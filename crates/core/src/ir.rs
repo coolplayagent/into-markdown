@@ -513,6 +513,7 @@ impl Document {
                 format!("expected {DOCUMENT_SCHEMA_VERSION}, got {version}"),
             ));
         }
+        preflight_document_value(&value, limits)?;
         let document: Self = serde_json::from_value(value).map_err(|error| {
             IrError::new(IrErrorCode::InvalidJson, "$", format!("decode document: {error}"))
         })?;
@@ -572,6 +573,340 @@ impl<'a> ValidationState<'a> {
             footnote_references: BTreeSet::new(),
         }
     }
+}
+
+enum PreflightTask<'a> {
+    Block { value: &'a serde_json::Value, path: String, depth: usize },
+    Inline { value: &'a serde_json::Value, path: String },
+    ListItem { value: &'a serde_json::Value, path: String, depth: usize },
+    TableRow { value: &'a serde_json::Value, path: String, depth: usize },
+    TableCell { value: &'a serde_json::Value, path: String, depth: usize },
+}
+
+#[allow(clippy::too_many_lines)] // Keeping the non-recursive wire state machine together is safer.
+fn preflight_document_value(
+    document: &serde_json::Value,
+    limits: &ValidationLimits,
+) -> Result<(), IrError> {
+    let Some(blocks) = document.get("blocks").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    let mut stack = Vec::new();
+    push_block_tasks(&mut stack, blocks, "$.blocks", 1);
+    let mut structural_nodes = 0_usize;
+    let mut inline_nodes = 0_usize;
+
+    while let Some(task) = stack.pop() {
+        match task {
+            PreflightTask::Block { value, path, depth } => {
+                let Some(object) = value.as_object() else { continue };
+                let Some(block) = object.get("block").and_then(serde_json::Value::as_object) else {
+                    continue;
+                };
+                if object.get("id").and_then(serde_json::Value::as_str).is_none()
+                    || !object.get("provenance").is_some_and(serde_json::Value::is_object)
+                {
+                    continue;
+                }
+                let Some(kind) = block.get("type").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let data = block.get("data");
+                if !valid_block_wire_shape(kind, data) {
+                    continue;
+                }
+                if depth > limits.max_depth {
+                    return resource_limit(&path, "documentDepth", limits.max_depth);
+                }
+                consume_preflight_node(&mut structural_nodes, limits, &path)?;
+                let data_path = format!("{path}.block.data");
+                match kind {
+                    "paragraph" => {
+                        if let Some(inlines) = data.and_then(serde_json::Value::as_array) {
+                            push_inline_tasks(&mut stack, inlines, &data_path);
+                        }
+                    }
+                    "heading" | "timedSegment" => push_inline_property(
+                        &mut stack,
+                        data,
+                        "content",
+                        &format!("{data_path}.content"),
+                    ),
+                    "list" => push_list_item_tasks(
+                        &mut stack,
+                        data,
+                        &format!("{data_path}.items"),
+                        depth + 1,
+                    ),
+                    "table" => {
+                        preflight_table_width(data, &data_path, limits)?;
+                        push_table_row_tasks(
+                            &mut stack,
+                            data,
+                            &format!("{data_path}.rows"),
+                            depth + 1,
+                        );
+                    }
+                    "footnote" | "page" | "slide" | "sheet" => push_block_property(
+                        &mut stack,
+                        data,
+                        "blocks",
+                        &format!("{data_path}.blocks"),
+                        depth + 1,
+                    ),
+                    _ => {}
+                }
+            }
+            PreflightTask::Inline { value, path } => {
+                let Some(object) = value.as_object() else { continue };
+                let Some(kind) = object.get("type").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if !valid_inline_wire_shape(kind, object.get("data")) {
+                    continue;
+                }
+                inline_nodes = inline_nodes.saturating_add(1);
+                if inline_nodes > limits.max_inlines {
+                    return resource_limit(&path, "documentInlines", limits.max_inlines);
+                }
+                if kind == "link" {
+                    push_inline_property(
+                        &mut stack,
+                        object.get("data"),
+                        "content",
+                        &format!("{path}.data.content"),
+                    );
+                }
+            }
+            PreflightTask::ListItem { value, path, depth } => {
+                let Some(object) = value.as_object() else { continue };
+                let Some(blocks) = object.get("blocks").and_then(serde_json::Value::as_array)
+                else {
+                    continue;
+                };
+                consume_preflight_node(&mut structural_nodes, limits, &path)?;
+                push_block_tasks(&mut stack, blocks, &format!("{path}.blocks"), depth);
+            }
+            PreflightTask::TableRow { value, path, depth } => {
+                let Some(cells) = value.get("cells").and_then(serde_json::Value::as_array) else {
+                    continue;
+                };
+                consume_preflight_node(&mut structural_nodes, limits, &path)?;
+                for (index, cell) in cells.iter().enumerate().rev() {
+                    stack.push(PreflightTask::TableCell {
+                        value: cell,
+                        path: format!("{path}.cells[{index}]"),
+                        depth,
+                    });
+                }
+            }
+            PreflightTask::TableCell { value, path, depth } => {
+                let Some(object) = value.as_object() else { continue };
+                let Some(blocks) = object.get("blocks").and_then(serde_json::Value::as_array)
+                else {
+                    continue;
+                };
+                if object.get("rowSpan").and_then(serde_json::Value::as_u64).is_none()
+                    || object.get("columnSpan").and_then(serde_json::Value::as_u64).is_none()
+                {
+                    continue;
+                }
+                consume_preflight_node(&mut structural_nodes, limits, &path)?;
+                push_block_tasks(&mut stack, blocks, &format!("{path}.blocks"), depth);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_block_wire_shape(kind: &str, data: Option<&serde_json::Value>) -> bool {
+    match kind {
+        "paragraph" => data.is_some_and(serde_json::Value::is_array),
+        "formula" => data.is_some_and(serde_json::Value::is_string),
+        "heading" | "list" | "table" | "code" | "footnote" | "image" | "page" | "slide"
+        | "sheet" | "timedSegment" => data.is_some_and(serde_json::Value::is_object),
+        "rule" => true,
+        _ => false,
+    }
+}
+
+fn valid_inline_wire_shape(kind: &str, data: Option<&serde_json::Value>) -> bool {
+    match kind {
+        "text" | "link" => data.is_some_and(serde_json::Value::is_object),
+        "code" | "formula" | "footnoteReference" => data.is_some_and(serde_json::Value::is_string),
+        "lineBreak" => true,
+        _ => false,
+    }
+}
+
+fn push_block_tasks<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    blocks: &'a [serde_json::Value],
+    path: &str,
+    depth: usize,
+) {
+    for (index, block) in blocks.iter().enumerate().rev() {
+        stack.push(PreflightTask::Block { value: block, path: format!("{path}[{index}]"), depth });
+    }
+}
+
+fn push_inline_tasks<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    inlines: &'a [serde_json::Value],
+    path: &str,
+) {
+    for (index, inline) in inlines.iter().enumerate().rev() {
+        stack.push(PreflightTask::Inline { value: inline, path: format!("{path}[{index}]") });
+    }
+}
+
+fn push_block_property<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    data: Option<&'a serde_json::Value>,
+    property: &str,
+    path: &str,
+    depth: usize,
+) {
+    if let Some(blocks) = data
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get(property))
+        .and_then(serde_json::Value::as_array)
+    {
+        push_block_tasks(stack, blocks, path, depth);
+    }
+}
+
+fn push_inline_property<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    data: Option<&'a serde_json::Value>,
+    property: &str,
+    path: &str,
+) {
+    if let Some(inlines) = data
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get(property))
+        .and_then(serde_json::Value::as_array)
+    {
+        push_inline_tasks(stack, inlines, path);
+    }
+}
+
+fn push_list_item_tasks<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    data: Option<&'a serde_json::Value>,
+    path: &str,
+    depth: usize,
+) {
+    if let Some(items) = data
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("items"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, item) in items.iter().enumerate().rev() {
+            stack.push(PreflightTask::ListItem {
+                value: item,
+                path: format!("{path}[{index}]"),
+                depth,
+            });
+        }
+    }
+}
+
+fn push_table_row_tasks<'a>(
+    stack: &mut Vec<PreflightTask<'a>>,
+    data: Option<&'a serde_json::Value>,
+    path: &str,
+    depth: usize,
+) {
+    if let Some(rows) = data
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("rows"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, row) in rows.iter().enumerate().rev() {
+            stack.push(PreflightTask::TableRow {
+                value: row,
+                path: format!("{path}[{index}]"),
+                depth,
+            });
+        }
+    }
+}
+
+fn consume_preflight_node(
+    count: &mut usize,
+    limits: &ValidationLimits,
+    path: &str,
+) -> Result<(), IrError> {
+    *count = count.saturating_add(1);
+    if *count > limits.max_nodes {
+        resource_limit(path, "documentNodes", limits.max_nodes)
+    } else {
+        Ok(())
+    }
+}
+
+fn preflight_table_width(
+    data: Option<&serde_json::Value>,
+    path: &str,
+    limits: &ValidationLimits,
+) -> Result<(), IrError> {
+    let Some(rows) = data
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("rows"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
+    let mut occupancy = Vec::<u64>::new();
+    for (row_index, row) in rows.iter().enumerate() {
+        let Some(cells) = row.get("cells").and_then(serde_json::Value::as_array) else {
+            return Ok(());
+        };
+        let mut column = 0_usize;
+        for (cell_index, cell) in cells.iter().enumerate() {
+            while occupancy.get(column).is_some_and(|remaining| *remaining > 0) {
+                column += 1;
+            }
+            let Some(row_span) = cell.get("rowSpan").and_then(serde_json::Value::as_u64) else {
+                return Ok(());
+            };
+            let Some(column_span) = cell
+                .get("columnSpan")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                return Ok(());
+            };
+            if row_span == 0 || column_span == 0 {
+                return Ok(());
+            }
+            let cell_path = format!("{path}.rows[{row_index}].cells[{cell_index}]");
+            let Some(end) = column.checked_add(column_span) else {
+                return resource_limit(
+                    format!("{cell_path}.columnSpan"),
+                    "tableColumns",
+                    limits.max_table_columns,
+                );
+            };
+            if end > limits.max_table_columns {
+                return resource_limit(
+                    format!("{cell_path}.columnSpan"),
+                    "tableColumns",
+                    limits.max_table_columns,
+                );
+            }
+            if occupancy.len() < end {
+                occupancy.resize(end, 0);
+            }
+            occupancy[column..end].fill(row_span);
+            column = end;
+        }
+        for remaining in &mut occupancy {
+            *remaining = remaining.saturating_sub(1);
+        }
+    }
+    Ok(())
 }
 
 fn validate_nodes(
@@ -1350,6 +1685,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wire_preflight_rejects_limits_before_typed_deserialization() {
+        let node_limited = Document {
+            blocks: vec![node("one", Block::Rule), node("two", Block::Rule)],
+            ..Document::default()
+        };
+        let depth_limited = Document {
+            blocks: vec![node(
+                "outer",
+                Block::Page { number: 1, blocks: vec![node("inner", Block::Paragraph(vec![]))] },
+            )],
+            ..Document::default()
+        };
+        let inline_limited = Document {
+            blocks: vec![node(
+                "inline",
+                Block::Paragraph(vec![Inline::LineBreak, Inline::LineBreak]),
+            )],
+            ..Document::default()
+        };
+        let cases = [
+            (
+                serde_json::to_value(node_limited).unwrap(),
+                ValidationLimits { max_nodes: 1, ..ValidationLimits::default() },
+            ),
+            (
+                serde_json::to_value(depth_limited).unwrap(),
+                ValidationLimits { max_depth: 1, ..ValidationLimits::default() },
+            ),
+            (
+                serde_json::to_value(inline_limited).unwrap(),
+                ValidationLimits { max_inlines: 1, ..ValidationLimits::default() },
+            ),
+        ];
+        for (value, limits) in cases {
+            let error = preflight_document_value(&value, &limits).unwrap_err();
+            assert_eq!(error.code, IrErrorCode::ResourceLimit);
+            let json = serde_json::to_string(&value).unwrap();
+            assert_eq!(
+                Document::from_json_with_limits(&json, &limits).unwrap_err().code,
+                IrErrorCode::ResourceLimit
+            );
+        }
+    }
+
     fn cell(row_span: u32, column_span: u32) -> Cell {
         Cell { row_span, column_span, header: false, blocks: vec![] }
     }
@@ -1399,5 +1779,24 @@ mod tests {
             document.validate_with_limits(&limits).unwrap_err().code,
             IrErrorCode::ResourceLimit
         );
+    }
+
+    #[test]
+    fn wire_preflight_rejects_wide_tables_and_defers_malformed_shapes() {
+        let wide = table_document(vec![TableRow { cells: vec![cell(1, 3)] }]);
+        let value = serde_json::to_value(wide).unwrap();
+        let limits = ValidationLimits { max_table_columns: 2, ..ValidationLimits::default() };
+        let error = preflight_document_value(&value, &limits).unwrap_err();
+        assert_eq!(error.code, IrErrorCode::ResourceLimit);
+        assert!(error.path.ends_with(".columnSpan"));
+
+        let malformed = serde_json::json!({
+            "schemaVersion": DOCUMENT_SCHEMA_VERSION,
+            "metadata": { "title": null, "authors": [], "properties": {} },
+            "blocks": { "not": "an array" }
+        });
+        assert!(preflight_document_value(&malformed, &ValidationLimits::default()).is_ok());
+        let json = serde_json::to_string(&malformed).unwrap();
+        assert_eq!(Document::from_json(&json).unwrap_err().code, IrErrorCode::InvalidJson);
     }
 }

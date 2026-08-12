@@ -29,3 +29,5 @@ IR 结构使用 lowerCamelCase 字段；`Block` 与 `Inline` 使用显式的 `ty
 表格逻辑列数预算，超限返回 `resourceLimit`。表格验证使用有界占用网格，保证每行
 逻辑宽度一致并拒绝跨度重叠或越界。`SourceLocator.part` 只接受不含空段、`.`、`..`、
 反斜杠或控制字符的容器相对路径，并拒绝绝对路径、盘符和 UNC 形式。
+JSON 解码在构造 typed `Document` 前先以显式任务栈预检这些结构预算，构造后仍执行
+完整语义验证，形成两层防线；无法识别的畸形 wire shape 继续由 Serde 拒绝。
