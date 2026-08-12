@@ -4,6 +4,7 @@ use crate::args::{
     AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
     ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
     ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
+    RaggedRowsArg, TableHeaderArg,
 };
 use crate::config::{self, LoadedConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -13,7 +14,7 @@ use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
     AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, FormatHint,
-    InputFormat, InputRef, OcrPolicy, TextDecodingMode,
+    InputFormat, InputRef, OcrPolicy, RaggedRowsMode, TableHeaderMode, TextDecodingMode,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -1169,6 +1170,7 @@ fn apply_conversion_overrides(
             EncodingErrorsArg::Replace => TextDecodingMode::Replace,
         };
     }
+    apply_delimited_overrides(arguments, options);
     if let Some(value) = arguments.max_redirects {
         options.network.max_redirects = value;
     }
@@ -1191,6 +1193,12 @@ fn apply_conversion_overrides(
     assign!(max_depth, max_nesting_depth);
     assign!(max_pages, max_pages);
     assign!(max_asset_size, max_asset_bytes);
+    assign!(max_memory_size, max_memory_bytes);
+    assign!(max_temporary_size, max_temporary_bytes);
+    assign!(max_table_rows, max_table_rows);
+    assign!(max_table_columns, max_table_columns);
+    assign!(max_table_cells, max_table_cells);
+    assign!(max_field_size, max_field_bytes);
     if let Some(mode) = arguments.asset_mode {
         options.output.asset_mode = match mode {
             AssetModeArg::Extract => AssetMode::Extract,
@@ -1238,6 +1246,22 @@ fn apply_conversion_overrides(
         validate_network_url(&provider.base_url, options, "AI provider")?;
     }
     Ok(())
+}
+
+fn apply_delimited_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
+    if let Some(mode) = arguments.table_header {
+        options.delimited_text.header = match mode {
+            TableHeaderArg::Auto => TableHeaderMode::Auto,
+            TableHeaderArg::Always => TableHeaderMode::Always,
+            TableHeaderArg::Never => TableHeaderMode::Never,
+        };
+    }
+    if let Some(mode) = arguments.ragged_rows {
+        options.delimited_text.ragged_rows = match mode {
+            RaggedRowsArg::Strict => RaggedRowsMode::Strict,
+            RaggedRowsArg::Pad => RaggedRowsMode::Pad,
+        };
+    }
 }
 
 fn set_ai_mode(options: &mut ConversionOptions, capability: &str, mode: AiMode) {

@@ -52,6 +52,10 @@ minimum_confidence = 0.70
 # strict（默认）或 replace；replace 会逐段输出带原始字节范围的诊断。
 decoding_mode = "strict"
 
+[conversion.delimited_text]
+header = "auto" # auto、always 或 never
+ragged_rows = "strict" # strict 或 pad
+
 [conversion.ai]
 vision_ocr = "fallback"
 image_description = "off"
@@ -76,6 +80,10 @@ max_pages = 10000
 max_asset_bytes = 268435456
 max_memory_bytes = 1073741824
 max_temporary_bytes = 1073741824
+max_table_rows = 100000
+max_table_columns = 16384
+max_table_cells = 1000000
+max_field_bytes = 16777216
 
 [conversion.output]
 emit = "markdown"

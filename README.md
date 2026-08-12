@@ -4,7 +4,7 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、TXT 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
+GFM 渲染器、TXT/CSV/TSV 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
 网络客户端或 LLM 调用。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
@@ -28,6 +28,8 @@ x86_64。项目明确不支持 macOS x86_64。
 bazel run //apps/cli:into-md -- report.pdf
 bazel run //apps/cli:into-md -- notes.txt
 printf 'caf\351\n' | bazel run //apps/cli:into-md -- --charset windows-1252 -
+bazel run //apps/cli:into-md -- table.csv
+printf 'name\tage\nAlice\t42\n' | bazel run //apps/cli:into-md -- --format tsv -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
@@ -50,6 +52,11 @@ TXT 转换可用，支持 UTF-8、带 BOM 的 UTF-16 与受限的常见字符集
 严格失败，`--encoding-errors replace` 会替换并输出带原始字节范围和替换数量的诊断。
 自动检测会为完整 JSON 及具备三行和类型证据的 CSV/TSV 候选让路；带 BOM 的输入也会
 按实际字符集解码完整内容，除 TAB、LF、CR 外的 C0、DEL 或 C1 都会拒绝自动 TXT 候选。
+
+CSV 与 TSV 转换支持 RFC 4180 引号、双引号转义、字段内换行、空单元格和 UTF-8/UTF-16
+BOM，并复用 TXT 的安全字符集解码。`--table-header auto|always|never` 控制表头，
+`--ragged-rows strict|pad` 控制不等宽记录；默认保守识别表头并严格拒绝不等宽记录。
+所有值作为文本进入 IR，中央 GFM 渲染器负责 pipe 与换行转义。
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定

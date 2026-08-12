@@ -376,6 +376,18 @@ fn select_charset(
     Ok((charset, 0))
 }
 
+/// Decode text once for all built-in text converters while retaining exact
+/// original-byte spans for every Unicode scalar.
+pub(crate) fn decode_source(
+    bytes: &[u8],
+    explicit_charset: Option<&str>,
+    mode: TextDecodingMode,
+    context: &ExecutionContext,
+) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
+    let (charset, bom_len) = select_charset(bytes, explicit_charset)?;
+    decode_mapped(&bytes[bom_len..], bom_len, charset, mode, context)
+}
+
 fn convert_text(
     input: &ResolvedInput,
     options: &ConversionOptions,
@@ -392,7 +404,6 @@ fn convert_text(
             detail: format!("{size} > {}", options.limits.max_input_bytes),
         });
     }
-    let (charset, bom_len) = select_charset(&input.bytes, options.text.charset.as_deref())?;
     // Legacy single-byte characters can expand to three UTF-8 bytes. Count raw
     // newline bytes conservatively to cover line vectors and resulting IR
     // containers while both are live (UTF-16 non-newline low bytes may only
@@ -411,10 +422,9 @@ fn convert_text(
             detail: "text decoding memory estimate overflowed".into(),
         })?;
     let _working_memory = context.reserve_memory(working_bytes)?;
-    let (lines, diagnostics) = decode_lines(
-        &input.bytes[bom_len..],
-        bom_len,
-        charset,
+    let (decoded, diagnostics) = decode_source(
+        &input.bytes,
+        options.text.charset.as_deref(),
         options.text.decoding_mode,
         context,
     )?;
@@ -423,17 +433,17 @@ fn convert_text(
             limit: "max_text_decoded_bytes",
             detail: "decoded text byte budget overflowed".into(),
         })?;
-    let document = build_document(lines, max_decoded_text_bytes, context)?;
+    let document = build_document(decoded.into_lines(), max_decoded_text_bytes, context)?;
     Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
 }
 
-fn decode_lines(
+fn decode_mapped(
     bytes: &[u8],
     base: usize,
     charset: Charset,
     mode: TextDecodingMode,
     context: &ExecutionContext,
-) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
+) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
     match charset {
         Charset::Utf8 => decode_utf8(bytes, base, mode, charset, context),
         Charset::Utf16Le | Charset::Utf16Be => decode_utf16(bytes, base, mode, charset, context),
@@ -447,8 +457,8 @@ fn decode_utf8(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
-) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
-    let mut decoded = DecodedLines::default();
+) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
+    let mut decoded = DecodedText::default();
     let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -483,10 +493,10 @@ fn decode_utf8(
             }
         }
     }
-    Ok((decoded.finish(), recoveries.into_diagnostics(charset)))
+    Ok((decoded, recoveries.into_diagnostics(charset)))
 }
 
-fn push_str_units(decoded: &mut DecodedLines, text: &str, base: usize) {
+fn push_str_units(decoded: &mut impl DecodedSink, text: &str, base: usize) {
     for (offset, value) in text.char_indices() {
         decoded.push(value, base + offset, base + offset + value.len_utf8());
     }
@@ -498,8 +508,8 @@ fn decode_utf16(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
-) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
-    let mut decoded = DecodedLines::default();
+) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
+    let mut decoded = DecodedText::default();
     let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -569,7 +579,7 @@ fn decode_utf16(
         }
         offset += width;
     }
-    Ok((decoded.finish(), recoveries.into_diagnostics(charset)))
+    Ok((decoded, recoveries.into_diagnostics(charset)))
 }
 
 fn decode_legacy(
@@ -578,8 +588,8 @@ fn decode_legacy(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
-) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
-    let mut lines_builder = DecodedLines::default();
+) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
+    let mut lines_builder = DecodedText::default();
     let mut recoveries = RecoveryTracker::default();
     let mut charset_decoder = charset.encoding().new_decoder_without_bom_handling();
     let mut output = String::with_capacity(16);
@@ -677,14 +687,14 @@ fn decode_legacy(
         charset,
         mode,
     )?;
-    Ok((lines_builder.finish(), recoveries.into_diagnostics(charset)))
+    Ok((lines_builder, recoveries.into_diagnostics(charset)))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn finish_legacy_decoder(
     decoder: &mut encoding_rs::Decoder,
     output: &mut String,
-    lines_builder: &mut DecodedLines,
+    lines_builder: &mut impl DecodedSink,
     recoveries: &mut RecoveryTracker,
     input_len: usize,
     base: usize,
@@ -758,14 +768,14 @@ fn finish_legacy_decoder(
     })
 }
 
-fn push_str_range(decoded: &mut DecodedLines, text: &str, start: usize, end: usize) {
+fn push_str_range(decoded: &mut impl DecodedSink, text: &str, start: usize, end: usize) {
     for value in text.chars() {
         decoded.push(value, start, end);
     }
 }
 
 fn recover_invalid(
-    decoded: &mut DecodedLines,
+    decoded: &mut impl DecodedSink,
     recoveries: &mut RecoveryTracker,
     start: usize,
     end: usize,
@@ -842,6 +852,68 @@ struct Line {
     end: Option<usize>,
 }
 
+trait DecodedSink {
+    fn push(&mut self, value: char, start: usize, end: usize);
+}
+
+#[derive(Debug)]
+struct DecodedUnit {
+    utf8_start: usize,
+    utf8_end: usize,
+    source_start: usize,
+    source_end: usize,
+}
+
+/// Decoded UTF-8 and its monotonic mapping back to original encoded bytes.
+#[derive(Debug, Default)]
+pub(crate) struct DecodedText {
+    pub(crate) text: String,
+    units: Vec<DecodedUnit>,
+}
+
+impl DecodedSink for DecodedText {
+    fn push(&mut self, value: char, start: usize, end: usize) {
+        let utf8_start = self.text.len();
+        self.text.push(value);
+        self.units.push(DecodedUnit {
+            utf8_start,
+            utf8_end: self.text.len(),
+            source_start: start,
+            source_end: end,
+        });
+    }
+}
+
+impl DecodedText {
+    /// Convert a half-open decoded UTF-8 range into an original-byte range.
+    pub(crate) fn source_range(&self, start: usize, end: usize) -> (usize, usize) {
+        let start_source = self.units.iter().find(|unit| unit.utf8_end > start).map_or_else(
+            || self.units.last().map_or(0, |unit| unit.source_end),
+            |unit| unit.source_start,
+        );
+        let end_source = if end <= start {
+            start_source
+        } else {
+            self.units
+                .iter()
+                .rev()
+                .find(|unit| unit.utf8_start < end)
+                .map_or(start_source, |unit| unit.source_end)
+        };
+        (start_source, end_source)
+    }
+
+    fn into_lines(self) -> Vec<Line> {
+        let mut lines = DecodedLines::default();
+        for unit in self.units {
+            if let Some(value) = self.text[unit.utf8_start..unit.utf8_end].chars().next() {
+                DecodedSink::push(&mut lines, value, unit.source_start, unit.source_end);
+            }
+        }
+        lines.finish()
+    }
+}
+
 #[derive(Debug, Default)]
 struct DecodedLines {
     lines: Vec<Line>,
@@ -849,7 +921,7 @@ struct DecodedLines {
     pending_cr: bool,
 }
 
-impl DecodedLines {
+impl DecodedSink for DecodedLines {
     fn push(&mut self, value: char, start: usize, end: usize) {
         if self.pending_cr {
             self.finish_line();
@@ -868,7 +940,9 @@ impl DecodedLines {
             }
         }
     }
+}
 
+impl DecodedLines {
     fn finish_line(&mut self) {
         self.lines.push(std::mem::take(&mut self.current));
     }

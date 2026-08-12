@@ -66,11 +66,15 @@ into-md <INPUT...>
     --mime-type <TYPE>
     --charset <CHARSET>
     --encoding-errors <strict|replace>
+    --table-header <auto|always|never>
+    --ragged-rows <strict|pad>
 ```
 
 显式格式优先于检测结果。扩展名可以带或不带前导点，Office 变体扩展名会映射到
 对应格式族。TXT 的字符集 allowlist 与别名见[格式矩阵](formats.md)。字符集提示权威；
 无效序列默认 `strict` 失败，`replace` 会为每个替换片段输出原始 byte range 诊断。
+字符集同样适用于 CSV/TSV。表头默认保守自动识别；不等宽记录默认严格失败，`pad`
+只补齐比首条记录短的行并输出诊断。
 
 ### 输出
 

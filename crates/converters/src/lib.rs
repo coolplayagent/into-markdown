@@ -2,8 +2,10 @@
 //!
 //! Built-in source resolvers, format detectors, and converters.
 
+mod delimited;
 mod text;
 
+pub use delimited::DelimitedTextConverter;
 pub use text::TextConverter;
 
 use into_markdown_core::{
@@ -155,13 +157,13 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Csv,
         family: "text",
         extensions: &["csv"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Tsv,
         family: "text",
         extensions: &["tsv"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Json,
@@ -943,14 +945,18 @@ impl FormatDetector for HintFormatDetector {
             if let Some(format) = media_type.and_then(format_from_media_type) {
                 evidence.entry(format).or_default().push("media type");
             }
-            if hint.charset.is_some() {
+            let delimited_hint =
+                evidence.keys().any(|format| matches!(format, InputFormat::Csv | InputFormat::Tsv));
+            if hint.charset.is_some() && !delimited_hint {
                 evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
             }
             let conflict = evidence.len() > 1;
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
-                    let confidence = if reasons.len() > 1 {
+                    let confidence = if matches!(format, InputFormat::Csv | InputFormat::Tsv) {
+                        0.99
+                    } else if reasons.len() > 1 {
                         0.68
                     } else if reasons[0] == "media type" {
                         0.60

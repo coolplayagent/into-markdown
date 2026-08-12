@@ -39,6 +39,12 @@ locator 与 replacement diagnostic 必须断言原始半开 byte range，不能�
 伪装，以及位于 64 KiB 解码样本之后的 DEL、UTF-8 C1 与传统字符集 C1；格式检测不得
 返回 text，真实转换必须失败。
 
+CSV/TSV 契约覆盖 CRLF/LF/CR、外围引号、doubled quote、字段内换行、尾随空字段、空记录、
+UTF-8/UTF-16 BOM、显式传统字符集、表头三种策略、strict/pad 不等宽策略与 GFM pipe
+转义。provenance 同时断言 quoted、多字节和补齐空单元格的原始 byte range；损坏 quote、
+超宽表、超长字段及行/列/cell 预算断言 `malformed` 或 `resourceLimit`，并通过真实 CLI
+覆盖文件、stdin、扩展名、MIME、显式格式与字符集。
+
 真实 CLI 回归同时覆盖文件与 stdin：200 层且超过 1 MiB 的合法 JSON、具备表头/数字列
 证据的三行 CSV/TSV 不得被 TXT 回退吞入；恰在 1 MiB 边界闭合但后接非空白的内容及
 两行逗号散文仍须按普通文本转换。JSON scanner 单元测试覆盖 escape/Unicode、number、

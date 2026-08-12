@@ -18,6 +18,9 @@
   U+FFFD；相邻错误可合并诊断，但每条诊断都必须保留原始 byte range、编码名和替换数。
 - TXT 转换器在创建节点前以 checked arithmetic 核算 block、inline 与解码文本预算，
   超限直接返回 `resourceLimit`，不能依赖 Engine 的 IR 验证把预算错误改写为内部错误。
+- CSV/TSV 把 `= + - @` 开头的字段保留为普通文本，不解释或执行公式。解析循环定期检查
+  取消与 deadline，并在构造 IR 前检查输入、行、列、单元格、单字段、文本、inline、
+  node 与内存预算；畸形引号和不等宽记录返回受控错误。
 - JSON 格式保护使用非递归状态机扫描完整输入，定期执行 `ExecutionContext` checkpoint，
   nesting 的 checked 上限独立返回 `resourceLimit`；`\u` escape 还必须验证 UTF-16
   surrogate pairing。不能用递归 DOM parse 作为格式 guard。

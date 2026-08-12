@@ -23,6 +23,11 @@ TXT 的 `FormatHint.charset` 会由 Engine 复制到请求级 `ConversionOptions
 默认 `TextDecodingMode::Strict`。`Replace` 只能在每段恢复都附带稳定 diagnostic code、
 encoding 与原始 byte range 时继续。转换器必须在 resolver 之后再次执行输入大小检查。
 
+CSV/TSV 与 TXT 共用 converters 内部的安全解码及原始字节映射。新增的
+`ConversionOptions.delimited_text.header` 和 `ragged_rows` 均带 serde 默认值，旧请求
+分别解析为 `auto` 与 `strict`。表格预算由 `ResourceLimits` 的 `max_table_rows`、
+`max_table_columns`、`max_table_cells` 和 `max_field_bytes` 控制。
+
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 

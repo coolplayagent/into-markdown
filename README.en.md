@@ -5,7 +5,7 @@
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
-command-line shell, a production TXT/character-set converter, and contract
+command-line shell, production TXT/CSV/TSV and character-set converters, and contract
 tests. It does not yet contain OCR inference, network clients, or LLM calls.
 
 The project is implemented independently of the neighbouring `anydoc` and
@@ -30,6 +30,8 @@ x86_64. macOS x86_64 is intentionally unsupported.
 bazel run //apps/cli:into-md -- report.pdf
 bazel run //apps/cli:into-md -- notes.txt
 printf 'caf\351\n' | bazel run //apps/cli:into-md -- --charset windows-1252 -
+bazel run //apps/cli:into-md -- table.csv
+printf 'name\tage\nAlice\t42\n' | bazel run //apps/cli:into-md -- --format tsv -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
@@ -56,6 +58,12 @@ detectable legacy encodings. Explicit `--charset` also accepts `windows-1252`,
 `--encoding-errors replace` emits byte-ranged diagnostics for every recovery.
 Automatic detection decodes the complete input and rejects C0, DEL, and C1
 controls other than tab and line endings.
+
+CSV and TSV conversion supports RFC 4180 quoting, doubled quotes, embedded line
+endings, empty cells, and UTF-8/UTF-16 BOMs through the same safe decoder as TXT.
+Use `--table-header auto|always|never` and `--ragged-rows strict|pad`; conservative
+header detection and strict rectangular rows are the defaults. Values remain
+literal text, with pipe and line-ending escaping handled by the central renderer.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source

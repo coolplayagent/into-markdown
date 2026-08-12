@@ -3,7 +3,10 @@
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind, Language, Scope};
 use crate::error::CliError;
 use directories::ProjectDirs;
-use into_markdown::{AiMode, AssetMode, ConversionOptions, OcrPolicy, TextDecodingMode};
+use into_markdown::{
+    AiMode, AssetMode, ConversionOptions, OcrPolicy, RaggedRowsMode, TableHeaderMode,
+    TextDecodingMode,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -75,6 +78,7 @@ pub struct CliConfig {
 pub struct ConversionConfig {
     pub timeout_ms: Option<u64>,
     pub text: TextConfig,
+    pub delimited_text: DelimitedTextConfig,
     pub ocr: OcrConfig,
     pub ai: AiConfig,
     pub network: NetworkConfig,
@@ -87,6 +91,14 @@ pub struct ConversionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct TextConfig {
     pub decoding_mode: Option<TextDecodingMode>,
+}
+
+/// Partial CSV and TSV policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DelimitedTextConfig {
+    pub header: Option<TableHeaderMode>,
+    pub ragged_rows: Option<RaggedRowsMode>,
 }
 
 /// Partial local OCR configuration.
@@ -137,6 +149,10 @@ pub struct LimitsConfig {
     pub max_asset_bytes: Option<u64>,
     pub max_memory_bytes: Option<u64>,
     pub max_temporary_bytes: Option<u64>,
+    pub max_table_rows: Option<u64>,
+    pub max_table_columns: Option<u64>,
+    pub max_table_cells: Option<u64>,
+    pub max_field_bytes: Option<u64>,
 }
 
 /// Partial artifact policy.
@@ -423,6 +439,12 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     if let Some(mode) = config.text.decoding_mode {
         options.text.decoding_mode = mode;
     }
+    if let Some(mode) = config.delimited_text.header {
+        options.delimited_text.header = mode;
+    }
+    if let Some(mode) = config.delimited_text.ragged_rows {
+        options.delimited_text.ragged_rows = mode;
+    }
     if let Some(policy) = config.ocr.policy {
         options.ocr.policy = policy;
     }
@@ -481,6 +503,10 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     assign!(max_asset_bytes);
     assign!(max_memory_bytes);
     assign!(max_temporary_bytes);
+    assign!(max_table_rows);
+    assign!(max_table_columns);
+    assign!(max_table_cells);
+    assign!(max_field_bytes);
     if let Some(value) = &config.output.asset_directory_suffix {
         options.output.asset_directory_suffix.clone_from(value);
     }

@@ -120,6 +120,14 @@ pub struct ResourceLimits {
     pub max_memory_bytes: u64,
     /// Maximum bytes written to request-scoped temporary files.
     pub max_temporary_bytes: u64,
+    /// Maximum records in a delimited-text table.
+    pub max_table_rows: u64,
+    /// Maximum columns in a delimited-text table.
+    pub max_table_columns: u64,
+    /// Maximum cells in a delimited-text table.
+    pub max_table_cells: u64,
+    /// Maximum decoded UTF-8 bytes in one delimited-text field.
+    pub max_field_bytes: u64,
 }
 
 impl Default for ResourceLimits {
@@ -133,6 +141,10 @@ impl Default for ResourceLimits {
             max_asset_bytes: 256 * 1024 * 1024,
             max_memory_bytes: 1024 * 1024 * 1024,
             max_temporary_bytes: 1024 * 1024 * 1024,
+            max_table_rows: 100_000,
+            max_table_columns: 16_384,
+            max_table_cells: 1_000_000,
+            max_field_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -173,6 +185,40 @@ pub struct TextOptions {
     pub decoding_mode: TextDecodingMode,
 }
 
+/// Header-row selection for delimited text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TableHeaderMode {
+    /// Use the conservative, deterministic header heuristic.
+    #[default]
+    Auto,
+    /// Treat the first record as a header row.
+    Always,
+    /// Treat every source record as data; the renderer supplies the required empty GFM header.
+    Never,
+}
+
+/// Handling of records whose field count differs from the table width.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RaggedRowsMode {
+    /// Reject the malformed table.
+    #[default]
+    Strict,
+    /// Pad short records with empty cells; records wider than the first remain invalid.
+    Pad,
+}
+
+/// CSV and TSV parsing policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DelimitedTextOptions {
+    /// Header detection or override.
+    pub header: TableHeaderMode,
+    /// Ragged-record recovery policy.
+    pub ragged_rows: RaggedRowsMode,
+}
+
 /// Markdown representation policy for assets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -203,6 +249,9 @@ pub struct ConversionOptions {
     /// Plain-text decoding policy.
     #[serde(default)]
     pub text: TextOptions,
+    /// CSV and TSV parsing policy.
+    #[serde(default)]
+    pub delimited_text: DelimitedTextOptions,
     /// Local OCR policy.
     pub ocr: OcrOptions,
     /// Optional AI capability policies.
