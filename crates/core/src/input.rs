@@ -40,6 +40,8 @@ pub struct FormatHint {
     pub extension: Option<String>,
     /// MIME media type.
     pub media_type: Option<String>,
+    /// Character encoding name, when supplied by the caller.
+    pub charset: Option<String>,
 }
 
 /// Metadata recorded by a source resolver.

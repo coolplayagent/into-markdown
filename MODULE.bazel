@@ -17,6 +17,9 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.from_cargo(
     name = "crates",
     cargo_lockfile = "//:Cargo.lock",
+    # Reuse Cargo's standard registry/cache so Bazel follows the same proxy,
+    # mirror, and credential configuration as `cargo check` on developer and CI hosts.
+    isolated = False,
     manifests = ["//:Cargo.toml"],
 )
 use_repo(crate, "crates")

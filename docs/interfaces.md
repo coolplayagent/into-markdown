@@ -6,7 +6,8 @@
 
 ## 输入源契约
 
-`InputRef` 区分本地路径、内存、标准输入和 URI。`SourceResolver` 读取数据时
+`InputRef` 区分本地路径、内存、标准输入和 URI。`FormatHint` 可携带显式格式、
+文件名、扩展名、MIME 类型和字符集。`SourceResolver` 读取数据时
 必须执行 `ResourceLimits`。URI 解析器还必须执行 `NetworkOptions`，网络访问
 默认关闭。解析器返回不可变字节和不含秘密的元数据，避免检测器与转换器共享
 可变流状态。
@@ -30,8 +31,12 @@
 视觉 OCR、图片描述、版面修复、表格与公式修复、音频转写和 Markdown
 后处理均可独立配置 AI 模式。每项 AI 能力默认均为 `Off`。
 
+`Engine::detect(DetectionRequest)` 只执行输入解析和格式检测，供 CLI 的
+`formats detect` 使用；它不会探测或调用转换器。
+
 ## 兼容性
 
 错误文本用于描述问题，但不保证稳定；`ErrorCode::as_str()` 是稳定的机器接口。
+可选后端缺失使用 `componentUnavailable`，与内部不变量错误分开。
 提供者 ID、转换器 ID、节点 ID、模型包 ID 和线协议版本均为稳定标识符。枚举
 允许增加新变体，因此使用方应保留默认分支。

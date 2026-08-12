@@ -21,12 +21,13 @@ pub use ir::{
     Rect, SourceLocator, TableRow, TimeRange,
 };
 pub use options::{
-    AiMode, AiOptions, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions,
-    ResourceLimits,
+    AiMode, AiOptions, AssetMode, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy,
+    OutputOptions, ResourceLimits,
 };
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
-    ConversionResult, Converter, ConverterOutput, DocumentPatch, FormatDetector, MarkdownRenderer,
-    OcrEngine, OcrRegion, OcrRequest, OcrResult, PatchOperation, ProbeOutcome, Services,
-    SourceResolver, Tensor, TensorRuntime, Transcriber, TranscriptionRequest, TranscriptionResult,
+    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, DocumentPatch,
+    FormatDetector, MarkdownRenderer, OcrEngine, OcrRegion, OcrRequest, OcrResult, PatchOperation,
+    ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
+    TranscriptionRequest, TranscriptionResult,
 };

@@ -139,6 +139,22 @@ pub struct OutputOptions {
     pub asset_directory_suffix: String,
     /// Preserve provenance in the structured result.
     pub include_provenance: bool,
+    /// How visual and embedded assets are represented in Markdown.
+    pub asset_mode: AssetMode,
+    /// URI prefix used by the renderer for extracted assets.
+    pub asset_uri_prefix: Option<String>,
+}
+
+/// Markdown representation policy for assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssetMode {
+    /// Reference assets written separately by the caller.
+    Extract,
+    /// Encode asset bytes as data URIs where the renderer supports it.
+    Embed,
+    /// Omit binary resources while retaining text alternatives.
+    Omit,
 }
 
 impl Default for OutputOptions {
@@ -147,6 +163,8 @@ impl Default for OutputOptions {
             flavor: "gfm".into(),
             asset_directory_suffix: "_assets".into(),
             include_provenance: true,
+            asset_mode: AssetMode::Extract,
+            asset_uri_prefix: None,
         }
     }
 }

@@ -2,8 +2,8 @@
 
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionRequest, ConversionResult, Converter,
-    FormatCandidate, FormatDetector, InputFormat, MarkdownRenderer, ProbeOutcome, Services,
-    SourceResolver,
+    DetectionRequest, DetectionResult, FormatCandidate, FormatDetector, InputFormat,
+    MarkdownRenderer, ProbeOutcome, Services, SourceResolver,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -129,6 +129,20 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Resolve an input and return ordered format hypotheses without converting.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error from source resolution or format detection.
+    pub async fn detect(
+        &self,
+        request: DetectionRequest,
+    ) -> Result<DetectionResult, ConversionError> {
+        let input = self.resolve_input(&request.input, &request.options).await?;
+        let candidates = self.detect_formats(&input, &request.hint).await?;
+        Ok(DetectionResult { source: input.metadata, candidates })
+    }
+
     /// Resolve, detect, select, convert, and render one request.
     ///
     /// # Errors
@@ -139,14 +153,7 @@ impl Engine {
         &self,
         request: ConversionRequest,
     ) -> Result<ConversionResult, ConversionError> {
-        let resolver = self
-            .source_resolvers
-            .iter()
-            .find(|resolver| resolver.supports(&request.input))
-            .ok_or_else(|| ConversionError::Unsupported {
-                detail: "no source resolver accepts the requested input".into(),
-            })?;
-        let input = resolver.resolve(&request.input, &request.options).await?;
+        let input = self.resolve_input(&request.input, &request.options).await?;
 
         let candidates = self.detect_formats(&input, &request.hint).await?;
         if candidates.is_empty() {
@@ -209,6 +216,20 @@ impl Engine {
             diagnostics: output.diagnostics,
             provenance,
         })
+    }
+
+    async fn resolve_input(
+        &self,
+        input: &into_markdown_core::InputRef,
+        options: &into_markdown_core::ConversionOptions,
+    ) -> Result<into_markdown_core::ResolvedInput, ConversionError> {
+        let resolver =
+            self.source_resolvers.iter().find(|resolver| resolver.supports(input)).ok_or_else(
+                || ConversionError::Unsupported {
+                    detail: "no source resolver accepts the requested input".into(),
+                },
+            )?;
+        resolver.resolve(input, options).await
     }
 
     async fn detect_formats(

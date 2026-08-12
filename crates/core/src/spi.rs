@@ -22,6 +22,34 @@ pub struct ConversionRequest {
     pub options: ConversionOptions,
 }
 
+/// Request to resolve and detect an input without converting it.
+#[derive(Debug, Clone)]
+pub struct DetectionRequest {
+    /// Source to resolve.
+    pub input: InputRef,
+    /// Optional format hints.
+    pub hint: FormatHint,
+    /// Source, network, and resource policy.
+    pub options: ConversionOptions,
+}
+
+impl DetectionRequest {
+    /// Construct a detection request with safe offline defaults.
+    #[must_use]
+    pub fn new(input: InputRef) -> Self {
+        Self { input, hint: FormatHint::default(), options: ConversionOptions::default() }
+    }
+}
+
+/// Format hypotheses and safe source metadata returned by detection.
+#[derive(Debug, Clone)]
+pub struct DetectionResult {
+    /// Metadata produced by the selected source resolver.
+    pub source: crate::SourceMetadata,
+    /// Ordered format candidates.
+    pub candidates: Vec<FormatCandidate>,
+}
+
 impl ConversionRequest {
     /// Construct a request with safe offline defaults.
     #[must_use]

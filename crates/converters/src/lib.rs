@@ -354,8 +354,9 @@ impl SourceResolver for UriSourceResolver {
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         Box::pin(async move {
             if options.network.enabled {
-                Err(ConversionError::Internal {
-                    detail: "the URI resolver is scaffold-only and performs no network I/O".into(),
+                Err(ConversionError::ComponentUnavailable {
+                    component: "builtin.source.uri".into(),
+                    detail: "HTTP(S) resolution is not implemented".into(),
                 })
             } else {
                 Err(ConversionError::Network {

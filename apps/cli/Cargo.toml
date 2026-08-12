@@ -10,8 +10,20 @@ name = "into-md"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+directories.workspace = true
 futures.workspace = true
+globset.workspace = true
 into-markdown = { path = "../../crates/api" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+tempfile.workspace = true
+url.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

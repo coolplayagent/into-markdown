@@ -27,8 +27,9 @@ impl MarkdownRenderer for GfmRenderer {
             if document.blocks.is_empty() {
                 Ok(String::new())
             } else {
-                Err(ConversionError::Internal {
-                    detail: "the GFM renderer is scaffold-only and has no serializer yet".into(),
+                Err(ConversionError::ComponentUnavailable {
+                    component: "builtin.gfm".into(),
+                    detail: "the Markdown serializer is not implemented".into(),
                 })
             }
         })

@@ -24,6 +24,8 @@ pub enum ErrorCode {
     Network,
     /// Local input/output failed.
     Io,
+    /// A recognized optional component is unavailable.
+    ComponentUnavailable,
     /// The caller cancelled conversion.
     Cancelled,
     /// An invariant or unavailable internal component prevented conversion.
@@ -44,6 +46,7 @@ impl ErrorCode {
             Self::Ai => "ai",
             Self::Network => "network",
             Self::Io => "io",
+            Self::ComponentUnavailable => "componentUnavailable",
             Self::Cancelled => "cancelled",
             Self::Internal => "internal",
         }
@@ -113,6 +116,14 @@ pub enum ConversionError {
         /// Underlying I/O failure without source bytes or secrets.
         detail: String,
     },
+    /// A recognized optional component is unavailable in this build or installation.
+    #[error("component {component} is unavailable: {detail}")]
+    ComponentUnavailable {
+        /// Stable component or subsystem ID.
+        component: String,
+        /// Build, installation, or runtime availability detail.
+        detail: String,
+    },
     /// The caller cancelled conversion.
     #[error("conversion cancelled")]
     Cancelled,
@@ -138,6 +149,7 @@ impl ConversionError {
             Self::Ai { .. } => ErrorCode::Ai,
             Self::Network { .. } => ErrorCode::Network,
             Self::Io { .. } => ErrorCode::Io,
+            Self::ComponentUnavailable { .. } => ErrorCode::ComponentUnavailable,
             Self::Cancelled => ErrorCode::Cancelled,
             Self::Internal { .. } => ErrorCode::Internal,
         }
@@ -169,6 +181,13 @@ mod tests {
             (ConversionError::Ai { provider: "test".into(), detail: String::new() }, "ai"),
             (ConversionError::Network { detail: String::new() }, "network"),
             (ConversionError::Io { detail: String::new() }, "io"),
+            (
+                ConversionError::ComponentUnavailable {
+                    component: "test".into(),
+                    detail: String::new(),
+                },
+                "componentUnavailable",
+            ),
             (ConversionError::Cancelled, "cancelled"),
             (ConversionError::Internal { detail: String::new() }, "internal"),
         ];
