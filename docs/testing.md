@@ -1,7 +1,17 @@
 # 测试策略
 
-脚手架已经为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
-离线、资源预算、模型清单校验和 CLI 骨架提供契约测试。
+仓库已经为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
+离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
+逐类覆盖全部 IR 节点，并覆盖恶意链接、HTML/Markdown 字符、动态围栏、表格换行、
+交错 span、脚注标签、资源模式、空内容、最深合法嵌套、LF 和重复运行确定性。
+CommonMark 解析契约还覆盖 character reference 链接绕过、空 code span、富文本边界
+空白以及表格内 code/link 的 pipe 语义；CLI 测试验证资源链接与写出目标共享同一
+哈希规划，并在冲突时不留下部分资源。bundle 契约使用含图片的真实转换结果验证
+默认、显式资源目录和 stdout 路径都只引用实际 ZIP entry；路径 URI 测试覆盖 POSIX
+绝对路径、Windows 同盘路径、UNC 同 share、合法 `..`、反斜杠以及特殊字符的
+CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定错误。
+Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与目录 `040755`，
+并在 Unix 临时目录真实解压有资源归档，验证 `assets/` 可遍历且资源可读取。
 
 后续实现应增加四层测试：
 

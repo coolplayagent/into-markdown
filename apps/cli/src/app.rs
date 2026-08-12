@@ -891,6 +891,13 @@ struct ExecutionPolicy {
     asset_mode: AssetModeArg,
     conflict: ConflictPolicy,
     assets_dir: Option<PathBuf>,
+    working_directory: PathBuf,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct AssetOutputPlan {
+    uri_prefix: Option<String>,
+    external_directory: Option<PathBuf>,
 }
 
 fn run_conversion(
@@ -953,6 +960,7 @@ fn run_conversion(
         asset_mode,
         conflict,
         assets_dir: arguments.assets_dir,
+        working_directory: context.cwd.clone(),
     };
     let reports = if plans.len() == 1 && plans[0].output.is_none() {
         vec![process_stdout(&plans[0], &policy, catalog, json_log, context)?]
@@ -1387,34 +1395,46 @@ fn process_stdout(
     json_log: bool,
     context: &mut RunContext<'_>,
 ) -> Result<BatchItemReport, CliError> {
-    let result = convert_item(&plan.item, policy)?;
-    if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
-        let assets_dir = policy
-            .assets_dir
-            .clone()
-            .or_else(|| plan.item.local_path.as_deref().map(default_asset_directory));
-        let assets_dir = assets_dir.ok_or_else(|| {
-            CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
-        })?;
-        for outcome in
-            output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
-        {
-            if outcome.renamed {
-                write_stderr_event(
-                    context.stderr,
-                    json_log,
-                    "warning",
-                    "assetRenamed",
-                    &format!("asset output renamed to {}", outcome.path.display()),
-                    Some(&plan.item.display),
-                    &format!(
-                        "{}: asset output renamed to {}",
-                        catalog.warning_prefix(),
-                        outcome.path.display()
-                    ),
-                )?;
+    let asset_output = plan_stdout_asset_output(
+        policy.emit,
+        policy.asset_mode,
+        policy.assets_dir.as_deref(),
+        plan.item.local_path.as_deref(),
+        &policy.working_directory,
+    )?;
+    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    if let Some(assets_dir) = asset_output.external_directory {
+        if !result.assets.is_empty() {
+            for outcome in output::write_assets(
+                &result.assets,
+                &assets_dir,
+                policy.asset_mode,
+                policy.conflict,
+            )? {
+                if outcome.renamed {
+                    write_stderr_event(
+                        context.stderr,
+                        json_log,
+                        "warning",
+                        "assetRenamed",
+                        &format!("asset output renamed to {}", outcome.path.display()),
+                        Some(&plan.item.display),
+                        &format!(
+                            "{}: asset output renamed to {}",
+                            catalog.warning_prefix(),
+                            outcome.path.display()
+                        ),
+                    )?;
+                }
             }
         }
+    } else if policy.asset_mode == AssetModeArg::Extract
+        && policy.emit != EmitKind::Bundle
+        && !result.assets.is_empty()
+    {
+        return Err({
+            CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
+        });
     }
     context.stdout.write_all(&output::encode_result(&result, policy.emit)?)?;
     Ok(BatchItemReport {
@@ -1499,24 +1519,35 @@ fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
 ) -> Result<(PathBuf, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
-    let result = convert_item(&plan.item, policy)?;
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
-    let outcome = output::write_file(
-        requested,
+    let output_path = output::preflight_file(requested, policy.conflict)?;
+    let asset_output = plan_file_asset_output(
+        policy.emit,
+        policy.asset_mode,
+        policy.assets_dir.as_deref(),
+        &output_path,
+        &policy.working_directory,
+    )?;
+    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    if let Some(assets_dir) = asset_output.external_directory.as_deref() {
+        output::preflight_assets(&result.assets, assets_dir, policy.asset_mode, policy.conflict)?;
+    }
+    let outcome = output::write_preflighted_file(
+        &output_path,
         &output::encode_result(&result, policy.emit)?,
         policy.conflict,
     )?;
     let mut warnings = Vec::new();
-    if outcome.renamed {
+    if output_path != requested {
         warnings.push(format!(
             "output renamed to {} because the requested path existed",
             outcome.path.display()
         ));
     }
-    if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
-        let assets_dir =
-            policy.assets_dir.clone().unwrap_or_else(|| default_asset_directory(&outcome.path));
+    if let Some(assets_dir) = asset_output.external_directory
+        && !result.assets.is_empty()
+    {
         for asset in
             output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
         {
@@ -1531,13 +1562,319 @@ fn process_file_task_inner(
 fn convert_item(
     item: &WorkItem,
     policy: &ExecutionPolicy,
+    asset_uri_prefix: Option<String>,
 ) -> Result<into_markdown::ConversionResult, CliError> {
     validate_input_network(&item.input, &policy.options)?;
     let mut request = ConversionRequest::new(item.input.clone());
     request.options = policy.options.clone();
+    if policy.asset_mode == AssetModeArg::Extract {
+        request.options.output.asset_uri_prefix = asset_uri_prefix;
+    }
     request.hint = policy.hint.clone();
     let engine = into_markdown::default_engine().map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
+}
+
+fn plan_stdout_asset_output(
+    emit: EmitKind,
+    mode: AssetModeArg,
+    configured_directory: Option<&Path>,
+    local_input: Option<&Path>,
+    working_directory: &Path,
+) -> Result<AssetOutputPlan, CliError> {
+    if mode != AssetModeArg::Extract {
+        return Ok(AssetOutputPlan { uri_prefix: None, external_directory: None });
+    }
+    if emit == EmitKind::Bundle {
+        return Ok(AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None });
+    }
+    let external_directory = configured_directory
+        .map(Path::to_path_buf)
+        .or_else(|| local_input.map(default_asset_directory));
+    let uri_prefix = external_directory
+        .as_deref()
+        .map(|directory| asset_uri_prefix_for_stdout(directory, working_directory))
+        .transpose()?;
+    Ok(AssetOutputPlan { uri_prefix, external_directory })
+}
+
+fn plan_file_asset_output(
+    emit: EmitKind,
+    mode: AssetModeArg,
+    configured_directory: Option<&Path>,
+    output: &Path,
+    working_directory: &Path,
+) -> Result<AssetOutputPlan, CliError> {
+    if mode != AssetModeArg::Extract {
+        return Ok(AssetOutputPlan { uri_prefix: None, external_directory: None });
+    }
+    if emit == EmitKind::Bundle {
+        return Ok(AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None });
+    }
+    let external_directory =
+        configured_directory.map_or_else(|| default_asset_directory(output), Path::to_path_buf);
+    Ok(AssetOutputPlan {
+        uri_prefix: Some(asset_uri_prefix_for_file(
+            output,
+            &external_directory,
+            working_directory,
+        )?),
+        external_directory: Some(external_directory),
+    })
+}
+
+fn asset_uri_prefix_for_stdout(
+    directory: &Path,
+    working_directory: &Path,
+) -> Result<String, CliError> {
+    asset_uri_prefix_for_stdout_with_flavor(
+        directory.as_os_str().as_encoded_bytes(),
+        working_directory.as_os_str().as_encoded_bytes(),
+        native_path_flavor(),
+    )
+}
+
+fn asset_uri_prefix_for_stdout_with_flavor(
+    directory: &[u8],
+    working_directory: &[u8],
+    flavor: PathFlavor,
+) -> Result<String, CliError> {
+    let base = lexical_absolute(working_directory, None, flavor)?;
+    let target = lexical_absolute(directory, Some(&base), flavor)?;
+    relative_uri_path(&base, &target)
+}
+
+fn asset_uri_prefix_for_file(
+    output: &Path,
+    directory: &Path,
+    working_directory: &Path,
+) -> Result<String, CliError> {
+    asset_uri_prefix_for_file_with_flavor(
+        output.as_os_str().as_encoded_bytes(),
+        directory.as_os_str().as_encoded_bytes(),
+        working_directory.as_os_str().as_encoded_bytes(),
+        native_path_flavor(),
+    )
+}
+
+fn asset_uri_prefix_for_file_with_flavor(
+    output: &[u8],
+    directory: &[u8],
+    working_directory: &[u8],
+    flavor: PathFlavor,
+) -> Result<String, CliError> {
+    let cwd = lexical_absolute(working_directory, None, flavor)?;
+    let mut base = lexical_absolute(output, Some(&cwd), flavor)?;
+    if base.components.pop().is_none() {
+        return Err(asset_path_unsupported("output path has no filename"));
+    }
+    let target = lexical_absolute(directory, Some(&cwd), flavor)?;
+    relative_uri_path(&base, &target)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PathFlavor {
+    Posix,
+    Windows,
+}
+
+#[cfg(not(windows))]
+const fn native_path_flavor() -> PathFlavor {
+    PathFlavor::Posix
+}
+
+#[cfg(windows)]
+const fn native_path_flavor() -> PathFlavor {
+    PathFlavor::Windows
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LexicalRoot {
+    Posix,
+    WindowsDrive(u8),
+    Unc { server: Vec<u8>, share: Vec<u8> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LexicalAbsolutePath {
+    root: LexicalRoot,
+    components: Vec<Vec<u8>>,
+}
+
+type ParsedAbsoluteRoot<'a> = Option<(LexicalRoot, &'a [u8], PathFlavor)>;
+
+fn lexical_absolute(
+    path: &[u8],
+    relative_base: Option<&LexicalAbsolutePath>,
+    flavor: PathFlavor,
+) -> Result<LexicalAbsolutePath, CliError> {
+    if let Some((root, rest, parsed_flavor)) = absolute_root(path, flavor)? {
+        let mut absolute = LexicalAbsolutePath { root, components: Vec::new() };
+        normalize_components(&mut absolute.components, rest, parsed_flavor);
+        return Ok(absolute);
+    }
+    if flavor == PathFlavor::Windows
+        && path.len() >= 2
+        && path[0].is_ascii_alphabetic()
+        && path[1] == b':'
+    {
+        return Err(asset_path_unsupported(
+            "drive-relative paths cannot be represented safely in Markdown",
+        ));
+    }
+    if flavor == PathFlavor::Windows && path.first().is_some_and(|byte| is_separator(*byte, flavor))
+    {
+        return Err(asset_path_unsupported(
+            "root-relative Windows paths cannot be represented without a drive",
+        ));
+    }
+    let Some(base) = relative_base else {
+        return Err(asset_path_unsupported("path base is not absolute"));
+    };
+    let mut absolute = base.clone();
+    normalize_components(&mut absolute.components, path, flavor);
+    Ok(absolute)
+}
+
+fn absolute_root(path: &[u8], flavor: PathFlavor) -> Result<ParsedAbsoluteRoot<'_>, CliError> {
+    if flavor == PathFlavor::Posix {
+        let mut cursor = 0;
+        while cursor < path.len() && path[cursor] == b'/' {
+            cursor += 1;
+        }
+        return Ok((cursor > 0).then_some((LexicalRoot::Posix, &path[cursor..], flavor)));
+    }
+    if path.len() >= 2 && is_separator(path[0], flavor) && is_separator(path[1], flavor) {
+        let mut cursor = 2;
+        while cursor < path.len() && is_separator(path[cursor], flavor) {
+            cursor += 1;
+        }
+        let server_start = cursor;
+        while cursor < path.len() && !is_separator(path[cursor], flavor) {
+            cursor += 1;
+        }
+        let server = &path[server_start..cursor];
+        if server.is_empty() {
+            return Err(asset_path_unsupported("UNC path is missing its server"));
+        }
+        while cursor < path.len() && is_separator(path[cursor], flavor) {
+            cursor += 1;
+        }
+        let share_start = cursor;
+        while cursor < path.len() && !is_separator(path[cursor], flavor) {
+            cursor += 1;
+        }
+        let share = &path[share_start..cursor];
+        if share.is_empty() {
+            return Err(asset_path_unsupported("UNC path is missing its share"));
+        }
+        if matches!(server, b"." | b".." | b"?") || matches!(share, b"." | b"..") {
+            return Err(asset_path_unsupported("UNC path has an invalid server or share"));
+        }
+        while cursor < path.len() && is_separator(path[cursor], flavor) {
+            cursor += 1;
+        }
+        return Ok(Some((
+            LexicalRoot::Unc { server: server.to_vec(), share: share.to_vec() },
+            &path[cursor..],
+            flavor,
+        )));
+    }
+    if path.len() >= 3
+        && path[0].is_ascii_alphabetic()
+        && path[1] == b':'
+        && is_separator(path[2], flavor)
+    {
+        return Ok(Some((
+            LexicalRoot::WindowsDrive(path[0].to_ascii_uppercase()),
+            &path[3..],
+            flavor,
+        )));
+    }
+    Ok(None)
+}
+
+fn split_components(path: &[u8], flavor: PathFlavor) -> impl Iterator<Item = &[u8]> {
+    path.split(move |byte| is_separator(*byte, flavor)).filter(|component| !component.is_empty())
+}
+
+fn normalize_components(output: &mut Vec<Vec<u8>>, path: &[u8], flavor: PathFlavor) {
+    for component in split_components(path, flavor) {
+        match component {
+            b"." => {}
+            b".." => {
+                output.pop();
+            }
+            _ => output.push(component.to_vec()),
+        }
+    }
+}
+
+fn is_separator(byte: u8, flavor: PathFlavor) -> bool {
+    byte == b'/' || flavor == PathFlavor::Windows && byte == b'\\'
+}
+
+fn relative_uri_path(
+    base: &LexicalAbsolutePath,
+    target: &LexicalAbsolutePath,
+) -> Result<String, CliError> {
+    if !same_root(&base.root, &target.root) {
+        return Err(asset_path_unsupported(
+            "asset directory and Markdown output use different filesystem roots",
+        ));
+    }
+    let windows = !matches!(base.root, LexicalRoot::Posix);
+    let common = base
+        .components
+        .iter()
+        .zip(&target.components)
+        .take_while(|(left, right)| component_eq(left, right, windows))
+        .count();
+    let mut parts = vec![b"..".to_vec(); base.components.len() - common];
+    parts.extend(target.components[common..].iter().cloned());
+    if parts.is_empty() {
+        return Ok(".".into());
+    }
+    Ok(parts.iter().map(|part| encode_uri_segment(part)).collect::<Vec<_>>().join("/"))
+}
+
+fn same_root(left: &LexicalRoot, right: &LexicalRoot) -> bool {
+    match (left, right) {
+        (LexicalRoot::Posix, LexicalRoot::Posix) => true,
+        (LexicalRoot::WindowsDrive(left), LexicalRoot::WindowsDrive(right)) => {
+            left.eq_ignore_ascii_case(right)
+        }
+        (
+            LexicalRoot::Unc { server: left_server, share: left_share },
+            LexicalRoot::Unc { server: right_server, share: right_share },
+        ) => {
+            component_eq(left_server, right_server, true)
+                && component_eq(left_share, right_share, true)
+        }
+        _ => false,
+    }
+}
+
+fn component_eq(left: &[u8], right: &[u8], case_insensitive: bool) -> bool {
+    if case_insensitive { left.eq_ignore_ascii_case(right) } else { left == right }
+}
+
+fn encode_uri_segment(segment: &[u8]) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.iter().copied() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(b"0123456789ABCDEF"[usize::from(byte >> 4)]));
+            encoded.push(char::from(b"0123456789ABCDEF"[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+fn asset_path_unsupported(message: impl Into<String>) -> CliError {
+    CliError::new(ExitClass::Usage, "assetPathUnsupported", message)
 }
 
 fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Result<(), CliError> {
@@ -1778,7 +2115,13 @@ fn redact_url(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use into_markdown::{
+        Asset, AssetId, Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind,
+        SourceLocator, asset_filename, render_markdown,
+    };
+    use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
+    use std::io::{Cursor, Read as _};
 
     fn invoke(arguments: &[&str], stdin_is_terminal: bool) -> Result<(String, String), CliError> {
         let mut stdout = Vec::new();
@@ -1809,6 +2152,289 @@ mod tests {
         let (stdout, _) = invoke(&[], true).unwrap();
         assert!(stdout.contains("Usage:"));
         assert!(stdout.contains("providers"));
+    }
+
+    #[test]
+    fn bundle_assets_always_use_internal_prefix_without_external_writes() {
+        let output = Path::new("out/document.mdpkg.zip");
+        let cwd = Path::new("/work");
+        let plans = [
+            plan_file_asset_output(EmitKind::Bundle, AssetModeArg::Extract, None, output, cwd),
+            plan_file_asset_output(
+                EmitKind::Bundle,
+                AssetModeArg::Extract,
+                Some(Path::new("custom assets")),
+                output,
+                cwd,
+            ),
+            plan_stdout_asset_output(
+                EmitKind::Bundle,
+                AssetModeArg::Extract,
+                Some(Path::new("custom assets")),
+                Some(Path::new("input.pdf")),
+                cwd,
+            ),
+        ];
+        for asset_output in plans {
+            let asset_output = asset_output.unwrap();
+            assert_eq!(
+                asset_output,
+                AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None }
+            );
+            assert_bundle_image_href_hits_entry(asset_output.uri_prefix.as_deref().unwrap());
+        }
+    }
+
+    #[test]
+    fn filesystem_asset_paths_are_segment_encoded_and_survive_commonmark() {
+        let cwd = Path::new("/work/project");
+        assert_eq!(
+            asset_uri_prefix_for_file(
+                Path::new("out/document.md"),
+                Path::new("out/assets #?%/中文"),
+                cwd,
+            )
+            .unwrap(),
+            "assets%20%23%3F%25/%E4%B8%AD%E6%96%87"
+        );
+        assert_eq!(
+            asset_uri_prefix_for_file(
+                Path::new("out/nested/document.md"),
+                Path::new("out/nested/../../safe assets/图"),
+                cwd,
+            )
+            .unwrap(),
+            "../../safe%20assets/%E5%9B%BE"
+        );
+        let windows_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"C:\Users\Docs\document.md",
+            r"c:\users\Assets #?%\中文".as_bytes(),
+            br"C:\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        assert_eq!(windows_prefix, "../Assets%20%23%3F%25/%E4%B8%AD%E6%96%87");
+        let unc_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"\\Server\Share\docs\document.md",
+            r"\\server\share\assets #?%\中文".as_bytes(),
+            br"\\server\share\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        assert_eq!(unc_prefix, "../assets%20%23%3F%25/%E4%B8%AD%E6%96%87");
+        let stdout_prefix = asset_uri_prefix_for_stdout_with_flavor(
+            "/var/assets #?%/中文".as_bytes(),
+            b"/work/project",
+            PathFlavor::Posix,
+        )
+        .unwrap();
+        assert_eq!(stdout_prefix, "../../var/assets%20%23%3F%25/%E4%B8%AD%E6%96%87");
+        assert_eq!(
+            asset_uri_prefix_for_stdout_with_flavor(
+                "assets #?%/中文\\literal".as_bytes(),
+                b"/work/project",
+                PathFlavor::Posix,
+            )
+            .unwrap(),
+            "assets%20%23%3F%25/%E4%B8%AD%E6%96%87%5Cliteral"
+        );
+
+        for (output, directory, cwd, flavor) in [
+            (
+                br"C:\docs\document.md".as_slice(),
+                br"D:\assets".as_slice(),
+                br"C:\work".as_slice(),
+                PathFlavor::Windows,
+            ),
+            (
+                br"\\server\share\document.md".as_slice(),
+                br"\\server\other\assets".as_slice(),
+                br"\\server\share\work".as_slice(),
+                PathFlavor::Windows,
+            ),
+        ] {
+            let error =
+                asset_uri_prefix_for_file_with_flavor(output, directory, cwd, flavor).unwrap_err();
+            assert_eq!(error.code(), "assetPathUnsupported");
+            assert_eq!(error.exit_code(), 2);
+        }
+        assert_eq!(
+            asset_uri_prefix_for_file_with_flavor(
+                br"/work/document.md",
+                br"C:\assets",
+                br"/work",
+                PathFlavor::Posix,
+            )
+            .unwrap(),
+            "C%3A%5Cassets"
+        );
+        let error = asset_uri_prefix_for_stdout_with_flavor(
+            br"\\server\share\assets",
+            br"C:\work",
+            PathFlavor::Windows,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "assetPathUnsupported");
+    }
+
+    #[test]
+    fn rendered_asset_uris_resolve_with_commonmark_and_file_url_semantics() {
+        let windows_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"C:\Users\Docs\document.md",
+            r"c:\users\Assets #?%\中文".as_bytes(),
+            br"C:\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        let unc_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"\\Server\Share\docs\document.md",
+            r"\\server\share\assets #?%\中文".as_bytes(),
+            br"\\server\share\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        let stdout_prefix = asset_uri_prefix_for_stdout_with_flavor(
+            "/var/assets #?%/中文".as_bytes(),
+            b"/work/project",
+            PathFlavor::Posix,
+        )
+        .unwrap();
+
+        let asset = Asset {
+            id: AssetId("uri-image".into()),
+            filename: Some("image.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("image".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        assert_rendered_asset_resolves(
+            &document,
+            &asset,
+            &windows_prefix,
+            "file:///C:/Users/Docs/",
+            "file:///C:/Users/Assets%20%23%3F%25/%E4%B8%AD%E6%96%87",
+        );
+        assert_rendered_asset_resolves(
+            &document,
+            &asset,
+            &unc_prefix,
+            "file://server/share/docs/",
+            "file://server/share/assets%20%23%3F%25/%E4%B8%AD%E6%96%87",
+        );
+        assert_rendered_asset_resolves(
+            &document,
+            &asset,
+            &stdout_prefix,
+            "file:///work/project/",
+            "file:///var/assets%20%23%3F%25/%E4%B8%AD%E6%96%87",
+        );
+        let mut options = ConversionOptions::default();
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("out/document.md");
+        let directory = root.path().join("out/nested/../assets #?%/中文\\literal");
+        options.output.asset_uri_prefix =
+            Some(asset_uri_prefix_for_file(&output, &directory, root.path()).unwrap());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let href = markdown_image_href(&markdown);
+        output::write_assets(
+            std::slice::from_ref(&asset),
+            &directory,
+            AssetModeArg::Extract,
+            ConflictPolicy::Error,
+        )
+        .unwrap();
+        let base_url = url::Url::from_directory_path(output.parent().unwrap()).unwrap();
+        let resolved = base_url.join(&href).unwrap();
+        assert_eq!(resolved.scheme(), "file");
+        assert!(resolved.query().is_none());
+        assert!(resolved.fragment().is_none());
+        assert_eq!(fs::read(resolved.to_file_path().unwrap()).unwrap(), asset.bytes);
+    }
+
+    fn assert_rendered_asset_resolves(
+        document: &Document,
+        asset: &Asset,
+        prefix: &str,
+        base: &str,
+        expected_directory: &str,
+    ) {
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some(prefix.into());
+        let markdown = render_markdown(document, std::slice::from_ref(asset), &options).unwrap();
+        let href = markdown_image_href(&markdown);
+        let resolved = url::Url::parse(base).unwrap().join(&href).unwrap();
+        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
+        assert_eq!(resolved.as_str(), format!("{expected_directory}/{filename}"));
+        assert_eq!(resolved.scheme(), "file");
+        assert!(resolved.query().is_none());
+        assert!(resolved.fragment().is_none());
+        assert!(!href.contains(':'));
+        assert!(!href.starts_with("//"));
+    }
+
+    fn assert_bundle_image_href_hits_entry(prefix: &str) {
+        let asset = Asset {
+            id: AssetId("bundle-route-image".into()),
+            filename: Some("route.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![7, 8, 9],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("bundle".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some(prefix.into());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let result = into_markdown::ConversionResult {
+            document,
+            markdown,
+            assets: vec![asset],
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        let bundle = output::encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
+        let markdown = {
+            let mut entry = archive.by_name("document.md").unwrap();
+            let mut markdown = String::new();
+            entry.read_to_string(&mut markdown).unwrap();
+            markdown
+        };
+        let href = markdown_image_href(&markdown);
+        assert!(archive.by_name(&href).is_ok(), "missing ZIP entry for image href {href}");
+    }
+
+    fn markdown_image_href(markdown: &str) -> String {
+        MarkdownParser::new(markdown)
+            .find_map(|event| match event {
+                Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            })
+            .unwrap()
     }
 
     #[test]

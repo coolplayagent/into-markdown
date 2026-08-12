@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//crates:__subpackages__"])
 
@@ -9,5 +9,15 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "into_markdown_render_markdown",
     edition = "2024",
-    deps = ["//crates/core"],
+    deps = [
+        "//crates/core",
+        "@crates//:base64",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "render_markdown_test",
+    crate = ":render_markdown",
+    deps = ["@crates//:pulldown-cmark"],
 )

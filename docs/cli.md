@@ -90,11 +90,27 @@ into-md <INPUT...>
   诊断、溯源和 base64 资源。
 - `bundle` 生成 `.mdpkg.zip`，固定包含 `manifest.json`、`document.md`、
   `document.ir.json`、`diagnostics.json`、`provenance.json` 和 `assets/`。归档路径
-  会被净化并稳定排序。
+  会被净化并稳定排序。bundle 内的 Markdown 固定引用 `assets/` 下的条目；无论
+  输出到文件还是 stdout，bundle 都不会因默认值或显式 `--assets-dir` 再向外部
+  文件系统抽取一份资源。ZIP central directory 中普通文件固定为 Unix mode `0644`，
+  `assets/` 目录固定为 `0755`，因此跨平台解压后目录保持可遍历且文件保持只读语义。
 - 资源策略默认 `extract`。本地单文件输出到 stdout 时，资源写到输入同级
   `<文档名>_assets/`；stdin 和 URI 若产生资源，必须指定 `--assets-dir`。
 - 文件冲突默认改名为 `name-1.ext` 并发出 warning；`error` 拒绝写入，
   `overwrite` 通过同目录临时文件原子替换。
+- extract 资源使用 `asset-<SHA-256(asset ID)>.<安全扩展名>` 稳定命名，并在主产物
+  或任何资源写入前预检全部非空资源。为了防止 Markdown 链接因改名漂移，资源目标
+  已存在时 `rename` 安全降级为 `assetConflict`；`overwrite` 才会原子替换稳定目标。
+  `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
+  失败而不会被覆盖。当前不承诺主产物与多个资源之间的整体回滚，跨文件事务边界由
+  资源写出策略任务处理。
+- CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
+  规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
+  目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定
+  `assetPathUnsupported`，绝不输出会被解释为自定义 scheme 或网络 host 的目标。
+  每个路径段中的空格、`#`、`?`、`%`、Unicode、反斜杠字面量和控制字节按 UTF-8
+  百分号编码，渲染器保留这些 `%HH` 而不二次编码。文件输出以 Markdown 文件父目录
+  为基准；stdout 以当前工作目录为基准。
 - 多输入输出保留相对于各输入根的目录结构；不同输入根产生同名输出时先加输入根名
   前缀，仍冲突时再使用稳定数字后缀，所有消歧均在调度前完成。
 - `--report` 写入带 `schemaVersion` 的 JSON 报告，包含逐项输入、输出、状态、

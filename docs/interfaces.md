@@ -34,6 +34,31 @@
 `Engine::detect(DetectionRequest)` 只执行输入解析和格式检测，供 CLI 的
 `formats detect` 使用；它不会探测或调用转换器。
 
+## Markdown 渲染器
+
+`MarkdownRenderer` 是统一 IR 到 GFM 的唯一边界。内置 `builtin.gfm` 会校验 IR
+与所有嵌套图片的资源引用，规范化 LF，并按源顺序输出稳定字节。渲染结果是纯文本；
+SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器诊断和引擎按深度优先
+阅读顺序收集的 provenance 原样保留在 `ConversionResult` 中。
+
+资源模式只决定 Markdown 表示：`extract` 生成与资源写出层共享的
+`asset-<SHA-256(asset ID)>.<安全扩展名>` 有界 ASCII 文件名，
+`embed` 生成 base64 data URI，`omit` 保留 alt 而不生成悬空链接。资源写出层必须
+使用相同名字且不能在写出后单方面改名。CLI 在主产物或任何资源写入前预检全部
+非空资源目标；稳定资源路径已经存在时，`rename` 与 `error` 都返回
+`assetConflict`，只有 `overwrite` 会原子替换。`rename` 与 `error` 的每个精确目标
+都使用原子 no-clobber 写入，因此预检后的竞态文件不会被覆盖；若竞态发生在一组
+输出的中途，已完成的主产物或资源不会自动回滚。跨主产物与全部资源的事务式提交
+由资源写出策略任务统一实现。
+
+CLI 将文件系统路径按 POSIX、Windows drive 和 UNC 语法独立做词法规范化，并只在
+相同 root/drive/share 内生成相对于 Markdown 基准目录的 percent-encoded URI path
+reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported`，不得输出
+`C:/...` 自定义 scheme 或 `//server/...` 网络引用。原始 `%` 编码为 `%25`，渲染器
+不会再次编码已经形成的 `%HH`。文件输出以 Markdown 文件父目录为基准，stdout 以
+当前工作目录为基准。bundle 是自包含输出，渲染前固定使用 `assets` 前缀，归档内
+`document.md` 的每个抽取资源 href 必须精确命中对应 ZIP entry，且不额外写外部资源。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，

@@ -7,9 +7,10 @@ pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{Engine, EngineBuilder, RegistryBuilder};
 pub use into_markdown_ocr::{ModelArtifact, ModelBundle, ModelManifest};
+pub use into_markdown_render_markdown::{asset_filename, render as render_markdown};
 
 /// Create the standard builder with safe local source resolvers, hint
-/// detection, a placeholder GFM renderer, and non-networking provider seams.
+/// detection, the deterministic GFM renderer, and non-networking provider seams.
 /// No production converter is registered by the scaffold.
 #[must_use]
 pub fn default_engine_builder() -> EngineBuilder {

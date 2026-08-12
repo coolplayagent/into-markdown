@@ -46,6 +46,45 @@ IR 可表达段落、标题、富文本、嵌套列表、表格、代码、公�
 AI 提供者不能返回无法追踪的整篇重写文档。它只能返回带 AI 溯源信息的新节点，
 或带版本的 `DocumentPatch`；引擎验证补丁后才能应用。原始来源节点始终可审计。
 
+## GFM 渲染契约
+
+中央渲染器按 IR 的阅读顺序输出确定性的 GFM，所有换行统一为 LF，并且只在非空
+输出末尾保留一个 LF。渲染前会再次验证 Document 和完整资源清单；任何层级中的
+图片引用缺失、资源 ID 重复、媒体类型不安全或输出策略无法兑现时都返回稳定的
+`internal` 错误，不生成部分结果或伪成功。渲染器不修改转换器已经产生的诊断，
+也不重排引擎收集的 provenance。
+
+GFM 没有原生行列合并语法。表格会展开为矩形逻辑网格：内容只出现在 span 的
+左上原点，其余覆盖位置为空；原点使用 `data-rowspan` 和 `data-colspan` 的内联
+HTML 保留跨度语义。只有首行全部单元格均为表头时才使用 GFM 表头行，其他
+`header` 单元格使用 `<strong>` 保留强调。多块单元格以 `<br>` 展平。下划线、
+上标和下标分别使用 `<u>`、`<sup>` 和 `<sub>`；代码和公式围栏始终长于内容中
+连续反引号。列表的源 marker label 经过百分号编码后放入 HTML 注释，避免丢失。
+
+Document metadata 不进入 Markdown，防止 namespaced properties 意外泄漏；调用方
+仍可从结构化 Document 读取它。provenance 和诊断同样只存在于结构化转换结果中。
+页面、幻灯片、工作表与时间片段使用可见、稳定的标题或时间标签表达。
+
+渲染器只生成资源引用，不创建目录或写文件。`extract` 使用
+`asset_uri_prefix + asset-<SHA-256(asset ID)>.<安全扩展名>`；建议文件名只贡献
+最长 16 字节的 ASCII 字母数字扩展名。该纯函数由渲染器和 CLI 写出层共享，结果
+长度有界、全 ASCII，且不受路径分隔符、Unicode、大小写折叠与 Windows 保留名影响。
+CLI 以 Markdown 所在目录（stdout 使用当前工作目录）为基准，对文件系统路径先按
+POSIX、Windows drive 或 UNC 语法做词法规范化，再在相同 root/drive/share 内生成
+逐段编码的相对 URI；跨 root/drive/share 稳定拒绝，避免把盘符解释为 scheme 或把
+UNC server 解释为网络 host。渲染器保留其中已经形成的 `%HH`，避免二次编码。bundle
+在渲染前固定使用 `assets` 前缀，其 `document.md` 只引用归档内条目，不执行额外的
+外部 extract。
+`embed` 只接受有字节且 MIME token 安全的资源并
+生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。资源落盘、冲突
+处理与原子写入属于调用方职责。
+
+源文档链接会拒绝控制字符、任何 HTML character reference、`javascript`、
+`vbscript`、`data`、`file` scheme 和含 userinfo 的绝对 URL，再对 Markdown 目标
+中的结构字符做百分号编码并把 `&` 输出为 `&amp;`，防止 CommonMark 实体解码改变
+已校验的目标。渲染器
+生成的受控 data URI 不走源链接策略，因此保留 data URI 必需的分隔符。
+
 ## 支持平台
 
 - macOS ARM64

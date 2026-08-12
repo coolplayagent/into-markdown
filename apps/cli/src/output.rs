@@ -4,7 +4,7 @@ use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
 use into_markdown::{
     Asset, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionResult, DTO_SCHEMA_VERSION,
-    DiagnosticsDto, DtoJsonStyle, ProvenanceListDto, ResultDto,
+    DiagnosticsDto, DtoJsonStyle, ProvenanceListDto, ResultDto, asset_filename,
 };
 use std::fs;
 use std::io::{Cursor, Write};
@@ -37,20 +37,75 @@ pub fn write_assets(
     mode: AssetModeArg,
     conflict: ConflictPolicy,
 ) -> Result<Vec<WriteOutcome>, CliError> {
-    if mode != AssetModeArg::Extract || assets.is_empty() {
+    write_assets_with_hook(assets, directory, mode, conflict, || Ok(()))
+}
+
+fn write_assets_with_hook(
+    assets: &[Asset],
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+    after_preflight: impl FnOnce() -> Result<(), CliError>,
+) -> Result<Vec<WriteOutcome>, CliError> {
+    let planned = plan_asset_writes(assets, directory, mode, conflict)?;
+    if planned.is_empty() {
         return Ok(Vec::new());
     }
     fs::create_dir_all(directory)?;
-    let mut outcomes = Vec::with_capacity(assets.len());
-    for (index, asset) in assets.iter().enumerate() {
+    after_preflight()?;
+    let mut outcomes = Vec::with_capacity(planned.len());
+    for (asset, path) in planned {
+        write_exact_file(&path, &asset.bytes, conflict == ConflictPolicy::Overwrite)?;
+        outcomes.push(WriteOutcome { path, renamed: false });
+    }
+    Ok(outcomes)
+}
+
+/// Validate every extracted-asset target without mutating the filesystem.
+pub fn preflight_assets(
+    assets: &[Asset],
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+) -> Result<(), CliError> {
+    plan_asset_writes(assets, directory, mode, conflict).map(|_| ())
+}
+
+fn plan_asset_writes<'a>(
+    assets: &'a [Asset],
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+) -> Result<Vec<(&'a Asset, PathBuf)>, CliError> {
+    if mode != AssetModeArg::Extract || assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut planned = Vec::with_capacity(assets.len());
+    let mut targets = std::collections::BTreeSet::new();
+    for asset in assets {
         if asset.bytes.is_empty() {
             continue;
         }
-        let fallback = format!("asset-{}", index + 1);
-        let filename = sanitize_filename(asset.filename.as_deref().unwrap_or(&fallback));
-        outcomes.push(write_file(&directory.join(filename), &asset.bytes, conflict)?);
+        let path = directory.join(asset_filename(&asset.id.0, asset.filename.as_deref()));
+        if !targets.insert(path.clone()) {
+            return Err(CliError::internal(format!(
+                "multiple assets resolve to {}",
+                path.display()
+            )));
+        }
+        if path.exists() && conflict != ConflictPolicy::Overwrite {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "assetConflict",
+                format!(
+                    "stable asset output already exists and cannot be renamed safely: {}",
+                    path.display()
+                ),
+            ));
+        }
+        planned.push((asset, path));
     }
-    Ok(outcomes)
+    Ok(planned)
 }
 
 /// Outcome of one atomic file write.
@@ -67,8 +122,23 @@ pub fn write_file(
     conflict: ConflictPolicy,
 ) -> Result<WriteOutcome, CliError> {
     let (path, renamed) = resolve_conflict(requested, conflict)?;
-    atomic_write(&path, bytes)?;
+    write_exact_file(&path, bytes, conflict == ConflictPolicy::Overwrite)?;
     Ok(WriteOutcome { path, renamed })
+}
+
+/// Resolve an output conflict without writing the file.
+pub fn preflight_file(path: &Path, conflict: ConflictPolicy) -> Result<PathBuf, CliError> {
+    resolve_conflict(path, conflict).map(|(resolved, _)| resolved)
+}
+
+/// Atomically write a previously resolved path without recalculating its name.
+pub fn write_preflighted_file(
+    path: &Path,
+    bytes: &[u8],
+    conflict: ConflictPolicy,
+) -> Result<WriteOutcome, CliError> {
+    write_exact_file(path, bytes, conflict == ConflictPolicy::Overwrite)?;
+    Ok(WriteOutcome { path: path.to_path_buf(), renamed: false })
 }
 
 /// Write a versioned JSON report atomically.
@@ -97,13 +167,12 @@ fn encode_document(document: &into_markdown::Document) -> Result<Vec<u8>, CliErr
 fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     let mut assets = Vec::new();
     let mut asset_entries = Vec::new();
-    for (index, asset) in result.assets.iter().enumerate() {
+    for asset in &result.assets {
         if asset.bytes.is_empty() {
             continue;
         }
-        let fallback = format!("asset-{}", index + 1);
-        let filename = sanitize_filename(asset.filename.as_deref().unwrap_or(&fallback));
-        let path = unique_bundle_path(&asset_entries, &format!("assets/{filename}"));
+        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
+        let path = format!("assets/{filename}");
         asset_entries.push(path.clone());
         assets.push(BundleAssetDto {
             id: asset.id.0.clone(),
@@ -155,84 +224,32 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut archive = zip::ZipWriter::new(&mut cursor);
-        let options = SimpleFileOptions::default()
+        let file_options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
+        let directory_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
         for (name, bytes) in entries {
             archive
-                .start_file(name, options)
+                .start_file(name, file_options)
                 .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
             archive.write_all(&bytes)?;
         }
-        archive.add_directory("assets/", options).map_err(|error| {
+        archive.add_directory("assets/", directory_options).map_err(|error| {
             CliError::internal(format!("create bundle assets directory: {error}"))
         })?;
         for (asset, entry) in
             result.assets.iter().filter(|asset| !asset.bytes.is_empty()).zip(asset_entries)
         {
             archive
-                .start_file(entry, options)
+                .start_file(entry, file_options)
                 .map_err(|error| CliError::internal(format!("create bundle asset: {error}")))?;
             archive.write_all(&asset.bytes)?;
         }
         archive.finish().map_err(|error| CliError::internal(format!("finish bundle: {error}")))?;
     }
     Ok(cursor.into_inner())
-}
-
-fn unique_bundle_path(existing: &[String], requested: &str) -> String {
-    if !existing.iter().any(|value| value.eq_ignore_ascii_case(requested)) {
-        return requested.to_owned();
-    }
-    let path = Path::new(requested);
-    let parent = path.parent().and_then(Path::to_str).unwrap_or("");
-    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("asset");
-    let extension = path.extension().and_then(|value| value.to_str());
-    for number in 1_u64..=u64::MAX {
-        let name = extension.map_or_else(
-            || format!("{stem}-{number}"),
-            |extension| format!("{stem}-{number}.{extension}"),
-        );
-        let candidate = if parent.is_empty() { name } else { format!("{parent}/{name}") };
-        if !existing.iter().any(|value| value.eq_ignore_ascii_case(&candidate)) {
-            return candidate;
-        }
-    }
-    format!("assets/asset-{}", existing.len() + 1)
-}
-
-fn sanitize_filename(value: &str) -> String {
-    let filename = Path::new(value).file_name().and_then(|part| part.to_str()).unwrap_or("asset");
-    let mut sanitized = filename
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    sanitized.truncate(sanitized.len().min(200));
-    let sanitized = sanitized.trim_end_matches(['.', ' ']);
-    if sanitized.is_empty() || matches!(sanitized, "." | "..") {
-        "asset".into()
-    } else if is_windows_reserved_filename(sanitized) {
-        format!("_{sanitized}")
-    } else {
-        sanitized.into()
-    }
-}
-
-fn is_windows_reserved_filename(value: &str) -> bool {
-    let stem = value.split('.').next().unwrap_or(value).to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
-        || stem.strip_prefix("COM").is_some_and(|suffix| {
-            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-        })
-        || stem.strip_prefix("LPT").is_some_and(|suffix| {
-            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-        })
 }
 
 fn resolve_conflict(
@@ -276,7 +293,7 @@ fn resolve_conflict(
     ))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+fn write_exact_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), CliError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let filename = path.file_name().and_then(|value| value.to_str()).unwrap_or("output");
@@ -286,7 +303,19 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         .tempfile_in(parent)?;
     temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| CliError::from(error.error))?;
+    let result =
+        if overwrite { temporary.persist(path) } else { temporary.persist_noclobber(path) };
+    result.map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            CliError::new(
+                ExitClass::Io,
+                "outputConflict",
+                format!("output appeared after preflight: {}", path.display()),
+            )
+        } else {
+            CliError::from(error.error)
+        }
+    })?;
     Ok(())
 }
 
@@ -294,9 +323,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
 mod tests {
     use super::*;
     use into_markdown::{
-        AssetId, BundleManifestDto, ConversionResult, DiagnosticsDto, Document, ProvenanceListDto,
+        AssetId, Block, BlockNode, BundleManifestDto, ConversionOptions, ConversionResult,
+        DiagnosticsDto, Document, NodeId, Provenance, ProvenanceKind, ProvenanceListDto,
+        SourceLocator, render_markdown,
     };
-    use std::io::Read;
+    use pulldown_cmark::{Event, Parser, Tag};
+    use std::io::Read as _;
 
     fn empty_result() -> ConversionResult {
         ConversionResult {
@@ -309,6 +341,39 @@ mod tests {
                 bytes: vec![1, 2, 3],
                 external_uri: None,
             }],
+            diagnostics: vec![],
+            provenance: vec![],
+        }
+    }
+
+    fn image_result(prefix: &str) -> ConversionResult {
+        let asset = Asset {
+            id: AssetId("bundle-image".into()),
+            filename: Some("bundle image.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1, 2, 3],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("bundle".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some(prefix.into());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        ConversionResult {
+            document,
+            markdown,
+            assets: vec![asset],
             diagnostics: vec![],
             provenance: vec![],
         }
@@ -357,7 +422,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"manifest.json".to_owned()));
         assert!(names.contains(&"assets/".to_owned()));
-        assert!(names.contains(&"assets/unsafe_image.png".to_owned()));
+        assert!(
+            names.contains(&format!(
+                "assets/{}",
+                asset_filename("image", Some("../unsafe image.png"))
+            ))
+        );
         assert!(!names.iter().any(|name| name.contains("..")));
 
         let mut manifest = String::new();
@@ -376,7 +446,45 @@ mod tests {
     }
 
     #[test]
-    fn bundle_renames_case_collisions_and_reserved_asset_names() {
+    fn bundle_entries_have_fixed_file_and_directory_modes_with_or_without_assets() {
+        for (has_assets, mut result) in [(false, empty_result()), (true, empty_result())] {
+            if !has_assets {
+                result.assets.clear();
+            }
+            let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+            let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+            for index in 0..archive.len() {
+                let entry = archive.by_index(index).unwrap();
+                let expected = if entry.name() == "assets/" { 0o40_755 } else { 0o100_644 };
+                assert_eq!(entry.unix_mode(), Some(expected), "mode for {}", entry.name());
+            }
+            assert_eq!(archive.by_name("assets/").unwrap().unix_mode(), Some(0o40755));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_extraction_produces_a_traversable_asset_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let result = empty_result();
+        let filename = asset_filename("image", Some("../unsafe image.png"));
+        let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        archive.extract(destination.path()).unwrap();
+
+        let assets = destination.path().join("assets");
+        assert_eq!(fs::metadata(&assets).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::metadata(assets.join(&filename)).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fs::read(assets.join(filename)).unwrap(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn bundle_uses_stable_cross_platform_asset_names() {
         let mut result = empty_result();
         result.assets = vec![
             Asset {
@@ -413,10 +521,18 @@ mod tests {
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_owned())
             .collect::<Vec<_>>();
-        assert!(names.contains(&"assets/Image.png".into()));
-        assert!(names.contains(&"assets/image-1.png".into()));
-        assert!(names.contains(&"assets/_CON.txt".into()));
-        assert!(names.contains(&"assets/__.png".into()));
+        for asset in &result.assets {
+            assert!(names.contains(&format!(
+                "assets/{}",
+                asset_filename(&asset.id.0, asset.filename.as_deref())
+            )));
+        }
+        let asset_entries = names
+            .iter()
+            .filter(|name| name.starts_with("assets/") && name.as_str() != "assets/")
+            .collect::<Vec<_>>();
+        assert_eq!(asset_entries.len(), result.assets.len());
+        assert!(asset_entries.iter().all(|name| name.is_ascii()));
     }
 
     #[test]
@@ -437,6 +553,147 @@ mod tests {
         write_report(&path, &report).unwrap();
         let json = fs::read_to_string(path).unwrap();
         assert_eq!(BatchReport::from_json(&json).unwrap(), report);
+    }
+
+    #[test]
+    fn bundle_markdown_image_href_exactly_matches_its_zip_entry() {
+        let result = image_result("assets");
+        let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let markdown = {
+            let mut entry = archive.by_name("document.md").unwrap();
+            let mut markdown = String::new();
+            entry.read_to_string(&mut markdown).unwrap();
+            markdown
+        };
+        let href = Parser::new(&markdown)
+            .find_map(|event| match event {
+                Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(archive.by_name(&href).is_ok(), "missing ZIP entry for image href {href}");
+        assert_eq!(
+            href,
+            format!("assets/{}", asset_filename("bundle-image", Some("bundle image.png")))
+        );
+    }
+
+    #[test]
+    fn stable_asset_conflicts_are_preflighted_before_any_write() {
+        let root = std::env::temp_dir().join(format!(
+            "into-md-assets-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let assets = vec![
+            Asset {
+                id: AssetId("first".into()),
+                filename: Some("same.PNG".into()),
+                media_type: "image/png".into(),
+                bytes: vec![1],
+                external_uri: None,
+            },
+            Asset {
+                id: AssetId("second".into()),
+                filename: Some("same.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![2],
+                external_uri: None,
+            },
+        ];
+        let second = root.join(asset_filename("second", Some("same.png")));
+        fs::write(&second, b"existing").unwrap();
+        let error = write_assets(&assets, &root, AssetModeArg::Extract, ConflictPolicy::Rename)
+            .unwrap_err();
+        assert_eq!(error.code(), "assetConflict");
+        assert!(!root.join(asset_filename("first", Some("same.PNG"))).exists());
+        assert_eq!(fs::read(second).unwrap(), b"existing");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_preflight_races_never_overwrite_primary_or_asset_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "into-md-race-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let requested = root.join("document.md");
+        fs::write(&requested, b"original").unwrap();
+        let planned = preflight_file(&requested, ConflictPolicy::Rename).unwrap();
+        assert_eq!(planned, root.join("document-1.md"));
+        fs::write(&planned, b"racer").unwrap();
+        let error = write_preflighted_file(&planned, b"new", ConflictPolicy::Rename).unwrap_err();
+        assert_eq!(error.code(), "outputConflict");
+        assert_eq!(fs::read(&planned).unwrap(), b"racer");
+
+        let asset = Asset {
+            id: AssetId("race".into()),
+            filename: Some("race.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![9],
+            external_uri: None,
+        };
+        let asset_target = root.join(asset_filename(&asset.id.0, asset.filename.as_deref()));
+        let error = write_assets_with_hook(
+            &[asset],
+            &root,
+            AssetModeArg::Extract,
+            ConflictPolicy::Rename,
+            || {
+                fs::write(&asset_target, b"asset-racer")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "outputConflict");
+        assert_eq!(fs::read(asset_target).unwrap(), b"asset-racer");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn renderer_asset_uri_and_writer_target_use_the_same_plan() {
+        let root = std::env::temp_dir().join(format!(
+            "into-md-linked-assets-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let asset = Asset {
+            id: AssetId("图片/CON".into()),
+            filename: Some("dir\\Case.PNG".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1, 2, 3],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("image".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some("assets".into());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        assert!(markdown.contains(&format!("assets/{filename}")));
+        write_assets(&[asset], &root.join("assets"), AssetModeArg::Extract, ConflictPolicy::Error)
+            .unwrap();
+        assert_eq!(fs::read(root.join("assets").join(filename)).unwrap(), [1, 2, 3]);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

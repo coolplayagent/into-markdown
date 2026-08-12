@@ -4,9 +4,9 @@
 
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
-provider interfaces, registry and pipeline shell, command-line shell, and
-contract tests. It does not yet contain production format parsers, OCR
-inference, network clients, or LLM calls.
+provider interfaces, registry and pipeline, a deterministic GFM renderer,
+command-line shell, and contract tests. It does not yet contain production
+format parsers, OCR inference, network clients, or LLM calls.
 
 The project is implemented independently of the neighbouring `anydoc` and
 `markitdown` projects. Documents from every source, including PDF, OCR, and
