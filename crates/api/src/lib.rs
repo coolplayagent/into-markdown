@@ -7,7 +7,7 @@ pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{Engine, EngineBuilder, RegistryBuilder};
 pub use into_markdown_ocr::{
-    CharacterSet, DataDirectoryEnvironment, ModelArtifact, ModelBundle, ModelManager,
+    CharacterSet, DataDirectoryEnvironment, ModelArtifact, ModelBundle, ModelFetcher, ModelManager,
     ModelManagerError, ModelManifest, ModelStatus, ProductTarget, RuntimeArtifact,
     model_data_directory,
 };

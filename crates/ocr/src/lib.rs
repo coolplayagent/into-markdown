@@ -2,6 +2,13 @@
 //!
 //! The embedded manifests are the only authority used by this crate. Source
 //! archives are never treated as installable runtime models.
+#![allow(missing_docs, reason = "manifest fields preserve the documented JSON authority names")]
+#![allow(
+    clippy::large_stack_arrays,
+    clippy::missing_errors_doc,
+    clippy::too_many_lines,
+    reason = "streaming supply-chain operations keep validation and fixed buffers auditable"
+)]
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ExecutionStage, OcrEngine, OcrRequest, OcrResult,
@@ -11,8 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const SUPPORTED_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
@@ -117,6 +125,14 @@ struct NativeDownload {
     url: String,
     sha256: String,
     strip_prefix: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct InstallState {
+    schema_version: u32,
+    bundle_id: String,
+    complete: bool,
 }
 
 impl ModelManifest {
@@ -451,8 +467,24 @@ pub enum ModelManagerError {
     Corrupt(String),
     #[error("model operation is busy")]
     Busy,
+    #[error("model execution failed: {0}")]
+    Execution(#[from] ConversionError),
     #[error("model I/O failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Opens one authoritative runtime artifact as a bounded byte stream.
+///
+/// Network implementations must enforce HTTPS, redirect, DNS/address, host,
+/// and response-size policy before returning a stream. The manager still
+/// enforces the manifest size and hash while reading.
+pub trait ModelFetcher {
+    /// Opens the exact runtime artifact requested by the manager.
+    fn open(
+        &self,
+        artifact: &RuntimeArtifact,
+        context: &ExecutionContext,
+    ) -> Result<Box<dyn Read>, ModelManagerError>;
 }
 
 /// Observed bundle state. Inspection never accesses the network.
@@ -475,16 +507,20 @@ pub struct ModelManager {
 }
 
 impl ModelManager {
-    /// Creates a manager without touching the filesystem.
-    pub fn new(
-        manifest: ModelManifest,
+    /// Creates a manager from the cross-validated embedded authorities.
+    pub fn embedded(
         writable_root: PathBuf,
         bundled_root: Option<PathBuf>,
-    ) -> Self {
+    ) -> Result<Self, ConversionError> {
+        Ok(Self::new(ModelManifest::embedded()?, writable_root, bundled_root))
+    }
+
+    fn new(manifest: ModelManifest, writable_root: PathBuf, bundled_root: Option<PathBuf>) -> Self {
         Self { manifest, writable_root, bundled_root }
     }
 
     /// Embedded manifest accessor.
+    #[must_use]
     pub fn manifest(&self) -> &ModelManifest {
         &self.manifest
     }
@@ -495,11 +531,12 @@ impl ModelManager {
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
             if safe_existing_directory(&path)? {
+                let verified = verify_directory(bundle, &path).is_ok();
                 return Ok(ModelStatus {
                     schema_version: 1,
                     id: id.to_owned(),
                     availability: bundle.availability.clone(),
-                    state: "installed".into(),
+                    state: if verified { "installed" } else { "corrupt" }.into(),
                     ownership: "bundled-read-only".into(),
                     path: Some(path),
                 });
@@ -535,9 +572,22 @@ impl ModelManager {
 
     /// Verifies one installed bundle using local bytes only.
     pub fn verify(&self, id: &str) -> Result<ModelStatus, ModelManagerError> {
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        self.verify_with_context(id, &context)
+    }
+
+    /// Verifies one installed bundle with caller cancellation and timeout.
+    pub fn verify_with_context(
+        &self,
+        id: &str,
+        context: &ExecutionContext,
+    ) -> Result<ModelStatus, ModelManagerError> {
         let status = self.status(id)?;
         let path = status.path.as_ref().ok_or(ModelManagerError::NotInstalled)?;
-        verify_directory(self.bundle(id)?, path)?;
+        verify_directory_with_context(self.bundle(id)?, path, context)?;
         Ok(status)
     }
 
@@ -548,11 +598,25 @@ impl ModelManager {
 
     /// Removes only a user-owned directory while holding an interprocess lock.
     pub fn remove(&self, id: &str) -> Result<(), ModelManagerError> {
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        self.remove_with_context(id, &context)
+    }
+
+    /// Removes a user-owned directory with caller cancellation and timeout.
+    pub fn remove_with_context(
+        &self,
+        id: &str,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        context.checkpoint()?;
         let _ = self.bundle(id)?;
-        if let Some(root) = &self.bundled_root {
-            if safe_existing_directory(&root.join(id))? {
-                return Err(ModelManagerError::ReadOnly);
-            }
+        if let Some(root) = &self.bundled_root
+            && safe_existing_directory(&root.join(id))?
+        {
+            return Err(ModelManagerError::ReadOnly);
         }
         fs::create_dir_all(&self.writable_root)?;
         reject_symlink(&self.writable_root)?;
@@ -561,6 +625,7 @@ impl ModelManager {
         if !safe_existing_directory(&path)? {
             return Err(ModelManagerError::NotInstalled);
         }
+        context.checkpoint()?;
         let tombstone = self.writable_root.join(format!(".{id}.removing-{}", std::process::id()));
         if fs::symlink_metadata(&tombstone).is_ok() {
             return Err(ModelManagerError::Busy);
@@ -581,6 +646,115 @@ impl ModelManager {
         Ok(bundle)
     }
 
+    /// Fetches, verifies, fsyncs, and atomically publishes one runtime bundle.
+    ///
+    /// The caller supplies the transport so normal builds and tests remain
+    /// offline. Publication runs under the same interprocess lock as removal.
+    pub fn install(
+        &self,
+        id: &str,
+        fetcher: &dyn ModelFetcher,
+        context: &ExecutionContext,
+    ) -> Result<ModelStatus, ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        context.checkpoint()?;
+        let total_size = bundle.runtime_artifacts.iter().try_fold(0_u64, |total, artifact| {
+            total
+                .checked_add(artifact.size)
+                .ok_or_else(|| ModelManagerError::Corrupt("runtime artifact sizes overflow".into()))
+        })?;
+        let _temporary = context.reserve_temporary(total_size)?;
+        let _memory = context.reserve_memory(64 * 1024)?;
+        fs::create_dir_all(&self.writable_root)?;
+        reject_symlink(&self.writable_root)?;
+        let lock = self.acquire_lock()?;
+        let final_path = self.writable_root.join(id);
+        if safe_existing_directory(&final_path)?
+            && verify_directory_with_context(bundle, &final_path, context).is_ok()
+        {
+            drop(lock);
+            return self.status(id);
+        }
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let staging_path =
+            self.writable_root.join(format!(".{id}.staging-{}-{nonce}", std::process::id()));
+        fs::create_dir(&staging_path)?;
+        let staging = StagingDirectory::new(staging_path);
+        for artifact in &bundle.runtime_artifacts {
+            context.checkpoint()?;
+            let mut source = fetcher.open(artifact, context)?;
+            let path = staging.path().join(&artifact.file_name);
+            let mut destination = OpenOptions::new().write(true).create_new(true).open(&path)?;
+            let mut digest = Sha256::new();
+            let mut received = 0_u64;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                context.checkpoint()?;
+                let count = source.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                let count_u64 = u64::try_from(count)
+                    .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+                received = received
+                    .checked_add(count_u64)
+                    .ok_or_else(|| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+                if received > artifact.size {
+                    return Err(ModelManagerError::Corrupt(format!(
+                        "{} exceeds declared size",
+                        artifact.file_name
+                    )));
+                }
+                destination.write_all(&buffer[..count])?;
+                digest.update(&buffer[..count]);
+            }
+            if received != artifact.size || format!("{:x}", digest.finalize()) != artifact.sha256 {
+                return Err(ModelManagerError::Corrupt(format!(
+                    "{} has a size or SHA-256 mismatch",
+                    artifact.file_name
+                )));
+            }
+            destination.sync_all()?;
+        }
+        let state = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "bundleId": id,
+            "complete": true,
+        }))
+        .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
+        let mut state_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(staging.path().join("install-state.json"))?;
+        state_file.write_all(&state)?;
+        state_file.sync_all()?;
+        sync_directory(staging.path())?;
+        context.checkpoint()?;
+
+        let backup_path =
+            self.writable_root.join(format!(".{id}.backup-{}-{nonce}", std::process::id()));
+        let had_old = safe_existing_directory(&final_path)?;
+        if had_old {
+            fs::rename(&final_path, &backup_path)?;
+            sync_directory(&self.writable_root)?;
+        }
+        if let Err(error) = fs::rename(staging.path(), &final_path) {
+            if had_old {
+                let _ = fs::rename(&backup_path, &final_path);
+                let _ = sync_directory(&self.writable_root);
+            }
+            return Err(ModelManagerError::Io(error));
+        }
+        staging.disarm();
+        sync_directory(&self.writable_root)?;
+        if had_old {
+            fs::remove_dir_all(backup_path)?;
+        }
+        drop(lock);
+        self.verify_with_context(id, context)
+    }
+
     fn bundle(&self, id: &str) -> Result<&ModelBundle, ModelManagerError> {
         self.manifest
             .bundles
@@ -592,14 +766,35 @@ impl ModelManager {
     fn acquire_lock(&self) -> Result<File, ModelManagerError> {
         let path = self.writable_root.join(".models.lock");
         reject_symlink_if_present(&path)?;
-        let file = OpenOptions::new().create(true).read(true).write(true).open(path)?;
+        let file =
+            OpenOptions::new().create(true).truncate(false).read(true).write(true).open(path)?;
         file.try_lock().map_err(|_| ModelManagerError::Busy)?;
         Ok(file)
     }
 }
 
 fn verify_directory(bundle: &ModelBundle, path: &Path) -> Result<(), ModelManagerError> {
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits::default(),
+    );
+    verify_directory_with_context(bundle, path, &context)
+}
+
+fn verify_directory_with_context(
+    bundle: &ModelBundle,
+    path: &Path,
+    context: &ExecutionContext,
+) -> Result<(), ModelManagerError> {
+    context.checkpoint()?;
     reject_symlink(path)?;
+    let state_path = path.join("install-state.json");
+    reject_symlink(&state_path)?;
+    let state: InstallState = serde_json::from_reader(File::open(state_path)?)
+        .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
+    if state.schema_version != 1 || state.bundle_id != bundle.id || !state.complete {
+        return Err(ModelManagerError::Corrupt("invalid install state".into()));
+    }
     let expected: BTreeSet<_> =
         bundle.runtime_artifacts.iter().map(|artifact| artifact.file_name.as_str()).collect();
     for entry in fs::read_dir(path)? {
@@ -615,6 +810,7 @@ fn verify_directory(bundle: &ModelBundle, path: &Path) -> Result<(), ModelManage
         }
     }
     for artifact in &bundle.runtime_artifacts {
+        context.checkpoint()?;
         let file_path = path.join(&artifact.file_name);
         reject_symlink(&file_path)?;
         let metadata = fs::metadata(&file_path)?;
@@ -625,6 +821,7 @@ fn verify_directory(bundle: &ModelBundle, path: &Path) -> Result<(), ModelManage
         let mut digest = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
+            context.checkpoint()?;
             let count = file.read(&mut buffer)?;
             if count == 0 {
                 break;
@@ -636,6 +833,33 @@ fn verify_directory(bundle: &ModelBundle, path: &Path) -> Result<(), ModelManage
         }
     }
     Ok(())
+}
+
+struct StagingDirectory {
+    path: PathBuf,
+    armed: std::cell::Cell<bool>,
+}
+
+impl StagingDirectory {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: std::cell::Cell::new(true) }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn disarm(&self) {
+        self.armed.set(false);
+    }
+}
+
+impl Drop for StagingDirectory {
+    fn drop(&mut self) {
+        if self.armed.get() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 fn safe_existing_directory(path: &Path) -> Result<bool, ModelManagerError> {
@@ -791,6 +1015,112 @@ mod tests {
             manager.require_installable(&status.id),
             Err(ModelManagerError::ComponentUnavailable)
         ));
+    }
+
+    struct BytesFetcher {
+        bytes: Vec<u8>,
+        opens: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ModelFetcher for BytesFetcher {
+        fn open(
+            &self,
+            _: &RuntimeArtifact,
+            context: &ExecutionContext,
+        ) -> Result<Box<dyn Read>, ModelManagerError> {
+            context.checkpoint()?;
+            self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(std::io::Cursor::new(self.bytes.clone())))
+        }
+    }
+
+    fn installable_manager(root: &Path) -> ModelManager {
+        let mut manifest = ModelManifest::embedded().unwrap();
+        let bundle = &mut manifest.bundles[0];
+        bundle.availability = "available".into();
+        bundle.character_set.status = "available".into();
+        bundle.runtime_artifacts.push(RuntimeArtifact {
+            id: "test-runtime".into(),
+            role: "detector".into(),
+            file_name: "model.onnx".into(),
+            url: "https://example.invalid/model.onnx".into(),
+            sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
+            size: 5,
+            platforms: vec!["aarch64-apple-darwin".into()],
+            license: "MIT".into(),
+        });
+        ModelManager::new(manifest, root.to_path_buf(), None)
+    }
+
+    fn execution(max_temporary_bytes: u64) -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_temporary_bytes, ..Default::default() },
+        )
+    }
+
+    #[test]
+    fn install_is_hash_verified_atomic_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let id = "pp-ocrv6-tiny-zh-en";
+        let status = manager.install(id, &fetcher, &execution(5)).unwrap();
+        assert_eq!(status.state, "installed");
+        assert_eq!(fs::read(manager.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+        assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn hash_mismatch_truncation_and_temporary_budget_leave_no_partial_state() {
+        for (bytes, budget) in [(b"wrong".as_slice(), 5), (b"hell".as_slice(), 5), (b"hello", 4)] {
+            let temp = tempfile::tempdir().unwrap();
+            let manager = installable_manager(temp.path());
+            let fetcher = BytesFetcher {
+                bytes: bytes.to_vec(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+            };
+            assert!(manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &execution(budget)).is_err());
+            assert!(!temp.path().join("pp-ocrv6-tiny-zh-en").exists());
+            assert!(
+                fs::read_dir(temp.path())
+                    .unwrap()
+                    .flatten()
+                    .all(|entry| !entry.file_name().to_string_lossy().contains(".staging-"))
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_and_concurrent_lock_fail_without_fetching() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        fs::create_dir_all(temp.path()).unwrap();
+        let held = manager.acquire_lock().unwrap();
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &execution(5)),
+            Err(ModelManagerError::Busy)
+        ));
+        drop(held);
+        let token = into_markdown_core::CancellationToken::new();
+        token.cancel();
+        let cancelled = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions { cancellation: token, ..Default::default() },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        assert!(matches!(
+            manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &cancelled),
+            Err(ModelManagerError::Execution(ConversionError::Cancelled))
+        ));
+        assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[cfg(unix)]

@@ -337,6 +337,18 @@ impl ExecutionContext {
         self.reserve(ResourceKind::Memory, bytes)
     }
 
+    /// Reserve request-scoped temporary storage until the returned guard is dropped.
+    ///
+    /// This is intended for same-filesystem staging directories whose atomic
+    /// publication semantics cannot use the temporary-file helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, or resource-limit error.
+    pub fn reserve_temporary(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
+        self.reserve(ResourceKind::Temporary, bytes)
+    }
+
     /// Create an automatically cleaned temporary file charged as bytes are written.
     ///
     /// # Errors
@@ -380,6 +392,11 @@ impl ExecutionContext {
             ResourceKind::Memory => {
                 (&self.shared.memory_bytes, self.shared.limits.max_memory_bytes, "max_memory_bytes")
             }
+            ResourceKind::Temporary => (
+                &self.shared.temporary_bytes,
+                self.shared.limits.max_temporary_bytes,
+                "max_temporary_bytes",
+            ),
         };
         checked_charge(counter, bytes, limit, name)?;
         Ok(ResourceReservation { context: self.clone(), kind, bytes })
@@ -439,6 +456,7 @@ impl Drop for ExecutionShared {
 #[derive(Clone, Copy)]
 enum ResourceKind {
     Memory,
+    Temporary,
 }
 
 /// RAII resource-budget reservation.
@@ -466,14 +484,22 @@ impl ResourceReservation {
     pub fn grow(&mut self, bytes: u64) -> Result<(), ConversionError> {
         self.context.checkpoint()?;
         let next = self.bytes.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "memory reservation overflowed".into(),
+            limit: match self.kind {
+                ResourceKind::Memory => "max_memory_bytes",
+                ResourceKind::Temporary => "max_temporary_bytes",
+            },
+            detail: "resource reservation overflowed".into(),
         })?;
         let (counter, limit, name) = match self.kind {
             ResourceKind::Memory => (
                 &self.context.shared.memory_bytes,
                 self.context.shared.limits.max_memory_bytes,
                 "max_memory_bytes",
+            ),
+            ResourceKind::Temporary => (
+                &self.context.shared.temporary_bytes,
+                self.context.shared.limits.max_temporary_bytes,
+                "max_temporary_bytes",
             ),
         };
         checked_charge(counter, bytes, limit, name)?;
@@ -488,12 +514,16 @@ impl ResourceReservation {
     /// Returns a resource-limit error if `bytes` exceeds the held reservation.
     pub fn shrink(&mut self, bytes: u64) -> Result<(), ConversionError> {
         let next = self.bytes.checked_sub(bytes).ok_or_else(|| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "memory reservation underflowed".into(),
+            limit: match self.kind {
+                ResourceKind::Memory => "max_memory_bytes",
+                ResourceKind::Temporary => "max_temporary_bytes",
+            },
+            detail: "resource reservation underflowed".into(),
         })?;
         self.bytes = next;
         let counter = match self.kind {
             ResourceKind::Memory => &self.context.shared.memory_bytes,
+            ResourceKind::Temporary => &self.context.shared.temporary_bytes,
         };
         counter.fetch_sub(bytes, Ordering::AcqRel);
         Ok(())
@@ -519,6 +549,7 @@ impl Drop for ResourceReservation {
     fn drop(&mut self) {
         let counter = match self.kind {
             ResourceKind::Memory => &self.context.shared.memory_bytes,
+            ResourceKind::Temporary => &self.context.shared.temporary_bytes,
         };
         counter.fetch_sub(self.bytes, Ordering::AcqRel);
     }

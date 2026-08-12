@@ -32,6 +32,7 @@ bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
 bazel run //apps/cli:into-md -- models
+bazel run //apps/cli:into-md -- models show pp-ocrv6-tiny-zh-en --json
 bazel run //apps/cli:into-md -- doctor
 ```
 
@@ -47,9 +48,12 @@ For example, `--emit result-json` returns `markdown`, a versioned `document`,
 base64 `assets`, `diagnostics`, and `provenance`. The authoritative Chinese
 [DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.
 
-Format conversion, OCR inference, model installation, provider requests, and
-plugin execution backends are not implemented yet. Their commands return stable
-errors and never report a false success.
+Model discovery, offline verification, path lookup, and guarded cleanup are
+implemented. The authoritative manifests currently contain upstream source
+archives but no reviewed final ONNX/character-table runtime files, so
+installation fails closed with `componentUnavailable` instead of pretending
+that source archives are installed models. Format conversion, OCR inference,
+provider requests, and plugin execution remain unavailable.
 
 The detailed design documents are maintained in Chinese. See the
 [architecture](docs/architecture.md), [interface contract](docs/interfaces.md),

@@ -58,8 +58,29 @@ struct ModelManifest {
 #[derive(Debug, Deserialize)]
 struct ModelBundle {
     id: String,
+    availability: String,
     upstream_version: String,
+    platforms: Vec<String>,
+    character_set: ModelCharacterSet,
+    runtime_artifacts: Vec<ModelRuntimeArtifact>,
     source_artifacts: Vec<ModelArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelCharacterSet {
+    status: String,
+    source_artifact_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelRuntimeArtifact {
+    id: String,
+    file_name: String,
+    url: String,
+    sha256: String,
+    size: u64,
+    platforms: Vec<String>,
+    license: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +97,7 @@ struct ModelArtifact {
 struct DownloadManifest {
     schema_version: u64,
     model_files: Vec<ModelDownload>,
+    model_runtime_files: Vec<ModelRuntimeDownload>,
     native_archives: Vec<NativeDownload>,
 }
 
@@ -87,6 +109,17 @@ struct ModelDownload {
     downloaded_file_path: String,
     url: String,
     sha256: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ModelRuntimeDownload {
+    artifact_id: String,
+    repository: String,
+    downloaded_file_path: String,
+    url: String,
+    sha256: String,
+    size: u64,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -449,6 +482,20 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             errors.push(format!("model download {} has incomplete fields", item.repository));
         }
     }
+    for item in &downloads.model_runtime_files {
+        if !repositories.insert(item.repository.as_str()) {
+            errors.push(format!("duplicate download repository {}", item.repository));
+        }
+        if item.artifact_id.is_empty()
+            || item.downloaded_file_path.is_empty()
+            || !item.url.starts_with("https://")
+            || !is_sha256(&item.sha256)
+            || item.size == 0
+        {
+            errors
+                .push(format!("model runtime download {} has incomplete fields", item.repository));
+        }
+    }
     for item in &downloads.native_archives {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
@@ -573,7 +620,7 @@ fn validate_model_manifest(
     if manifest.schema_version != 1 {
         errors.push("unsupported model manifest schema_version".to_owned());
     }
-    let (artifacts, bundles) = collect_model_artifacts(manifest, errors);
+    let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
     validate_default_model_bundle(manifest, &bundles, errors);
 
     let mut inventory_sources = BTreeMap::new();
@@ -623,11 +670,19 @@ type ModelArtifacts<'a> = BTreeMap<&'a str, (&'a ModelArtifact, &'a str, &'a str
 
 fn collect_model_artifacts<'a>(
     manifest: &'a ModelManifest,
+    downloads: &'a DownloadManifest,
     errors: &mut Vec<String>,
 ) -> (ModelArtifacts<'a>, BTreeMap<&'a str, &'a ModelBundle>) {
+    let runtime_downloads: BTreeMap<_, _> = downloads
+        .model_runtime_files
+        .iter()
+        .map(|item| (item.artifact_id.as_str(), item))
+        .collect();
     let mut artifacts = BTreeMap::new();
     let mut bundles = BTreeMap::new();
+    let mut runtime_ids = BTreeSet::new();
     for bundle in &manifest.bundles {
+        validate_runtime_bundle(bundle, &runtime_downloads, &mut runtime_ids, errors);
         if bundle.id.is_empty() {
             errors.push("model bundle ID must not be empty".to_owned());
         }
@@ -661,7 +716,74 @@ fn collect_model_artifacts<'a>(
             }
         }
     }
+    if runtime_ids != runtime_downloads.keys().copied().collect() {
+        errors.push(
+            "authoritative runtime model downloads do not match all runtime artifacts".to_owned(),
+        );
+    }
     (artifacts, bundles)
+}
+
+fn validate_runtime_bundle<'a>(
+    bundle: &'a ModelBundle,
+    runtime_downloads: &BTreeMap<&str, &ModelRuntimeDownload>,
+    runtime_ids: &mut BTreeSet<&'a str>,
+    errors: &mut Vec<String>,
+) {
+    if !matches!(bundle.availability.as_str(), "planned" | "available") {
+        errors.push(format!("model bundle {} has invalid availability", bundle.id));
+    }
+    let expected_targets = BTreeSet::from([
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+    ]);
+    if bundle.platforms.iter().map(String::as_str).collect::<BTreeSet<_>>() != expected_targets {
+        errors.push(format!("model bundle {} must declare exact supported targets", bundle.id));
+    }
+    if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
+        || !bundle
+            .source_artifacts
+            .iter()
+            .any(|item| item.id == bundle.character_set.source_artifact_id)
+    {
+        errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
+    }
+    if bundle.availability == "available"
+        && (bundle.character_set.status != "available" || bundle.runtime_artifacts.is_empty())
+    {
+        errors.push(format!(
+            "model bundle {} is available without complete runtime files",
+            bundle.id
+        ));
+    }
+    for artifact in &bundle.runtime_artifacts {
+        if !runtime_ids.insert(artifact.id.as_str()) {
+            errors.push(format!("duplicate runtime model artifact {}", artifact.id));
+        }
+        if artifact.id.is_empty()
+            || artifact.file_name.is_empty()
+            || !artifact.url.starts_with("https://")
+            || !is_sha256(&artifact.sha256)
+            || artifact.size == 0
+            || artifact.platforms.is_empty()
+            || artifact.license.is_empty()
+        {
+            errors.push(format!("runtime model artifact {} is incomplete", artifact.id));
+        }
+        match runtime_downloads.get(artifact.id.as_str()) {
+            Some(download)
+                if download.downloaded_file_path == artifact.file_name
+                    && download.url == artifact.url
+                    && download.sha256 == artifact.sha256
+                    && download.size == artifact.size => {}
+            _ => errors.push(format!(
+                "runtime model artifact {} disagrees with authoritative download",
+                artifact.id
+            )),
+        }
+    }
 }
 
 fn validate_default_model_bundle(
@@ -856,7 +978,34 @@ mod tests {
     }
 
     fn empty_downloads() -> DownloadManifest {
-        DownloadManifest { schema_version: 1, model_files: vec![], native_archives: vec![] }
+        DownloadManifest {
+            schema_version: 1,
+            model_files: vec![],
+            model_runtime_files: vec![],
+            native_archives: vec![],
+        }
+    }
+
+    fn bundle(id: &str, version: &str, source_artifacts: Vec<ModelArtifact>) -> ModelBundle {
+        ModelBundle {
+            id: id.to_owned(),
+            availability: "planned".to_owned(),
+            upstream_version: version.to_owned(),
+            platforms: vec![
+                "aarch64-apple-darwin".to_owned(),
+                "x86_64-unknown-linux-gnu".to_owned(),
+                "aarch64-unknown-linux-gnu".to_owned(),
+                "x86_64-pc-windows-msvc".to_owned(),
+            ],
+            character_set: ModelCharacterSet {
+                status: "planned".to_owned(),
+                source_artifact_id: source_artifacts
+                    .last()
+                    .map_or_else(|| "absent".to_owned(), |artifact| artifact.id.clone()),
+            },
+            runtime_artifacts: vec![],
+            source_artifacts,
+        }
     }
 
     fn model_fixture() -> (ModelManifest, Inventory, DownloadManifest) {
@@ -889,16 +1038,13 @@ mod tests {
                     sha256: recognizer.sha256.clone(),
                 },
             ],
+            model_runtime_files: vec![],
             native_archives: vec![],
         };
         let manifest = ModelManifest {
             schema_version: 1,
             default_bundle: "default".to_owned(),
-            bundles: vec![ModelBundle {
-                id: "default".to_owned(),
-                upstream_version: version.to_owned(),
-                source_artifacts: vec![detector, recognizer],
-            }],
+            bundles: vec![bundle("default", version, vec![detector, recognizer])],
         };
         (manifest, inventory, downloads)
     }
@@ -956,7 +1102,12 @@ mod tests {
         (
             manifest,
             inventory,
-            DownloadManifest { schema_version: 1, model_files: vec![], native_archives },
+            DownloadManifest {
+                schema_version: 1,
+                model_files: vec![],
+                model_runtime_files: vec![],
+                native_archives,
+            },
         )
     }
 
@@ -1116,11 +1267,7 @@ version = "9.9.9"
     #[test]
     fn duplicate_bundle_id_is_rejected() {
         let (mut manifest, inventory, downloads) = model_fixture();
-        manifest.bundles.push(ModelBundle {
-            id: "default".to_owned(),
-            upstream_version: "duplicate".to_owned(),
-            source_artifacts: vec![],
-        });
+        manifest.bundles.push(bundle("default", "duplicate", vec![]));
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| error.contains("duplicate model bundle ID default")));
@@ -1141,11 +1288,11 @@ version = "9.9.9"
     #[test]
     fn every_ocr_bundle_requires_complete_roles() {
         let (mut manifest, inventory, downloads) = model_fixture();
-        manifest.bundles.push(ModelBundle {
-            id: "incomplete".to_owned(),
-            upstream_version: "incomplete".to_owned(),
-            source_artifacts: vec![artifact("only-detector", "detector", 'f')],
-        });
+        manifest.bundles.push(bundle(
+            "incomplete",
+            "incomplete",
+            vec![artifact("only-detector", "detector", 'f')],
+        ));
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| {
@@ -1158,11 +1305,11 @@ version = "9.9.9"
     #[test]
     fn artifact_in_later_bundle_is_not_ignored() {
         let (mut manifest, inventory, downloads) = model_fixture();
-        manifest.bundles.push(ModelBundle {
-            id: "later".to_owned(),
-            upstream_version: "later".to_owned(),
-            source_artifacts: vec![artifact("later-bundle-artifact", "detector", 'c')],
-        });
+        manifest.bundles.push(bundle(
+            "later",
+            "later",
+            vec![artifact("later-bundle-artifact", "detector", 'c')],
+        ));
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(
@@ -1173,11 +1320,11 @@ version = "9.9.9"
     #[test]
     fn duplicate_model_artifact_across_bundles_is_rejected() {
         let (mut manifest, inventory, downloads) = model_fixture();
-        manifest.bundles.push(ModelBundle {
-            id: "duplicate-artifact".to_owned(),
-            upstream_version: "duplicate".to_owned(),
-            source_artifacts: vec![artifact("pp-ocrv6-tiny-detector-source", "detector", 'd')],
-        });
+        manifest.bundles.push(bundle(
+            "duplicate-artifact",
+            "duplicate",
+            vec![artifact("pp-ocrv6-tiny-detector-source", "detector", 'd')],
+        ));
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| error.contains("duplicate model artifact")));

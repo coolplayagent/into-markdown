@@ -226,7 +226,11 @@ into-md models path <ID>
 ```
 
 转换过程不会自动下载模型。下载必须使用固定来源和 SHA-256，先校验再原子安装。
-只读发布模型不能被删除。
+只读发布模型不能被删除。`list`、`show`、`verify`、`path` 全程离线；JSON 输出包含
+`schemaVersion`、availability、state、ownership 和安装路径。当前清单只有上游
+source archives，尚无经审核的最终 ONNX/字符表文件，因此显示为
+`planned` / `unavailable`，安装稳定返回 `componentUnavailable`。完整的清单、
+数据目录、事务和威胁边界见[本地模型管理](models.md)。
 
 ### AI Provider
 
@@ -302,7 +306,7 @@ into-md version [--json]
 | 70 | 内部错误 |
 | 130 | 用户取消 |
 
-当前工程仍是转换后端脚手架。格式、模型、插件或 Provider 后端缺失时，命令返回
+当前工程仍是转换后端脚手架。格式、模型运行时产物、插件或 Provider 后端缺失时，命令返回
 稳定错误，不会执行网络操作、创建虚假安装状态或 panic。
 
 `ir-json` 使用 Document IR 的公共版本化契约；`result-json`、Bundle manifest 和
