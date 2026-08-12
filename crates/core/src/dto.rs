@@ -50,7 +50,7 @@ pub const MAX_DTO_VALUES: usize = 2_000_000;
 /// Maximum encoded bytes in one JSON string before JSON allocation.
 pub const MAX_DTO_STRING_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum encoded bytes across JSON strings before JSON allocation.
-pub const MAX_DTO_TOTAL_STRING_BYTES: usize = 56 * 1024 * 1024;
+pub const MAX_DTO_TOTAL_STRING_BYTES: usize = 48 * 1024 * 1024;
 
 /// JSON layout used by the borrowed, budgeted result writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,20 +472,27 @@ struct InternalResultWire<'a> {
     provenance: InternalProvenanceWire<'a>,
 }
 
-struct InternalAssetsWire<'a>(&'a [Asset]);
+struct InternalAssetsWire<'a> {
+    assets: &'a [Asset],
+    include_base64: bool,
+}
 
 impl Serialize for InternalAssetsWire<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
-        for asset in self.0 {
+        let mut sequence = serializer.serialize_seq(Some(self.assets.len()))?;
+        for asset in self.assets {
             sequence.serialize_element(&InternalAssetWire {
                 id: &asset.id.0,
                 filename: asset.filename.as_deref(),
                 media_type: &asset.media_type,
-                data_base64: "",
+                data_base64: if self.include_base64 {
+                    AssetBase64Wire::Encoded(&asset.bytes)
+                } else {
+                    AssetBase64Wire::Placeholder
+                },
                 external_uri: asset.external_uri.as_deref(),
             })?;
         }
@@ -499,8 +506,36 @@ struct InternalAssetWire<'a> {
     id: &'a str,
     filename: Option<&'a str>,
     media_type: &'a str,
-    data_base64: &'static str,
+    data_base64: AssetBase64Wire<'a>,
     external_uri: Option<&'a str>,
+}
+
+enum AssetBase64Wire<'a> {
+    Placeholder,
+    Encoded(&'a [u8]),
+}
+
+impl Serialize for AssetBase64Wire<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Placeholder => serializer.serialize_str(""),
+            Self::Encoded(bytes) => serializer.collect_str(&StreamingBase64(bytes)),
+        }
+    }
+}
+
+struct StreamingBase64<'a>(&'a [u8]);
+
+impl fmt::Display for StreamingBase64<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(test)]
+        ASSET_BASE64_ENCODE_CALLS.set(ASSET_BASE64_ENCODE_CALLS.get() + 1);
+        base64::display::Base64Display::new(self.0, &base64::engine::general_purpose::STANDARD)
+            .fmt(formatter)
+    }
 }
 
 struct InternalDiagnosticsWire<'a>(&'a [Diagnostic]);
@@ -1669,22 +1704,36 @@ impl WireAccounting {
 
 impl Write for WireAccounting {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.json_bytes = self.json_bytes.saturating_add(buffer.len());
+        self.json_bytes = self
+            .json_bytes
+            .checked_add(buffer.len())
+            .ok_or_else(|| io::Error::other("wire JSON byte count overflow"))?;
         for &byte in buffer {
             if self.in_string {
                 if self.escaped {
                     self.escaped = false;
-                    self.string_bytes = self.string_bytes.saturating_add(1);
+                    self.string_bytes = self
+                        .string_bytes
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire string byte count overflow"))?;
                 } else if byte == b'\\' {
                     self.escaped = true;
-                    self.string_bytes = self.string_bytes.saturating_add(1);
+                    self.string_bytes = self
+                        .string_bytes
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire string byte count overflow"))?;
                 } else if byte == b'"' {
                     self.in_string = false;
                     self.max_string_bytes = self.max_string_bytes.max(self.string_bytes);
-                    self.total_string_bytes =
-                        self.total_string_bytes.saturating_add(self.string_bytes);
+                    self.total_string_bytes = self
+                        .total_string_bytes
+                        .checked_add(self.string_bytes)
+                        .ok_or_else(|| io::Error::other("wire string byte count overflow"))?;
                 } else {
-                    self.string_bytes = self.string_bytes.saturating_add(1);
+                    self.string_bytes = self
+                        .string_bytes
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire string byte count overflow"))?;
                 }
                 continue;
             }
@@ -1694,11 +1743,22 @@ impl Write for WireAccounting {
                     self.string_bytes = 0;
                 }
                 b'{' | b'[' => {
-                    self.depth = self.depth.saturating_add(1);
+                    self.depth = self
+                        .depth
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire depth count overflow"))?;
                     self.max_depth = self.max_depth.max(self.depth);
-                    self.values = self.values.saturating_add(1);
+                    self.values = self
+                        .values
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire value count overflow"))?;
                 }
-                b':' | b',' => self.values = self.values.saturating_add(1),
+                b':' | b',' => {
+                    self.values = self
+                        .values
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("wire value count overflow"))?;
+                }
                 b'}' | b']' => self.depth = self.depth.saturating_sub(1),
                 _ => {}
             }
@@ -1720,7 +1780,7 @@ fn serialize_internal_result_placeholder<W: Write>(
         schema_version: DTO_SCHEMA_VERSION,
         markdown: &value.markdown,
         document: &value.document,
-        assets: InternalAssetsWire(&value.assets),
+        assets: InternalAssetsWire { assets: &value.assets, include_base64: false },
         diagnostics: InternalDiagnosticsWire(&value.diagnostics),
         provenance: InternalProvenanceWire(&value.provenance),
     };
@@ -1751,88 +1811,24 @@ fn account_internal_result_wire(
     Ok(accounting)
 }
 
-struct Base64InjectingWriter<'a, W> {
-    inner: &'a mut W,
-    assets: &'a [Asset],
-    asset_index: usize,
-    marker: &'static [u8],
-    pending: Vec<u8>,
-}
-
-impl<'a, W: Write> Base64InjectingWriter<'a, W> {
-    fn new(inner: &'a mut W, assets: &'a [Asset], style: DtoJsonStyle) -> Self {
-        Self {
-            inner,
-            assets,
-            asset_index: 0,
-            marker: match style {
-                DtoJsonStyle::Compact => b"\"dataBase64\":\"\"",
-                DtoJsonStyle::Pretty => b"\"dataBase64\": \"\"",
-            },
-            pending: Vec::with_capacity(24),
-        }
-    }
-
-    fn drain_non_prefix(&mut self) -> io::Result<()> {
-        while !self.marker.starts_with(&self.pending) {
-            self.inner.write_all(&self.pending[..1])?;
-            self.pending.remove(0);
-        }
-        if self.pending == self.marker {
-            let asset = self.assets.get(self.asset_index).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "more base64 fields than assets")
-            })?;
-            self.asset_index += 1;
-            self.inner.write_all(&self.marker[..self.marker.len() - 1])?;
-            #[cfg(test)]
-            ASSET_BASE64_ENCODE_CALLS.set(ASSET_BASE64_ENCODE_CALLS.get() + 1);
-            let mut encoder = base64::write::EncoderWriter::new(
-                &mut *self.inner,
-                &base64::engine::general_purpose::STANDARD,
-            );
-            encoder.write_all(&asset.bytes)?;
-            encoder.finish()?.write_all(b"\"")?;
-            self.pending.clear();
-        }
-        Ok(())
-    }
-
-    fn finish(self) -> io::Result<()> {
-        self.inner.write_all(&self.pending)?;
-        if self.asset_index != self.assets.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "fewer base64 fields than assets",
-            ));
-        }
-        self.inner.flush()
-    }
-}
-
-impl<W: Write> Write for Base64InjectingWriter<'_, W> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        for &byte in buffer {
-            self.pending.push(byte);
-            self.drain_non_prefix()?;
-        }
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 fn write_internal_result_wire<W: Write>(
     value: &crate::ConversionResult,
     style: DtoJsonStyle,
     writer: &mut W,
 ) -> Result<(), DtoError> {
-    let mut injecting = Base64InjectingWriter::new(writer, &value.assets, style);
-    serialize_internal_result_placeholder(value, style, &mut injecting).map_err(|error| {
-        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("write result wire JSON: {error}"))
-    })?;
-    injecting.finish().map_err(|error| {
+    let wire = InternalResultWire {
+        schema_version: DTO_SCHEMA_VERSION,
+        markdown: &value.markdown,
+        document: &value.document,
+        assets: InternalAssetsWire { assets: &value.assets, include_base64: true },
+        diagnostics: InternalDiagnosticsWire(&value.diagnostics),
+        provenance: InternalProvenanceWire(&value.provenance),
+    };
+    let result = match style {
+        DtoJsonStyle::Compact => serde_json::to_writer(&mut *writer, &wire),
+        DtoJsonStyle::Pretty => serde_json::to_writer_pretty(&mut *writer, &wire),
+    };
+    result.map_err(|error| {
         DtoError::new(DtoErrorCode::InvalidJson, "$", format!("write result wire JSON: {error}"))
     })
 }
@@ -2430,7 +2426,7 @@ mod tests {
 
     #[test]
     fn pretty_layout_is_rejected_before_base64_when_only_compact_fits() {
-        let sizes = [5, 5, 5, 5, 5, 6];
+        let sizes = [5, 5, 5, 5, 4, 4];
         let assets = sizes
             .into_iter()
             .enumerate()
@@ -2452,7 +2448,7 @@ mod tests {
             .collect();
         let result = ConversionResult {
             document: Document::default(),
-            markdown: "m".repeat(700 * 1024),
+            markdown: "m".repeat(256 * 1024),
             assets,
             diagnostics: vec![],
             provenance,
@@ -2460,16 +2456,26 @@ mod tests {
         let limits = DtoLimits::default();
         let compact = account_internal_result_wire(&result, DtoJsonStyle::Compact).unwrap();
         let pretty = account_internal_result_wire(&result, DtoJsonStyle::Pretty).unwrap();
+        let layout_limit = pretty.json_bytes - 1;
+        let limits = DtoLimits { max_json_bytes: layout_limit, ..limits };
         assert!(compact.json_bytes < limits.max_json_bytes);
         assert!(compact.validate(&limits).is_ok(), "compact accounting: {compact:?}");
-        assert!(pretty.json_bytes > limits.max_json_bytes);
+        assert!(
+            pretty.json_bytes > limits.max_json_bytes,
+            "compact={compact:?}, pretty={pretty:?}"
+        );
 
         ASSET_BASE64_ENCODE_CALLS.set(0);
         let mut destination = Vec::new();
         assert_eq!(
-            ResultDto::write_json_from_result(&result, DtoJsonStyle::Pretty, &mut destination)
-                .unwrap_err()
-                .code,
+            ResultDto::write_json_from_result_with_limits(
+                &result,
+                DtoJsonStyle::Pretty,
+                &limits,
+                &mut destination,
+            )
+            .unwrap_err()
+            .code,
             DtoErrorCode::ResourceLimit
         );
         assert!(destination.is_empty());
@@ -2519,6 +2525,39 @@ mod tests {
         );
         assert_eq!(destination.written, destination.maximum);
         assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 1);
+    }
+
+    #[test]
+    fn user_strings_cannot_be_confused_with_base64_wire_fields() {
+        let marker = r#"\"dataBase64\":\"\""#;
+        let result = ConversionResult {
+            document: Document::default(),
+            markdown: format!("before {marker} after"),
+            assets: vec![Asset {
+                id: AssetId("marker".into()),
+                filename: Some(format!("name-{marker}")),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![1, 2, 3],
+                external_uri: None,
+            }],
+            diagnostics: vec![Diagnostic {
+                code: "marker".into(),
+                severity: DiagnosticSeverity::Info,
+                message: marker.into(),
+                locator: None,
+            }],
+            provenance: vec![],
+        };
+        for style in [DtoJsonStyle::Compact, DtoJsonStyle::Pretty] {
+            ASSET_BASE64_ENCODE_CALLS.set(0);
+            let json = ResultDto::json_from_result(&result, style).unwrap();
+            let decoded = ResultDto::from_json(&json).unwrap();
+            assert_eq!(decoded.markdown, result.markdown);
+            assert_eq!(decoded.assets[0].filename.as_deref(), result.assets[0].filename.as_deref());
+            assert_eq!(decoded.assets[0].data_base64, "AQID");
+            assert_eq!(decoded.diagnostics[0].message, marker);
+            assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 1);
+        }
     }
 
     #[test]

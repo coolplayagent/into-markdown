@@ -117,7 +117,7 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
 出站的 `to_json`、`to_pretty_json` 和 Bundle 成员 serializer 使用与默认解码相同的
 JSON 总字节、深度、结构项、单字符串和总字符串预算。因此任何成功序列化的默认 DTO
 都能由对应默认入口读回；超大 Markdown 或 base64 不会出现“能写不能读”。base64 解码
-总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串、56 MiB 总字符串和 64 MiB JSON 总量
+总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串、48 MiB 总字符串和 64 MiB JSON 总量
 约束。内部 result 出站时先按原始 bytes 用 checked arithmetic 计算逐项及聚合后的
 padded base64 长度，再把完整 result 按所选 `Compact` 或 `Pretty` 布局以及 private wire
 的相同字段和顺序流式写入无缓冲计数器：
@@ -125,7 +125,7 @@ Markdown、Document、诊断、溯源、资源元数据、JSON 固定开销及�
 base64 精确预计长度合并。在任何 base64 缓冲区分配前拒绝资源数、原始总量、单字符串、
 总字符串或预计 JSON wire 预算必然超限的结果；Document 只经过计数 writer，不创建巨大
 JSON 副本。完整预检通过后，`write_json_from_result` 把非资源字段直接从内部模型借用
-序列化，并通过固定 1 KiB 缓冲逐项 base64 编码到调用方 writer，不构造 owned DTO、Raw
+序列化，并通过 base64 的固定小缓冲逐项编码到调用方 writer，不构造 owned DTO、Raw
 副本或 base64 String。`json_from_result` 只分配最终 JSON 缓冲。CLI `result-json` 选择
 `Pretty` 并直接使用该借用写接口，因此缩进导致的额外字节也在任何 base64 编码前计入；
 成功的 compact 或 pretty 输出都能由默认入口读回。

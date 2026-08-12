@@ -287,7 +287,7 @@ into-md version [--json]
 diagnostics/provenance 保持裸数组成员形状，其版本由 manifest 统辖；独立 HTTP 响应
 使用带 `schemaVersion` 的 envelope。
 `result-json` 通过公共 DTO 的 `Pretty` 借用写接口生成：完整缩进后 wire 预算在任何
-base64 编码前验证，资源内容再分块写入唯一最终输出缓冲，不构造 owned DTO 或 base64
+base64 编码前验证，资源内容再以固定小缓冲写入唯一最终输出缓冲，不构造 owned DTO 或 base64
 String 副本。
 字段、兼容及验证规则以[稳定数据传输契约](dto.md)为准，CLI 不维护另一套私有 JSON
 结构。
