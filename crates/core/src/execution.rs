@@ -382,7 +382,13 @@ impl ExecutionContext {
             }
         };
         checked_charge(counter, bytes, limit, name)?;
-        Ok(ResourceReservation { context: self.clone(), kind, bytes })
+        Ok(ResourceReservation {
+            shared: Arc::new(ResourceReservationShared {
+                context: self.clone(),
+                kind,
+                bytes: Mutex::new(bytes),
+            }),
+        })
     }
 }
 
@@ -441,11 +447,28 @@ enum ResourceKind {
     Memory,
 }
 
-/// RAII resource-budget reservation.
+/// Cloneable RAII resource-budget reservation.
+///
+/// Clones share one reservation. Dropping a clone does not refund the budget;
+/// the charge is released exactly once when the final clone is dropped.
+#[derive(Clone)]
 pub struct ResourceReservation {
+    shared: Arc<ResourceReservationShared>,
+}
+
+struct ResourceReservationShared {
     context: ExecutionContext,
     kind: ResourceKind,
-    bytes: u64,
+    bytes: Mutex<u64>,
+}
+
+impl fmt::Debug for ResourceReservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResourceReservation")
+            .field("bytes", &*lock_unpoisoned(&self.shared.bytes))
+            .finish_non_exhaustive()
+    }
 }
 
 impl ResourceReservation {
@@ -454,31 +477,69 @@ impl ResourceReservation {
     /// # Errors
     ///
     /// Returns a cancellation, timeout, arithmetic-overflow, or resource-limit error.
-    pub fn grow(&mut self, bytes: u64) -> Result<(), ConversionError> {
-        self.context.checkpoint()?;
-        let next = self.bytes.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+    pub fn grow(&self, bytes: u64) -> Result<(), ConversionError> {
+        self.shared.context.checkpoint()?;
+        let mut held = lock_unpoisoned(&self.shared.bytes);
+        let next = held.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: "memory reservation overflowed".into(),
         })?;
-        let (counter, limit, name) = match self.kind {
+        let (counter, limit, name) = match self.shared.kind {
             ResourceKind::Memory => (
-                &self.context.shared.memory_bytes,
-                self.context.shared.limits.max_memory_bytes,
+                &self.shared.context.shared.memory_bytes,
+                self.shared.context.shared.limits.max_memory_bytes,
                 "max_memory_bytes",
             ),
         };
         checked_charge(counter, bytes, limit, name)?;
-        self.bytes = next;
+        *held = next;
         Ok(())
+    }
+
+    /// Reduce this reservation after a conservatively charged allocation peak ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-limit error if `bytes` exceeds the held reservation.
+    pub fn shrink(&self, bytes: u64) -> Result<(), ConversionError> {
+        let mut held = lock_unpoisoned(&self.shared.bytes);
+        let next = held.checked_sub(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "memory reservation underflowed".into(),
+        })?;
+        *held = next;
+        let counter = match self.shared.kind {
+            ResourceKind::Memory => &self.shared.context.shared.memory_bytes,
+        };
+        counter.fetch_sub(bytes, Ordering::AcqRel);
+        Ok(())
+    }
+
+    pub(crate) fn accounts_memory_for(&self, context: &ExecutionContext, bytes: u64) -> bool {
+        matches!(self.shared.kind, ResourceKind::Memory)
+            && Arc::ptr_eq(&self.shared.context.shared, &context.shared)
+            && *lock_unpoisoned(&self.shared.bytes) == bytes
+    }
+
+    pub(crate) fn belongs_to_memory_context(&self, context: &ExecutionContext) -> bool {
+        matches!(self.shared.kind, ResourceKind::Memory)
+            && Arc::ptr_eq(&self.shared.context.shared, &context.shared)
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        *lock_unpoisoned(&self.shared.bytes)
     }
 }
 
-impl Drop for ResourceReservation {
+impl Drop for ResourceReservationShared {
     fn drop(&mut self) {
         let counter = match self.kind {
             ResourceKind::Memory => &self.context.shared.memory_bytes,
         };
-        counter.fetch_sub(self.bytes, Ordering::AcqRel);
+        counter.fetch_sub(
+            *self.bytes.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner),
+            Ordering::AcqRel,
+        );
     }
 }
 
@@ -802,6 +863,18 @@ mod tests {
         assert_eq!(error.code(), crate::ErrorCode::ResourceLimit);
         drop(first);
         assert!(context.reserve_memory(10).is_ok());
+    }
+
+    #[test]
+    fn reservation_clones_share_one_charge_until_the_last_drop() {
+        let limits = ResourceLimits { max_memory_bytes: 4, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let reservation = context.reserve_memory(4).unwrap();
+        let clone = reservation.clone();
+        drop(reservation);
+        assert_eq!(context.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
+        drop(clone);
+        assert!(context.reserve_memory(4).is_ok());
     }
 
     #[test]

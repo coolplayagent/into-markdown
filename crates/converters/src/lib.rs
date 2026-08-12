@@ -421,14 +421,16 @@ impl SourceResolver for MemorySourceResolver {
             };
             context.checkpoint()?;
             enforce_input_limit(data.len() as u64, options.limits.max_input_bytes)?;
-            Ok(ResolvedInput {
-                bytes: Arc::clone(data),
-                metadata: SourceMetadata {
-                    name: name.clone(),
-                    size: data.len() as u64,
-                    ..SourceMetadata::default()
-                },
-            })
+            let size = u64::try_from(data.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "memory input size cannot be represented as u64".into(),
+            })?;
+            let memory = context.reserve_memory(size)?;
+            Ok(ResolvedInput::with_memory_reservation(
+                Arc::clone(data),
+                SourceMetadata { name: name.clone(), size, ..SourceMetadata::default() },
+                memory,
+            ))
         })
     }
 }
@@ -465,20 +467,22 @@ impl SourceResolver for LocalFileSourceResolver {
                 context.checkpoint()?;
                 let (mut file, metadata) = securely_open_local_file(&path)?;
                 enforce_input_limit(metadata.len(), limit)?;
-                let bytes = read_bounded(&mut file, limit, &context)?;
+                let (bytes, memory) = read_bounded(&mut file, limit, &context)?;
                 let size =
                     u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
                         limit: "max_input_bytes",
                         detail: "resolved file size cannot be represented as u64".into(),
                     })?;
-                Ok(ResolvedInput {
-                    bytes: Arc::from(bytes),
-                    metadata: SourceMetadata {
+                let (bytes, memory) = into_shared_source(bytes, memory)?;
+                Ok(ResolvedInput::with_memory_reservation(
+                    bytes,
+                    SourceMetadata {
                         name: path.file_name().and_then(|value| value.to_str()).map(str::to_owned),
                         size,
                         ..SourceMetadata::default()
                     },
-                })
+                    memory,
+                ))
             })
         });
         Box::pin(async move {
@@ -513,20 +517,22 @@ impl SourceResolver for StdinSourceResolver {
             pool.submit(move || {
                 context.checkpoint()?;
                 let mut stdin = std::io::stdin().lock();
-                let bytes = read_bounded(&mut stdin, limit, &context)?;
+                let (bytes, memory) = read_bounded(&mut stdin, limit, &context)?;
                 let size =
                     u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
                         limit: "max_input_bytes",
                         detail: "resolved stdin size cannot be represented as u64".into(),
                     })?;
-                Ok(ResolvedInput {
-                    metadata: SourceMetadata {
+                let (bytes, memory) = into_shared_source(bytes, memory)?;
+                Ok(ResolvedInput::with_memory_reservation(
+                    bytes,
+                    SourceMetadata {
                         name: Some("stdin".into()),
                         size,
                         ..SourceMetadata::default()
                     },
-                    bytes: Arc::from(bytes),
-                })
+                    memory,
+                ))
             })
         });
         Box::pin(async move {
@@ -540,17 +546,20 @@ fn read_bounded(
     reader: &mut dyn Read,
     limit: u64,
     context: &ExecutionContext,
-) -> Result<Vec<u8>, ConversionError> {
+) -> Result<(Vec<u8>, into_markdown_core::ResourceReservation), ConversionError> {
     let mut bytes = Vec::new();
-    let mut memory = context.reserve_memory(0)?;
+    let memory = context.reserve_memory(0)?;
     let mut total = 0_u64;
-    let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-    let _scratch = context.reserve_memory(u64::try_from(chunk.len()).map_err(|_| {
-        ConversionError::ResourceLimit {
+    let scratch_bytes = limit.saturating_add(1).min(64 * 1024);
+    let scratch = context.reserve_memory(scratch_bytes)?;
+    let scratch_len =
+        usize::try_from(scratch_bytes).map_err(|_| ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
-            detail: "source scratch buffer size cannot be represented as u64".into(),
-        }
-    })?)?;
+            detail: "source scratch buffer size cannot be represented as usize".into(),
+        })?;
+    // The charge must exist before this allocation. It remains held until the
+    // reader and its scratch buffer are no longer used.
+    let mut chunk = vec![0_u8; scratch_len].into_boxed_slice();
     loop {
         context.checkpoint()?;
         let remaining_plus_one = limit.saturating_sub(total).saturating_add(1);
@@ -573,6 +582,10 @@ fn read_bounded(
                 detail: format!("{total} > {limit}"),
             });
         }
+        // Charge initialized payload bytes before requesting backing storage.
+        // `try_reserve_exact` avoids implementation-requested growth slack;
+        // allocator size-class rounding and bookkeeping are outside this
+        // cooperative logical budget and are not represented as process RSS.
         memory.grow(read_u64)?;
         bytes.try_reserve_exact(read).map_err(|error| ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
@@ -580,7 +593,28 @@ fn read_bounded(
         })?;
         bytes.extend_from_slice(&chunk[..read]);
     }
-    Ok(bytes)
+    // Release the allocation before its accounting guard; keeping the reverse
+    // order would create an uncharged lifetime window during the handoff.
+    drop(chunk);
+    drop(scratch);
+    Ok((bytes, memory))
+}
+
+fn into_shared_source(
+    bytes: Vec<u8>,
+    memory: into_markdown_core::ResourceReservation,
+) -> Result<(Arc<[u8]>, into_markdown_core::ResourceReservation), ConversionError> {
+    let size = u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "resolved source size cannot be represented as u64".into(),
+    })?;
+    // `Arc<[u8]>::from(Vec<u8>)` may copy. Account the worst-case overlap
+    // before allocating the shared buffer, then release only the consumed Vec
+    // half after the conversion has completed.
+    memory.grow(size)?;
+    let shared = Arc::from(bytes);
+    memory.shrink(size)?;
+    Ok((shared, memory))
 }
 
 #[cfg(unix)]
@@ -611,12 +645,9 @@ fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionE
 
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let expected = std::fs::symlink_metadata(path)?;
-    if expected.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !expected.is_file() {
-        return Err(ConversionError::Io {
-            detail: format!("local input is not a regular non-reparse file: {}", path.display()),
-        });
-    }
+    // This no-follow handle is the authoritative source object. There is no
+    // path metadata snapshot to race with a later open, and the same handle is
+    // retained for every subsequent read.
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path)?;
@@ -630,21 +661,11 @@ fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionE
 }
 
 #[cfg(not(any(unix, windows)))]
-fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
-    let expected = std::fs::symlink_metadata(path)?;
-    if expected.file_type().is_symlink() || !expected.is_file() {
-        return Err(ConversionError::Io {
-            detail: format!("local input is not a regular non-symlink file: {}", path.display()),
-        });
-    }
-    let file = File::open(path)?;
-    let opened = file.metadata()?;
-    if !opened.is_file() {
-        return Err(ConversionError::Io {
-            detail: format!("local input is not a regular file: {}", path.display()),
-        });
-    }
-    Ok((file, opened))
+fn securely_open_local_file(_: &Path) -> Result<(File, Metadata), ConversionError> {
+    Err(ConversionError::ComponentUnavailable {
+        component: "secure-local-file-open".into(),
+        detail: "this platform has no audited no-follow local-file open policy".into(),
+    })
 }
 
 /// Deliberately non-networking URI resolver placeholder.
@@ -2032,6 +2053,55 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Acquire), 1);
     }
 
+    #[test]
+    fn abandoned_blocking_source_releases_its_memory_after_worker_returns() {
+        let pool = BlockingPool::new("test-abandon-memory", 1, 1, "test_queue").unwrap();
+        let resource_context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 8,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let worker_context = resource_context.clone();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let reservation = worker_context.reserve_memory(8)?;
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(reservation)
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let wait_context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions {
+                timeout: Some(Duration::from_millis(20)),
+                ..into_markdown_core::ExecutionOptions::default()
+            },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        assert_eq!(
+            block_on(wait_context.run(future)).unwrap_err().code(),
+            into_markdown_core::ErrorCode::Timeout
+        );
+        assert_eq!(
+            resource_context.reserve_memory(1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        release_sender.send(()).unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(reservation) = resource_context.reserve_memory(8) {
+                drop(reservation);
+                break;
+            }
+            assert!(Instant::now() < limit, "worker did not release abandoned source memory");
+            std::thread::yield_now();
+        }
+    }
+
     struct EndlessReader {
         read: Arc<AtomicUsize>,
     }
@@ -2052,6 +2122,70 @@ mod tests {
         let error = read_bounded(&mut reader, 65_537, &context).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
         assert_eq!(read.load(Ordering::Acquire), 65_538);
+    }
+
+    struct CountReads(AtomicUsize);
+
+    impl Read for CountReads {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            self.0.fetch_add(1, Ordering::AcqRel);
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn source_scratch_is_reserved_before_reader_or_large_buffer_use() {
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 1,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let mut reader = CountReads(AtomicUsize::new(0));
+        let error = read_bounded(&mut reader, 128 * 1024, &context).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert_eq!(reader.0.load(Ordering::Acquire), 0);
+        assert!(context.reserve_memory(1).is_ok());
+    }
+
+    #[test]
+    fn exact_two_payload_budget_covers_arc_peak_after_scratch_refund() {
+        const SIZE: usize = 100_000;
+        const READ_PEAK: u64 = SIZE as u64 + 64 * 1024;
+        let too_small = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: READ_PEAK,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let (bytes, memory) =
+            read_bounded(&mut Cursor::new(vec![b'x'; SIZE]), SIZE as u64, &too_small).unwrap();
+        let error = into_shared_source(bytes, memory).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(too_small.reserve_memory(READ_PEAK).is_ok());
+
+        let enough = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: (SIZE as u64) * 2,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let (bytes, memory) =
+            read_bounded(&mut Cursor::new(vec![b'x'; SIZE]), SIZE as u64, &enough).unwrap();
+        let (shared, memory) = into_shared_source(bytes, memory).unwrap();
+        assert_eq!(shared.len(), SIZE);
+        let remainder = enough.reserve_memory(SIZE as u64).unwrap();
+        drop(remainder);
+        assert_eq!(
+            enough.reserve_memory(SIZE as u64 + 1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        drop(memory);
+        drop(shared);
+        assert!(enough.reserve_memory((SIZE as u64) * 2).is_ok());
     }
 
     #[cfg(unix)]
@@ -2077,6 +2211,29 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_authoritative_handle_is_stable_across_regular_path_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "into-md-windows-identity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let expected_path = root.join("planned.txt");
+        let replacement_path = root.join("replacement.txt");
+        std::fs::write(&expected_path, b"expected").unwrap();
+        std::fs::write(&replacement_path, b"replacement").unwrap();
+        let (mut authoritative, _) = securely_open_local_file(&expected_path).unwrap();
+        std::fs::remove_file(&expected_path).unwrap();
+        std::fs::rename(&replacement_path, &expected_path).unwrap();
+        let mut contents = Vec::new();
+        authoritative.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"expected");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn memory_resolver_enforces_input_budget() {
         let resolver = MemorySourceResolver;
@@ -2086,6 +2243,39 @@ mod tests {
         let context = execution_context();
         let error = block_on(resolver.resolve(&input, &options, &context)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn memory_resolver_charges_shared_arc_without_copying_it() {
+        let resolver = MemorySourceResolver;
+        let data = Arc::<[u8]>::from(b"large".as_slice());
+        let input = InputRef::Bytes { data: Arc::clone(&data), name: Some("x.txt".into()) };
+        let options = ConversionOptions::default();
+        let too_small = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 4,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let error = block_on(resolver.resolve(&input, &options, &too_small)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+
+        let exact = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 5,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let output = block_on(resolver.resolve(&input, &options, &exact)).unwrap();
+        assert!(Arc::ptr_eq(&data, &output.bytes));
+        assert_eq!(
+            exact.reserve_memory(1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        drop(output);
+        assert!(exact.reserve_memory(5).is_ok());
     }
 
     #[test]
@@ -2099,14 +2289,11 @@ mod tests {
     }
 
     fn resolved(bytes: Vec<u8>, name: &str) -> ResolvedInput {
-        ResolvedInput {
-            metadata: SourceMetadata {
-                name: Some(name.into()),
-                size: bytes.len() as u64,
-                ..SourceMetadata::default()
-            },
-            bytes: Arc::from(bytes),
-        }
+        let size = bytes.len() as u64;
+        ResolvedInput::new(
+            Arc::from(bytes),
+            SourceMetadata { name: Some(name.into()), size, ..SourceMetadata::default() },
+        )
     }
 
     fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {

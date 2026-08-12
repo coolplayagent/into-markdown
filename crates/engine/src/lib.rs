@@ -140,9 +140,9 @@ impl Engine {
     ) -> Result<DetectionResult, ConversionError> {
         let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
-        let input = self.resolve_input(&request.input, &request.options, &context).await?;
-        let input_bytes = measured_input_bytes(&input, &request.options)?;
-        let _input_memory = context.reserve_memory(input_bytes)?;
+        let mut input = self.resolve_input(&request.input, &request.options, &context).await?;
+        measured_input_bytes(&input, &request.options)?;
+        input.ensure_memory_reservation(&context)?;
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
         let candidates = self.detect_formats(&input, &request.hint, &context).await?;
         context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
@@ -162,9 +162,9 @@ impl Engine {
     ) -> Result<ConversionResult, ConversionError> {
         let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
-        let input = self.resolve_input(&request.input, &request.options, &context).await?;
-        let input_bytes = measured_input_bytes(&input, &request.options)?;
-        let _input_memory = context.reserve_memory(input_bytes)?;
+        let mut input = self.resolve_input(&request.input, &request.options, &context).await?;
+        measured_input_bytes(&input, &request.options)?;
+        input.ensure_memory_reservation(&context)?;
 
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
         let candidates = self.detect_formats(&input, &request.hint, &context).await?;
@@ -418,14 +418,14 @@ mod tests {
                 let InputRef::Bytes { data, name } = input else {
                     return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
                 };
-                Ok(ResolvedInput {
-                    bytes: Arc::clone(data),
-                    metadata: SourceMetadata {
+                Ok(ResolvedInput::new(
+                    Arc::clone(data),
+                    SourceMetadata {
                         name: name.clone(),
                         size: data.len() as u64,
                         ..SourceMetadata::default()
                     },
-                })
+                ))
             })
         }
     }
@@ -883,14 +883,14 @@ mod tests {
                 let InputRef::Bytes { data, name } = input else {
                     return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
                 };
-                Ok(ResolvedInput {
-                    bytes: Arc::clone(data),
-                    metadata: SourceMetadata {
+                Ok(ResolvedInput::new(
+                    Arc::clone(data),
+                    SourceMetadata {
                         name: name.clone(),
                         size: data.len() as u64,
                         ..SourceMetadata::default()
                     },
-                })
+                ))
             })
         }
     }
