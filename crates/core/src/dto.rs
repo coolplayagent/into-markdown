@@ -50,7 +50,16 @@ pub const MAX_DTO_VALUES: usize = 2_000_000;
 /// Maximum encoded bytes in one JSON string before JSON allocation.
 pub const MAX_DTO_STRING_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum encoded bytes across JSON strings before JSON allocation.
-pub const MAX_DTO_TOTAL_STRING_BYTES: usize = 48 * 1024 * 1024;
+pub const MAX_DTO_TOTAL_STRING_BYTES: usize = 56 * 1024 * 1024;
+
+/// JSON layout used by the borrowed, budgeted result writer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DtoJsonStyle {
+    /// No insignificant whitespace.
+    Compact,
+    /// Human-readable indentation produced by `serde_json`.
+    Pretty,
+}
 
 /// Resource budgets for decoding untrusted application DTO JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -871,33 +880,6 @@ impl TryFrom<AssetDto> for Asset {
     }
 }
 
-impl TryFrom<&crate::ConversionResult> for ResultDto {
-    type Error = DtoError;
-
-    fn try_from(value: &crate::ConversionResult) -> Result<Self, Self::Error> {
-        let limits = DtoLimits::default();
-        value.document.validate().map_err(|error| {
-            DtoError::new(DtoErrorCode::InvalidField, "$.document", error.to_string())
-        })?;
-        let diagnostics = value.diagnostics.iter().map(DiagnosticDto::from).collect::<Vec<_>>();
-        validate_diagnostics(&diagnostics, &limits, "$.diagnostics")?;
-        let provenance = value.provenance.iter().map(ProvenanceDto::from).collect::<Vec<_>>();
-        validate_provenance(&provenance, &limits, "$.provenance")?;
-        preflight_internal_assets(&value.assets, &limits)?;
-        preflight_internal_result_wire(value, &limits)?;
-        let dto = Self {
-            schema_version: DTO_SCHEMA_VERSION,
-            markdown: value.markdown.clone(),
-            document: value.document.clone(),
-            assets: value.assets.iter().map(AssetDto::try_from).collect::<Result<_, _>>()?,
-            diagnostics,
-            provenance,
-        };
-        dto.validate(&limits)?;
-        Ok(dto)
-    }
-}
-
 impl TryFrom<ResultDto> for crate::ConversionResult {
     type Error = DtoError;
 
@@ -989,6 +971,60 @@ json_api!(BundleManifestDto, validate, no_preflight, decode_manifest, encode_man
 json_api!(BatchReportDto, validate, no_preflight, decode_batch_report, encode_batch_report);
 
 impl ResultDto {
+    /// Stream a conversion result directly to a JSON writer without constructing an owned DTO or
+    /// base64 string. The selected layout is fully budgeted before the first asset is encoded.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for an invalid or over-budget result, serialization
+    /// failure, or destination write failure.
+    pub fn write_json_from_result<W: Write>(
+        result: &crate::ConversionResult,
+        style: DtoJsonStyle,
+        writer: &mut W,
+    ) -> Result<(), DtoError> {
+        Self::write_json_from_result_with_limits(result, style, &DtoLimits::default(), writer)
+    }
+
+    /// Stream a conversion result with caller-provided limits. Limits are applied to the actual
+    /// selected compact or pretty layout before the destination is touched.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for an invalid or over-budget result, serialization
+    /// failure, or destination write failure.
+    pub fn write_json_from_result_with_limits<W: Write>(
+        result: &crate::ConversionResult,
+        style: DtoJsonStyle,
+        limits: &DtoLimits,
+        writer: &mut W,
+    ) -> Result<(), DtoError> {
+        validate_internal_result(result, limits)?;
+        account_internal_result_wire(result, style)?.validate(limits)?;
+        write_internal_result_wire(result, style, writer)
+    }
+
+    /// Serialize a conversion result into its sole owned JSON buffer through the borrowed,
+    /// budgeted writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::write_json_from_result`].
+    pub fn json_from_result(
+        result: &crate::ConversionResult,
+        style: DtoJsonStyle,
+    ) -> Result<String, DtoError> {
+        let mut bytes = Vec::new();
+        Self::write_json_from_result(result, style, &mut bytes)?;
+        String::from_utf8(bytes).map_err(|error| {
+            DtoError::new(
+                DtoErrorCode::InvalidJson,
+                "$",
+                format!("result JSON was not UTF-8: {error}"),
+            )
+        })
+    }
+
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
         validate_version(self.schema_version)?;
         self.document.validate().map_err(|error| {
@@ -1675,22 +1711,31 @@ impl Write for WireAccounting {
     }
 }
 
+fn serialize_internal_result_placeholder<W: Write>(
+    value: &crate::ConversionResult,
+    style: DtoJsonStyle,
+    writer: &mut W,
+) -> Result<(), serde_json::Error> {
+    let wire = InternalResultWire {
+        schema_version: DTO_SCHEMA_VERSION,
+        markdown: &value.markdown,
+        document: &value.document,
+        assets: InternalAssetsWire(&value.assets),
+        diagnostics: InternalDiagnosticsWire(&value.diagnostics),
+        provenance: InternalProvenanceWire(&value.provenance),
+    };
+    match style {
+        DtoJsonStyle::Compact => serde_json::to_writer(writer, &wire),
+        DtoJsonStyle::Pretty => serde_json::to_writer_pretty(writer, &wire),
+    }
+}
+
 fn account_internal_result_wire(
     value: &crate::ConversionResult,
+    style: DtoJsonStyle,
 ) -> Result<WireAccounting, DtoError> {
     let mut accounting = WireAccounting::default();
-    serde_json::to_writer(
-        &mut accounting,
-        &InternalResultWire {
-            schema_version: DTO_SCHEMA_VERSION,
-            markdown: &value.markdown,
-            document: &value.document,
-            assets: InternalAssetsWire(&value.assets),
-            diagnostics: InternalDiagnosticsWire(&value.diagnostics),
-            provenance: InternalProvenanceWire(&value.provenance),
-        },
-    )
-    .map_err(|error| {
+    serialize_internal_result_placeholder(value, style, &mut accounting).map_err(|error| {
         DtoError::new(DtoErrorCode::InvalidJson, "$", format!("account result wire JSON: {error}"))
     })?;
     for asset in &value.assets {
@@ -1706,11 +1751,90 @@ fn account_internal_result_wire(
     Ok(accounting)
 }
 
-fn preflight_internal_result_wire(
+struct Base64InjectingWriter<'a, W> {
+    inner: &'a mut W,
+    assets: &'a [Asset],
+    asset_index: usize,
+    marker: &'static [u8],
+    pending: Vec<u8>,
+}
+
+impl<'a, W: Write> Base64InjectingWriter<'a, W> {
+    fn new(inner: &'a mut W, assets: &'a [Asset], style: DtoJsonStyle) -> Self {
+        Self {
+            inner,
+            assets,
+            asset_index: 0,
+            marker: match style {
+                DtoJsonStyle::Compact => b"\"dataBase64\":\"\"",
+                DtoJsonStyle::Pretty => b"\"dataBase64\": \"\"",
+            },
+            pending: Vec::with_capacity(24),
+        }
+    }
+
+    fn drain_non_prefix(&mut self) -> io::Result<()> {
+        while !self.marker.starts_with(&self.pending) {
+            self.inner.write_all(&self.pending[..1])?;
+            self.pending.remove(0);
+        }
+        if self.pending == self.marker {
+            let asset = self.assets.get(self.asset_index).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "more base64 fields than assets")
+            })?;
+            self.asset_index += 1;
+            self.inner.write_all(&self.marker[..self.marker.len() - 1])?;
+            #[cfg(test)]
+            ASSET_BASE64_ENCODE_CALLS.set(ASSET_BASE64_ENCODE_CALLS.get() + 1);
+            let mut encoder = base64::write::EncoderWriter::new(
+                &mut *self.inner,
+                &base64::engine::general_purpose::STANDARD,
+            );
+            encoder.write_all(&asset.bytes)?;
+            encoder.finish()?.write_all(b"\"")?;
+            self.pending.clear();
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> io::Result<()> {
+        self.inner.write_all(&self.pending)?;
+        if self.asset_index != self.assets.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fewer base64 fields than assets",
+            ));
+        }
+        self.inner.flush()
+    }
+}
+
+impl<W: Write> Write for Base64InjectingWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        for &byte in buffer {
+            self.pending.push(byte);
+            self.drain_non_prefix()?;
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn write_internal_result_wire<W: Write>(
     value: &crate::ConversionResult,
-    limits: &DtoLimits,
+    style: DtoJsonStyle,
+    writer: &mut W,
 ) -> Result<(), DtoError> {
-    account_internal_result_wire(value)?.validate(limits)
+    let mut injecting = Base64InjectingWriter::new(writer, &value.assets, style);
+    serialize_internal_result_placeholder(value, style, &mut injecting).map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("write result wire JSON: {error}"))
+    })?;
+    injecting.finish().map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("write result wire JSON: {error}"))
+    })
 }
 
 fn preflight_internal_asset_lengths(
@@ -1788,6 +1912,56 @@ fn preflight_internal_assets(assets: &[Asset], limits: &DtoLimits) -> Result<(),
                 "duplicate asset ID",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_internal_result(
+    result: &crate::ConversionResult,
+    limits: &DtoLimits,
+) -> Result<(), DtoError> {
+    result.document.validate().map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidField, "$.document", error.to_string())
+    })?;
+    preflight_internal_assets(&result.assets, limits)?;
+    if result.diagnostics.len() > limits.max_diagnostics {
+        return limit("$.diagnostics", "diagnostics", limits.max_diagnostics);
+    }
+    for (index, diagnostic) in result.diagnostics.iter().enumerate() {
+        if diagnostic.code.is_empty() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("$.diagnostics[{index}].code"),
+                "diagnostic code must not be empty",
+            ));
+        }
+        if let Some(locator) = &diagnostic.locator {
+            validate_locator(locator, &format!("$.diagnostics[{index}].locator"))?;
+        }
+    }
+    if result.provenance.len() > limits.max_provenance {
+        return limit("$.provenance", "provenance", limits.max_provenance);
+    }
+    for (index, provenance) in result.provenance.iter().enumerate() {
+        let path = format!("$.provenance[{index}]");
+        if provenance.provider.is_empty() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{path}.provider"),
+                "provider must not be empty",
+            ));
+        }
+        if provenance
+            .confidence
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+        {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{path}.confidence"),
+                "confidence must be finite and between 0 and 1",
+            ));
+        }
+        validate_locator(&provenance.locator, &format!("{path}.locator"))?;
     }
     Ok(())
 }
@@ -2079,7 +2253,7 @@ mod tests {
     use crate::{AssetId, ConversionResult, Rect};
 
     fn result_dto() -> ResultDto {
-        ResultDto::try_from(&ConversionResult {
+        let result = ConversionResult {
             document: Document::default(),
             markdown: "# Example\n".into(),
             assets: vec![Asset {
@@ -2101,8 +2275,9 @@ mod tests {
                 locator: SourceLocator::default(),
                 confidence: Some(1.0),
             }],
-        })
-        .unwrap()
+        };
+        ResultDto::from_json(&ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap())
+            .unwrap()
     }
 
     fn result_value() -> serde_json::Value {
@@ -2118,8 +2293,13 @@ mod tests {
             r##"{"schemaVersion":1,"markdown":"# Example\n","document":{"schemaVersion":1,"metadata":{"title":null,"authors":[],"properties":{}},"blocks":[]},"assets":[{"id":"image-1","filename":"image.png","mediaType":"image/png","dataBase64":"AQID","externalUri":null}],"diagnostics":[{"code":"recoveredText","severity":"warning","message":"text was recovered","locator":null}],"provenance":[{"kind":"nativeParser","provider":"example-parser","locator":{"page":null,"slide":null,"sheet":null,"cell":null,"bounds":null,"time":null,"part":null},"confidence":1.0}]}"##
         );
         assert_eq!(ResultDto::from_json(&json).unwrap(), dto);
-        let internal = ConversionResult::try_from(dto).unwrap();
+        let internal = ConversionResult::try_from(dto.clone()).unwrap();
         assert_eq!(internal.assets[0].bytes, [1, 2, 3]);
+        assert_eq!(ResultDto::json_from_result(&internal, DtoJsonStyle::Compact).unwrap(), json);
+        assert_eq!(
+            ResultDto::json_from_result(&internal, DtoJsonStyle::Pretty).unwrap(),
+            dto.to_pretty_json().unwrap()
+        );
     }
 
     #[test]
@@ -2127,9 +2307,9 @@ mod tests {
         let mut internal = ConversionResult::try_from(result_dto()).unwrap();
         internal.markdown = "m".repeat(MAX_DTO_STRING_BYTES - 1024);
         internal.assets[0].bytes = vec![7_u8; 6 * 1024 * 1024];
-        let dto = ResultDto::try_from(&internal).unwrap();
-        let json = dto.to_json().unwrap();
-        assert_eq!(ResultDto::from_json(&json).unwrap(), dto);
+        let json = ResultDto::json_from_result(&internal, DtoJsonStyle::Compact).unwrap();
+        let dto = ResultDto::from_json(&json).unwrap();
+        assert_eq!(dto.assets[0].data_base64.len(), MAX_DTO_STRING_BYTES);
 
         let mut oversized = result_dto();
         oversized.markdown = "x".repeat(49 * 1024 * 1024);
@@ -2169,7 +2349,7 @@ mod tests {
         let assets = (0..6)
             .map(|index| Asset {
                 id: AssetId(format!("asset-{index}")),
-                filename: Some(format!("asset-{index}.bin")),
+                filename: Some(format!("{}-{index}.bin", "f".repeat(2 * 1024 * 1024))),
                 media_type: "application/octet-stream".into(),
                 bytes: vec![0_u8; 5 * 1024 * 1024],
                 external_uri: None,
@@ -2183,7 +2363,14 @@ mod tests {
             provenance: vec![],
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
-        assert_eq!(ResultDto::try_from(&oversized).unwrap_err().code, DtoErrorCode::ResourceLimit);
+        let mut destination = Vec::new();
+        assert_eq!(
+            ResultDto::write_json_from_result(&oversized, DtoJsonStyle::Compact, &mut destination)
+                .unwrap_err()
+                .code,
+            DtoErrorCode::ResourceLimit
+        );
+        assert!(destination.is_empty());
         assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
 
         let long_metadata = ConversionResult {
@@ -2201,7 +2388,7 @@ mod tests {
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         assert_eq!(
-            ResultDto::try_from(&long_metadata).unwrap_err().code,
+            ResultDto::json_from_result(&long_metadata, DtoJsonStyle::Compact).unwrap_err().code,
             DtoErrorCode::ResourceLimit
         );
         assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
@@ -2221,9 +2408,8 @@ mod tests {
         internal.diagnostics[0].message = "diagnostic \\\" detail".into();
         internal.provenance[0].provider = "provider \\\" id".into();
 
-        let expected = account_internal_result_wire(&internal).unwrap();
-        let dto = ResultDto::try_from(&internal).unwrap();
-        let json = dto.to_json().unwrap();
+        let expected = account_internal_result_wire(&internal, DtoJsonStyle::Compact).unwrap();
+        let json = ResultDto::json_from_result(&internal, DtoJsonStyle::Compact).unwrap();
         let mut actual = WireAccounting::default();
         actual.write_all(json.as_bytes()).unwrap();
         assert_eq!(expected, actual);
@@ -2233,9 +2419,106 @@ mod tests {
             ..DtoLimits::default()
         };
         assert_eq!(
-            preflight_internal_result_wire(&internal, &limits).unwrap_err().code,
+            account_internal_result_wire(&internal, DtoJsonStyle::Compact)
+                .unwrap()
+                .validate(&limits)
+                .unwrap_err()
+                .code,
             DtoErrorCode::ResourceLimit
         );
+    }
+
+    #[test]
+    fn pretty_layout_is_rejected_before_base64_when_only_compact_fits() {
+        let sizes = [5, 5, 5, 5, 5, 6];
+        let assets = sizes
+            .into_iter()
+            .enumerate()
+            .map(|(index, mebibytes)| Asset {
+                id: AssetId(format!("asset-{index}")),
+                filename: Some(format!("asset-{index}.bin")),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![0_u8; mebibytes * 1024 * 1024],
+                external_uri: None,
+            })
+            .collect();
+        let provenance = (0..85_000)
+            .map(|_| Provenance {
+                kind: ProvenanceKind::NativeParser,
+                provider: "p".into(),
+                locator: SourceLocator::default(),
+                confidence: None,
+            })
+            .collect();
+        let result = ConversionResult {
+            document: Document::default(),
+            markdown: "m".repeat(700 * 1024),
+            assets,
+            diagnostics: vec![],
+            provenance,
+        };
+        let limits = DtoLimits::default();
+        let compact = account_internal_result_wire(&result, DtoJsonStyle::Compact).unwrap();
+        let pretty = account_internal_result_wire(&result, DtoJsonStyle::Pretty).unwrap();
+        assert!(compact.json_bytes < limits.max_json_bytes);
+        assert!(compact.validate(&limits).is_ok(), "compact accounting: {compact:?}");
+        assert!(pretty.json_bytes > limits.max_json_bytes);
+
+        ASSET_BASE64_ENCODE_CALLS.set(0);
+        let mut destination = Vec::new();
+        assert_eq!(
+            ResultDto::write_json_from_result(&result, DtoJsonStyle::Pretty, &mut destination)
+                .unwrap_err()
+                .code,
+            DtoErrorCode::ResourceLimit
+        );
+        assert!(destination.is_empty());
+        assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
+    }
+
+    #[test]
+    fn borrowed_writer_streams_base64_and_stops_on_destination_failure() {
+        struct FailAfter {
+            written: usize,
+            maximum: usize,
+        }
+
+        impl Write for FailAfter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                if self.written == self.maximum {
+                    return Err(io::Error::other("destination full"));
+                }
+                let accepted = buffer.len().min(self.maximum - self.written);
+                self.written += accepted;
+                Ok(accepted)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let result = ConversionResult {
+            document: Document::default(),
+            markdown: String::new(),
+            assets: vec![Asset {
+                id: AssetId("streamed".into()),
+                filename: None,
+                media_type: "application/octet-stream".into(),
+                bytes: vec![1_u8; 6 * 1024 * 1024],
+                external_uri: None,
+            }],
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        ASSET_BASE64_ENCODE_CALLS.set(0);
+        let mut destination = FailAfter { written: 0, maximum: 1024 };
+        assert!(
+            ResultDto::write_json_from_result(&result, DtoJsonStyle::Compact, &mut destination)
+                .is_err()
+        );
+        assert_eq!(destination.written, destination.maximum);
+        assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 1);
     }
 
     #[test]
@@ -2354,21 +2637,24 @@ mod tests {
 
     #[test]
     fn external_asset_uris_are_audit_only_and_cannot_leak_secrets() {
-        let error = ResultDto::try_from(&ConversionResult {
-            document: Document::default(),
-            markdown: String::new(),
-            assets: vec![Asset {
-                id: AssetId("remote".into()),
-                filename: None,
-                media_type: "image/png".into(),
-                bytes: vec![1],
-                external_uri: Some(
-                    "https://user:secret@example.com/image.png?token=secret#fragment".into(),
-                ),
-            }],
-            diagnostics: vec![],
-            provenance: vec![],
-        })
+        let error = ResultDto::json_from_result(
+            &ConversionResult {
+                document: Document::default(),
+                markdown: String::new(),
+                assets: vec![Asset {
+                    id: AssetId("remote".into()),
+                    filename: None,
+                    media_type: "image/png".into(),
+                    bytes: vec![1],
+                    external_uri: Some(
+                        "https://user:secret@example.com/image.png?token=secret#fragment".into(),
+                    ),
+                }],
+                diagnostics: vec![],
+                provenance: vec![],
+            },
+            DtoJsonStyle::Compact,
+        )
         .unwrap_err();
         assert_eq!(error.code, DtoErrorCode::InvalidField);
 

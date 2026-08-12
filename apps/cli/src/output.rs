@@ -4,7 +4,7 @@ use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
 use into_markdown::{
     Asset, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionResult, DTO_SCHEMA_VERSION,
-    DiagnosticsDto, ProvenanceListDto, ResultDto,
+    DiagnosticsDto, DtoJsonStyle, ProvenanceListDto, ResultDto,
 };
 use std::fs;
 use std::io::{Cursor, Write};
@@ -20,11 +20,11 @@ pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8
         EmitKind::Markdown => Ok(result.markdown.as_bytes().to_vec()),
         EmitKind::IrJson => encode_document(&result.document),
         EmitKind::ResultJson => {
-            let dto = ResultDto::try_from(result)
-                .map_err(|error| CliError::internal(format!("build result DTO: {error}")))?;
-            dto.to_pretty_json()
-                .map(json_with_newline)
-                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))
+            let mut json = Vec::new();
+            ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut json)
+                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))?;
+            json.push(b'\n');
+            Ok(json)
         }
         EmitKind::Bundle => encode_bundle(result),
     }
@@ -318,8 +318,12 @@ mod tests {
     fn stable_json_envelopes_have_schema_versions() {
         let result = empty_result();
         let ir = String::from_utf8(encode_result(&result, EmitKind::IrJson).unwrap()).unwrap();
-        let full =
-            String::from_utf8(encode_result(&result, EmitKind::ResultJson).unwrap()).unwrap();
+        let encoded = encode_result(&result, EmitKind::ResultJson).unwrap();
+        let mut expected =
+            ResultDto::json_from_result(&result, DtoJsonStyle::Pretty).unwrap().into_bytes();
+        expected.push(b'\n');
+        assert_eq!(encoded, expected);
+        let full = String::from_utf8(encoded).unwrap();
         assert!(ir.contains("\"schemaVersion\": 1"));
         assert!(full.contains("\"dataBase64\": \"AQID\""));
     }
