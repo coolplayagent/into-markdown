@@ -12,5 +12,8 @@ quick-xml.workspace = true
 serde_json.workspace = true
 zip.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true

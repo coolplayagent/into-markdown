@@ -12,9 +12,14 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 use std::collections::BTreeMap;
+use std::fs::{File, Metadata, OpenOptions};
+use std::future::Future;
 use std::io::{Cursor, Read};
 use std::path::Path;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::task::{Context, Poll, Waker};
 
 /// Converter implementation status exposed by `into-md formats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +233,167 @@ pub fn planned_formats() -> &'static [FormatDescriptor] {
     FORMATS
 }
 
+const PATH_WORKER_COUNT: usize = 4;
+const PATH_QUEUE_CAPACITY: usize = 32;
+const STDIN_QUEUE_CAPACITY: usize = 1;
+
+type BlockingJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct BlockingPool {
+    sender: SyncSender<BlockingJob>,
+    queue_limit: &'static str,
+}
+
+impl BlockingPool {
+    fn new(
+        worker_name: &'static str,
+        worker_count: usize,
+        queue_capacity: usize,
+        queue_limit: &'static str,
+    ) -> Result<Self, String> {
+        let (sender, receiver) = mpsc::sync_channel::<BlockingJob>(queue_capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for index in 0..worker_count {
+            let receiver = Arc::clone(&receiver);
+            std::thread::Builder::new()
+                .name(format!("{worker_name}-{index}"))
+                .spawn(move || {
+                    loop {
+                        let job = {
+                            let receiver = lock_unpoisoned(&receiver);
+                            receiver.recv()
+                        };
+                        let Ok(job) = job else { break };
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    }
+                })
+                .map_err(|error| format!("start {worker_name} worker: {error}"))?;
+        }
+        Ok(Self { sender, queue_limit })
+    }
+
+    fn submit<T, F>(&self, operation: F) -> Result<BlockingFuture<T>, ConversionError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, ConversionError> + Send + 'static,
+    {
+        let state = Arc::new(BlockingState::default());
+        let worker_state = Arc::clone(&state);
+        let job: BlockingJob = Box::new(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+                .unwrap_or_else(|_| {
+                    Err(ConversionError::Internal {
+                        detail: "blocking source worker panicked".into(),
+                    })
+                });
+            worker_state.complete(outcome);
+        });
+        match self.sender.try_send(job) {
+            Ok(()) => Ok(BlockingFuture { state }),
+            Err(TrySendError::Full(_)) => Err(ConversionError::ResourceLimit {
+                limit: self.queue_limit,
+                detail: "blocking source worker queue is full".into(),
+            }),
+            Err(TrySendError::Disconnected(_)) => Err(ConversionError::ComponentUnavailable {
+                component: "blocking-source-workers".into(),
+                detail: "blocking source worker queue is unavailable".into(),
+            }),
+        }
+    }
+}
+
+struct BlockingState<T> {
+    inner: Mutex<BlockingStateInner<T>>,
+}
+
+struct BlockingStateInner<T> {
+    outcome: Option<Result<T, ConversionError>>,
+    waker: Option<Waker>,
+    abandoned: bool,
+}
+
+impl<T> Default for BlockingState<T> {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(BlockingStateInner { outcome: None, waker: None, abandoned: false }),
+        }
+    }
+}
+
+impl<T> BlockingState<T> {
+    fn complete(&self, outcome: Result<T, ConversionError>) {
+        let mut inner = lock_unpoisoned(&self.inner);
+        if inner.abandoned {
+            return;
+        }
+        inner.outcome = Some(outcome);
+        let waker = inner.waker.take();
+        drop(inner);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+struct BlockingFuture<T> {
+    state: Arc<BlockingState<T>>,
+}
+
+impl<T> Future for BlockingFuture<T> {
+    type Output = Result<T, ConversionError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = lock_unpoisoned(&self.state.inner);
+        if let Some(outcome) = inner.outcome.take() {
+            return Poll::Ready(outcome);
+        }
+        inner.waker = Some(context.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for BlockingFuture<T> {
+    fn drop(&mut self) {
+        let mut inner = lock_unpoisoned(&self.state.inner);
+        inner.abandoned = true;
+        inner.waker = None;
+        inner.outcome.take();
+    }
+}
+
+fn path_pool() -> Result<&'static BlockingPool, ConversionError> {
+    static POOL: OnceLock<Result<BlockingPool, String>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        BlockingPool::new(
+            "into-md-path-io",
+            PATH_WORKER_COUNT,
+            PATH_QUEUE_CAPACITY,
+            "blocking_path_queue",
+        )
+    })
+    .as_ref()
+    .map_err(|detail| ConversionError::ComponentUnavailable {
+        component: "blocking-path-workers".into(),
+        detail: detail.clone(),
+    })
+}
+
+fn stdin_pool() -> Result<&'static BlockingPool, ConversionError> {
+    static POOL: OnceLock<Result<BlockingPool, String>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        BlockingPool::new("into-md-stdin-io", 1, STDIN_QUEUE_CAPACITY, "blocking_stdin_queue")
+    })
+    .as_ref()
+    .map_err(|detail| ConversionError::ComponentUnavailable {
+        component: "blocking-stdin-worker".into(),
+        detail: detail.clone(),
+    })
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Resolver for in-memory inputs.
 #[derive(Debug, Default)]
 pub struct MemorySourceResolver;
@@ -254,7 +420,7 @@ impl SourceResolver for MemorySourceResolver {
                 });
             };
             context.checkpoint()?;
-            enforce_input_limit(data.len() as u64, options)?;
+            enforce_input_limit(data.len() as u64, options.limits.max_input_bytes)?;
             Ok(ResolvedInput {
                 bytes: Arc::clone(data),
                 metadata: SourceMetadata {
@@ -286,35 +452,39 @@ impl SourceResolver for LocalFileSourceResolver {
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
-        let result = (|| {
-            let InputRef::Path(path) = input else {
-                return Err(ConversionError::Unsupported { detail: "expected local path".into() });
-            };
-            let metadata = std::fs::metadata(path)?;
-            enforce_input_limit(metadata.len(), options)?;
-            let _memory = context.reserve_memory(metadata.len())?;
-            let mut file = std::fs::File::open(path)?;
-            let capacity = usize::try_from(metadata.len()).unwrap_or(0).min(8 * 1024 * 1024);
-            let mut bytes = Vec::with_capacity(capacity);
-            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-            loop {
+        let InputRef::Path(path) = input else {
+            return Box::pin(async {
+                Err(ConversionError::Unsupported { detail: "expected local path".into() })
+            });
+        };
+        let path = path.clone();
+        let limit = options.limits.max_input_bytes;
+        let context = context.clone();
+        let submitted = path_pool().and_then(|pool| {
+            pool.submit(move || {
                 context.checkpoint()?;
-                let read = file.read(&mut chunk)?;
-                if read == 0 {
-                    break;
-                }
-                bytes.extend_from_slice(&chunk[..read]);
-            }
-            Ok(ResolvedInput {
-                bytes: Arc::from(bytes),
-                metadata: SourceMetadata {
-                    name: path.file_name().and_then(|v| v.to_str()).map(str::to_owned),
-                    size: metadata.len(),
-                    ..SourceMetadata::default()
-                },
+                let (mut file, metadata) = securely_open_local_file(&path)?;
+                enforce_input_limit(metadata.len(), limit)?;
+                let bytes = read_bounded(&mut file, limit, &context)?;
+                let size =
+                    u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                        limit: "max_input_bytes",
+                        detail: "resolved file size cannot be represented as u64".into(),
+                    })?;
+                Ok(ResolvedInput {
+                    bytes: Arc::from(bytes),
+                    metadata: SourceMetadata {
+                        name: path.file_name().and_then(|value| value.to_str()).map(str::to_owned),
+                        size,
+                        ..SourceMetadata::default()
+                    },
+                })
             })
-        })();
-        Box::pin(async move { result })
+        });
+        Box::pin(async move {
+            let future = submitted?;
+            future.await
+        })
     }
 }
 
@@ -337,38 +507,144 @@ impl SourceResolver for StdinSourceResolver {
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
-        let result = (|| {
-            let limit = options.limits.max_input_bytes;
-            let mut bytes = Vec::new();
-            let mut reservations = Vec::new();
-            let mut stdin = std::io::stdin().take(limit.saturating_add(1));
-            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-            loop {
+        let limit = options.limits.max_input_bytes;
+        let context = context.clone();
+        let submitted = stdin_pool().and_then(|pool| {
+            pool.submit(move || {
                 context.checkpoint()?;
-                let read = stdin.read(&mut chunk)?;
-                if read == 0 {
-                    break;
-                }
-                reservations.push(context.reserve_memory(u64::try_from(read).map_err(
-                    |_| ConversionError::ResourceLimit {
-                        limit: "max_memory_bytes",
-                        detail: "stdin read size cannot be represented as u64".into(),
+                let mut stdin = std::io::stdin().lock();
+                let bytes = read_bounded(&mut stdin, limit, &context)?;
+                let size =
+                    u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                        limit: "max_input_bytes",
+                        detail: "resolved stdin size cannot be represented as u64".into(),
+                    })?;
+                Ok(ResolvedInput {
+                    metadata: SourceMetadata {
+                        name: Some("stdin".into()),
+                        size,
+                        ..SourceMetadata::default()
                     },
-                )?)?);
-                bytes.extend_from_slice(&chunk[..read]);
-            }
-            enforce_input_limit(bytes.len() as u64, options)?;
-            Ok(ResolvedInput {
-                metadata: SourceMetadata {
-                    name: Some("stdin".into()),
-                    size: bytes.len() as u64,
-                    ..SourceMetadata::default()
-                },
-                bytes: Arc::from(bytes),
+                    bytes: Arc::from(bytes),
+                })
             })
-        })();
-        Box::pin(async move { result })
+        });
+        Box::pin(async move {
+            let future = submitted?;
+            future.await
+        })
     }
+}
+
+fn read_bounded(
+    reader: &mut dyn Read,
+    limit: u64,
+    context: &ExecutionContext,
+) -> Result<Vec<u8>, ConversionError> {
+    let mut bytes = Vec::new();
+    let mut memory = context.reserve_memory(0)?;
+    let mut total = 0_u64;
+    let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
+    let _scratch = context.reserve_memory(u64::try_from(chunk.len()).map_err(|_| {
+        ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "source scratch buffer size cannot be represented as u64".into(),
+        }
+    })?)?;
+    loop {
+        context.checkpoint()?;
+        let remaining_plus_one = limit.saturating_sub(total).saturating_add(1);
+        let read_limit = usize::try_from(remaining_plus_one).unwrap_or(usize::MAX).min(chunk.len());
+        let read = reader.read(&mut chunk[..read_limit])?;
+        if read == 0 {
+            break;
+        }
+        let read_u64 = u64::try_from(read).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "source read size cannot be represented as u64".into(),
+        })?;
+        total = total.checked_add(read_u64).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "source byte count overflowed".into(),
+        })?;
+        if total > limit {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: format!("{total} > {limit}"),
+            });
+        }
+        memory.grow(read_u64)?;
+        bytes.try_reserve_exact(read).map_err(|error| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: format!("could not reserve source buffer: {error}"),
+        })?;
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let expected = std::fs::symlink_metadata(path)?;
+    if expected.file_type().is_symlink() || !expected.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input is not a regular non-symlink file: {}", path.display()),
+        });
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || expected.dev() != opened.dev() || expected.ino() != opened.ino() {
+        return Err(ConversionError::Io {
+            detail: format!("local input changed while it was opened: {}", path.display()),
+        });
+    }
+    Ok((file, opened))
+}
+
+#[cfg(windows)]
+fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let expected = std::fs::symlink_metadata(path)?;
+    if expected.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !expected.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input is not a regular non-reparse file: {}", path.display()),
+        });
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !opened.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input resolved to a reparse point: {}", path.display()),
+        });
+    }
+    Ok((file, opened))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
+    let expected = std::fs::symlink_metadata(path)?;
+    if expected.file_type().is_symlink() || !expected.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input is not a regular non-symlink file: {}", path.display()),
+        });
+    }
+    let file = File::open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input is not a regular file: {}", path.display()),
+        });
+    }
+    Ok((file, opened))
 }
 
 /// Deliberately non-networking URI resolver placeholder.
@@ -406,11 +682,11 @@ impl SourceResolver for UriSourceResolver {
     }
 }
 
-fn enforce_input_limit(size: u64, options: &ConversionOptions) -> Result<(), ConversionError> {
-    if size > options.limits.max_input_bytes {
+fn enforce_input_limit(size: u64, limit: u64) -> Result<(), ConversionError> {
+    if size > limit {
         return Err(ConversionError::ResourceLimit {
             limit: "max_input_bytes",
-            detail: format!("{size} > {}", options.limits.max_input_bytes),
+            detail: format!("{size} > {limit}"),
         });
     }
     Ok(())
@@ -1646,6 +1922,8 @@ fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
@@ -1664,6 +1942,139 @@ mod tests {
             into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits::default(),
         )
+    }
+
+    #[test]
+    fn blocking_worker_wait_is_deadline_interruptible() {
+        let pool = BlockingPool::new("test-blocking", 1, 1, "test_blocking_queue").unwrap();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(())
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions {
+                timeout: Some(Duration::from_millis(20)),
+                ..into_markdown_core::ExecutionOptions::default()
+            },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        let start = Instant::now();
+        let error = block_on(context.run(future)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Timeout);
+        assert!(start.elapsed() < Duration::from_millis(500));
+        release_sender.send(()).unwrap();
+    }
+
+    #[test]
+    fn blocking_worker_overload_has_a_stable_resource_error() {
+        let pool = BlockingPool::new("test-overload", 1, 1, "test_blocking_queue").unwrap();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let running = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(())
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let queued = pool.submit(|| Ok(())).unwrap();
+        let error = pool.submit(|| Ok(())).err().unwrap();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(error.to_string().contains("test_blocking_queue"));
+        drop(running);
+        drop(queued);
+        release_sender.send(()).unwrap();
+    }
+
+    #[test]
+    fn blocking_worker_panic_is_a_stable_internal_error() {
+        let pool = BlockingPool::new("test-panic", 1, 1, "test_blocking_queue").unwrap();
+        let future = pool.submit::<(), _>(|| panic!("untrusted worker panic")).unwrap();
+        let error = block_on(future).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+    }
+
+    #[test]
+    fn abandoned_blocking_result_is_dropped_after_worker_returns() {
+        struct DropSignal(Arc<AtomicUsize>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        let pool = BlockingPool::new("test-abandon", 1, 1, "test_blocking_queue").unwrap();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let worker_dropped = Arc::clone(&dropped);
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(DropSignal(worker_dropped))
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        drop(future);
+        release_sender.send(()).unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        while dropped.load(Ordering::Acquire) == 0 && Instant::now() < limit {
+            std::thread::yield_now();
+        }
+        assert_eq!(dropped.load(Ordering::Acquire), 1);
+    }
+
+    struct EndlessReader {
+        read: Arc<AtomicUsize>,
+    }
+
+    impl Read for EndlessReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            buffer.fill(b'x');
+            self.read.fetch_add(buffer.len(), Ordering::AcqRel);
+            Ok(buffer.len())
+        }
+    }
+
+    #[test]
+    fn growing_source_reads_at_most_input_limit_plus_one() {
+        let read = Arc::new(AtomicUsize::new(0));
+        let mut reader = EndlessReader { read: Arc::clone(&read) };
+        let context = execution_context();
+        let error = read_bounded(&mut reader, 65_537, &context).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert_eq!(read.load(Ordering::Acquire), 65_538);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_open_refuses_a_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "into-md-secure-open-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let planned = root.join("planned.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&planned, b"planned").unwrap();
+        std::fs::write(&target, b"target").unwrap();
+        std::fs::remove_file(&planned).unwrap();
+        symlink(&target, &planned).unwrap();
+        let error = securely_open_local_file(&planned).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

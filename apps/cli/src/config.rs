@@ -508,6 +508,9 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
     if let Some(confidence) = config.conversion.ocr.minimum_confidence {
         validate_confidence(confidence)?;
     }
+    if config.conversion.timeout_ms == Some(0) {
+        return Err(CliError::config("conversion.timeout_ms must be greater than zero"));
+    }
     if config.conversion.network.deny_private_networks == Some(false) {
         return Err(CliError::config(
             "conversion.network.deny_private_networks cannot be false; private-network access requires --allow-private-network on the current invocation",
@@ -1516,5 +1519,12 @@ api_key_env = "VISION_API_KEY"
     fn no_secret_config_field_exists() {
         let fields = BTreeSet::from(["api_key_env"]);
         assert!(!fields.contains("api_key"));
+    }
+
+    #[test]
+    fn zero_conversion_timeout_is_rejected() {
+        let config: RawConfig =
+            toml::from_str("schema_version = 1\n[conversion]\ntimeout_ms = 0\n").unwrap();
+        assert!(validate_raw(&config).is_err());
     }
 }

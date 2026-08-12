@@ -15,7 +15,9 @@ Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与�
 
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending
 future 的取消和 deadline 唤醒、多 waiter 竞争、checked 预算累加，以及失败后临时
-产物清理。测试不得依赖某个异步运行时才能触发取消或 timeout。
+产物清理。阻塞来源还要覆盖有界工作者过载、deadline 先于系统调用返回、增长文件只读
+预算加一字节、symlink 替换拒绝，以及 worker panic 的稳定失败。测试不得依赖某个异步
+运行时才能触发取消或 timeout。
 
 后续实现应增加四层测试：
 

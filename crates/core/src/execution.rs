@@ -184,6 +184,7 @@ struct ProgressState {
     basis_points: u16,
     started: bool,
     completed: bool,
+    sequence: u64,
 }
 
 impl fmt::Debug for ExecutionContext {
@@ -201,10 +202,8 @@ impl ExecutionContext {
     /// Construct a context from request controls and conversion limits.
     #[must_use]
     pub fn new(options: ExecutionOptions, limits: ResourceLimits) -> Self {
-        let deadline = options.timeout.map(|duration| {
-            let now = Instant::now();
-            now.checked_add(duration).unwrap_or(now)
-        });
+        let now = Instant::now();
+        let deadline = options.timeout.and_then(|duration| now.checked_add(duration));
         let dispatcher = options.progress_listener.map(ProgressDispatcher::new);
         let timer_stop = Arc::new(TimerStop::default());
         let shared = Arc::new(ExecutionShared {
@@ -311,16 +310,21 @@ impl ExecutionContext {
         progress.stage = Some(stage);
         progress.basis_points = basis_points;
         progress.completed = stage == ExecutionStage::Completed;
-        drop(progress);
+        progress.sequence = progress.sequence.saturating_add(1);
+        let sequence = progress.sequence;
         if let Some(dispatcher) = &self.shared.dispatcher {
-            dispatcher.publish(ProgressEvent {
-                stage,
-                basis_points,
-                completed_units,
-                total_units,
-                message: message.map(Into::into),
-            });
+            dispatcher.publish(
+                sequence,
+                ProgressEvent {
+                    stage,
+                    basis_points,
+                    completed_units,
+                    total_units,
+                    message: message.map(Into::into),
+                },
+            );
         }
+        drop(progress);
         Ok(())
     }
 
@@ -442,6 +446,31 @@ pub struct ResourceReservation {
     context: ExecutionContext,
     kind: ResourceKind,
     bytes: u64,
+}
+
+impl ResourceReservation {
+    /// Increase this reservation using the same checked request budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, arithmetic-overflow, or resource-limit error.
+    pub fn grow(&mut self, bytes: u64) -> Result<(), ConversionError> {
+        self.context.checkpoint()?;
+        let next = self.bytes.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "memory reservation overflowed".into(),
+        })?;
+        let (counter, limit, name) = match self.kind {
+            ResourceKind::Memory => (
+                &self.context.shared.memory_bytes,
+                self.context.shared.limits.max_memory_bytes,
+                "max_memory_bytes",
+            ),
+        };
+        checked_charge(counter, bytes, limit, name)?;
+        self.bytes = next;
+        Ok(())
+    }
 }
 
 impl Drop for ResourceReservation {
@@ -571,15 +600,29 @@ struct ProgressDispatcher {
 }
 
 struct ProgressMailbox {
-    queue: Mutex<VecDeque<ProgressEvent>>,
+    inner: Mutex<ProgressMailboxInner>,
     ready: Condvar,
     closed: AtomicBool,
+}
+
+struct ProgressEnvelope {
+    event: ProgressEvent,
+}
+
+struct ProgressMailboxInner {
+    queue: VecDeque<ProgressEnvelope>,
+    newest_sequence: u64,
+    terminal: bool,
 }
 
 impl ProgressDispatcher {
     fn new(listener: Arc<dyn ProgressListener>) -> Self {
         let mailbox = Arc::new(ProgressMailbox {
-            queue: Mutex::new(VecDeque::with_capacity(8)),
+            inner: Mutex::new(ProgressMailboxInner {
+                queue: VecDeque::with_capacity(8),
+                newest_sequence: 0,
+                terminal: false,
+            }),
             ready: Condvar::new(),
             closed: AtomicBool::new(false),
         });
@@ -587,39 +630,46 @@ impl ProgressDispatcher {
         std::thread::spawn(move || {
             loop {
                 let event = {
-                    let mut queue = lock_unpoisoned(&worker_mailbox.queue);
-                    while queue.is_empty() && !worker_mailbox.closed.load(Ordering::Acquire) {
-                        queue = wait_unpoisoned(&worker_mailbox.ready, queue);
+                    let mut inner = lock_unpoisoned(&worker_mailbox.inner);
+                    while inner.queue.is_empty() && !worker_mailbox.closed.load(Ordering::Acquire) {
+                        inner = wait_unpoisoned(&worker_mailbox.ready, inner);
                     }
-                    queue.pop_front()
+                    inner.queue.pop_front()
                 };
-                let Some(event) = event else { break };
+                let Some(envelope) = event else { break };
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    listener.on_progress(event);
+                    listener.on_progress(envelope.event);
                 }));
             }
         });
         Self { mailbox }
     }
 
-    fn publish(&self, event: ProgressEvent) {
+    fn publish(&self, sequence: u64, event: ProgressEvent) {
         if self.mailbox.closed.load(Ordering::Acquire) {
             return;
         }
-        let mut queue = lock_unpoisoned(&self.mailbox.queue);
-        if let Some(last) = queue.back_mut()
-            && last.stage == event.stage
+        let mut inner = lock_unpoisoned(&self.mailbox.inner);
+        if inner.terminal || sequence <= inner.newest_sequence {
+            return;
+        }
+        inner.newest_sequence = sequence;
+        let terminal = event.stage == ExecutionStage::Completed;
+        let envelope = ProgressEnvelope { event };
+        if let Some(last) = inner.queue.back_mut()
+            && last.event.stage == envelope.event.stage
         {
-            *last = event;
-        } else if queue.len() < 8 {
-            queue.push_back(event);
+            *last = envelope;
+        } else if inner.queue.len() < 8 {
+            inner.queue.push_back(envelope);
         } else {
             // Preserve the oldest already queued boundaries and guarantee the
             // newest boundary, especially Completed, is eventually observed.
-            queue.pop_back();
-            queue.push_back(event);
+            inner.queue.pop_back();
+            inner.queue.push_back(envelope);
         }
-        drop(queue);
+        inner.terminal = terminal;
+        drop(inner);
         self.mailbox.ready.notify_one();
     }
 }
@@ -876,21 +926,27 @@ mod tests {
             ExecutionStage::Rendering,
         ];
         for sequence in 0_u16..32 {
-            dispatcher.publish(ProgressEvent {
-                stage: stages[usize::from(sequence) % stages.len()],
-                basis_points: sequence,
-                completed_units: None,
-                total_units: None,
-                message: None,
-            });
+            dispatcher.publish(
+                u64::from(sequence) + 1,
+                ProgressEvent {
+                    stage: stages[usize::from(sequence) % stages.len()],
+                    basis_points: sequence,
+                    completed_units: None,
+                    total_units: None,
+                    message: None,
+                },
+            );
         }
-        dispatcher.publish(ProgressEvent {
-            stage: ExecutionStage::Completed,
-            basis_points: 10_000,
-            completed_units: Some(1),
-            total_units: Some(1),
-            message: None,
-        });
+        dispatcher.publish(
+            33,
+            ProgressEvent {
+                stage: ExecutionStage::Completed,
+                basis_points: 10_000,
+                completed_units: Some(1),
+                total_units: Some(1),
+                message: None,
+            },
+        );
         let limit = Instant::now() + Duration::from_secs(2);
         while lock_unpoisoned(&events).last().map(|event| event.stage)
             != Some(ExecutionStage::Completed)
@@ -902,6 +958,54 @@ mod tests {
             lock_unpoisoned(&events).last().map(|event| event.stage),
             Some(ExecutionStage::Completed)
         );
+    }
+
+    #[test]
+    fn terminal_progress_rejects_a_stale_concurrent_publication() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = Arc::new(RecordingListener {
+            events: Arc::clone(&events),
+            delay: Duration::ZERO,
+            panic_once: AtomicBool::new(false),
+        });
+        let dispatcher = Arc::new(ProgressDispatcher::new(listener));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let stale_dispatcher = Arc::clone(&dispatcher);
+        let stale_barrier = Arc::clone(&barrier);
+        let stale = std::thread::spawn(move || {
+            stale_barrier.wait();
+            std::thread::yield_now();
+            stale_dispatcher.publish(
+                1,
+                ProgressEvent {
+                    stage: ExecutionStage::Resolving,
+                    basis_points: 0,
+                    completed_units: None,
+                    total_units: None,
+                    message: None,
+                },
+            );
+        });
+        dispatcher.publish(
+            2,
+            ProgressEvent {
+                stage: ExecutionStage::Completed,
+                basis_points: 10_000,
+                completed_units: Some(1),
+                total_units: Some(1),
+                message: None,
+            },
+        );
+        barrier.wait();
+        stale.join().unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        while lock_unpoisoned(&events).is_empty() && Instant::now() < limit {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        let recorded = lock_unpoisoned(&events);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].stage, ExecutionStage::Completed);
     }
 
     #[test]
@@ -927,5 +1031,24 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn unrepresentable_deadline_saturates_to_no_deadline() {
+        let context = ExecutionContext::new(
+            ExecutionOptions { timeout: Some(Duration::MAX), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        assert!(context.shared.deadline.is_none());
+        assert!(context.checkpoint().is_ok());
+    }
+
+    #[test]
+    fn zero_library_timeout_is_an_immediate_deadline() {
+        let context = ExecutionContext::new(
+            ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        assert!(matches!(context.checkpoint(), Err(ConversionError::Timeout)));
     }
 }

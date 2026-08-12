@@ -68,15 +68,32 @@ reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported
 解压循环、页面循环、模型批次和网络等待边界调用 `checkpoint`，异步等待应通过
 `ExecutionContext::run` 包装；只在引擎入口检查一次不符合接口契约。
 
+本地路径和 stdin 的阻塞读取运行在进程级固定工作者中：路径使用四个工作者与容量 32
+的有界队列，stdin 使用独立的单工作者与容量 1 的队列，避免一个不可中断的 stdin
+读取占满路径池。调用 future 只等待共享结果，因此 deadline 或取消可以立即返回；
+工作者在系统调用返回后观察同一上下文，停止读取并丢弃已无人等待的结果。该设计的
+永久线程数和排队请求数都有固定上限，过载返回 `resourceLimit`，工作者不可用返回
+`componentUnavailable`。每次读取最多请求剩余输入预算加一个字节，并在追加前执行
+checked 累加和协作式内存预留。
+
+路径打开不能依赖规划时的一次 symlink 检查。Unix resolver 使用 `O_NOFOLLOW`，打开
+后要求 regular file，并核对紧邻打开前的设备与 inode；Windows 使用
+`FILE_FLAG_OPEN_REPARSE_POINT` 打开并拒绝 reparse attribute。规划阶段仍用于尽早给出
+`symlinkDenied`，resolver 的 handle 级策略才是最终读取边界；它不承诺锁定更早规划
+阶段看到的普通文件版本。
+
 `CancellationToken` 是协作式、可克隆的取消句柄。总 timeout 从引擎接收请求时开始，
 覆盖解析、检测、探测、转换、OCR、AI 与渲染，并以 `timeout` 稳定错误码失败；显式取消
 使用 `cancelled`。取消、超时和完成以最后一次检查点线性化，成功完成事件发布后到达的
 取消不会改写已经完成的结果。
+library 的零 `Duration` 表示立即 deadline；CLI 和配置拒绝零值。若极大 `Duration`
+无法转换为平台 `Instant`，则饱和为无 deadline，不能回绕成立即 timeout。
 
 阶段进度使用 `ProgressEvent` 和对象安全的 `ProgressListener`。总体进度以 basis points
 表达并保持单调。OCR 与 AI 是转换期间可以交错出现的活动，而不是互斥的线性总体阶段。
-监听器运行在隔离线程上；固定容量 mailbox 会合并同阶段更新，并在饱和时保留最新边界
-与最终完成事件，因此慢监听器不会阻塞转换，监听器 panic 也不会穿透执行边界。回调期间
+监听器运行在隔离线程上；进度状态锁覆盖序号分配和入队，dispatcher 还会丢弃旧序号及
+终态后的事件。固定容量 mailbox 会合并同阶段更新，并在饱和时保留最新边界与最终完成
+事件，因此慢监听器不会阻塞转换，监听器 panic 也不会穿透执行边界。回调期间
 不持有进度状态锁，监听器可以安全地请求取消。接口不依赖特定异步运行时，也不创建
 无界事件队列。
 
