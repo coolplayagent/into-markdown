@@ -38,7 +38,7 @@ mod tests {
     }
 
     #[test]
-    fn default_engine_converts_text_and_only_txt_is_available() {
+    fn default_engine_converts_text_and_reports_builtin_text_tables() {
         let engine = default_engine().unwrap();
         let mut request = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from([0xff, 0xfe, b'A', 0, 0x3d, 0xd8, 0x00, 0xde]),
@@ -55,7 +55,7 @@ mod tests {
             .filter(|descriptor| descriptor.status == FormatStatus::Available)
             .map(|descriptor| descriptor.format)
             .collect::<Vec<_>>();
-        assert_eq!(available, vec![InputFormat::Text]);
+        assert_eq!(available, vec![InputFormat::Text, InputFormat::Csv, InputFormat::Tsv]);
     }
 
     #[test]

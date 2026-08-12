@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT 状态为 `available`，其余尚未
+运行时的权威列表以 `into-md formats` 输出为准。TXT、CSV、TSV 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -35,10 +35,26 @@ JSON、XML、HTML 等结构化候选先于普通文本。JSON 使用非递归词
 `complete` 只是中间状态，检测器继续读取完整 resolved bytes；只有完整结构及其后纯
 空白形成 JSON 候选，闭合结构后的非空白尾部可继续按 TXT 评估。
 
-planned CSV/TSV 保护至少需要三行非空记录、RFC 风格 quote 语法、一致且不少于两列，
+CSV/TSV 自动检测至少需要三行非空记录、RFC 风格 quote 语法、一致且不少于两列，
 以及至少一列呈现非数字表头与全数字数据的类型差异；两行逗号或 Tab 散文仍按 TXT
-评估。启发式只保留格式候选，不实现 CSV/TSV 转换。显式 `--format text` 或 `--charset`
-仍表示用户有意按文本解释输入。已知二进制 magic 也不会降级为 TXT。
+评估。扩展名、MIME 或显式格式提示对 CSV/TSV 具有权威性；单独的字符集提示仍按文本
+解释。已知二进制 magic 也不会降级为 TXT。
+
+自动检测与 converter probe 使用和转换相同的完整逻辑记录解析器，字段内的 CRLF、LF、
+CR 不会被误计为新记录。强证据忽略空记录；因此显式 `pad` 可恢复含空记录的自动候选，
+而 strict 策略仍在转换阶段返回权威的不等宽错误。
+
+## CSV 与 TSV
+
+CSV 使用逗号，TSV 使用 Tab；分隔符不从内容猜测后互换。解析器接受 CRLF、LF、CR、
+外围双引号、doubled quote、字段内换行、尾随空字段、空记录与 BOM，不执行 trim、注释
+或公式。表格默认以首条记录宽度为准，不等宽记录返回稳定 malformed；`ragged_rows =
+"pad"` 只补齐较短记录并输出 `delimited.raggedRecordPadded`，较宽记录仍拒绝。
+
+表头默认使用保守启发式：首行非空且唯一，并至少有一列呈“文本标签、后续全为数字”；
+`always` 与 `never` 可覆盖。每个单元格内容节点的 provenance 使用原始编码的半开 byte
+range，范围包含外围引号和 doubled quote 原始字节；`locator.cell` 保存零基行列。
+Table 节点覆盖全部原始记录。转换输出始终为矩形 Table IR，GFM 转义只由中央渲染器完成。
 
 默认严格拒绝非法或截断序列；传统字符集使用增量 decoder 报告的 malformed 长度和
 已消费范围定位原始字节，不以 lead-byte 宽度猜测。replacement 模式为 decoder 实际

@@ -116,6 +116,14 @@ pub struct ConversionArgs {
     #[arg(long, value_enum, value_name = "MODE")]
     pub encoding_errors: Option<EncodingErrorsArg>,
 
+    /// Header-row policy for CSV and TSV.
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub table_header: Option<TableHeaderArg>,
+
+    /// Ragged-record policy for CSV and TSV.
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub ragged_rows: Option<RaggedRowsArg>,
+
     /// Output path for one input.
     #[arg(short = 'o', long, value_name = "PATH", conflicts_with = "output_dir")]
     pub output: Option<PathBuf>,
@@ -231,6 +239,22 @@ pub struct ConversionArgs {
     /// Maximum request-scoped temporary file bytes.
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
     pub max_temporary_size: Option<u64>,
+
+    /// Maximum CSV/TSV records.
+    #[arg(long, value_name = "N")]
+    pub max_table_rows: Option<u64>,
+
+    /// Maximum CSV/TSV columns.
+    #[arg(long, value_name = "N")]
+    pub max_table_columns: Option<u64>,
+
+    /// Maximum CSV/TSV cells.
+    #[arg(long, value_name = "N")]
+    pub max_table_cells: Option<u64>,
+
+    /// Maximum decoded bytes in one CSV/TSV field.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_field_size: Option<u64>,
 }
 
 /// Management command tree.
@@ -651,6 +675,23 @@ pub enum EncodingErrorsArg {
     #[default]
     Strict,
     Replace,
+}
+
+/// CSV/TSV header-row selection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum TableHeaderArg {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+/// CSV/TSV ragged-record handling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum RaggedRowsArg {
+    #[default]
+    Strict,
+    Pad,
 }
 
 /// Configuration mutation scope.

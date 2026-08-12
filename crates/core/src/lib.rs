@@ -37,8 +37,9 @@ pub use ir::{
     TableRow, TimeRange, ValidationLimits,
 };
 pub use options::{
-    AiMode, AiOptions, AssetMode, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy,
-    OutputOptions, ResourceLimits, TextDecodingMode, TextOptions,
+    AiMode, AiOptions, AssetMode, ConversionOptions, DelimitedTextOptions, NetworkOptions,
+    OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode,
+    TextDecodingMode, TextOptions,
 };
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,

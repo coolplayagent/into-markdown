@@ -84,12 +84,12 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     std::fs::write(&csv_path, b"name,age\nAlice,42\nBob,30\n").unwrap();
     let output =
         Command::new(binary()).args(["--no-config", csv_path.to_str().unwrap()]).output().unwrap();
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("csv"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("<strong>name</strong>"));
 
     let output = run_with_stdin(&["--no-config", "-"], b"name\tage\nAlice\t42\nBob\t30\n");
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("tsv"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("<strong>age</strong>"));
 
     let output =
         run_with_stdin(&["--no-config", "-"], b"Today, we walked home\nTomorrow, we will rest\n");

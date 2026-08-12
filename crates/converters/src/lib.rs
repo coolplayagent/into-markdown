@@ -2,8 +2,10 @@
 //!
 //! Built-in source resolvers, format detectors, and converters.
 
+mod delimited;
 mod text;
 
+pub use delimited::DelimitedTextConverter;
 pub use text::TextConverter;
 
 use into_markdown_core::{
@@ -155,13 +157,13 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Csv,
         family: "text",
         extensions: &["csv"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Tsv,
         family: "text",
         extensions: &["tsv"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Json,
@@ -943,14 +945,18 @@ impl FormatDetector for HintFormatDetector {
             if let Some(format) = media_type.and_then(format_from_media_type) {
                 evidence.entry(format).or_default().push("media type");
             }
-            if hint.charset.is_some() {
+            let delimited_hint =
+                evidence.keys().any(|format| matches!(format, InputFormat::Csv | InputFormat::Tsv));
+            if hint.charset.is_some() && !delimited_hint {
                 evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
             }
             let conflict = evidence.len() > 1;
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
-                    let confidence = if reasons.len() > 1 {
+                    let confidence = if matches!(format, InputFormat::Csv | InputFormat::Tsv) {
+                        0.99
+                    } else if reasons.len() > 1 {
                         0.68
                     } else if reasons[0] == "media type" {
                         0.60
@@ -1005,8 +1011,6 @@ const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 const JSON_SCAN_DEPTH_LIMIT: usize = 4096;
 const JSON_SCAN_CHECKPOINT_BYTES: usize = 4096;
-const DELIMITED_ROW_LIMIT: usize = 64;
-const DELIMITED_FIELD_LIMIT: usize = 1024;
 
 fn detect_content(
     bytes: &[u8],
@@ -1231,7 +1235,11 @@ fn structured_text_candidate(
             Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
         });
     }
-    Ok(delimited_text_candidate(text))
+    let delimited_bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    let Ok(delimited_text) = std::str::from_utf8(delimited_bytes) else {
+        return Ok(None);
+    };
+    delimited::detected_candidate(delimited_text, context)
 }
 
 fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {
@@ -1756,139 +1764,6 @@ fn bounded_utf8_prefix(bytes: &[u8], limit: usize) -> Option<(&str, bool)> {
         }
         Err(_) => None,
     }
-}
-
-fn delimited_text_candidate(text: &str) -> Option<FormatCandidate> {
-    let mut csv = DelimitedRows::new(',');
-    let mut tsv = DelimitedRows::new('\t');
-    for line in text.lines().filter(|line| !line.trim().is_empty()).take(DELIMITED_ROW_LIMIT) {
-        csv.observe(line);
-        tsv.observe(line);
-    }
-    let (format, delimiter, fields, rows) = if tsv.is_tabular() {
-        (InputFormat::Tsv, "tab", tsv.fields?, tsv.rows)
-    } else if csv.is_tabular() {
-        (InputFormat::Csv, "comma", csv.fields?, csv.rows)
-    } else {
-        return None;
-    };
-    Some(FormatCandidate::new(
-        format,
-        0.90,
-        format!("{rows} bounded rows with {fields} consistent {delimiter}-delimited fields"),
-    ))
-}
-
-struct DelimitedRows {
-    delimiter: char,
-    fields: Option<usize>,
-    rows: usize,
-    invalid: bool,
-    header_numeric: Vec<bool>,
-    data_all_numeric: Vec<bool>,
-}
-
-impl DelimitedRows {
-    const fn new(delimiter: char) -> Self {
-        Self {
-            delimiter,
-            fields: None,
-            rows: 0,
-            invalid: false,
-            header_numeric: Vec::new(),
-            data_all_numeric: Vec::new(),
-        }
-    }
-
-    fn observe(&mut self, line: &str) {
-        if self.invalid {
-            return;
-        }
-        let Some(numeric_fields) = parse_delimited_fields(line, self.delimiter) else {
-            self.invalid = true;
-            return;
-        };
-        let fields = numeric_fields.len();
-        if fields < 2 || self.fields.is_some_and(|expected| expected != fields) {
-            self.invalid = true;
-            return;
-        }
-        if self.fields.is_none() {
-            self.fields = Some(fields);
-            self.header_numeric = numeric_fields;
-            self.data_all_numeric = vec![true; fields];
-        } else {
-            for (all_numeric, numeric) in self.data_all_numeric.iter_mut().zip(numeric_fields) {
-                *all_numeric &= numeric;
-            }
-        }
-        self.rows += 1;
-    }
-
-    fn is_tabular(&self) -> bool {
-        !self.invalid
-            && self.rows >= 3
-            && self
-                .header_numeric
-                .iter()
-                .zip(&self.data_all_numeric)
-                .any(|(&header, &data)| !header && data)
-    }
-}
-
-fn parse_delimited_fields(line: &str, delimiter: char) -> Option<Vec<bool>> {
-    let delimiter = u8::try_from(delimiter).ok()?;
-    let bytes = line.as_bytes();
-    let mut fields = Vec::new();
-    let mut field_start = 0_usize;
-    let mut offset = 0_usize;
-    let mut quoted = false;
-    let mut after_quote = false;
-    while offset < bytes.len() {
-        let byte = bytes[offset];
-        if quoted {
-            if byte == b'"' {
-                if bytes.get(offset + 1) == Some(&b'"') {
-                    offset += 2;
-                    continue;
-                }
-                quoted = false;
-                after_quote = true;
-            }
-        } else if after_quote {
-            if byte == delimiter {
-                push_delimited_field(&mut fields, &line[field_start..offset], true)?;
-                field_start = offset + 1;
-                after_quote = false;
-            } else {
-                return None;
-            }
-        } else if byte == delimiter {
-            push_delimited_field(&mut fields, &line[field_start..offset], false)?;
-            field_start = offset + 1;
-        } else if byte == b'"' {
-            if offset != field_start {
-                return None;
-            }
-            quoted = true;
-        }
-        offset += 1;
-    }
-    if quoted {
-        return None;
-    }
-    push_delimited_field(&mut fields, &line[field_start..], after_quote)?;
-    Some(fields)
-}
-
-fn push_delimited_field(fields: &mut Vec<bool>, raw: &str, quoted: bool) -> Option<()> {
-    if fields.len() >= DELIMITED_FIELD_LIMIT {
-        return None;
-    }
-    let value = if quoted { raw.strip_prefix('"')?.strip_suffix('"')? } else { raw.trim() };
-    let numeric = !value.is_empty() && value.parse::<f64>().ok().is_some_and(f64::is_finite);
-    fields.push(numeric);
-    Some(())
 }
 
 fn html_prelude_identifies_html(mut text: &str) -> bool {
@@ -3389,6 +3264,11 @@ mod tests {
             detect(b"Today, we walked home\nTomorrow, we will rest")[0].format,
             InputFormat::Text
         );
+
+        let mut malformed_after_bound = String::from("name,age\nAlice,42\nBob,30\n");
+        malformed_after_bound.extend(std::iter::repeat_n(' ', TEXT_INSPECTION_BYTE_LIMIT));
+        malformed_after_bound.push_str("\n\"unterminated");
+        assert!(structured(malformed_after_bound.as_bytes()).is_none());
     }
 
     #[test]
