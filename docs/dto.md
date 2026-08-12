@@ -118,8 +118,13 @@ JSON 总字节、深度、结构项、单字符串和总字符串预算。因此
 都能由对应默认入口读回；超大 Markdown 或 base64 不会出现“能写不能读”。base64 解码
 总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串和 64 MiB JSON 总量约束。内部资源转为
 DTO 时先按原始 bytes 用 checked arithmetic 计算逐项及聚合后的 padded base64 长度，
-在任何 base64 缓冲区分配前拒绝资源数、原始总量、单字符串、总字符串或预计 JSON 线
-预算必然超限的结果；只有完整预检通过后才逐项编码。
+再把完整 result 按 private compact wire 的相同字段和顺序流式写入无缓冲计数器：
+Markdown、Document、诊断、溯源、资源元数据、JSON 固定开销及转义后的实际长度都会与
+base64 精确预计长度合并。在任何 base64 缓冲区分配前拒绝资源数、原始总量、单字符串、
+总字符串或预计 JSON wire 预算必然超限的结果；Document 只经过计数 writer，不创建巨大
+JSON 副本。完整预检通过后才逐项编码，因此内部 Result 成功转 DTO 时保证 compact
+`to_json` 处于默认预算内。`to_pretty_json` 的缩进空白可能增加 JSON 总量，它仍对自身
+实际输出重新执行预算检查；成功的 pretty 输出同样能由默认入口读回。
 
 Bundle schema 1 保留既有 `diagnostics.json` 与 `provenance.json` 裸数组形状，成员版本
 由 manifest 统辖；`to_bundle_pretty_json` / `from_bundle_json` 是这两个成员的专用边界。

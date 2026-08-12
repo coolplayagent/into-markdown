@@ -22,9 +22,11 @@ use base64::Engine as _;
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor},
+    ser::SerializeSeq,
 };
 use std::collections::BTreeSet;
 use std::fmt;
+use std::io::{self, Write};
 use thiserror::Error;
 
 /// Schema version emitted and accepted by application DTOs.
@@ -450,6 +452,116 @@ struct RawBatchReportDto {
     items: Vec<RawBatchItemDto>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InternalResultWire<'a> {
+    schema_version: u32,
+    markdown: &'a str,
+    document: &'a Document,
+    assets: InternalAssetsWire<'a>,
+    diagnostics: InternalDiagnosticsWire<'a>,
+    provenance: InternalProvenanceWire<'a>,
+}
+
+struct InternalAssetsWire<'a>(&'a [Asset]);
+
+impl Serialize for InternalAssetsWire<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for asset in self.0 {
+            sequence.serialize_element(&InternalAssetWire {
+                id: &asset.id.0,
+                filename: asset.filename.as_deref(),
+                media_type: &asset.media_type,
+                data_base64: "",
+                external_uri: asset.external_uri.as_deref(),
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InternalAssetWire<'a> {
+    id: &'a str,
+    filename: Option<&'a str>,
+    media_type: &'a str,
+    data_base64: &'static str,
+    external_uri: Option<&'a str>,
+}
+
+struct InternalDiagnosticsWire<'a>(&'a [Diagnostic]);
+
+impl Serialize for InternalDiagnosticsWire<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for diagnostic in self.0 {
+            sequence.serialize_element(&InternalDiagnosticWire {
+                code: &diagnostic.code,
+                severity: match diagnostic.severity {
+                    DiagnosticSeverity::Info => RawDiagnosticSeverityDto::Info,
+                    DiagnosticSeverity::Warning => RawDiagnosticSeverityDto::Warning,
+                    DiagnosticSeverity::Error => RawDiagnosticSeverityDto::Error,
+                },
+                message: &diagnostic.message,
+                locator: diagnostic.locator.as_ref(),
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InternalDiagnosticWire<'a> {
+    code: &'a str,
+    severity: RawDiagnosticSeverityDto,
+    message: &'a str,
+    locator: Option<&'a SourceLocator>,
+}
+
+struct InternalProvenanceWire<'a>(&'a [Provenance]);
+
+impl Serialize for InternalProvenanceWire<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for provenance in self.0 {
+            sequence.serialize_element(&InternalProvenanceItemWire {
+                kind: match provenance.kind {
+                    ProvenanceKind::NativeParser => RawProvenanceKindDto::NativeParser,
+                    ProvenanceKind::LocalOcr => RawProvenanceKindDto::LocalOcr,
+                    ProvenanceKind::AiProvider => RawProvenanceKindDto::AiProvider,
+                    ProvenanceKind::Metadata => RawProvenanceKindDto::Metadata,
+                    ProvenanceKind::Postprocessor => RawProvenanceKindDto::Postprocessor,
+                },
+                provider: &provenance.provider,
+                locator: &provenance.locator,
+                confidence: provenance.confidence,
+            })?;
+        }
+        sequence.end()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InternalProvenanceItemWire<'a> {
+    kind: RawProvenanceKindDto,
+    provider: &'a str,
+    locator: &'a SourceLocator,
+    confidence: Option<f32>,
+}
+
 impl From<RawDiagnosticDto> for DiagnosticDto {
     fn from(value: RawDiagnosticDto) -> Self {
         Self {
@@ -683,7 +795,7 @@ impl TryFrom<&Asset> for AssetDto {
             id: value.id.0.clone(),
             filename: value.filename.clone(),
             media_type: value.media_type.clone(),
-            data_base64: base64::engine::general_purpose::STANDARD.encode(&value.bytes),
+            data_base64: encode_asset_base64(&value.bytes),
             external_uri: value.external_uri.clone(),
         };
         validate_assets(std::slice::from_ref(&dto), &DtoLimits::default())?;
@@ -763,16 +875,25 @@ impl TryFrom<&crate::ConversionResult> for ResultDto {
     type Error = DtoError;
 
     fn try_from(value: &crate::ConversionResult) -> Result<Self, Self::Error> {
-        preflight_internal_assets(&value.assets, &DtoLimits::default())?;
+        let limits = DtoLimits::default();
+        value.document.validate().map_err(|error| {
+            DtoError::new(DtoErrorCode::InvalidField, "$.document", error.to_string())
+        })?;
+        let diagnostics = value.diagnostics.iter().map(DiagnosticDto::from).collect::<Vec<_>>();
+        validate_diagnostics(&diagnostics, &limits, "$.diagnostics")?;
+        let provenance = value.provenance.iter().map(ProvenanceDto::from).collect::<Vec<_>>();
+        validate_provenance(&provenance, &limits, "$.provenance")?;
+        preflight_internal_assets(&value.assets, &limits)?;
+        preflight_internal_result_wire(value, &limits)?;
         let dto = Self {
             schema_version: DTO_SCHEMA_VERSION,
             markdown: value.markdown.clone(),
             document: value.document.clone(),
             assets: value.assets.iter().map(AssetDto::try_from).collect::<Result<_, _>>()?,
-            diagnostics: value.diagnostics.iter().map(DiagnosticDto::from).collect(),
-            provenance: value.provenance.iter().map(ProvenanceDto::from).collect(),
+            diagnostics,
+            provenance,
         };
-        dto.validate(&DtoLimits::default())?;
+        dto.validate(&limits)?;
         Ok(dto)
     }
 }
@@ -1464,6 +1585,134 @@ fn padded_base64_encoded_len(raw_bytes: usize) -> Option<usize> {
     (raw_bytes / 3).checked_mul(4)?.checked_add(if raw_bytes.is_multiple_of(3) { 0 } else { 4 })
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WireAccounting {
+    json_bytes: usize,
+    depth: usize,
+    max_depth: usize,
+    values: usize,
+    in_string: bool,
+    escaped: bool,
+    string_bytes: usize,
+    max_string_bytes: usize,
+    total_string_bytes: usize,
+}
+
+impl WireAccounting {
+    fn add_base64_string(&mut self, encoded_bytes: usize) -> Result<(), DtoError> {
+        self.json_bytes = self.json_bytes.checked_add(encoded_bytes).ok_or_else(|| {
+            DtoError::new(DtoErrorCode::ResourceLimit, "$", "wire JSON byte count overflow")
+        })?;
+        self.max_string_bytes = self.max_string_bytes.max(encoded_bytes);
+        self.total_string_bytes =
+            self.total_string_bytes.checked_add(encoded_bytes).ok_or_else(|| {
+                DtoError::new(DtoErrorCode::ResourceLimit, "$", "wire string byte count overflow")
+            })?;
+        Ok(())
+    }
+
+    fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
+        if self.json_bytes > limits.max_json_bytes {
+            return limit("$", "dtoJsonBytes", limits.max_json_bytes);
+        }
+        if self.max_depth > limits.max_depth {
+            return limit("$", "dtoDepth", limits.max_depth);
+        }
+        if self.values > limits.max_values {
+            return limit("$", "dtoValues", limits.max_values);
+        }
+        if self.max_string_bytes > limits.max_string_bytes {
+            return limit("$", "dtoStringBytes", limits.max_string_bytes);
+        }
+        if self.total_string_bytes > limits.max_total_string_bytes {
+            return limit("$", "dtoTotalStringBytes", limits.max_total_string_bytes);
+        }
+        Ok(())
+    }
+}
+
+impl Write for WireAccounting {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.json_bytes = self.json_bytes.saturating_add(buffer.len());
+        for &byte in buffer {
+            if self.in_string {
+                if self.escaped {
+                    self.escaped = false;
+                    self.string_bytes = self.string_bytes.saturating_add(1);
+                } else if byte == b'\\' {
+                    self.escaped = true;
+                    self.string_bytes = self.string_bytes.saturating_add(1);
+                } else if byte == b'"' {
+                    self.in_string = false;
+                    self.max_string_bytes = self.max_string_bytes.max(self.string_bytes);
+                    self.total_string_bytes =
+                        self.total_string_bytes.saturating_add(self.string_bytes);
+                } else {
+                    self.string_bytes = self.string_bytes.saturating_add(1);
+                }
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.in_string = true;
+                    self.string_bytes = 0;
+                }
+                b'{' | b'[' => {
+                    self.depth = self.depth.saturating_add(1);
+                    self.max_depth = self.max_depth.max(self.depth);
+                    self.values = self.values.saturating_add(1);
+                }
+                b':' | b',' => self.values = self.values.saturating_add(1),
+                b'}' | b']' => self.depth = self.depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn account_internal_result_wire(
+    value: &crate::ConversionResult,
+) -> Result<WireAccounting, DtoError> {
+    let mut accounting = WireAccounting::default();
+    serde_json::to_writer(
+        &mut accounting,
+        &InternalResultWire {
+            schema_version: DTO_SCHEMA_VERSION,
+            markdown: &value.markdown,
+            document: &value.document,
+            assets: InternalAssetsWire(&value.assets),
+            diagnostics: InternalDiagnosticsWire(&value.diagnostics),
+            provenance: InternalProvenanceWire(&value.provenance),
+        },
+    )
+    .map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("account result wire JSON: {error}"))
+    })?;
+    for asset in &value.assets {
+        let encoded_bytes = padded_base64_encoded_len(asset.bytes.len()).ok_or_else(|| {
+            DtoError::new(
+                DtoErrorCode::ResourceLimit,
+                "$.assets",
+                "base64 encoded size cannot be represented",
+            )
+        })?;
+        accounting.add_base64_string(encoded_bytes)?;
+    }
+    Ok(accounting)
+}
+
+fn preflight_internal_result_wire(
+    value: &crate::ConversionResult,
+    limits: &DtoLimits,
+) -> Result<(), DtoError> {
+    account_internal_result_wire(value)?.validate(limits)
+}
+
 fn preflight_internal_asset_lengths(
     asset_count: usize,
     lengths: impl IntoIterator<Item = usize>,
@@ -1541,6 +1790,17 @@ fn preflight_internal_assets(assets: &[Asset], limits: &DtoLimits) -> Result<(),
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static ASSET_BASE64_ENCODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn encode_asset_base64(bytes: &[u8]) -> String {
+    #[cfg(test)]
+    ASSET_BASE64_ENCODE_CALLS.set(ASSET_BASE64_ENCODE_CALLS.get() + 1);
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 fn validate_assets(assets: &[AssetDto], limits: &DtoLimits) -> Result<(), DtoError> {
@@ -1902,6 +2162,80 @@ mod tests {
             DtoErrorCode::ResourceLimit
         );
         assert_eq!(visited.get(), 2);
+    }
+
+    #[test]
+    fn complete_result_wire_is_budgeted_before_any_base64_encoding() {
+        let assets = (0..6)
+            .map(|index| Asset {
+                id: AssetId(format!("asset-{index}")),
+                filename: Some(format!("asset-{index}.bin")),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![0_u8; 5 * 1024 * 1024],
+                external_uri: None,
+            })
+            .collect();
+        let oversized = ConversionResult {
+            document: Document::default(),
+            markdown: "m".repeat(MAX_DTO_STRING_BYTES),
+            assets,
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        ASSET_BASE64_ENCODE_CALLS.set(0);
+        assert_eq!(ResultDto::try_from(&oversized).unwrap_err().code, DtoErrorCode::ResourceLimit);
+        assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
+
+        let long_metadata = ConversionResult {
+            document: Document::default(),
+            markdown: String::new(),
+            assets: vec![Asset {
+                id: AssetId("metadata".into()),
+                filename: Some("f".repeat(MAX_DTO_STRING_BYTES + 1)),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![1],
+                external_uri: None,
+            }],
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        ASSET_BASE64_ENCODE_CALLS.set(0);
+        assert_eq!(
+            ResultDto::try_from(&long_metadata).unwrap_err().code,
+            DtoErrorCode::ResourceLimit
+        );
+        assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
+    }
+
+    #[test]
+    fn internal_wire_accounting_matches_private_result_serializer() {
+        let mut internal = ConversionResult::try_from(result_dto()).unwrap();
+        internal.markdown = "markdown \\\" escaped 中文".into();
+        internal.document.metadata.title = Some("document \\\" title".into());
+        internal
+            .document
+            .metadata
+            .properties
+            .insert("property".into(), "value \\\" escaped".into());
+        internal.assets[0].filename = Some("asset \\\" name.png".into());
+        internal.diagnostics[0].message = "diagnostic \\\" detail".into();
+        internal.provenance[0].provider = "provider \\\" id".into();
+
+        let expected = account_internal_result_wire(&internal).unwrap();
+        let dto = ResultDto::try_from(&internal).unwrap();
+        let json = dto.to_json().unwrap();
+        let mut actual = WireAccounting::default();
+        actual.write_all(json.as_bytes()).unwrap();
+        assert_eq!(expected, actual);
+
+        let limits = DtoLimits {
+            max_total_string_bytes: expected.total_string_bytes - 1,
+            ..DtoLimits::default()
+        };
+        assert_eq!(
+            preflight_internal_result_wire(&internal, &limits).unwrap_err().code,
+            DtoErrorCode::ResourceLimit
+        );
     }
 
     #[test]
