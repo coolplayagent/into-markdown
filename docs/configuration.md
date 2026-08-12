@@ -106,6 +106,17 @@ formula_repair = "prefer"
 into-md report.pdf --profile quality --allow-network --allow-private-network
 ```
 
+若配置与当前调用都指定主机 allowlist，最终范围是两者规范化后的交集；只有一方非空
+时保留该方。交集为空会在联网前以 `hostAllowlistConflict` 拒绝，不会把命令行列表
+当成对配置限制的替换。主机按 URL 标准规范化：DNS 名不区分 ASCII 大小写，允许一个
+表示 DNS 根的尾随点，IDN 转为 ASCII Punycode，IP 地址使用标准文本形式。allowlist
+条目只接受主机或方括号包裹的 IPv6，不接受 scheme、路径或端口；目标 URL 的端口不
+参与主机匹配。
+
+回环、IPv4 私网与链路本地地址、IPv6 ULA (`fc00::/7`) 与链路本地地址
+(`fe80::/10`) 均视为私网。IPv4-mapped IPv6 会先还原为 IPv4，再执行相同检查。
+Provider URL 与远程输入采用同一套规则，且 URL 不得包含用户名或密码。
+
 ## 配置操作
 
 ```shell
@@ -122,13 +133,28 @@ into-md config profile create quality --scope project
 
 `config set` 首先把值解析为 TOML 标量、数组或内联表；无法解析时按字符串处理。
 写入使用同目录临时文件和原子替换。`config show --resolved` 会遮蔽秘密字段，并从
-可能包含签名参数的 URL 中移除 query 与 fragment。
+可能包含签名参数的 URL（包括 Provider URL 与插件来源）中移除用户信息、query 与
+fragment。resolved 输出的 `_sources` 表按点分字段名记录最终值来自内置默认值、
+具体配置文件、该文件中的 Profile、环境变量还是当前命令行。该表是解释元数据，
+不是可写回的配置字段。
+
+显式配置的相对路径以调用时的当前目录解析；绝对路径保持不变。配置值中的 POSIX
+路径与 Windows 路径按原字符串保存，不做平台相关改写。
 
 ## Profile 语义
 
 Profile 是同一配置层中的覆盖表。选定 profile 后，先合并该层的普通配置，再合并
 profile 内容，然后继续处理更高优先级配置层。Profile 可以覆盖转换、CLI、
 Provider 和插件配置，但不能赋予联网或私网权限。
+
+普通配置层和 Profile 都可以只写 Provider 的部分字段，以覆盖更低层的同名
+Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL、类型、环境变量名和能力；
+全部层合并后，Provider 必须包含 `type`、`base_url`、`model` 与 `api_key_env`，否则
+配置整体无效。单独校验一个不完整文件也会失败。
+
+`conversion.network.deny_private_networks` 只能省略或设为 `true`；设为 `false` 会被
+拒绝。配置文件和 Profile 中的 `allow_network`、`allow_private_network` 及任何未知
+字段同样会被拒绝。联网和私网授权不参与配置合并，只读取当前调用的命令行参数。
 
 若指定的 profile 在所有加载层中都不存在，命令返回配置错误，不静默回退。
 

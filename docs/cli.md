@@ -149,6 +149,9 @@ AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allo
   Provider。
 - 回环与私网目标还需要 `--allow-private-network`。
 - `--allow-host` 只能收窄已授权范围。
+- 配置与命令行的主机列表同时存在时取规范化交集；空交集在联网前拒绝。主机比较忽略
+  DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
+  目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
 - 网络实现必须在 DNS 解析及每次重定向后重新执行地址与主机策略。
 
@@ -214,10 +217,13 @@ into-md providers remove <NAME> [--scope <global|project>]
 into-md providers set-default <NAME> [--scope <global|project>]
 into-md providers capabilities <NAME> [--json]
 into-md providers test <NAME> --allow-network [--allow-private-network]
+                            [--allow-host <HOST>]...
 ```
 
 CLI 只接受 API Key 的环境变量名，不提供明文 `--api-key`。`providers test` 只允许
-发送最小能力探测请求，不发送文档内容。
+发送最小能力探测请求，不发送文档内容。远程输入、转换选定的 AI Provider 与
+`providers test` 共用相同的 URL 策略：仅允许无用户信息的 HTTP(S) URL，并执行配置
+与当前调用的主机交集及私网双重授权检查，之后才能进入具体后端。
 
 ### 插件
 

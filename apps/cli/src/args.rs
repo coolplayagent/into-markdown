@@ -387,10 +387,15 @@ pub struct ProviderAddArgs {
 #[derive(Debug, Args)]
 pub struct ProviderTestArgs {
     pub name: String,
+    /// Authorize the connectivity check for this invocation.
     #[arg(long)]
     pub allow_network: bool,
+    /// Additionally authorize loopback and private-network provider targets.
     #[arg(long, requires = "allow_network")]
     pub allow_private_network: bool,
+    /// Further restrict the effective configured hostname allowlist.
+    #[arg(long, requires = "allow_network")]
+    pub allow_host: Vec<String>,
 }
 
 /// `plugins` arguments.
