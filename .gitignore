@@ -1,0 +1,10 @@
+/bazel-*
+/target
+/.idea
+/.vscode
+.DS_Store
+*.swp
+
+# Models and native runtimes are fetched by verified Bazel repositories.
+/models/artifacts/
+/third_party/onnxruntime/artifacts/

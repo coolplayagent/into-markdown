@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+rust_library(
+    name = "converters",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_converters",
+    edition = "2024",
+    deps = ["//crates/core"],
+)
+
+rust_test(
+    name = "converters_test",
+    crate = ":converters",
+    edition = "2024",
+    deps = ["//crates/core"],
+)

@@ -1,0 +1,13 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["manifest.json"])
+
+# Explicit/manual target: ordinary builds and tests never download models.
+filegroup(
+    name = "source_models",
+    srcs = [
+        "@ppocrv6_tiny_detector_source//file",
+        "@ppocrv6_tiny_recognizer_source//file",
+    ],
+    tags = ["manual"],
+)

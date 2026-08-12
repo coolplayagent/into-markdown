@@ -1,0 +1,15 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+filegroup(
+    name = "documentation",
+    srcs = glob([
+        "docs/**/*.md",
+        "README.en.md",
+        "README.md",
+    ]),
+)

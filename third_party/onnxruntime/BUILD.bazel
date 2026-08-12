@@ -1,0 +1,27 @@
+package(default_visibility = ["//visibility:private"])
+
+# These manual targets pin official CPU distributions. Future FFI targets will
+# select the matching package for the current supported platform.
+filegroup(
+    name = "linux_arm64",
+    srcs = ["@onnxruntime_linux_arm64//:lib/libonnxruntime.so"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "linux_x86_64",
+    srcs = ["@onnxruntime_linux_x86_64//:lib/libonnxruntime.so"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "macos_arm64",
+    srcs = ["@onnxruntime_macos_arm64//:lib/libonnxruntime.dylib"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "windows_x86_64",
+    srcs = ["@onnxruntime_windows_x86_64//:lib/onnxruntime.dll"],
+    tags = ["manual"],
+)

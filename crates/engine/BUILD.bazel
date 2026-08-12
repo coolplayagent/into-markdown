@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+rust_library(
+    name = "engine",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_engine",
+    edition = "2024",
+    deps = ["//crates/core"],
+)
+
+rust_test(
+    name = "engine_test",
+    crate = ":engine",
+    edition = "2024",
+    deps = ["//crates/core"],
+)

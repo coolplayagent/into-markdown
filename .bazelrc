@@ -1,0 +1,11 @@
+common --enable_bzlmod
+build --announce_rc
+build --incompatible_strict_action_env
+build --show_timestamps
+test --test_output=errors
+
+# This project intentionally supports Apple Silicon only on macOS.
+build:macos_arm64 --platforms=@rules_rust//rust/platform:aarch64-apple-darwin
+build:linux_x86_64 --platforms=@rules_rust//rust/platform:x86_64-unknown-linux-gnu
+build:linux_arm64 --platforms=@rules_rust//rust/platform:aarch64-unknown-linux-gnu
+build:windows_x86_64 --platforms=@rules_rust//rust/platform:x86_64-pc-windows-msvc

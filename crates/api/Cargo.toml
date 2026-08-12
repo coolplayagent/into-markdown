@@ -1,0 +1,17 @@
+[package]
+name = "into-markdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+into-markdown-ai = { path = "../ai" }
+into-markdown-converters = { path = "../converters" }
+into-markdown-core = { path = "../core" }
+into-markdown-engine = { path = "../engine" }
+into-markdown-ocr = { path = "../ocr" }
+into-markdown-render-markdown = { path = "../render-markdown" }
+
+[lints]
+workspace = true

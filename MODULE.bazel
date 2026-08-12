@@ -1,0 +1,68 @@
+module(
+    name = "into_markdown",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.73.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.97.1"],
+)
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+)
+use_repo(crate, "crates")
+
+# Source models are lazy, hash-pinned repositories. Only //models:source_models
+# references them, and that target is tagged manual.
+model_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+model_file(
+    name = "ppocrv6_tiny_detector_source",
+    downloaded_file_path = "PP-OCRv6_tiny_det_infer.tar",
+    sha256 = "33a23c5e18d83208f9eeeccd00ed789af891786ac9255c83aeb2495b3db9ce63",
+    urls = ["https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_infer.tar"],
+)
+model_file(
+    name = "ppocrv6_tiny_recognizer_source",
+    downloaded_file_path = "PP-OCRv6_tiny_rec_infer.tar",
+    sha256 = "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604",
+    urls = ["https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar"],
+)
+
+native_runtime = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+native_runtime(
+    name = "onnxruntime_linux_arm64",
+    build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+    integrity = "sha256-4XmQmOvAVLNw9hdqRQ8VhyDyl4GMYT5dyZuS4uyCNG8=",
+    strip_prefix = "onnxruntime-linux-aarch64-1.29.0",
+    urls = ["https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-aarch64-1.29.0.tgz"],
+)
+native_runtime(
+    name = "onnxruntime_linux_x86_64",
+    build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+    integrity = "sha256-w/3cTxOaBFsMSQLFdBDwaU8cL9+baTn744sa6ufNFLo=",
+    strip_prefix = "onnxruntime-linux-x64-1.29.0",
+    urls = ["https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz"],
+)
+native_runtime(
+    name = "onnxruntime_macos_arm64",
+    build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+    integrity = "sha256-0HBvw08xXYyIY50KjIHy4J6BXygsq+00k8BqBUNSz5I=",
+    strip_prefix = "onnxruntime-osx-arm64-1.29.0",
+    urls = ["https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz"],
+)
+native_runtime(
+    name = "onnxruntime_windows_x86_64",
+    build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+    integrity = "sha256-ybS3CGtSmtgU9CjButAo4gol19wGmYNndfqs5KtbeLI=",
+    strip_prefix = "onnxruntime-win-x64-1.29.0",
+    urls = ["https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip"],
+)

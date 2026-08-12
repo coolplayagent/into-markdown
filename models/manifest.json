@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "default_bundle": "pp-ocrv6-tiny-zh-en",
+  "bundles": [
+    {
+      "id": "pp-ocrv6-tiny-zh-en",
+      "upstream_version": "PP-OCRv6 tiny / PaddleOCR 3.x",
+      "languages": ["zh-Hans", "zh-Hant", "en"],
+      "runtime_format": "onnx-derived",
+      "source_artifacts": [
+        {
+          "id": "pp-ocrv6-tiny-detector-source",
+          "role": "detector",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_infer.tar",
+          "sha256": "33a23c5e18d83208f9eeeccd00ed789af891786ac9255c83aeb2495b3db9ce63",
+          "format": "paddle-inference-tar",
+          "license": "Apache-2.0"
+        },
+        {
+          "id": "pp-ocrv6-tiny-recognizer-source",
+          "role": "recognizer-and-dictionary",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar",
+          "sha256": "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604",
+          "format": "paddle-inference-tar",
+          "license": "Apache-2.0"
+        }
+      ]
+    }
+  ]
+}

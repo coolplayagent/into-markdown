@@ -1,0 +1,22 @@
+load("@crates//:defs.bzl", "all_crate_deps", "aliases")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "into-md",
+    srcs = ["src/main.rs"],
+    crate_name = "into_md",
+    edition = "2024",
+    deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "cli_test",
+    srcs = ["src/main.rs"],
+    crate_name = "into_md_test",
+    aliases = aliases(normal = True, normal_dev = True, proc_macro = True, proc_macro_dev = True),
+    edition = "2024",
+    deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True, normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
+)

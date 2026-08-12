@@ -1,0 +1,32 @@
+//! Stable contracts and provenance-aware intermediate representation for
+//! `into-markdown`.
+//!
+//! This crate deliberately contains no format parser, network client, model
+//! runtime, or provider implementation. Implementations depend on this crate;
+//! the dependency never points in the opposite direction.
+
+mod error;
+mod format;
+mod input;
+mod ir;
+mod options;
+mod spi;
+
+pub use error::{ConversionError, ErrorCode};
+pub use format::{FormatCandidate, InputFormat};
+pub use input::{FormatHint, InputRef, ResolvedInput, SourceMetadata};
+pub use ir::{
+    Asset, AssetId, Block, BlockNode, Cell, CellRef, Diagnostic, DiagnosticSeverity, Document,
+    DocumentMetadata, Inline, InlineMark, ListItem, ListKind, NodeId, Provenance, ProvenanceKind,
+    Rect, SourceLocator, TableRow, TimeRange,
+};
+pub use options::{
+    AiMode, AiOptions, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions,
+    ResourceLimits,
+};
+pub use spi::{
+    AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
+    ConversionResult, Converter, ConverterOutput, DocumentPatch, FormatDetector, MarkdownRenderer,
+    OcrEngine, OcrRegion, OcrRequest, OcrResult, PatchOperation, ProbeOutcome, Services,
+    SourceResolver, Tensor, TensorRuntime, Transcriber, TranscriptionRequest, TranscriptionResult,
+};

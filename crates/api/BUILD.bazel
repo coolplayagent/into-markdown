@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "into_markdown",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown",
+    edition = "2024",
+    deps = [
+        "//crates/ai",
+        "//crates/converters",
+        "//crates/core",
+        "//crates/engine",
+        "//crates/ocr",
+        "//crates/render-markdown:render_markdown",
+    ],
+)
+
+rust_test(
+    name = "api_test",
+    crate = ":into_markdown",
+    edition = "2024",
+    deps = [
+        "//crates/ai",
+        "//crates/converters",
+        "//crates/core",
+        "//crates/engine",
+        "//crates/ocr",
+        "//crates/render-markdown:render_markdown",
+    ],
+)

@@ -1,0 +1,17 @@
+[package]
+name = "into-markdown-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "into-md"
+path = "src/main.rs"
+
+[dependencies]
+futures.workspace = true
+into-markdown = { path = "../../crates/api" }
+
+[lints]
+workspace = true

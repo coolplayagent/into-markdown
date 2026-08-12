@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:private"])
+
+# Anchor package for __subpackages__ visibility used by internal crates.
+filegroup(
+    name = "crate_root",
+    srcs = [],
+)
