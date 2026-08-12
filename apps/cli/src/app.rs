@@ -886,6 +886,7 @@ struct WorkPlan {
 #[derive(Clone)]
 struct ExecutionPolicy {
     options: ConversionOptions,
+    execution: into_markdown::ExecutionOptions,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -948,6 +949,13 @@ fn run_conversion(
     }
 
     let policy = ExecutionPolicy {
+        execution: into_markdown::ExecutionOptions {
+            timeout: arguments
+                .timeout_ms
+                .or(loaded.timeout_ms)
+                .map(std::time::Duration::from_millis),
+            ..into_markdown::ExecutionOptions::default()
+        },
         options: loaded.options,
         hint: FormatHint {
             format: arguments.format.as_deref().map(parse_format).transpose()?,

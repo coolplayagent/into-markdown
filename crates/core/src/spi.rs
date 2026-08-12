@@ -1,7 +1,7 @@
 use crate::{
     Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, ExecutionContext,
     ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, Provenance,
-    ResolvedInput,
+    ResolvedInput, ResolvedSource,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -101,6 +101,23 @@ pub trait SourceResolver: Send + Sync {
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>>;
+
+    /// Resolve while optionally retaining request memory accounting across the
+    /// resolver-to-engine handoff.
+    ///
+    /// Existing implementations inherit this allocation-free adapter. A
+    /// resolver that reserves before constructing source bytes may override it
+    /// and return the reservation with [`ResolvedSource`].
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
+        Box::pin(
+            async move { self.resolve(input, options, context).await.map(ResolvedSource::new) },
+        )
+    }
 }
 
 /// Produce format hypotheses from bytes, metadata, and explicit hints.

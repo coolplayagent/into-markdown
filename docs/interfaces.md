@@ -82,10 +82,14 @@ scratch 或 source buffer 分配前执行 checked 累加和协作式内存预留
 路径打开不能依赖规划时的一次 symlink 检查。Unix resolver 使用 `O_NOFOLLOW`，打开
 后要求 regular file，并核对紧邻打开前的设备与 inode；Windows 使用
 `FILE_FLAG_OPEN_REPARSE_POINT` 单次打开权威句柄，立即从该句柄拒绝 reparse attribute
-与非 regular file，后续读取始终使用同一句柄；它没有路径 metadata 快照与二次 open
-之间的身份窗口，也不会先跟随 reparse target。其他平台若没有经过审计的 no-follow
-策略，则返回 `componentUnavailable`。规划阶段仍用于尽早给出 `symlinkDenied`，resolver
-的 handle 级策略才是最终读取边界；它不承诺锁定更早规划阶段看到的普通文件版本。
+与非 regular file，并通过 `GetFileType` 要求 `FILE_TYPE_DISK`；安全 wrapper 将
+`FILE_TYPE_UNKNOWN` 与 `GetLastError` 组合成明确成功或 I/O 失败。打开前的路径策略拒绝
+`\\.\`、`\\?\GLOBALROOT` 等设备 namespace 及 `NUL`、`CON`、`COM1` 等保留设备
+组件，同时允许普通 `\\?\C:\...` 和 `\\?\UNC\...` 长路径。后续读取始终使用
+同一句柄；它没有路径 metadata 快照与二次 open 之间的身份窗口，也不会先跟随 reparse
+target。其他平台若没有经过审计的 no-follow 策略，则返回 `componentUnavailable`。
+规划阶段仍用于尽早给出 `symlinkDenied`，resolver 的 handle 级策略才是最终读取边界；
+它不承诺锁定更早规划阶段看到的普通文件版本。
 
 `CancellationToken` 是协作式、可克隆的取消句柄。总 timeout 从引擎接收请求时开始，
 覆盖解析、检测、探测、转换、OCR、AI 与渲染，并以 `timeout` 稳定错误码失败；显式取消
@@ -115,12 +119,16 @@ scratch 会在共享转换前先释放，所以最坏 `Vec`/`Arc` 双 payload �
 提供者在分配大块输入副本、模型 tensor、解压缓冲或输出缓冲前必须调用
 `reserve_memory`，并在需要磁盘暂存时使用 `temporary_file`；引擎在 SPI 边界的计费只是
 补充防线，不能替代提供者内部检查。
-内置 source resolver 在 scratch 与 source buffer 分配前预留预算，并让解析结果携带
-共享 RAII reservation 穿过 resolver 到引擎的 handoff。`Vec` 转换为共享 bytes 前按
-可能复制的峰值预留，转换结束后只释放旧 buffer 对应部分。reservation 的 clone 共同
-持有一次计费，最后一个 clone 才退款；引擎只接受 context identity 与实际输入长度都
-完全匹配的 reservation，跨请求或不足的 reservation 不能绕过预算。内存输入的 `Arc`
-虽然不复制，仍按其完整长度计入当前请求。
+内置 source resolver 在 scratch 与 source buffer 分配前预留预算，并让
+`ResolvedSource` accounting wrapper 携带唯一 RAII reservation 穿过 resolver 到引擎的
+handoff。`Vec` 转换为共享 bytes 前按可能复制的峰值预留，转换结束后只释放旧 buffer
+对应部分。引擎只接受 context identity 与实际输入长度都完全匹配的 reservation，跨请求
+或不足的 reservation 不能绕过预算。wrapper 不进入
+`ResolvedInput` 的公开布局，既有第三方 resolver 的两字段 struct literal 及 `resolve`
+实现保持可编译；对象安全的 `resolve_accounted` 默认方法把旧输出直接包装为未计费结果，
+不复制 source bytes，Engine 随后补计。提供者若要消除自身分配与 Engine 补计间的窗口，
+可覆写该方法并从分配前携带 reservation。Engine 持有 wrapper 到检测或转换整体结束。
+内存输入的 `Arc` 虽然不复制，仍按其完整长度计入当前请求。
 
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。

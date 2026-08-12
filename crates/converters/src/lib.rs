@@ -5,8 +5,8 @@
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
-    FormatDetector, FormatHint, InputFormat, InputRef, ResolvedInput, SourceMetadata,
-    SourceResolver,
+    FormatDetector, FormatHint, InputFormat, InputRef, ResolvedInput, ResolvedSource,
+    SourceMetadata, SourceResolver,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
@@ -413,6 +413,16 @@ impl SourceResolver for MemorySourceResolver {
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
         Box::pin(async move {
             let InputRef::Bytes { data, name } = input else {
                 return Err(ConversionError::Unsupported {
@@ -426,9 +436,15 @@ impl SourceResolver for MemorySourceResolver {
                 detail: "memory input size cannot be represented as u64".into(),
             })?;
             let memory = context.reserve_memory(size)?;
-            Ok(ResolvedInput::with_memory_reservation(
-                Arc::clone(data),
-                SourceMetadata { name: name.clone(), size, ..SourceMetadata::default() },
+            Ok(ResolvedSource::with_memory_reservation(
+                ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
+                        name: name.clone(),
+                        size,
+                        ..SourceMetadata::default()
+                    },
+                },
                 memory,
             ))
         })
@@ -454,6 +470,16 @@ impl SourceResolver for LocalFileSourceResolver {
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
         let InputRef::Path(path) = input else {
             return Box::pin(async {
                 Err(ConversionError::Unsupported { detail: "expected local path".into() })
@@ -474,12 +500,17 @@ impl SourceResolver for LocalFileSourceResolver {
                         detail: "resolved file size cannot be represented as u64".into(),
                     })?;
                 let (bytes, memory) = into_shared_source(bytes, memory)?;
-                Ok(ResolvedInput::with_memory_reservation(
-                    bytes,
-                    SourceMetadata {
-                        name: path.file_name().and_then(|value| value.to_str()).map(str::to_owned),
-                        size,
-                        ..SourceMetadata::default()
+                Ok(ResolvedSource::with_memory_reservation(
+                    ResolvedInput {
+                        bytes,
+                        metadata: SourceMetadata {
+                            name: path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .map(str::to_owned),
+                            size,
+                            ..SourceMetadata::default()
+                        },
                     },
                     memory,
                 ))
@@ -507,10 +538,20 @@ impl SourceResolver for StdinSourceResolver {
 
     fn resolve<'a>(
         &'a self,
-        _: &'a InputRef,
+        input: &'a InputRef,
         options: &'a ConversionOptions,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
+        _: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
         let limit = options.limits.max_input_bytes;
         let context = context.clone();
         let submitted = stdin_pool().and_then(|pool| {
@@ -524,12 +565,14 @@ impl SourceResolver for StdinSourceResolver {
                         detail: "resolved stdin size cannot be represented as u64".into(),
                     })?;
                 let (bytes, memory) = into_shared_source(bytes, memory)?;
-                Ok(ResolvedInput::with_memory_reservation(
-                    bytes,
-                    SourceMetadata {
-                        name: Some("stdin".into()),
-                        size,
-                        ..SourceMetadata::default()
+                Ok(ResolvedSource::with_memory_reservation(
+                    ResolvedInput {
+                        bytes,
+                        metadata: SourceMetadata {
+                            name: Some("stdin".into()),
+                            size,
+                            ..SourceMetadata::default()
+                        },
                     },
                     memory,
                 ))
@@ -548,7 +591,7 @@ fn read_bounded(
     context: &ExecutionContext,
 ) -> Result<(Vec<u8>, into_markdown_core::ResourceReservation), ConversionError> {
     let mut bytes = Vec::new();
-    let memory = context.reserve_memory(0)?;
+    let mut memory = context.reserve_memory(0)?;
     let mut total = 0_u64;
     let scratch_bytes = limit.saturating_add(1).min(64 * 1024);
     let scratch = context.reserve_memory(scratch_bytes)?;
@@ -602,7 +645,7 @@ fn read_bounded(
 
 fn into_shared_source(
     bytes: Vec<u8>,
-    memory: into_markdown_core::ResourceReservation,
+    mut memory: into_markdown_core::ResourceReservation,
 ) -> Result<(Arc<[u8]>, into_markdown_core::ResourceReservation), ConversionError> {
     let size = u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
         limit: "max_memory_bytes",
@@ -643,21 +686,169 @@ fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionE
 fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
     use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    validate_windows_local_path(path)?;
     // This no-follow handle is the authoritative source object. There is no
     // path metadata snapshot to race with a later open, and the same handle is
     // retained for every subsequent read.
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path)?;
+    let file_type = winapi_util::file::typ(&file)?;
     let opened = file.metadata()?;
-    if opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !opened.is_file() {
+    validate_windows_opened_file(
+        path,
+        file_type.is_disk(),
+        opened.file_attributes(),
+        opened.is_file(),
+    )?;
+    Ok((file, opened))
+}
+
+#[cfg(windows)]
+fn validate_windows_opened_file(
+    path: &Path,
+    is_disk: bool,
+    attributes: u32,
+    is_regular: bool,
+) -> Result<(), ConversionError> {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    if !is_disk || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !is_regular {
         return Err(ConversionError::Io {
-            detail: format!("local input resolved to a reparse point: {}", path.display()),
+            detail: format!(
+                "local input is not a regular non-reparse disk file: {}",
+                path.display()
+            ),
         });
     }
-    Ok((file, opened))
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_windows_local_path(path: &Path) -> Result<(), ConversionError> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if is_windows_device_namespace(&wide) || has_windows_reserved_device_component(&wide) {
+        return Err(ConversionError::Io {
+            detail: format!("local input uses a denied Windows device path: {}", path.display()),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_windows_device_namespace(path: &[u16]) -> bool {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+
+    let is_separator = |value| value == BACKSLASH || value == b'/' as u16;
+    if path.len() >= 4
+        && is_separator(path[0])
+        && is_separator(path[1])
+        && path[2] == DOT
+        && is_separator(path[3])
+    {
+        return true;
+    }
+    if path.len() >= 4
+        && is_separator(path[0])
+        && path[1] == QUESTION
+        && path[2] == QUESTION
+        && is_separator(path[3])
+    {
+        return true;
+    }
+    if path.len() >= 5
+        && is_separator(path[0])
+        && is_separator(path[1])
+        && path[2] == QUESTION
+        && path[3] == QUESTION
+        && is_separator(path[4])
+    {
+        return true;
+    }
+    if path.len() < 4
+        || !is_separator(path[0])
+        || !is_separator(path[1])
+        || path[2] != QUESTION
+        || !is_separator(path[3])
+    {
+        return false;
+    }
+
+    let extended = &path[4..];
+    let drive_path = extended.len() >= 3
+        && is_ascii_letter(extended[0])
+        && extended[1] == b':' as u16
+        && is_separator(extended[2]);
+    let unc_path = starts_with_ascii_case_insensitive(extended, "UNC\\")
+        || starts_with_ascii_case_insensitive(extended, "UNC/");
+    !drive_path && !unc_path
+}
+
+#[cfg(windows)]
+fn has_windows_reserved_device_component(path: &[u16]) -> bool {
+    path.split(|value| *value == b'\\' as u16 || *value == b'/' as u16)
+        .filter(|component| !component.is_empty())
+        .any(|component| {
+            let end = component
+                .iter()
+                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .map_or(0, |index| index + 1);
+            let stem_end = component[..end]
+                .iter()
+                .position(|value| *value == b'.' as u16 || *value == b':' as u16)
+                .unwrap_or(end);
+            let trimmed_stem_end = component[..stem_end]
+                .iter()
+                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .map_or(0, |index| index + 1);
+            let stem = &component[..trimmed_stem_end];
+            ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"]
+                .iter()
+                .any(|name| equals_ascii_case_insensitive(stem, name))
+                || is_numbered_windows_device(stem, "COM")
+                || is_numbered_windows_device(stem, "LPT")
+        })
+}
+
+#[cfg(windows)]
+fn is_numbered_windows_device(value: &[u16], prefix: &str) -> bool {
+    value.len() == prefix.len() + 1
+        && starts_with_ascii_case_insensitive(value, prefix)
+        && ((b'1' as u16..=b'9' as u16).contains(&value[prefix.len()])
+            || [0x00B9, 0x00B2, 0x00B3].contains(&value[prefix.len()]))
+}
+
+#[cfg(windows)]
+fn starts_with_ascii_case_insensitive(value: &[u16], prefix: &str) -> bool {
+    value.len() >= prefix.len()
+        && value
+            .iter()
+            .zip(prefix.bytes())
+            .all(|(left, right)| ascii_uppercase(*left) == u16::from(right.to_ascii_uppercase()))
+}
+
+#[cfg(windows)]
+fn equals_ascii_case_insensitive(value: &[u16], expected: &str) -> bool {
+    value.len() == expected.len() && starts_with_ascii_case_insensitive(value, expected)
+}
+
+#[cfg(windows)]
+fn is_ascii_letter(value: u16) -> bool {
+    (b'A' as u16..=b'Z' as u16).contains(&ascii_uppercase(value))
+}
+
+#[cfg(windows)]
+fn ascii_uppercase(value: u16) -> u16 {
+    if (b'a' as u16..=b'z' as u16).contains(&value) {
+        value - u16::from(b'a' - b'A')
+    } else {
+        value
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -2234,6 +2425,44 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_policy_allows_long_disk_paths_and_rejects_devices() {
+        for allowed in
+            [r"C:\safe\input.txt", r"\\?\C:\safe\input.txt", r"\\?\UNC\server\share\input.txt"]
+        {
+            validate_windows_local_path(Path::new(allowed)).unwrap();
+        }
+        for denied in [
+            r"\\.\NUL",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\input.txt",
+            r"\??\C:\input.txt",
+            r"C:\safe\NUL.txt",
+            r"C:\safe\NUL .txt",
+            r"C:\safe\COM1.md",
+            "C:\\safe\\lpt¹.txt",
+        ] {
+            let error = validate_windows_local_path(Path::new(denied)).unwrap_err();
+            assert_eq!(error.code(), into_markdown_core::ErrorCode::Io, "{denied}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reserved_device_is_rejected_before_open() {
+        let error = securely_open_local_file(Path::new("NUL")).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+        assert!(error.to_string().contains("denied Windows device path"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_non_disk_handle_is_rejected_even_if_metadata_looks_regular() {
+        let error =
+            validate_windows_opened_file(Path::new("input.txt"), false, 0, true).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+    }
+
     #[test]
     fn memory_resolver_enforces_input_budget() {
         let resolver = MemorySourceResolver;
@@ -2268,8 +2497,8 @@ mod tests {
                 ..into_markdown_core::ResourceLimits::default()
             },
         );
-        let output = block_on(resolver.resolve(&input, &options, &exact)).unwrap();
-        assert!(Arc::ptr_eq(&data, &output.bytes));
+        let output = block_on(resolver.resolve_accounted(&input, &options, &exact)).unwrap();
+        assert!(Arc::ptr_eq(&data, &output.input().bytes));
         assert_eq!(
             exact.reserve_memory(1).unwrap_err().code(),
             into_markdown_core::ErrorCode::ResourceLimit
@@ -2290,10 +2519,10 @@ mod tests {
 
     fn resolved(bytes: Vec<u8>, name: &str) -> ResolvedInput {
         let size = bytes.len() as u64;
-        ResolvedInput::new(
-            Arc::from(bytes),
-            SourceMetadata { name: Some(name.into()), size, ..SourceMetadata::default() },
-        )
+        ResolvedInput {
+            bytes: Arc::from(bytes),
+            metadata: SourceMetadata { name: Some(name.into()), size, ..SourceMetadata::default() },
+        }
     }
 
     fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {

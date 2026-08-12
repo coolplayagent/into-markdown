@@ -1,5 +1,4 @@
 use crate::{ConversionError, ExecutionContext, InputFormat, ResourceReservation};
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -60,35 +59,57 @@ pub struct SourceMetadata {
 
 /// Seek-independent bytes passed from source resolution into detection and
 /// conversion.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ResolvedInput {
     /// Complete input bytes.
     pub bytes: Arc<[u8]>,
     /// Trusted metadata attached by the resolver.
     pub metadata: SourceMetadata,
+}
+
+/// Resolver output plus an optional request-scoped source-memory lease.
+///
+/// Existing resolver implementations can keep returning [`ResolvedInput`]
+/// from [`crate::SourceResolver::resolve`]. Engines use the additive
+/// `resolve_accounted` hook to retain built-in resolver accounting across the
+/// resolver boundary without changing the layout of [`ResolvedInput`].
+pub struct ResolvedSource {
+    input: ResolvedInput,
     memory_reservation: Option<ResourceReservation>,
 }
 
-impl ResolvedInput {
-    /// Construct resolver output whose memory has not yet been charged.
-    ///
-    /// The engine validates and charges these bytes at the resolver boundary.
+impl ResolvedSource {
+    /// Wrap resolver output that has not carried a source-memory reservation.
     #[must_use]
-    pub fn new(bytes: Arc<[u8]>, metadata: SourceMetadata) -> Self {
-        Self { bytes, metadata, memory_reservation: None }
+    pub fn new(input: ResolvedInput) -> Self {
+        Self { input, memory_reservation: None }
     }
 
-    /// Construct resolver output with a request-scoped memory reservation.
+    /// Wrap resolver output with its request-scoped memory reservation.
     ///
     /// The engine verifies the reservation's context identity and exact byte
     /// count before treating it as the source-buffer charge.
     #[must_use]
     pub fn with_memory_reservation(
-        bytes: Arc<[u8]>,
-        metadata: SourceMetadata,
+        input: ResolvedInput,
         memory_reservation: ResourceReservation,
     ) -> Self {
-        Self { bytes, metadata, memory_reservation: Some(memory_reservation) }
+        Self { input, memory_reservation: Some(memory_reservation) }
+    }
+
+    /// Borrow resolved bytes and metadata.
+    #[must_use]
+    pub fn input(&self) -> &ResolvedInput {
+        &self.input
+    }
+
+    /// Consume the accounting wrapper and return its ordinary resolver output.
+    ///
+    /// This is intended for compatibility implementations of `resolve`; the
+    /// carried reservation is released as the wrapper is consumed.
+    #[must_use]
+    pub fn into_input(self) -> ResolvedInput {
+        self.input
     }
 
     /// Ensure the complete source bytes are charged to this exact request.
@@ -105,11 +126,11 @@ impl ResolvedInput {
         context: &ExecutionContext,
     ) -> Result<(), ConversionError> {
         let bytes =
-            u64::try_from(self.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+            u64::try_from(self.input.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: "resolved input size cannot be represented as u64".into(),
             })?;
-        if let Some(reservation) = &self.memory_reservation {
+        if let Some(reservation) = self.memory_reservation.as_mut() {
             if reservation.accounts_memory_for(context, bytes) {
                 return Ok(());
             }
@@ -130,17 +151,6 @@ impl ResolvedInput {
     }
 }
 
-impl fmt::Debug for ResolvedInput {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResolvedInput")
-            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
-            .field("metadata", &self.metadata)
-            .field("memory_reserved", &self.memory_reservation.is_some())
-            .finish()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,19 +168,16 @@ mod tests {
         let foreign = context(4);
         let current = context(4);
         let foreign_reservation = foreign.reserve_memory(4).unwrap();
-        let mut input = ResolvedInput::with_memory_reservation(
-            Arc::from(b"data".as_slice()),
-            SourceMetadata { size: 4, ..SourceMetadata::default() },
-            foreign_reservation,
-        );
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source = ResolvedSource::with_memory_reservation(input, foreign_reservation);
 
-        input.ensure_memory_reservation(&current).unwrap();
+        source.ensure_memory_reservation(&current).unwrap();
         assert!(foreign.reserve_memory(4).is_ok());
         assert_eq!(current.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
-        let cloned = input.clone();
-        drop(input);
-        assert_eq!(current.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
-        drop(cloned);
+        drop(source);
         assert!(current.reserve_memory(4).is_ok());
     }
 
@@ -178,12 +185,21 @@ mod tests {
     fn undersized_same_context_reservation_is_not_a_budget_credential() {
         let context = context(4);
         let reservation = context.reserve_memory(0).unwrap();
-        let mut input = ResolvedInput::with_memory_reservation(
-            Arc::from(b"data".as_slice()),
-            SourceMetadata { size: 4, ..SourceMetadata::default() },
-            reservation,
-        );
-        input.ensure_memory_reservation(&context).unwrap();
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source = ResolvedSource::with_memory_reservation(input, reservation);
+        source.ensure_memory_reservation(&context).unwrap();
         assert_eq!(context.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn legacy_resolved_input_literal_remains_source_compatible() {
+        let input = ResolvedInput {
+            bytes: Arc::from(b"legacy".as_slice()),
+            metadata: SourceMetadata::default(),
+        };
+        assert_eq!(&*input.bytes, b"legacy");
     }
 }

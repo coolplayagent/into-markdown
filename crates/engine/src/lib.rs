@@ -140,13 +140,16 @@ impl Engine {
     ) -> Result<DetectionResult, ConversionError> {
         let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
-        let mut input = self.resolve_input(&request.input, &request.options, &context).await?;
-        measured_input_bytes(&input, &request.options)?;
-        input.ensure_memory_reservation(&context)?;
+        let mut source = self.resolve_input(&request.input, &request.options, &context).await?;
+        measured_input_bytes(source.input(), &request.options)?;
+        source.ensure_memory_reservation(&context)?;
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
-        let candidates = self.detect_formats(&input, &request.hint, &context).await?;
+        let candidates = self.detect_formats(source.input(), &request.hint, &context).await?;
         context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
-        Ok(DetectionResult { source: input.metadata, candidates })
+        let source_metadata = source.input().metadata.clone();
+        // Keep the resolver's source-memory lease through the terminal event.
+        drop(source);
+        Ok(DetectionResult { source: source_metadata, candidates })
     }
 
     /// Resolve, detect, select, convert, and render one request.
@@ -162,12 +165,12 @@ impl Engine {
     ) -> Result<ConversionResult, ConversionError> {
         let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
-        let mut input = self.resolve_input(&request.input, &request.options, &context).await?;
-        measured_input_bytes(&input, &request.options)?;
-        input.ensure_memory_reservation(&context)?;
+        let mut source = self.resolve_input(&request.input, &request.options, &context).await?;
+        measured_input_bytes(source.input(), &request.options)?;
+        source.ensure_memory_reservation(&context)?;
 
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
-        let candidates = self.detect_formats(&input, &request.hint, &context).await?;
+        let candidates = self.detect_formats(source.input(), &request.hint, &context).await?;
         if candidates.is_empty() {
             return Err(ConversionError::Unsupported {
                 detail: "format detectors produced no candidates".into(),
@@ -181,7 +184,7 @@ impl Engine {
                 if !converter.supported_formats().contains(&candidate.format) {
                     continue;
                 }
-                match context.run(converter.probe(&input, candidate, &context)).await?? {
+                match context.run(converter.probe(source.input(), candidate, &context)).await?? {
                     ProbeOutcome::NotApplicable => {}
                     ProbeOutcome::Match { confidence } => attempts.push(Attempt {
                         converter: Arc::clone(converter),
@@ -217,7 +220,7 @@ impl Engine {
         context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
         let output = context
             .run(attempt.converter.convert(
-                &input,
+                source.input(),
                 &attempt.candidate,
                 &request.options,
                 &self.services,
@@ -274,6 +277,9 @@ impl Engine {
             provenance,
         };
         context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
+        // Keep the resolver's source-memory lease through conversion,
+        // rendering, result assembly, and the terminal event.
+        drop(source);
         Ok(result)
     }
 
@@ -282,14 +288,14 @@ impl Engine {
         input: &into_markdown_core::InputRef,
         options: &into_markdown_core::ConversionOptions,
         context: &ExecutionContext,
-    ) -> Result<into_markdown_core::ResolvedInput, ConversionError> {
+    ) -> Result<into_markdown_core::ResolvedSource, ConversionError> {
         let resolver =
             self.source_resolvers.iter().find(|resolver| resolver.supports(input)).ok_or_else(
                 || ConversionError::Unsupported {
                     detail: "no source resolver accepts the requested input".into(),
                 },
             )?;
-        context.run(resolver.resolve(input, options, context)).await?
+        context.run(resolver.resolve_accounted(input, options, context)).await?
     }
 
     async fn detect_formats(
@@ -418,14 +424,14 @@ mod tests {
                 let InputRef::Bytes { data, name } = input else {
                     return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
                 };
-                Ok(ResolvedInput::new(
-                    Arc::clone(data),
-                    SourceMetadata {
+                Ok(ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
                         name: name.clone(),
                         size: data.len() as u64,
                         ..SourceMetadata::default()
                     },
-                ))
+                })
             })
         }
     }
@@ -717,6 +723,20 @@ mod tests {
     }
 
     #[test]
+    fn legacy_trait_object_resolver_uses_default_accounting_adapter() {
+        let resolver: Arc<dyn SourceResolver> = Arc::new(BytesResolver);
+        let mut builder = EngineBuilder::new();
+        builder.registry_mut().register_source_resolver(resolver);
+        let engine = builder.build().unwrap();
+        let mut request =
+            DetectionRequest::new(InputRef::bytes(b"data".as_slice(), Some("data.bin")));
+        request.options.limits.max_memory_bytes = 3;
+
+        let error = block_on(engine.detect(request)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+    }
+
+    #[test]
     fn detection_candidates_sort_by_confidence_priority_and_stable_id() {
         let mut builder = EngineBuilder::new();
         builder
@@ -883,14 +903,14 @@ mod tests {
                 let InputRef::Bytes { data, name } = input else {
                     return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
                 };
-                Ok(ResolvedInput::new(
-                    Arc::clone(data),
-                    SourceMetadata {
+                Ok(ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
                         name: name.clone(),
                         size: data.len() as u64,
                         ..SourceMetadata::default()
                     },
-                ))
+                })
             })
         }
     }
