@@ -1,4 +1,12 @@
 //! Stable application wire contracts shared by CLI, HTTP, SSE consumers, and bundles.
+//!
+//! DTOs intentionally do not implement [`serde::Deserialize`]. Untrusted JSON must enter
+//! through the versioned, budgeted `from_json` methods instead of a generic framework extractor.
+//!
+//! ```compile_fail
+//! use into_markdown_core::ResultDto;
+//! let _: ResultDto = serde_json::from_str("{}").unwrap();
+//! ```
 
 use crate::{
     Asset, Diagnostic, DiagnosticSeverity, Document, Provenance, ProvenanceKind, SourceLocator,
@@ -17,7 +25,7 @@ pub const MAX_DTO_DEPTH: usize = 64;
 /// Maximum assets accepted in one result or bundle manifest.
 pub const MAX_DTO_ASSETS: usize = 100_000;
 /// Maximum decoded bytes carried by all base64 assets in one result.
-pub const MAX_DTO_BASE64_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_DTO_BASE64_BYTES: usize = 32 * 1024 * 1024;
 /// Maximum diagnostics accepted in one envelope or result.
 pub const MAX_DTO_DIAGNOSTICS: usize = 100_000;
 /// Maximum provenance records accepted in one envelope or result.
@@ -74,7 +82,7 @@ impl Default for DtoLimits {
 }
 
 /// Stable categories returned while decoding or validating application DTOs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum DtoErrorCode {
@@ -126,7 +134,7 @@ impl DtoError {
 }
 
 /// Stable diagnostic severity used by external protocols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverityDto {
     /// Informational recovery note.
@@ -138,7 +146,7 @@ pub enum DiagnosticSeverityDto {
 }
 
 /// One stable non-fatal diagnostic.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticDto {
     /// Stable machine-readable code.
@@ -152,7 +160,7 @@ pub struct DiagnosticDto {
 }
 
 /// Versioned diagnostics document used by bundles and HTTP responses.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsDto {
     /// Protocol version.
@@ -162,7 +170,7 @@ pub struct DiagnosticsDto {
 }
 
 /// Stable provenance origin used by external protocols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProvenanceKindDto {
     /// Deterministic source parser.
@@ -178,7 +186,7 @@ pub enum ProvenanceKindDto {
 }
 
 /// One stable material provenance record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvenanceDto {
     /// Origin class.
@@ -192,7 +200,7 @@ pub struct ProvenanceDto {
 }
 
 /// Versioned provenance document used by bundles and HTTP responses.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvenanceListDto {
     /// Protocol version.
@@ -202,7 +210,7 @@ pub struct ProvenanceListDto {
 }
 
 /// Stable asset representation with standard padded base64 content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetDto {
     /// Stable document-scoped identifier.
@@ -218,7 +226,7 @@ pub struct AssetDto {
 }
 
 /// Versioned complete conversion response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultDto {
     /// Protocol version.
@@ -236,7 +244,7 @@ pub struct ResultDto {
 }
 
 /// One asset entry in a portable bundle manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BundleAssetDto {
     /// Stable asset identifier.
@@ -250,7 +258,7 @@ pub struct BundleAssetDto {
 }
 
 /// Stable portable bundle manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BundleManifestDto {
     /// Protocol version.
@@ -261,14 +269,18 @@ pub struct BundleManifestDto {
     pub document_ir: String,
     /// Bundle-relative diagnostics path.
     pub diagnostics: String,
+    /// Diagnostics member schema governed by this manifest.
+    pub diagnostics_schema_version: u32,
     /// Bundle-relative provenance path.
     pub provenance: String,
+    /// Provenance member schema governed by this manifest.
+    pub provenance_schema_version: u32,
     /// Ordered asset entries.
     pub assets: Vec<BundleAssetDto>,
 }
 
 /// Stable completion state for one batch item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BatchItemStatus {
     /// Conversion completed successfully.
@@ -278,7 +290,7 @@ pub enum BatchItemStatus {
 }
 
 /// One item in a machine-readable batch report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchItemDto {
     /// Display-safe input identifier.
@@ -300,7 +312,7 @@ pub struct BatchItemDto {
 }
 
 /// Versioned machine-readable batch report.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchReportDto {
     /// Protocol version.
@@ -313,18 +325,207 @@ pub struct BatchReportDto {
     pub items: Vec<BatchItemDto>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawDiagnosticSeverityDto {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDiagnosticDto {
+    code: String,
+    severity: RawDiagnosticSeverityDto,
+    message: String,
+    locator: Option<SourceLocator>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDiagnosticsDto {
+    schema_version: u32,
+    diagnostics: Vec<RawDiagnosticDto>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum RawProvenanceKindDto {
+    NativeParser,
+    LocalOcr,
+    AiProvider,
+    Metadata,
+    Postprocessor,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawProvenanceDto {
+    kind: RawProvenanceKindDto,
+    provider: String,
+    locator: SourceLocator,
+    confidence: Option<f32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawProvenanceListDto {
+    schema_version: u32,
+    provenance: Vec<RawProvenanceDto>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAssetDto {
+    id: String,
+    filename: Option<String>,
+    media_type: String,
+    data_base64: String,
+    external_uri: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawResultDto {
+    schema_version: u32,
+    markdown: String,
+    document: Document,
+    assets: Vec<RawAssetDto>,
+    diagnostics: Vec<RawDiagnosticDto>,
+    provenance: Vec<RawProvenanceDto>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBundleAssetDto {
+    id: String,
+    path: String,
+    media_type: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBundleManifestDto {
+    schema_version: u32,
+    markdown: String,
+    document_ir: String,
+    diagnostics: String,
+    #[serde(default = "dto_schema_version")]
+    diagnostics_schema_version: u32,
+    provenance: String,
+    #[serde(default = "dto_schema_version")]
+    provenance_schema_version: u32,
+    assets: Vec<RawBundleAssetDto>,
+}
+
+const fn dto_schema_version() -> u32 {
+    DTO_SCHEMA_VERSION
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum RawBatchItemStatus {
+    Success,
+    Failed,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBatchItemDto {
+    input: String,
+    output: Option<String>,
+    format: Option<String>,
+    status: RawBatchItemStatus,
+    diagnostics: Vec<RawDiagnosticDto>,
+    error_code: Option<String>,
+    message: Option<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBatchReportDto {
+    schema_version: u32,
+    succeeded: u64,
+    failed: u64,
+    items: Vec<RawBatchItemDto>,
+}
+
+impl From<RawDiagnosticDto> for DiagnosticDto {
+    fn from(value: RawDiagnosticDto) -> Self {
+        Self {
+            code: value.code,
+            severity: match value.severity {
+                RawDiagnosticSeverityDto::Info => DiagnosticSeverityDto::Info,
+                RawDiagnosticSeverityDto::Warning => DiagnosticSeverityDto::Warning,
+                RawDiagnosticSeverityDto::Error => DiagnosticSeverityDto::Error,
+            },
+            message: value.message,
+            locator: value.locator,
+        }
+    }
+}
+
+impl From<RawProvenanceDto> for ProvenanceDto {
+    fn from(value: RawProvenanceDto) -> Self {
+        Self {
+            kind: match value.kind {
+                RawProvenanceKindDto::NativeParser => ProvenanceKindDto::NativeParser,
+                RawProvenanceKindDto::LocalOcr => ProvenanceKindDto::LocalOcr,
+                RawProvenanceKindDto::AiProvider => ProvenanceKindDto::AiProvider,
+                RawProvenanceKindDto::Metadata => ProvenanceKindDto::Metadata,
+                RawProvenanceKindDto::Postprocessor => ProvenanceKindDto::Postprocessor,
+            },
+            provider: value.provider,
+            locator: value.locator,
+            confidence: value.confidence,
+        }
+    }
+}
+
+impl From<RawAssetDto> for AssetDto {
+    fn from(value: RawAssetDto) -> Self {
+        Self {
+            id: value.id,
+            filename: value.filename,
+            media_type: value.media_type,
+            data_base64: value.data_base64,
+            external_uri: value.external_uri,
+        }
+    }
+}
+
 impl BatchReportDto {
     /// Build a report with derived, checked totals.
-    #[must_use]
-    pub fn new(items: Vec<BatchItemDto>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtoErrorCode::ResourceLimit`] if counts cannot be represented.
+    pub fn try_new(items: Vec<BatchItemDto>) -> Result<Self, DtoError> {
         let succeeded = items.iter().filter(|item| item.status == BatchItemStatus::Success).count();
         let failed = items.len().saturating_sub(succeeded);
-        Self {
+        let report = Self {
             schema_version: DTO_SCHEMA_VERSION,
-            succeeded: u64::try_from(succeeded).unwrap_or(u64::MAX),
-            failed: u64::try_from(failed).unwrap_or(u64::MAX),
+            succeeded: u64::try_from(succeeded).map_err(|_| {
+                DtoError::new(
+                    DtoErrorCode::ResourceLimit,
+                    "$.succeeded",
+                    "successful item count cannot be represented",
+                )
+            })?,
+            failed: u64::try_from(failed).map_err(|_| {
+                DtoError::new(
+                    DtoErrorCode::ResourceLimit,
+                    "$.failed",
+                    "failed item count cannot be represented",
+                )
+            })?,
             items,
-        }
+        };
+        report.validate(&DtoLimits::default())?;
+        Ok(report)
     }
 }
 
@@ -421,6 +622,7 @@ impl TryFrom<AssetDto> for Asset {
     type Error = DtoError;
 
     fn try_from(value: AssetDto) -> Result<Self, Self::Error> {
+        validate_assets(std::slice::from_ref(&value), &DtoLimits::default())?;
         let bytes =
             base64::engine::general_purpose::STANDARD.decode(&value.data_base64).map_err(|_| {
                 DtoError::new(
@@ -487,7 +689,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
 }
 
 macro_rules! json_api {
-    ($type:ty, $validate:ident, $preflight:ident) => {
+    ($type:ty, $validate:ident, $preflight:ident, $decode:ident) => {
         impl $type {
             /// Serialize this DTO after validating protocol invariants.
             ///
@@ -496,9 +698,11 @@ macro_rules! json_api {
             /// Returns a stable [`DtoErrorCode`] for an invalid DTO or serialization failure.
             pub fn to_json(&self) -> Result<String, DtoError> {
                 self.$validate(&DtoLimits::default())?;
-                serde_json::to_string(self).map_err(|error| {
+                let json = serde_json::to_string(self).map_err(|error| {
                     DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
-                })
+                })?;
+                validate_wire_json(&json, &DtoLimits::default())?;
+                Ok(json)
             }
 
             /// Serialize this DTO as indented JSON after validating protocol invariants.
@@ -508,9 +712,11 @@ macro_rules! json_api {
             /// Returns a stable [`DtoErrorCode`] for an invalid DTO or serialization failure.
             pub fn to_pretty_json(&self) -> Result<String, DtoError> {
                 self.$validate(&DtoLimits::default())?;
-                serde_json::to_string_pretty(self).map_err(|error| {
+                let json = serde_json::to_string_pretty(self).map_err(|error| {
                     DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
-                })
+                })?;
+                validate_wire_json(&json, &DtoLimits::default())?;
+                Ok(json)
             }
 
             /// Decode untrusted JSON with default resource limits.
@@ -533,7 +739,7 @@ macro_rules! json_api {
                 let mut value = decode_value(json, limits)?;
                 require_version(&value)?;
                 $preflight(&mut value, limits)?;
-                let decoded: Self = decode_typed(value)?;
+                let decoded: Self = $decode(value)?;
                 decoded.$validate(limits)?;
                 Ok(decoded)
             }
@@ -541,11 +747,11 @@ macro_rules! json_api {
     };
 }
 
-json_api!(ResultDto, validate, preflight_result_document);
-json_api!(DiagnosticsDto, validate, no_preflight);
-json_api!(ProvenanceListDto, validate, no_preflight);
-json_api!(BundleManifestDto, validate, no_preflight);
-json_api!(BatchReportDto, validate, no_preflight);
+json_api!(ResultDto, validate, preflight_result_document, decode_result);
+json_api!(DiagnosticsDto, validate, no_preflight, decode_diagnostics);
+json_api!(ProvenanceListDto, validate, no_preflight, decode_provenance);
+json_api!(BundleManifestDto, validate, no_preflight, decode_manifest);
+json_api!(BatchReportDto, validate, no_preflight, decode_batch_report);
 
 impl ResultDto {
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
@@ -574,6 +780,40 @@ impl DiagnosticsDto {
         Ok(dto)
     }
 
+    /// Serialize the diagnostics member of a bundle governed by manifest schema version 1.
+    ///
+    /// Bundle schema 1 retains the established bare-array member shape. Standalone HTTP and
+    /// library responses use the versioned envelope returned by [`Self::to_json`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for invalid or over-budget output.
+    pub fn to_bundle_pretty_json(&self) -> Result<String, DtoError> {
+        self.validate(&DtoLimits::default())?;
+        let json = serde_json::to_string_pretty(&self.diagnostics).map_err(|error| {
+            DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
+        })?;
+        validate_wire_json(&json, &DtoLimits::default())?;
+        Ok(json)
+    }
+
+    /// Decode the diagnostics member of a bundle governed by the supplied manifest version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for unsupported, malformed, invalid, or over-budget input.
+    pub fn from_bundle_json(json: &str, manifest_schema_version: u32) -> Result<Self, DtoError> {
+        validate_version(manifest_schema_version)?;
+        let value = decode_value(json, &DtoLimits::default())?;
+        let raw: Vec<RawDiagnosticDto> = decode_typed(value)?;
+        let dto = Self {
+            schema_version: manifest_schema_version,
+            diagnostics: raw.into_iter().map(DiagnosticDto::from).collect(),
+        };
+        dto.validate(&DtoLimits::default())?;
+        Ok(dto)
+    }
+
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
         validate_version(self.schema_version)?;
         validate_diagnostics(&self.diagnostics, limits, "$.diagnostics")
@@ -595,6 +835,37 @@ impl ProvenanceListDto {
         Ok(dto)
     }
 
+    /// Serialize the provenance member of a bundle governed by manifest schema version 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for invalid or over-budget output.
+    pub fn to_bundle_pretty_json(&self) -> Result<String, DtoError> {
+        self.validate(&DtoLimits::default())?;
+        let json = serde_json::to_string_pretty(&self.provenance).map_err(|error| {
+            DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
+        })?;
+        validate_wire_json(&json, &DtoLimits::default())?;
+        Ok(json)
+    }
+
+    /// Decode the provenance member of a bundle governed by the supplied manifest version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for unsupported, malformed, invalid, or over-budget input.
+    pub fn from_bundle_json(json: &str, manifest_schema_version: u32) -> Result<Self, DtoError> {
+        validate_version(manifest_schema_version)?;
+        let value = decode_value(json, &DtoLimits::default())?;
+        let raw: Vec<RawProvenanceDto> = decode_typed(value)?;
+        let dto = Self {
+            schema_version: manifest_schema_version,
+            provenance: raw.into_iter().map(ProvenanceDto::from).collect(),
+        };
+        dto.validate(&DtoLimits::default())?;
+        Ok(dto)
+    }
+
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
         validate_version(self.schema_version)?;
         validate_provenance(&self.provenance, limits, "$.provenance")
@@ -605,21 +876,42 @@ impl BundleManifestDto {
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
         validate_version(self.schema_version)?;
         let fixed_entries = [
-            ("$.markdown", &self.markdown),
-            ("$.documentIr", &self.document_ir),
-            ("$.diagnostics", &self.diagnostics),
-            ("$.provenance", &self.provenance),
+            ("$.markdown", &self.markdown, "document.md"),
+            ("$.documentIr", &self.document_ir, "document.ir.json"),
+            ("$.diagnostics", &self.diagnostics, "diagnostics.json"),
+            ("$.provenance", &self.provenance, "provenance.json"),
         ];
-        let mut paths = BTreeSet::from(["manifest.json"]);
-        for (path, value) in fixed_entries {
+        let mut paths = BTreeSet::from(["manifest.json".to_owned()]);
+        for (path, value, expected) in fixed_entries {
             validate_bundle_path(value, path)?;
-            if !paths.insert(value.as_str()) {
+            if value != expected {
+                return Err(DtoError::new(
+                    DtoErrorCode::InvalidField,
+                    path,
+                    format!("bundle schema 1 requires path {expected}"),
+                ));
+            }
+            if !paths.insert(portable_path_key(value)) {
                 return Err(DtoError::new(
                     DtoErrorCode::InvalidField,
                     path,
                     "duplicate or reserved bundle path",
                 ));
             }
+        }
+        if self.diagnostics_schema_version != DTO_SCHEMA_VERSION {
+            return Err(DtoError::new(
+                DtoErrorCode::UnsupportedSchemaVersion,
+                "$.diagnosticsSchemaVersion",
+                format!("expected {DTO_SCHEMA_VERSION}, got {}", self.diagnostics_schema_version),
+            ));
+        }
+        if self.provenance_schema_version != DTO_SCHEMA_VERSION {
+            return Err(DtoError::new(
+                DtoErrorCode::UnsupportedSchemaVersion,
+                "$.provenanceSchemaVersion",
+                format!("expected {DTO_SCHEMA_VERSION}, got {}", self.provenance_schema_version),
+            ));
         }
         if self.assets.len() > limits.max_assets {
             return limit("$.assets", "assets", limits.max_assets);
@@ -629,6 +921,20 @@ impl BundleManifestDto {
             let path = format!("$.assets[{index}]");
             validate_id(&asset.id, &format!("{path}.id"))?;
             validate_bundle_path(&asset.path, &format!("{path}.path"))?;
+            if !asset.path.starts_with("assets/") {
+                return Err(DtoError::new(
+                    DtoErrorCode::InvalidField,
+                    format!("{path}.path"),
+                    "bundle asset paths must be under assets/",
+                ));
+            }
+            if asset.media_type.trim().is_empty() {
+                return Err(DtoError::new(
+                    DtoErrorCode::InvalidField,
+                    format!("{path}.mediaType"),
+                    "media type must not be empty",
+                ));
+            }
             if !ids.insert(&asset.id) {
                 return Err(DtoError::new(
                     DtoErrorCode::DuplicateId,
@@ -636,7 +942,7 @@ impl BundleManifestDto {
                     "duplicate asset ID",
                 ));
             }
-            if !paths.insert(asset.path.as_str()) {
+            if !paths.insert(portable_path_key(&asset.path)) {
                 return Err(DtoError::new(
                     DtoErrorCode::InvalidField,
                     format!("{path}.path"),
@@ -657,9 +963,21 @@ impl BatchReportDto {
         let succeeded =
             self.items.iter().filter(|item| item.status == BatchItemStatus::Success).count();
         let failed = self.items.len().saturating_sub(succeeded);
-        if self.succeeded != u64::try_from(succeeded).unwrap_or(u64::MAX)
-            || self.failed != u64::try_from(failed).unwrap_or(u64::MAX)
-        {
+        let expected_succeeded = u64::try_from(succeeded).map_err(|_| {
+            DtoError::new(
+                DtoErrorCode::ResourceLimit,
+                "$.succeeded",
+                "successful item count cannot be represented",
+            )
+        })?;
+        let expected_failed = u64::try_from(failed).map_err(|_| {
+            DtoError::new(
+                DtoErrorCode::ResourceLimit,
+                "$.failed",
+                "failed item count cannot be represented",
+            )
+        })?;
+        if self.succeeded != expected_succeeded || self.failed != expected_failed {
             return Err(DtoError::new(
                 DtoErrorCode::InvalidField,
                 "$",
@@ -703,14 +1021,18 @@ impl BatchReportDto {
 }
 
 fn decode_value(json: &str, limits: &DtoLimits) -> Result<serde_json::Value, DtoError> {
-    if json.len() > limits.max_json_bytes {
-        return limit("$", "dtoJsonBytes", limits.max_json_bytes);
-    }
-    preflight_json_text(json, limits)?;
+    validate_wire_json(json, limits)?;
     let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
         DtoError::new(DtoErrorCode::InvalidJson, "$", format!("decode DTO: {error}"))
     })?;
     Ok(value)
+}
+
+fn validate_wire_json(json: &str, limits: &DtoLimits) -> Result<(), DtoError> {
+    if json.len() > limits.max_json_bytes {
+        return limit("$", "dtoJsonBytes", limits.max_json_bytes);
+    }
+    preflight_json_text(json, limits)
 }
 
 fn preflight_json_text(json: &str, limits: &DtoLimits) -> Result<(), DtoError> {
@@ -844,6 +1166,83 @@ fn decode_typed<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, DtoE
     })
 }
 
+fn decode_result(value: serde_json::Value) -> Result<ResultDto, DtoError> {
+    let raw: RawResultDto = decode_typed(value)?;
+    Ok(ResultDto {
+        schema_version: raw.schema_version,
+        markdown: raw.markdown,
+        document: raw.document,
+        assets: raw.assets.into_iter().map(AssetDto::from).collect(),
+        diagnostics: raw.diagnostics.into_iter().map(DiagnosticDto::from).collect(),
+        provenance: raw.provenance.into_iter().map(ProvenanceDto::from).collect(),
+    })
+}
+
+fn decode_diagnostics(value: serde_json::Value) -> Result<DiagnosticsDto, DtoError> {
+    let raw: RawDiagnosticsDto = decode_typed(value)?;
+    Ok(DiagnosticsDto {
+        schema_version: raw.schema_version,
+        diagnostics: raw.diagnostics.into_iter().map(DiagnosticDto::from).collect(),
+    })
+}
+
+fn decode_provenance(value: serde_json::Value) -> Result<ProvenanceListDto, DtoError> {
+    let raw: RawProvenanceListDto = decode_typed(value)?;
+    Ok(ProvenanceListDto {
+        schema_version: raw.schema_version,
+        provenance: raw.provenance.into_iter().map(ProvenanceDto::from).collect(),
+    })
+}
+
+fn decode_manifest(value: serde_json::Value) -> Result<BundleManifestDto, DtoError> {
+    let raw: RawBundleManifestDto = decode_typed(value)?;
+    Ok(BundleManifestDto {
+        schema_version: raw.schema_version,
+        markdown: raw.markdown,
+        document_ir: raw.document_ir,
+        diagnostics: raw.diagnostics,
+        diagnostics_schema_version: raw.diagnostics_schema_version,
+        provenance: raw.provenance,
+        provenance_schema_version: raw.provenance_schema_version,
+        assets: raw
+            .assets
+            .into_iter()
+            .map(|asset| BundleAssetDto {
+                id: asset.id,
+                path: asset.path,
+                media_type: asset.media_type,
+                size: asset.size,
+            })
+            .collect(),
+    })
+}
+
+fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoError> {
+    let raw: RawBatchReportDto = decode_typed(value)?;
+    Ok(BatchReportDto {
+        schema_version: raw.schema_version,
+        succeeded: raw.succeeded,
+        failed: raw.failed,
+        items: raw
+            .items
+            .into_iter()
+            .map(|item| BatchItemDto {
+                input: item.input,
+                output: item.output,
+                format: item.format,
+                status: match item.status {
+                    RawBatchItemStatus::Success => BatchItemStatus::Success,
+                    RawBatchItemStatus::Failed => BatchItemStatus::Failed,
+                },
+                diagnostics: item.diagnostics.into_iter().map(DiagnosticDto::from).collect(),
+                error_code: item.error_code,
+                message: item.message,
+                warnings: item.warnings,
+            })
+            .collect(),
+    })
+}
+
 fn validate_version(version: u32) -> Result<(), DtoError> {
     if version == DTO_SCHEMA_VERSION {
         Ok(())
@@ -891,6 +1290,9 @@ fn validate_assets(assets: &[AssetDto], limits: &DtoLimits) -> Result<(), DtoErr
         }
         let remaining = limits.max_base64_bytes.saturating_sub(total);
         let maximum_encoded = remaining.saturating_mul(4).saturating_add(2) / 3 + 4;
+        if asset.data_base64.len() > limits.max_string_bytes {
+            return limit(&format!("{path}.dataBase64"), "dtoStringBytes", limits.max_string_bytes);
+        }
         if asset.data_base64.len() > maximum_encoded {
             return limit("$.assets", "base64Bytes", limits.max_base64_bytes);
         }
@@ -1074,21 +1476,49 @@ fn validate_id(id: &str, path: &str) -> Result<(), DtoError> {
 }
 
 fn validate_bundle_path(value: &str, path: &str) -> Result<(), DtoError> {
+    const MAX_BUNDLE_PATH_BYTES: usize = 1024;
+    const MAX_BUNDLE_SEGMENT_BYTES: usize = 240;
     if value.is_empty()
+        || value.len() > MAX_BUNDLE_PATH_BYTES
+        || !value.is_ascii()
         || value.starts_with('/')
         || value.starts_with('\\')
         || value.contains('\\')
         || value.contains('\0')
-        || value.split('/').any(|part| part.is_empty() || matches!(part, "." | ".."))
-        || value.as_bytes().get(1) == Some(&b':')
+        || value.split('/').any(|part| {
+            part.is_empty()
+                || part.len() > MAX_BUNDLE_SEGMENT_BYTES
+                || matches!(part, "." | "..")
+                || part.ends_with(['.', ' '])
+                || part.bytes().any(|byte| {
+                    !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+                })
+                || is_windows_reserved_segment(part)
+        })
     {
         return Err(DtoError::new(
             DtoErrorCode::InvalidField,
             path,
-            "expected a normalized safe bundle-relative path",
+            "expected a portable ASCII bundle-relative path",
         ));
     }
     Ok(())
+}
+
+fn portable_path_key(value: &str) -> String {
+    value.to_ascii_lowercase()
+}
+
+fn is_windows_reserved_segment(value: &str) -> bool {
+    let stem = value.split('.').next().unwrap_or(value);
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
+        || upper.strip_prefix("COM").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
+        || upper.strip_prefix("LPT").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
 }
 
 fn limit<T>(path: &str, name: &str, maximum: usize) -> Result<T, DtoError> {
@@ -1141,6 +1571,25 @@ mod tests {
     }
 
     #[test]
+    fn emitted_wire_json_always_fits_the_default_decoder() {
+        let mut dto = result_dto();
+        dto.markdown = "m".repeat(MAX_DTO_STRING_BYTES - 1024);
+        dto.assets[0].data_base64 =
+            base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 6 * 1024 * 1024]);
+        let json = dto.to_json().unwrap();
+        assert_eq!(ResultDto::from_json(&json).unwrap(), dto);
+
+        let mut oversized = result_dto();
+        oversized.markdown = "x".repeat(49 * 1024 * 1024);
+        assert_eq!(oversized.to_json().unwrap_err().code, DtoErrorCode::ResourceLimit);
+
+        let mut oversized_asset = result_dto();
+        oversized_asset.assets[0].data_base64 =
+            base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 6 * 1024 * 1024 + 1]);
+        assert_eq!(oversized_asset.to_json().unwrap_err().code, DtoErrorCode::ResourceLimit);
+    }
+
+    #[test]
     fn auxiliary_envelope_json_goldens_are_stable() {
         let result = result_dto();
         let diagnostics =
@@ -1160,14 +1609,21 @@ mod tests {
             markdown: "document.md".into(),
             document_ir: "document.ir.json".into(),
             diagnostics: "diagnostics.json".into(),
+            diagnostics_schema_version: DTO_SCHEMA_VERSION,
             provenance: "provenance.json".into(),
+            provenance_schema_version: DTO_SCHEMA_VERSION,
             assets: vec![],
         };
         assert_eq!(
             manifest.to_json().unwrap(),
-            r#"{"schemaVersion":1,"markdown":"document.md","documentIr":"document.ir.json","diagnostics":"diagnostics.json","provenance":"provenance.json","assets":[]}"#
+            r#"{"schemaVersion":1,"markdown":"document.md","documentIr":"document.ir.json","diagnostics":"diagnostics.json","diagnosticsSchemaVersion":1,"provenance":"provenance.json","provenanceSchemaVersion":1,"assets":[]}"#
         );
-        let report = BatchReportDto::new(vec![BatchItemDto {
+        let legacy_manifest = r#"{"schemaVersion":1,"markdown":"document.md","documentIr":"document.ir.json","diagnostics":"diagnostics.json","provenance":"provenance.json","assets":[]}"#;
+        assert_eq!(
+            BundleManifestDto::from_json(legacy_manifest).unwrap().diagnostics_schema_version,
+            DTO_SCHEMA_VERSION
+        );
+        let report = BatchReportDto::try_new(vec![BatchItemDto {
             input: "report.pdf".into(),
             output: Some("report.md".into()),
             format: Some("pdf".into()),
@@ -1176,7 +1632,8 @@ mod tests {
             error_code: None,
             message: None,
             warnings: vec![],
-        }]);
+        }])
+        .unwrap();
         assert_eq!(
             report.to_json().unwrap(),
             r#"{"schemaVersion":1,"succeeded":1,"failed":0,"items":[{"input":"report.pdf","output":"report.md","format":"pdf","status":"success","diagnostics":[],"errorCode":null,"message":null,"warnings":[]}]}"#
@@ -1220,6 +1677,15 @@ mod tests {
         let mut dto = result_dto();
         dto.assets.push(dto.assets[0].clone());
         assert_eq!(dto.to_json().unwrap_err().code, DtoErrorCode::DuplicateId);
+
+        let invalid = AssetDto {
+            id: String::new(),
+            filename: None,
+            media_type: String::new(),
+            data_base64: String::new(),
+            external_uri: None,
+        };
+        assert_eq!(Asset::try_from(invalid).unwrap_err().code, DtoErrorCode::InvalidField);
     }
 
     #[test]
@@ -1347,7 +1813,9 @@ mod tests {
             markdown: "document.md".into(),
             document_ir: "document.ir.json".into(),
             diagnostics: "diagnostics.json".into(),
+            diagnostics_schema_version: DTO_SCHEMA_VERSION,
             provenance: "provenance.json".into(),
+            provenance_schema_version: DTO_SCHEMA_VERSION,
             assets: vec![BundleAssetDto {
                 id: "a".into(),
                 path: "../escape".into(),
@@ -1362,7 +1830,9 @@ mod tests {
             markdown: "document.md".into(),
             document_ir: "document.ir.json".into(),
             diagnostics: "diagnostics.json".into(),
+            diagnostics_schema_version: DTO_SCHEMA_VERSION,
             provenance: "provenance.json".into(),
+            provenance_schema_version: DTO_SCHEMA_VERSION,
             assets: vec![BundleAssetDto {
                 id: "a".into(),
                 path: "document.md".into(),
@@ -1371,6 +1841,46 @@ mod tests {
             }],
         };
         assert_eq!(collision.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+
+        for unsafe_path in [
+            "assets/CON.txt",
+            "assets/PRN",
+            "assets/COM1.png",
+            "assets/LPT9",
+            "assets/name.",
+            "assets/name:stream",
+            "assets/图片.png",
+        ] {
+            let mut manifest = collision.clone();
+            manifest.assets[0].path = unsafe_path.into();
+            assert_eq!(
+                manifest.to_json().unwrap_err().code,
+                DtoErrorCode::InvalidField,
+                "accepted unsafe path {unsafe_path}"
+            );
+        }
+
+        let mut case_collision = collision.clone();
+        case_collision.assets = vec![
+            BundleAssetDto {
+                id: "a".into(),
+                path: "assets/Image.png".into(),
+                media_type: "image/png".into(),
+                size: 1,
+            },
+            BundleAssetDto {
+                id: "b".into(),
+                path: "assets/image.png".into(),
+                media_type: "image/png".into(),
+                size: 1,
+            },
+        ];
+        assert_eq!(case_collision.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+
+        let mut wrong_fixed_path = collision;
+        wrong_fixed_path.assets.clear();
+        wrong_fixed_path.markdown = "other.md".into();
+        assert_eq!(wrong_fixed_path.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
     }
 
     #[test]
@@ -1380,7 +1890,7 @@ mod tests {
         dto.provenance[0].locator.bounds = Some(Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
         assert_eq!(dto.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
 
-        let report = BatchReportDto::new(vec![BatchItemDto {
+        let error = BatchReportDto::try_new(vec![BatchItemDto {
             input: "input.txt".into(),
             output: None,
             format: Some("text".into()),
@@ -1389,8 +1899,9 @@ mod tests {
             error_code: None,
             message: Some("failed".into()),
             warnings: vec![],
-        }]);
-        assert_eq!(report.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+        }])
+        .unwrap_err();
+        assert_eq!(error.code, DtoErrorCode::InvalidField);
 
         let invalid = ProvenanceDto {
             kind: ProvenanceKindDto::NativeParser,

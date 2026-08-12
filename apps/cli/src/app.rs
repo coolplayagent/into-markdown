@@ -1014,7 +1014,8 @@ fn finish_reports(
             )?;
         }
     }
-    let report = BatchReport::new(reports);
+    let report = BatchReport::try_new(reports)
+        .map_err(|error| CliError::internal(format!("build batch report DTO: {error}")))?;
     if let Some(path) = report_path {
         output::write_report(path, &report)?;
     }

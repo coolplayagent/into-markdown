@@ -19,15 +19,25 @@ Document IR 自己的 `schemaVersion` 与外围 DTO 独立演进；例如 result
 DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resourceLimit`；显示
 文本只用于人工排错，程序必须按错误码处理。
 
+公开 DTO 只实现 `Serialize`，不实现 `Deserialize`。因此 `serde_json::from_str::<ResultDto>`
+和未来 `axum::Json<ResultDto>` 在类型层不可用；HTTP、SSE、CLI 和库调用方必须使用
+`from_json` 或 `from_json_with_limits`。这些入口先解析私有 Raw 类型，再返回通过版本、
+预算和不变量检查的 DTO，避免框架 extractor 绕过稳定边界。字段公开用于读取已验证结果
+及应用代码显式构造；任何出站对象仍须调用 `to_json` 或 `to_pretty_json`，二者执行完整
+验证。
+
 ## 顶层 DTO
 
 - `ResultDto`：`markdown`、版本化 `document`、`assets`、`diagnostics` 和
-  `provenance`。`ResultDto::from_result` 和 `TryFrom<ResultDto>` 是内部
+  `provenance`。`TryFrom<&ConversionResult>` 和 `TryFrom<ResultDto>` 是内部
   `ConversionResult` 的显式双向边界。
-- `DiagnosticsDto`：Bundle `diagnostics.json` 和独立 HTTP 诊断响应使用的版本化包裹。
-- `ProvenanceListDto`：Bundle `provenance.json` 和独立 HTTP 溯源响应使用的版本化包裹。
-- `BundleManifestDto`：固定产物路径及资源索引。资源路径必须是使用 `/` 的规范相对
-  路径，不允许绝对路径、反斜杠、空片段、`.`、`..`、NUL 或 Windows drive 前缀。
+- `DiagnosticsDto`：独立 HTTP/库诊断响应使用的版本化包裹。
+- `ProvenanceListDto`：独立 HTTP/库溯源响应使用的版本化包裹。
+- `BundleManifestDto`：固定产物路径及资源索引。schema 1 强制使用 `document.md`、
+  `document.ir.json`、`diagnostics.json` 和 `provenance.json`，并以
+  `diagnosticsSchemaVersion`、`provenanceSchemaVersion` 声明成员版本。资源路径只允许
+  使用 `/`、ASCII 字母数字、`.`、`-`、`_` 的 portable 相对路径；拒绝非 ASCII、
+  大小写折叠碰撞、ADS 冒号、Windows 保留设备名、尾随点/空格、超长片段和路径穿越。
 - `BatchReportDto`：包含派生的 `succeeded`、`failed` 和输入稳定顺序的 `items`；状态
   只有 `success`、`failed`。失败项必须有 `errorCode`，成功项不得有 `errorCode`。
 
@@ -98,6 +108,16 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
 - 内嵌 Document IR 在反序列化为 `ResultDto` 前先调用 IR 的有界解码，必须通过它自己
   的版本、宽表预检、节点、重复 ID、路径及结构预算校验；
 - Bundle 路径只描述归档内成员，不能直接作为宿主文件系统写入目标。
+
+出站的 `to_json`、`to_pretty_json` 和 Bundle 成员 serializer 使用与默认解码相同的
+JSON 总字节、深度、结构项、单字符串和总字符串预算。因此任何成功序列化的默认 DTO
+都能由对应默认入口读回；超大 Markdown 或 base64 不会出现“能写不能读”。base64 解码
+总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串和 64 MiB JSON 总量约束。
+
+Bundle schema 1 保留既有 `diagnostics.json` 与 `provenance.json` 裸数组形状，成员版本
+由 manifest 统辖；`to_bundle_pretty_json` / `from_bundle_json` 是这两个成员的专用边界。
+带 `schemaVersion` 的 envelope 只用于独立 HTTP/库响应。这样不会把曾经改变过的成员
+形状伪称为兼容。`assets/` 目录成员始终存在，即使没有资源。
 
 默认上限由 `DtoLimits` 和 `MAX_DTO_*` 常量公开，覆盖 JSON 总字节、深度、结构项、
 单字符串、总字符串、各类记录数和 base64 解码后总量。HTTP 层可按请求策略进一步收紧，
