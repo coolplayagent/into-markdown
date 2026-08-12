@@ -8,6 +8,7 @@ DATA = [
     "//:Cargo.lock",
     "//:Cargo.toml",
     "//:LICENSE",
+    "//:MODULE.bazel",
     "//:NOTICE",
     "//:THIRD_PARTY_NOTICES.md",
     "//models:manifest.json",
@@ -32,6 +33,7 @@ rust_library(
     crate_name = "license_check",
     edition = "2024",
     deps = [
+        "@crates//:base64",
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:toml",

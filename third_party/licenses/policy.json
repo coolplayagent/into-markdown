@@ -6,6 +6,5 @@
     "BUSL-1.1",
     "GPL-1.0-only", "GPL-1.0-or-later", "GPL-2.0-only", "GPL-2.0-or-later", "GPL-3.0-only", "GPL-3.0-or-later",
     "SSPL-1.0"
-  ],
-  "require_known_for_release": true
+  ]
 }

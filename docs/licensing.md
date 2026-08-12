@@ -6,7 +6,9 @@
 ## 权威清单与状态
 
 - `Cargo.lock` 固定 Rust 依赖；`third_party/licenses/rust-lock.tsv` 必须与所有
-  非 workspace 包的名称和版本精确一致，并为每个包记录经过选择的 SPDX 许可。
+  非 workspace 包的名称和版本精确一致，并为每个包记录经过选择的 SPDX 义务
+  结论。`AND` 的每一项都必须保留并分别通过 allow/deny 策略；例如
+  `unicode-ident` 的结论是 `MIT AND Unicode-3.0`，不能简化为 `MIT`。
 - `third_party/licenses/inventory.json` 记录原生运行时、模型和未来组件。
 - `reviewed` 表示清单字段已经核对，不表示组件一定进入发布物；
   `planned` 表示版本、来源、构建选项或义务仍待确定，不能用于发布。
@@ -26,14 +28,16 @@ bazel test //tools/license-check:license_check
 bazel run //tools/license-check:release_audit
 ```
 
-任何 Cargo 锁文件漂移、未知许可、deny 列表命中、清单重复、缺字段，或被纳入
-发布但仍为 `planned` 的组件都会失败。依赖升级必须同时核对上游许可表达式、选择
-兼容许可并更新精确版本清单。
+任何 Cargo 锁文件漂移、无法与 workspace 清单精确匹配的无来源包、未知许可、
+deny 列表命中、清单重复、缺字段，或被纳入发布但仍为 `planned` 的组件都会失败。
+严格发布规则不能通过策略配置降级。依赖升级必须同时核对上游许可表达式、选择
+完整的兼容义务结论并更新精确版本清单。
 
 ## 当前覆盖与后续义务
 
-当前覆盖 Cargo 锁文件中的 Rust 包、已固定但只用于手动目标的 ONNX Runtime
-1.29.0，以及 PP-OCRv6 detector/recognizer 源归档。后两者没有进入普通构建产物。
+当前门禁覆盖 Cargo 锁文件中的 Rust 包，并将已固定但只用于手动目标的 ONNX
+Runtime 1.29.0、PP-OCRv6 detector/recognizer 源归档，与 `MODULE.bazel` 中的实际
+平台键、下载 URL 和哈希逐项绑定。后两者没有进入普通构建产物。
 
 PDFium、FFmpeg、LibreOffice、Wasmtime、字体和生成模型只是占位项。未来纳入时
 必须记录具体版本、源码 URL、哈希、补丁、构建开关、许可证文本与 NOTICE 要求。
@@ -42,3 +46,5 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 
 所有源码和二进制归档都必须包含项目的 `LICENSE`、`NOTICE`、
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
+当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
+都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
