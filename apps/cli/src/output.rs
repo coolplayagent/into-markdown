@@ -224,23 +224,26 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut archive = zip::ZipWriter::new(&mut cursor);
-        let options = SimpleFileOptions::default()
+        let file_options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
+        let directory_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
         for (name, bytes) in entries {
             archive
-                .start_file(name, options)
+                .start_file(name, file_options)
                 .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
             archive.write_all(&bytes)?;
         }
-        archive.add_directory("assets/", options).map_err(|error| {
+        archive.add_directory("assets/", directory_options).map_err(|error| {
             CliError::internal(format!("create bundle assets directory: {error}"))
         })?;
         for (asset, entry) in
             result.assets.iter().filter(|asset| !asset.bytes.is_empty()).zip(asset_entries)
         {
             archive
-                .start_file(entry, options)
+                .start_file(entry, file_options)
                 .map_err(|error| CliError::internal(format!("create bundle asset: {error}")))?;
             archive.write_all(&asset.bytes)?;
         }
@@ -440,6 +443,44 @@ mod tests {
         archive.by_name("provenance.json").unwrap().read_to_string(&mut provenance).unwrap();
         assert!(serde_json::from_str::<serde_json::Value>(&provenance).unwrap().is_array());
         assert!(ProvenanceListDto::from_bundle_json(&provenance, DTO_SCHEMA_VERSION).is_ok());
+    }
+
+    #[test]
+    fn bundle_entries_have_fixed_file_and_directory_modes_with_or_without_assets() {
+        for (has_assets, mut result) in [(false, empty_result()), (true, empty_result())] {
+            if !has_assets {
+                result.assets.clear();
+            }
+            let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+            let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+            for index in 0..archive.len() {
+                let entry = archive.by_index(index).unwrap();
+                let expected = if entry.name() == "assets/" { 0o40_755 } else { 0o100_644 };
+                assert_eq!(entry.unix_mode(), Some(expected), "mode for {}", entry.name());
+            }
+            assert_eq!(archive.by_name("assets/").unwrap().unix_mode(), Some(0o40755));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_extraction_produces_a_traversable_asset_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let result = empty_result();
+        let filename = asset_filename("image", Some("../unsafe image.png"));
+        let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        archive.extract(destination.path()).unwrap();
+
+        let assets = destination.path().join("assets");
+        assert_eq!(fs::metadata(&assets).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::metadata(assets.join(&filename)).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fs::read(assets.join(filename)).unwrap(), [1, 2, 3]);
     }
 
     #[test]

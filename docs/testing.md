@@ -10,6 +10,8 @@ CommonMark 解析契约还覆盖 character reference 链接绕过、空 code spa
 默认、显式资源目录和 stdout 路径都只引用实际 ZIP entry；路径 URI 测试覆盖 POSIX
 绝对路径、Windows 同盘路径、UNC 同 share、合法 `..`、反斜杠以及特殊字符的
 CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定错误。
+Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与目录 `040755`，
+并在 Unix 临时目录真实解压有资源归档，验证 `assets/` 可遍历且资源可读取。
 
 后续实现应增加四层测试：
 

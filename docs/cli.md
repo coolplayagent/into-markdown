@@ -92,7 +92,8 @@ into-md <INPUT...>
   `document.ir.json`、`diagnostics.json`、`provenance.json` 和 `assets/`。归档路径
   会被净化并稳定排序。bundle 内的 Markdown 固定引用 `assets/` 下的条目；无论
   输出到文件还是 stdout，bundle 都不会因默认值或显式 `--assets-dir` 再向外部
-  文件系统抽取一份资源。
+  文件系统抽取一份资源。ZIP central directory 中普通文件固定为 Unix mode `0644`，
+  `assets/` 目录固定为 `0755`，因此跨平台解压后目录保持可遍历且文件保持只读语义。
 - 资源策略默认 `extract`。本地单文件输出到 stdout 时，资源写到输入同级
   `<文档名>_assets/`；stdin 和 URI 若产生资源，必须指定 `--assets-dir`。
 - 文件冲突默认改名为 `name-1.ext` 并发出 warning；`error` 拒绝写入，
