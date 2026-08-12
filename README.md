@@ -37,6 +37,11 @@ CLI 采用直接输入形式，不提供 `convert` 子命令。支持多文件�
 URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider、模型与插件管理。
 联网与 AI 默认关闭，远程输入和 Provider 每次都需要显式 `--allow-network`。
 
+结构化产物以 `schemaVersion: 1` 开始；转换结果、Bundle 和批量报告使用 CLI 与未来
+HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`、版本化
+`document`、base64 `assets`、`diagnostics` 和 `provenance`。协议细节、兼容策略与
+不可信 JSON 资源预算见[稳定数据传输契约](docs/dto.md)。
+
 当前格式转换、OCR 推理、模型安装、Provider 请求和插件执行后端尚未实现；对应命令
 返回稳定错误，不会伪装成功。
 

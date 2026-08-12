@@ -8,7 +8,7 @@ use crate::args::{
 use crate::config::{self, LoadedConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
 use crate::i18n::{self, Catalog};
-use crate::output::{self, BatchItemReport, BatchReport};
+use crate::output::{self, BatchItemReport, BatchItemStatus, BatchReport};
 use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
@@ -963,8 +963,8 @@ fn run_conversion(
             input: plan.item.display.clone(),
             output: Some(output_path.display().to_string()),
             format: policy.hint.format.map(|format| format.as_str().into()),
-            status: "success".into(),
-            diagnostics,
+            status: BatchItemStatus::Success,
+            diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
             message: None,
             warnings,
@@ -997,7 +997,7 @@ fn finish_reports(
                 )?;
             }
         }
-        if report.status == "failed" && !global.quiet {
+        if report.status == BatchItemStatus::Failed && !global.quiet {
             write_stderr_event(
                 stderr,
                 json_log,
@@ -1420,8 +1420,8 @@ fn process_stdout(
         input: plan.item.display.clone(),
         output: None,
         format: policy.hint.format.map(|format| format.as_str().into()),
-        status: "success".into(),
-        diagnostics: result.diagnostics,
+        status: BatchItemStatus::Success,
+        diagnostics: result.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
         message: None,
         warnings: vec![],
@@ -1475,8 +1475,8 @@ fn process_file_task(plan: WorkPlan, policy: &ExecutionPolicy) -> BatchItemRepor
             input: plan.item.display,
             output: Some(output_path.display().to_string()),
             format: policy.hint.format.map(|format| format.as_str().into()),
-            status: "success".into(),
-            diagnostics,
+            status: BatchItemStatus::Success,
+            diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
             message: None,
             warnings,
@@ -1485,7 +1485,7 @@ fn process_file_task(plan: WorkPlan, policy: &ExecutionPolicy) -> BatchItemRepor
             input: plan.item.display,
             output: plan.output.map(|path| path.display().to_string()),
             format: policy.hint.format.map(|format| format.as_str().into()),
-            status: "failed".into(),
+            status: BatchItemStatus::Failed,
             diagnostics: vec![],
             error_code: Some(error.code().into()),
             message: Some(error.to_string()),

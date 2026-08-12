@@ -281,3 +281,8 @@ into-md version [--json]
 
 当前工程仍是转换后端脚手架。格式、模型、插件或 Provider 后端缺失时，命令返回
 稳定错误，不会执行网络操作、创建虚假安装状态或 panic。
+
+`ir-json` 使用 Document IR 的公共版本化契约；`result-json`、Bundle manifest、Bundle
+内的 diagnostics/provenance 和 `--report` 使用与未来 HTTP 服务共享的公共 DTO。
+字段、兼容及验证规则以[稳定数据传输契约](dto.md)为准，CLI 不维护另一套私有 JSON
+结构。
