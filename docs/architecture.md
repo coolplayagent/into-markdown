@@ -66,13 +66,17 @@ Document metadata 不进入 Markdown，防止 namespaced properties 意外泄漏
 页面、幻灯片、工作表与时间片段使用可见、稳定的标题或时间标签表达。
 
 渲染器只生成资源引用，不创建目录或写文件。`extract` 使用
-`asset_uri_prefix + 净化后的建议文件名`；净化后重名或资源无字节时稳定失败，
-为资源写出层预留无歧义契约。`embed` 只接受有字节且 MIME token 安全的资源并
+`asset_uri_prefix + asset-<SHA-256(asset ID)>.<安全扩展名>`；建议文件名只贡献
+最长 16 字节的 ASCII 字母数字扩展名。该纯函数由渲染器和 CLI 写出层共享，结果
+长度有界、全 ASCII，且不受路径分隔符、Unicode、大小写折叠与 Windows 保留名影响。
+`embed` 只接受有字节且 MIME token 安全的资源并
 生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。资源落盘、冲突
 处理与原子写入属于调用方职责。
 
-源文档链接会拒绝控制字符、`javascript`、`vbscript`、`data`、`file` scheme 和
-含 userinfo 的绝对 URL，再对 Markdown 目标中的结构字符做百分号编码。渲染器
+源文档链接会拒绝控制字符、任何 HTML character reference、`javascript`、
+`vbscript`、`data`、`file` scheme 和含 userinfo 的绝对 URL，再对 Markdown 目标
+中的结构字符做百分号编码并把 `&` 输出为 `&amp;`，防止 CommonMark 实体解码改变
+已校验的目标。渲染器
 生成的受控 data URI 不走源链接策略，因此保留 data URI 必需的分隔符。
 
 ## 支持平台

@@ -12,10 +12,12 @@ rust_library(
     deps = [
         "//crates/core",
         "@crates//:base64",
+        "@crates//:sha2",
     ],
 )
 
 rust_test(
     name = "render_markdown_test",
     crate = ":render_markdown",
+    deps = ["@crates//:pulldown-cmark"],
 )

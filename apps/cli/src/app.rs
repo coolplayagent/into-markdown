@@ -1387,12 +1387,17 @@ fn process_stdout(
     json_log: bool,
     context: &mut RunContext<'_>,
 ) -> Result<BatchItemReport, CliError> {
-    let result = convert_item(&plan.item, policy)?;
+    let assets_dir = (policy.asset_mode == AssetModeArg::Extract)
+        .then(|| {
+            policy
+                .assets_dir
+                .clone()
+                .or_else(|| plan.item.local_path.as_deref().map(default_asset_directory))
+        })
+        .flatten();
+    let prefix = assets_dir.as_deref().map(asset_uri_prefix);
+    let result = convert_item(&plan.item, policy, prefix)?;
     if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
-        let assets_dir = policy
-            .assets_dir
-            .clone()
-            .or_else(|| plan.item.local_path.as_deref().map(default_asset_directory));
         let assets_dir = assets_dir.ok_or_else(|| {
             CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
         })?;
@@ -1499,24 +1504,27 @@ fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
 ) -> Result<(PathBuf, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
-    let result = convert_item(&plan.item, policy)?;
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
-    let outcome = output::write_file(
-        requested,
+    let output_path = output::preflight_file(requested, policy.conflict)?;
+    let assets_dir =
+        policy.assets_dir.clone().unwrap_or_else(|| default_asset_directory(&output_path));
+    let prefix = asset_uri_prefix_for_file(&output_path, &assets_dir);
+    let result = convert_item(&plan.item, policy, Some(prefix))?;
+    output::preflight_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?;
+    let outcome = output::write_preflighted_file(
+        &output_path,
         &output::encode_result(&result, policy.emit)?,
         policy.conflict,
     )?;
     let mut warnings = Vec::new();
-    if outcome.renamed {
+    if output_path != requested {
         warnings.push(format!(
             "output renamed to {} because the requested path existed",
             outcome.path.display()
         ));
     }
     if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
-        let assets_dir =
-            policy.assets_dir.clone().unwrap_or_else(|| default_asset_directory(&outcome.path));
         for asset in
             output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
         {
@@ -1531,13 +1539,26 @@ fn process_file_task_inner(
 fn convert_item(
     item: &WorkItem,
     policy: &ExecutionPolicy,
+    asset_uri_prefix: Option<String>,
 ) -> Result<into_markdown::ConversionResult, CliError> {
     validate_input_network(&item.input, &policy.options)?;
     let mut request = ConversionRequest::new(item.input.clone());
     request.options = policy.options.clone();
+    if policy.asset_mode == AssetModeArg::Extract {
+        request.options.output.asset_uri_prefix = asset_uri_prefix;
+    }
     request.hint = policy.hint.clone();
     let engine = into_markdown::default_engine().map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
+}
+
+fn asset_uri_prefix(directory: &Path) -> String {
+    directory.to_string_lossy().replace('\\', "/")
+}
+
+fn asset_uri_prefix_for_file(output: &Path, directory: &Path) -> String {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    directory.strip_prefix(parent).map_or_else(|_| asset_uri_prefix(directory), asset_uri_prefix)
 }
 
 fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Result<(), CliError> {

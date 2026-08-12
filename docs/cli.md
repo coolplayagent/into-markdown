@@ -95,6 +95,12 @@ into-md <INPUT...>
   `<文档名>_assets/`；stdin 和 URI 若产生资源，必须指定 `--assets-dir`。
 - 文件冲突默认改名为 `name-1.ext` 并发出 warning；`error` 拒绝写入，
   `overwrite` 通过同目录临时文件原子替换。
+- extract 资源使用 `asset-<SHA-256(asset ID)>.<安全扩展名>` 稳定命名，并在主产物
+  或任何资源写入前预检全部非空资源。为了防止 Markdown 链接因改名漂移，资源目标
+  已存在时 `rename` 安全降级为 `assetConflict`；`overwrite` 才会原子替换稳定目标。
+  `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
+  失败而不会被覆盖。当前不承诺主产物与多个资源之间的整体回滚，跨文件事务边界由
+  资源写出策略任务处理。
 - 多输入输出保留相对于各输入根的目录结构；不同输入根产生同名输出时先加输入根名
   前缀，仍冲突时再使用稳定数字后缀，所有消歧均在调度前完成。
 - `--report` 写入带 `schemaVersion` 的 JSON 报告，包含逐项输入、输出、状态、

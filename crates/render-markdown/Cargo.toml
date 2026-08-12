@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 base64.workspace = true
 into-markdown-core = { path = "../core" }
+sha2.workspace = true
+
+[dev-dependencies]
+pulldown-cmark = "0.13.0"
 
 [lints]
 workspace = true

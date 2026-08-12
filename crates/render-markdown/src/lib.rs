@@ -8,12 +8,35 @@ use into_markdown_core::{
     Asset, AssetMode, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
     Document, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer, TableRow,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 /// Deterministic renderer occupying the single built-in GFM renderer slot.
 #[derive(Debug, Default)]
 pub struct GfmRenderer;
+
+/// Allocate the cross-platform filename used for one extracted asset.
+///
+/// The basename is a fixed SHA-256 digest of the UTF-8 asset ID. A suggested
+/// filename contributes only an ASCII alphanumeric extension of at most 16
+/// bytes. The result is bounded ASCII, is never a Windows reserved name, and
+/// remains unique when filenames are compared case-insensitively.
+#[must_use]
+pub fn asset_filename(asset_id: &str, suggested_filename: Option<&str>) -> String {
+    let digest = Sha256::digest(asset_id.as_bytes());
+    let mut filename = String::with_capacity(6 + digest.len() * 2 + 17);
+    filename.push_str("asset-");
+    for byte in digest {
+        filename.push(hex_digit(byte >> 4, false));
+        filename.push(hex_digit(byte & 0x0f, false));
+    }
+    if let Some(extension) = safe_extension(suggested_filename) {
+        filename.push('.');
+        filename.push_str(&extension);
+    }
+    filename
+}
 
 impl MarkdownRenderer for GfmRenderer {
     fn id(&self) -> &'static str {
@@ -76,13 +99,13 @@ pub fn render(
 }
 
 struct AssetInventory<'a> {
-    by_id: BTreeMap<&'a str, (usize, &'a Asset)>,
+    by_id: BTreeMap<&'a str, &'a Asset>,
 }
 
 impl<'a> AssetInventory<'a> {
     fn new(assets: &'a [Asset]) -> Result<Self, ConversionError> {
         let mut by_id = BTreeMap::new();
-        for (index, asset) in assets.iter().enumerate() {
+        for asset in assets {
             if asset.id.0.trim().is_empty() {
                 return Err(render_error("asset inventory contains an empty asset ID"));
             }
@@ -92,14 +115,14 @@ impl<'a> AssetInventory<'a> {
                     asset.id.0
                 )));
             }
-            if by_id.insert(asset.id.0.as_str(), (index, asset)).is_some() {
+            if by_id.insert(asset.id.0.as_str(), asset).is_some() {
                 return Err(render_error(format!("duplicate asset ID {}", asset.id.0)));
             }
         }
         Ok(Self { by_id })
     }
 
-    fn get(&self, id: &str) -> Result<(usize, &'a Asset), ConversionError> {
+    fn get(&self, id: &str) -> Result<&'a Asset, ConversionError> {
         self.by_id
             .get(id)
             .copied()
@@ -110,20 +133,12 @@ impl<'a> AssetInventory<'a> {
         &self,
         referenced_assets: &BTreeSet<&str>,
     ) -> Result<(), ConversionError> {
-        let mut targets = BTreeSet::new();
         for id in referenced_assets {
-            let (index, asset) = self.get(id)?;
+            let asset = self.get(id)?;
             if asset.bytes.is_empty() {
                 return Err(render_error(format!(
                     "asset {} has no bytes for extract mode",
                     asset.id.0
-                )));
-            }
-            let fallback = format!("asset-{}", index + 1);
-            let target = sanitize_filename(asset.filename.as_deref().unwrap_or(&fallback));
-            if !targets.insert(target.clone()) {
-                return Err(render_error(format!(
-                    "extract target {target} is shared by multiple assets"
                 )));
             }
         }
@@ -136,11 +151,25 @@ struct RenderContext<'a> {
     options: &'a ConversionOptions,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InlineContext {
+    Normal,
+    TableCell,
+}
+
 impl RenderContext<'_> {
     fn render_blocks(&self, nodes: &[BlockNode]) -> Result<String, ConversionError> {
+        self.render_blocks_in(nodes, InlineContext::Normal)
+    }
+
+    fn render_blocks_in(
+        &self,
+        nodes: &[BlockNode],
+        inline_context: InlineContext,
+    ) -> Result<String, ConversionError> {
         let mut rendered = Vec::with_capacity(nodes.len());
         for node in nodes {
-            let block = self.render_block(&node.block)?;
+            let block = self.render_block(&node.block, inline_context)?;
             if !block.is_empty() {
                 rendered.push(block);
             }
@@ -149,20 +178,28 @@ impl RenderContext<'_> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_block(&self, block: &Block) -> Result<String, ConversionError> {
+    fn render_block(
+        &self,
+        block: &Block,
+        inline_context: InlineContext,
+    ) -> Result<String, ConversionError> {
         match block {
-            Block::Paragraph(content) => render_inlines(content),
-            Block::Heading { level, content } => {
-                Ok(format!("{} {}", "#".repeat(usize::from(*level)), render_inlines(content)?))
+            Block::Paragraph(content) => render_inlines(content, inline_context),
+            Block::Heading { level, content } => Ok(format!(
+                "{} {}",
+                "#".repeat(usize::from(*level)),
+                render_inlines(content, inline_context)?
+            )),
+            Block::List { kind, start, items } => {
+                self.render_list(*kind, *start, items, inline_context)
             }
-            Block::List { kind, start, items } => self.render_list(*kind, *start, items),
             Block::Table { rows } => self.render_table(rows),
             Block::Code { language, text } => {
                 Ok(render_fence(text, language.as_deref().map(sanitize_info_string).as_deref()))
             }
             Block::Formula(value) => Ok(render_fence(value, Some("math"))),
             Block::Footnote { label, blocks } => {
-                let body = self.render_blocks(blocks)?;
+                let body = self.render_blocks_in(blocks, inline_context)?;
                 let label = footnote_label(label);
                 if body.is_empty() {
                     Ok(format!("[^{label}]:"))
@@ -172,33 +209,44 @@ impl RenderContext<'_> {
             }
             Block::Image { asset, alt } => self.render_image(&asset.0, alt.as_deref()),
             Block::Page { number, blocks } => {
-                let body = self.render_blocks(blocks)?;
+                let body = self.render_blocks_in(blocks, inline_context)?;
                 Ok(with_body(format!("## Page {number}"), &body))
             }
             Block::Slide { number, title, blocks } => {
                 let mut heading = format!("## Slide {number}");
                 if let Some(title) = title {
-                    write!(heading, ": {}", escape_text(&single_line(title)))
-                        .map_err(|_| render_error("failed to render slide title"))?;
+                    write!(
+                        heading,
+                        ": {}",
+                        escape_text(&single_line(title), InlineContext::Normal)
+                    )
+                    .map_err(|_| render_error("failed to render slide title"))?;
                 }
-                let body = self.render_blocks(blocks)?;
+                let body = self.render_blocks_in(blocks, inline_context)?;
                 Ok(with_body(heading, &body))
             }
             Block::Sheet { name, blocks } => {
-                let body = self.render_blocks(blocks)?;
-                Ok(with_body(format!("## Sheet: {}", escape_text(&single_line(name))), &body))
+                let body = self.render_blocks_in(blocks, inline_context)?;
+                Ok(with_body(
+                    format!("## Sheet: {}", escape_text(&single_line(name), InlineContext::Normal)),
+                    &body,
+                ))
             }
             Block::TimedSegment { range, speaker, content } => {
                 let mut line =
                     format!("`{} – {}`", timestamp(range.start_ms), timestamp(range.end_ms));
                 if let Some(speaker) = speaker {
-                    write!(line, " **{}:**", escape_text(&single_line(speaker)))
-                        .map_err(|_| render_error("failed to render speaker label"))?;
+                    write!(
+                        line,
+                        " **{}:**",
+                        escape_text(&single_line(speaker), InlineContext::Normal)
+                    )
+                    .map_err(|_| render_error("failed to render speaker label"))?;
                 }
-                let content = render_inlines(content)?;
-                if !content.is_empty() {
+                let rendered_content = render_inlines(content, inline_context)?;
+                if !rendered_content.is_empty() {
                     line.push(' ');
-                    line.push_str(&content);
+                    line.push_str(&rendered_content);
                 }
                 Ok(line)
             }
@@ -212,6 +260,7 @@ impl RenderContext<'_> {
         kind: ListKind,
         start: u64,
         items: &[ListItem],
+        context: InlineContext,
     ) -> Result<String, ConversionError> {
         let mut lines = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
@@ -236,7 +285,7 @@ impl RenderContext<'_> {
                 marker.push_str(&encode_bytes(label, |byte| byte.is_ascii_alphanumeric()));
                 marker.push_str(" -->");
             }
-            let body = self.render_blocks(&item.blocks)?;
+            let body = self.render_blocks_in(&item.blocks, context)?;
             let paragraph_first =
                 item.blocks.first().is_some_and(|node| matches!(node.block, Block::Paragraph(_)));
             if body.is_empty() {
@@ -303,9 +352,8 @@ impl RenderContext<'_> {
     }
 
     fn render_cell(&self, cell: &Cell) -> Result<String, ConversionError> {
-        let rendered = self.render_blocks(&cell.blocks)?;
+        let rendered = self.render_blocks_in(&cell.blocks, InlineContext::TableCell)?;
         let flattened = normalize_lf(&rendered).replace("\n\n", "<br><br>").replace('\n', "<br>");
-        let flattened = escape_unescaped_pipes(&flattened);
         let mut rendered = if cell.row_span > 1 || cell.column_span > 1 {
             format!(
                 "<span data-rowspan=\"{}\" data-colspan=\"{}\">{flattened}</span>",
@@ -325,7 +373,7 @@ impl RenderContext<'_> {
         if self.options.output.asset_mode == AssetMode::Omit {
             return Ok(alt);
         }
-        let (index, asset) = self.inventory.get(id)?;
+        let asset = self.inventory.get(id)?;
         let target = match self.options.output.asset_mode {
             AssetMode::Omit => return Ok(alt),
             AssetMode::Embed if !asset.bytes.is_empty() => format!(
@@ -337,31 +385,38 @@ impl RenderContext<'_> {
                 return Err(render_error(format!("asset {id} has no bytes for embed mode")));
             }
             AssetMode::Extract => {
-                let fallback = format!("asset-{}", index + 1);
-                let filename = sanitize_filename(asset.filename.as_deref().unwrap_or(&fallback));
+                let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
                 join_uri_prefix(self.options.output.asset_uri_prefix.as_deref(), &filename)
             }
         };
-        Ok(format!("![{alt}](<{}>)", escape_generated_destination(&target)))
+        let destination = if self.options.output.asset_mode == AssetMode::Embed {
+            escape_generated_destination(&target)
+        } else {
+            validate_link_target(&target)?;
+            escape_destination(&target, InlineContext::Normal)
+        };
+        Ok(format!("![{alt}](<{destination}>)"))
     }
 }
 
-fn render_inlines(inlines: &[Inline]) -> Result<String, ConversionError> {
+fn render_inlines(inlines: &[Inline], context: InlineContext) -> Result<String, ConversionError> {
     let mut output = String::new();
     for inline in inlines {
         match inline {
-            Inline::Text { value, marks } => output.push_str(&render_marked_text(value, marks)),
-            Inline::Code(value) => output.push_str(&render_code_span(value)),
+            Inline::Text { value, marks } => {
+                output.push_str(&render_marked_text(value, marks, context));
+            }
+            Inline::Code(value) => output.push_str(&render_code_span(value, context)),
             Inline::Link { target, content } => {
                 validate_link_target(target)?;
                 output.push('[');
-                output.push_str(&render_inlines(content)?);
+                output.push_str(&render_inlines(content, context)?);
                 output.push_str("](<");
-                output.push_str(&escape_destination(target));
+                output.push_str(&escape_destination(target, context));
                 output.push_str(">)");
             }
             Inline::Formula(value) => {
-                let code = render_code_span(value);
+                let code = render_code_span(value, context);
                 output.push('$');
                 output.push_str(&code);
                 output.push('$');
@@ -380,8 +435,8 @@ fn render_inlines(inlines: &[Inline]) -> Result<String, ConversionError> {
     Ok(output)
 }
 
-fn render_marked_text(value: &str, marks: &[InlineMark]) -> String {
-    let mut rendered = escape_text(&single_line(value));
+fn render_marked_text(value: &str, marks: &[InlineMark], context: InlineContext) -> String {
+    let mut rendered = escape_text(&single_line(value), context);
     let marks = marks.iter().copied().collect::<BTreeSet<_>>();
     for mark in [
         InlineMark::Subscript,
@@ -393,9 +448,9 @@ fn render_marked_text(value: &str, marks: &[InlineMark]) -> String {
     ] {
         if marks.contains(&mark) {
             rendered = match mark {
-                InlineMark::Bold => format!("**{rendered}**"),
-                InlineMark::Italic => format!("*{rendered}*"),
-                InlineMark::Strikethrough => format!("~~{rendered}~~"),
+                InlineMark::Bold => format!("<strong>{rendered}</strong>"),
+                InlineMark::Italic => format!("<em>{rendered}</em>"),
+                InlineMark::Strikethrough => format!("<del>{rendered}</del>"),
                 InlineMark::Underline => format!("<u>{rendered}</u>"),
                 InlineMark::Superscript => format!("<sup>{rendered}</sup>"),
                 InlineMark::Subscript => format!("<sub>{rendered}</sub>"),
@@ -405,8 +460,14 @@ fn render_marked_text(value: &str, marks: &[InlineMark]) -> String {
     rendered
 }
 
-fn render_code_span(value: &str) -> String {
-    let value = single_line(value);
+fn render_code_span(value: &str, context: InlineContext) -> String {
+    let mut value = single_line(value);
+    if value.is_empty() || value.chars().all(char::is_whitespace) {
+        return format!("<code>{}</code>", escape_html_code(&value, context));
+    }
+    if context == InlineContext::TableCell {
+        value = value.replace('|', "\\|");
+    }
     let fence = "`".repeat(longest_run(&value, '`').saturating_add(1).max(1));
     let padding = value.starts_with([' ', '`']) || value.ends_with([' ', '`']);
     if padding { format!("{fence} {value} {fence}") } else { format!("{fence}{value}{fence}") }
@@ -443,9 +504,13 @@ fn footnote_label(value: &str) -> String {
     output
 }
 
-fn escape_text(value: &str) -> String {
+fn escape_text(value: &str, _: InlineContext) -> String {
     let mut output = String::with_capacity(value.len());
     for character in value.chars() {
+        if character == '&' {
+            output.push_str("&amp;");
+            continue;
+        }
         if matches!(
             character,
             '\\' | '`'
@@ -473,17 +538,35 @@ fn escape_text(value: &str) -> String {
 }
 
 fn escape_image_alt(value: &str) -> String {
-    escape_text(value).replace('"', "&quot;")
+    escape_text(value, InlineContext::Normal).replace('"', "&quot;")
 }
 
-fn escape_destination(value: &str) -> String {
-    escape_generated_destination(&normalize_lf(value))
+fn escape_destination(value: &str, context: InlineContext) -> String {
+    let value = normalize_lf(value).replace('&', "&amp;");
+    encode_bytes(&value, |byte| {
+        !byte.is_ascii_control()
+            && !matches!(byte, b' ' | b'<' | b'>' | b'\\')
+            && (context != InlineContext::TableCell || byte != b'|')
+    })
 }
 
 fn escape_generated_destination(value: &str) -> String {
     encode_bytes(value, |byte| {
         !byte.is_ascii_control() && !matches!(byte, b' ' | b'<' | b'>' | b'\\')
     })
+}
+
+fn escape_html_code(value: &str, _: InlineContext) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            _ => output.push(character),
+        }
+    }
+    output
 }
 
 fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
@@ -503,19 +586,6 @@ fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
 fn hex_digit(value: u8, uppercase: bool) -> char {
     let alphabet = if uppercase { b"0123456789ABCDEF" } else { b"0123456789abcdef" };
     char::from(alphabet[usize::from(value)])
-}
-
-fn escape_unescaped_pipes(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut slashes = 0_usize;
-    for character in value.chars() {
-        if character == '|' && slashes.is_multiple_of(2) {
-            output.push('\\');
-        }
-        output.push(character);
-        slashes = if character == '\\' { slashes + 1 } else { 0 };
-    }
-    output
 }
 
 fn write_table_row(output: &mut String, cells: &[String]) {
@@ -561,6 +631,9 @@ fn validate_link_target(value: &str) -> Result<(), ConversionError> {
     if value.chars().any(char::is_control) {
         return Err(render_error("link target contains a control character"));
     }
+    if contains_html_entity(value) {
+        return Err(render_error("link target contains an HTML character reference"));
+    }
     let Some(colon) = value.find(':') else {
         return Ok(());
     };
@@ -582,6 +655,35 @@ fn validate_link_target(value: &str) -> Result<(), ConversionError> {
         return Err(render_error("link target authority contains user information"));
     }
     Ok(())
+}
+
+fn contains_html_entity(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'&' {
+            continue;
+        }
+        let tail = &bytes[index + 1..];
+        let Some(end) = tail.iter().position(|byte| *byte == b';') else {
+            continue;
+        };
+        if end == 0 || end > 32 {
+            continue;
+        }
+        let body = &tail[..end];
+        let named = body.iter().all(u8::is_ascii_alphanumeric);
+        let numeric = body
+            .strip_prefix(b"#")
+            .is_some_and(|digits| !digits.is_empty() && digits.iter().all(u8::is_ascii_digit));
+        let hexadecimal = body
+            .strip_prefix(b"#x")
+            .or_else(|| body.strip_prefix(b"#X"))
+            .is_some_and(|digits| !digits.is_empty() && digits.iter().all(u8::is_ascii_hexdigit));
+        if named || numeric || hexadecimal {
+            return true;
+        }
+    }
+    false
 }
 
 fn timestamp(milliseconds: u64) -> String {
@@ -614,23 +716,13 @@ fn longest_run(value: &str, needle: char) -> usize {
     longest
 }
 
-fn sanitize_filename(value: &str) -> String {
-    let filename = value.rsplit(['/', '\\']).next().unwrap_or("asset");
-    let sanitized = filename
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized.is_empty() || matches!(sanitized.as_str(), "." | "..") {
-        "asset".into()
-    } else {
-        sanitized
-    }
+fn safe_extension(value: Option<&str>) -> Option<String> {
+    let filename = value?.rsplit(['/', '\\']).next()?;
+    let (_, extension) = filename.rsplit_once('.')?;
+    (!extension.is_empty()
+        && extension.len() <= 16
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    .then(|| extension.to_ascii_lowercase())
 }
 
 fn join_uri_prefix(prefix: Option<&str>, filename: &str) -> String {
@@ -657,7 +749,7 @@ fn validate_image_references<'a>(
     for node in nodes {
         match &node.block {
             Block::Image { asset, .. } => {
-                let (_, asset) = inventory.get(&asset.0)?;
+                let asset = inventory.get(&asset.0)?;
                 referenced_assets.insert(asset.id.0.as_str());
             }
             Block::List { items, .. } => {
@@ -691,6 +783,7 @@ mod tests {
         AssetId, CellRef, DocumentMetadata, NodeId, Provenance, ProvenanceKind, SourceLocator,
         TimeRange,
     };
+    use pulldown_cmark::{Event, Options, Parser, Tag};
 
     fn provenance() -> Provenance {
         Provenance {
@@ -742,7 +835,7 @@ mod tests {
         let doc = document(vec![node("h", Block::Heading { level: 3, content })]);
         assert_eq!(
             output(&doc),
-            "### ***<u>a\\*\\[x\\] b</u>***```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$  \n~~tail~~\n"
+            "### <strong><em><u>a\\*\\[x\\] b</u></em></strong>```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$  \n<del>tail</del>\n"
         );
     }
 
@@ -890,6 +983,119 @@ mod tests {
     }
 
     #[test]
+    fn empty_and_whitespace_inline_code_have_exact_commonmark_semantics() {
+        for value in ["", " ", "   ", "\t"] {
+            let doc = document(vec![node("p", Block::Paragraph(vec![Inline::Code(value.into())]))]);
+            let markdown = output(&doc);
+            let html = {
+                let parser = Parser::new(&markdown);
+                let mut html = String::new();
+                pulldown_cmark::html::push_html(&mut html, parser);
+                html
+            };
+            assert!(html.contains("<code>"));
+            assert!(html.contains("</code>"));
+            assert_eq!(html.matches("<code>").count(), 1);
+        }
+        assert_eq!(
+            output(&document(vec![
+                node("p", Block::Paragraph(vec![Inline::Code(String::new())]),)
+            ])),
+            "<code></code>\n"
+        );
+    }
+
+    #[test]
+    fn marked_boundary_whitespace_remains_inside_the_mark() {
+        let doc = document(vec![node(
+            "p",
+            Block::Paragraph(vec![Inline::Text {
+                value: "\u{2003} x \u{2003}".into(),
+                marks: vec![InlineMark::Bold, InlineMark::Italic, InlineMark::Strikethrough],
+            }]),
+        )]);
+        let markdown = output(&doc);
+        assert_eq!(markdown, "<strong><em><del>\u{2003} x \u{2003}</del></em></strong>\n");
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(&mut html, Parser::new(&markdown));
+        assert!(html.contains("<strong><em><del>\u{2003} x \u{2003}</del></em></strong>"));
+    }
+
+    #[test]
+    fn table_context_preserves_code_backslashes_pipes_and_link_destinations() {
+        let rows = vec![TableRow {
+            cells: vec![Cell {
+                row_span: 1,
+                column_span: 1,
+                header: false,
+                blocks: vec![node(
+                    "p",
+                    Block::Paragraph(vec![
+                        Inline::Code(r"a\|b".into()),
+                        Inline::Text { value: " / ".into(), marks: vec![] },
+                        Inline::Link {
+                            target: "https://example.invalid/a|b".into(),
+                            content: vec![Inline::Text { value: "link".into(), marks: vec![] }],
+                        },
+                    ]),
+                )],
+            }],
+        }];
+        let markdown = output(&document(vec![node("t", Block::Table { rows })]));
+        assert!(markdown.contains(r"`a\\|b`"));
+        assert!(markdown.contains("https://example.invalid/a%7Cb"));
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(
+            &mut html,
+            Parser::new_ext(&markdown, Options::ENABLE_TABLES),
+        );
+        assert!(html.contains(r"<code>a\|b</code>"));
+        assert!(html.contains("href=\"https://example.invalid/a%7Cb\""));
+    }
+
+    #[test]
+    fn asset_filenames_are_bounded_ascii_and_cross_platform() {
+        let long_id = "\0😀".repeat(10_000);
+        let cases = [
+            ("CON", Some("dir\\evil.PNG")),
+            ("con", Some("dir/evil.png")),
+            (long_id.as_str(), Some("name.超长扩展名")),
+            ("Case", Some("trailing.")),
+        ];
+        let names =
+            cases.iter().map(|(id, suggested)| asset_filename(id, *suggested)).collect::<Vec<_>>();
+        for name in &names {
+            assert!(name.is_ascii());
+            assert!(name.len() <= 87);
+            assert!(name.starts_with("asset-"));
+            assert!(!name.ends_with('.'));
+        }
+        assert_ne!(names[0].to_ascii_lowercase(), names[1].to_ascii_lowercase());
+        assert_eq!(asset_filename("CON", Some("dir\\evil.PNG")), names[0]);
+    }
+
+    #[test]
+    fn commonmark_decodes_colon_entities_but_renderer_rejects_them() {
+        for entity in ["&colon;", "&#58;", "&#x3a;"] {
+            let markdown = format!("[x](<javascript{entity}alert(1)>)");
+            let decoded = Parser::new(&markdown).find_map(|event| match event {
+                Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            });
+            assert_eq!(decoded.as_deref(), Some("javascript:alert(1)"));
+
+            let doc = document(vec![node(
+                "p",
+                Block::Paragraph(vec![Inline::Link {
+                    target: format!("javascript{entity}alert(1)"),
+                    content: vec![Inline::Text { value: "x".into(), marks: vec![] }],
+                }]),
+            )]);
+            assert!(render(&doc, &[], &ConversionOptions::default()).is_err());
+        }
+    }
+
+    #[test]
     fn formula_footnote_and_container_nodes_have_stable_golden() {
         let reference = paragraph("ref", "note");
         let mut reference = reference;
@@ -943,7 +1149,7 @@ mod tests {
         options.output.asset_uri_prefix = Some("assets/".into());
         assert_eq!(
             render(&image, std::slice::from_ref(&asset), &options).unwrap(),
-            "![a\\]lt ](<assets/bad_name.png>)\n"
+            format!("![a\\]lt ](<assets/{}>)\n", asset_filename("img", Some("../bad:name.png")))
         );
         options.output.asset_mode = AssetMode::Embed;
         assert_eq!(
@@ -987,9 +1193,12 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_links_mime_types_and_extract_collisions_fail_stably() {
+    fn unsafe_links_entities_and_mime_types_fail_stably() {
         for target in [
             "javascript:alert(1)",
+            "javascript&colon;alert(1)",
+            "javascript&#58;alert(1)",
+            "javascript&#x3a;alert(1)",
             "DATA:text/html,x",
             "file:///etc/passwd",
             "https://user@example.invalid/x",
@@ -1008,10 +1217,6 @@ mod tests {
             );
         }
 
-        let image = document(vec![
-            node("a", Block::Image { asset: AssetId("a".into()), alt: None }),
-            node("b", Block::Image { asset: AssetId("b".into()), alt: None }),
-        ]);
         let asset = |id: &str, media_type: &str| Asset {
             id: AssetId(id.into()),
             filename: Some("same?.png".into()),
@@ -1019,8 +1224,6 @@ mod tests {
             bytes: vec![1],
             external_uri: None,
         };
-        let assets = [asset("a", "image/png"), asset("b", "image/png")];
-        assert!(render(&image, &assets, &ConversionOptions::default()).is_err());
         let bad_mime = [asset("a", "image/png;base64,EVIL")];
         assert!(
             render(
@@ -1102,7 +1305,7 @@ mod tests {
             marks.reverse();
         }
         assert_eq!(output(&left), output(&right));
-        assert_eq!(output(&left), "***x***\n");
+        assert_eq!(output(&left), "<strong><em>x</em></strong>\n");
     }
 
     #[test]
