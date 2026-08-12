@@ -46,7 +46,10 @@ impl Converter for TextConverter {
             }
             let explicit_charset_hint = candidate.detector_id == "builtin.detector.hints"
                 && candidate.evidence.contains("character encoding hint");
-            if candidate.explicit || explicit_charset_hint || sniff_text(&input.bytes).is_some() {
+            if candidate.explicit
+                || explicit_charset_hint
+                || sniff_text(&input.bytes, context)?.is_some()
+            {
                 Ok(ProbeOutcome::Match { confidence: 1.0 })
             } else {
                 Ok(ProbeOutcome::NotApplicable)
@@ -135,42 +138,133 @@ fn bom(bytes: &[u8]) -> Option<(Charset, usize)> {
     }
 }
 
-pub(crate) fn sniff_text(bytes: &[u8]) -> Option<f32> {
+pub(crate) fn sniff_text(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<f32>, ConversionError> {
     if bytes.is_empty() {
-        return Some(0.80);
+        return Ok(Some(0.80));
     }
-    if super::structured_text_candidate(bytes).is_some() {
-        return None;
+    if super::structured_text_candidate(bytes, context)?.is_some() {
+        return Ok(None);
+    }
+    sniff_unstructured_text(bytes, context)
+}
+
+pub(crate) fn sniff_unstructured_text(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<f32>, ConversionError> {
+    if bytes.is_empty() {
+        return Ok(Some(0.80));
     }
     if let Some((charset, bom_len)) = bom(bytes) {
-        return sniff_bom_text(bytes.get(bom_len..)?, charset);
+        return sniff_bom_text(
+            bytes.get(bom_len..).ok_or_else(|| ConversionError::Internal {
+                detail: "BOM offset exceeds text input".into(),
+            })?,
+            charset,
+            context,
+        );
     }
-    let sample = bytes.get(..bytes.len().min(TEXT_SNIFF_BYTE_LIMIT))?;
-    if !raw_text_safe(sample) {
-        return None;
+    let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
+    let sample = bytes.get(..sample_len).ok_or_else(|| ConversionError::Internal {
+        detail: "bounded text sample exceeds input".into(),
+    })?;
+    if !raw_text_safe_full(bytes, context)? {
+        return Ok(None);
     }
     if let Ok(text) = std::str::from_utf8(sample)
         && decoded_text_safe(text)
     {
-        return Some(0.88);
+        return Ok(Some(0.88));
     }
-    let charset = detect_legacy(sample)?;
-    let text = charset.encoding().decode_without_bom_handling_and_without_replacement(sample)?;
-    (decoded_text_safe(&text) && legacy_roundtrips(charset, sample, &text)).then_some(0.72)
+    let Some(charset) = detect_legacy(sample) else {
+        return Ok(None);
+    };
+    let Some(text) = charset.encoding().decode_without_bom_handling_and_without_replacement(sample)
+    else {
+        return Ok(None);
+    };
+    Ok((decoded_text_safe(&text) && legacy_roundtrips(charset, sample, &text)).then_some(0.72))
 }
 
-fn sniff_bom_text(bytes: &[u8], charset: Charset) -> Option<f32> {
+fn sniff_bom_text(
+    bytes: &[u8],
+    charset: Charset,
+    context: &ExecutionContext,
+) -> Result<Option<f32>, ConversionError> {
+    if encoded_bom_text_has_unsafe_control(bytes, charset, context)? {
+        return Ok(None);
+    }
     let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
-    let sample = bytes.get(..sample_len)?;
+    let sample = bytes.get(..sample_len).ok_or_else(|| ConversionError::Internal {
+        detail: "bounded BOM text sample exceeds input".into(),
+    })?;
     let source_truncated = bytes.len() > sample_len;
     let (decoded, trailing_malformed) = match charset {
-        Charset::Utf8 => strict_utf8_sample(sample, source_truncated)?,
-        Charset::Utf16Le | Charset::Utf16Be => {
-            strict_utf16_sample(sample, source_truncated, charset)?
+        Charset::Utf8 => {
+            let Some(decoded) = strict_utf8_sample(sample, source_truncated) else {
+                return Ok(None);
+            };
+            decoded
         }
-        _ => return None,
+        Charset::Utf16Le | Charset::Utf16Be => {
+            let Some(decoded) = strict_utf16_sample(sample, source_truncated, charset) else {
+                return Ok(None);
+            };
+            decoded
+        }
+        _ => return Ok(None),
     };
-    decoded_text_safe(&decoded).then_some(if trailing_malformed { 0.80 } else { 0.95 })
+    Ok(decoded_text_safe(&decoded).then_some(if trailing_malformed { 0.80 } else { 0.95 }))
+}
+
+fn raw_text_safe_full(bytes: &[u8], context: &ExecutionContext) -> Result<bool, ConversionError> {
+    for chunk in bytes.chunks(4096) {
+        context.checkpoint()?;
+        if !raw_text_safe(chunk) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn encoded_bom_text_has_unsafe_control(
+    bytes: &[u8],
+    charset: Charset,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    let mut offset = 0_usize;
+    while offset < bytes.len() {
+        if offset.is_multiple_of(4096) {
+            context.checkpoint()?;
+        }
+        let unsafe_control = match charset {
+            Charset::Utf8 => {
+                let byte = bytes[offset];
+                (byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
+                    || byte == 0x7f
+                    || byte == 0xc2
+                        && bytes.get(offset + 1).is_some_and(|byte| (0x80..=0x9f).contains(byte))
+            }
+            Charset::Utf16Le | Charset::Utf16Be if bytes.len() - offset >= 2 => {
+                let unit = if charset == Charset::Utf16Le {
+                    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+                } else {
+                    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+                };
+                (unit < 0x20 && !matches!(unit, 0x09 | 0x0a | 0x0d))
+                    || (0x7f..=0x9f).contains(&unit)
+            }
+            _ => false,
+        };
+        if unsafe_control {
+            return Ok(true);
+        }
+        offset += if matches!(charset, Charset::Utf16Le | Charset::Utf16Be) { 2 } else { 1 };
+    }
+    Ok(false)
 }
 
 fn strict_utf8_sample(bytes: &[u8], source_truncated: bool) -> Option<(String, bool)> {
@@ -206,14 +300,7 @@ fn strict_utf16_sample(
 }
 
 fn raw_text_safe(bytes: &[u8]) -> bool {
-    if bytes.contains(&0) {
-        return false;
-    }
-    let controls = bytes
-        .iter()
-        .filter(|&&byte| byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r' | 0x0c))
-        .count();
-    controls.saturating_mul(100) <= bytes.len().saturating_mul(MAX_UNSAFE_PERCENT)
+    !bytes.iter().any(|&byte| byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
 }
 
 fn decoded_text_safe(text: &str) -> bool {
@@ -226,13 +313,11 @@ fn decoded_text_safe(text: &str) -> bool {
     let mut printable = 0_usize;
     for value in text.chars() {
         total += 1;
-        unsafe_controls +=
-            usize::from(value.is_control() && !matches!(value, '\t' | '\n' | '\r' | '\u{c}'));
+        unsafe_controls += usize::from(value.is_control() && !matches!(value, '\t' | '\n' | '\r'));
         replacement += usize::from(value == '\u{fffd}');
-        printable +=
-            usize::from(!value.is_control() || matches!(value, '\t' | '\n' | '\r' | '\u{c}'));
+        printable += usize::from(!value.is_control() || matches!(value, '\t' | '\n' | '\r'));
     }
-    unsafe_controls.saturating_mul(100) <= total.saturating_mul(MAX_UNSAFE_PERCENT)
+    unsafe_controls == 0
         && replacement.saturating_mul(100) <= total.saturating_mul(MAX_UNSAFE_PERCENT)
         && printable.saturating_mul(100) >= total.saturating_mul(MIN_PRINTABLE_PERCENT)
 }
@@ -947,6 +1032,10 @@ mod tests {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
     }
 
+    fn sniff(bytes: &[u8]) -> Option<f32> {
+        sniff_text(bytes, &context()).unwrap()
+    }
+
     fn input(bytes: &[u8]) -> ResolvedInput {
         ResolvedInput {
             bytes: Arc::from(bytes),
@@ -985,16 +1074,22 @@ mod tests {
 
     #[test]
     fn binary_disguised_as_text_is_not_auto_detected() {
-        assert_eq!(sniff_text(b"MZ\0\x01\x02payload"), None);
+        assert_eq!(sniff(b"MZ\0\x01\x02payload"), None);
     }
 
     #[test]
     fn bom_probe_decodes_safe_sample_and_rejects_binary_masquerades() {
-        assert_eq!(sniff_text(&[0xff, 0xfe, b'A']), Some(0.80));
-        assert!(sniff_text(&[0xff, 0xfe, b'A', 0]).is_some_and(|value| value < 0.99));
-        assert_eq!(sniff_text(&[0xef, 0xbb, 0xbf, b'M', b'Z', 0, 1, 2]), None);
-        assert_eq!(sniff_text(&[0xff, 0xfe, 0, 0, 1, 0, 2, 0]), None);
-        assert_eq!(sniff_text(&[0xff, 0xfe, 0x00, 0xdc, b'A', 0]), None);
+        assert_eq!(sniff(&[0xff, 0xfe, b'A']), Some(0.80));
+        assert!(sniff(&[0xff, 0xfe, b'A', 0]).is_some_and(|value| value < 0.99));
+        assert_eq!(sniff(&[0xef, 0xbb, 0xbf, b'M', b'Z', 0, 1, 2]), None);
+        assert_eq!(sniff(&[0xff, 0xfe, 0, 0, 1, 0, 2, 0]), None);
+        assert_eq!(sniff(&[0xff, 0xfe, 0x00, 0xdc, b'A', 0]), None);
+
+        let mut sparse_control = vec![0xef, 0xbb, 0xbf];
+        sparse_control.extend(std::iter::repeat_n(b'A', TEXT_SNIFF_BYTE_LIMIT + 1024));
+        sparse_control.push(0x01);
+        assert_eq!(sniff(&sparse_control), None);
+        assert_eq!(sniff(&[0xef, 0xbb, 0xbf, b'A', 0x0c, b'B']), None);
 
         let error =
             convert_text(&input(&[0xff, 0xfe, b'A']), &ConversionOptions::default(), &context())
@@ -1012,7 +1107,7 @@ mod tests {
         ] {
             let (encoded, _, had_errors) = charset.encoding().encode(sample);
             assert!(!had_errors, "{} fixture must be encodable", charset.name());
-            assert!(sniff_text(&encoded).is_some(), "{} must be auto-detectable", charset.name());
+            assert!(sniff(&encoded).is_some(), "{} must be auto-detectable", charset.name());
             let source = input(&encoded);
             assert!(
                 !convert_text(&source, &ConversionOptions::default(), &context())

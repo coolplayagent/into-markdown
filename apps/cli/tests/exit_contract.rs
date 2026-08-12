@@ -63,11 +63,11 @@ fn real_cli_converts_txt_files_and_explicit_charset_stdin() {
 #[test]
 fn structured_text_is_never_consumed_by_txt_fallback() {
     let directory = tempfile::tempdir().unwrap();
-    let mut large_json = String::from("{\"records\":[");
-    while large_json.len() <= 1024 * 1024 + 4096 {
-        large_json.push_str("{\"name\":\"中文\",\"value\":123},");
-    }
-    large_json.push_str("null]}");
+    let mut large_json = "[".repeat(200);
+    large_json.push('"');
+    large_json.extend(std::iter::repeat_n('x', 1024 * 1024 + 50_000));
+    large_json.push('"');
+    large_json.push_str(&"]".repeat(200));
 
     let json_path = directory.path().join("misleading.txt");
     std::fs::write(&json_path, &large_json).unwrap();
@@ -81,26 +81,33 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("json"));
 
     let csv_path = directory.path().join("table.txt");
-    std::fs::write(&csv_path, b"name,city\nAlice,London\nBob,Shanghai\n").unwrap();
+    std::fs::write(&csv_path, b"name,age\nAlice,42\nBob,30\n").unwrap();
     let output =
         Command::new(binary()).args(["--no-config", csv_path.to_str().unwrap()]).output().unwrap();
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("csv"));
 
-    let output =
-        run_with_stdin(&["--no-config", "-"], b"name\tcity\nAlice\tLondon\nBob\tShanghai\n");
+    let output = run_with_stdin(&["--no-config", "-"], b"name\tage\nAlice\t42\nBob\t30\n");
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("tsv"));
 
-    let output = run_with_stdin(
-        &["--no-config", "-"],
-        b"ordinary prose, with one comma\nand a second plain line\n",
-    );
+    let output =
+        run_with_stdin(&["--no-config", "-"], b"Today, we walked home\nTomorrow, we will rest\n");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "ordinary prose, with one comma  \nand a second plain line\n"
+        "Today, we walked home  \nTomorrow, we will rest\n"
     );
+
+    let prefix = "{\"value\":\"";
+    let suffix = "\"}";
+    let mut boundary_junk = String::new();
+    boundary_junk.push_str(prefix);
+    boundary_junk.extend(std::iter::repeat_n('x', 1024 * 1024 - prefix.len() - suffix.len()));
+    boundary_junk.push_str(suffix);
+    boundary_junk.push_str(" trailing prose");
+    let output = run_with_stdin(&["--no-config", "-"], boundary_junk.as_bytes());
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
 
 #[test]

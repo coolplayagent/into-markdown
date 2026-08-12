@@ -20,16 +20,22 @@ TXT 转换器支持无 BOM/有 BOM UTF-8、带 BOM UTF-16LE/UTF-16BE，以及显
 和已记录别名规范化，allowlist 之外的标签稳定拒绝。BOM 不进入正文，显式标签与 BOM
 冲突时不会猜测。
 
-无 BOM 自动检测只读取至多 64 KiB 样本，先通过 NUL、控制字符、替换字符和可打印文本
-阈值，再使用固定检测器选择 allowlist 编码。带 BOM 的输入同样必须对有界样本做严格
-解码并通过文本安全阈值，BOM 本身不会无条件形成高置信候选；样本尾部的截断序列仍由
+无 BOM 自动检测使用至多 64 KiB 解码样本，并对完整输入扫描 NUL 与控制字节，再使用
+固定检测器选择 allowlist 编码。带 BOM 的输入同样必须对有界样本做严格解码，并按
+对应编码扫描完整输入；除 TAB、LF、CR 外，任一 Unicode control 都会使自动 probe
+返回 `NotApplicable`。BOM 本身不会无条件形成高置信候选；样本尾部的截断序列仍由
 转换阶段返回稳定编码错误，带 BOM 的二进制伪装则不作为 TXT 候选。
 
-JSON、XML、HTML 等结构化候选先于普通文本。JSON 即使超过 1 MiB 探测上限，只要有界
-前缀是尚未闭合的合法 JSON 结构，仍保留为 JSON 候选；至少两行且字段数一致的逗号或
-Tab 分隔内容保留为 planned CSV/TSV 候选，自动 TXT probe 返回 `NotApplicable`。显式
-`--format text` 或 `--charset` 仍表示用户有意按文本解释输入。已知二进制 magic 也不会
-降级为 TXT。
+JSON、XML、HTML 等结构化候选先于普通文本。JSON 使用非递归词法与结构状态机扫描完整
+输入，字符串 escape/Unicode、number、literal 和 `{}`/`[]` nesting 都必须合法；扫描
+过程定期 checkpoint，并对 nesting 执行 checked 上限。采样边界处的 `valid-open` 或
+`complete` 只是中间状态，检测器继续读取完整 resolved bytes；只有完整结构及其后纯
+空白形成 JSON 候选，闭合结构后的非空白尾部可继续按 TXT 评估。
+
+planned CSV/TSV 保护至少需要三行非空记录、RFC 风格 quote 语法、一致且不少于两列，
+以及至少一列呈现非数字表头与全数字数据的类型差异；两行逗号或 Tab 散文仍按 TXT
+评估。启发式只保留格式候选，不实现 CSV/TSV 转换。显式 `--format text` 或 `--charset`
+仍表示用户有意按文本解释输入。已知二进制 magic 也不会降级为 TXT。
 
 默认严格拒绝非法或截断序列；传统字符集使用增量 decoder 报告的 malformed 长度和
 已消费范围定位原始字节，不以 lead-byte 宽度猜测。replacement 模式为 decoder 实际

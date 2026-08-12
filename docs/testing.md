@@ -35,11 +35,15 @@ TXT 契约覆盖 UTF-8 BOM、UTF-16LE/BE BOM、Windows-1252、GB18030、Big5、S
 locator 与 replacement diagnostic 必须断言原始半开 byte range，不能只断言正文。
 字符集边界用固定字节覆盖 GB18030 的双字节与四字节序列、Shift_JIS 和 Big5；损坏序列
 后跟合法内容时必须保留合法内容，连续相邻损坏既要断言实际 U+FFFD 数量，也要断言合并
-后的诊断范围。带 BOM probe 还要分别覆盖安全文本、奇数或截断输入以及二进制伪装。
+后的诊断范围。带 BOM probe 还要分别覆盖安全文本、奇数或截断输入、二进制伪装，以及
+位于 64 KiB 解码样本之后的稀疏控制字符。
 
-真实 CLI 回归同时覆盖文件与 stdin：超过 1 MiB 的合法 JSON、CSV 和 TSV 不得被 TXT
-回退吞入，普通文本仍可自动转换。500001 行输入必须在创建 IR 节点前以 `resourceLimit`
-和退出码 5 失败，不得退化为 `internal`。
+真实 CLI 回归同时覆盖文件与 stdin：200 层且超过 1 MiB 的合法 JSON、具备表头/数字列
+证据的三行 CSV/TSV 不得被 TXT 回退吞入；恰在 1 MiB 边界闭合但后接非空白的内容及
+两行逗号散文仍须按普通文本转换。JSON scanner 单元测试覆盖 escape/Unicode、number、
+literal、有效开放状态、错误尾部、括号不匹配、trailing comma 与 nesting 资源上限。
+500001 行输入必须在创建 IR 节点前以 `resourceLimit` 和退出码 5 失败，不得退化为
+`internal`。
 
 常用定向命令如下：
 

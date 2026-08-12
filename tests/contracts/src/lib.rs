@@ -72,6 +72,18 @@ mod tests {
             Some("disguised.txt"),
         ));
         assert_eq!(block_on(engine.convert(disguised)).unwrap_err().code(), ErrorCode::NoConverter);
+
+        let mut sparse_control = vec![0xef, 0xbb, 0xbf];
+        sparse_control.extend(std::iter::repeat_n(b'A', 70 * 1024));
+        sparse_control.push(0x01);
+        let sparse_control = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from(sparse_control),
+            Some("sparse-control.txt"),
+        ));
+        assert_eq!(
+            block_on(engine.convert(sparse_control)).unwrap_err().code(),
+            ErrorCode::NoConverter
+        );
     }
 
     #[derive(Default)]
