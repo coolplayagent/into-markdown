@@ -144,7 +144,7 @@ impl From<ConversionError> for CliError {
             | ErrorCode::NoConverter
             | ErrorCode::Malformed
             | ErrorCode::Encrypted => ExitClass::Conversion,
-            ErrorCode::ResourceLimit => ExitClass::Policy,
+            ErrorCode::ResourceLimit | ErrorCode::Timeout => ExitClass::Policy,
             ErrorCode::Ocr => ExitClass::Ocr,
             ErrorCode::Ai => ExitClass::Ai,
             ErrorCode::Network => ExitClass::Network,

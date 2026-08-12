@@ -59,6 +59,77 @@ reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported
 当前工作目录为基准。bundle 是自包含输出，渲染前固定使用 `assets` 前缀，归档内
 `document.md` 的每个抽取资源 href 必须精确命中对应 ZIP entry，且不额外写外部资源。
 
+## 执行上下文
+
+`ConversionRequest` 与 `DetectionRequest` 都携带 `ExecutionOptions`。引擎为每次调用
+创建一个 `ExecutionContext`，并把同一个上下文显式传给 `SourceResolver`、
+`FormatDetector`、`Converter::probe`、`Converter::convert`、`OcrEngine`、
+`TensorRuntime`、`Transcriber`、`AiProvider` 和 `MarkdownRenderer`。实现必须在读取循环、
+解压循环、页面循环、模型批次和网络等待边界调用 `checkpoint`，异步等待应通过
+`ExecutionContext::run` 包装；只在引擎入口检查一次不符合接口契约。
+
+本地路径和 stdin 的阻塞读取运行在进程级固定工作者中：路径使用四个工作者与容量 32
+的有界队列，stdin 使用独立的单工作者与容量 1 的队列，避免一个不可中断的 stdin
+读取占满路径池。调用 future 只等待共享结果，因此 deadline 或取消可以立即返回；
+工作者在系统调用返回后观察同一上下文，停止读取并丢弃已无人等待的结果。stdin 的
+底层阻塞 `read` 本身无法被协作取消：调用方超时返回后，单个 stdin 工作者仍会保留该
+请求的上下文、listener 和已有 reservation，直至 `read` 返回或 EOF；随后才释放。
+这项进程级成本限制为一个工作者和一个排队请求，在它们被占用时，更多 stdin 请求稳定
+返回 `resourceLimit`，而不会创建额外线程。路径池也采用固定线程与有界队列；工作者
+不可用返回 `componentUnavailable`。每次读取最多请求剩余输入预算加一个字节，并在
+scratch 或 source buffer 分配前执行 checked 累加和协作式内存预留。
+
+路径打开不能依赖规划时的一次 symlink 检查。Unix resolver 使用 `O_NOFOLLOW`，打开
+后要求 regular file，并核对紧邻打开前的设备与 inode；Windows 使用
+`FILE_FLAG_OPEN_REPARSE_POINT` 单次打开权威句柄，立即从该句柄拒绝 reparse attribute
+与非 regular file，并通过 `GetFileType` 要求 `FILE_TYPE_DISK`；安全 wrapper 将
+`FILE_TYPE_UNKNOWN` 与 `GetLastError` 组合成明确成功或 I/O 失败。打开前的路径策略拒绝
+`\\.\`、`\\?\GLOBALROOT` 等设备 namespace 及 `NUL`、`CON`、`COM1` 等保留设备
+组件，同时允许普通 `\\?\C:\...` 和 `\\?\UNC\...` 长路径。后续读取始终使用
+同一句柄；它没有路径 metadata 快照与二次 open 之间的身份窗口，也不会先跟随 reparse
+target。其他平台若没有经过审计的 no-follow 策略，则返回 `componentUnavailable`。
+规划阶段仍用于尽早给出 `symlinkDenied`，resolver 的 handle 级策略才是最终读取边界；
+它不承诺锁定更早规划阶段看到的普通文件版本。
+
+`CancellationToken` 是协作式、可克隆的取消句柄。总 timeout 从引擎接收请求时开始，
+覆盖解析、检测、探测、转换、OCR、AI 与渲染，并以 `timeout` 稳定错误码失败；显式取消
+使用 `cancelled`。取消、超时和完成以最后一次检查点线性化，成功完成事件发布后到达的
+取消不会改写已经完成的结果。
+library 的零 `Duration` 表示立即 deadline；CLI 和配置拒绝零值。若极大 `Duration`
+无法转换为平台 `Instant`，则饱和为无 deadline，不能回绕成立即 timeout。
+
+阶段进度使用 `ProgressEvent` 和对象安全的 `ProgressListener`。总体进度以 basis points
+表达并保持单调。OCR 与 AI 是转换期间可以交错出现的活动，而不是互斥的线性总体阶段。
+监听器运行在隔离线程上；进度状态锁覆盖序号分配和入队，dispatcher 还会丢弃旧序号及
+终态后的事件。固定容量 mailbox 会合并同阶段更新，并在饱和时保留最新边界与最终完成
+事件，因此慢监听器不会阻塞转换，监听器 panic 也不会穿透执行边界。回调期间
+不持有进度状态锁，监听器可以安全地请求取消。接口不依赖特定异步运行时，也不创建
+无界事件队列。
+
+`ResourceLimits` 除格式专用限制外，还提供 `max_memory_bytes` 与
+`max_temporary_bytes`。`ExecutionContext::reserve_memory` 使用 checked arithmetic 和
+RAII guard；`temporary_file` 在写入时计费，并在成功、错误、取消、超时或预算超限后
+删除临时产物。实现仍需使用格式专用预算，例如解压字节、条目、页数和资源大小；通用
+内存预算只统计实现显式保留的内存，不声称代表进程 RSS。
+source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserve_exact` 避免实现主动
+请求额外增长余量；allocator 的 size-class 舍入、元数据及其他 RSS 开销不属于这项
+协作式逻辑预算。默认 `max_input_bytes` 为 512 MiB、`max_memory_bytes` 为 1 GiB 时，
+scratch 会在共享转换前先释放，所以最坏 `Vec`/`Arc` 双 payload 峰值恰好落在 1 GiB
+边界内，不会再叠加 64 KiB scratch。
+提供者在分配大块输入副本、模型 tensor、解压缓冲或输出缓冲前必须调用
+`reserve_memory`，并在需要磁盘暂存时使用 `temporary_file`；引擎在 SPI 边界的计费只是
+补充防线，不能替代提供者内部检查。
+内置 source resolver 在 scratch 与 source buffer 分配前预留预算，并让
+`ResolvedSource` accounting wrapper 携带唯一 RAII reservation 穿过 resolver 到引擎的
+handoff。`Vec` 转换为共享 bytes 前按可能复制的峰值预留，转换结束后只释放旧 buffer
+对应部分。引擎只接受 context identity 与实际输入长度都完全匹配的 reservation，跨请求
+或不足的 reservation 不能绕过预算。wrapper 不进入
+`ResolvedInput` 的公开布局，既有第三方 resolver 的两字段 struct literal 及 `resolve`
+实现保持可编译；对象安全的 `resolve_accounted` 默认方法把旧输出直接包装为未计费结果，
+不复制 source bytes，Engine 随后补计。提供者若要消除自身分配与 Engine 补计间的窗口，
+可覆写该方法并从分配前携带 reservation。Engine 持有 wrapper 到检测或转换整体结束。
+内存输入的 `Arc` 虽然不复制，仍按其完整长度计入当前请求。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，

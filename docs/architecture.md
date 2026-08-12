@@ -10,6 +10,10 @@ Markdown。PDF、OCR 和 AI 生成的内容都不能绕过 IR。
 可选能力提供者（`ocr`、`ai`）、统一渲染器（`render-markdown`）、稳定外观层
 （`api`）和应用程序。依赖方向始终朝向 `core`，`core` 不得导入任何具体实现。
 
+每次检测或转换都有独立 `ExecutionContext`。上下文沿所有流水线边和可选服务调用
+传播，统一提供阶段进度、协作式取消、总 deadline、显式内存计费与临时空间计费；
+这些能力不绑定 Tokio 或其他异步运行时。
+
 ```mermaid
 flowchart LR
   Input["路径 / 字节 / 标准输入 / URI"] --> Source["输入源解析器"]

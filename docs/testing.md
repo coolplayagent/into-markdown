@@ -13,6 +13,15 @@ CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定
 Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与目录 `040755`，
 并在 Unix 临时目录真实解压有资源归档，验证 `assets/` 可遍历且资源可读取。
 
+执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending
+future 的取消和 deadline 唤醒、多 waiter 竞争、checked 预算累加，以及失败后临时
+产物清理。阻塞来源还要覆盖有界工作者过载、deadline 先于系统调用返回、增长文件只读
+预算加一字节、Unix symlink 拒绝、Windows 设备 namespace/保留设备拒绝、磁盘句柄类型
+与权威句柄替换稳定性、source 分配前预留、scratch 退款后恰好双 payload 的 Vec 到 Arc
+峰值、跨 context handoff、旧 `ResolvedInput` literal 与默认 resolver 方法兼容、abandon
+后释放，以及 worker panic 的稳定失败。测试不得依赖某个异步运行时才能触发取消或
+timeout。
+
 后续实现应增加四层测试：
 
 1. 为每个解析器、渲染器、OCR 前后处理模块和安全边界编写小型、确定性的单元

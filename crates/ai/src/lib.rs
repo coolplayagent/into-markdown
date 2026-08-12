@@ -1,8 +1,8 @@
 //! AI provider contracts and non-networking placeholder implementations.
 
 use into_markdown_core::{
-    AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, Transcriber,
-    TranscriptionRequest, TranscriptionResult,
+    AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, ExecutionContext,
+    ExecutionStage, Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 use std::collections::BTreeSet;
 
@@ -53,8 +53,14 @@ impl AiProvider for PlaceholderAiProvider {
         BTreeSet::new()
     }
 
-    fn execute<'a>(&'a self, _: AiRequest<'a>) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
-        Box::pin(async {
+    fn execute<'a>(
+        &'a self,
+        _: AiRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
+        Box::pin(async move {
+            context.checkpoint()?;
+            context.report(ExecutionStage::Ai, None, None, Some("builtin.ai.placeholder"))?;
             Err(ConversionError::Ai {
                 provider: "builtin.ai.placeholder".into(),
                 detail: "AI provider networking is not implemented in the scaffold".into(),
@@ -75,8 +81,16 @@ impl Transcriber for PlaceholderTranscriber {
     fn transcribe<'a>(
         &'a self,
         _: TranscriptionRequest<'a>,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>> {
-        Box::pin(async {
+        Box::pin(async move {
+            context.checkpoint()?;
+            context.report(
+                ExecutionStage::Ai,
+                None,
+                None,
+                Some("builtin.transcriber.placeholder"),
+            )?;
             Err(ConversionError::Ai {
                 provider: "builtin.transcriber.placeholder".into(),
                 detail: "audio transcription is not implemented in the scaffold".into(),

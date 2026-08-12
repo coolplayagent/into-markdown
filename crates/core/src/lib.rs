@@ -7,6 +7,7 @@
 
 mod dto;
 mod error;
+mod execution;
 mod format;
 mod input;
 mod ir;
@@ -22,8 +23,12 @@ pub use dto::{
     ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto,
 };
 pub use error::{ConversionError, ErrorCode};
+pub use execution::{
+    CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions, ExecutionStage,
+    ProgressEvent, ProgressListener, ResourceReservation, TemporaryFile,
+};
 pub use format::{FormatCandidate, InputFormat};
-pub use input::{FormatHint, InputRef, ResolvedInput, SourceMetadata};
+pub use input::{FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata};
 pub use ir::{
     Asset, AssetId, Block, BlockNode, Cell, CellRef, DOCUMENT_SCHEMA_VERSION, Diagnostic,
     DiagnosticSeverity, Document, DocumentMetadata, Inline, InlineMark, IrError, IrErrorCode,

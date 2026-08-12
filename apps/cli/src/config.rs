@@ -73,6 +73,7 @@ pub struct CliConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConversionConfig {
+    pub timeout_ms: Option<u64>,
     pub ocr: OcrConfig,
     pub ai: AiConfig,
     pub network: NetworkConfig,
@@ -126,6 +127,8 @@ pub struct LimitsConfig {
     pub max_nesting_depth: Option<u16>,
     pub max_pages: Option<u32>,
     pub max_asset_bytes: Option<u64>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_temporary_bytes: Option<u64>,
 }
 
 /// Partial artifact policy.
@@ -168,6 +171,7 @@ pub struct LoadedConfig {
     pub prompts: BTreeMap<String, PathBuf>,
     /// Dotted effective keys mapped to the layer that supplied their final value.
     pub sources: BTreeMap<String, String>,
+    pub timeout_ms: Option<u64>,
 }
 
 impl LoadedConfig {
@@ -289,6 +293,7 @@ fn load_with_global(
     let asset_mode = parse_asset_mode(parsed.conversion.output.asset_mode);
     let conflict = parse_conflict(parsed.conversion.output.conflict.as_deref())?;
     let sources = complete_sources(&parsed, sources)?;
+    let timeout_ms = parsed.conversion.timeout_ms;
     Ok(LoadedConfig {
         paths: ConfigPaths { global, project, explicit, loaded },
         merged,
@@ -301,6 +306,7 @@ fn load_with_global(
         ai_model: parsed.conversion.ai.model.clone(),
         ocr_languages: parsed.conversion.ocr.languages.clone(),
         prompts: parsed.conversion.ai.prompts.clone(),
+        timeout_ms,
         effective: parsed,
         options,
         language,
@@ -462,6 +468,8 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     assign!(max_nesting_depth);
     assign!(max_pages);
     assign!(max_asset_bytes);
+    assign!(max_memory_bytes);
+    assign!(max_temporary_bytes);
     if let Some(value) = &config.output.asset_directory_suffix {
         options.output.asset_directory_suffix.clone_from(value);
     }
@@ -499,6 +507,9 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
     }
     if let Some(confidence) = config.conversion.ocr.minimum_confidence {
         validate_confidence(confidence)?;
+    }
+    if config.conversion.timeout_ms == Some(0) {
+        return Err(CliError::config("conversion.timeout_ms must be greater than zero"));
     }
     if config.conversion.network.deny_private_networks == Some(false) {
         return Err(CliError::config(
@@ -1508,5 +1519,12 @@ api_key_env = "VISION_API_KEY"
     fn no_secret_config_field_exists() {
         let fields = BTreeSet::from(["api_key_env"]);
         assert!(!fields.contains("api_key"));
+    }
+
+    #[test]
+    fn zero_conversion_timeout_is_rejected() {
+        let config: RawConfig =
+            toml::from_str("schema_version = 1\n[conversion]\ntimeout_ms = 0\n").unwrap();
+        assert!(validate_raw(&config).is_err());
     }
 }

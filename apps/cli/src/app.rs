@@ -886,6 +886,7 @@ struct WorkPlan {
 #[derive(Clone)]
 struct ExecutionPolicy {
     options: ConversionOptions,
+    execution: into_markdown::ExecutionOptions,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -948,6 +949,13 @@ fn run_conversion(
     }
 
     let policy = ExecutionPolicy {
+        execution: into_markdown::ExecutionOptions {
+            timeout: arguments
+                .timeout_ms
+                .or(loaded.timeout_ms)
+                .map(std::time::Duration::from_millis),
+            ..into_markdown::ExecutionOptions::default()
+        },
         options: loaded.options,
         hint: FormatHint {
             format: arguments.format.as_deref().map(parse_format).transpose()?,
@@ -1570,6 +1578,7 @@ fn convert_item(
     if policy.asset_mode == AssetModeArg::Extract {
         request.options.output.asset_uri_prefix = asset_uri_prefix;
     }
+    request.execution = policy.execution.clone();
     request.hint = policy.hint.clone();
     let engine = into_markdown::default_engine().map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)

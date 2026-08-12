@@ -215,6 +215,18 @@ pub struct ConversionArgs {
     /// Maximum retained asset bytes.
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
     pub max_asset_size: Option<u64>,
+
+    /// Total conversion timeout in milliseconds.
+    #[arg(long, value_name = "MILLISECONDS", value_parser = parse_duration_ms)]
+    pub timeout_ms: Option<u64>,
+
+    /// Maximum request-scoped accounted memory.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_memory_size: Option<u64>,
+
+    /// Maximum request-scoped temporary file bytes.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_temporary_size: Option<u64>,
 }
 
 /// Management command tree.
@@ -690,6 +702,9 @@ pub fn parse_duration_ms(value: &str) -> Result<u64, String> {
         })
         .unwrap_or((trimmed, 1));
     let base = number.parse::<u64>().map_err(|_| format!("invalid duration '{value}'"))?;
+    if base == 0 {
+        return Err("duration must be greater than zero".into());
+    }
     base.checked_mul(multiplier).ok_or_else(|| format!("duration '{value}' is too large"))
 }
 
@@ -701,6 +716,7 @@ mod tests {
     fn parses_iec_sizes_and_durations() {
         assert_eq!(parse_byte_size("2 MiB").unwrap(), 2 * 1024 * 1024);
         assert_eq!(parse_duration_ms("3s").unwrap(), 3_000);
+        assert!(parse_duration_ms("0").is_err());
         assert!(parse_byte_size("many").is_err());
     }
 }

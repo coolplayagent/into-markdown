@@ -39,6 +39,9 @@ color = "auto"
 progress = "auto"
 log_format = "text"
 
+[conversion]
+timeout_ms = 120000
+
 [conversion.ocr]
 policy = "auto"
 model_bundle = "pp-ocrv6-tiny-zh-en"
@@ -67,6 +70,8 @@ max_archive_entries = 100000
 max_nesting_depth = 256
 max_pages = 10000
 max_asset_bytes = 268435456
+max_memory_bytes = 1073741824
+max_temporary_bytes = 1073741824
 
 [conversion.output]
 emit = "markdown"

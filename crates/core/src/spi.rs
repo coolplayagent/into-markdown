@@ -1,6 +1,7 @@
 use crate::{
-    Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, FormatCandidate,
-    FormatHint, InputFormat, InputRef, Provenance, ResolvedInput,
+    Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, ExecutionContext,
+    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, Provenance,
+    ResolvedInput, ResolvedSource,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -20,6 +21,8 @@ pub struct ConversionRequest {
     pub hint: FormatHint,
     /// Pipeline policy.
     pub options: ConversionOptions,
+    /// Cancellation, timeout, and progress controls for this invocation.
+    pub execution: ExecutionOptions,
 }
 
 /// Request to resolve and detect an input without converting it.
@@ -31,13 +34,20 @@ pub struct DetectionRequest {
     pub hint: FormatHint,
     /// Source, network, and resource policy.
     pub options: ConversionOptions,
+    /// Cancellation, timeout, and progress controls for this invocation.
+    pub execution: ExecutionOptions,
 }
 
 impl DetectionRequest {
     /// Construct a detection request with safe offline defaults.
     #[must_use]
     pub fn new(input: InputRef) -> Self {
-        Self { input, hint: FormatHint::default(), options: ConversionOptions::default() }
+        Self {
+            input,
+            hint: FormatHint::default(),
+            options: ConversionOptions::default(),
+            execution: ExecutionOptions::default(),
+        }
     }
 }
 
@@ -54,7 +64,12 @@ impl ConversionRequest {
     /// Construct a request with safe offline defaults.
     #[must_use]
     pub fn new(input: InputRef) -> Self {
-        Self { input, hint: FormatHint::default(), options: ConversionOptions::default() }
+        Self {
+            input,
+            hint: FormatHint::default(),
+            options: ConversionOptions::default(),
+            execution: ExecutionOptions::default(),
+        }
     }
 }
 
@@ -84,7 +99,25 @@ pub trait SourceResolver: Send + Sync {
         &'a self,
         input: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>>;
+
+    /// Resolve while optionally retaining request memory accounting across the
+    /// resolver-to-engine handoff.
+    ///
+    /// Existing implementations inherit this allocation-free adapter. A
+    /// resolver that reserves before constructing source bytes may override it
+    /// and return the reservation with [`ResolvedSource`].
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
+        Box::pin(
+            async move { self.resolve(input, options, context).await.map(ResolvedSource::new) },
+        )
+    }
 }
 
 /// Produce format hypotheses from bytes, metadata, and explicit hints.
@@ -100,6 +133,7 @@ pub trait FormatDetector: Send + Sync {
         &'a self,
         input: &'a ResolvedInput,
         hint: &'a FormatHint,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>>;
 }
 
@@ -141,6 +175,7 @@ pub trait Converter: Send + Sync {
         &'a self,
         input: &'a ResolvedInput,
         candidate: &'a FormatCandidate,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>>;
     /// Convert a confirmed input. Any error is authoritative and stops
     /// fallback; only `ProbeOutcome::NotApplicable` permits the next attempt.
@@ -150,6 +185,7 @@ pub trait Converter: Send + Sync {
         candidate: &'a FormatCandidate,
         options: &'a ConversionOptions,
         services: &'a Services,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
 }
 
@@ -163,6 +199,7 @@ pub trait MarkdownRenderer: Send + Sync {
         document: &'a Document,
         assets: &'a [Asset],
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<String, ConversionError>>;
 }
 
@@ -205,6 +242,7 @@ pub trait OcrEngine: Send + Sync {
     fn recognize<'a>(
         &'a self,
         request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>>;
 }
 
@@ -236,6 +274,7 @@ pub trait Transcriber: Send + Sync {
     fn transcribe<'a>(
         &'a self,
         request: TranscriptionRequest<'a>,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>>;
 }
 
@@ -360,6 +399,7 @@ pub trait AiProvider: Send + Sync {
     fn execute<'a>(
         &'a self,
         request: AiRequest<'a>,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<AiOutput, ConversionError>>;
 }
 
@@ -381,6 +421,7 @@ pub trait TensorRuntime: Send + Sync {
         &'a self,
         model_id: &'a str,
         inputs: &'a [Tensor],
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<Tensor>, ConversionError>>;
 }
 

@@ -4,16 +4,22 @@
 //! this scaffold.
 
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, FormatCandidate, FormatDetector, FormatHint,
-    InputFormat, InputRef, ResolvedInput, SourceMetadata, SourceResolver,
+    BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
+    FormatDetector, FormatHint, InputFormat, InputRef, ResolvedInput, ResolvedSource,
+    SourceMetadata, SourceResolver,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 use std::collections::BTreeMap;
+use std::fs::{File, Metadata, OpenOptions};
+use std::future::Future;
 use std::io::{Cursor, Read};
 use std::path::Path;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::task::{Context, Poll, Waker};
 
 /// Converter implementation status exposed by `into-md formats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +233,167 @@ pub fn planned_formats() -> &'static [FormatDescriptor] {
     FORMATS
 }
 
+const PATH_WORKER_COUNT: usize = 4;
+const PATH_QUEUE_CAPACITY: usize = 32;
+const STDIN_QUEUE_CAPACITY: usize = 1;
+
+type BlockingJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct BlockingPool {
+    sender: SyncSender<BlockingJob>,
+    queue_limit: &'static str,
+}
+
+impl BlockingPool {
+    fn new(
+        worker_name: &'static str,
+        worker_count: usize,
+        queue_capacity: usize,
+        queue_limit: &'static str,
+    ) -> Result<Self, String> {
+        let (sender, receiver) = mpsc::sync_channel::<BlockingJob>(queue_capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for index in 0..worker_count {
+            let receiver = Arc::clone(&receiver);
+            std::thread::Builder::new()
+                .name(format!("{worker_name}-{index}"))
+                .spawn(move || {
+                    loop {
+                        let job = {
+                            let receiver = lock_unpoisoned(&receiver);
+                            receiver.recv()
+                        };
+                        let Ok(job) = job else { break };
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    }
+                })
+                .map_err(|error| format!("start {worker_name} worker: {error}"))?;
+        }
+        Ok(Self { sender, queue_limit })
+    }
+
+    fn submit<T, F>(&self, operation: F) -> Result<BlockingFuture<T>, ConversionError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, ConversionError> + Send + 'static,
+    {
+        let state = Arc::new(BlockingState::default());
+        let worker_state = Arc::clone(&state);
+        let job: BlockingJob = Box::new(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+                .unwrap_or_else(|_| {
+                    Err(ConversionError::Internal {
+                        detail: "blocking source worker panicked".into(),
+                    })
+                });
+            worker_state.complete(outcome);
+        });
+        match self.sender.try_send(job) {
+            Ok(()) => Ok(BlockingFuture { state }),
+            Err(TrySendError::Full(_)) => Err(ConversionError::ResourceLimit {
+                limit: self.queue_limit,
+                detail: "blocking source worker queue is full".into(),
+            }),
+            Err(TrySendError::Disconnected(_)) => Err(ConversionError::ComponentUnavailable {
+                component: "blocking-source-workers".into(),
+                detail: "blocking source worker queue is unavailable".into(),
+            }),
+        }
+    }
+}
+
+struct BlockingState<T> {
+    inner: Mutex<BlockingStateInner<T>>,
+}
+
+struct BlockingStateInner<T> {
+    outcome: Option<Result<T, ConversionError>>,
+    waker: Option<Waker>,
+    abandoned: bool,
+}
+
+impl<T> Default for BlockingState<T> {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(BlockingStateInner { outcome: None, waker: None, abandoned: false }),
+        }
+    }
+}
+
+impl<T> BlockingState<T> {
+    fn complete(&self, outcome: Result<T, ConversionError>) {
+        let mut inner = lock_unpoisoned(&self.inner);
+        if inner.abandoned {
+            return;
+        }
+        inner.outcome = Some(outcome);
+        let waker = inner.waker.take();
+        drop(inner);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+struct BlockingFuture<T> {
+    state: Arc<BlockingState<T>>,
+}
+
+impl<T> Future for BlockingFuture<T> {
+    type Output = Result<T, ConversionError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = lock_unpoisoned(&self.state.inner);
+        if let Some(outcome) = inner.outcome.take() {
+            return Poll::Ready(outcome);
+        }
+        inner.waker = Some(context.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for BlockingFuture<T> {
+    fn drop(&mut self) {
+        let mut inner = lock_unpoisoned(&self.state.inner);
+        inner.abandoned = true;
+        inner.waker = None;
+        inner.outcome.take();
+    }
+}
+
+fn path_pool() -> Result<&'static BlockingPool, ConversionError> {
+    static POOL: OnceLock<Result<BlockingPool, String>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        BlockingPool::new(
+            "into-md-path-io",
+            PATH_WORKER_COUNT,
+            PATH_QUEUE_CAPACITY,
+            "blocking_path_queue",
+        )
+    })
+    .as_ref()
+    .map_err(|detail| ConversionError::ComponentUnavailable {
+        component: "blocking-path-workers".into(),
+        detail: detail.clone(),
+    })
+}
+
+fn stdin_pool() -> Result<&'static BlockingPool, ConversionError> {
+    static POOL: OnceLock<Result<BlockingPool, String>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        BlockingPool::new("into-md-stdin-io", 1, STDIN_QUEUE_CAPACITY, "blocking_stdin_queue")
+    })
+    .as_ref()
+    .map_err(|detail| ConversionError::ComponentUnavailable {
+        component: "blocking-stdin-worker".into(),
+        detail: detail.clone(),
+    })
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Resolver for in-memory inputs.
 #[derive(Debug, Default)]
 pub struct MemorySourceResolver;
@@ -244,22 +411,42 @@ impl SourceResolver for MemorySourceResolver {
         &'a self,
         input: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
         Box::pin(async move {
             let InputRef::Bytes { data, name } = input else {
                 return Err(ConversionError::Unsupported {
                     detail: "expected memory input".into(),
                 });
             };
-            enforce_input_limit(data.len() as u64, options)?;
-            Ok(ResolvedInput {
-                bytes: Arc::clone(data),
-                metadata: SourceMetadata {
-                    name: name.clone(),
-                    size: data.len() as u64,
-                    ..SourceMetadata::default()
+            context.checkpoint()?;
+            enforce_input_limit(data.len() as u64, options.limits.max_input_bytes)?;
+            let size = u64::try_from(data.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "memory input size cannot be represented as u64".into(),
+            })?;
+            let memory = context.reserve_memory(size)?;
+            Ok(ResolvedSource::with_memory_reservation(
+                ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
+                        name: name.clone(),
+                        size,
+                        ..SourceMetadata::default()
+                    },
                 },
-            })
+                memory,
+            ))
         })
     }
 }
@@ -281,24 +468,58 @@ impl SourceResolver for LocalFileSourceResolver {
         &'a self,
         input: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
-        let result = (|| {
-            let InputRef::Path(path) = input else {
-                return Err(ConversionError::Unsupported { detail: "expected local path".into() });
-            };
-            let metadata = std::fs::metadata(path)?;
-            enforce_input_limit(metadata.len(), options)?;
-            let bytes = std::fs::read(path)?;
-            Ok(ResolvedInput {
-                bytes: Arc::from(bytes),
-                metadata: SourceMetadata {
-                    name: path.file_name().and_then(|v| v.to_str()).map(str::to_owned),
-                    size: metadata.len(),
-                    ..SourceMetadata::default()
-                },
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
+        let InputRef::Path(path) = input else {
+            return Box::pin(async {
+                Err(ConversionError::Unsupported { detail: "expected local path".into() })
+            });
+        };
+        let path = path.clone();
+        let limit = options.limits.max_input_bytes;
+        let context = context.clone();
+        let submitted = path_pool().and_then(|pool| {
+            pool.submit(move || {
+                context.checkpoint()?;
+                let (mut file, metadata) = securely_open_local_file(&path)?;
+                enforce_input_limit(metadata.len(), limit)?;
+                let (bytes, memory) = read_bounded(&mut file, limit, &context)?;
+                let size =
+                    u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                        limit: "max_input_bytes",
+                        detail: "resolved file size cannot be represented as u64".into(),
+                    })?;
+                let (bytes, memory) = into_shared_source(bytes, memory)?;
+                Ok(ResolvedSource::with_memory_reservation(
+                    ResolvedInput {
+                        bytes,
+                        metadata: SourceMetadata {
+                            name: path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .map(str::to_owned),
+                            size,
+                            ..SourceMetadata::default()
+                        },
+                    },
+                    memory,
+                ))
             })
-        })();
-        Box::pin(async move { result })
+        });
+        Box::pin(async move {
+            let future = submitted?;
+            future.await
+        })
     }
 }
 
@@ -317,25 +538,325 @@ impl SourceResolver for StdinSourceResolver {
 
     fn resolve<'a>(
         &'a self,
+        input: &'a InputRef,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+        let future = self.resolve_accounted(input, options, context);
+        Box::pin(async move { future.await.map(ResolvedSource::into_input) })
+    }
+
+    fn resolve_accounted<'a>(
+        &'a self,
         _: &'a InputRef,
         options: &'a ConversionOptions,
-    ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
-        let result = (|| {
-            let limit = options.limits.max_input_bytes;
-            let mut bytes = Vec::new();
-            std::io::stdin().take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
-            enforce_input_limit(bytes.len() as u64, options)?;
-            Ok(ResolvedInput {
-                metadata: SourceMetadata {
-                    name: Some("stdin".into()),
-                    size: bytes.len() as u64,
-                    ..SourceMetadata::default()
-                },
-                bytes: Arc::from(bytes),
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ResolvedSource, ConversionError>> {
+        let limit = options.limits.max_input_bytes;
+        let context = context.clone();
+        let submitted = stdin_pool().and_then(|pool| {
+            pool.submit(move || {
+                context.checkpoint()?;
+                let mut stdin = std::io::stdin().lock();
+                let (bytes, memory) = read_bounded(&mut stdin, limit, &context)?;
+                let size =
+                    u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                        limit: "max_input_bytes",
+                        detail: "resolved stdin size cannot be represented as u64".into(),
+                    })?;
+                let (bytes, memory) = into_shared_source(bytes, memory)?;
+                Ok(ResolvedSource::with_memory_reservation(
+                    ResolvedInput {
+                        bytes,
+                        metadata: SourceMetadata {
+                            name: Some("stdin".into()),
+                            size,
+                            ..SourceMetadata::default()
+                        },
+                    },
+                    memory,
+                ))
             })
-        })();
-        Box::pin(async move { result })
+        });
+        Box::pin(async move {
+            let future = submitted?;
+            future.await
+        })
     }
+}
+
+fn read_bounded(
+    reader: &mut dyn Read,
+    limit: u64,
+    context: &ExecutionContext,
+) -> Result<(Vec<u8>, into_markdown_core::ResourceReservation), ConversionError> {
+    let mut bytes = Vec::new();
+    let mut memory = context.reserve_memory(0)?;
+    let mut total = 0_u64;
+    let scratch_bytes = limit.saturating_add(1).min(64 * 1024);
+    let scratch = context.reserve_memory(scratch_bytes)?;
+    let scratch_len =
+        usize::try_from(scratch_bytes).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "source scratch buffer size cannot be represented as usize".into(),
+        })?;
+    // The charge must exist before this allocation. It remains held until the
+    // reader and its scratch buffer are no longer used.
+    let mut chunk = vec![0_u8; scratch_len].into_boxed_slice();
+    loop {
+        context.checkpoint()?;
+        let remaining_plus_one = limit.saturating_sub(total).saturating_add(1);
+        let read_limit = usize::try_from(remaining_plus_one).unwrap_or(usize::MAX).min(chunk.len());
+        let read = reader.read(&mut chunk[..read_limit])?;
+        if read == 0 {
+            break;
+        }
+        let read_u64 = u64::try_from(read).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "source read size cannot be represented as u64".into(),
+        })?;
+        total = total.checked_add(read_u64).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "source byte count overflowed".into(),
+        })?;
+        if total > limit {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: format!("{total} > {limit}"),
+            });
+        }
+        // Charge initialized payload bytes before requesting backing storage.
+        // `try_reserve_exact` avoids implementation-requested growth slack;
+        // allocator size-class rounding and bookkeeping are outside this
+        // cooperative logical budget and are not represented as process RSS.
+        memory.grow(read_u64)?;
+        bytes.try_reserve_exact(read).map_err(|error| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: format!("could not reserve source buffer: {error}"),
+        })?;
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    // Release the allocation before its accounting guard; keeping the reverse
+    // order would create an uncharged lifetime window during the handoff.
+    drop(chunk);
+    drop(scratch);
+    Ok((bytes, memory))
+}
+
+fn into_shared_source(
+    bytes: Vec<u8>,
+    mut memory: into_markdown_core::ResourceReservation,
+) -> Result<(Arc<[u8]>, into_markdown_core::ResourceReservation), ConversionError> {
+    let size = u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "resolved source size cannot be represented as u64".into(),
+    })?;
+    // `Arc<[u8]>::from(Vec<u8>)` may copy. Account the worst-case overlap
+    // before allocating the shared buffer, then release only the consumed Vec
+    // half after the conversion has completed.
+    memory.grow(size)?;
+    let shared = Arc::from(bytes);
+    memory.shrink(size)?;
+    Ok((shared, memory))
+}
+
+#[cfg(unix)]
+fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let expected = std::fs::symlink_metadata(path)?;
+    if expected.file_type().is_symlink() || !expected.is_file() {
+        return Err(ConversionError::Io {
+            detail: format!("local input is not a regular non-symlink file: {}", path.display()),
+        });
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || expected.dev() != opened.dev() || expected.ino() != opened.ino() {
+        return Err(ConversionError::Io {
+            detail: format!("local input changed while it was opened: {}", path.display()),
+        });
+    }
+    Ok((file, opened))
+}
+
+#[cfg(windows)]
+fn securely_open_local_file(path: &Path) -> Result<(File, Metadata), ConversionError> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    validate_windows_local_path(path)?;
+    // This no-follow handle is the authoritative source object. There is no
+    // path metadata snapshot to race with a later open, and the same handle is
+    // retained for every subsequent read.
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    let file_type = winapi_util::file::typ(&file)?;
+    let opened = file.metadata()?;
+    validate_windows_opened_file(
+        path,
+        file_type.is_disk(),
+        opened.file_attributes(),
+        opened.is_file(),
+    )?;
+    Ok((file, opened))
+}
+
+#[cfg(windows)]
+fn validate_windows_opened_file(
+    path: &Path,
+    is_disk: bool,
+    attributes: u32,
+    is_regular: bool,
+) -> Result<(), ConversionError> {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    if !is_disk || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !is_regular {
+        return Err(ConversionError::Io {
+            detail: format!(
+                "local input is not a regular non-reparse disk file: {}",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_windows_local_path(path: &Path) -> Result<(), ConversionError> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if is_windows_device_namespace(&wide) || has_windows_reserved_device_component(&wide) {
+        return Err(ConversionError::Io {
+            detail: format!("local input uses a denied Windows device path: {}", path.display()),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_windows_device_namespace(path: &[u16]) -> bool {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+
+    let is_separator = |value| value == BACKSLASH || value == b'/' as u16;
+    if path.len() >= 4
+        && is_separator(path[0])
+        && is_separator(path[1])
+        && path[2] == DOT
+        && is_separator(path[3])
+    {
+        return true;
+    }
+    if path.len() >= 4
+        && is_separator(path[0])
+        && path[1] == QUESTION
+        && path[2] == QUESTION
+        && is_separator(path[3])
+    {
+        return true;
+    }
+    if path.len() >= 5
+        && is_separator(path[0])
+        && is_separator(path[1])
+        && path[2] == QUESTION
+        && path[3] == QUESTION
+        && is_separator(path[4])
+    {
+        return true;
+    }
+    if path.len() < 4
+        || !is_separator(path[0])
+        || !is_separator(path[1])
+        || path[2] != QUESTION
+        || !is_separator(path[3])
+    {
+        return false;
+    }
+
+    let extended = &path[4..];
+    let drive_path = extended.len() >= 3
+        && is_ascii_letter(extended[0])
+        && extended[1] == b':' as u16
+        && is_separator(extended[2]);
+    let unc_path = starts_with_ascii_case_insensitive(extended, "UNC\\")
+        || starts_with_ascii_case_insensitive(extended, "UNC/");
+    !drive_path && !unc_path
+}
+
+#[cfg(windows)]
+fn has_windows_reserved_device_component(path: &[u16]) -> bool {
+    path.split(|value| *value == b'\\' as u16 || *value == b'/' as u16)
+        .filter(|component| !component.is_empty())
+        .any(|component| {
+            let end = component
+                .iter()
+                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .map_or(0, |index| index + 1);
+            let stem_end = component[..end]
+                .iter()
+                .position(|value| *value == b'.' as u16 || *value == b':' as u16)
+                .unwrap_or(end);
+            let trimmed_stem_end = component[..stem_end]
+                .iter()
+                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .map_or(0, |index| index + 1);
+            let stem = &component[..trimmed_stem_end];
+            ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"]
+                .iter()
+                .any(|name| equals_ascii_case_insensitive(stem, name))
+                || is_numbered_windows_device(stem, "COM")
+                || is_numbered_windows_device(stem, "LPT")
+        })
+}
+
+#[cfg(windows)]
+fn is_numbered_windows_device(value: &[u16], prefix: &str) -> bool {
+    value.len() == prefix.len() + 1
+        && starts_with_ascii_case_insensitive(value, prefix)
+        && ((b'1' as u16..=b'9' as u16).contains(&value[prefix.len()])
+            || [0x00B9, 0x00B2, 0x00B3].contains(&value[prefix.len()]))
+}
+
+#[cfg(windows)]
+fn starts_with_ascii_case_insensitive(value: &[u16], prefix: &str) -> bool {
+    value.len() >= prefix.len()
+        && value
+            .iter()
+            .zip(prefix.bytes())
+            .all(|(left, right)| ascii_uppercase(*left) == u16::from(right.to_ascii_uppercase()))
+}
+
+#[cfg(windows)]
+fn equals_ascii_case_insensitive(value: &[u16], expected: &str) -> bool {
+    value.len() == expected.len() && starts_with_ascii_case_insensitive(value, expected)
+}
+
+#[cfg(windows)]
+fn is_ascii_letter(value: u16) -> bool {
+    (b'A' as u16..=b'Z' as u16).contains(&ascii_uppercase(value))
+}
+
+#[cfg(windows)]
+fn ascii_uppercase(value: u16) -> u16 {
+    if (b'a' as u16..=b'z' as u16).contains(&value) {
+        value - u16::from(b'a' - b'A')
+    } else {
+        value
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn securely_open_local_file(_: &Path) -> Result<(File, Metadata), ConversionError> {
+    Err(ConversionError::ComponentUnavailable {
+        component: "secure-local-file-open".into(),
+        detail: "this platform has no audited no-follow local-file open policy".into(),
+    })
 }
 
 /// Deliberately non-networking URI resolver placeholder.
@@ -355,8 +876,10 @@ impl SourceResolver for UriSourceResolver {
         &'a self,
         _: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         Box::pin(async move {
+            context.checkpoint()?;
             if options.network.enabled {
                 Err(ConversionError::ComponentUnavailable {
                     component: "builtin.source.uri".into(),
@@ -371,11 +894,11 @@ impl SourceResolver for UriSourceResolver {
     }
 }
 
-fn enforce_input_limit(size: u64, options: &ConversionOptions) -> Result<(), ConversionError> {
-    if size > options.limits.max_input_bytes {
+fn enforce_input_limit(size: u64, limit: u64) -> Result<(), ConversionError> {
+    if size > limit {
         return Err(ConversionError::ResourceLimit {
             limit: "max_input_bytes",
-            detail: format!("{size} > {}", options.limits.max_input_bytes),
+            detail: format!("{size} > {limit}"),
         });
     }
     Ok(())
@@ -399,8 +922,10 @@ impl FormatDetector for HintFormatDetector {
         &'a self,
         input: &'a ResolvedInput,
         hint: &'a FormatHint,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
         Box::pin(async move {
+            context.checkpoint()?;
             let mut evidence: BTreeMap<InputFormat, Vec<&str>> = BTreeMap::new();
             let extension = hint
                 .extension
@@ -454,8 +979,12 @@ impl FormatDetector for ContentFormatDetector {
         &'a self,
         input: &'a ResolvedInput,
         _: &'a FormatHint,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
-        Box::pin(async move { Ok(detect_content(&input.bytes)) })
+        Box::pin(async move {
+            context.checkpoint()?;
+            Ok(detect_content(&input.bytes))
+        })
     }
 }
 
@@ -1605,6 +2134,8 @@ fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
@@ -1618,32 +2149,379 @@ mod tests {
         }
     }
 
+    fn execution_context() -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        )
+    }
+
+    #[test]
+    fn blocking_worker_wait_is_deadline_interruptible() {
+        let pool = BlockingPool::new("test-blocking", 1, 1, "test_blocking_queue").unwrap();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(())
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions {
+                timeout: Some(Duration::from_millis(20)),
+                ..into_markdown_core::ExecutionOptions::default()
+            },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        let start = Instant::now();
+        let error = block_on(context.run(future)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Timeout);
+        assert!(start.elapsed() < Duration::from_millis(500));
+        release_sender.send(()).unwrap();
+    }
+
+    #[test]
+    fn blocking_worker_overload_has_a_stable_resource_error() {
+        let pool = BlockingPool::new("test-overload", 1, 1, "test_blocking_queue").unwrap();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let running = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(())
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let queued = pool.submit(|| Ok(())).unwrap();
+        let error = pool.submit(|| Ok(())).err().unwrap();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(error.to_string().contains("test_blocking_queue"));
+        drop(running);
+        drop(queued);
+        release_sender.send(()).unwrap();
+    }
+
+    #[test]
+    fn blocking_worker_panic_is_a_stable_internal_error() {
+        let pool = BlockingPool::new("test-panic", 1, 1, "test_blocking_queue").unwrap();
+        let future = pool.submit::<(), _>(|| panic!("untrusted worker panic")).unwrap();
+        let error = block_on(future).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+    }
+
+    #[test]
+    fn abandoned_blocking_result_is_dropped_after_worker_returns() {
+        struct DropSignal(Arc<AtomicUsize>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        let pool = BlockingPool::new("test-abandon", 1, 1, "test_blocking_queue").unwrap();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let worker_dropped = Arc::clone(&dropped);
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(DropSignal(worker_dropped))
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        drop(future);
+        release_sender.send(()).unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        while dropped.load(Ordering::Acquire) == 0 && Instant::now() < limit {
+            std::thread::yield_now();
+        }
+        assert_eq!(dropped.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn abandoned_blocking_source_releases_its_memory_after_worker_returns() {
+        let pool = BlockingPool::new("test-abandon-memory", 1, 1, "test_queue").unwrap();
+        let resource_context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 8,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let worker_context = resource_context.clone();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let future = pool
+            .submit(move || {
+                let reservation = worker_context.reserve_memory(8)?;
+                let _ = started_sender.send(());
+                let _ = release_receiver.recv();
+                Ok(reservation)
+            })
+            .unwrap();
+        started_receiver.recv().unwrap();
+        let wait_context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions {
+                timeout: Some(Duration::from_millis(20)),
+                ..into_markdown_core::ExecutionOptions::default()
+            },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        assert_eq!(
+            block_on(wait_context.run(future)).unwrap_err().code(),
+            into_markdown_core::ErrorCode::Timeout
+        );
+        assert_eq!(
+            resource_context.reserve_memory(1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        release_sender.send(()).unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(reservation) = resource_context.reserve_memory(8) {
+                drop(reservation);
+                break;
+            }
+            assert!(Instant::now() < limit, "worker did not release abandoned source memory");
+            std::thread::yield_now();
+        }
+    }
+
+    struct EndlessReader {
+        read: Arc<AtomicUsize>,
+    }
+
+    impl Read for EndlessReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            buffer.fill(b'x');
+            self.read.fetch_add(buffer.len(), Ordering::AcqRel);
+            Ok(buffer.len())
+        }
+    }
+
+    #[test]
+    fn growing_source_reads_at_most_input_limit_plus_one() {
+        let read = Arc::new(AtomicUsize::new(0));
+        let mut reader = EndlessReader { read: Arc::clone(&read) };
+        let context = execution_context();
+        let error = read_bounded(&mut reader, 65_537, &context).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert_eq!(read.load(Ordering::Acquire), 65_538);
+    }
+
+    struct CountReads(AtomicUsize);
+
+    impl Read for CountReads {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            self.0.fetch_add(1, Ordering::AcqRel);
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn source_scratch_is_reserved_before_reader_or_large_buffer_use() {
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 1,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let mut reader = CountReads(AtomicUsize::new(0));
+        let error = read_bounded(&mut reader, 128 * 1024, &context).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert_eq!(reader.0.load(Ordering::Acquire), 0);
+        assert!(context.reserve_memory(1).is_ok());
+    }
+
+    #[test]
+    fn exact_two_payload_budget_covers_arc_peak_after_scratch_refund() {
+        const SIZE: usize = 100_000;
+        const READ_PEAK: u64 = SIZE as u64 + 64 * 1024;
+        let too_small = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: READ_PEAK,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let (bytes, memory) =
+            read_bounded(&mut Cursor::new(vec![b'x'; SIZE]), SIZE as u64, &too_small).unwrap();
+        let error = into_shared_source(bytes, memory).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(too_small.reserve_memory(READ_PEAK).is_ok());
+
+        let enough = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: (SIZE as u64) * 2,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let (bytes, memory) =
+            read_bounded(&mut Cursor::new(vec![b'x'; SIZE]), SIZE as u64, &enough).unwrap();
+        let (shared, memory) = into_shared_source(bytes, memory).unwrap();
+        assert_eq!(shared.len(), SIZE);
+        let remainder = enough.reserve_memory(SIZE as u64).unwrap();
+        drop(remainder);
+        assert_eq!(
+            enough.reserve_memory(SIZE as u64 + 1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        drop(memory);
+        drop(shared);
+        assert!(enough.reserve_memory((SIZE as u64) * 2).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_open_refuses_a_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "into-md-secure-open-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let planned = root.join("planned.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&planned, b"planned").unwrap();
+        std::fs::write(&target, b"target").unwrap();
+        std::fs::remove_file(&planned).unwrap();
+        symlink(&target, &planned).unwrap();
+        let error = securely_open_local_file(&planned).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_authoritative_handle_is_stable_across_regular_path_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "into-md-windows-identity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let expected_path = root.join("planned.txt");
+        let replacement_path = root.join("replacement.txt");
+        std::fs::write(&expected_path, b"expected").unwrap();
+        std::fs::write(&replacement_path, b"replacement").unwrap();
+        let (mut authoritative, _) = securely_open_local_file(&expected_path).unwrap();
+        std::fs::remove_file(&expected_path).unwrap();
+        std::fs::rename(&replacement_path, &expected_path).unwrap();
+        let mut contents = Vec::new();
+        authoritative.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"expected");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_policy_allows_long_disk_paths_and_rejects_devices() {
+        for allowed in
+            [r"C:\safe\input.txt", r"\\?\C:\safe\input.txt", r"\\?\UNC\server\share\input.txt"]
+        {
+            validate_windows_local_path(Path::new(allowed)).unwrap();
+        }
+        for denied in [
+            r"\\.\NUL",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\input.txt",
+            r"\??\C:\input.txt",
+            r"C:\safe\NUL.txt",
+            r"C:\safe\NUL .txt",
+            r"C:\safe\COM1.md",
+            "C:\\safe\\lpt¹.txt",
+        ] {
+            let error = validate_windows_local_path(Path::new(denied)).unwrap_err();
+            assert_eq!(error.code(), into_markdown_core::ErrorCode::Io, "{denied}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reserved_device_is_rejected_before_open() {
+        let error = securely_open_local_file(Path::new("NUL")).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+        assert!(error.to_string().contains("denied Windows device path"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_non_disk_handle_is_rejected_even_if_metadata_looks_regular() {
+        let error =
+            validate_windows_opened_file(Path::new("input.txt"), false, 0, true).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Io);
+    }
+
     #[test]
     fn memory_resolver_enforces_input_budget() {
         let resolver = MemorySourceResolver;
         let input = InputRef::bytes(b"large".as_slice(), Some("x.txt"));
         let mut options = ConversionOptions::default();
         options.limits.max_input_bytes = 2;
-        let error = block_on(resolver.resolve(&input, &options)).unwrap_err();
+        let context = execution_context();
+        let error = block_on(resolver.resolve(&input, &options, &context)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn memory_resolver_charges_shared_arc_without_copying_it() {
+        let resolver = MemorySourceResolver;
+        let data = Arc::<[u8]>::from(b"large".as_slice());
+        let input = InputRef::Bytes { data: Arc::clone(&data), name: Some("x.txt".into()) };
+        let options = ConversionOptions::default();
+        let too_small = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 4,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let error = block_on(resolver.resolve(&input, &options, &too_small)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+
+        let exact = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 5,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let output = block_on(resolver.resolve_accounted(&input, &options, &exact)).unwrap();
+        assert!(Arc::ptr_eq(&data, &output.input().bytes));
+        assert_eq!(
+            exact.reserve_memory(1).unwrap_err().code(),
+            into_markdown_core::ErrorCode::ResourceLimit
+        );
+        drop(output);
+        assert!(exact.reserve_memory(5).is_ok());
     }
 
     #[test]
     fn remote_resolution_is_disabled_by_default() {
         let resolver = UriSourceResolver;
         let input = InputRef::Uri("https://example.com/a.pdf".into());
-        let error = block_on(resolver.resolve(&input, &ConversionOptions::default())).unwrap_err();
+        let options = ConversionOptions::default();
+        let context = execution_context();
+        let error = block_on(resolver.resolve(&input, &options, &context)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Network);
     }
 
     fn resolved(bytes: Vec<u8>, name: &str) -> ResolvedInput {
+        let size = bytes.len() as u64;
         ResolvedInput {
-            metadata: SourceMetadata {
-                name: Some(name.into()),
-                size: bytes.len() as u64,
-                ..SourceMetadata::default()
-            },
             bytes: Arc::from(bytes),
+            metadata: SourceMetadata { name: Some(name.into()), size, ..SourceMetadata::default() },
         }
     }
 
@@ -1721,7 +2599,7 @@ mod tests {
         let input = resolved(b"ignored".to_vec(), "report.docx");
         let hint =
             FormatHint { media_type: Some("application/pdf".into()), ..FormatHint::default() };
-        let candidates = block_on(detector.detect(&input, &hint)).unwrap();
+        let candidates = block_on(detector.detect(&input, &hint, &execution_context())).unwrap();
         assert_eq!(candidates.len(), 2);
         assert!(candidates.iter().all(|candidate| !candidate.diagnostics.is_empty()));
     }
@@ -1730,7 +2608,9 @@ mod tests {
     fn magic_identification_does_not_trust_a_misleading_name() {
         let detector = ContentFormatDetector;
         let input = resolved(b"%PDF-1.7\n".to_vec(), "report.docx");
-        let candidates = block_on(detector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates =
+            block_on(detector.detect(&input, &FormatHint::default(), &execution_context()))
+                .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Pdf);
         assert!((candidates[0].confidence - 0.99).abs() < f32::EPSILON);
     }
@@ -1775,8 +2655,12 @@ mod tests {
         ];
         for (bytes, expected) in fixtures {
             let input = resolved(bytes.to_vec(), "misleading.txt");
-            let candidates =
-                block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+            let candidates = block_on(ContentFormatDetector.detect(
+                &input,
+                &FormatHint::default(),
+                &execution_context(),
+            ))
+            .unwrap();
             assert_eq!(candidates[0].format, expected);
         }
     }
@@ -1869,7 +2753,9 @@ mod tests {
         ];
         for (bytes, expected) in fixtures {
             let input = resolved(bytes, "misleading.zip");
-            let candidates = block_on(detector.detect(&input, &FormatHint::default())).unwrap();
+            let candidates =
+                block_on(detector.detect(&input, &FormatHint::default(), &execution_context()))
+                    .unwrap();
             assert_eq!(candidates[1].format, expected);
             assert_eq!(candidates[0].format, InputFormat::Zip);
         }
@@ -1879,8 +2765,12 @@ mod tests {
     fn zip_mimetype_read_is_bounded_and_explained() {
         let bytes = zip_with(&[("mimetype", &[b'x'; 129])]);
         let input = resolved(bytes, "oversized.odt");
-        let candidates =
-            block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates = block_on(ContentFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].format, InputFormat::Zip);
         assert!(candidates[0].diagnostics[0].contains("128 byte read limit"));
@@ -2025,8 +2915,12 @@ mod tests {
     #[test]
     fn cfb_directory_chain_distinguishes_legacy_office() {
         let input = resolved(cfb_with_stream("PowerPoint Document"), "slides.doc");
-        let candidates =
-            block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates = block_on(ContentFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Ppt);
         assert!((candidates[0].confidence - 0.98).abs() < f32::EPSILON);
     }

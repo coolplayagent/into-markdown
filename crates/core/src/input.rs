@@ -1,4 +1,4 @@
-use crate::InputFormat;
+use crate::{ConversionError, ExecutionContext, InputFormat, ResourceReservation};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -65,4 +65,141 @@ pub struct ResolvedInput {
     pub bytes: Arc<[u8]>,
     /// Trusted metadata attached by the resolver.
     pub metadata: SourceMetadata,
+}
+
+/// Resolver output plus an optional request-scoped source-memory lease.
+///
+/// Existing resolver implementations can keep returning [`ResolvedInput`]
+/// from [`crate::SourceResolver::resolve`]. Engines use the additive
+/// `resolve_accounted` hook to retain built-in resolver accounting across the
+/// resolver boundary without changing the layout of [`ResolvedInput`].
+pub struct ResolvedSource {
+    input: ResolvedInput,
+    memory_reservation: Option<ResourceReservation>,
+}
+
+impl ResolvedSource {
+    /// Wrap resolver output that has not carried a source-memory reservation.
+    #[must_use]
+    pub fn new(input: ResolvedInput) -> Self {
+        Self { input, memory_reservation: None }
+    }
+
+    /// Wrap resolver output with its request-scoped memory reservation.
+    ///
+    /// The engine verifies the reservation's context identity and exact byte
+    /// count before treating it as the source-buffer charge.
+    #[must_use]
+    pub fn with_memory_reservation(
+        input: ResolvedInput,
+        memory_reservation: ResourceReservation,
+    ) -> Self {
+        Self { input, memory_reservation: Some(memory_reservation) }
+    }
+
+    /// Borrow resolved bytes and metadata.
+    #[must_use]
+    pub fn input(&self) -> &ResolvedInput {
+        &self.input
+    }
+
+    /// Consume the accounting wrapper and return its ordinary resolver output.
+    ///
+    /// This is intended for compatibility implementations of `resolve`; the
+    /// carried reservation is released as the wrapper is consumed.
+    #[must_use]
+    pub fn into_input(self) -> ResolvedInput {
+        self.input
+    }
+
+    /// Ensure the complete source bytes are charged to this exact request.
+    ///
+    /// Existing reservations from another request are never accepted as a
+    /// budget credential. A same-request reservation is resized to the exact
+    /// byte length before the engine continues.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, arithmetic, or memory-budget error.
+    pub fn ensure_memory_reservation(
+        &mut self,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        let bytes =
+            u64::try_from(self.input.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "resolved input size cannot be represented as u64".into(),
+            })?;
+        if let Some(reservation) = self.memory_reservation.as_mut() {
+            if reservation.accounts_memory_for(context, bytes) {
+                return Ok(());
+            }
+            if reservation.belongs_to_memory_context(context) {
+                let held = reservation.bytes();
+                if held < bytes {
+                    reservation.grow(bytes - held)?;
+                } else {
+                    reservation.shrink(held - bytes)?;
+                }
+                debug_assert!(reservation.accounts_memory_for(context, bytes));
+                return Ok(());
+            }
+        }
+        let replacement = context.reserve_memory(bytes)?;
+        self.memory_reservation = Some(replacement);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ExecutionOptions, ResourceLimits};
+
+    fn context(max_memory_bytes: u64) -> ExecutionContext {
+        ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes, ..ResourceLimits::default() },
+        )
+    }
+
+    #[test]
+    fn source_reservation_is_exact_and_bound_to_one_context() {
+        let foreign = context(4);
+        let current = context(4);
+        let foreign_reservation = foreign.reserve_memory(4).unwrap();
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source = ResolvedSource::with_memory_reservation(input, foreign_reservation);
+
+        source.ensure_memory_reservation(&current).unwrap();
+        assert!(foreign.reserve_memory(4).is_ok());
+        assert_eq!(current.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
+        drop(source);
+        assert!(current.reserve_memory(4).is_ok());
+    }
+
+    #[test]
+    fn undersized_same_context_reservation_is_not_a_budget_credential() {
+        let context = context(4);
+        let reservation = context.reserve_memory(0).unwrap();
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source = ResolvedSource::with_memory_reservation(input, reservation);
+        source.ensure_memory_reservation(&context).unwrap();
+        assert_eq!(context.reserve_memory(1).unwrap_err().code(), crate::ErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn legacy_resolved_input_literal_remains_source_compatible() {
+        let input = ResolvedInput {
+            bytes: Arc::from(b"legacy".as_slice()),
+            metadata: SourceMetadata::default(),
+        };
+        assert_eq!(&*input.bytes, b"legacy");
+    }
 }
