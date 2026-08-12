@@ -30,6 +30,7 @@ bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
 bazel run //apps/cli:into-md -- models
+bazel run //apps/cli:into-md -- models show pp-ocrv6-tiny-zh-en --json
 bazel run //apps/cli:into-md -- doctor
 ```
 
@@ -42,11 +43,16 @@ HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`�
 `document`、base64 `assets`、`diagnostics` 和 `provenance`。协议细节、兼容策略与
 不可信 JSON 资源预算见[稳定数据传输契约](docs/dto.md)。
 
-当前格式转换、OCR 推理、模型安装、Provider 请求和插件执行后端尚未实现；对应命令
-返回稳定错误，不会伪装成功。
+模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
+archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
+`componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
+不会读取伪造安装状态或伪装成功。格式转换、OCR 推理、Provider 请求和插件
+执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
+同样 fail closed；目录解析和离线元数据查询不受影响。
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、
+[本地模型管理](docs/models.md)、
 [安全模型](docs/security.md)和[测试策略](docs/testing.md)。
 命令与配置契约详见[命令行设计](docs/cli.md)和[配置文件](docs/configuration.md)，
 许可证、第三方来源和发布审计详见[许可证治理](docs/licensing.md)。

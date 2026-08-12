@@ -104,7 +104,7 @@ fn run_command(
             }
         },
         Command::Models(arguments) => {
-            run_models(arguments.command, arguments.json, catalog, context)
+            run_models(arguments.command, arguments.json, &loaded, catalog, context)
         }
         Command::Providers(arguments) => {
             run_providers(arguments.command, arguments.json, &loaded, catalog, context)
@@ -277,22 +277,48 @@ fn detect_format(
 fn run_models(
     command: Option<ModelsCommand>,
     json: bool,
+    loaded: &LoadedConfig,
     catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
-    let manifest = into_markdown::model_manifest().map_err(CliError::from)?;
+    if let Some(ModelsCommand::Install { id }) = &command {
+        preflight_model_install(id.as_deref(), catalog)?;
+    }
+    let manager = model_manager()?;
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions {
+            timeout: loaded.timeout_ms.map(std::time::Duration::from_millis),
+            ..into_markdown::ExecutionOptions::default()
+        },
+        loaded.options.limits.clone(),
+    );
     match command {
         None => {
             if json {
-                write_json(context.stdout, &manifest)
+                write_json(
+                    context.stdout,
+                    &serde_json::json!({
+                        "schemaVersion": 1,
+                        "defaultBundle": manager.manifest().default_bundle,
+                        "models": manager.list().map_err(model_error)?,
+                    }),
+                )
             } else {
-                writeln!(context.stdout, "MODEL\tDEFAULT\tRUNTIME\tLANGUAGES\tSTATUS")?;
-                for bundle in manifest.bundles {
+                writeln!(
+                    context.stdout,
+                    "MODEL\tDEFAULT\tAVAILABILITY\tSTATE\tOWNERSHIP\tRUNTIME\tLANGUAGES"
+                )?;
+                for (bundle, status) in
+                    manager.manifest().bundles.iter().zip(manager.list().map_err(model_error)?)
+                {
                     writeln!(
                         context.stdout,
-                        "{}\t{}\t{}\t{}\tplanned",
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                         bundle.id,
-                        bundle.id == manifest.default_bundle,
+                        bundle.id == manager.manifest().default_bundle,
+                        bundle.availability,
+                        status.state,
+                        status.ownership,
                         bundle.runtime_format,
                         bundle.languages.join(",")
                     )?;
@@ -301,36 +327,109 @@ fn run_models(
             }
         }
         Some(ModelsCommand::Show { id, json }) => {
-            let bundle = manifest
+            let bundle = manager
+                .manifest()
                 .bundles
                 .iter()
                 .find(|bundle| bundle.id == id)
                 .ok_or_else(|| CliError::usage(format!("unknown model bundle '{id}'")))?;
+            let status = manager.status(&id).map_err(model_error)?;
             if json {
-                write_json(context.stdout, bundle)
+                write_json(
+                    context.stdout,
+                    &serde_json::json!({
+                        "schemaVersion": 1,
+                        "model": bundle,
+                        "status": status,
+                    }),
+                )
             } else {
                 writeln!(context.stdout, "model: {}", bundle.id)?;
+                writeln!(context.stdout, "availability: {}", bundle.availability)?;
+                writeln!(context.stdout, "state: {}", status.state)?;
+                writeln!(context.stdout, "ownership: {}", status.ownership)?;
                 writeln!(context.stdout, "upstream: {}", bundle.upstream_version)?;
                 writeln!(context.stdout, "runtime: {}", bundle.runtime_format)?;
                 writeln!(context.stdout, "languages: {}", bundle.languages.join(", "))?;
+                writeln!(context.stdout, "platforms: {}", bundle.platforms.join(", "))?;
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id }) => Err(CliError::component(format!(
-            "models install {}: {}",
-            id.as_deref().unwrap_or(&manifest.default_bundle),
-            catalog.unavailable()
-        ))),
-        Some(ModelsCommand::Verify { id, json: _ }) => Err(CliError::component(format!(
-            "models verify {}: {}",
-            id.as_deref().unwrap_or(&manifest.default_bundle),
-            catalog.unavailable()
-        ))),
+        Some(ModelsCommand::Install { id }) => {
+            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            manager.require_installable(id).map_err(model_error)?;
+            Err(CliError::component(format!("models install {id}: {}", catalog.unavailable())))
+        }
+        Some(ModelsCommand::Verify { id, json }) => {
+            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            let status = manager.verify_with_context(id, &execution).map_err(model_error)?;
+            if json {
+                write_json(context.stdout, &status)
+            } else {
+                writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
+                Ok(())
+            }
+        }
         Some(ModelsCommand::Remove { id }) => {
-            Err(CliError::component(format!("models remove {id}: {}", catalog.unavailable())))
+            manager.remove_with_context(&id, &execution).map_err(model_error)?;
+            writeln!(context.stdout, "removed {id}")?;
+            Ok(())
         }
         Some(ModelsCommand::Path { id }) => {
-            Err(CliError::component(format!("models path {id}: {}", catalog.unavailable())))
+            writeln!(context.stdout, "{}", manager.path(&id).map_err(model_error)?.display())?;
+            Ok(())
+        }
+    }
+}
+
+fn preflight_model_install(id: Option<&str>, catalog: Catalog) -> Result<(), CliError> {
+    let manifest = into_markdown::model_manifest().map_err(CliError::from)?;
+    let selected = id.unwrap_or(&manifest.default_bundle);
+    let installable =
+        manifest.bundles.iter().find(|bundle| bundle.id == selected).is_some_and(|bundle| {
+            bundle.availability == "available" && !bundle.runtime_artifacts.is_empty()
+        });
+    if installable {
+        Ok(())
+    } else {
+        Err(CliError::component(format!("models install {selected}: {}", catalog.unavailable())))
+    }
+}
+
+fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
+    let writable_root = directories::ProjectDirs::from("", "", "into-markdown")
+        .map(|directories| directories.data_dir().join("models"))
+        .ok_or_else(|| {
+            CliError::new(
+                ExitClass::Io,
+                "modelDataDirectoryUnavailable",
+                "cannot determine the platform model data directory",
+            )
+        })?;
+    let bundled_root = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("models")))
+        .filter(|path| path.is_dir());
+    into_markdown::ModelManager::embedded(writable_root, bundled_root).map_err(CliError::from)
+}
+
+fn model_error(error: into_markdown::ModelManagerError) -> CliError {
+    use into_markdown::ModelManagerError;
+    match error {
+        ModelManagerError::UnknownBundle => CliError::usage(error.to_string()),
+        ModelManagerError::ComponentUnavailable => CliError::component(error.to_string()),
+        ModelManagerError::ReadOnly
+        | ModelManagerError::UnsafePath
+        | ModelManagerError::DataDirectoryUnsafe => {
+            CliError::new(ExitClass::Policy, "modelPolicy", error.to_string())
+        }
+        ModelManagerError::NotInstalled | ModelManagerError::Corrupt(_) => {
+            CliError::new(ExitClass::Ocr, "modelInvalid", error.to_string())
+        }
+        ModelManagerError::Busy => CliError::new(ExitClass::Io, "modelBusy", error.to_string()),
+        ModelManagerError::Execution(error) => CliError::from(error),
+        ModelManagerError::DataDirectoryUnavailable | ModelManagerError::Io(_) => {
+            CliError::new(ExitClass::Io, "modelIo", error.to_string())
         }
     }
 }
@@ -2500,6 +2599,50 @@ mod tests {
         let error = invoke(&["models", "install"], true).unwrap_err();
         assert_eq!(error.exit_code(), 9);
         assert_eq!(error.code(), "componentUnavailable");
+    }
+
+    #[test]
+    fn model_management_json_and_offline_error_codes_are_stable() {
+        let (listed, _) = invoke(&["models", "--json"], true).unwrap();
+        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        assert_eq!(listed["schemaVersion"], 1);
+        assert_eq!(listed["models"][0]["availability"], "planned");
+        assert_eq!(listed["models"][0]["state"], "unavailable");
+        assert_eq!(listed["models"][0]["ownership"], "none");
+
+        let (shown, _) =
+            invoke(&["models", "show", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap();
+        let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+        assert_eq!(shown["schemaVersion"], 1);
+        assert_eq!(shown["status"]["state"], "unavailable");
+        assert!(shown["model"]["source_artifacts"].is_array());
+        assert!(shown["model"]["runtime_artifacts"].as_array().unwrap().is_empty());
+
+        let verify =
+            invoke(&["models", "verify", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap_err();
+        assert_eq!(verify.exit_code(), 9);
+        assert_eq!(verify.code(), "componentUnavailable");
+        let path = invoke(&["models", "path", "pp-ocrv6-tiny-zh-en"], true).unwrap_err();
+        assert_eq!(path.exit_code(), 9);
+        assert_eq!(path.code(), "componentUnavailable");
+        let unknown = invoke(&["models", "show", "../escape"], true).unwrap_err();
+        assert_eq!(unknown.exit_code(), 2);
+    }
+
+    #[test]
+    fn model_verification_failure_classes_are_stable() {
+        let missing = model_error(into_markdown::ModelManagerError::NotInstalled);
+        assert_eq!(missing.exit_code(), 6);
+        assert_eq!(missing.code(), "modelInvalid");
+        let corrupt = model_error(into_markdown::ModelManagerError::Corrupt("hash".into()));
+        assert_eq!(corrupt.exit_code(), 6);
+        assert_eq!(corrupt.code(), "modelInvalid");
+        let io = model_error(into_markdown::ModelManagerError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        )));
+        assert_eq!(io.exit_code(), 4);
+        assert_eq!(io.code(), "modelIo");
     }
 
     #[test]

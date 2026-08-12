@@ -7,6 +7,11 @@
 `models/manifest.json` 记录 HTTPS 来源、SHA-256、模型角色、上游版本、语言、
 格式和 SPDX 许可证。
 
+这些条目当前是生成部署模型所需的 source archives，不是可安装的最终 ONNX
+runtime files。模型管理命令会将 bundle 显示为 `planned` / `unavailable`，不会
+将源码归档当作已安装推理模型。查询、校验、平台目录、原子安装与清理契约见
+[本地模型管理](models.md)。
+
 普通构建和测试既不下载模型，也不加载推理运行时。手动目标
 `//models:source_models` 用于获取已固定哈希的上游源归档。未来会增加可复现的
 转换动作，以生成准确的 ONNX 部署产物及其派生哈希。

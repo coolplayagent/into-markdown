@@ -650,9 +650,16 @@ dependencies = [
 name = "into-markdown-ocr"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.4.3",
  "into-markdown-core",
+ "libc",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "url",
 ]
 
 [[package]]
@@ -699,6 +706,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "url",
 ]
 
 [[package]]

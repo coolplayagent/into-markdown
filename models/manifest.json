@@ -4,9 +4,21 @@
   "bundles": [
     {
       "id": "pp-ocrv6-tiny-zh-en",
+      "availability": "planned",
       "upstream_version": "PP-OCRv6 tiny / PaddleOCR 3.x",
       "languages": ["zh-Hans", "zh-Hant", "en"],
+      "platforms": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ],
       "runtime_format": "onnx-derived",
+      "character_set": {
+        "status": "planned",
+        "source_artifact_id": "pp-ocrv6-tiny-recognizer-source"
+      },
+      "runtime_artifacts": [],
       "source_artifacts": [
         {
           "id": "pp-ocrv6-tiny-detector-source",

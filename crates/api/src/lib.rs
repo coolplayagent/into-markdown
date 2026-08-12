@@ -6,7 +6,11 @@ pub use into_markdown_ai::{AiProviderDescriptor, OpenAiCompatibleConfig};
 pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{Engine, EngineBuilder, RegistryBuilder};
-pub use into_markdown_ocr::{ModelArtifact, ModelBundle, ModelManifest};
+pub use into_markdown_ocr::{
+    CharacterSet, DataDirectoryEnvironment, ModelArtifact, ModelBundle, ModelFetcher, ModelManager,
+    ModelManagerError, ModelManifest, ModelStatus, ProductTarget, RuntimeArtifact,
+    model_data_directory,
+};
 pub use into_markdown_render_markdown::{asset_filename, render as render_markdown};
 
 /// Create the standard builder with safe local source resolvers, hint
