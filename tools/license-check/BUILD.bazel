@@ -8,13 +8,13 @@ DATA = [
     "//:Cargo.lock",
     "//:Cargo.toml",
     "//:LICENSE",
-    "//:MODULE.bazel",
     "//:NOTICE",
     "//:THIRD_PARTY_NOTICES.md",
     "//models:manifest.json",
     "//third_party/licenses:inventory.json",
     "//third_party/licenses:policy.json",
     "//third_party/licenses:rust-lock.tsv",
+    "//third_party/licenses:downloads.json",
     "//third_party/onnxruntime:manifest.json",
     ":Cargo.toml",
     "//apps/cli:Cargo.toml",
@@ -33,7 +33,6 @@ rust_library(
     crate_name = "license_check",
     edition = "2024",
     deps = [
-        "@crates//:base64",
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:toml",
@@ -51,11 +50,10 @@ rust_binary(
 
 rust_binary(
     name = "release_audit",
-    srcs = ["src/main.rs"],
+    srcs = ["src/release_main.rs"],
     crate_name = "release_audit",
     data = DATA,
     edition = "2024",
-    rustc_env = {"LICENSE_CHECK_DEFAULT_MODE": "release"},
     deps = [":license_check_lib"],
 )
 

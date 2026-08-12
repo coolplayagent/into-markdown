@@ -1,12 +1,11 @@
 //! Offline validation for the repository's license policy and inventories.
 
-use base64::Engine as _;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use toml::Value as TomlValue;
 
 #[derive(Debug, Deserialize)]
@@ -51,11 +50,14 @@ struct OrtTarget {
 
 #[derive(Debug, Deserialize)]
 struct ModelManifest {
+    schema_version: u64,
+    default_bundle: String,
     bundles: Vec<ModelBundle>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ModelBundle {
+    id: String,
     upstream_version: String,
     source_artifacts: Vec<ModelArtifact>,
 }
@@ -63,15 +65,38 @@ struct ModelBundle {
 #[derive(Debug, Deserialize)]
 struct ModelArtifact {
     id: String,
+    role: String,
     url: String,
     sha256: String,
     license: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct Download {
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct DownloadManifest {
+    schema_version: u64,
+    model_files: Vec<ModelDownload>,
+    native_archives: Vec<NativeDownload>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ModelDownload {
+    artifact_id: String,
+    repository: String,
+    downloaded_file_path: String,
     url: String,
     sha256: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct NativeDownload {
+    target: String,
+    repository: String,
+    url: String,
+    sha256: String,
+    strip_prefix: String,
 }
 
 /// Runs the repository audit. Release mode applies distribution-boundary rules.
@@ -83,6 +108,36 @@ struct Download {
 pub fn run(release: bool) -> Result<(), Vec<String>> {
     let root = repository_root().map_err(|error| vec![error])?;
     audit(&root, release)
+}
+
+/// Runs one immutable CLI mode and rejects all user arguments.
+///
+/// `release = true` cannot be downgraded by an argument. The dedicated release
+/// binary therefore always applies strict release checks.
+#[must_use]
+pub fn main_for_mode(release: bool) -> ExitCode {
+    if !arguments_are_empty(env::args_os().skip(1)) {
+        let program = if release { "release-audit" } else { "license-check" };
+        eprintln!("usage: {program}");
+        return ExitCode::from(2);
+    }
+    let mode = if release { "release" } else { "check" };
+    match run(release) {
+        Ok(()) => {
+            println!("license audit passed ({mode})");
+            ExitCode::SUCCESS
+        }
+        Err(errors) => {
+            for error in errors {
+                eprintln!("license audit: {error}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn arguments_are_empty(arguments: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> bool {
+    arguments.into_iter().next().is_none()
 }
 
 fn repository_root() -> Result<PathBuf, String> {
@@ -356,17 +411,23 @@ fn validate_inventory(
 fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut Vec<String>) {
     let ort_text = read(&root.join("third_party/onnxruntime/manifest.json"), errors);
     let models_text = read(&root.join("models/manifest.json"), errors);
-    let module_text = read(&root.join("MODULE.bazel"), errors);
+    let downloads_text = read(&root.join("third_party/licenses/downloads.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
-    let native_downloads = parse_module_downloads(&module_text, "native_runtime", true, errors);
-    let model_downloads = parse_module_downloads(&module_text, "model_file", false, errors);
+    let downloads: Option<DownloadManifest> =
+        parse_json("download manifest", &downloads_text, errors);
 
-    if let Some(ort) = &ort {
-        validate_ort_manifest(inventory, ort, &native_downloads, errors);
+    if let (Some(ort), Some(downloads)) = (&ort, &downloads) {
+        validate_ort_manifest(inventory, ort, downloads, errors);
     }
-    if let Some(models) = &models {
-        validate_model_manifest(inventory, models, &model_downloads, errors);
+    if let (Some(models), Some(downloads)) = (&models, &downloads) {
+        validate_model_manifest(inventory, models, downloads, errors);
+    }
+    if let Some(downloads) = &downloads {
+        if downloads.schema_version != 1 {
+            errors.push("unsupported download manifest schema_version".to_owned());
+        }
+        validate_download_fields(downloads, errors);
     }
 }
 
@@ -374,86 +435,32 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn parse_module_downloads(
-    module: &str,
-    rule_name: &str,
-    uses_integrity: bool,
-    errors: &mut Vec<String>,
-) -> BTreeMap<String, Download> {
-    let mut downloads = BTreeMap::new();
-    let marker = format!("{rule_name}(");
-    let lines: Vec<_> = module.lines().collect();
-    let mut index = 0;
-    while index < lines.len() {
-        if lines[index].trim() != marker {
-            index += 1;
-            continue;
+fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
+    let mut repositories = BTreeSet::new();
+    for item in &downloads.model_files {
+        if !repositories.insert(item.repository.as_str()) {
+            errors.push(format!("duplicate download repository {}", item.repository));
         }
-        let block_start = index + 1;
-        let Some(relative_end) = lines[block_start..].iter().position(|line| line.trim() == ")")
-        else {
-            errors.push(format!("unterminated {rule_name} declaration in MODULE.bazel"));
-            break;
-        };
-        let block_end = block_start + relative_end;
-        let block = &lines[block_start..block_end];
-        let name = module_attribute(block, "name", errors);
-        let url = module_attribute(block, "urls", errors);
-        let hash_field = if uses_integrity { "integrity" } else { "sha256" };
-        let hash = module_attribute(block, hash_field, errors);
-        if let (Some(name), Some(url), Some(hash)) = (name, url, hash) {
-            let sha256 = if uses_integrity {
-                decode_integrity(&hash).unwrap_or_else(|error| {
-                    errors.push(format!("MODULE.bazel {name}: {error}"));
-                    String::new()
-                })
-            } else {
-                hash
-            };
-            if downloads.insert(name.clone(), Download { url, sha256 }).is_some() {
-                errors.push(format!("duplicate MODULE.bazel download repository {name}"));
-            }
+        if item.artifact_id.is_empty()
+            || item.downloaded_file_path.is_empty()
+            || !item.url.starts_with("https://")
+            || !is_sha256(&item.sha256)
+        {
+            errors.push(format!("model download {} has incomplete fields", item.repository));
         }
-        index = block_end + 1;
     }
-    downloads
-}
-
-fn module_attribute(block: &[&str], key: &str, errors: &mut Vec<String>) -> Option<String> {
-    let prefix = format!("{key} = ");
-    let values: Vec<_> =
-        block.iter().filter_map(|line| line.trim().strip_prefix(&prefix)).collect();
-    if values.len() != 1 {
-        errors.push(format!("MODULE.bazel declaration must contain exactly one {key}"));
-        return None;
+    for item in &downloads.native_archives {
+        if !repositories.insert(item.repository.as_str()) {
+            errors.push(format!("duplicate download repository {}", item.repository));
+        }
+        if item.target.is_empty()
+            || item.strip_prefix.is_empty()
+            || !item.url.starts_with("https://")
+            || !is_sha256(&item.sha256)
+        {
+            errors.push(format!("native download {} has incomplete fields", item.repository));
+        }
     }
-    let value = values[0].strip_suffix(',').unwrap_or(values[0]);
-    let quoted = if key == "urls" {
-        value.strip_prefix("[\"").and_then(|value| value.strip_suffix("\"]"))
-    } else {
-        value.strip_prefix('"').and_then(|value| value.strip_suffix('"'))
-    };
-    quoted.map(str::to_owned).or_else(|| {
-        errors.push(format!("MODULE.bazel {key} must be one literal string"));
-        None
-    })
-}
-
-fn decode_integrity(integrity: &str) -> Result<String, String> {
-    let encoded =
-        integrity.strip_prefix("sha256-").ok_or_else(|| "integrity must use sha256".to_owned())?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("invalid integrity base64: {error}"))?;
-    if bytes.len() != 32 {
-        return Err("integrity digest is not 32 bytes".to_owned());
-    }
-    let mut digest = String::with_capacity(64);
-    for byte in bytes {
-        write!(&mut digest, "{byte:02x}")
-            .map_err(|error| format!("cannot format integrity digest: {error}"))?;
-    }
-    Ok(digest)
 }
 
 fn exact_component<'a>(
@@ -478,7 +485,7 @@ fn exact_component<'a>(
 fn validate_ort_manifest(
     inventory: &Inventory,
     manifest: &OrtManifest,
-    downloads: &BTreeMap<String, Download>,
+    downloads: &DownloadManifest,
     errors: &mut Vec<String>,
 ) {
     let Some(component) = exact_component(inventory, "onnxruntime-cpu", errors) else {
@@ -518,17 +525,21 @@ fn validate_ort_manifest(
             "ONNX Runtime manifest must contain the exact four supported target keys".to_owned(),
         );
     }
-    let expected_repositories: BTreeSet<_> = expected_targets.values().copied().collect();
-    let actual_repositories: BTreeSet<_> = downloads.keys().map(String::as_str).collect();
-    if actual_repositories != expected_repositories {
+    let mut by_target = BTreeMap::new();
+    for download in &downloads.native_archives {
+        if by_target.insert(download.target.as_str(), download).is_some() {
+            errors.push(format!("duplicate native download target {}", download.target));
+        }
+    }
+    let download_targets: BTreeSet<_> = by_target.keys().copied().collect();
+    if download_targets != expected_keys {
         errors.push(
-            "MODULE.bazel native runtime repositories do not match supported ONNX targets"
-                .to_owned(),
+            "download manifest native targets do not match supported ONNX targets".to_owned(),
         );
     }
     for (target, repository) in expected_targets {
         let (Some(asset), Some(download)) =
-            (manifest.targets.get(target), downloads.get(repository))
+            (manifest.targets.get(target), by_target.get(target).copied())
         else {
             continue;
         };
@@ -539,44 +550,31 @@ fn validate_ort_manifest(
             "https://github.com/microsoft/onnxruntime/releases/download/v{}/{}",
             manifest.version, asset.asset
         );
-        if download.url != expected_url || download.sha256 != asset.sha256 {
+        let expected_strip_prefix =
+            asset.asset.strip_suffix(".tgz").or_else(|| asset.asset.strip_suffix(".zip"));
+        if download.repository != repository
+            || download.url != expected_url
+            || download.sha256 != asset.sha256
+            || Some(download.strip_prefix.as_str()) != expected_strip_prefix
+        {
             errors.push(format!(
-                "ONNX Runtime target {target} URL/hash disagrees with MODULE.bazel repository {repository}"
+                "ONNX Runtime target {target} disagrees with authoritative download {repository}"
             ));
         }
-    }
-}
-
-fn model_repository(id: &str) -> Option<&'static str> {
-    match id {
-        "pp-ocrv6-tiny-detector-source" => Some("ppocrv6_tiny_detector_source"),
-        "pp-ocrv6-tiny-recognizer-source" => Some("ppocrv6_tiny_recognizer_source"),
-        _ => None,
     }
 }
 
 fn validate_model_manifest(
     inventory: &Inventory,
     manifest: &ModelManifest,
-    downloads: &BTreeMap<String, Download>,
+    downloads: &DownloadManifest,
     errors: &mut Vec<String>,
 ) {
-    let mut artifacts = BTreeMap::new();
-    for bundle in &manifest.bundles {
-        for artifact in &bundle.source_artifacts {
-            if artifacts
-                .insert(artifact.id.as_str(), (artifact, bundle.upstream_version.as_str()))
-                .is_some()
-            {
-                errors.push(format!("duplicate model artifact {} across bundles", artifact.id));
-            }
-        }
+    if manifest.schema_version != 1 {
+        errors.push("unsupported model manifest schema_version".to_owned());
     }
-    for required in ["pp-ocrv6-tiny-detector-source", "pp-ocrv6-tiny-recognizer-source"] {
-        if !artifacts.contains_key(required) {
-            errors.push(format!("model manifest lacks required artifact {required}"));
-        }
-    }
+    let (artifacts, bundles) = collect_model_artifacts(manifest, errors);
+    validate_default_model_bundle(manifest, &bundles, errors);
 
     let mut inventory_sources = BTreeMap::new();
     for component in inventory.components.iter().filter(|item| item.kind == "model-source") {
@@ -595,11 +593,117 @@ fn validate_model_manifest(
         }
     }
 
-    let mut expected_repositories = BTreeSet::new();
-    for (id, (artifact, upstream_version)) in artifacts {
-        let Some(component) = inventory_sources.get(id) else {
-            continue;
-        };
+    let mut downloads_by_artifact = BTreeMap::new();
+    for download in &downloads.model_files {
+        if downloads_by_artifact.insert(download.artifact_id.as_str(), download).is_some() {
+            errors.push(format!("duplicate model download artifact {}", download.artifact_id));
+        }
+    }
+    let artifact_ids: BTreeSet<_> = artifacts.keys().copied().collect();
+    let download_ids: BTreeSet<_> = downloads_by_artifact.keys().copied().collect();
+    if artifact_ids != download_ids {
+        errors.push(
+            "authoritative model downloads do not match all model manifest artifacts".to_owned(),
+        );
+    }
+
+    for (id, (artifact, _bundle_id, upstream_version)) in artifacts {
+        validate_model_artifact(
+            id,
+            artifact,
+            upstream_version,
+            &inventory_sources,
+            &downloads_by_artifact,
+            errors,
+        );
+    }
+}
+
+type ModelArtifacts<'a> = BTreeMap<&'a str, (&'a ModelArtifact, &'a str, &'a str)>;
+
+fn collect_model_artifacts<'a>(
+    manifest: &'a ModelManifest,
+    errors: &mut Vec<String>,
+) -> (ModelArtifacts<'a>, BTreeMap<&'a str, &'a ModelBundle>) {
+    let mut artifacts = BTreeMap::new();
+    let mut bundles = BTreeMap::new();
+    for bundle in &manifest.bundles {
+        if bundle.id.is_empty() {
+            errors.push("model bundle ID must not be empty".to_owned());
+        }
+        if bundles.insert(bundle.id.as_str(), bundle).is_some() {
+            errors.push(format!("duplicate model bundle ID {}", bundle.id));
+        }
+        let mut roles = BTreeMap::new();
+        for artifact in &bundle.source_artifacts {
+            if roles.insert(artifact.role.as_str(), artifact.id.as_str()).is_some() {
+                errors.push(format!(
+                    "model bundle {} has duplicate role {}",
+                    bundle.id, artifact.role
+                ));
+            }
+            if artifacts
+                .insert(
+                    artifact.id.as_str(),
+                    (artifact, bundle.id.as_str(), bundle.upstream_version.as_str()),
+                )
+                .is_some()
+            {
+                errors.push(format!("duplicate model artifact {} across bundles", artifact.id));
+            }
+        }
+        for required_role in ["detector", "recognizer-and-dictionary"] {
+            if !roles.contains_key(required_role) {
+                errors.push(format!(
+                    "OCR model bundle {} lacks required role {required_role}",
+                    bundle.id
+                ));
+            }
+        }
+    }
+    (artifacts, bundles)
+}
+
+fn validate_default_model_bundle(
+    manifest: &ModelManifest,
+    bundles: &BTreeMap<&str, &ModelBundle>,
+    errors: &mut Vec<String>,
+) {
+    if manifest.default_bundle.is_empty() {
+        errors.push("model manifest default_bundle must not be empty".to_owned());
+    }
+    let default = bundles.get(manifest.default_bundle.as_str()).copied();
+    if default.is_none() {
+        errors
+            .push(format!("model manifest default bundle {} is missing", manifest.default_bundle));
+    }
+    for (required_id, required_role) in [
+        ("pp-ocrv6-tiny-detector-source", "detector"),
+        ("pp-ocrv6-tiny-recognizer-source", "recognizer-and-dictionary"),
+    ] {
+        if default.is_none_or(|bundle| {
+            !bundle
+                .source_artifacts
+                .iter()
+                .any(|artifact| artifact.id == required_id && artifact.role == required_role)
+        }) {
+            errors.push(format!(
+                "default OCR bundle {} lacks required artifact {required_id} with role {required_role}",
+                manifest.default_bundle
+            ));
+        }
+    }
+}
+
+fn validate_model_artifact(
+    id: &str,
+    artifact: &ModelArtifact,
+    upstream_version: &str,
+    inventory_sources: &BTreeMap<&str, &Component>,
+    downloads_by_artifact: &BTreeMap<&str, &ModelDownload>,
+    errors: &mut Vec<String>,
+) {
+    if let Some(component) = inventory_sources.get(id) {
         if component.status != "reviewed" {
             errors.push(format!("managed model component {id} must be reviewed"));
         }
@@ -612,29 +716,15 @@ fn validate_model_manifest(
                 errors.push(format!("model component {id} {field} disagrees with its manifest"));
             }
         }
-        if !is_sha256(&artifact.sha256) {
-            errors.push(format!("model manifest entry {id} lacks a valid SHA-256"));
-        }
-        let Some(repository) = model_repository(id) else {
-            errors.push(format!("managed model artifact {id} has no Bazel repository mapping"));
-            continue;
-        };
-        expected_repositories.insert(repository);
-        match downloads.get(repository) {
-            Some(download)
-                if download.url == artifact.url && download.sha256 == artifact.sha256 => {}
-            Some(_) => errors.push(format!(
-                "model artifact {id} URL/hash disagrees with MODULE.bazel repository {repository}"
-            )),
-            None => errors
-                .push(format!("model artifact {id} lacks MODULE.bazel repository {repository}")),
-        }
     }
-    let actual_repositories: BTreeSet<_> = downloads.keys().map(String::as_str).collect();
-    if actual_repositories != expected_repositories {
-        errors.push(
-            "MODULE.bazel model repositories do not match managed model artifacts".to_owned(),
-        );
+    if !is_sha256(&artifact.sha256) {
+        errors.push(format!("model manifest entry {id} lacks a valid SHA-256"));
+    }
+    match downloads_by_artifact.get(id).copied() {
+        Some(download) if download.url == artifact.url && download.sha256 == artifact.sha256 => {}
+        Some(_) => errors
+            .push(format!("model artifact {id} URL/hash disagrees with authoritative download")),
+        None => errors.push(format!("model artifact {id} lacks authoritative download")),
     }
 }
 
@@ -755,18 +845,24 @@ mod tests {
         }
     }
 
-    fn artifact(id: &str, marker: char) -> ModelArtifact {
+    fn artifact(id: &str, role: &str, marker: char) -> ModelArtifact {
         ModelArtifact {
             id: id.to_owned(),
+            role: role.to_owned(),
             url: format!("https://example.invalid/{id}.tar"),
             sha256: marker.to_string().repeat(64),
             license: "Apache-2.0".to_owned(),
         }
     }
 
-    fn model_fixture() -> (ModelManifest, Inventory, BTreeMap<String, Download>) {
-        let detector = artifact("pp-ocrv6-tiny-detector-source", 'a');
-        let recognizer = artifact("pp-ocrv6-tiny-recognizer-source", 'b');
+    fn empty_downloads() -> DownloadManifest {
+        DownloadManifest { schema_version: 1, model_files: vec![], native_archives: vec![] }
+    }
+
+    fn model_fixture() -> (ModelManifest, Inventory, DownloadManifest) {
+        let detector = artifact("pp-ocrv6-tiny-detector-source", "detector", 'a');
+        let recognizer =
+            artifact("pp-ocrv6-tiny-recognizer-source", "recognizer-and-dictionary", 'b');
         let version = "test model";
         let inventory = Inventory {
             schema_version: 1,
@@ -775,18 +871,31 @@ mod tests {
                 model_component(&recognizer.id, &recognizer, version),
             ],
         };
-        let downloads = BTreeMap::from([
-            (
-                "ppocrv6_tiny_detector_source".to_owned(),
-                Download { url: detector.url.clone(), sha256: detector.sha256.clone() },
-            ),
-            (
-                "ppocrv6_tiny_recognizer_source".to_owned(),
-                Download { url: recognizer.url.clone(), sha256: recognizer.sha256.clone() },
-            ),
-        ]);
+        let downloads = DownloadManifest {
+            schema_version: 1,
+            model_files: vec![
+                ModelDownload {
+                    artifact_id: detector.id.clone(),
+                    repository: "ppocrv6_tiny_detector_source".to_owned(),
+                    downloaded_file_path: "detector.tar".to_owned(),
+                    url: detector.url.clone(),
+                    sha256: detector.sha256.clone(),
+                },
+                ModelDownload {
+                    artifact_id: recognizer.id.clone(),
+                    repository: "ppocrv6_tiny_recognizer_source".to_owned(),
+                    downloaded_file_path: "recognizer.tar".to_owned(),
+                    url: recognizer.url.clone(),
+                    sha256: recognizer.sha256.clone(),
+                },
+            ],
+            native_archives: vec![],
+        };
         let manifest = ModelManifest {
+            schema_version: 1,
+            default_bundle: "default".to_owned(),
             bundles: vec![ModelBundle {
+                id: "default".to_owned(),
                 upstream_version: version.to_owned(),
                 source_artifacts: vec![detector, recognizer],
             }],
@@ -794,7 +903,7 @@ mod tests {
         (manifest, inventory, downloads)
     }
 
-    fn ort_fixture() -> (OrtManifest, Inventory, BTreeMap<String, Download>) {
+    fn ort_fixture() -> (OrtManifest, Inventory, DownloadManifest) {
         let version = "1.2.3";
         let target_repositories = [
             ("aarch64-apple-darwin", "onnxruntime_macos_arm64", "mac.tgz", 'a'),
@@ -803,22 +912,26 @@ mod tests {
             ("x86_64-unknown-linux-gnu", "onnxruntime_linux_x86_64", "linux.tgz", 'd'),
         ];
         let mut targets = BTreeMap::new();
-        let mut downloads = BTreeMap::new();
+        let mut native_archives = Vec::new();
         for (target, repository, asset, marker) in target_repositories {
             let sha256 = marker.to_string().repeat(64);
             targets.insert(
                 target.to_owned(),
                 OrtTarget { asset: asset.to_owned(), sha256: sha256.clone() },
             );
-            downloads.insert(
-                repository.to_owned(),
-                Download {
-                    url: format!(
-                        "https://github.com/microsoft/onnxruntime/releases/download/v{version}/{asset}"
-                    ),
-                    sha256,
-                },
-            );
+            native_archives.push(NativeDownload {
+                target: target.to_owned(),
+                repository: repository.to_owned(),
+                url: format!(
+                    "https://github.com/microsoft/onnxruntime/releases/download/v{version}/{asset}"
+                ),
+                sha256,
+                strip_prefix: asset
+                    .strip_suffix(".tgz")
+                    .or_else(|| asset.strip_suffix(".zip"))
+                    .unwrap()
+                    .to_owned(),
+            });
         }
         let source = format!("https://github.com/microsoft/onnxruntime/releases/tag/v{version}");
         let manifest = OrtManifest {
@@ -840,7 +953,11 @@ mod tests {
                 obligations: Some("preserve MIT".to_owned()),
             }],
         };
-        (manifest, inventory, downloads)
+        (
+            manifest,
+            inventory,
+            DownloadManifest { schema_version: 1, model_files: vec![], native_archives },
+        )
     }
 
     #[test]
@@ -925,17 +1042,10 @@ version = "9.9.9"
     }
 
     #[test]
-    fn commented_module_declaration_is_not_treated_as_a_download() {
-        let module = r#"# native_runtime(
-#     name = "onnxruntime_macos_arm64",
-#     integrity = "sha256-YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
-#     urls = ["https://example.invalid/runtime.tgz"],
-# )
-"#;
-        let mut errors = Vec::new();
-        let downloads = parse_module_downloads(module, "native_runtime", true, &mut errors);
-        assert!(downloads.is_empty());
-        assert!(errors.is_empty());
+    fn fixed_cli_modes_reject_override_arguments() {
+        assert!(arguments_are_empty(Vec::<&str>::new()));
+        assert!(!arguments_are_empty(["check"]));
+        assert!(!arguments_are_empty(["release"]));
     }
 
     #[test]
@@ -950,22 +1060,29 @@ version = "9.9.9"
         validate_ort_manifest(
             &Inventory { schema_version: 1, components: vec![] },
             &manifest,
-            &BTreeMap::new(),
+            &empty_downloads(),
             &mut errors,
         );
         assert!(errors.iter().any(|error| error.contains("onnxruntime-cpu is missing")));
     }
 
     #[test]
-    fn onnx_platform_url_and_hash_drift_is_rejected() {
+    fn onnx_authoritative_download_platform_url_and_hash_drift_is_rejected() {
         let (mut manifest, inventory, mut downloads) = ort_fixture();
-        downloads.get_mut("onnxruntime_macos_arm64").unwrap().url.push_str(".wrong");
+        downloads
+            .native_archives
+            .iter_mut()
+            .find(|download| download.target == "aarch64-apple-darwin")
+            .unwrap()
+            .url
+            .push_str(".wrong");
         manifest.targets.remove("x86_64-pc-windows-msvc");
         let mut errors = Vec::new();
         validate_ort_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| error.contains("exact four supported target keys")));
         assert!(errors.iter().any(|error| {
-            error.contains("aarch64-apple-darwin") && error.contains("disagrees with MODULE.bazel")
+            error.contains("aarch64-apple-darwin")
+                && error.contains("disagrees with authoritative download")
         }));
     }
 
@@ -979,11 +1096,72 @@ version = "9.9.9"
     }
 
     #[test]
+    fn empty_default_bundle_is_rejected() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.default_bundle.clear();
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("default_bundle must not be empty")));
+    }
+
+    #[test]
+    fn missing_default_bundle_is_rejected() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.default_bundle = "absent".to_owned();
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("default bundle absent is missing")));
+    }
+
+    #[test]
+    fn duplicate_bundle_id_is_rejected() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.bundles.push(ModelBundle {
+            id: "default".to_owned(),
+            upstream_version: "duplicate".to_owned(),
+            source_artifacts: vec![],
+        });
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("duplicate model bundle ID default")));
+    }
+
+    #[test]
+    fn default_bundle_must_contain_required_roles_and_artifacts_itself() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.bundles[0].source_artifacts.pop();
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("default OCR bundle default lacks required artifact")
+                && error.contains("recognizer-and-dictionary")
+        }));
+    }
+
+    #[test]
+    fn every_ocr_bundle_requires_complete_roles() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.bundles.push(ModelBundle {
+            id: "incomplete".to_owned(),
+            upstream_version: "incomplete".to_owned(),
+            source_artifacts: vec![artifact("only-detector", "detector", 'f')],
+        });
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains(
+                "OCR model bundle incomplete lacks required role recognizer-and-dictionary",
+            )
+        }));
+    }
+
+    #[test]
     fn artifact_in_later_bundle_is_not_ignored() {
         let (mut manifest, inventory, downloads) = model_fixture();
         manifest.bundles.push(ModelBundle {
+            id: "later".to_owned(),
             upstream_version: "later".to_owned(),
-            source_artifacts: vec![artifact("later-bundle-artifact", 'c')],
+            source_artifacts: vec![artifact("later-bundle-artifact", "detector", 'c')],
         });
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
@@ -996,8 +1174,9 @@ version = "9.9.9"
     fn duplicate_model_artifact_across_bundles_is_rejected() {
         let (mut manifest, inventory, downloads) = model_fixture();
         manifest.bundles.push(ModelBundle {
+            id: "duplicate-artifact".to_owned(),
             upstream_version: "duplicate".to_owned(),
-            source_artifacts: vec![artifact("pp-ocrv6-tiny-detector-source", 'd')],
+            source_artifacts: vec![artifact("pp-ocrv6-tiny-detector-source", "detector", 'd')],
         });
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
@@ -1007,7 +1186,7 @@ version = "9.9.9"
     #[test]
     fn orphan_model_inventory_component_is_rejected() {
         let (manifest, mut inventory, downloads) = model_fixture();
-        let orphan = artifact("orphan", 'e');
+        let orphan = artifact("orphan", "detector", 'e');
         inventory.components.push(model_component(&orphan.id, &orphan, "orphan"));
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
@@ -1015,13 +1194,18 @@ version = "9.9.9"
     }
 
     #[test]
-    fn model_module_url_and_hash_drift_is_rejected() {
+    fn model_authoritative_download_url_and_hash_drift_is_rejected() {
         let (manifest, inventory, mut downloads) = model_fixture();
-        downloads.get_mut("ppocrv6_tiny_detector_source").unwrap().sha256 = "f".repeat(64);
+        downloads
+            .model_files
+            .iter_mut()
+            .find(|download| download.artifact_id == "pp-ocrv6-tiny-detector-source")
+            .unwrap()
+            .sha256 = "f".repeat(64);
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| {
-            error.contains("detector-source URL/hash disagrees with MODULE.bazel")
+            error.contains("detector-source URL/hash disagrees with authoritative download")
         }));
     }
 }

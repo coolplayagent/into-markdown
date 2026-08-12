@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "model_files": [
+    {
+      "artifact_id": "pp-ocrv6-tiny-detector-source",
+      "repository": "ppocrv6_tiny_detector_source",
+      "downloaded_file_path": "PP-OCRv6_tiny_det_infer.tar",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_infer.tar",
+      "sha256": "33a23c5e18d83208f9eeeccd00ed789af891786ac9255c83aeb2495b3db9ce63"
+    },
+    {
+      "artifact_id": "pp-ocrv6-tiny-recognizer-source",
+      "repository": "ppocrv6_tiny_recognizer_source",
+      "downloaded_file_path": "PP-OCRv6_tiny_rec_infer.tar",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar",
+      "sha256": "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604"
+    }
+  ],
+  "native_archives": [
+    {
+      "target": "aarch64-apple-darwin",
+      "repository": "onnxruntime_macos_arm64",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
+      "sha256": "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92",
+      "strip_prefix": "onnxruntime-osx-arm64-1.29.0"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "repository": "onnxruntime_linux_arm64",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-aarch64-1.29.0.tgz",
+      "sha256": "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f",
+      "strip_prefix": "onnxruntime-linux-aarch64-1.29.0"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "repository": "onnxruntime_windows_x86_64",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip",
+      "sha256": "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
+      "strip_prefix": "onnxruntime-win-x64-1.29.0"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "repository": "onnxruntime_linux_x86_64",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz",
+      "sha256": "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba",
+      "strip_prefix": "onnxruntime-linux-x64-1.29.0"
+    }
+  ]
+}

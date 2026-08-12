@@ -4,7 +4,6 @@ exports_files([
     "Cargo.lock",
     "Cargo.toml",
     "LICENSE",
-    "MODULE.bazel",
     "NOTICE",
     "THIRD_PARTY_NOTICES.md",
 ])

@@ -15,8 +15,10 @@ package is fixed by `Cargo.lock`.
 
 ONNX Runtime 1.29.0 archives and the PP-OCRv6 source archives are hash-pinned,
 manual inputs. They are not linked into or copied into normal build outputs.
-Their sources and declared licenses are recorded in their existing manifests,
-and the audit binds every managed artifact's URL and hash to `MODULE.bazel`.
+Their sources and declared licenses are recorded in their existing manifests.
+The audit and the local Bzlmod extension share
+`third_party/licenses/downloads.json`, so every managed artifact's URL and hash
+has one structured download source of truth.
 
 PDFium, FFmpeg, LibreOffice, Wasmtime, generated models, and fonts are not in
 current release outputs. They remain machine-readable `planned` entries. No

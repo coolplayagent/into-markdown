@@ -18,7 +18,7 @@
 普通检查完全离线，只读取仓库文件：
 
 ```shell
-cargo run --locked --offline -p license-check -- check
+cargo run --locked --offline -p license-check --bin license-check
 bazel test //tools/license-check:license_check
 ```
 
@@ -36,8 +36,21 @@ deny 列表命中、清单重复、缺字段，或被纳入发布但仍为 `plan
 ## 当前覆盖与后续义务
 
 当前门禁覆盖 Cargo 锁文件中的 Rust 包，并将已固定但只用于手动目标的 ONNX
-Runtime 1.29.0、PP-OCRv6 detector/recognizer 源归档，与 `MODULE.bazel` 中的实际
-平台键、下载 URL 和哈希逐项绑定。后两者没有进入普通构建产物。
+Runtime 1.29.0、PP-OCRv6 detector/recognizer 源归档，与结构化权威清单
+`third_party/licenses/downloads.json` 中的平台键、下载 URL 和哈希逐项绑定。
+本地 Bzlmod extension 从同一 JSON 生成下载仓库，不解析或重复维护 MODULE 语法。
+后两者没有进入普通构建产物。
+
+`release-audit` 是不可降级的独立入口，不接受 `check` 或其他模式参数：
+
+```shell
+cargo run --locked --offline -p license-check --bin release-audit
+```
+
+模型清单的每个 bundle 都是 OCR bundle，bundle ID 必须唯一，并且必须各自包含唯一
+`detector` 与 `recognizer-and-dictionary` 角色。`default_bundle` 必须非空、存在，且
+默认 bundle 自身必须包含受管的 detector 与 recognizer/dictionary 源产物；其他
+bundle 不能替它补齐。
 
 PDFium、FFmpeg、LibreOffice、Wasmtime、字体和生成模型只是占位项。未来纳入时
 必须记录具体版本、源码 URL、哈希、补丁、构建开关、许可证文本与 NOTICE 要求。

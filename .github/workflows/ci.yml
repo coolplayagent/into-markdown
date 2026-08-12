@@ -47,4 +47,4 @@ jobs:
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Audit release licenses
-        run: cargo run --locked --offline -p license-check -- release
+        run: cargo run --locked --offline -p license-check --bin release-audit
