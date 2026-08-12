@@ -47,7 +47,8 @@ HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`�
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
 `componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
 不会读取伪造安装状态或伪装成功。格式转换、OCR 推理、Provider 请求和插件
-执行后端尚未实现。
+执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
+同样 fail closed；目录解析和离线元数据查询不受影响。
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、

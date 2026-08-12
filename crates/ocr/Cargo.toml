@@ -8,7 +8,9 @@ license.workspace = true
 
 [dependencies]
 into-markdown-core = { path = "../core" }
+getrandom.workspace = true
 libc.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

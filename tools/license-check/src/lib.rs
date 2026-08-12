@@ -35,6 +35,7 @@ struct Inventory {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OrtManifest {
     version: String,
     source: String,
@@ -43,6 +44,7 @@ struct OrtManifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OrtTarget {
     asset: String,
     sha256: String,
@@ -606,7 +608,11 @@ fn validate_ort_manifest(
     }
     let expected_source =
         format!("https://github.com/microsoft/onnxruntime/releases/tag/v{}", manifest.version);
-    if manifest.source != expected_source {
+    if manifest.version.is_empty()
+        || manifest.source != expected_source
+        || !is_canonical_https(&manifest.source)
+        || manifest.license != "MIT"
+    {
         errors.push("ONNX Runtime source is not the versioned upstream release tag".to_owned());
     }
 
@@ -641,7 +647,7 @@ fn validate_ort_manifest(
         else {
             continue;
         };
-        if !is_sha256(&asset.sha256) {
+        if !is_safe_model_file_name(&asset.asset) || !is_sha256(&asset.sha256) {
             errors.push(format!("ONNX Runtime target {target} lacks a valid SHA-256"));
         }
         let expected_url = format!(
@@ -758,7 +764,14 @@ fn collect_model_artifacts<'a>(
                 errors.push(format!("duplicate model artifact {} across bundles", artifact.id));
             }
         }
-        for required_role in ["detector", "recognizer-and-dictionary"] {
+        let required_roles = BTreeSet::from(["detector", "recognizer-and-dictionary"]);
+        if roles.keys().copied().collect::<BTreeSet<_>>() != required_roles {
+            errors.push(format!(
+                "OCR model bundle {} must have exactly the required source roles",
+                bundle.id
+            ));
+        }
+        for required_role in required_roles {
             if !roles.contains_key(required_role) {
                 errors.push(format!(
                     "OCR model bundle {} lacks required role {required_role}",
@@ -800,10 +813,10 @@ fn validate_runtime_bundle<'a>(
         errors.push(format!("model bundle {} has incomplete metadata", bundle.id));
     }
     if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
-        || !bundle
-            .source_artifacts
-            .iter()
-            .any(|item| item.id == bundle.character_set.source_artifact_id)
+        || !bundle.source_artifacts.iter().any(|item| {
+            item.id == bundle.character_set.source_artifact_id
+                && item.role == "recognizer-and-dictionary"
+        })
     {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
@@ -816,11 +829,18 @@ fn validate_runtime_bundle<'a>(
             bundle.id
         ));
     }
+    let mut runtime_roles = BTreeSet::new();
     for artifact in &bundle.runtime_artifacts {
         if !runtime_ids.insert(artifact.id.as_str()) {
             errors.push(format!("duplicate runtime model artifact {}", artifact.id));
         }
         let platforms = artifact.platforms.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if !runtime_roles.insert(artifact.role.as_str()) {
+            errors.push(format!(
+                "model bundle {} has duplicate runtime role {}",
+                bundle.id, artifact.role
+            ));
+        }
         if !is_safe_model_id(&artifact.id)
             || !is_safe_model_file_name(&artifact.file_name)
             || !is_canonical_https(&artifact.url)
@@ -845,6 +865,14 @@ fn validate_runtime_bundle<'a>(
                 artifact.id
             )),
         }
+    }
+    if !bundle.runtime_artifacts.is_empty()
+        && runtime_roles != BTreeSet::from(["detector", "recognizer-and-dictionary"])
+    {
+        errors.push(format!(
+            "model bundle {} must have exactly the required runtime roles",
+            bundle.id
+        ));
     }
 }
 
@@ -1330,6 +1358,30 @@ version = "9.9.9"
             error.contains("aarch64-apple-darwin")
                 && error.contains("disagrees with authoritative download")
         }));
+
+        for mutate in ["repository", "sha256", "strip_prefix"] {
+            let (manifest, inventory, mut downloads) = ort_fixture();
+            let download = downloads
+                .native_archives
+                .iter_mut()
+                .find(|download| download.target == "aarch64-apple-darwin")
+                .unwrap();
+            match mutate {
+                "repository" => download.repository = "wrong_repository".into(),
+                "sha256" => download.sha256 = "f".repeat(64),
+                "strip_prefix" => download.strip_prefix = "wrong-prefix".into(),
+                _ => unreachable!(),
+            }
+            let mut errors = Vec::new();
+            validate_ort_manifest(&inventory, &manifest, &downloads, &mut errors);
+            assert!(
+                errors.iter().any(|error| {
+                    error.contains("aarch64-apple-darwin")
+                        && error.contains("disagrees with authoritative download")
+                }),
+                "mutation {mutate}"
+            );
+        }
     }
 
     #[test]
@@ -1476,5 +1528,37 @@ version = "9.9.9"
         validate_download_fields(&downloads, &mut errors);
         assert!(errors.iter().any(|error| error.contains("reviewed-runtime is incomplete")));
         assert!(errors.iter().any(|error| error.contains("runtime download")));
+    }
+
+    #[test]
+    fn source_and_runtime_role_rules_match_runtime_validation() {
+        let (mut manifest, inventory, downloads) = model_fixture();
+        manifest.bundles[0].source_artifacts[1].role = "detector".into();
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("required source roles")));
+
+        let (mut manifest, inventory, mut downloads) = model_fixture();
+        let (detector, detector_download) = runtime_fixture();
+        manifest.bundles[0].runtime_artifacts.push(detector);
+        downloads.model_runtime_files.push(detector_download);
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("required runtime roles")));
+
+        let (mut recognizer, mut recognizer_download) = runtime_fixture();
+        recognizer.id = "reviewed-recognizer-runtime".into();
+        recognizer.role = "recognizer-and-dictionary".into();
+        recognizer.file_name = "recognizer.onnx".into();
+        recognizer.url = "https://example.invalid/recognizer.onnx".into();
+        recognizer_download.artifact_id = recognizer.id.clone();
+        recognizer_download.repository = "reviewed_recognizer_runtime".into();
+        recognizer_download.downloaded_file_path = recognizer.file_name.clone();
+        recognizer_download.url = recognizer.url.clone();
+        manifest.bundles[0].runtime_artifacts.push(recognizer);
+        downloads.model_runtime_files.push(recognizer_download);
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(!errors.iter().any(|error| error.contains("runtime roles")));
     }
 }

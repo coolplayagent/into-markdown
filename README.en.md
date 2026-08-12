@@ -54,6 +54,8 @@ archives but no reviewed final ONNX/character-table runtime files, so
 installation fails closed with `componentUnavailable` instead of pretending
 that source archives are installed models. Verify, path, and remove return the
 same error for this source-only entry and ignore forged install-state directories.
+Windows model installation remains fail-closed until durable, reparse-safe
+directory-handle flushing is implemented; path resolution and offline metadata remain available.
 Format conversion, OCR inference,
 provider requests, and plugin execution remain unavailable.
 

@@ -31,6 +31,10 @@
   `~/.local/share/into-markdown/models`
 - Windows x86_64：`%LOCALAPPDATA%\into-markdown\models`
 
+Windows x86_64 的目录解析与 source-only 查询可用；在实现并审计“不跟随 reparse point
+打开目录并 flush 目录 handle”前，即使未来清单加入完整 runtime files，Windows 安装
+事务也稳定返回 `componentUnavailable`，不会把空操作当作持久化成功。
+
 ## 安装事务与安全边界
 
 只有 `models install` 是模型下载授权。只有清单中经审核的最终 runtime files
@@ -41,8 +45,11 @@ runtime file 清单，因此产品命令不会创建网络连接。
 安装器在目标数据目录内创建唯一 staging 目录，在进程间锁内流式写入并同时检查
 ExecutionContext 的取消、总超时、内存与临时空间预算。每个文件必须精确匹配清单
 字节数和 SHA-256，再 `fsync` 文件、完成标记及目录。发布时先保留旧完整目录，
-再以同文件系统 rename 切换。发布前写入绑定 bundle ID、nonce 和精确目录名的版本化
-journal，并依次 `fsync` journal 与父目录；进程重启或每次管理操作访问磁盘前，
+再以同文件系统 no-replace rename 切换。发布前先将完整 journal 序列化到根身份绑定的
+随机临时文件，`write_all` 并 `fsync` 后才以 no-replace rename 发布最终 journal，随后
+`fsync` 父目录。最终 journal 携带内容校验和，并绑定 canonical 根路径、Unix dev/inode、
+权限受限的持久根 token、bundle ID、nonce 和精确目录名；跨数据根复制会被拒绝。
+进程重启或每次管理操作访问磁盘前，
 管理器根据 journal 与目录拓扑完成发布或恢复旧目录。journal 损坏、路径不匹配或存在
 多个残留时 fail closed，不触碰任何候选目录。错误、哈希不符、截断、预算不足、磁盘
 满或取消只会留下可由 journal 恢复的旧完整状态、新完整状态或无安装状态。管理器只
@@ -50,3 +57,8 @@ journal，并依次 `fsync` journal 与父目录；进程重启或每次管理�
 
 所有路径组件均来自严格 ID/文件名校验；查询、校验和清理拒绝符号链接及非普通
 对象。install/remove 共用同一锁，避免并发发布与清理发生 TOCTOU。
+
+`third_party/onnxruntime/manifest.json` 同样被运行时嵌入；其四个 target、asset、SHA-256
+必须与 `downloads.json` 的 URL、strip prefix 和固定 repository 名双向精确一致。
+source 与 runtime artifacts 的角色只允许且必须完整包含 `detector` 和
+`recognizer-and-dictionary`，角色不能重复；空 runtime 列表只允许 planned 状态。
