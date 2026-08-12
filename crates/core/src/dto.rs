@@ -1860,6 +1860,10 @@ mod tests {
             );
         }
 
+        let mut overlong = collision.clone();
+        overlong.assets[0].path = format!("assets/{}", "a".repeat(241));
+        assert_eq!(overlong.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+
         let mut case_collision = collision.clone();
         case_collision.assets = vec![
             BundleAssetDto {

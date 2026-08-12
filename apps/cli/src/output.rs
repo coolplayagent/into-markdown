@@ -203,7 +203,7 @@ fn unique_bundle_path(existing: &[String], requested: &str) -> String {
 
 fn sanitize_filename(value: &str) -> String {
     let filename = Path::new(value).file_name().and_then(|part| part.to_str()).unwrap_or("asset");
-    let sanitized = filename
+    let mut sanitized = filename
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
@@ -213,6 +213,7 @@ fn sanitize_filename(value: &str) -> String {
             }
         })
         .collect::<String>();
+    sanitized.truncate(sanitized.len().min(200));
     let sanitized = sanitized.trim_end_matches(['.', ' ']);
     if sanitized.is_empty() || matches!(sanitized, "." | "..") {
         "asset".into()
