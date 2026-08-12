@@ -171,13 +171,10 @@ pub(crate) fn sniff_unstructured_text(
     let sample = bytes.get(..sample_len).ok_or_else(|| ConversionError::Internal {
         detail: "bounded text sample exceeds input".into(),
     })?;
-    if !raw_text_safe_full(bytes, context)? {
-        return Ok(None);
-    }
     if let Ok(text) = std::str::from_utf8(sample)
         && decoded_text_safe(text)
     {
-        return Ok(Some(0.88));
+        return Ok(decoded_input_safe(bytes, Charset::Utf8, context)?.then_some(0.88));
     }
     let Some(charset) = detect_legacy(sample) else {
         return Ok(None);
@@ -186,7 +183,10 @@ pub(crate) fn sniff_unstructured_text(
     else {
         return Ok(None);
     };
-    Ok((decoded_text_safe(&text) && legacy_roundtrips(charset, sample, &text)).then_some(0.72))
+    if !decoded_text_safe(&text) || !legacy_roundtrips(charset, sample, &text) {
+        return Ok(None);
+    }
+    Ok(decoded_input_safe(bytes, charset, context)?.then_some(0.72))
 }
 
 fn sniff_bom_text(
@@ -194,9 +194,6 @@ fn sniff_bom_text(
     charset: Charset,
     context: &ExecutionContext,
 ) -> Result<Option<f32>, ConversionError> {
-    if encoded_bom_text_has_unsafe_control(bytes, charset, context)? {
-        return Ok(None);
-    }
     let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
     let sample = bytes.get(..sample_len).ok_or_else(|| ConversionError::Internal {
         detail: "bounded BOM text sample exceeds input".into(),
@@ -217,54 +214,44 @@ fn sniff_bom_text(
         }
         _ => return Ok(None),
     };
-    Ok(decoded_text_safe(&decoded).then_some(if trailing_malformed { 0.80 } else { 0.95 }))
-}
-
-fn raw_text_safe_full(bytes: &[u8], context: &ExecutionContext) -> Result<bool, ConversionError> {
-    for chunk in bytes.chunks(4096) {
-        context.checkpoint()?;
-        if !raw_text_safe(chunk) {
-            return Ok(false);
-        }
+    if !decoded_text_safe(&decoded) || !decoded_input_safe(bytes, charset, context)? {
+        return Ok(None);
     }
-    Ok(true)
+    Ok(Some(if trailing_malformed { 0.80 } else { 0.95 }))
 }
 
-fn encoded_bom_text_has_unsafe_control(
+fn decoded_input_safe(
     bytes: &[u8],
     charset: Charset,
     context: &ExecutionContext,
 ) -> Result<bool, ConversionError> {
+    let mut decoder = charset.encoding().new_decoder_without_bom_handling();
+    let mut output = String::with_capacity(16 * 1024);
     let mut offset = 0_usize;
     while offset < bytes.len() {
-        if offset.is_multiple_of(4096) {
-            context.checkpoint()?;
+        context.checkpoint()?;
+        output.clear();
+        let end = offset.saturating_add(4096).min(bytes.len());
+        let (result, read) =
+            decoder.decode_to_string_without_replacement(&bytes[offset..end], &mut output, false);
+        if !decoded_text_safe(&output) || matches!(result, DecoderResult::Malformed(_, _)) {
+            return Ok(false);
         }
-        let unsafe_control = match charset {
-            Charset::Utf8 => {
-                let byte = bytes[offset];
-                (byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
-                    || byte == 0x7f
-                    || byte == 0xc2
-                        && bytes.get(offset + 1).is_some_and(|byte| (0x80..=0x9f).contains(byte))
-            }
-            Charset::Utf16Le | Charset::Utf16Be if bytes.len() - offset >= 2 => {
-                let unit = if charset == Charset::Utf16Le {
-                    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-                } else {
-                    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
-                };
-                (unit < 0x20 && !matches!(unit, 0x09 | 0x0a | 0x0d))
-                    || (0x7f..=0x9f).contains(&unit)
-            }
-            _ => false,
-        };
-        if unsafe_control {
-            return Ok(true);
+        if result == DecoderResult::OutputFull || read == 0 {
+            return Err(ConversionError::Internal {
+                detail: format!("{} safety decoder made no bounded progress", charset.name()),
+            });
         }
-        offset += if matches!(charset, Charset::Utf16Le | Charset::Utf16Be) { 2 } else { 1 };
+        offset = offset.checked_add(read).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "text safety decoder position overflowed".into(),
+        })?;
     }
-    Ok(false)
+    output.clear();
+    let (result, read) = decoder.decode_to_string_without_replacement(b"", &mut output, true);
+    Ok(read == 0
+        && matches!(result, DecoderResult::InputEmpty | DecoderResult::Malformed(_, _))
+        && decoded_text_safe(&output))
 }
 
 fn strict_utf8_sample(bytes: &[u8], source_truncated: bool) -> Option<(String, bool)> {
@@ -299,10 +286,6 @@ fn strict_utf16_sample(
     Some((decoded.into_owned(), trailing_malformed))
 }
 
-fn raw_text_safe(bytes: &[u8]) -> bool {
-    !bytes.iter().any(|&byte| byte < 0x20 && !matches!(byte, b'\t' | b'\n' | b'\r'))
-}
-
 fn decoded_text_safe(text: &str) -> bool {
     if text.is_empty() {
         return true;
@@ -313,13 +296,17 @@ fn decoded_text_safe(text: &str) -> bool {
     let mut printable = 0_usize;
     for value in text.chars() {
         total += 1;
-        unsafe_controls += usize::from(value.is_control() && !matches!(value, '\t' | '\n' | '\r'));
+        unsafe_controls += usize::from(is_unsafe_auto_control(value));
         replacement += usize::from(value == '\u{fffd}');
-        printable += usize::from(!value.is_control() || matches!(value, '\t' | '\n' | '\r'));
+        printable += usize::from(!is_unsafe_auto_control(value));
     }
     unsafe_controls == 0
         && replacement.saturating_mul(100) <= total.saturating_mul(MAX_UNSAFE_PERCENT)
         && printable.saturating_mul(100) >= total.saturating_mul(MIN_PRINTABLE_PERCENT)
+}
+
+fn is_unsafe_auto_control(value: char) -> bool {
+    matches!(value, '\0'..='\u{8}' | '\u{b}'..='\u{c}' | '\u{e}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
 }
 
 fn legacy_roundtrips(charset: Charset, bytes: &[u8], text: &str) -> bool {
@@ -371,11 +358,6 @@ fn select_charset(
     }
     if std::str::from_utf8(bytes).is_ok() {
         return Ok((Charset::Utf8, 0));
-    }
-    if !raw_text_safe(bytes) {
-        return Err(ConversionError::Unsupported {
-            detail: "input does not satisfy plain-text binary safety thresholds".into(),
-        });
     }
     let charset = detect_legacy(bytes).ok_or_else(|| ConversionError::Malformed {
         part: Some("charset".into()),
@@ -1075,6 +1057,32 @@ mod tests {
     #[test]
     fn binary_disguised_as_text_is_not_auto_detected() {
         assert_eq!(sniff(b"MZ\0\x01\x02payload"), None);
+    }
+
+    #[test]
+    fn full_input_unicode_control_policy_covers_utf8_legacy_and_safe_text() {
+        let mut safe = vec![b'A'; TEXT_SNIFF_BYTE_LIMIT + 4096];
+        safe.extend_from_slice(" 安全文本\tline\r\n".as_bytes());
+        assert_eq!(sniff(&safe), Some(0.88));
+
+        for suffix in [b"\x7f".as_slice(), b"\xc2\x80".as_slice(), b"\xc2\x9f".as_slice()] {
+            let mut unsafe_text = vec![b'A'; TEXT_SNIFF_BYTE_LIMIT + 4096];
+            unsafe_text.extend_from_slice(suffix);
+            assert_eq!(sniff(&unsafe_text), None);
+            assert!(!decoded_input_safe(&unsafe_text, Charset::Utf8, &context()).unwrap());
+        }
+
+        let (legacy_control, _, had_errors) = SHIFT_JIS.encode("\u{80}");
+        assert!(!had_errors);
+        let mut legacy = Charset::ShiftJis
+            .encoding()
+            .encode("日本語の文字コード判定に十分な長さの文章です。")
+            .0
+            .into_owned();
+        legacy.extend(std::iter::repeat_n(b'A', TEXT_SNIFF_BYTE_LIMIT + 4096));
+        legacy.extend_from_slice(&legacy_control);
+        assert!(!decoded_input_safe(&legacy, Charset::ShiftJis, &context()).unwrap());
+        assert_eq!(sniff(&legacy), None);
     }
 
     #[test]

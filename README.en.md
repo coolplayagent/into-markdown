@@ -54,6 +54,8 @@ TXT conversion is available for UTF-8, BOM-marked UTF-16, and a bounded set of
 detectable legacy encodings. Explicit `--charset` also accepts `windows-1252`,
 `gb18030`, `big5`, and `shift_jis`. Invalid sequences fail strictly by default;
 `--encoding-errors replace` emits byte-ranged diagnostics for every recovery.
+Automatic detection decodes the complete input and rejects C0, DEL, and C1
+controls other than tab and line endings.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source

@@ -111,6 +111,43 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
 }
 
 #[test]
+fn full_input_unicode_controls_never_auto_detect_as_text() {
+    let directory = tempfile::tempdir().unwrap();
+    for (name, suffix) in [("del", b"\x7f".as_slice()), ("c1", b"\xc2\x80".as_slice())] {
+        let path = directory.path().join(name);
+        let mut contents = vec![b'A'; 70 * 1024];
+        contents.extend_from_slice(suffix);
+        std::fs::write(&path, contents).unwrap();
+
+        let detected = Command::new(binary())
+            .args(["formats", "detect", "--no-config", "--json", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(detected.status.success(), "{}", String::from_utf8_lossy(&detected.stderr));
+        let detected: serde_json::Value = serde_json::from_slice(&detected.stdout).unwrap();
+        assert!(
+            detected["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate["format"] != "text")
+        );
+
+        let converted =
+            Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+        assert!(!converted.status.success());
+    }
+
+    let safe_path = directory.path().join("safe.txt");
+    let mut safe = vec![b'A'; 70 * 1024];
+    safe.extend_from_slice(" 安全文本\tline\r\n".as_bytes());
+    std::fs::write(&safe_path, safe).unwrap();
+    let converted =
+        Command::new(binary()).args(["--no-config", safe_path.to_str().unwrap()]).output().unwrap();
+    assert!(converted.status.success(), "{}", String::from_utf8_lossy(&converted.stderr));
+}
+
+#[test]
 fn excessive_txt_inlines_exit_as_resource_limit_not_internal() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("too-many-lines.txt");

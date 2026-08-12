@@ -49,7 +49,7 @@ TXT 转换可用，支持 UTF-8、带 BOM 的 UTF-16 与受限的常见字符集
 `--charset` 支持 `windows-1252`、`gb18030`、`big5` 和 `shift_jis`。无效序列默认
 严格失败，`--encoding-errors replace` 会替换并输出带原始字节范围和替换数量的诊断。
 自动检测会为完整 JSON 及具备三行和类型证据的 CSV/TSV 候选让路；带 BOM 的输入也会
-扫描完整内容，除 TAB、LF、CR 外的任一控制字符都会拒绝自动 TXT 候选。
+按实际字符集解码完整内容，除 TAB、LF、CR 外的 C0、DEL 或 C1 都会拒绝自动 TXT 候选。
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定

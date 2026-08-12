@@ -1588,13 +1588,10 @@ fn scan_json_string(
                     return Ok(JsonLexeme::Open);
                 };
                 if escape == b'u' {
-                    let Some(hex) = bytes.get(offset + 1..offset + 5) else {
-                        return Ok(JsonLexeme::Open);
+                    offset = match scan_json_unicode_escape(bytes, offset) {
+                        Ok(next) => next,
+                        Err(status) => return Ok(status),
                     };
-                    if !hex.iter().all(u8::is_ascii_hexdigit) {
-                        return Ok(JsonLexeme::Invalid);
-                    }
-                    offset += 5;
                     continue;
                 }
                 if !matches!(escape, b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') {
@@ -1623,6 +1620,48 @@ fn scan_json_string(
         offset += 1;
     }
     Ok(JsonLexeme::Open)
+}
+
+fn scan_json_unicode_escape(bytes: &[u8], u_offset: usize) -> Result<usize, JsonLexeme> {
+    let first = parse_json_hex_quad(bytes, u_offset + 1)?;
+    let next = u_offset + 5;
+    if (0xdc00..=0xdfff).contains(&first) {
+        return Err(JsonLexeme::Invalid);
+    }
+    if !(0xd800..=0xdbff).contains(&first) {
+        return Ok(next);
+    }
+    if bytes.get(next..next + 2) != Some(b"\\u") {
+        return Err(JsonLexeme::Invalid);
+    }
+    let low = parse_json_hex_quad(bytes, next + 2).map_err(|_| JsonLexeme::Invalid)?;
+    if !(0xdc00..=0xdfff).contains(&low) {
+        return Err(JsonLexeme::Invalid);
+    }
+    Ok(next + 6)
+}
+
+fn parse_json_hex_quad(bytes: &[u8], start: usize) -> Result<u16, JsonLexeme> {
+    let Some(hex) = bytes.get(start..start + 4) else {
+        return Err(
+            if bytes.get(start..).is_some_and(|tail| tail.iter().all(u8::is_ascii_hexdigit)) {
+                JsonLexeme::Open
+            } else {
+                JsonLexeme::Invalid
+            },
+        );
+    };
+    let mut value = 0_u16;
+    for &digit in hex {
+        let Some(nibble) = char::from(digit).to_digit(16) else {
+            return Err(JsonLexeme::Invalid);
+        };
+        value = value
+            .checked_mul(16)
+            .and_then(|value| value.checked_add(u16::try_from(nibble).ok()?))
+            .ok_or(JsonLexeme::Invalid)?;
+    }
+    Ok(value)
 }
 
 fn scan_json_number(
@@ -3408,6 +3447,43 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(invalid)
             );
+        }
+    }
+
+    #[test]
+    fn json_scanner_requires_well_formed_utf16_surrogate_escapes() {
+        for valid in [
+            br#"{"emoji":"\uD83D\uDE00"}"#.as_slice(),
+            br#"{"pairs":"\uD83D\uDE00\uD834\uDD1E"}"#.as_slice(),
+            br#"{"bmp":"\u4e2d\u0000"}"#.as_slice(),
+            br#"{"text":"\\uD800 is not a Unicode escape"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                scan_json(valid, &execution_context()).unwrap().status,
+                JsonScanStatus::Complete,
+                "{}",
+                String::from_utf8_lossy(valid)
+            );
+        }
+
+        for invalid in [
+            br#"{"bad":"\uD800"}"#.as_slice(),
+            br#"{"bad":"\uD800x"}"#.as_slice(),
+            br#"{"bad":"\uD800\u0041"}"#.as_slice(),
+            br#"{"bad":"\uDC00"}"#.as_slice(),
+            br#"{"bad":"\uD800\uD800"}"#.as_slice(),
+            br#"{"bad":"\uD800\u"}"#.as_slice(),
+            br#"{"bad":"\uD800"#.as_slice(),
+            br#"{"bad":"\uD800\uD"#.as_slice(),
+        ] {
+            assert_eq!(
+                scan_json(invalid, &execution_context()).unwrap().status,
+                JsonScanStatus::Invalid,
+                "{}",
+                String::from_utf8_lossy(invalid)
+            );
+            assert_eq!(structured(invalid), None);
+            assert_eq!(detect(invalid)[0].format, InputFormat::Text);
         }
     }
 
