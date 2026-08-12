@@ -10,13 +10,10 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
-/// Versioned IR transport envelope.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IrDocument<'a> {
-    schema_version: u32,
-    document: &'a Document,
-}
+// These wire protocols evolve independently from the Document IR schema.
+const RESULT_DOCUMENT_SCHEMA_VERSION: u32 = 1;
+const BUNDLE_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const BATCH_REPORT_SCHEMA_VERSION: u32 = 1;
 
 /// Versioned conversion result transport envelope.
 #[derive(Serialize)]
@@ -92,7 +89,7 @@ impl BatchReport {
     pub fn new(items: Vec<BatchItemReport>) -> Self {
         let succeeded = items.iter().filter(|item| item.status == "success").count();
         let failed = items.iter().filter(|item| item.status == "failed").count();
-        Self { schema_version: 1, succeeded, failed, items }
+        Self { schema_version: BATCH_REPORT_SCHEMA_VERSION, succeeded, failed, items }
     }
 }
 
@@ -100,11 +97,9 @@ impl BatchReport {
 pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
     match emit {
         EmitKind::Markdown => Ok(result.markdown.as_bytes().to_vec()),
-        EmitKind::IrJson => {
-            pretty_json(&IrDocument { schema_version: 1, document: &result.document })
-        }
+        EmitKind::IrJson => pretty_json(&result.document),
         EmitKind::ResultJson => pretty_json(&ResultDocument {
-            schema_version: 1,
+            schema_version: RESULT_DOCUMENT_SCHEMA_VERSION,
             markdown: &result.markdown,
             document: &result.document,
             assets: result
@@ -197,7 +192,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
         });
     }
     let manifest = BundleManifest {
-        schema_version: 1,
+        schema_version: BUNDLE_MANIFEST_SCHEMA_VERSION,
         markdown: "document.md",
         document_ir: "document.ir.json",
         diagnostics: "diagnostics.json",
@@ -206,10 +201,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     };
     let entries = [
         ("diagnostics.json", pretty_json(&result.diagnostics)?),
-        (
-            "document.ir.json",
-            pretty_json(&IrDocument { schema_version: 1, document: &result.document })?,
-        ),
+        ("document.ir.json", pretty_json(&result.document)?),
         ("document.md", result.markdown.as_bytes().to_vec()),
         ("manifest.json", pretty_json(&manifest)?),
         ("provenance.json", pretty_json(&result.provenance)?),
@@ -363,6 +355,25 @@ mod tests {
             String::from_utf8(encode_result(&result, EmitKind::ResultJson).unwrap()).unwrap();
         assert!(ir.contains("\"schemaVersion\": 1"));
         assert!(full.contains("\"dataBase64\": \"AQID\""));
+    }
+
+    #[test]
+    fn cli_dto_versions_are_independent_from_document_ir_version() {
+        let mut result = empty_result();
+        result.document.schema_version = 27;
+        let full: serde_json::Value =
+            serde_json::from_slice(&encode_result(&result, EmitKind::ResultJson).unwrap()).unwrap();
+        assert_eq!(full["schemaVersion"], RESULT_DOCUMENT_SCHEMA_VERSION);
+        assert_eq!(full["document"]["schemaVersion"], 27);
+
+        let bundle = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
+        assert_eq!(manifest["schemaVersion"], BUNDLE_MANIFEST_SCHEMA_VERSION);
+
+        let report = BatchReport::new(vec![]);
+        assert_eq!(report.schema_version, BATCH_REPORT_SCHEMA_VERSION);
     }
 
     #[test]

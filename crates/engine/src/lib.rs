@@ -203,6 +203,15 @@ impl Engine {
             .converter
             .convert(&input, &attempt.candidate, &request.options, &self.services)
             .await?;
+        output.document.validate().map_err(|error| ConversionError::Internal {
+            detail: format!(
+                "converter {} returned invalid document IR ({} at {}): {}",
+                attempt.converter.id(),
+                error.code.as_str(),
+                error.path,
+                error.detail
+            ),
+        })?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
@@ -407,6 +416,9 @@ mod tests {
             Box::pin(async move {
                 let mut document = Document::default();
                 document.metadata.title = Some(id.into());
+                if id == "invalid.converter" {
+                    document.schema_version += 1;
+                }
                 Ok(ConverterOutput { document, ..ConverterOutput::default() })
             })
         }
@@ -476,5 +488,20 @@ mod tests {
         let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
         let result = block_on(engine.convert(request)).unwrap();
         assert_eq!(result.document.metadata.title.as_deref(), Some("a.converter"));
+    }
+
+    #[test]
+    fn invalid_converter_ir_is_rejected_before_rendering() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(MatchingConverter("invalid.converter")));
+        let engine = builder.build().unwrap();
+        let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let error = block_on(engine.convert(request)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+        assert!(error.to_string().contains("unsupportedSchemaVersion"));
     }
 }
