@@ -19,12 +19,13 @@ Document IR 自己的 `schemaVersion` 与外围 DTO 独立演进；例如 result
 DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resourceLimit`；显示
 文本只用于人工排错，程序必须按错误码处理。
 
-公开 DTO 只实现 `Serialize`，不实现 `Deserialize`。因此 `serde_json::from_str::<ResultDto>`
-和未来 `axum::Json<ResultDto>` 在类型层不可用；HTTP、SSE、CLI 和库调用方必须使用
-`from_json` 或 `from_json_with_limits`。这些入口先解析私有 Raw 类型，再返回通过版本、
-预算和不变量检查的 DTO，避免框架 extractor 绕过稳定边界。字段公开用于读取已验证结果
-及应用代码显式构造；任何出站对象仍须调用 `to_json` 或 `to_pretty_json`，二者执行完整
-验证。
+公开 DTO 既不实现 `Serialize`，也不实现 `Deserialize`。因此
+`serde_json::from_str::<ResultDto>`、`serde_json::to_string(&result)` 和未来直接使用
+`axum::Json<ResultDto>` 作为 extractor 或 response 均在类型层不可用；HTTP、SSE、CLI 和
+库调用方入站必须使用 `from_json` 或 `from_json_with_limits`，出站必须使用 `to_json` 或
+`to_pretty_json`。这些入口通过私有 Raw wire 类型编码或解码，并执行版本、预算和不变量
+检查，避免框架绕过稳定边界。字段公开用于读取已验证结果及应用代码显式构造，但不能
+直接进入通用 serde/Axum wire 边界。
 
 ## 顶层 DTO
 
