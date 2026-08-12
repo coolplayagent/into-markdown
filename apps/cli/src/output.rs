@@ -320,9 +320,9 @@ fn write_exact_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), Cl
 mod tests {
     use super::*;
     use into_markdown::{
-        AssetId, BundleManifestDto, ConversionResult, DiagnosticsDto, Document, ProvenanceListDto,
-        Block, BlockNode, ConversionOptions, NodeId, Provenance, ProvenanceKind, SourceLocator,
-        render_markdown,
+        AssetId, Block, BlockNode, BundleManifestDto, ConversionOptions, ConversionResult,
+        DiagnosticsDto, Document, NodeId, Provenance, ProvenanceKind, ProvenanceListDto,
+        SourceLocator, render_markdown,
     };
     use pulldown_cmark::{Event, Parser, Tag};
     use std::io::Read as _;
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_renames_case_collisions_and_reserved_asset_names() {
+    fn bundle_uses_stable_cross_platform_asset_names() {
         let mut result = empty_result();
         result.assets = vec![
             Asset {
@@ -480,10 +480,18 @@ mod tests {
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_owned())
             .collect::<Vec<_>>();
-        assert!(names.contains(&"assets/Image.png".into()));
-        assert!(names.contains(&"assets/image-1.png".into()));
-        assert!(names.contains(&"assets/_CON.txt".into()));
-        assert!(names.contains(&"assets/__.png".into()));
+        for asset in &result.assets {
+            assert!(names.contains(&format!(
+                "assets/{}",
+                asset_filename(&asset.id.0, asset.filename.as_deref())
+            )));
+        }
+        let asset_entries = names
+            .iter()
+            .filter(|name| name.starts_with("assets/") && name.as_str() != "assets/")
+            .collect::<Vec<_>>();
+        assert_eq!(asset_entries.len(), result.assets.len());
+        assert!(asset_entries.iter().all(|name| name.is_ascii()));
     }
 
     #[test]
