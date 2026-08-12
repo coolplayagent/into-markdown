@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "components": [
+    {
+      "id": "onnxruntime-cpu",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "1.29.0",
+      "source": "https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0",
+      "license": "MIT",
+      "obligations": "If distributed, preserve the upstream MIT license and copyright notice; select only a hash-pinned platform archive."
+    },
+    {
+      "id": "pp-ocrv6-tiny-detector-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "PP-OCRv6 tiny / PaddleOCR 3.x",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_infer.tar",
+      "license": "Apache-2.0",
+      "obligations": "If distributed, include Apache-2.0 and any upstream NOTICE; record derived-model provenance separately."
+    },
+    {
+      "id": "pp-ocrv6-tiny-recognizer-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "PP-OCRv6 tiny / PaddleOCR 3.x",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar",
+      "license": "Apache-2.0",
+      "obligations": "If distributed, include Apache-2.0 and any upstream NOTICE; preserve dictionary and derived-model provenance."
+    },
+    {"id": "pdfium", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {"id": "ffmpeg", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {"id": "libreoffice", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {"id": "wasmtime", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {"id": "generated-onnx-models", "kind": "model", "status": "planned", "included_in_release": false},
+    {"id": "distribution-fonts", "kind": "font", "status": "planned", "included_in_release": false}
+  ]
+}

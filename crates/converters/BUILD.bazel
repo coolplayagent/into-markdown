@@ -2,6 +2,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//crates:__subpackages__"])
 
+exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
+
 rust_library(
     name = "converters",
     srcs = glob(["src/**/*.rs"]),

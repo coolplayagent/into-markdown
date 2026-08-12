@@ -1,0 +1,72 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+DATA = [
+    "//:Cargo.lock",
+    "//:Cargo.toml",
+    "//:LICENSE",
+    "//:NOTICE",
+    "//:THIRD_PARTY_NOTICES.md",
+    "//models:manifest.json",
+    "//third_party/licenses:inventory.json",
+    "//third_party/licenses:policy.json",
+    "//third_party/licenses:rust-lock.tsv",
+    "//third_party/onnxruntime:manifest.json",
+    ":Cargo.toml",
+    "//apps/cli:Cargo.toml",
+    "//crates/ai:Cargo.toml",
+    "//crates/api:Cargo.toml",
+    "//crates/converters:Cargo.toml",
+    "//crates/core:Cargo.toml",
+    "//crates/engine:Cargo.toml",
+    "//crates/ocr:Cargo.toml",
+    "//crates/render-markdown:Cargo.toml",
+]
+
+rust_library(
+    name = "license_check_lib",
+    srcs = ["src/lib.rs"],
+    crate_name = "license_check",
+    edition = "2024",
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:toml",
+    ],
+)
+
+rust_binary(
+    name = "offline_license_check",
+    srcs = ["src/main.rs"],
+    crate_name = "license_check_bin",
+    data = DATA,
+    edition = "2024",
+    deps = [":license_check_lib"],
+)
+
+rust_binary(
+    name = "release_audit",
+    srcs = ["src/main.rs"],
+    crate_name = "release_audit",
+    data = DATA,
+    edition = "2024",
+    rustc_env = {"LICENSE_CHECK_DEFAULT_MODE": "release"},
+    deps = [":license_check_lib"],
+)
+
+rust_test(
+    name = "license_check_unit_test",
+    crate = ":license_check_lib",
+)
+
+rust_test(
+    name = "license_check",
+    srcs = ["tests/repository.rs"],
+    crate_name = "repository_license_test",
+    data = DATA,
+    edition = "2024",
+    deps = [":license_check_lib"],
+)

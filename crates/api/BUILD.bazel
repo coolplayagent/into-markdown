@@ -2,6 +2,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["Cargo.toml"])
+
 rust_library(
     name = "into_markdown",
     srcs = glob(["src/**/*.rs"]),
