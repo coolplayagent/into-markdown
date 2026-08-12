@@ -6,8 +6,9 @@ use into_markdown_core::{
     Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
     Diagnostic, DiagnosticSeverity, Document, ExecutionContext, FormatCandidate, Inline,
     InputFormat, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance,
-    ProvenanceKind, ResolvedInput, Services, SourceLocator, TextDecodingMode,
+    ProvenanceKind, ResolvedInput, ResourceReservation, Services, SourceLocator, TextDecodingMode,
 };
+use std::mem::size_of;
 
 const TEXT_FORMATS: &[InputFormat] = &[InputFormat::Text];
 const PROVIDER_ID: &str = "builtin.converter.text";
@@ -226,6 +227,7 @@ fn decoded_input_safe(
     context: &ExecutionContext,
 ) -> Result<bool, ConversionError> {
     let mut decoder = charset.encoding().new_decoder_without_bom_handling();
+    let _output_memory = context.reserve_memory(16 * 1024)?;
     let mut output = String::with_capacity(16 * 1024);
     let mut offset = 0_usize;
     while offset < bytes.len() {
@@ -385,7 +387,87 @@ pub(crate) fn decode_source(
     context: &ExecutionContext,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
     let (charset, bom_len) = select_charset(bytes, explicit_charset)?;
-    decode_mapped(&bytes[bom_len..], bom_len, charset, mode, context)
+    let memory = LogicalMemory::new(context)?;
+    decode_mapped(&bytes[bom_len..], bom_len, charset, mode, context, memory)
+}
+
+/// Logical heap-capacity accounting shared by text-family converters.
+///
+/// The accounting covers requested `String` bytes and `Vec<T>` element slots.
+/// Allocator bookkeeping and platform-specific size-class slack are excluded;
+/// every logical capacity increase is charged before its allocation request.
+pub(crate) struct LogicalMemory {
+    reservation: ResourceReservation,
+}
+
+impl LogicalMemory {
+    pub(crate) fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
+        Ok(Self { reservation: context.reserve_memory(0)? })
+    }
+
+    pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        self.reservation.grow(u64::try_from(bytes).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "logical heap capacity cannot be represented as u64".into(),
+        })?)
+    }
+
+    pub(crate) fn reserve_vec<T>(
+        &mut self,
+        vector: &mut Vec<T>,
+        additional: usize,
+    ) -> Result<(), ConversionError> {
+        let required =
+            vector.len().checked_add(additional).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical vector capacity overflowed".into(),
+            })?;
+        if required <= vector.capacity() {
+            return Ok(());
+        }
+        let target = required.max(vector.capacity().saturating_mul(2)).max(4);
+        let new_slots = target.checked_sub(vector.capacity()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical vector capacity underflowed".into(),
+            }
+        })?;
+        self.charge(new_slots.checked_mul(size_of::<T>()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical vector byte capacity overflowed".into(),
+            }
+        })?)?;
+        vector.try_reserve_exact(target - vector.len()).map_err(|error| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!("logical vector allocation failed: {error}"),
+            }
+        })
+    }
+
+    pub(crate) fn reserve_string(
+        &mut self,
+        string: &mut String,
+        additional: usize,
+    ) -> Result<(), ConversionError> {
+        let required =
+            string.len().checked_add(additional).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical string capacity overflowed".into(),
+            })?;
+        if required <= string.capacity() {
+            return Ok(());
+        }
+        let target = required.max(string.capacity().saturating_mul(2)).max(64);
+        self.charge(target - string.capacity())?;
+        string.try_reserve_exact(target - string.len()).map_err(|error| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!("logical string allocation failed: {error}"),
+            }
+        })
+    }
 }
 
 fn convert_text(
@@ -404,24 +486,6 @@ fn convert_text(
             detail: format!("{size} > {}", options.limits.max_input_bytes),
         });
     }
-    // Legacy single-byte characters can expand to three UTF-8 bytes. Count raw
-    // newline bytes conservatively to cover line vectors and resulting IR
-    // containers while both are live (UTF-16 non-newline low bytes may only
-    // over-reserve, never under-reserve).
-    let newline_count = input.bytes.iter().filter(|&&byte| matches!(byte, b'\r' | b'\n')).count();
-    let newline_count =
-        u64::try_from(newline_count).map_err(|_| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "text newline count cannot be represented as u64".into(),
-        })?;
-    let working_bytes = size
-        .checked_mul(3)
-        .and_then(|text| newline_count.checked_mul(96).and_then(|lines| text.checked_add(lines)))
-        .ok_or_else(|| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "text decoding memory estimate overflowed".into(),
-        })?;
-    let _working_memory = context.reserve_memory(working_bytes)?;
     let (decoded, diagnostics) = decode_source(
         &input.bytes,
         options.text.charset.as_deref(),
@@ -433,7 +497,13 @@ fn convert_text(
             limit: "max_text_decoded_bytes",
             detail: "decoded text byte budget overflowed".into(),
         })?;
-    let document = build_document(decoded.into_lines(), max_decoded_text_bytes, context)?;
+    let mut lines = decoded.into_lines(context)?;
+    let document = build_document(
+        std::mem::take(&mut lines.lines),
+        max_decoded_text_bytes,
+        context,
+        &mut lines.memory,
+    )?;
     Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
 }
 
@@ -443,11 +513,14 @@ fn decode_mapped(
     charset: Charset,
     mode: TextDecodingMode,
     context: &ExecutionContext,
+    memory: LogicalMemory,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
     match charset {
-        Charset::Utf8 => decode_utf8(bytes, base, mode, charset, context),
-        Charset::Utf16Le | Charset::Utf16Be => decode_utf16(bytes, base, mode, charset, context),
-        _ => decode_legacy(bytes, base, mode, charset, context),
+        Charset::Utf8 => decode_utf8(bytes, base, mode, charset, context, memory),
+        Charset::Utf16Le | Charset::Utf16Be => {
+            decode_utf16(bytes, base, mode, charset, context, memory)
+        }
+        _ => decode_legacy(bytes, base, mode, charset, context, memory),
     }
 }
 
@@ -457,8 +530,9 @@ fn decode_utf8(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
+    memory: LogicalMemory,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
-    let mut decoded = DecodedText::default();
+    let mut decoded = DecodedText::new(base, memory);
     let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -467,7 +541,7 @@ fn decode_utf8(
         }
         match std::str::from_utf8(&bytes[offset..]) {
             Ok(valid) => {
-                push_str_units(&mut decoded, valid, base + offset);
+                push_str_units(&mut decoded, valid, base + offset)?;
                 break;
             }
             Err(error) => {
@@ -478,7 +552,7 @@ fn decode_utf8(
                             detail: "UTF-8 validation prefix changed".into(),
                         }
                     })?;
-                push_str_units(&mut decoded, valid, base + offset);
+                push_str_units(&mut decoded, valid, base + offset)?;
                 offset += valid_len;
                 let invalid_len = error.error_len().unwrap_or(bytes.len() - offset).max(1);
                 recover_invalid(
@@ -493,13 +567,19 @@ fn decode_utf8(
             }
         }
     }
-    Ok((decoded, recoveries.into_diagnostics(charset)))
+    let diagnostics = recoveries.into_diagnostics(charset, &mut decoded.memory)?;
+    Ok((decoded, diagnostics))
 }
 
-fn push_str_units(decoded: &mut impl DecodedSink, text: &str, base: usize) {
+fn push_str_units(
+    decoded: &mut impl DecodedSink,
+    text: &str,
+    base: usize,
+) -> Result<(), ConversionError> {
     for (offset, value) in text.char_indices() {
-        decoded.push(value, base + offset, base + offset + value.len_utf8());
+        decoded.push(value, base + offset, base + offset + value.len_utf8())?;
     }
+    Ok(())
 }
 
 fn decode_utf16(
@@ -508,8 +588,9 @@ fn decode_utf16(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
+    memory: LogicalMemory,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
-    let mut decoded = DecodedText::default();
+    let mut decoded = DecodedText::new(base, memory);
     let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -566,7 +647,7 @@ fn decode_utf16(
             (char::from_u32(u32::from(first)), 2)
         };
         if let Some(value) = value {
-            decoded.push(value, base + offset, base + offset + width);
+            decoded.push(value, base + offset, base + offset + width)?;
         } else {
             recover_invalid(
                 &mut decoded,
@@ -579,7 +660,8 @@ fn decode_utf16(
         }
         offset += width;
     }
-    Ok((decoded, recoveries.into_diagnostics(charset)))
+    let diagnostics = recoveries.into_diagnostics(charset, &mut decoded.memory)?;
+    Ok((decoded, diagnostics))
 }
 
 fn decode_legacy(
@@ -588,10 +670,12 @@ fn decode_legacy(
     mode: TextDecodingMode,
     charset: Charset,
     context: &ExecutionContext,
+    memory: LogicalMemory,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
-    let mut lines_builder = DecodedText::default();
+    let mut lines_builder = DecodedText::new(base, memory);
     let mut recoveries = RecoveryTracker::default();
     let mut charset_decoder = charset.encoding().new_decoder_without_bom_handling();
+    lines_builder.memory.charge(16)?;
     let mut output = String::with_capacity(16);
     let mut offset = 0;
     let mut sequence_start = 0;
@@ -618,7 +702,7 @@ fn decode_legacy(
                         &output,
                         base + sequence_start,
                         base + consumed_end,
-                    );
+                    )?;
                     sequence_start = consumed_end;
                 }
                 if consumed_end <= offset {
@@ -652,7 +736,7 @@ fn decode_legacy(
                         &output,
                         base + sequence_start,
                         base + error_start,
-                    );
+                    )?;
                 }
                 recover_invalid(
                     &mut lines_builder,
@@ -687,7 +771,8 @@ fn decode_legacy(
         charset,
         mode,
     )?;
-    Ok((lines_builder, recoveries.into_diagnostics(charset)))
+    let diagnostics = recoveries.into_diagnostics(charset, &mut lines_builder.memory)?;
+    Ok((lines_builder, diagnostics))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -713,7 +798,7 @@ fn finish_legacy_decoder(
         match result {
             DecoderResult::InputEmpty => {
                 if !output.is_empty() {
-                    push_str_range(lines_builder, output, base + sequence_start, base + input_len);
+                    push_str_range(lines_builder, output, base + sequence_start, base + input_len)?;
                 }
                 return Ok(());
             }
@@ -741,7 +826,7 @@ fn finish_legacy_decoder(
                         output,
                         base + sequence_start,
                         base + error_start,
-                    );
+                    )?;
                 }
                 recover_invalid(
                     lines_builder,
@@ -768,10 +853,16 @@ fn finish_legacy_decoder(
     })
 }
 
-fn push_str_range(decoded: &mut impl DecodedSink, text: &str, start: usize, end: usize) {
+fn push_str_range(
+    decoded: &mut impl DecodedSink,
+    text: &str,
+    start: usize,
+    end: usize,
+) -> Result<(), ConversionError> {
     for value in text.chars() {
-        decoded.push(value, start, end);
+        decoded.push(value, start, end)?;
     }
+    Ok(())
 }
 
 fn recover_invalid(
@@ -791,8 +882,8 @@ fn recover_invalid(
             ),
         });
     }
-    decoded.push('\u{fffd}', start, end);
-    recoveries.record(start, end)?;
+    decoded.push('\u{fffd}', start, end)?;
+    recoveries.record(start, end, decoded.memory())?;
     Ok(())
 }
 
@@ -809,7 +900,12 @@ struct RecoveryTracker {
 }
 
 impl RecoveryTracker {
-    fn record(&mut self, start: usize, end: usize) -> Result<(), ConversionError> {
+    fn record(
+        &mut self,
+        start: usize,
+        end: usize,
+        memory: &mut LogicalMemory,
+    ) -> Result<(), ConversionError> {
         if let Some(previous) = self.spans.last_mut()
             && previous.end == start
         {
@@ -822,14 +918,23 @@ impl RecoveryTracker {
             })?;
             return Ok(());
         }
+        memory.reserve_vec(&mut self.spans, 1)?;
         self.spans.push(RecoverySpan { start, end, replacements: 1 });
         Ok(())
     }
 
-    fn into_diagnostics(self, charset: Charset) -> Vec<Diagnostic> {
-        self.spans
-            .into_iter()
-            .map(|span| Diagnostic {
+    fn into_diagnostics(
+        self,
+        charset: Charset,
+        memory: &mut LogicalMemory,
+    ) -> Result<Vec<Diagnostic>, ConversionError> {
+        let mut diagnostics = Vec::new();
+        memory.reserve_vec(&mut diagnostics, self.spans.len())?;
+        for span in self.spans {
+            // Decimal offsets/counts and the longest supported charset name
+            // fit this fixed logical message allowance.
+            memory.charge(256 + INVALID_SEQUENCE_CODE.len())?;
+            diagnostics.push(Diagnostic {
                 code: INVALID_SEQUENCE_CODE.into(),
                 severity: DiagnosticSeverity::Warning,
                 message: format!(
@@ -840,8 +945,9 @@ impl RecoveryTracker {
                     span.end
                 ),
                 locator: Some(byte_locator(span.start, span.end)),
-            })
-            .collect()
+            });
+        }
+        Ok(diagnostics)
     }
 }
 
@@ -853,113 +959,260 @@ struct Line {
 }
 
 trait DecodedSink {
-    fn push(&mut self, value: char, start: usize, end: usize);
+    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError>;
+    fn memory(&mut self) -> &mut LogicalMemory;
 }
 
-#[derive(Debug)]
-struct DecodedUnit {
-    utf8_start: usize,
-    utf8_end: usize,
-    source_start: usize,
-    source_end: usize,
+#[derive(Debug, Clone, Copy)]
+struct MapRun {
+    decoded_start: u64,
+    source_start: u64,
+    units: u32,
+    decoded_width: u32,
+    source_width: u32,
+}
+
+impl MapRun {
+    fn decoded_end(self) -> u64 {
+        self.decoded_start + u64::from(self.units) * u64::from(self.decoded_width)
+    }
+
+    fn source_end(self) -> u64 {
+        self.source_start + u64::from(self.units) * u64::from(self.source_width)
+    }
 }
 
 /// Decoded UTF-8 and its monotonic mapping back to original encoded bytes.
-#[derive(Debug, Default)]
 pub(crate) struct DecodedText {
     pub(crate) text: String,
-    units: Vec<DecodedUnit>,
+    runs: Vec<MapRun>,
+    initial_source: usize,
+    pub(crate) memory: LogicalMemory,
 }
 
 impl DecodedSink for DecodedText {
-    fn push(&mut self, value: char, start: usize, end: usize) {
-        let utf8_start = self.text.len();
-        self.text.push(value);
-        self.units.push(DecodedUnit {
-            utf8_start,
-            utf8_end: self.text.len(),
-            source_start: start,
-            source_end: end,
+    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError> {
+        let decoded_start =
+            u64::try_from(self.text.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "decoded UTF-8 offset cannot be represented as u64".into(),
+            })?;
+        let decoded_width =
+            u32::try_from(value.len_utf8()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "decoded scalar width cannot be represented as u32".into(),
+            })?;
+        let source_start = u64::try_from(start).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: "source offset cannot be represented as u64".into(),
+        })?;
+        let source_width = u32::try_from(end.saturating_sub(start)).map_err(|_| {
+            ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: "source scalar width cannot be represented as u32".into(),
+            }
+        })?;
+        self.memory.reserve_string(&mut self.text, value.len_utf8())?;
+        let merge = self.runs.last().is_some_and(|run| {
+            run.decoded_end() == decoded_start
+                && run.source_end() == source_start
+                && run.decoded_width == decoded_width
+                && run.source_width == source_width
+                && run.units < u32::MAX
         });
+        if !merge {
+            self.memory.reserve_vec(&mut self.runs, 1)?;
+        }
+        self.text.push(value);
+        if merge {
+            if let Some(run) = self.runs.last_mut() {
+                run.units += 1;
+            }
+        } else {
+            self.runs.push(MapRun {
+                decoded_start,
+                source_start,
+                units: 1,
+                decoded_width,
+                source_width,
+            });
+        }
+        Ok(())
+    }
+
+    fn memory(&mut self) -> &mut LogicalMemory {
+        &mut self.memory
     }
 }
 
 impl DecodedText {
-    /// Convert a half-open decoded UTF-8 range into an original-byte range.
-    pub(crate) fn source_range(&self, start: usize, end: usize) -> (usize, usize) {
-        let start_source = self.units.iter().find(|unit| unit.utf8_end > start).map_or_else(
-            || self.units.last().map_or(0, |unit| unit.source_end),
-            |unit| unit.source_start,
-        );
-        let end_source = if end <= start {
-            start_source
-        } else {
-            self.units
-                .iter()
-                .rev()
-                .find(|unit| unit.utf8_start < end)
-                .map_or(start_source, |unit| unit.source_end)
-        };
-        (start_source, end_source)
+    fn new(initial_source: usize, memory: LogicalMemory) -> Self {
+        Self { text: String::new(), runs: Vec::new(), initial_source, memory }
     }
 
-    fn into_lines(self) -> Vec<Line> {
-        let mut lines = DecodedLines::default();
-        for unit in self.units {
-            if let Some(value) = self.text[unit.utf8_start..unit.utf8_end].chars().next() {
-                DecodedSink::push(&mut lines, value, unit.source_start, unit.source_end);
+    /// Convert a half-open decoded UTF-8 range into an original-byte range.
+    pub(crate) fn source_range(&self, start: usize, end: usize) -> (usize, usize) {
+        self.mapping().source_range(start, end)
+    }
+
+    pub(crate) fn mapping_and_memory(&mut self) -> (DecodedMapping<'_>, &mut LogicalMemory) {
+        (DecodedMapping { runs: &self.runs, initial_source: self.initial_source }, &mut self.memory)
+    }
+
+    fn mapping(&self) -> DecodedMapping<'_> {
+        DecodedMapping { runs: &self.runs, initial_source: self.initial_source }
+    }
+
+    #[cfg(test)]
+    fn source_range_lookup_count(&self, start: usize, end: usize) -> usize {
+        self.mapping().source_range_lookup_count(start, end)
+    }
+
+    fn into_lines(self, context: &ExecutionContext) -> Result<DecodedLineOutput, ConversionError> {
+        let Self { text, runs, initial_source, memory } = self;
+        let mut lines = DecodedLines::new(memory);
+        let mut run_index = 0;
+        for (decoded_start, value) in text.char_indices() {
+            if decoded_start.is_multiple_of(4096) {
+                context.checkpoint()?;
             }
+            while runs.get(run_index).is_some_and(|run| {
+                u64::try_from(decoded_start).unwrap_or(u64::MAX) >= run.decoded_end()
+            }) {
+                run_index += 1;
+            }
+            let Some(run) = runs.get(run_index).copied() else {
+                return Err(ConversionError::Internal {
+                    detail: "decoded text mapping ended before its text".into(),
+                });
+            };
+            let within =
+                u64::try_from(decoded_start).unwrap_or(u64::MAX).saturating_sub(run.decoded_start);
+            let unit = within / u64::from(run.decoded_width);
+            let source_start = run.source_start + unit * u64::from(run.source_width);
+            let source_end = source_start + u64::from(run.source_width);
+            lines.push(
+                value,
+                usize::try_from(source_start).unwrap_or(initial_source),
+                usize::try_from(source_end).unwrap_or(initial_source),
+            )?;
         }
         lines.finish()
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy)]
+pub(crate) struct DecodedMapping<'a> {
+    runs: &'a [MapRun],
+    initial_source: usize,
+}
+
+impl DecodedMapping<'_> {
+    pub(crate) fn source_range(self, start: usize, end: usize) -> (usize, usize) {
+        let (start_source, _) = self.source_boundary(start);
+        let (end_source, _) = self.source_boundary(end.max(start));
+        (start_source, end_source)
+    }
+
+    fn source_boundary(self, decoded: usize) -> (usize, usize) {
+        if self.runs.is_empty() {
+            return (self.initial_source, 0);
+        }
+        let decoded = u64::try_from(decoded).unwrap_or(u64::MAX);
+        let mut low = 0;
+        let mut high = self.runs.len();
+        let mut comparisons = 0;
+        while low < high {
+            comparisons += 1;
+            let middle = low + (high - low) / 2;
+            if self.runs[middle].decoded_start <= decoded {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        if low == 0 {
+            return (self.initial_source, comparisons);
+        }
+        let run = self.runs[low - 1];
+        let within = decoded
+            .saturating_sub(run.decoded_start)
+            .min(u64::from(run.units) * u64::from(run.decoded_width));
+        let units = within / u64::from(run.decoded_width);
+        let source = run.source_start + units * u64::from(run.source_width);
+        (usize::try_from(source).unwrap_or(usize::MAX), comparisons)
+    }
+
+    #[cfg(test)]
+    fn source_range_lookup_count(self, start: usize, end: usize) -> usize {
+        self.source_boundary(start).1 + self.source_boundary(end).1
+    }
+}
+
 struct DecodedLines {
     lines: Vec<Line>,
     current: Line,
     pending_cr: bool,
+    memory: LogicalMemory,
 }
 
 impl DecodedSink for DecodedLines {
-    fn push(&mut self, value: char, start: usize, end: usize) {
+    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError> {
         if self.pending_cr {
-            self.finish_line();
+            self.finish_line()?;
             self.pending_cr = false;
             if value == '\n' {
-                return;
+                return Ok(());
             }
         }
         match value {
             '\r' => self.pending_cr = true,
-            '\n' => self.finish_line(),
+            '\n' => self.finish_line()?,
             _ => {
                 self.current.start.get_or_insert(start);
                 self.current.end = Some(end);
+                self.memory.reserve_string(&mut self.current.text, value.len_utf8())?;
                 self.current.text.push(value);
             }
         }
+        Ok(())
+    }
+
+    fn memory(&mut self) -> &mut LogicalMemory {
+        &mut self.memory
     }
 }
 
 impl DecodedLines {
-    fn finish_line(&mut self) {
-        self.lines.push(std::mem::take(&mut self.current));
+    fn new(memory: LogicalMemory) -> Self {
+        Self { lines: Vec::new(), current: Line::default(), pending_cr: false, memory }
     }
 
-    fn finish(mut self) -> Vec<Line> {
-        if self.pending_cr {
-            self.finish_line();
-        }
-        self.finish_line();
-        self.lines
+    fn finish_line(&mut self) -> Result<(), ConversionError> {
+        self.memory.reserve_vec(&mut self.lines, 1)?;
+        self.lines.push(std::mem::take(&mut self.current));
+        Ok(())
     }
+
+    fn finish(mut self) -> Result<DecodedLineOutput, ConversionError> {
+        if self.pending_cr {
+            self.finish_line()?;
+        }
+        self.finish_line()?;
+        Ok(DecodedLineOutput { lines: self.lines, memory: self.memory })
+    }
+}
+
+struct DecodedLineOutput {
+    lines: Vec<Line>,
+    memory: LogicalMemory,
 }
 
 fn build_document(
     lines: Vec<Line>,
     max_decoded_text_bytes: u64,
     context: &ExecutionContext,
+    memory: &mut LogicalMemory,
 ) -> Result<Document, ConversionError> {
     let mut document = Document::default();
     let mut paragraph: Vec<Line> = Vec::new();
@@ -969,12 +1222,19 @@ fn build_document(
             context.checkpoint()?;
         }
         if line.text.is_empty() {
-            flush_paragraph(&mut document, &mut paragraph, &mut stats, max_decoded_text_bytes)?;
+            flush_paragraph(
+                &mut document,
+                &mut paragraph,
+                &mut stats,
+                max_decoded_text_bytes,
+                memory,
+            )?;
         } else {
+            memory.reserve_vec(&mut paragraph, 1)?;
             paragraph.push(line);
         }
     }
-    flush_paragraph(&mut document, &mut paragraph, &mut stats, max_decoded_text_bytes)?;
+    flush_paragraph(&mut document, &mut paragraph, &mut stats, max_decoded_text_bytes, memory)?;
     Ok(document)
 }
 
@@ -990,6 +1250,7 @@ fn flush_paragraph(
     lines: &mut Vec<Line>,
     stats: &mut DocumentStats,
     max_decoded_text_bytes: u64,
+    memory: &mut LogicalMemory,
 ) -> Result<(), ConversionError> {
     if lines.is_empty() {
         return Ok(());
@@ -1049,14 +1310,19 @@ fn flush_paragraph(
     stats.text_bytes = text_bytes;
     let start = lines.first().and_then(|line| line.start).unwrap_or(0);
     let end = lines.last().and_then(|line| line.end).unwrap_or(start);
-    let mut content = Vec::with_capacity(lines.len().saturating_mul(2).saturating_sub(1));
+    let content_capacity = lines.len().saturating_mul(2).saturating_sub(1);
+    let mut content = Vec::new();
+    memory.reserve_vec(&mut content, content_capacity)?;
     for (index, line) in lines.drain(..).enumerate() {
         if index > 0 {
             content.push(Inline::LineBreak);
         }
         content.push(Inline::Text { value: line.text, marks: Vec::new() });
     }
+    memory.charge(64)?;
     let id = format!("text-paragraph-{}", document.blocks.len() + 1);
+    memory.charge(PROVIDER_ID.len())?;
+    memory.reserve_vec(&mut document.blocks, 1)?;
     document.blocks.push(BlockNode {
         id: NodeId(id),
         block: Block::Paragraph(content),
@@ -1342,5 +1608,42 @@ mod tests {
         assert!(convert_text(&input(b"text"), &options, &context()).is_err());
         options.text.charset = Some("utf-16be".into());
         assert!(convert_text(&input(&[0xff, 0xfe, 0x41, 0]), &options, &context()).is_err());
+    }
+
+    #[test]
+    fn compact_ascii_mapping_fits_a_450_kib_logical_memory_budget() {
+        let bytes = vec![b'a'; 100 * 1024];
+        let input = ResolvedInput { bytes: Arc::from(bytes), metadata: SourceMetadata::default() };
+        let limits = ResourceLimits { max_memory_bytes: 450 * 1024, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let output = convert_text(&input, &ConversionOptions::default(), &context).unwrap();
+        assert_eq!(output.document.blocks.len(), 1);
+    }
+
+    #[test]
+    fn source_mapping_lookup_is_logarithmic_for_16k_utf16_table_columns() {
+        let mut bytes = vec![0xff, 0xfe];
+        let mut decoded_ranges = Vec::new();
+        let mut decoded_len = 0;
+        for index in 0..16_384 {
+            if index > 0 {
+                bytes.extend(u16::from(b'\t').to_le_bytes());
+                decoded_len += 1;
+            }
+            let value = if index % 2 == 0 { 'a' } else { '界' };
+            let start = decoded_len;
+            decoded_len += value.len_utf8();
+            decoded_ranges.push((start, decoded_len));
+            let mut encoded = [0; 2];
+            for unit in value.encode_utf16(&mut encoded).iter() {
+                bytes.extend(unit.to_le_bytes());
+            }
+        }
+        let (decoded, _) =
+            decode_source(&bytes, None, TextDecodingMode::Strict, &context()).unwrap();
+        assert!(decoded.runs.len() >= 8_192);
+        for (start, end) in decoded_ranges {
+            assert!(decoded.source_range_lookup_count(start, end) <= 32);
+        }
     }
 }

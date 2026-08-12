@@ -11,6 +11,87 @@ const FORMATS: &[InputFormat] = &[InputFormat::Csv, InputFormat::Tsv];
 const PROVIDER_ID: &str = "builtin.converter.delimited-text";
 const RAGGED_CODE: &str = "delimited.raggedRecordPadded";
 
+pub(crate) fn detected_candidate(
+    text: &str,
+    context: &ExecutionContext,
+) -> Result<Option<FormatCandidate>, ConversionError> {
+    for (format, delimiter, label) in
+        [(InputFormat::Tsv, '\t', "tab"), (InputFormat::Csv, ',', "comma")]
+    {
+        let options = ConversionOptions::default();
+        let mut memory = text::LogicalMemory::new(context)?;
+        match applicable(text, delimiter, format, &options, context, &mut memory) {
+            Ok(Some((rows, fields))) => {
+                memory.charge(192)?;
+                return Ok(Some(FormatCandidate::new(
+                    format,
+                    0.90,
+                    format!(
+                        "{rows} complete logical records with {fields} consistent {label}-delimited fields"
+                    ),
+                )));
+            }
+            Ok(None)
+            | Err(
+                ConversionError::Malformed { .. }
+                | ConversionError::ResourceLimit {
+                    limit:
+                        "max_field_bytes" | "max_table_rows" | "max_table_columns" | "max_table_cells",
+                    ..
+                },
+            ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+fn applicable(
+    text: &str,
+    delimiter: char,
+    format: InputFormat,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    memory: &mut text::LogicalMemory,
+) -> Result<Option<(usize, usize)>, ConversionError> {
+    let records = parse_records(text, delimiter, format, options, context, memory)?;
+    strong_evidence(&records, memory)
+}
+
+fn strong_evidence(
+    records: &[RawRecord],
+    memory: &mut text::LogicalMemory,
+) -> Result<Option<(usize, usize)>, ConversionError> {
+    let mut nonblank = records
+        .iter()
+        .filter(|record| record.fields.iter().any(|field| !field.value.trim().is_empty()));
+    let Some(first) = nonblank.next() else { return Ok(None) };
+    let width = first.fields.len();
+    if width < 2 {
+        return Ok(None);
+    }
+    let mut rows = 1;
+    let mut data_all_numeric = Vec::new();
+    memory.reserve_vec(&mut data_all_numeric, width)?;
+    data_all_numeric.resize(width, true);
+    for record in nonblank {
+        if record.fields.len() != width {
+            return Ok(None);
+        }
+        rows += 1;
+        for (numeric, field) in data_all_numeric.iter_mut().zip(&record.fields) {
+            *numeric &= is_number(&field.value);
+        }
+    }
+    let typed = rows >= 3
+        && first
+            .fields
+            .iter()
+            .enumerate()
+            .any(|(column, field)| !is_number(&field.value) && data_all_numeric[column]);
+    Ok(typed.then_some((rows, width)))
+}
+
 /// RFC 4180 CSV and equivalent tab-separated text converter.
 #[derive(Debug, Default)]
 pub struct DelimitedTextConverter;
@@ -41,21 +122,19 @@ impl Converter for DelimitedTextConverter {
             }
             if candidate.detector_id == "builtin.detector.content" {
                 let options = ConversionOptions::default();
-                let probe_memory = u64::try_from(input.bytes.len())
-                    .ok()
-                    .and_then(|size| size.checked_mul(4))
-                    .ok_or_else(|| ConversionError::ResourceLimit {
-                        limit: "max_memory_bytes",
-                        detail: "delimited probe memory estimate overflowed".into(),
-                    })?;
-                let _probe_memory = context.reserve_memory(probe_memory)?;
-                let (decoded, _) =
+                let (mut decoded, _) =
                     text::decode_source(&input.bytes, None, options.text.decoding_mode, context)?;
                 let delimiter = if candidate.format == InputFormat::Tsv { '\t' } else { ',' };
-                let records =
-                    parse_records(&decoded.text, delimiter, candidate.format, &options, context)?;
-                let width = records.first().map_or(0, |record| record.fields.len());
-                if width < 2 || records.iter().any(|record| record.fields.len() != width) {
+                if applicable(
+                    &decoded.text,
+                    delimiter,
+                    candidate.format,
+                    &options,
+                    context,
+                    &mut decoded.memory,
+                )?
+                .is_none()
+                {
                     return Ok(ProbeOutcome::NotApplicable);
                 }
             }
@@ -106,37 +185,19 @@ fn convert_delimited(
             detail: format!("{size} > {}", options.limits.max_input_bytes),
         });
     }
-    let working = size.checked_mul(5).ok_or_else(|| ConversionError::ResourceLimit {
-        limit: "max_memory_bytes",
-        detail: "delimited decoding memory estimate overflowed".into(),
-    })?;
-    let _memory = context.reserve_memory(working)?;
-    let (decoded, mut diagnostics) = text::decode_source(
+    let (mut decoded, mut diagnostics) = text::decode_source(
         &input.bytes,
         options.text.charset.as_deref(),
         options.text.decoding_mode,
         context,
     )?;
     let delimiter = if format == InputFormat::Tsv { '\t' } else { ',' };
-    let mut records = parse_records(&decoded.text, delimiter, format, options, context)?;
-    enforce_shape(&mut records, options, &decoded, &mut diagnostics)?;
-    let cell_count = records
-        .first()
-        .map_or(0_usize, |record| record.fields.len())
-        .checked_mul(records.len())
-        .ok_or_else(|| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "table memory estimate overflowed".into(),
-        })?;
-    let table_memory = u64::try_from(cell_count)
-        .ok()
-        .and_then(|cells| cells.checked_mul(256))
-        .ok_or_else(|| ConversionError::ResourceLimit {
-            limit: "max_memory_bytes",
-            detail: "table IR memory estimate overflowed".into(),
-        })?;
-    let _table_memory = context.reserve_memory(table_memory)?;
-    let header = has_header(&records, options.delimited_text.header);
+    let mut records =
+        parse_records(&decoded.text, delimiter, format, options, context, &mut decoded.memory)?;
+    let (mapping, memory) = decoded.mapping_and_memory();
+    enforce_shape(&mut records, options, mapping, &mut diagnostics, memory)?;
+    let header = has_header(&records, options.delimited_text.header, &mut decoded.memory)?;
+    reserve_table_ir(&records, &mut decoded.memory)?;
     let document = build_table(records, header, &decoded, format, context)?;
     Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
 }
@@ -147,6 +208,7 @@ fn parse_records(
     format: InputFormat,
     options: &ConversionOptions,
     context: &ExecutionContext,
+    memory: &mut text::LogicalMemory,
 ) -> Result<Vec<RawRecord>, ConversionError> {
     let mut records = Vec::new();
     let mut fields = Vec::new();
@@ -165,14 +227,14 @@ fn parse_records(
         if quoted {
             if character == '"' {
                 if iter.peek().is_some_and(|(_, next)| *next == '"') {
-                    push_field_character(&mut value, '"', options)?;
+                    push_field_character(&mut value, '"', options, memory)?;
                     iter.next();
                 } else {
                     quoted = false;
                     after_quote = true;
                 }
             } else {
-                push_field_character(&mut value, character, options)?;
+                push_field_character(&mut value, character, options, memory)?;
             }
             continue;
         }
@@ -185,6 +247,7 @@ fn parse_records(
             return malformed(format, offset, "unexpected character after closing quote");
         }
         if character == delimiter {
+            memory.reserve_vec(&mut fields, 1)?;
             fields.push(RawField {
                 value: std::mem::take(&mut value),
                 start: field_start,
@@ -196,6 +259,7 @@ fn parse_records(
             continue;
         }
         if matches!(character, '\r' | '\n') {
+            memory.reserve_vec(&mut fields, 1)?;
             fields.push(RawField {
                 value: std::mem::take(&mut value),
                 start: field_start,
@@ -207,7 +271,7 @@ fn parse_records(
                 } else {
                     offset + character.len_utf8()
                 };
-            push_record(&mut records, &mut fields, record_start, offset, options)?;
+            push_record(&mut records, &mut fields, record_start, offset, options, memory)?;
             record_start = terminator_end;
             field_start = terminator_end;
             at_field_start = true;
@@ -217,15 +281,16 @@ fn parse_records(
         if character == '"' {
             return malformed(format, offset, "quote in an unquoted field");
         }
-        push_field_character(&mut value, character, options)?;
+        push_field_character(&mut value, character, options, memory)?;
         at_field_start = false;
     }
     if quoted {
         return malformed(format, text.len(), "unterminated quoted field");
     }
     if record_start < text.len() || records.is_empty() || field_start < text.len() {
+        memory.reserve_vec(&mut fields, 1)?;
         fields.push(RawField { value, start: field_start, end: text.len() });
-        push_record(&mut records, &mut fields, record_start, text.len(), options)?;
+        push_record(&mut records, &mut fields, record_start, text.len(), options, memory)?;
     }
     Ok(records)
 }
@@ -234,6 +299,7 @@ fn push_field_character(
     value: &mut String,
     character: char,
     options: &ConversionOptions,
+    memory: &mut text::LogicalMemory,
 ) -> Result<(), ConversionError> {
     let next = value.len().checked_add(character.len_utf8()).ok_or_else(|| {
         ConversionError::ResourceLimit {
@@ -247,6 +313,7 @@ fn push_field_character(
             detail: format!("decoded field exceeds {} bytes", options.limits.max_field_bytes),
         });
     }
+    memory.reserve_string(value, character.len_utf8())?;
     value.push(character);
     Ok(())
 }
@@ -257,6 +324,7 @@ fn push_record(
     start: usize,
     end: usize,
     options: &ConversionOptions,
+    memory: &mut text::LogicalMemory,
 ) -> Result<(), ConversionError> {
     let next = records.len().checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
         limit: "max_table_rows",
@@ -268,6 +336,7 @@ fn push_record(
             detail: format!("{next} > {}", options.limits.max_table_rows),
         });
     }
+    memory.reserve_vec(records, 1)?;
     records.push(RawRecord { fields: std::mem::take(fields), start, end });
     Ok(())
 }
@@ -282,8 +351,9 @@ fn malformed<T>(format: InputFormat, offset: usize, detail: &str) -> Result<T, C
 fn enforce_shape(
     records: &mut [RawRecord],
     options: &ConversionOptions,
-    decoded: &text::DecodedText,
+    mapping: text::DecodedMapping<'_>,
     diagnostics: &mut Vec<Diagnostic>,
+    memory: &mut text::LogicalMemory,
 ) -> Result<(), ConversionError> {
     let width = records.first().map_or(0, |record| record.fields.len());
     let width_u64 = u64::try_from(width).unwrap_or(u64::MAX);
@@ -312,12 +382,15 @@ fn enforce_shape(
                 });
             }
             let missing = width - record.fields.len();
+            memory.reserve_vec(&mut record.fields, missing)?;
             record.fields.extend((0..missing).map(|_| RawField {
                 value: String::new(),
                 start: record.end,
                 end: record.end,
             }));
-            let (start, end) = decoded.source_range(record.start, record.end);
+            let (start, end) = mapping.source_range(record.start, record.end);
+            memory.reserve_vec(diagnostics, 1)?;
+            memory.charge(256 + RAGGED_CODE.len())?;
             diagnostics.push(Diagnostic {
                 code: RAGGED_CODE.into(),
                 severity: DiagnosticSeverity::Warning,
@@ -362,27 +435,90 @@ fn enforce_shape(
     Ok(())
 }
 
-fn has_header(records: &[RawRecord], mode: TableHeaderMode) -> bool {
-    match mode {
+fn has_header(
+    records: &[RawRecord],
+    mode: TableHeaderMode,
+    memory: &mut text::LogicalMemory,
+) -> Result<bool, ConversionError> {
+    Ok(match mode {
         TableHeaderMode::Always => true,
         TableHeaderMode::Never => false,
         TableHeaderMode::Auto => {
-            let Some(first) = records.first() else { return false };
+            let Some(first) = records.first() else { return Ok(false) };
             if records.len() < 2 || first.fields.iter().any(|field| field.value.trim().is_empty()) {
-                return false;
+                return Ok(false);
             }
-            let mut labels = std::collections::BTreeSet::new();
-            if !first.fields.iter().all(|field| labels.insert(field.value.trim().to_lowercase())) {
-                return false;
+            let mut labels: Vec<String> = Vec::new();
+            memory.reserve_vec(&mut labels, first.fields.len())?;
+            for field in &first.fields {
+                let mut label = String::new();
+                for character in field.value.trim().chars().flat_map(char::to_lowercase) {
+                    memory.reserve_string(&mut label, character.len_utf8())?;
+                    label.push(character);
+                }
+                labels.push(label);
             }
+            labels.sort_unstable();
+            if labels.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Ok(false);
+            }
+            let mut data_records = Vec::new();
+            memory.reserve_vec(&mut data_records, records.len().saturating_sub(1))?;
+            data_records.extend(
+                records[1..].iter().filter(|record| {
+                    record.fields.iter().any(|field| !field.value.trim().is_empty())
+                }),
+            );
             first.fields.iter().enumerate().any(|(column, field)| {
                 !is_number(&field.value)
-                    && records[1..].iter().all(|record| {
+                    && data_records.iter().all(|record| {
                         record.fields.get(column).is_some_and(|value| is_number(&value.value))
                     })
             })
         }
-    }
+    })
+}
+
+fn reserve_table_ir(
+    records: &[RawRecord],
+    memory: &mut text::LogicalMemory,
+) -> Result<(), ConversionError> {
+    let cells = records.iter().try_fold(0_usize, |total, record| {
+        total.checked_add(record.fields.len()).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "table IR cell capacity overflowed".into(),
+        })
+    })?;
+    let structural = records
+        .len()
+        .checked_mul(std::mem::size_of::<TableRow>())
+        .and_then(|bytes| {
+            cells.checked_mul(std::mem::size_of::<Cell>()).and_then(|v| bytes.checked_add(v))
+        })
+        .and_then(|bytes| {
+            cells.checked_mul(std::mem::size_of::<BlockNode>()).and_then(|v| bytes.checked_add(v))
+        })
+        .and_then(|bytes| {
+            cells.checked_mul(std::mem::size_of::<Inline>()).and_then(|v| bytes.checked_add(v))
+        })
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<BlockNode>()))
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "table IR structural capacity overflowed".into(),
+        })?;
+    let strings = cells
+        .checked_mul(64 + PROVIDER_ID.len() + 3)
+        .and_then(|bytes| bytes.checked_add(64 + PROVIDER_ID.len()))
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "table IR string capacity overflowed".into(),
+        })?;
+    memory.charge(structural.checked_add(strings).ok_or_else(|| {
+        ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "table IR logical capacity overflowed".into(),
+        }
+    })?)
 }
 
 fn is_number(value: &str) -> bool {
@@ -530,6 +666,11 @@ mod tests {
         assert!(rows[0].cells.iter().all(|cell| cell.header));
         assert_eq!(rows[1].cells.len(), 2);
         assert_eq!(output.diagnostics[0].code, RAGGED_CODE);
+
+        let output =
+            convert(b"Name,name\n1,2\n3,4", InputFormat::Csv, &ConversionOptions::default());
+        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        assert!(rows[0].cells.iter().all(|cell| !cell.header));
     }
 
     #[test]
@@ -584,8 +725,47 @@ mod tests {
         let output = convert(b"head,value\rone,1\r\rthree,3", InputFormat::Csv, &options);
         let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 4);
+        assert!(rows[0].cells.iter().all(|cell| cell.header));
         assert_eq!(rows[2].cells.len(), 2);
         assert_eq!(rows[2].cells[0].blocks[0].provenance.locator.byte_start, Some(17));
         assert_eq!(output.diagnostics[0].code, RAGGED_CODE);
+    }
+
+    #[test]
+    fn detector_reads_complete_quoted_logical_records() {
+        let candidate = detected_candidate("name,score\r\n\"Alice\r\nA.\",1\rBob,2\r", &context())
+            .unwrap()
+            .unwrap();
+        assert_eq!(candidate.format, InputFormat::Csv);
+        assert!(candidate.evidence.contains("3 complete logical records"));
+        assert!(detected_candidate("name,score\n\"open,1\nBob,2", &context()).unwrap().is_none());
+    }
+
+    #[test]
+    fn blank_record_auto_detection_can_flow_into_pad_policy() {
+        let bytes = b"name,score\nAlice,1\n\nBob,2";
+        let candidate =
+            detected_candidate(std::str::from_utf8(bytes).unwrap(), &context()).unwrap().unwrap();
+        assert_eq!(candidate.format, InputFormat::Csv);
+        let mut options = ConversionOptions::default();
+        options.delimited_text.ragged_rows = RaggedRowsMode::Pad;
+        let output = convert(bytes, candidate.format, &options);
+        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[2].cells.len(), 2);
+        assert_eq!(output.diagnostics[0].code, RAGGED_CODE);
+    }
+
+    #[test]
+    fn compact_ascii_csv_fits_a_450_kib_logical_memory_budget() {
+        let bytes = vec![b'a'; 100 * 1024];
+        let input = ResolvedInput { bytes: Arc::from(bytes), metadata: SourceMetadata::default() };
+        let limits = ResourceLimits { max_memory_bytes: 450 * 1024, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let output =
+            convert_delimited(&input, InputFormat::Csv, &ConversionOptions::default(), &context)
+                .unwrap();
+        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        assert_eq!(rows.len(), 1);
     }
 }

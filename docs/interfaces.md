@@ -27,6 +27,9 @@ CSV/TSV 与 TXT 共用 converters 内部的安全解码及原始字节映射。�
 `ConversionOptions.delimited_text.header` 和 `ragged_rows` 均带 serde 默认值，旧请求
 分别解析为 `auto` 与 `strict`。表格预算由 `ResourceLimits` 的 `max_table_rows`、
 `max_table_columns`、`max_table_cells` 和 `max_field_bytes` 控制。
+字节映射按连续的“解码 UTF-8 宽度/原始编码宽度”run 压缩；ASCII identity 通常只占
+一个 run，UTF-16、传统字符集与 replacement 在宽度变化时才增加 run。随机 byte-range
+查询对 run 起点做二分，TXT 的顺序分行则使用单调游标。
 
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。

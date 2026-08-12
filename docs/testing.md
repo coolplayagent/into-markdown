@@ -44,6 +44,9 @@ UTF-8/UTF-16 BOM、显式传统字符集、表头三种策略、strict/pad 不�
 转义。provenance 同时断言 quoted、多字节和补齐空单元格的原始 byte range；损坏 quote、
 超宽表、超长字段及行/列/cell 预算断言 `malformed` 或 `resourceLimit`，并通过真实 CLI
 覆盖文件、stdin、扩展名、MIME、显式格式与字符集。
+共享解码回归还以 100 KiB ASCII 和 450 KiB 逻辑内存预算验证紧凑 identity map，并用
+16,384 个交替 UTF-16 映射 run 的比较次数上界证明 provenance 查询为对数复杂度。格式
+检测 fixture 包含 quoted embedded CRLF/LF/CR 及空记录配合 pad 的自动候选路径。
 
 真实 CLI 回归同时覆盖文件与 stdin：200 层且超过 1 MiB 的合法 JSON、具备表头/数字列
 证据的三行 CSV/TSV 不得被 TXT 回退吞入；恰在 1 MiB 边界闭合但后接非空白的内容及

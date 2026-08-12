@@ -21,6 +21,9 @@
 - CSV/TSV 把 `= + - @` 开头的字段保留为普通文本，不解释或执行公式。解析循环定期检查
   取消与 deadline，并在构造 IR 前检查输入、行、列、单元格、单字段、文本、inline、
   node 与内存预算；畸形引号和不等宽记录返回受控错误。
+  内存计费使用逻辑 heap capacity：`String` 的请求字节容量与 `Vec<T>` 的请求元素槽位在
+  allocation 前通过同一个 RAII reservation 增长；不包含 allocator metadata 与 size-class
+  slack。decoder、压缩 byte map、record/field 缓冲和 Table IR 的 guard 保持到 IR 构建完成。
 - JSON 格式保护使用非递归状态机扫描完整输入，定期执行 `ExecutionContext` checkpoint，
   nesting 的 checked 上限独立返回 `resourceLimit`；`\u` escape 还必须验证 UTF-16
   surrogate pairing。不能用递归 DOM parse 作为格式 guard。
