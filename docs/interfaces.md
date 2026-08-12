@@ -34,6 +34,18 @@
 `Engine::detect(DetectionRequest)` 只执行输入解析和格式检测，供 CLI 的
 `formats detect` 使用；它不会探测或调用转换器。
 
+## Markdown 渲染器
+
+`MarkdownRenderer` 是统一 IR 到 GFM 的唯一边界。内置 `builtin.gfm` 会校验 IR
+与所有嵌套图片的资源引用，规范化 LF，并按源顺序输出稳定字节。渲染结果是纯文本；
+SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器诊断和引擎按深度优先
+阅读顺序收集的 provenance 原样保留在 `ConversionResult` 中。
+
+资源模式只决定 Markdown 表示：`extract` 生成与资源写出层共享的净化文件名，
+`embed` 生成 base64 data URI，`omit` 保留 alt 而不生成悬空链接。资源写出层必须
+使用相同名字且不能在写出后单方面改名；当前渲染器会在清单内重名时提前失败，
+外部文件系统冲突仍由资源写出策略负责。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，
