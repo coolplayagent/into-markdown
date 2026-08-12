@@ -19,8 +19,12 @@ use crate::{
     Asset, Diagnostic, DiagnosticSeverity, Document, Provenance, ProvenanceKind, SourceLocator,
 };
 use base64::Engine as _;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Serialize,
+    de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
 use std::collections::BTreeSet;
+use std::fmt;
 use thiserror::Error;
 
 /// Schema version emitted and accepted by application DTOs.
@@ -674,9 +678,7 @@ impl TryFrom<&Asset> for AssetDto {
     type Error = DtoError;
 
     fn try_from(value: &Asset) -> Result<Self, Self::Error> {
-        if let Some(uri) = &value.external_uri {
-            validate_external_uri(uri, "$.externalUri")?;
-        }
+        preflight_internal_assets(std::slice::from_ref(value), &DtoLimits::default())?;
         let dto = Self {
             id: value.id.0.clone(),
             filename: value.filename.clone(),
@@ -761,6 +763,7 @@ impl TryFrom<&crate::ConversionResult> for ResultDto {
     type Error = DtoError;
 
     fn try_from(value: &crate::ConversionResult) -> Result<Self, Self::Error> {
+        preflight_internal_assets(&value.assets, &DtoLimits::default())?;
         let dto = Self {
             schema_version: DTO_SCHEMA_VERSION,
             markdown: value.markdown.clone(),
@@ -1145,7 +1148,96 @@ fn validate_wire_json(json: &str, limits: &DtoLimits) -> Result<(), DtoError> {
     if json.len() > limits.max_json_bytes {
         return limit("$", "dtoJsonBytes", limits.max_json_bytes);
     }
-    preflight_json_text(json, limits)
+    preflight_json_text(json, limits)?;
+    reject_duplicate_object_members(json)
+}
+
+#[derive(Clone, Copy)]
+struct DuplicateKeySeed;
+
+impl<'de> DeserializeSeed<'de> for DuplicateKeySeed {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DuplicateKeyVisitor)
+    }
+}
+
+struct DuplicateKeyVisitor;
+
+impl<'de> Visitor<'de> for DuplicateKeyVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value without duplicate object members")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _: String) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence.next_element_seed(DuplicateKeySeed)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = std::collections::HashSet::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if !keys.insert(key) {
+                return Err(serde::de::Error::custom("duplicate JSON object member"));
+            }
+            object.next_value_seed(DuplicateKeySeed)?;
+        }
+        Ok(())
+    }
+}
+
+fn reject_duplicate_object_members(json: &str) -> Result<(), DtoError> {
+    let mut deserializer = serde_json::Deserializer::from_str(json);
+    DuplicateKeySeed.deserialize(&mut deserializer).map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("decode DTO: {error}"))
+    })?;
+    deserializer.end().map_err(|error| {
+        DtoError::new(DtoErrorCode::InvalidJson, "$", format!("decode DTO: {error}"))
+    })
 }
 
 fn preflight_json_text(json: &str, limits: &DtoLimits) -> Result<(), DtoError> {
@@ -1366,6 +1458,89 @@ fn validate_version(version: u32) -> Result<(), DtoError> {
             format!("expected {DTO_SCHEMA_VERSION}, got {version}"),
         ))
     }
+}
+
+fn padded_base64_encoded_len(raw_bytes: usize) -> Option<usize> {
+    (raw_bytes / 3).checked_mul(4)?.checked_add(if raw_bytes.is_multiple_of(3) { 0 } else { 4 })
+}
+
+fn preflight_internal_asset_lengths(
+    asset_count: usize,
+    lengths: impl IntoIterator<Item = usize>,
+    limits: &DtoLimits,
+) -> Result<(), DtoError> {
+    if asset_count > limits.max_assets {
+        return limit("$.assets", "assets", limits.max_assets);
+    }
+    let mut total_raw = 0_usize;
+    let mut total_encoded = 0_usize;
+    for (index, raw_bytes) in lengths.into_iter().enumerate() {
+        let path = format!("$.assets[{index}].dataBase64");
+        let encoded_bytes = padded_base64_encoded_len(raw_bytes).ok_or_else(|| {
+            DtoError::new(
+                DtoErrorCode::ResourceLimit,
+                &path,
+                "base64 encoded size cannot be represented",
+            )
+        })?;
+        if encoded_bytes > limits.max_string_bytes {
+            return limit(&path, "dtoStringBytes", limits.max_string_bytes);
+        }
+        total_raw = total_raw.checked_add(raw_bytes).ok_or_else(|| {
+            DtoError::new(DtoErrorCode::ResourceLimit, "$.assets", "asset byte size overflow")
+        })?;
+        if total_raw > limits.max_base64_bytes {
+            return limit("$.assets", "base64Bytes", limits.max_base64_bytes);
+        }
+        total_encoded = total_encoded.checked_add(encoded_bytes).ok_or_else(|| {
+            DtoError::new(DtoErrorCode::ResourceLimit, "$.assets", "base64 encoded size overflow")
+        })?;
+        if total_encoded > limits.max_total_string_bytes {
+            return limit("$.assets", "dtoTotalStringBytes", limits.max_total_string_bytes);
+        }
+        if total_encoded > limits.max_json_bytes {
+            return limit("$.assets", "dtoJsonBytes", limits.max_json_bytes);
+        }
+    }
+    Ok(())
+}
+
+fn preflight_internal_assets(assets: &[Asset], limits: &DtoLimits) -> Result<(), DtoError> {
+    preflight_internal_asset_lengths(
+        assets.len(),
+        assets.iter().map(|asset| asset.bytes.len()),
+        limits,
+    )?;
+    let mut ids = BTreeSet::new();
+    for (index, asset) in assets.iter().enumerate() {
+        let path = format!("$.assets[{index}]");
+        validate_id(&asset.id.0, &format!("{path}.id"))?;
+        if asset.media_type.trim().is_empty() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{path}.mediaType"),
+                "media type must not be empty",
+            ));
+        }
+        if let Some(uri) = &asset.external_uri {
+            validate_external_uri(uri, &format!("{path}.externalUri"))?;
+        }
+        if asset.bytes.is_empty() && asset.external_uri.is_none() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                path,
+                "asset requires content or a safe external URI",
+            ));
+        }
+        if !ids.insert(&asset.id.0) {
+            return Err(DtoError::new(
+                DtoErrorCode::DuplicateId,
+                format!("{path}.id"),
+                "duplicate asset ID",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_assets(assets: &[AssetDto], limits: &DtoLimits) -> Result<(), DtoError> {
@@ -1689,10 +1864,10 @@ mod tests {
 
     #[test]
     fn emitted_wire_json_always_fits_the_default_decoder() {
-        let mut dto = result_dto();
-        dto.markdown = "m".repeat(MAX_DTO_STRING_BYTES - 1024);
-        dto.assets[0].data_base64 =
-            base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 6 * 1024 * 1024]);
+        let mut internal = ConversionResult::try_from(result_dto()).unwrap();
+        internal.markdown = "m".repeat(MAX_DTO_STRING_BYTES - 1024);
+        internal.assets[0].bytes = vec![7_u8; 6 * 1024 * 1024];
+        let dto = ResultDto::try_from(&internal).unwrap();
         let json = dto.to_json().unwrap();
         assert_eq!(ResultDto::from_json(&json).unwrap(), dto);
 
@@ -1704,6 +1879,29 @@ mod tests {
         oversized_asset.assets[0].data_base64 =
             base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 6 * 1024 * 1024 + 1]);
         assert_eq!(oversized_asset.to_json().unwrap_err().code, DtoErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn internal_asset_preflight_is_checked_and_stops_before_encoding() {
+        let limits = DtoLimits::default();
+        assert_eq!(padded_base64_encoded_len(6 * 1024 * 1024), Some(MAX_DTO_STRING_BYTES));
+        assert!(preflight_internal_asset_lengths(1, [6 * 1024 * 1024], &limits).is_ok());
+        assert_eq!(
+            preflight_internal_asset_lengths(1, [64 * 1024 * 1024], &limits).unwrap_err().code,
+            DtoErrorCode::ResourceLimit
+        );
+        assert_eq!(padded_base64_encoded_len(usize::MAX), None);
+
+        let visited = std::cell::Cell::new(0_usize);
+        let lengths = [3_usize, 3, usize::MAX].into_iter().inspect(|_| {
+            visited.set(visited.get() + 1);
+        });
+        let tight = DtoLimits { max_base64_bytes: 5, ..limits };
+        assert_eq!(
+            preflight_internal_asset_lengths(3, lengths, &tight).unwrap_err().code,
+            DtoErrorCode::ResourceLimit
+        );
+        assert_eq!(visited.get(), 2);
     }
 
     #[test]
@@ -1764,6 +1962,21 @@ mod tests {
         value["assets"][0].as_object_mut().unwrap().insert("futureAssetField".into(), true.into());
         let decoded = ResultDto::from_json(&value.to_string()).unwrap();
         assert_eq!(decoded.assets[0].id, "image-1");
+    }
+
+    #[test]
+    fn duplicate_object_members_are_rejected_before_value_decoding() {
+        for json in [
+            r#"{"schemaVersion":2,"schemaVersion":1,"diagnostics":[]}"#,
+            r#"{"schemaVersion":1,"diagnostics":[],"diagnostics":[]}"#,
+            r#"{"schemaVersion":1,"diagnostics":[{"code":"a","code":"b","severity":"info","message":"m","locator":null}]}"#,
+            r#"{"schemaVersion":1,"diagnostics":[],"future":{"member":1,"member":2}}"#,
+            r#"{"schemaVersion":2,"schema\u0056ersion":1,"diagnostics":[]}"#,
+        ] {
+            let error = DiagnosticsDto::from_json(json).unwrap_err();
+            assert_eq!(error.code, DtoErrorCode::InvalidJson, "accepted duplicate in {json}");
+            assert!(error.detail.contains("duplicate JSON object member"));
+        }
     }
 
     #[test]

@@ -98,6 +98,9 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   单字符串和总字符串编码字节预算；结构项计数用于提前拦截超宽对象与数组，不作为精确
   语义节点统计；
   `serde_json` 自身的递归限制继续作为第二道保护，JSON 总字节上限约束值树的整体分配；
+- 预算扫描后、值树分配前遍历 JSON token，并按转义解码后的完整 member 名在每个对象
+  内判重；顶层、内嵌对象及未知 additive 字段中的重复 member 均返回 `invalidJson`，不
+  接受解析器的 last-wins 行为。判重遍历仍受前述字节、深度、结构项和字符串预算约束；
 - base64 必须使用 RFC 4648 标准字母表和规范 padding；先按编码长度检查剩余预算，
   再分配解码缓冲区。空 base64 必须同时提供安全的 `externalUri`；两者都有时 base64 是
   内容，URI 只是审计提示，任何消费者都不得据此自动取回资源；
@@ -113,7 +116,10 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
 出站的 `to_json`、`to_pretty_json` 和 Bundle 成员 serializer 使用与默认解码相同的
 JSON 总字节、深度、结构项、单字符串和总字符串预算。因此任何成功序列化的默认 DTO
 都能由对应默认入口读回；超大 Markdown 或 base64 不会出现“能写不能读”。base64 解码
-总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串和 64 MiB JSON 总量约束。
+总预算为 32 MiB，同时受 8 MiB 单 JSON 字符串和 64 MiB JSON 总量约束。内部资源转为
+DTO 时先按原始 bytes 用 checked arithmetic 计算逐项及聚合后的 padded base64 长度，
+在任何 base64 缓冲区分配前拒绝资源数、原始总量、单字符串、总字符串或预计 JSON 线
+预算必然超限的结果；只有完整预检通过后才逐项编码。
 
 Bundle schema 1 保留既有 `diagnostics.json` 与 `provenance.json` 裸数组形状，成员版本
 由 manifest 统辖；`to_bundle_pretty_json` / `from_bundle_json` 是这两个成员的专用边界。
