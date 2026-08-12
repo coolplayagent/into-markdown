@@ -7,8 +7,9 @@
 
 当前 PP-OCRv6 条目固定的是 Paddle source archives，不是可直接执行的 ONNX 模型。
 在生成的 ONNX 文件、字符表、逐文件哈希、大小、平台和许可证审核完成前，
-`models list/show` 将其显示为 `planned` / `unavailable`，`models install` 返回
-`componentUnavailable`，不会下载 source archives 后伪装成已安装状态。
+`models list/show` 将其显示为 `planned` / `unavailable`；`install`、`verify`、
+`path` 和 `remove` 均返回 `componentUnavailable`，不会读取伪造的安装状态，
+也不会下载 source archives 后伪装成已安装状态。
 
 ## 命令与状态
 
@@ -40,9 +41,12 @@ runtime file 清单，因此产品命令不会创建网络连接。
 安装器在目标数据目录内创建唯一 staging 目录，在进程间锁内流式写入并同时检查
 ExecutionContext 的取消、总超时、内存与临时空间预算。每个文件必须精确匹配清单
 字节数和 SHA-256，再 `fsync` 文件、完成标记及目录。发布时先保留旧完整目录，
-再以同文件系统 rename 切换；失败会恢复旧目录。错误、哈希不符、截断、预算不足、
-磁盘满或取消只会留下旧完整状态或无安装状态。管理器只清理由当前操作创建且名称
-精确已知的 staging/backup，不扫描或删除所有权不明的目录。
+再以同文件系统 rename 切换。发布前写入绑定 bundle ID、nonce 和精确目录名的版本化
+journal，并依次 `fsync` journal 与父目录；进程重启或每次管理操作访问磁盘前，
+管理器根据 journal 与目录拓扑完成发布或恢复旧目录。journal 损坏、路径不匹配或存在
+多个残留时 fail closed，不触碰任何候选目录。错误、哈希不符、截断、预算不足、磁盘
+满或取消只会留下可由 journal 恢复的旧完整状态、新完整状态或无安装状态。管理器只
+清理由有效 journal 精确证明所有权的 staging/backup，不扫描或删除所有权不明的目录。
 
 所有路径组件均来自严格 ID/文件名校验；查询、校验和清理拒绝符号链接及非普通
 对象。install/remove 共用同一锁，避免并发发布与清理发生 TOCTOU。

@@ -135,6 +135,16 @@ struct InstallState {
     complete: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct InstallJournal {
+    schema_version: u32,
+    bundle_id: String,
+    nonce: String,
+    staging_name: String,
+    backup_name: String,
+}
+
 impl ModelManifest {
     /// Parses and cross-validates both embedded authoritative manifests.
     pub fn embedded() -> Result<Self, ConversionError> {
@@ -172,7 +182,9 @@ impl ModelManifest {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
             }
             let targets: BTreeSet<_> = bundle.platforms.iter().map(String::as_str).collect();
-            if targets != BTreeSet::from(SUPPORTED_TARGETS) {
+            if bundle.platforms.len() != SUPPORTED_TARGETS.len()
+                || targets != BTreeSet::from(SUPPORTED_TARGETS)
+            {
                 return Err(invalid_manifest(format!(
                     "{} must declare exactly four targets",
                     bundle.id
@@ -344,7 +356,10 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
         return Err(invalid_manifest(format!("runtime artifact {} is incomplete", artifact.id)));
     }
     let platforms: BTreeSet<_> = artifact.platforms.iter().map(String::as_str).collect();
-    if platforms.is_empty() || !platforms.iter().all(|target| SUPPORTED_TARGETS.contains(target)) {
+    if platforms.is_empty()
+        || platforms.len() != artifact.platforms.len()
+        || !platforms.iter().all(|target| SUPPORTED_TARGETS.contains(target))
+    {
         return Err(invalid_manifest(format!(
             "runtime artifact {} has invalid platforms",
             artifact.id
@@ -527,16 +542,33 @@ impl ModelManager {
 
     /// Returns one offline state snapshot.
     pub fn status(&self, id: &str) -> Result<ModelStatus, ModelManagerError> {
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        self.status_with_context(id, &context)
+    }
+
+    fn status_with_context(
+        &self,
+        id: &str,
+        context: &ExecutionContext,
+    ) -> Result<ModelStatus, ModelManagerError> {
         let bundle = self.bundle(id)?;
+        if !is_installable(bundle) {
+            return Ok(unavailable_status(bundle));
+        }
+        self.recover_if_present(bundle, context)?;
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
             if safe_existing_directory(&path)? {
-                let verified = verify_directory(bundle, &path).is_ok();
+                let state =
+                    verification_state(verify_directory_with_context(bundle, &path, context))?;
                 return Ok(ModelStatus {
                     schema_version: 1,
                     id: id.to_owned(),
                     availability: bundle.availability.clone(),
-                    state: if verified { "installed" } else { "corrupt" }.into(),
+                    state: state.into(),
                     ownership: "bundled-read-only".into(),
                     path: Some(path),
                 });
@@ -544,12 +576,12 @@ impl ModelManager {
         }
         let path = self.writable_root.join(id);
         if safe_existing_directory(&path)? {
-            let verified = verify_directory(bundle, &path).is_ok();
+            let state = verification_state(verify_directory_with_context(bundle, &path, context))?;
             return Ok(ModelStatus {
                 schema_version: 1,
                 id: id.to_owned(),
                 availability: bundle.availability.clone(),
-                state: if verified { "installed" } else { "corrupt" }.into(),
+                state: state.into(),
                 ownership: "user".into(),
                 path: Some(path),
             });
@@ -558,8 +590,7 @@ impl ModelManager {
             schema_version: 1,
             id: id.to_owned(),
             availability: bundle.availability.clone(),
-            state: if bundle.availability == "available" { "not-installed" } else { "unavailable" }
-                .into(),
+            state: "not-installed".into(),
             ownership: "none".into(),
             path: None,
         })
@@ -585,7 +616,8 @@ impl ModelManager {
         id: &str,
         context: &ExecutionContext,
     ) -> Result<ModelStatus, ModelManagerError> {
-        let status = self.status(id)?;
+        self.require_installable(id)?;
+        let status = self.status_with_context(id, context)?;
         let path = status.path.as_ref().ok_or(ModelManagerError::NotInstalled)?;
         verify_directory_with_context(self.bundle(id)?, path, context)?;
         Ok(status)
@@ -612,7 +644,7 @@ impl ModelManager {
         context: &ExecutionContext,
     ) -> Result<(), ModelManagerError> {
         context.checkpoint()?;
-        let _ = self.bundle(id)?;
+        let bundle = self.require_installable(id)?;
         if let Some(root) = &self.bundled_root
             && safe_existing_directory(&root.join(id))?
         {
@@ -621,10 +653,13 @@ impl ModelManager {
         fs::create_dir_all(&self.writable_root)?;
         reject_symlink(&self.writable_root)?;
         let lock = self.acquire_lock()?;
+        self.recover_locked(bundle, context)?;
         let path = self.writable_root.join(id);
         if !safe_existing_directory(&path)? {
             return Err(ModelManagerError::NotInstalled);
         }
+        // A directory named after a bundle is not sufficient ownership proof.
+        verify_directory_with_context(bundle, &path, context)?;
         context.checkpoint()?;
         let tombstone = self.writable_root.join(format!(".{id}.removing-{}", std::process::id()));
         if fs::symlink_metadata(&tombstone).is_ok() {
@@ -640,7 +675,7 @@ impl ModelManager {
     /// Installation is fail-closed until the runtime list is complete.
     pub fn require_installable(&self, id: &str) -> Result<&ModelBundle, ModelManagerError> {
         let bundle = self.bundle(id)?;
-        if bundle.availability != "available" || bundle.runtime_artifacts.is_empty() {
+        if !is_installable(bundle) {
             return Err(ModelManagerError::ComponentUnavailable);
         }
         Ok(bundle)
@@ -656,6 +691,17 @@ impl ModelManager {
         fetcher: &dyn ModelFetcher,
         context: &ExecutionContext,
     ) -> Result<ModelStatus, ModelManagerError> {
+        self.install_inner(id, fetcher, context, InstallFault::None, false)
+    }
+
+    fn install_inner(
+        &self,
+        id: &str,
+        fetcher: &dyn ModelFetcher,
+        context: &ExecutionContext,
+        fault: InstallFault,
+        force_publish: bool,
+    ) -> Result<ModelStatus, ModelManagerError> {
         let bundle = self.require_installable(id)?;
         context.checkpoint()?;
         let total_size = bundle.runtime_artifacts.iter().try_fold(0_u64, |total, artifact| {
@@ -668,17 +714,26 @@ impl ModelManager {
         fs::create_dir_all(&self.writable_root)?;
         reject_symlink(&self.writable_root)?;
         let lock = self.acquire_lock()?;
+        self.recover_locked(bundle, context)?;
         let final_path = self.writable_root.join(id);
-        if safe_existing_directory(&final_path)?
-            && verify_directory_with_context(bundle, &final_path, context).is_ok()
-        {
+        let had_old = safe_existing_directory(&final_path)?;
+        if had_old {
+            verify_directory_with_context(bundle, &final_path, context)?;
+        }
+        if had_old && !force_publish {
             drop(lock);
-            return self.status(id);
+            return self.status_with_context(id, context);
         }
 
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let staging_path =
-            self.writable_root.join(format!(".{id}.staging-{}-{nonce}", std::process::id()));
+        let nonce = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+        );
+        let staging_name = format!(".{id}.staging-{nonce}");
+        let backup_name = format!(".{id}.backup-{nonce}");
+        let staging_path = self.writable_root.join(&staging_name);
+        let backup_path = self.writable_root.join(&backup_name);
         fs::create_dir(&staging_path)?;
         let staging = StagingDirectory::new(staging_path);
         for artifact in &bundle.runtime_artifacts {
@@ -732,27 +787,38 @@ impl ModelManager {
         sync_directory(staging.path())?;
         context.checkpoint()?;
 
-        let backup_path =
-            self.writable_root.join(format!(".{id}.backup-{}-{nonce}", std::process::id()));
-        let had_old = safe_existing_directory(&final_path)?;
+        let journal = InstallJournal {
+            schema_version: 1,
+            bundle_id: id.to_owned(),
+            nonce,
+            staging_name,
+            backup_name,
+        };
+        self.write_journal(&journal)?;
+        // From this point the durable journal, rather than Drop, owns cleanup.
+        staging.disarm();
         if had_old {
             fs::rename(&final_path, &backup_path)?;
             sync_directory(&self.writable_root)?;
-        }
-        if let Err(error) = fs::rename(staging.path(), &final_path) {
-            if had_old {
-                let _ = fs::rename(&backup_path, &final_path);
-                let _ = sync_directory(&self.writable_root);
+            if fault == InstallFault::AfterBackup {
+                return Err(ModelManagerError::Corrupt(
+                    "simulated interruption after backup".into(),
+                ));
             }
-            return Err(ModelManagerError::Io(error));
         }
-        staging.disarm();
+        fs::rename(staging.path(), &final_path)?;
         sync_directory(&self.writable_root)?;
-        if had_old {
-            fs::remove_dir_all(backup_path)?;
+        if fault == InstallFault::AfterPublish {
+            return Err(ModelManagerError::Corrupt("simulated interruption after publish".into()));
         }
+        verify_directory_with_context(bundle, &final_path, context)?;
+        if had_old {
+            fs::remove_dir_all(&backup_path)?;
+            sync_directory(&self.writable_root)?;
+        }
+        self.remove_journal(id)?;
         drop(lock);
-        self.verify_with_context(id, context)
+        self.status_with_context(id, context)
     }
 
     fn bundle(&self, id: &str) -> Result<&ModelBundle, ModelManagerError> {
@@ -771,14 +837,136 @@ impl ModelManager {
         file.try_lock().map_err(|_| ModelManagerError::Busy)?;
         Ok(file)
     }
-}
 
-fn verify_directory(bundle: &ModelBundle, path: &Path) -> Result<(), ModelManagerError> {
-    let context = ExecutionContext::new(
-        into_markdown_core::ExecutionOptions::default(),
-        into_markdown_core::ResourceLimits::default(),
-    );
-    verify_directory_with_context(bundle, path, &context)
+    fn recover_if_present(
+        &self,
+        bundle: &ModelBundle,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        if !safe_existing_directory(&self.writable_root)? {
+            return Ok(());
+        }
+        let lock = self.acquire_lock()?;
+        let result = self.recover_locked(bundle, context);
+        drop(lock);
+        result
+    }
+
+    fn recover_locked(
+        &self,
+        bundle: &ModelBundle,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        context.checkpoint()?;
+        let journal_path = journal_path(&self.writable_root, &bundle.id);
+        let journal = match required_file_if_present(&journal_path)? {
+            Some(file) => {
+                Some(serde_json::from_reader::<_, InstallJournal>(file).map_err(|error| {
+                    ModelManagerError::Corrupt(format!("invalid install journal: {error}"))
+                })?)
+            }
+            None => None,
+        };
+        let residues = transaction_residues(&self.writable_root, &bundle.id)?;
+        let Some(journal) = journal else {
+            return if residues.is_empty() {
+                Ok(())
+            } else {
+                Err(ModelManagerError::Corrupt(
+                    "unowned or ambiguous install transaction residue".into(),
+                ))
+            };
+        };
+        validate_journal(bundle, &journal)?;
+        let expected: BTreeSet<_> =
+            [journal.staging_name.as_str(), journal.backup_name.as_str()].into_iter().collect();
+        if !residues.iter().all(|name| expected.contains(name.as_str())) {
+            return Err(ModelManagerError::Corrupt(
+                "multiple or ambiguous install transaction residues".into(),
+            ));
+        }
+
+        let final_path = self.writable_root.join(&bundle.id);
+        let staging_path = self.writable_root.join(&journal.staging_name);
+        let backup_path = self.writable_root.join(&journal.backup_name);
+        let final_exists = safe_existing_directory(&final_path)?;
+        let staging_exists = safe_existing_directory(&staging_path)?;
+        let backup_exists = safe_existing_directory(&backup_path)?;
+
+        match (final_exists, staging_exists, backup_exists) {
+            // Journal was durable but the old bundle was not moved: roll back the staged update.
+            (true, true, false) => {
+                verify_directory_with_context(bundle, &final_path, context)?;
+                fs::remove_dir_all(&staging_path)?;
+                sync_directory(&self.writable_root)?;
+            }
+            // The old bundle was backed up: finish publishing the complete staged bundle.
+            (false, true, true) => {
+                verify_directory_with_context(bundle, &backup_path, context)?;
+                if let Err(error) = verify_directory_with_context(bundle, &staging_path, context) {
+                    if !matches!(error, ModelManagerError::Corrupt(_)) {
+                        return Err(error);
+                    }
+                    fs::rename(&backup_path, &final_path)?;
+                    sync_directory(&self.writable_root)?;
+                    fs::remove_dir_all(&staging_path)?;
+                    sync_directory(&self.writable_root)?;
+                    self.remove_journal(&bundle.id)?;
+                    return Ok(());
+                }
+                fs::rename(&staging_path, &final_path)?;
+                sync_directory(&self.writable_root)?;
+                verify_directory_with_context(bundle, &final_path, context)?;
+                fs::remove_dir_all(&backup_path)?;
+                sync_directory(&self.writable_root)?;
+            }
+            // A new install was staged and its journal was durable: finish publication.
+            (false, true, false) => {
+                verify_directory_with_context(bundle, &staging_path, context)?;
+                fs::rename(&staging_path, &final_path)?;
+                sync_directory(&self.writable_root)?;
+                verify_directory_with_context(bundle, &final_path, context)?;
+            }
+            // Publication completed; only durable cleanup remains.
+            (true, false, true) => {
+                verify_directory_with_context(bundle, &final_path, context)?;
+                fs::remove_dir_all(&backup_path)?;
+                sync_directory(&self.writable_root)?;
+            }
+            (true, false, false) => {
+                verify_directory_with_context(bundle, &final_path, context)?;
+            }
+            // Publication failed after moving the old bundle and before a new final appeared.
+            (false, false, true) => {
+                verify_directory_with_context(bundle, &backup_path, context)?;
+                fs::rename(&backup_path, &final_path)?;
+                sync_directory(&self.writable_root)?;
+            }
+            _ => {
+                return Err(ModelManagerError::Corrupt(
+                    "ambiguous install journal topology".into(),
+                ));
+            }
+        }
+        self.remove_journal(&bundle.id)
+    }
+
+    fn write_journal(&self, journal: &InstallJournal) -> Result<(), ModelManagerError> {
+        let path = journal_path(&self.writable_root, &journal.bundle_id);
+        reject_symlink_if_present(&path)?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        serde_json::to_writer(&mut file, journal)
+            .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
+        file.sync_all()?;
+        sync_directory(&self.writable_root)
+    }
+
+    fn remove_journal(&self, id: &str) -> Result<(), ModelManagerError> {
+        let path = journal_path(&self.writable_root, id);
+        reject_symlink(&path)?;
+        fs::remove_file(path)?;
+        sync_directory(&self.writable_root)
+    }
 }
 
 fn verify_directory_with_context(
@@ -789,8 +977,8 @@ fn verify_directory_with_context(
     context.checkpoint()?;
     reject_symlink(path)?;
     let state_path = path.join("install-state.json");
-    reject_symlink(&state_path)?;
-    let state: InstallState = serde_json::from_reader(File::open(state_path)?)
+    let state_file = required_regular_file(&state_path, "install state is missing")?;
+    let state: InstallState = serde_json::from_reader(state_file)
         .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
     if state.schema_version != 1 || state.bundle_id != bundle.id || !state.complete {
         return Err(ModelManagerError::Corrupt("invalid install state".into()));
@@ -812,12 +1000,12 @@ fn verify_directory_with_context(
     for artifact in &bundle.runtime_artifacts {
         context.checkpoint()?;
         let file_path = path.join(&artifact.file_name);
-        reject_symlink(&file_path)?;
-        let metadata = fs::metadata(&file_path)?;
-        if !metadata.is_file() || metadata.len() != artifact.size {
+        let mut file =
+            required_regular_file(&file_path, &format!("{} is missing", artifact.file_name))?;
+        let metadata = file.metadata()?;
+        if metadata.len() != artifact.size {
             return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
         }
-        let mut file = File::open(&file_path)?;
         let mut digest = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
@@ -833,6 +1021,137 @@ fn verify_directory_with_context(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallFault {
+    None,
+    AfterBackup,
+    AfterPublish,
+}
+
+fn is_installable(bundle: &ModelBundle) -> bool {
+    bundle.availability == "available"
+        && bundle.character_set.status == "available"
+        && !bundle.runtime_artifacts.is_empty()
+}
+
+fn unavailable_status(bundle: &ModelBundle) -> ModelStatus {
+    ModelStatus {
+        schema_version: 1,
+        id: bundle.id.clone(),
+        availability: bundle.availability.clone(),
+        state: "unavailable".into(),
+        ownership: "none".into(),
+        path: None,
+    }
+}
+
+fn verification_state(
+    result: Result<(), ModelManagerError>,
+) -> Result<&'static str, ModelManagerError> {
+    match result {
+        Ok(()) => Ok("installed"),
+        Err(ModelManagerError::Corrupt(_) | ModelManagerError::NotInstalled) => Ok("corrupt"),
+        Err(error) => Err(error),
+    }
+}
+
+fn journal_path(root: &Path, id: &str) -> PathBuf {
+    root.join(format!(".{id}.install-journal.json"))
+}
+
+fn validate_journal(
+    bundle: &ModelBundle,
+    journal: &InstallJournal,
+) -> Result<(), ModelManagerError> {
+    if journal.schema_version != 1
+        || journal.bundle_id != bundle.id
+        || journal.nonce.is_empty()
+        || journal.nonce.len() > 80
+        || !journal.nonce.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-')
+        || journal.staging_name != format!(".{}.staging-{}", bundle.id, journal.nonce)
+        || journal.backup_name != format!(".{}.backup-{}", bundle.id, journal.nonce)
+    {
+        return Err(ModelManagerError::Corrupt("install journal is not manager-owned".into()));
+    }
+    Ok(())
+}
+
+fn transaction_residues(root: &Path, id: &str) -> Result<Vec<String>, ModelManagerError> {
+    let staging_prefix = format!(".{id}.staging-");
+    let backup_prefix = format!(".{id}.backup-");
+    let mut result = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
+        if name.starts_with(&staging_prefix) || name.starts_with(&backup_prefix) {
+            result.push(name);
+        }
+    }
+    result.sort_unstable();
+    Ok(result)
+}
+
+fn required_file_if_present(path: &Path) -> Result<Option<File>, ModelManagerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(ModelManagerError::UnsafePath)
+        }
+        Ok(_) => open_regular_no_follow(path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ModelManagerError::Io(error)),
+    }
+}
+
+fn required_regular_file(path: &Path, missing: &str) -> Result<File, ModelManagerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(ModelManagerError::UnsafePath),
+        Ok(metadata) if !metadata.is_file() => {
+            Err(ModelManagerError::Corrupt(format!("{} is not a regular file", path.display())))
+        }
+        Ok(_) => open_regular_no_follow(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(ModelManagerError::Corrupt(missing.into()))
+        }
+        Err(error) => Err(ModelManagerError::Io(error)),
+    }
+}
+
+fn open_regular_no_follow(path: &Path) -> Result<File, ModelManagerError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|error| {
+        #[cfg(unix)]
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return ModelManagerError::UnsafePath;
+        }
+        ModelManagerError::Io(error)
+    })?;
+    let metadata = file.metadata()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(ModelManagerError::UnsafePath);
+        }
+    }
+    if !metadata.is_file() {
+        return Err(ModelManagerError::UnsafePath);
+    }
+    Ok(file)
 }
 
 struct StagingDirectory {
@@ -1017,6 +1336,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn planned_bundle_ignores_fake_bundled_and_user_install_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundled = temp.path().join("bundled");
+        let writable = temp.path().join("writable");
+        let id = "pp-ocrv6-tiny-zh-en";
+        for root in [&bundled, &writable] {
+            fs::create_dir_all(root.join(id)).unwrap();
+            fs::write(
+                root.join(id).join("install-state.json"),
+                br#"{"schemaVersion":1,"bundleId":"pp-ocrv6-tiny-zh-en","complete":true}"#,
+            )
+            .unwrap();
+        }
+        let manager = ModelManager::new(
+            ModelManifest::embedded().unwrap(),
+            writable.clone(),
+            Some(bundled.clone()),
+        );
+        let status = manager.status(id).unwrap();
+        assert_eq!(status.state, "unavailable");
+        assert_eq!(status.ownership, "none");
+        assert!(status.path.is_none());
+        assert_eq!(manager.list().unwrap(), vec![status]);
+        assert!(matches!(manager.verify(id), Err(ModelManagerError::ComponentUnavailable)));
+        assert!(matches!(manager.path(id), Err(ModelManagerError::ComponentUnavailable)));
+        assert!(matches!(manager.remove(id), Err(ModelManagerError::ComponentUnavailable)));
+        let fetcher =
+            BytesFetcher { bytes: Vec::new(), opens: std::sync::atomic::AtomicUsize::new(0) };
+        assert!(matches!(
+            manager.install(id, &fetcher, &execution(0)),
+            Err(ModelManagerError::ComponentUnavailable)
+        ));
+        assert!(bundled.join(id).exists());
+        assert!(writable.join(id).exists());
+        assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
     struct BytesFetcher {
         bytes: Vec<u8>,
         opens: std::sync::atomic::AtomicUsize,
@@ -1073,6 +1430,129 @@ mod tests {
         assert_eq!(fs::read(manager.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
         manager.install(id, &fetcher, &execution(5)).unwrap();
         assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn install_journal_recovers_after_backup_and_after_publish() {
+        for fault in [InstallFault::AfterBackup, InstallFault::AfterPublish] {
+            let temp = tempfile::tempdir().unwrap();
+            let manager = installable_manager(temp.path());
+            let fetcher = BytesFetcher {
+                bytes: b"hello".to_vec(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+            };
+            let id = "pp-ocrv6-tiny-zh-en";
+            manager.install(id, &fetcher, &execution(5)).unwrap();
+            assert!(matches!(
+                manager.install_inner(id, &fetcher, &execution(5), fault, true),
+                Err(ModelManagerError::Corrupt(_))
+            ));
+
+            let restarted = installable_manager(temp.path());
+            assert_eq!(restarted.status(id).unwrap().state, "installed");
+            assert_eq!(fs::read(restarted.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
+            assert!(!journal_path(temp.path(), id).exists());
+            assert!(transaction_residues(temp.path(), id).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn corrupt_or_ambiguous_journal_fails_closed_without_cleanup() {
+        let id = "pp-ocrv6-tiny-zh-en";
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+        fs::write(journal_path(temp.path(), id), b"{").unwrap();
+        assert!(matches!(manager.status(id), Err(ModelManagerError::Corrupt(_))));
+        assert!(temp.path().join(id).exists());
+        assert!(journal_path(temp.path(), id).exists());
+
+        let ambiguous = tempfile::tempdir().unwrap();
+        let manager = installable_manager(ambiguous.path());
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+        assert!(
+            manager
+                .install_inner(id, &fetcher, &execution(5), InstallFault::AfterBackup, true)
+                .is_err()
+        );
+        let extra = ambiguous.path().join(format!(".{id}.staging-999-999"));
+        fs::create_dir(&extra).unwrap();
+        let before = transaction_residues(ambiguous.path(), id).unwrap();
+        assert!(matches!(manager.status(id), Err(ModelManagerError::Corrupt(_))));
+        assert_eq!(transaction_residues(ambiguous.path(), id).unwrap(), before);
+        assert!(extra.exists());
+        assert!(journal_path(ambiguous.path(), id).exists());
+    }
+
+    #[test]
+    fn journal_path_binding_rejects_traversal_without_touching_outside() {
+        let id = "pp-ocrv6-tiny-zh-en";
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("models");
+        fs::create_dir(&root).unwrap();
+        let manager = installable_manager(&root);
+        let outside = temp.path().join("must-not-touch");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            journal_path(&root, id),
+            format!(
+                r#"{{"schemaVersion":1,"bundleId":"{id}","nonce":"1-1","stagingName":"../must-not-touch","backupName":".{id}.backup-1-1"}}"#
+            ),
+        )
+        .unwrap();
+        assert!(matches!(manager.status(id), Err(ModelManagerError::Corrupt(_))));
+        assert!(outside.exists());
+        assert!(journal_path(&root, id).exists());
+    }
+
+    #[test]
+    fn missing_or_malformed_local_state_is_corrupt() {
+        for case in 0..5 {
+            let temp = tempfile::tempdir().unwrap();
+            let manager = installable_manager(temp.path());
+            let fetcher = BytesFetcher {
+                bytes: b"hello".to_vec(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+            };
+            let id = "pp-ocrv6-tiny-zh-en";
+            manager.install(id, &fetcher, &execution(5)).unwrap();
+            let bundle = temp.path().join(id);
+            match case {
+                0 => fs::remove_file(bundle.join("install-state.json")).unwrap(),
+                1 => fs::write(bundle.join("install-state.json"), b"{").unwrap(),
+                2 => fs::remove_file(bundle.join("model.onnx")).unwrap(),
+                3 => fs::write(bundle.join("model.onnx"), b"hell").unwrap(),
+                4 => fs::write(bundle.join("model.onnx"), b"jello").unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(matches!(manager.verify(id), Err(ModelManagerError::Corrupt(_))));
+            if case == 0 {
+                assert!(matches!(manager.remove(id), Err(ModelManagerError::Corrupt(_))));
+                assert!(bundle.exists());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_failure_remains_io_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let id = "pp-ocrv6-tiny-zh-en";
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+        let state = temp.path().join(id).join("install-state.json");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o0)).unwrap();
+        assert!(matches!(manager.verify(id), Err(ModelManagerError::Io(_))));
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     #[test]
@@ -1133,7 +1613,7 @@ mod tests {
         let root = temp.path().join("models");
         fs::create_dir(&root).unwrap();
         symlink(&outside, root.join("pp-ocrv6-tiny-zh-en")).unwrap();
-        let manager = ModelManager::new(ModelManifest::embedded().unwrap(), root, None);
+        let manager = installable_manager(&root);
         assert!(matches!(
             manager.status("pp-ocrv6-tiny-zh-en"),
             Err(ModelManagerError::UnsafePath)
@@ -1143,5 +1623,21 @@ mod tests {
             Err(ModelManagerError::UnsafePath)
         ));
         assert!(outside.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_install_journal_is_rejected_and_target_is_untouched() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("models");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("outside.json");
+        fs::write(&outside, b"outside").unwrap();
+        let id = "pp-ocrv6-tiny-zh-en";
+        symlink(&outside, journal_path(&root, id)).unwrap();
+        let manager = installable_manager(&root);
+        assert!(matches!(manager.status(id), Err(ModelManagerError::UnsafePath)));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside");
     }
 }

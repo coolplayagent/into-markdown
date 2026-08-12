@@ -45,7 +45,8 @@ HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`�
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
-`componentUnavailable`，不会伪装成功。格式转换、OCR 推理、Provider 请求和插件
+`componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
+不会读取伪造安装状态或伪装成功。格式转换、OCR 推理、Provider 请求和插件
 执行后端尚未实现。
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、

@@ -48,7 +48,15 @@ struct OrtTarget {
     sha256: String,
 }
 
+const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+];
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelManifest {
     schema_version: u64,
     default_bundle: String,
@@ -56,25 +64,31 @@ struct ModelManifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelBundle {
     id: String,
     availability: String,
     upstream_version: String,
+    languages: Vec<String>,
     platforms: Vec<String>,
+    runtime_format: String,
     character_set: ModelCharacterSet,
     runtime_artifacts: Vec<ModelRuntimeArtifact>,
     source_artifacts: Vec<ModelArtifact>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelCharacterSet {
     status: String,
     source_artifact_id: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelRuntimeArtifact {
     id: String,
+    role: String,
     file_name: String,
     url: String,
     sha256: String,
@@ -84,11 +98,13 @@ struct ModelRuntimeArtifact {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelArtifact {
     id: String,
     role: String,
     url: String,
     sha256: String,
+    format: String,
     license: String,
 }
 
@@ -465,18 +481,48 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
 }
 
 fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64
+        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_safe_model_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+}
+
+fn is_safe_model_file_name(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && path.components().count() == 1
+        && matches!(path.components().next(), Some(std::path::Component::Normal(_)))
+}
+
+fn is_canonical_https(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
     let mut repositories = BTreeSet::new();
+    let mut runtime_ids = BTreeSet::new();
     for item in &downloads.model_files {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
         }
-        if item.artifact_id.is_empty()
-            || item.downloaded_file_path.is_empty()
-            || !item.url.starts_with("https://")
+        if !is_safe_model_id(&item.artifact_id)
+            || !is_safe_model_id(&item.repository)
+            || !is_safe_model_file_name(&item.downloaded_file_path)
+            || !is_canonical_https(&item.url)
             || !is_sha256(&item.sha256)
         {
             errors.push(format!("model download {} has incomplete fields", item.repository));
@@ -486,23 +532,28 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
         }
-        if item.artifact_id.is_empty()
-            || item.downloaded_file_path.is_empty()
-            || !item.url.starts_with("https://")
+        if !is_safe_model_id(&item.artifact_id)
+            || !is_safe_model_id(&item.repository)
+            || !is_safe_model_file_name(&item.downloaded_file_path)
+            || !is_canonical_https(&item.url)
             || !is_sha256(&item.sha256)
             || item.size == 0
         {
             errors
                 .push(format!("model runtime download {} has incomplete fields", item.repository));
         }
+        if !runtime_ids.insert(item.artifact_id.as_str()) {
+            errors.push(format!("duplicate runtime download artifact {}", item.artifact_id));
+        }
     }
     for item in &downloads.native_archives {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
         }
-        if item.target.is_empty()
-            || item.strip_prefix.is_empty()
-            || !item.url.starts_with("https://")
+        if !SUPPORTED_MODEL_TARGETS.contains(&item.target.as_str())
+            || !is_safe_model_id(&item.repository)
+            || !is_safe_model_file_name(&item.strip_prefix)
+            || !is_canonical_https(&item.url)
             || !is_sha256(&item.sha256)
         {
             errors.push(format!("native download {} has incomplete fields", item.repository));
@@ -730,17 +781,23 @@ fn validate_runtime_bundle<'a>(
     runtime_ids: &mut BTreeSet<&'a str>,
     errors: &mut Vec<String>,
 ) {
+    if !is_safe_model_id(&bundle.id) {
+        errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
+    }
     if !matches!(bundle.availability.as_str(), "planned" | "available") {
         errors.push(format!("model bundle {} has invalid availability", bundle.id));
     }
-    let expected_targets = BTreeSet::from([
-        "aarch64-apple-darwin",
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-pc-windows-msvc",
-    ]);
-    if bundle.platforms.iter().map(String::as_str).collect::<BTreeSet<_>>() != expected_targets {
+    let expected_targets = BTreeSet::from(SUPPORTED_MODEL_TARGETS);
+    let bundle_targets = bundle.platforms.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    if bundle.platforms.len() != SUPPORTED_MODEL_TARGETS.len() || bundle_targets != expected_targets
+    {
         errors.push(format!("model bundle {} must declare exact supported targets", bundle.id));
+    }
+    if bundle.languages.is_empty()
+        || bundle.runtime_format.is_empty()
+        || bundle.upstream_version.is_empty()
+    {
+        errors.push(format!("model bundle {} has incomplete metadata", bundle.id));
     }
     if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
         || !bundle
@@ -750,9 +807,10 @@ fn validate_runtime_bundle<'a>(
     {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
-    if bundle.availability == "available"
-        && (bundle.character_set.status != "available" || bundle.runtime_artifacts.is_empty())
-    {
+    let installable = bundle.availability == "available"
+        && bundle.character_set.status == "available"
+        && !bundle.runtime_artifacts.is_empty();
+    if (bundle.availability == "available") != installable {
         errors.push(format!(
             "model bundle {} is available without complete runtime files",
             bundle.id
@@ -762,12 +820,16 @@ fn validate_runtime_bundle<'a>(
         if !runtime_ids.insert(artifact.id.as_str()) {
             errors.push(format!("duplicate runtime model artifact {}", artifact.id));
         }
-        if artifact.id.is_empty()
-            || artifact.file_name.is_empty()
-            || !artifact.url.starts_with("https://")
+        let platforms = artifact.platforms.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if !is_safe_model_id(&artifact.id)
+            || !is_safe_model_file_name(&artifact.file_name)
+            || !is_canonical_https(&artifact.url)
             || !is_sha256(&artifact.sha256)
             || artifact.size == 0
-            || artifact.platforms.is_empty()
+            || artifact.role.is_empty()
+            || platforms.is_empty()
+            || platforms.len() != artifact.platforms.len()
+            || !platforms.iter().all(|target| SUPPORTED_MODEL_TARGETS.contains(target))
             || artifact.license.is_empty()
         {
             errors.push(format!("runtime model artifact {} is incomplete", artifact.id));
@@ -825,6 +887,14 @@ fn validate_model_artifact(
     downloads_by_artifact: &BTreeMap<&str, &ModelDownload>,
     errors: &mut Vec<String>,
 ) {
+    if !is_safe_model_id(id)
+        || artifact.role.is_empty()
+        || artifact.format.is_empty()
+        || artifact.license.is_empty()
+        || !is_canonical_https(&artifact.url)
+    {
+        errors.push(format!("model manifest entry {id} has incomplete fields"));
+    }
     if let Some(component) = inventory_sources.get(id) {
         if component.status != "reviewed" {
             errors.push(format!("managed model component {id} must be reviewed"));
@@ -973,6 +1043,7 @@ mod tests {
             role: role.to_owned(),
             url: format!("https://example.invalid/{id}.tar"),
             sha256: marker.to_string().repeat(64),
+            format: "tar".to_owned(),
             license: "Apache-2.0".to_owned(),
         }
     }
@@ -991,12 +1062,14 @@ mod tests {
             id: id.to_owned(),
             availability: "planned".to_owned(),
             upstream_version: version.to_owned(),
+            languages: vec!["zh".to_owned(), "en".to_owned()],
             platforms: vec![
                 "aarch64-apple-darwin".to_owned(),
                 "x86_64-unknown-linux-gnu".to_owned(),
                 "aarch64-unknown-linux-gnu".to_owned(),
                 "x86_64-pc-windows-msvc".to_owned(),
             ],
+            runtime_format: "onnx".to_owned(),
             character_set: ModelCharacterSet {
                 status: "planned".to_owned(),
                 source_artifact_id: source_artifacts
@@ -1047,6 +1120,28 @@ mod tests {
             bundles: vec![bundle("default", version, vec![detector, recognizer])],
         };
         (manifest, inventory, downloads)
+    }
+
+    fn runtime_fixture() -> (ModelRuntimeArtifact, ModelRuntimeDownload) {
+        let artifact = ModelRuntimeArtifact {
+            id: "reviewed-runtime".to_owned(),
+            role: "detector".to_owned(),
+            file_name: "model.onnx".to_owned(),
+            url: "https://example.invalid/model.onnx".to_owned(),
+            sha256: "a".repeat(64),
+            size: 5,
+            platforms: vec!["aarch64-apple-darwin".to_owned()],
+            license: "Apache-2.0".to_owned(),
+        };
+        let download = ModelRuntimeDownload {
+            artifact_id: artifact.id.clone(),
+            repository: "reviewed_runtime".to_owned(),
+            downloaded_file_path: artifact.file_name.clone(),
+            url: artifact.url.clone(),
+            sha256: artifact.sha256.clone(),
+            size: artifact.size,
+        };
+        (artifact, download)
     }
 
     fn ort_fixture() -> (OrtManifest, Inventory, DownloadManifest) {
@@ -1354,5 +1449,32 @@ version = "9.9.9"
         assert!(errors.iter().any(|error| {
             error.contains("detector-source URL/hash disagrees with authoritative download")
         }));
+    }
+
+    #[test]
+    fn runtime_artifact_rejects_unsupported_platform() {
+        let (mut manifest, inventory, mut downloads) = model_fixture();
+        let (mut artifact, download) = runtime_fixture();
+        artifact.platforms = vec!["x86_64-linux-android".to_owned()];
+        manifest.bundles[0].runtime_artifacts.push(artifact);
+        downloads.model_runtime_files.push(download);
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("reviewed-runtime is incomplete")));
+    }
+
+    #[test]
+    fn runtime_artifact_rejects_uppercase_sha256_even_when_download_matches() {
+        let (mut manifest, inventory, mut downloads) = model_fixture();
+        let (mut artifact, mut download) = runtime_fixture();
+        artifact.sha256 = "A".repeat(64);
+        download.sha256 = artifact.sha256.clone();
+        manifest.bundles[0].runtime_artifacts.push(artifact);
+        downloads.model_runtime_files.push(download);
+        let mut errors = Vec::new();
+        validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
+        validate_download_fields(&downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("reviewed-runtime is incomplete")));
+        assert!(errors.iter().any(|error| error.contains("runtime download")));
     }
 }

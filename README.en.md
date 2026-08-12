@@ -52,7 +52,9 @@ Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source
 archives but no reviewed final ONNX/character-table runtime files, so
 installation fails closed with `componentUnavailable` instead of pretending
-that source archives are installed models. Format conversion, OCR inference,
+that source archives are installed models. Verify, path, and remove return the
+same error for this source-only entry and ignore forged install-state directories.
+Format conversion, OCR inference,
 provider requests, and plugin execution remain unavailable.
 
 The detailed design documents are maintained in Chinese. See the

@@ -2620,13 +2620,29 @@ mod tests {
 
         let verify =
             invoke(&["models", "verify", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap_err();
-        assert_eq!(verify.exit_code(), 6);
-        assert_eq!(verify.code(), "modelInvalid");
+        assert_eq!(verify.exit_code(), 9);
+        assert_eq!(verify.code(), "componentUnavailable");
         let path = invoke(&["models", "path", "pp-ocrv6-tiny-zh-en"], true).unwrap_err();
-        assert_eq!(path.exit_code(), 6);
-        assert_eq!(path.code(), "modelInvalid");
+        assert_eq!(path.exit_code(), 9);
+        assert_eq!(path.code(), "componentUnavailable");
         let unknown = invoke(&["models", "show", "../escape"], true).unwrap_err();
         assert_eq!(unknown.exit_code(), 2);
+    }
+
+    #[test]
+    fn model_verification_failure_classes_are_stable() {
+        let missing = model_error(into_markdown::ModelManagerError::NotInstalled);
+        assert_eq!(missing.exit_code(), 6);
+        assert_eq!(missing.code(), "modelInvalid");
+        let corrupt = model_error(into_markdown::ModelManagerError::Corrupt("hash".into()));
+        assert_eq!(corrupt.exit_code(), 6);
+        assert_eq!(corrupt.code(), "modelInvalid");
+        let io = model_error(into_markdown::ModelManagerError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        )));
+        assert_eq!(io.exit_code(), 4);
+        assert_eq!(io.code(), "modelIo");
     }
 
     #[test]

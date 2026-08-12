@@ -229,8 +229,9 @@ into-md models path <ID>
 只读发布模型不能被删除。`list`、`show`、`verify`、`path` 全程离线；JSON 输出包含
 `schemaVersion`、availability、state、ownership 和安装路径。当前清单只有上游
 source archives，尚无经审核的最终 ONNX/字符表文件，因此显示为
-`planned` / `unavailable`，安装稳定返回 `componentUnavailable`。完整的清单、
-数据目录、事务和威胁边界见[本地模型管理](models.md)。
+`planned` / `unavailable`；`install`、`verify`、`path`、`remove` 对该 source-only
+条目均稳定返回 `componentUnavailable`。完整的清单、数据目录、事务和威胁边界见
+[本地模型管理](models.md)。
 
 ### AI Provider
 
