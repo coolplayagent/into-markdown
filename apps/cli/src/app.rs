@@ -893,6 +893,12 @@ struct ExecutionPolicy {
     assets_dir: Option<PathBuf>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct AssetOutputPlan {
+    uri_prefix: Option<String>,
+    external_directory: Option<PathBuf>,
+}
+
 fn run_conversion(
     arguments: ConversionArgs,
     global: &crate::args::GlobalArgs,
@@ -1387,39 +1393,45 @@ fn process_stdout(
     json_log: bool,
     context: &mut RunContext<'_>,
 ) -> Result<BatchItemReport, CliError> {
-    let assets_dir = (policy.asset_mode == AssetModeArg::Extract)
-        .then(|| {
-            policy
-                .assets_dir
-                .clone()
-                .or_else(|| plan.item.local_path.as_deref().map(default_asset_directory))
-        })
-        .flatten();
-    let prefix = assets_dir.as_deref().map(asset_uri_prefix);
-    let result = convert_item(&plan.item, policy, prefix)?;
-    if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
-        let assets_dir = assets_dir.ok_or_else(|| {
-            CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
-        })?;
-        for outcome in
-            output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
-        {
-            if outcome.renamed {
-                write_stderr_event(
-                    context.stderr,
-                    json_log,
-                    "warning",
-                    "assetRenamed",
-                    &format!("asset output renamed to {}", outcome.path.display()),
-                    Some(&plan.item.display),
-                    &format!(
-                        "{}: asset output renamed to {}",
-                        catalog.warning_prefix(),
-                        outcome.path.display()
-                    ),
-                )?;
+    let asset_output = plan_stdout_asset_output(
+        policy.emit,
+        policy.asset_mode,
+        policy.assets_dir.as_deref(),
+        plan.item.local_path.as_deref(),
+    );
+    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    if let Some(assets_dir) = asset_output.external_directory {
+        if !result.assets.is_empty() {
+            for outcome in output::write_assets(
+                &result.assets,
+                &assets_dir,
+                policy.asset_mode,
+                policy.conflict,
+            )? {
+                if outcome.renamed {
+                    write_stderr_event(
+                        context.stderr,
+                        json_log,
+                        "warning",
+                        "assetRenamed",
+                        &format!("asset output renamed to {}", outcome.path.display()),
+                        Some(&plan.item.display),
+                        &format!(
+                            "{}: asset output renamed to {}",
+                            catalog.warning_prefix(),
+                            outcome.path.display()
+                        ),
+                    )?;
+                }
             }
         }
+    } else if policy.asset_mode == AssetModeArg::Extract
+        && policy.emit != EmitKind::Bundle
+        && !result.assets.is_empty()
+    {
+        return Err({
+            CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
+        });
     }
     context.stdout.write_all(&output::encode_result(&result, policy.emit)?)?;
     Ok(BatchItemReport {
@@ -1507,11 +1519,16 @@ fn process_file_task_inner(
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
     let output_path = output::preflight_file(requested, policy.conflict)?;
-    let assets_dir =
-        policy.assets_dir.clone().unwrap_or_else(|| default_asset_directory(&output_path));
-    let prefix = asset_uri_prefix_for_file(&output_path, &assets_dir);
-    let result = convert_item(&plan.item, policy, Some(prefix))?;
-    output::preflight_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?;
+    let asset_output = plan_file_asset_output(
+        policy.emit,
+        policy.asset_mode,
+        policy.assets_dir.as_deref(),
+        &output_path,
+    );
+    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    if let Some(assets_dir) = asset_output.external_directory.as_deref() {
+        output::preflight_assets(&result.assets, assets_dir, policy.asset_mode, policy.conflict)?;
+    }
     let outcome = output::write_preflighted_file(
         &output_path,
         &output::encode_result(&result, policy.emit)?,
@@ -1524,7 +1541,9 @@ fn process_file_task_inner(
             outcome.path.display()
         ));
     }
-    if policy.asset_mode == AssetModeArg::Extract && !result.assets.is_empty() {
+    if let Some(assets_dir) = asset_output.external_directory
+        && !result.assets.is_empty()
+    {
         for asset in
             output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
         {
@@ -1552,13 +1571,76 @@ fn convert_item(
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
 }
 
+fn plan_stdout_asset_output(
+    emit: EmitKind,
+    mode: AssetModeArg,
+    configured_directory: Option<&Path>,
+    local_input: Option<&Path>,
+) -> AssetOutputPlan {
+    if mode != AssetModeArg::Extract {
+        return AssetOutputPlan { uri_prefix: None, external_directory: None };
+    }
+    if emit == EmitKind::Bundle {
+        return AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None };
+    }
+    let external_directory = configured_directory
+        .map(Path::to_path_buf)
+        .or_else(|| local_input.map(default_asset_directory));
+    AssetOutputPlan {
+        uri_prefix: external_directory.as_deref().map(asset_uri_prefix),
+        external_directory,
+    }
+}
+
+fn plan_file_asset_output(
+    emit: EmitKind,
+    mode: AssetModeArg,
+    configured_directory: Option<&Path>,
+    output: &Path,
+) -> AssetOutputPlan {
+    if mode != AssetModeArg::Extract {
+        return AssetOutputPlan { uri_prefix: None, external_directory: None };
+    }
+    if emit == EmitKind::Bundle {
+        return AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None };
+    }
+    let external_directory =
+        configured_directory.map_or_else(|| default_asset_directory(output), Path::to_path_buf);
+    AssetOutputPlan {
+        uri_prefix: Some(asset_uri_prefix_for_file(output, &external_directory)),
+        external_directory: Some(external_directory),
+    }
+}
+
 fn asset_uri_prefix(directory: &Path) -> String {
-    directory.to_string_lossy().replace('\\', "/")
+    encode_filesystem_path(directory.as_os_str().as_encoded_bytes())
 }
 
 fn asset_uri_prefix_for_file(output: &Path, directory: &Path) -> String {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     directory.strip_prefix(parent).map_or_else(|_| asset_uri_prefix(directory), asset_uri_prefix)
+}
+
+fn encode_filesystem_path(path: &[u8]) -> String {
+    let windows_drive = path.len() >= 2
+        && path[0].is_ascii_alphabetic()
+        && path[1] == b':'
+        && (path.len() == 2 || matches!(path[2], b'/' | b'\\'));
+    let mut encoded = String::with_capacity(path.len());
+    for (index, byte) in path.iter().copied().enumerate() {
+        if matches!(byte, b'/' | b'\\') {
+            encoded.push('/');
+        } else if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else if windows_drive && index == 1 {
+            encoded.push(':');
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(b"0123456789ABCDEF"[usize::from(byte >> 4)]));
+            encoded.push(char::from(b"0123456789ABCDEF"[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
 }
 
 fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Result<(), CliError> {
@@ -1799,7 +1881,13 @@ fn redact_url(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use into_markdown::{
+        Asset, AssetId, Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind,
+        SourceLocator, asset_filename, render_markdown,
+    };
+    use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
+    use std::io::{Cursor, Read as _};
 
     fn invoke(arguments: &[&str], stdin_is_terminal: bool) -> Result<(String, String), CliError> {
         let mut stdout = Vec::new();
@@ -1830,6 +1918,183 @@ mod tests {
         let (stdout, _) = invoke(&[], true).unwrap();
         assert!(stdout.contains("Usage:"));
         assert!(stdout.contains("providers"));
+    }
+
+    #[test]
+    fn bundle_assets_always_use_internal_prefix_without_external_writes() {
+        let output = Path::new("out/document.mdpkg.zip");
+        let plans = [
+            plan_file_asset_output(EmitKind::Bundle, AssetModeArg::Extract, None, output),
+            plan_file_asset_output(
+                EmitKind::Bundle,
+                AssetModeArg::Extract,
+                Some(Path::new("custom assets")),
+                output,
+            ),
+            plan_stdout_asset_output(
+                EmitKind::Bundle,
+                AssetModeArg::Extract,
+                Some(Path::new("custom assets")),
+                Some(Path::new("input.pdf")),
+            ),
+        ];
+        for asset_output in plans {
+            assert_eq!(
+                asset_output,
+                AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None }
+            );
+            assert_bundle_image_href_hits_entry(asset_output.uri_prefix.as_deref().unwrap());
+        }
+    }
+
+    #[test]
+    fn filesystem_asset_paths_are_segment_encoded_and_survive_commonmark() {
+        assert_eq!(
+            asset_uri_prefix(Path::new("assets #?%/中文\\nested")),
+            "assets%20%23%3F%25/%E4%B8%AD%E6%96%87/nested"
+        );
+        assert_eq!(
+            asset_uri_prefix(Path::new("/tmp/a b/#?%/图.png")),
+            "/tmp/a%20b/%23%3F%25/%E5%9B%BE.png"
+        );
+        assert_eq!(
+            asset_uri_prefix(Path::new(r"C:\Users\A B\#\图.png")),
+            "C:/Users/A%20B/%23/%E5%9B%BE.png"
+        );
+        assert_eq!(
+            asset_uri_prefix(Path::new(r"\\server\share name\a?b%")),
+            "//server/share%20name/a%3Fb%25"
+        );
+        assert_eq!(
+            asset_uri_prefix_for_file(
+                Path::new("out/document.md"),
+                Path::new("out/assets #?%/中文"),
+            ),
+            "assets%20%23%3F%25/%E4%B8%AD%E6%96%87"
+        );
+
+        let asset = Asset {
+            id: AssetId("uri-image".into()),
+            filename: Some("image.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("image".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix =
+            Some(asset_uri_prefix(Path::new("assets #?%/中文\\nested")));
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let href = MarkdownParser::new(&markdown)
+            .find_map(|event| match event {
+                Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            })
+            .unwrap();
+        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
+        assert_eq!(href, format!("assets%20%23%3F%25/%E4%B8%AD%E6%96%87/nested/{filename}"));
+        assert_eq!(
+            percent_decode_for_test(&href),
+            format!("assets #?%/中文/nested/{filename}").into_bytes()
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("out/document.md");
+        let directory = root.path().join("out/assets #?%/中文");
+        options.output.asset_uri_prefix = Some(asset_uri_prefix_for_file(&output, &directory));
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let href = markdown_image_href(&markdown);
+        output::write_assets(
+            std::slice::from_ref(&asset),
+            &directory,
+            AssetModeArg::Extract,
+            ConflictPolicy::Error,
+        )
+        .unwrap();
+        let decoded = String::from_utf8(percent_decode_for_test(&href)).unwrap();
+        assert_eq!(fs::read(output.parent().unwrap().join(decoded)).unwrap(), asset.bytes);
+    }
+
+    fn assert_bundle_image_href_hits_entry(prefix: &str) {
+        let asset = Asset {
+            id: AssetId("bundle-route-image".into()),
+            filename: Some("route.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![7, 8, 9],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("bundle".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some(prefix.into());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let result = into_markdown::ConversionResult {
+            document,
+            markdown,
+            assets: vec![asset],
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        let bundle = output::encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
+        let markdown = {
+            let mut entry = archive.by_name("document.md").unwrap();
+            let mut markdown = String::new();
+            entry.read_to_string(&mut markdown).unwrap();
+            markdown
+        };
+        let href = markdown_image_href(&markdown);
+        assert!(archive.by_name(&href).is_ok(), "missing ZIP entry for image href {href}");
+    }
+
+    fn markdown_image_href(markdown: &str) -> String {
+        MarkdownParser::new(markdown)
+            .find_map(|event| match event {
+                Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn percent_decode_for_test(value: &str) -> Vec<u8> {
+        let bytes = value.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'%' && index + 2 < bytes.len() {
+                let high = char::from(bytes[index + 1]).to_digit(16).unwrap();
+                let low = char::from(bytes[index + 2]).to_digit(16).unwrap();
+                decoded.push(u8::try_from(high * 16 + low).unwrap());
+                index += 3;
+            } else {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+        decoded
     }
 
     #[test]

@@ -324,7 +324,8 @@ mod tests {
         Block, BlockNode, ConversionOptions, NodeId, Provenance, ProvenanceKind, SourceLocator,
         render_markdown,
     };
-    use std::io::Read;
+    use pulldown_cmark::{Event, Parser, Tag};
+    use std::io::Read as _;
 
     fn empty_result() -> ConversionResult {
         ConversionResult {
@@ -337,6 +338,39 @@ mod tests {
                 bytes: vec![1, 2, 3],
                 external_uri: None,
             }],
+            diagnostics: vec![],
+            provenance: vec![],
+        }
+    }
+
+    fn image_result(prefix: &str) -> ConversionResult {
+        let asset = Asset {
+            id: AssetId("bundle-image".into()),
+            filename: Some("bundle image.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1, 2, 3],
+            external_uri: None,
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: asset.id.clone(), alt: Some("bundle".into()) },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        };
+        let mut options = ConversionOptions::default();
+        options.output.asset_uri_prefix = Some(prefix.into());
+        let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        ConversionResult {
+            document,
+            markdown,
+            assets: vec![asset],
             diagnostics: vec![],
             provenance: vec![],
         }
@@ -470,6 +504,30 @@ mod tests {
         write_report(&path, &report).unwrap();
         let json = fs::read_to_string(path).unwrap();
         assert_eq!(BatchReport::from_json(&json).unwrap(), report);
+    }
+
+    #[test]
+    fn bundle_markdown_image_href_exactly_matches_its_zip_entry() {
+        let result = image_result("assets");
+        let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let markdown = {
+            let mut entry = archive.by_name("document.md").unwrap();
+            let mut markdown = String::new();
+            entry.read_to_string(&mut markdown).unwrap();
+            markdown
+        };
+        let href = Parser::new(&markdown)
+            .find_map(|event| match event {
+                Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(archive.by_name(&href).is_ok(), "missing ZIP entry for image href {href}");
+        assert_eq!(
+            href,
+            format!("assets/{}", asset_filename("bundle-image", Some("bundle image.png")))
+        );
     }
 
     #[test]

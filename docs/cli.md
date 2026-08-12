@@ -90,7 +90,9 @@ into-md <INPUT...>
   诊断、溯源和 base64 资源。
 - `bundle` 生成 `.mdpkg.zip`，固定包含 `manifest.json`、`document.md`、
   `document.ir.json`、`diagnostics.json`、`provenance.json` 和 `assets/`。归档路径
-  会被净化并稳定排序。
+  会被净化并稳定排序。bundle 内的 Markdown 固定引用 `assets/` 下的条目；无论
+  输出到文件还是 stdout，bundle 都不会因默认值或显式 `--assets-dir` 再向外部
+  文件系统抽取一份资源。
 - 资源策略默认 `extract`。本地单文件输出到 stdout 时，资源写到输入同级
   `<文档名>_assets/`；stdin 和 URI 若产生资源，必须指定 `--assets-dir`。
 - 文件冲突默认改名为 `name-1.ext` 并发出 warning；`error` 拒绝写入，
@@ -101,6 +103,10 @@ into-md <INPUT...>
   `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
   失败而不会被覆盖。当前不承诺主产物与多个资源之间的整体回滚，跨文件事务边界由
   资源写出策略任务处理。
+- CLI 把资源目录转换为 URI path reference：统一 `/` 分隔，保留 POSIX 根、Windows
+  盘符与 UNC 根，并逐路径段对空格、`#`、`?`、`%`、Unicode 和控制字节做 UTF-8
+  百分号编码。渲染器保留这些已编码的 `%HH`，不会二次编码；因此 Markdown parser
+  看到的 href 可无歧义解码到实际资源目标，而不是被解释为 query 或 fragment。
 - 多输入输出保留相对于各输入根的目录结构；不同输入根产生同名输出时先加输入根名
   前缀，仍冲突时再使用稳定数字后缀，所有消歧均在调度前完成。
 - `--report` 写入带 `schemaVersion` 的 JSON 报告，包含逐项输入、输出、状态、

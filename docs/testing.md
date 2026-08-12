@@ -6,7 +6,9 @@
 交错 span、脚注标签、资源模式、空内容、最深合法嵌套、LF 和重复运行确定性。
 CommonMark 解析契约还覆盖 character reference 链接绕过、空 code span、富文本边界
 空白以及表格内 code/link 的 pipe 语义；CLI 测试验证资源链接与写出目标共享同一
-哈希规划，并在冲突时不留下部分资源。
+哈希规划，并在冲突时不留下部分资源。bundle 契约使用含图片的真实转换结果验证
+默认、显式资源目录和 stdout 路径都只引用实际 ZIP entry；路径 URI 测试覆盖 POSIX
+绝对路径、Windows 盘符、UNC、反斜杠以及特殊字符的 CommonMark href 回读。
 
 后续实现应增加四层测试：
 

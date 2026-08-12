@@ -599,6 +599,7 @@ dependencies = [
  "futures",
  "globset",
  "into-markdown",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "sha2",
