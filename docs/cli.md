@@ -103,10 +103,13 @@ into-md <INPUT...>
   `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
   失败而不会被覆盖。当前不承诺主产物与多个资源之间的整体回滚，跨文件事务边界由
   资源写出策略任务处理。
-- CLI 把资源目录转换为 URI path reference：统一 `/` 分隔，保留 POSIX 根、Windows
-  盘符与 UNC 根，并逐路径段对空格、`#`、`?`、`%`、Unicode 和控制字节做 UTF-8
-  百分号编码。渲染器保留这些已编码的 `%HH`，不会二次编码；因此 Markdown parser
-  看到的 href 可无歧义解码到实际资源目标，而不是被解释为 query 或 fragment。
+- CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
+  规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
+  目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定
+  `assetPathUnsupported`，绝不输出会被解释为自定义 scheme 或网络 host 的目标。
+  每个路径段中的空格、`#`、`?`、`%`、Unicode、反斜杠字面量和控制字节按 UTF-8
+  百分号编码，渲染器保留这些 `%HH` 而不二次编码。文件输出以 Markdown 文件父目录
+  为基准；stdout 以当前工作目录为基准。
 - 多输入输出保留相对于各输入根的目录结构；不同输入根产生同名输出时先加输入根名
   前缀，仍冲突时再使用稳定数字后缀，所有消歧均在调度前完成。
 - `--report` 写入带 `schemaVersion` 的 JSON 报告，包含逐项输入、输出、状态、

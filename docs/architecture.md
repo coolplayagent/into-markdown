@@ -69,10 +69,12 @@ Document metadata 不进入 Markdown，防止 namespaced properties 意外泄漏
 `asset_uri_prefix + asset-<SHA-256(asset ID)>.<安全扩展名>`；建议文件名只贡献
 最长 16 字节的 ASCII 字母数字扩展名。该纯函数由渲染器和 CLI 写出层共享，结果
 长度有界、全 ASCII，且不受路径分隔符、Unicode、大小写折叠与 Windows 保留名影响。
-CLI 负责将文件系统目录逐路径段编码为 URI path reference，保留根与 `/` 分隔符，
-并编码会形成 query、fragment 或无效转义的字节；渲染器保留其中已经形成的 `%HH`，
-避免二次编码。bundle 在渲染前固定使用 `assets` 前缀，其 `document.md` 只引用归档内
-条目，不执行额外的外部 extract。
+CLI 以 Markdown 所在目录（stdout 使用当前工作目录）为基准，对文件系统路径先按
+POSIX、Windows drive 或 UNC 语法做词法规范化，再在相同 root/drive/share 内生成
+逐段编码的相对 URI；跨 root/drive/share 稳定拒绝，避免把盘符解释为 scheme 或把
+UNC server 解释为网络 host。渲染器保留其中已经形成的 `%HH`，避免二次编码。bundle
+在渲染前固定使用 `assets` 前缀，其 `document.md` 只引用归档内条目，不执行额外的
+外部 extract。
 `embed` 只接受有字节且 MIME token 安全的资源并
 生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。资源落盘、冲突
 处理与原子写入属于调用方职责。

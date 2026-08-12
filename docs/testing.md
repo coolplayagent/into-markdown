@@ -8,7 +8,8 @@ CommonMark 解析契约还覆盖 character reference 链接绕过、空 code spa
 空白以及表格内 code/link 的 pipe 语义；CLI 测试验证资源链接与写出目标共享同一
 哈希规划，并在冲突时不留下部分资源。bundle 契约使用含图片的真实转换结果验证
 默认、显式资源目录和 stdout 路径都只引用实际 ZIP entry；路径 URI 测试覆盖 POSIX
-绝对路径、Windows 盘符、UNC、反斜杠以及特殊字符的 CommonMark href 回读。
+绝对路径、Windows 同盘路径、UNC 同 share、合法 `..`、反斜杠以及特殊字符的
+CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定错误。
 
 后续实现应增加四层测试：
 

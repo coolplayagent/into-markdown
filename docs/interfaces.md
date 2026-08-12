@@ -51,9 +51,12 @@ SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器�
 输出的中途，已完成的主产物或资源不会自动回滚。跨主产物与全部资源的事务式提交
 由资源写出策略任务统一实现。
 
-CLI 将文件系统资源目录逐路径段转换为 percent-encoded URI path reference，并保留
-`/`、POSIX 根、Windows 盘符和 UNC 根语义；原始 `%` 编码为 `%25`，渲染器不会再次
-编码已经形成的 `%HH`。bundle 是自包含输出，渲染前固定使用 `assets` 前缀，归档内
+CLI 将文件系统路径按 POSIX、Windows drive 和 UNC 语法独立做词法规范化，并只在
+相同 root/drive/share 内生成相对于 Markdown 基准目录的 percent-encoded URI path
+reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported`，不得输出
+`C:/...` 自定义 scheme 或 `//server/...` 网络引用。原始 `%` 编码为 `%25`，渲染器
+不会再次编码已经形成的 `%HH`。文件输出以 Markdown 文件父目录为基准，stdout 以
+当前工作目录为基准。bundle 是自包含输出，渲染前固定使用 `assets` 前缀，归档内
 `document.md` 的每个抽取资源 href 必须精确命中对应 ZIP entry，且不额外写外部资源。
 
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
