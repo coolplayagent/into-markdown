@@ -166,6 +166,8 @@ pub struct LoadedConfig {
     pub ai_model: Option<String>,
     pub ocr_languages: Vec<String>,
     pub prompts: BTreeMap<String, PathBuf>,
+    /// Dotted effective keys mapped to the layer that supplied their final value.
+    pub sources: BTreeMap<String, String>,
 }
 
 impl LoadedConfig {
@@ -178,6 +180,15 @@ impl LoadedConfig {
             self.merged.clone()
         };
         redact_value(&mut value, None);
+        if resolved {
+            let sources = toml::Value::try_from(&self.sources).map_err(|error| {
+                CliError::internal(format!("serialize config sources: {error}"))
+            })?;
+            value
+                .as_table_mut()
+                .ok_or_else(|| CliError::internal("resolved configuration is not a table"))?
+                .insert("_sources".into(), sources);
+        }
         Ok(value)
     }
 }
@@ -199,6 +210,7 @@ pub fn load(
             candidates.push((path.clone(), false));
         }
     }
+    let explicit = explicit.iter().map(|path| resolve_path(cwd, path)).collect::<Vec<_>>();
     candidates.extend(explicit.iter().cloned().map(|path| (path, true)));
 
     let profile = selected_profile
@@ -208,6 +220,7 @@ pub fn load(
     let mut effective = empty_table();
     let mut loaded = Vec::new();
     let mut profile_found = false;
+    let mut sources = BTreeMap::new();
     for (path, required) in candidates {
         if !path.exists() {
             if required {
@@ -219,17 +232,14 @@ pub fn load(
             continue;
         }
         let value = read_validated_value(&path)?;
-        merge_value(&mut merged, value.clone());
-        let mut base = value.clone();
-        let profile_overlay = base
-            .as_table_mut()
-            .and_then(|table| table.remove("profiles"))
-            .and_then(|profiles| profile.as_ref().and_then(|name| profiles.get(name).cloned()));
-        merge_value(&mut effective, base);
-        if let Some(overlay) = profile_overlay {
-            profile_found = true;
-            merge_value(&mut effective, overlay);
-        }
+        profile_found |= merge_layer(
+            value,
+            &path,
+            profile.as_deref(),
+            &mut merged,
+            &mut effective,
+            &mut sources,
+        );
         loaded.push(path);
     }
     if let Some(name) = &profile
@@ -253,10 +263,7 @@ pub fn load(
         )));
     }
     let options = resolve_conversion_options(&parsed.conversion)?;
-    let language = language_override
-        .or_else(|| std::env::var("INTO_MD_LANGUAGE").ok().as_deref().and_then(parse_language))
-        .or_else(|| parsed.cli.language.as_deref().and_then(parse_language))
-        .unwrap_or_default();
+    let language = resolve_language(&mut parsed, language_override, &mut sources);
     let jobs = parsed.cli.jobs.unwrap_or_else(default_jobs);
     if jobs == 0 {
         return Err(CliError::config("cli.jobs must be greater than zero"));
@@ -264,8 +271,9 @@ pub fn load(
     let emit = parse_emit(parsed.conversion.output.emit.as_deref())?;
     let asset_mode = parse_asset_mode(parsed.conversion.output.asset_mode);
     let conflict = parse_conflict(parsed.conversion.output.conflict.as_deref())?;
+    let sources = complete_sources(&parsed, sources)?;
     Ok(LoadedConfig {
-        paths: ConfigPaths { global, project, explicit: explicit.to_vec(), loaded },
+        paths: ConfigPaths { global, project, explicit, loaded },
         merged,
         ai_provider: parsed
             .conversion
@@ -283,7 +291,100 @@ pub fn load(
         emit,
         asset_mode,
         conflict,
+        sources,
     })
+}
+
+fn merge_layer(
+    value: toml::Value,
+    path: &Path,
+    profile: Option<&str>,
+    merged: &mut toml::Value,
+    effective: &mut toml::Value,
+    sources: &mut BTreeMap<String, String>,
+) -> bool {
+    merge_value(merged, value.clone());
+    let mut base = value;
+    let profile_overlay = base
+        .as_table_mut()
+        .and_then(|table| table.remove("profiles"))
+        .and_then(|profiles| profile.and_then(|name| profiles.get(name).cloned()));
+    record_sources(&base, "", &path.display().to_string(), sources);
+    merge_value(effective, base);
+    if let Some(overlay) = profile_overlay {
+        record_sources(
+            &overlay,
+            "",
+            &format!("{}#profile:{}", path.display(), profile.unwrap_or_default()),
+            sources,
+        );
+        merge_value(effective, overlay);
+        true
+    } else {
+        false
+    }
+}
+
+fn resolve_language(
+    parsed: &mut RawConfig,
+    language_override: Option<Language>,
+    sources: &mut BTreeMap<String, String>,
+) -> Language {
+    let environment = std::env::var("INTO_MD_LANGUAGE").ok();
+    let environment = environment.as_deref().and_then(parse_language);
+    let language = language_override
+        .or(environment)
+        .or_else(|| parsed.cli.language.as_deref().and_then(parse_language))
+        .unwrap_or_default();
+    if language_override.is_some() {
+        sources.insert("cli.language".into(), "command line: --language".into());
+    } else if environment.is_some() {
+        sources.insert("cli.language".into(), "environment: INTO_MD_LANGUAGE".into());
+    }
+    parsed.cli.language = Some(
+        match language {
+            Language::En => "en",
+            Language::ZhCn => "zh-CN",
+        }
+        .into(),
+    );
+    language
+}
+
+fn resolve_path(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() { path.to_owned() } else { cwd.join(path) }
+}
+
+fn record_sources(
+    value: &toml::Value,
+    prefix: &str,
+    source: &str,
+    sources: &mut BTreeMap<String, String>,
+) {
+    if let toml::Value::Table(table) = value {
+        for (key, child) in table {
+            let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+            if child.is_table() {
+                record_sources(child, &path, source, sources);
+            } else {
+                sources.insert(path, source.to_owned());
+            }
+        }
+    }
+}
+
+fn complete_sources(
+    config: &RawConfig,
+    mut sources: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, CliError> {
+    let value = toml::Value::try_from(config)
+        .map_err(|error| CliError::internal(format!("serialize resolved config: {error}")))?;
+    let mut defaults = BTreeMap::new();
+    record_sources(&value, "", "built-in default", &mut defaults);
+    for (key, source) in defaults {
+        sources.entry(key).or_insert(source);
+    }
+    Ok(sources)
 }
 
 fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOptions, CliError> {
@@ -382,6 +483,11 @@ fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
     if let Some(confidence) = config.conversion.ocr.minimum_confidence {
         validate_confidence(confidence)?;
     }
+    if config.conversion.network.deny_private_networks == Some(false) {
+        return Err(CliError::config(
+            "conversion.network.deny_private_networks cannot be false; private-network access requires --allow-private-network on the current invocation",
+        ));
+    }
     parse_emit(config.conversion.output.emit.as_deref())?;
     parse_conflict(config.conversion.output.conflict.as_deref())?;
     for (name, provider) in &config.providers {
@@ -430,25 +536,71 @@ fn read_validated_value(path: &Path) -> Result<toml::Value, CliError> {
     let parsed: RawConfig = value.clone().try_into().map_err(|error| {
         CliError::config(format!("validate configuration {}: {error}", path.display()))
     })?;
-    if parsed.schema_version != Some(1) {
-        return Err(CliError::config(format!(
-            "configuration {} must declare schema_version = 1",
-            path.display()
-        )));
-    }
-    validate_raw(&parsed)?;
-    for profile in parsed.profiles.values() {
-        let overlay = RawConfig {
-            cli: profile.cli.clone(),
-            conversion: profile.conversion.clone(),
-            default_provider: profile.default_provider.clone(),
-            providers: profile.providers.clone(),
-            plugins: profile.plugins.clone(),
-            ..RawConfig::default()
-        };
-        validate_raw(&overlay)?;
-    }
+    validate_document(&parsed, true)
+        .map_err(|error| CliError::config(format!("configuration {}: {error}", path.display())))?;
     Ok(value)
+}
+
+fn validate_document(parsed: &RawConfig, require_schema: bool) -> Result<(), CliError> {
+    if require_schema && parsed.schema_version != Some(1) {
+        return Err(CliError::config("must declare schema_version = 1"));
+    }
+    validate_raw(parsed)?;
+    for (name, profile) in &parsed.profiles {
+        validate_id("profile", name)?;
+        validate_profile(name, profile)?;
+    }
+    Ok(())
+}
+
+fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), CliError> {
+    let partial = RawConfig {
+        cli: profile.cli.clone(),
+        conversion: profile.conversion.clone(),
+        ..RawConfig::default()
+    };
+    validate_raw(&partial)?;
+    for (provider_name, provider) in &profile.providers {
+        validate_id("provider", provider_name)?;
+        if !provider.provider_type.is_empty() && provider.provider_type != "openai-compatible" {
+            return Err(CliError::config(format!(
+                "profile '{name}' provider '{provider_name}' has unsupported type '{}'",
+                provider.provider_type
+            )));
+        }
+        if !provider.base_url.is_empty() {
+            let url = url::Url::parse(&provider.base_url).map_err(|error| {
+                CliError::config(format!(
+                    "profile '{name}' provider '{provider_name}' URL: {error}"
+                ))
+            })?;
+            if !matches!(url.scheme(), "http" | "https") {
+                return Err(CliError::config(format!(
+                    "profile '{name}' provider '{provider_name}' URL must use http or https"
+                )));
+            }
+        }
+        if !provider.api_key_env.is_empty() {
+            validate_environment_name(&provider.api_key_env)?;
+        }
+        for capability in &provider.capabilities {
+            validate_capability(capability)?;
+        }
+    }
+    for (plugin_id, plugin) in &profile.plugins {
+        validate_id("plugin", plugin_id)?;
+        if !plugin.protocol.is_empty()
+            && !matches!(plugin.protocol.as_str(), "process-v1" | "wasi-v1")
+        {
+            return Err(CliError::config(format!(
+                "profile '{name}' plugin '{plugin_id}' protocol must be process-v1 or wasi-v1"
+            )));
+        }
+        if let Some(hash) = &plugin.sha256 {
+            validate_sha256(hash)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn global_config_path() -> Result<PathBuf, CliError> {
@@ -593,7 +745,7 @@ fn mutate_scope(
         .clone()
         .try_into()
         .map_err(|error| CliError::config(format!("updated configuration is invalid: {error}")))?;
-    validate_raw(&parsed)?;
+    validate_document(&parsed, false)?;
     let text = toml::to_string_pretty(&value)
         .map_err(|error| CliError::internal(format!("serialize configuration: {error}")))?;
     atomic_write(&path, text.as_bytes(), true)?;
@@ -798,18 +950,24 @@ fn validate_id(kind: &str, value: &str) -> Result<(), CliError> {
 }
 
 fn redact_value(value: &mut toml::Value, key: Option<&str>) {
-    if key.is_some_and(|key| matches!(key, "api_key" | "token" | "password" | "secret")) {
+    if key.is_some_and(is_secret_key) {
         *value = toml::Value::String("<redacted>".into());
         return;
     }
     match value {
-        toml::Value::String(text) if key.is_some_and(|key| key.ends_with("url")) => {
-            if let Ok(mut parsed) = url::Url::parse(text)
-                && (parsed.query().is_some() || parsed.fragment().is_some())
-            {
-                parsed.set_query(None);
-                parsed.set_fragment(None);
-                *text = parsed.to_string();
+        toml::Value::String(text) => {
+            if let Ok(mut parsed) = url::Url::parse(text) {
+                let mut changed = parsed.query().is_some() || parsed.fragment().is_some();
+                if !parsed.username().is_empty() || parsed.password().is_some() {
+                    let _ = parsed.set_username("");
+                    let _ = parsed.set_password(None);
+                    changed = true;
+                }
+                if changed {
+                    parsed.set_query(None);
+                    parsed.set_fragment(None);
+                    *text = parsed.to_string();
+                }
             }
         }
         toml::Value::Table(table) => {
@@ -824,6 +982,14 @@ fn redact_value(value: &mut toml::Value, key: Option<&str>) {
         }
         _ => {}
     }
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    !normalized.ends_with("_env")
+        && ["api_key", "apikey", "access_key", "token", "password", "secret"]
+            .iter()
+            .any(|part| normalized == *part || normalized.ends_with(&format!("_{part}")))
 }
 
 fn default_jobs() -> usize {
@@ -894,6 +1060,85 @@ policy = "always"
         assert_eq!(loaded.options.ocr.policy, OcrPolicy::Always);
         assert_eq!(loaded.options.network.max_redirects, 1);
         assert!(!loaded.options.network.enabled);
+        assert!(loaded.sources["conversion.ocr.policy"].ends_with("custom.toml#profile:quality"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_layers_and_profiles_follow_command_line_order() {
+        let root = temporary_directory("layer-order");
+        fs::write(
+            root.join("one.toml"),
+            r"schema_version = 1
+[cli]
+jobs = 2
+[profiles.ci.cli]
+jobs = 3
+",
+        )
+        .unwrap();
+        fs::write(
+            root.join("two.toml"),
+            r"schema_version = 1
+[cli]
+jobs = 4
+[profiles.ci.cli]
+jobs = 5
+",
+        )
+        .unwrap();
+        let loaded = load(
+            &root,
+            &[PathBuf::from("one.toml"), PathBuf::from("two.toml")],
+            true,
+            Some("ci"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(loaded.jobs, 5);
+        assert_eq!(loaded.paths.explicit, vec![root.join("one.toml"), root.join("two.toml")]);
+        assert_eq!(
+            loaded.sources["cli.jobs"],
+            format!("{}#profile:ci", root.join("two.toml").display())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_can_partially_override_provider_from_a_lower_layer() {
+        let root = temporary_directory("partial-provider");
+        fs::write(
+            root.join("base.toml"),
+            r#"schema_version = 1
+[providers.vision]
+type = "openai-compatible"
+base_url = "https://example.com/v1"
+model = "base"
+api_key_env = "VISION_API_KEY"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("overlay.toml"),
+            r#"schema_version = 1
+[profiles.quality.providers.vision]
+model = "quality"
+"#,
+        )
+        .unwrap();
+        let loaded = load(
+            &root,
+            &[PathBuf::from("base.toml"), PathBuf::from("overlay.toml")],
+            true,
+            Some("quality"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(loaded.effective.providers["vision"].model, "quality");
+        assert_eq!(
+            loaded.sources["providers.vision.model"],
+            format!("{}#profile:quality", root.join("overlay.toml").display())
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -904,6 +1149,27 @@ policy = "always"
         fs::write(&path, "[conversion.network]\nenabled = true\n").unwrap();
         let error = load(&root, &[path], true, None, None).unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_profile_fields_and_private_network_relaxation_are_rejected() {
+        let root = temporary_directory("profile-security");
+        let unknown = root.join("unknown.toml");
+        fs::write(
+            &unknown,
+            "schema_version = 1\n[profiles.bad.conversion.network]\nallow_network = true\n",
+        )
+        .unwrap();
+        assert!(validate_file(&unknown).unwrap_err().to_string().contains("unknown field"));
+
+        let relaxed = root.join("relaxed.toml");
+        fs::write(
+            &relaxed,
+            "schema_version = 1\n[conversion.network]\ndeny_private_networks = false\n",
+        )
+        .unwrap();
+        assert!(validate_file(&relaxed).unwrap_err().to_string().contains("cannot be false"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -921,6 +1187,66 @@ api_key_env = "API_KEY"
         redact_value(&mut value, None);
         assert!(!value.to_string().contains("sig=secret"));
         assert!(value.to_string().contains("API_KEY"));
+    }
+
+    #[test]
+    fn redaction_covers_signed_source_urls_credentials_and_secret_keys() {
+        let mut value: toml::Value = toml::from_str(
+            r#"token = "top-secret"
+[plugins.remote]
+source = "https://user:password@example.com/plugin.wasm?X-Amz-Signature=secret#fragment"
+"#,
+        )
+        .unwrap();
+        redact_value(&mut value, None);
+        let text = value.to_string();
+        assert!(!text.contains("top-secret"));
+        assert!(!text.contains("password"));
+        assert!(!text.contains("Signature"));
+        assert!(!text.contains("fragment"));
+        assert!(text.contains("<redacted>"));
+    }
+
+    #[test]
+    fn platform_specific_paths_round_trip_without_interpretation() {
+        let value: RawConfig = toml::from_str(
+            r#"schema_version = 1
+[conversion.ai.prompts]
+windows = 'C:\models\prompt.txt'
+posix = '/opt/models/prompt.txt'
+[plugins.local]
+source = 'C:\plugins\parser.wasm'
+protocol = "wasi-v1"
+enabled = true
+"#,
+        )
+        .unwrap();
+        assert_eq!(value.conversion.ai.prompts["windows"], PathBuf::from(r"C:\models\prompt.txt"));
+        assert_eq!(value.conversion.ai.prompts["posix"], PathBuf::from("/opt/models/prompt.txt"));
+        assert_eq!(value.plugins["local"].source, r"C:\plugins\parser.wasm");
+    }
+
+    #[test]
+    fn resolved_display_includes_redacted_value_sources() {
+        let root = temporary_directory("resolved-sources");
+        fs::write(
+            root.join("config.toml"),
+            r#"schema_version = 1
+[providers.remote]
+type = "openai-compatible"
+base_url = "https://example.com/v1?signature=secret"
+model = "vision"
+api_key_env = "VISION_API_KEY"
+"#,
+        )
+        .unwrap();
+        let loaded = load(&root, &[PathBuf::from("config.toml")], true, None, None).unwrap();
+        let display = loaded.display_value(true).unwrap();
+        let text = display.to_string();
+        assert!(display.get("_sources").is_some());
+        assert!(!text.contains("signature=secret"));
+        assert!(text.contains("config.toml"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

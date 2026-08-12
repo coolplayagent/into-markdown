@@ -122,13 +122,23 @@ into-md config profile create quality --scope project
 
 `config set` 首先把值解析为 TOML 标量、数组或内联表；无法解析时按字符串处理。
 写入使用同目录临时文件和原子替换。`config show --resolved` 会遮蔽秘密字段，并从
-可能包含签名参数的 URL 中移除 query 与 fragment。
+可能包含签名参数的 URL（包括 Provider URL 与插件来源）中移除用户信息、query 与
+fragment。resolved 输出的 `_sources` 表按点分字段名记录最终值来自内置默认值、
+具体配置文件、该文件中的 Profile、环境变量还是当前命令行。该表是解释元数据，
+不是可写回的配置字段。
+
+显式配置的相对路径以调用时的当前目录解析；绝对路径保持不变。配置值中的 POSIX
+路径与 Windows 路径按原字符串保存，不做平台相关改写。
 
 ## Profile 语义
 
 Profile 是同一配置层中的覆盖表。选定 profile 后，先合并该层的普通配置，再合并
 profile 内容，然后继续处理更高优先级配置层。Profile 可以覆盖转换、CLI、
 Provider 和插件配置，但不能赋予联网或私网权限。
+
+`conversion.network.deny_private_networks` 只能省略或设为 `true`；设为 `false` 会被
+拒绝。配置文件和 Profile 中的 `allow_network`、`allow_private_network` 及任何未知
+字段同样会被拒绝。联网和私网授权不参与配置合并，只读取当前调用的命令行参数。
 
 若指定的 profile 在所有加载层中都不存在，命令返回配置错误，不静默回退。
 
