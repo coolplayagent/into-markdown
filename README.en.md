@@ -51,4 +51,5 @@ The detailed design documents are maintained in Chinese. See the
 [security model](docs/security.md), and [testing strategy](docs/testing.md).
 The authoritative CLI and configuration specifications are maintained in
 Chinese: [command-line design](docs/cli.md) and
-[configuration](docs/configuration.md).
+[configuration](docs/configuration.md). License policy, third-party sources,
+and release auditing are covered by [license governance](docs/licensing.md).

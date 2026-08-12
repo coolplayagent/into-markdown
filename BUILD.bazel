@@ -3,6 +3,9 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "Cargo.lock",
     "Cargo.toml",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
 ])
 
 filegroup(
@@ -11,5 +14,17 @@ filegroup(
         "docs/**/*.md",
         "README.en.md",
         "README.md",
+        "THIRD_PARTY_NOTICES.md",
     ]),
+)
+
+# Every source or binary archive starts with this mandatory declaration set.
+# Component-specific upstream texts are added according to the audited inventory.
+filegroup(
+    name = "release_license_files",
+    srcs = [
+        "LICENSE",
+        "NOTICE",
+        "THIRD_PARTY_NOTICES.md",
+    ],
 )

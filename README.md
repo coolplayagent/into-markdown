@@ -43,4 +43,5 @@ URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider�
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、
 [安全模型](docs/security.md)和[测试策略](docs/testing.md)。
-命令与配置契约详见[命令行设计](docs/cli.md)和[配置文件](docs/configuration.md)。
+命令与配置契约详见[命令行设计](docs/cli.md)和[配置文件](docs/configuration.md)，
+许可证、第三方来源和发布审计详见[许可证治理](docs/licensing.md)。

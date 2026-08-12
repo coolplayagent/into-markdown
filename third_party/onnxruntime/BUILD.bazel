@@ -1,5 +1,7 @@
 package(default_visibility = ["//visibility:private"])
 
+exports_files(["manifest.json"], visibility = ["//visibility:public"])
+
 # These manual targets pin official CPU distributions. Future FFI targets will
 # select the matching package for the current supported platform.
 filegroup(

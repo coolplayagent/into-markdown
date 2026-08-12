@@ -1,0 +1,7 @@
+exports_files([
+    "downloads.bzl",
+    "downloads.json",
+    "inventory.json",
+    "policy.json",
+    "rust-lock.tsv",
+])
