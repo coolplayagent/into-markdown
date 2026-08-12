@@ -48,7 +48,14 @@
   reparse point，源文件以 no-follow handle 打开并核对文件身份，再按 authority 中的
   解包动态库 SHA-256 复制到进程私有目录。只有该私有副本会进入动态加载器；加载后
   `GetVersionString` 必须与 authority 版本完全相等，且 `GetApi` 必须接受 authority 的
-  C API level。所有 FFI unsafe 集中在 `into-markdown-onnxruntime` crate，并启用
+  C API level。authority 同时记录从固定官方二进制审计得到的 `NEEDED`、
+  `LC_LOAD_DYLIB` 或 PE import 系统依赖闭包；Unix 在加载前拒绝 loader 环境变量及已加载
+  的同名非系统对象，私有目录只含主库，Windows 使用
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`。主库 load identity
+  已在进程中出现时同样拒绝，防止 loader 复用任意同名对象。动态句柄、API table 与
+  ORT 环境固定为进程生命周期，只允许一个 authority identity；已有全局 ORT 配置、
+  不同 runtime 或无法显式提交禁用 telemetry 的环境都会 fail closed。所有 FFI unsafe
+  集中在 `into-markdown-onnxruntime` crate，并启用
   `deny(unsafe_op_in_unsafe_fn)` 与逐块 SAFETY invariant。
 - 模型 source archives 与最终 runtime files 分开建模，缺少最终文件、字符表、大小、
   平台或许可证审核时禁止安装。运行时清单必须与权威下载清单逐项一致。
@@ -86,7 +93,11 @@
 依赖引擎外层检查来中断内部工作。
 
 ONNX session 固定使用 CPU provider、顺序图执行、显式 intra/inter-op 线程数和关闭的
-memory pattern；CPU arena 开关经 C API 设置。session 的保守内存估算同时受单 session
-上限与 LRU 总字节上限约束，输入输出再由 `ExecutionContext` 计费。创建前后、等待
-single-flight、推理前后均检查取消和 deadline；推理期间监控线程把失败 checkpoint
-连接到 ORT `RunOptions::terminate`。
+memory pattern；CPU arena 默认关闭并可经 C API 显式设置。模型 authority 必须给出
+保守的 session 与每次 run 上界；session 上界在 loading 前按 live count/bytes 计入缓存，
+不会因仍在使用的条目被移出 LRU 而提前释放。这里是保守的逻辑预算，不声称测量 ORT
+物理 RSS；arena 关闭、模型上界和 run 上界共同约束未直接暴露的 native 分配。
+`ExecutionContext` 在克隆输入前预留输入副本与 ORT backing，在执行前按输出 contract
+的最大 shape 预留 native 输出与 `to_vec` 副本，并全程持有 run scratch 预算；无最大值
+的动态维度不是合法 contract。创建前后、等待 single-flight、推理前后均检查取消和
+deadline；推理期间监控线程把失败 checkpoint 连接到 ORT `RunOptions::terminate`。

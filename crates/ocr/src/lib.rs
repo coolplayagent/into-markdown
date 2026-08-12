@@ -119,7 +119,9 @@ struct OrtTarget {
     asset: String,
     sha256: String,
     library: String,
+    load_identity: String,
     library_sha256: String,
+    system_dependencies: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,7 +435,13 @@ fn validate_native_downloads(
         validate_file_name(&target.asset)?;
         validate_hash(&target.sha256)?;
         validate_relative_path(&target.library)?;
+        validate_file_name(&target.load_identity)?;
         validate_hash(&target.library_sha256)?;
+        if target.system_dependencies.is_empty()
+            || target.system_dependencies.iter().any(String::is_empty)
+        {
+            return Err(invalid_manifest("invalid ONNX Runtime dependency audit"));
+        }
         let strip_prefix = target
             .asset
             .strip_suffix(".tgz")

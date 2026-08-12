@@ -50,7 +50,9 @@ struct OrtTarget {
     asset: String,
     sha256: String,
     library: String,
+    load_identity: String,
     library_sha256: String,
+    system_dependencies: Vec<String>,
 }
 
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
@@ -661,9 +663,13 @@ fn validate_ort_manifest(
         if !is_safe_model_file_name(&asset.asset)
             || !is_sha256(&asset.sha256)
             || !is_safe_relative_path(&asset.library)
+            || !is_safe_model_file_name(&asset.load_identity)
             || !is_sha256(&asset.library_sha256)
+            || asset.system_dependencies.is_empty()
+            || asset.system_dependencies.iter().any(String::is_empty)
+            || !ort_dependencies_are_system_only(target, &asset.system_dependencies)
         {
-            errors.push(format!("ONNX Runtime target {target} lacks a valid SHA-256"));
+            errors.push(format!("ONNX Runtime target {target} has invalid audited fields"));
         }
         let expected_url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{}/{}",
@@ -681,6 +687,30 @@ fn validate_ort_manifest(
             ));
         }
     }
+}
+
+fn ort_dependencies_are_system_only(target: &str, dependencies: &[String]) -> bool {
+    let mut unique = BTreeSet::new();
+    dependencies.iter().all(|dependency| {
+        let normalized = if target == "x86_64-pc-windows-msvc" {
+            dependency.to_ascii_lowercase()
+        } else {
+            dependency.clone()
+        };
+        unique.insert(normalized)
+            && if target == "aarch64-apple-darwin" {
+                let path = Path::new(dependency);
+                (dependency.starts_with("/System/Library/") || dependency.starts_with("/usr/lib/"))
+                    && path.components().all(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::RootDir | std::path::Component::Normal(_)
+                        )
+                    })
+            } else {
+                is_safe_model_file_name(dependency)
+            }
+    })
 }
 
 fn validate_model_manifest(
@@ -1205,7 +1235,15 @@ mod tests {
                     asset: asset.to_owned(),
                     sha256: sha256.clone(),
                     library: "lib/libonnxruntime.so".to_owned(),
+                    load_identity: "libonnxruntime.so.1".to_owned(),
                     library_sha256: marker.to_string().repeat(64),
+                    system_dependencies: vec![if target == "aarch64-apple-darwin" {
+                        "/usr/lib/libSystem.B.dylib".to_owned()
+                    } else if target == "x86_64-pc-windows-msvc" {
+                        "KERNEL32.dll".to_owned()
+                    } else {
+                        "libc.so.6".to_owned()
+                    }],
                 },
             );
             native_archives.push(NativeDownload {
@@ -1404,6 +1442,20 @@ version = "9.9.9"
                 "mutation {mutate}"
             );
         }
+
+        let (mut manifest, inventory, downloads) = ort_fixture();
+        manifest.targets.get_mut("aarch64-apple-darwin").unwrap().system_dependencies =
+            vec!["relative.dylib".into(), "relative.dylib".into()];
+        manifest.targets.get_mut("x86_64-pc-windows-msvc").unwrap().load_identity =
+            "../onnxruntime.dll".into();
+        let mut errors = Vec::new();
+        validate_ort_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("aarch64-apple-darwin") && error.contains("invalid audited fields")
+        }));
+        assert!(errors.iter().any(|error| {
+            error.contains("x86_64-pc-windows-msvc") && error.contains("invalid audited fields")
+        }));
     }
 
     #[test]

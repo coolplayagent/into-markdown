@@ -66,10 +66,12 @@ U+FFFE，以及 UTF-8/UTF-16 的独立属性 QName/value 原始 byte span。
 `internal`。
 
 ONNX 安全层测试使用 fake `SessionFactory`/`SessionAdapter`，离线覆盖 runtime 版本
-authority、ABI/API mismatch 策略、opset、输入输出 name/dtype/rank/shape、非法 C 字符串、
-并发 single-flight、失败重试、按 count/bytes 的 LRU 回收、取消和资源预算。普通
+authority、ABI/API mismatch 策略、IR/opset protobuf 变异与重复 domain、输入输出
+name/dtype/rank/shape、非法 C 字符串、并发 single-flight、失败重试、按最终 `Arc` 析构
+计费的 count/bytes LRU、完整 contract cache key、取消和复制前资源预留。普通
 `bazel build/test //...` 不获取 native archive；真正动态库的哈希、版本和 API
-探针只由显式 manual target 执行：
+探针只由显式 manual target 执行；该 target 再启动隔离子进程，覆盖 factory 释放后的
+环境/session API 重用、正常进程退出，以及预先提交不兼容全局环境时 fail closed：
 
 ```shell
 bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
@@ -77,7 +79,9 @@ bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
 
 其它三个配置分别为 `linux_x86_64`、`linux_arm64` 和 `windows_x86_64`。没有 macOS
 x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称完成真实模型推理；
-当前模型 authority 没有 ONNX runtime artifact，因而不存在可执行的真实推理验证。
+显式 native target 会用完整的极小 Identity `ModelProto` 创建真实 ORT session 并执行一次
+CPU 推理，以验证 adapter、factory 重建和退出析构顺序。该 fixture 不是产品 OCR 模型；
+当前模型 authority 没有 ONNX runtime artifact，因而没有产品模型推理验证。
 
 常用定向命令如下：
 

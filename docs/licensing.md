@@ -53,7 +53,8 @@ cargo run --locked --offline -p license-check --bin release-audit
 ```
 
 ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包动态库 SHA-256
-记录在 `third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
+及固定二进制的 load identity/系统动态依赖审计结果记录在
+`third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
 为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
 默认 feature、二进制下载和 build.rs 链接，仅启用 `std`、`alternative-backend` 与
 API 28 兼容绑定；安全 loader 将已验证的 API table 显式交给 wrapper，运行时仍以

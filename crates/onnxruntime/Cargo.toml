@@ -15,6 +15,7 @@ gpu-provider-placeholder = []
 into-markdown-core = { path = "../core" }
 into-markdown-ocr = { path = "../ocr" }
 libloading.workspace = true
+libc.workspace = true
 ort.workspace = true
 rustix.workspace = true
 serde.workspace = true

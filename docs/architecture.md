@@ -141,6 +141,8 @@ stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EP
 固定 CPU 运行层由两部分组成：`crates/ocr` 提供对象安全 `TensorRuntime`、模型契约、
 并发 single-flight 和 bounded LRU；`crates/onnxruntime` 隔离动态加载与 ORT C ABI，
 并实现真实 CPU session adapter。缓存 key 包含 canonical model identity、模型 SHA-256、
-全部 session options 和经验证的 runtime 版本；加载失败或取消不会进入缓存，Arc clone
-和 eviction 不会使在途 session 失效。GPU 仅保留独立构建 feature 名称，默认 CPU
-artifact 不包含 GPU provider。
+完整 `ModelContract` 的稳定 digest、全部 session options 和经验证的 runtime 版本；每次
+查询仍重新校验模型字节与 contract。创建前按 authority 声明的 session 上界预留 count/
+bytes，预算直到底层 session 的最后一个 `Arc` 完成析构才释放；因此在途 clone 不会因
+LRU eviction 被误算为空闲。加载失败、panic 或取消会同时移除 loading entry 和预留，
+不会污染缓存。GPU 仅保留独立构建 feature 名称，默认 CPU artifact 不包含 GPU provider。
