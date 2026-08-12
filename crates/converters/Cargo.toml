@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 into-markdown-core = { path = "../core" }
+quick-xml.workspace = true
+serde_json.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true

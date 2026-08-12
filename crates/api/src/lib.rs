@@ -27,7 +27,8 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_source_resolver(Arc::new(into_markdown_converters::LocalFileSourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::StdinSourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::UriSourceResolver))
-        .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector));
+        .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
+        .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector));
     builder
 }
 

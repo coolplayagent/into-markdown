@@ -34,6 +34,21 @@
 `Engine::detect(DetectionRequest)` 只执行输入解析和格式检测，供 CLI 的
 `formats detect` 使用；它不会探测或调用转换器。
 
+检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
+其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
+检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，
+不能压过更高置信度的 magic bytes 或容器结构证据。ZIP 探测只读取受限数量的目录
+项和受限长度的 `mimetype` 内容；OLE 探测只检查有界的目录项区域，不提取宏或
+内嵌对象。OLE 检测会验证 CFB header 并沿 DIFAT、FAT 和 directory chain 遍历，
+只有 directory stream 中的流名可产生高置信候选；损坏或超限结构只产生带诊断的
+低置信歧义候选。结构化文本探测最多检查 1 MiB UTF-8 前缀，可识别 HTML、XML、
+RSS/Atom、JSON 和 Jupyter Notebook；不会猜测 CSV、纯文本或 Markdown。媒体容器
+必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
+歧义诊断。无 ID3 的 MP3 会验证 MPEG frame header 的版本、层、码率和采样率字段；
+BMP 会验证 file/DIB header、声明大小、像素偏移和基本图像字段，不能只凭短签名获得
+高置信度。HTML 探测可在有界前缀内跳过 BOM、空白、XML declaration 和注释，并以
+ASCII 不区分大小写的方式识别 doctype 与 HTML/XHTML 根元素。
+
 ## 兼容性
 
 错误文本用于描述问题，但不保证稳定；`ErrorCode::as_str()` 是稳定的机器接口。

@@ -185,6 +185,8 @@ into-md formats detect <INPUT> [-f <FORMAT>] [--extension <EXT>]
 ```
 
 `detect` 只解析输入并输出候选格式，不选择转换器、不生成 Markdown。
+文本输出包含 `DETECTOR` 和 `DIAGNOSTICS` 列；JSON 候选包含稳定的
+`detectorId`、`reason` 和 `diagnostics` 字段。候选顺序是稳定契约。
 
 ### 模型
 

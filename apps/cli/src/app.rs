@@ -209,7 +209,9 @@ struct DetectionCandidateView {
     format: String,
     confidence: f32,
     explicit: bool,
+    detector_id: String,
     reason: String,
+    diagnostics: Vec<String>,
 }
 
 fn detect_format(
@@ -245,19 +247,26 @@ fn detect_format(
                 format: candidate.format.as_str().into(),
                 confidence: candidate.confidence,
                 explicit: candidate.explicit,
+                detector_id: candidate.detector_id,
                 reason: candidate.evidence,
+                diagnostics: candidate.diagnostics,
             })
             .collect(),
     };
     if arguments.json {
         write_json(stdout, &view)
     } else {
-        writeln!(stdout, "FORMAT\tCONFIDENCE\tEXPLICIT\tREASON")?;
+        writeln!(stdout, "FORMAT\tCONFIDENCE\tEXPLICIT\tDETECTOR\tREASON\tDIAGNOSTICS")?;
         for candidate in view.candidates {
             writeln!(
                 stdout,
-                "{}\t{:.3}\t{}\t{}",
-                candidate.format, candidate.confidence, candidate.explicit, candidate.reason
+                "{}\t{:.3}\t{}\t{}\t{}\t{}",
+                candidate.format,
+                candidate.confidence,
+                candidate.explicit,
+                candidate.detector_id,
+                candidate.reason,
+                candidate.diagnostics.join("; ")
             )?;
         }
         Ok(())
@@ -1744,6 +1753,39 @@ mod tests {
         let (version, _) = invoke(&["version", "--json"], true).unwrap();
         assert!(formats.contains("\"format\": \"pdf\""));
         assert!(version.contains("\"name\": \"into-md\""));
+    }
+
+    #[test]
+    fn formats_detect_text_contract_prefers_magic_over_extension() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("misleading.docx");
+        fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let path = input.to_str().unwrap();
+        let (output, _) = invoke(&["formats", "detect", path], true).unwrap();
+        let lines = output.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "FORMAT\tCONFIDENCE\tEXPLICIT\tDETECTOR\tREASON\tDIAGNOSTICS");
+        assert_eq!(lines[1], "pdf\t0.990\tfalse\tbuiltin.detector.content\tPDF magic bytes\t");
+        assert_eq!(lines[2], "docx\t0.550\tfalse\tbuiltin.detector.hints\tfilename extension\t");
+    }
+
+    #[test]
+    fn formats_detect_json_contract_exposes_detector_and_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("misleading.docx");
+        fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let path = input.to_str().unwrap();
+        let (output, _) =
+            invoke(&["formats", "detect", path, "--mime-type", "application/json", "--json"], true)
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let candidates = value["candidates"].as_array().unwrap();
+        assert_eq!(candidates[0]["format"], "pdf");
+        assert_eq!(candidates[0]["detectorId"], "builtin.detector.content");
+        assert_eq!(candidates[0]["reason"], "PDF magic bytes");
+        assert!(candidates[0]["diagnostics"].as_array().is_some());
+        assert_eq!(candidates[1]["format"], "json");
+        assert_eq!(candidates[2]["format"], "docx");
+        assert_eq!(candidates[1]["diagnostics"][0], "filename extension and media type disagree");
     }
 
     #[test]
