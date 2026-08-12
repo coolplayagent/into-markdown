@@ -97,11 +97,14 @@ CLI 把主产物和所有去重后的资源视为一个输出集合：完整预�
 随机 nonce 事务目录写完并 fsync 全部 stage 文件。事务目录包含带签名、版本、root、
 严格相对目标清单、内容摘要和递增 generation 的持久 journal；两个 journal 槽交替
 写入并分别 fsync，状态转换完成后再同步目录。每个事务登记在 root 下固定、私有的
-管理器 registry，并为每个 canonical target 建立完整 SHA-256 命名的 hard-link lease；
-相关输出开始前沿各目标的有限祖先查找 registry，只恢复签名、nonce、root 身份和目标
-清单全部匹配且能取得排他锁的事务；每目标 lease 另用于并发所有权的 no-replace 竞争。
-发现并恢复相交事务后，本次写出返回
-`transactionRecoveredRetry`，不会继续写入第三套值；无关或伪造目录不会被清理。
+管理器 registry，并在每个物理目标父目录通过已认证 handle 建立固定名称的 hard-link
+lease；lease 绑定父目录 dev/inode、随机 nonce、root 路径及 root 身份，并指向事务内的
+受签名标记。父目录身份按稳定顺序取得，缺失目标也保守锁定整个物理父目录；既有目标
+另在 journal 绑定 dev/inode。相关输出只读取目标物理父目录的固定 lease，不扫描祖先、
+根目录或无关路径；只有 lease、journal、registry、root 身份和排他锁全部匹配时才恢复。
+恢复完成后，输出边界在 `ExecutionContext` checkpoint 之间重新执行完整预检；仅内部
+`transactionRecoveredRetry` 会触发最多八次重试，超限返回稳定 `recoveryLimit`，不会
+写入第三套值或把该内部信号暴露为一次普通命令失败。无关或伪造目录不会被清理。
 
 提交前再次以 no-follow handle 核验每个既有目标为 regular file 且身份未变。Unix
 上的所有 rename/link/unlink/fsync 都绑定已认证目录 handle 并使用相对 `*at` 操作；

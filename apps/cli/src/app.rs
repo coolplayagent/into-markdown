@@ -1703,7 +1703,7 @@ fn process_file_task_inner(
 ) -> Result<(PathBuf, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
-    let output_path = output::preflight_file(requested, policy.conflict)?;
+    let output_path = output::preflight_file(requested, policy.conflict, &policy.output_context)?;
     let asset_output = plan_file_asset_output(
         policy.emit,
         policy.asset_mode,
@@ -2288,6 +2288,7 @@ fn redact_url(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaction::{HookDecision, Target};
     use into_markdown::{
         Asset, AssetId, Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind,
         SourceLocator, render_markdown,
@@ -2318,6 +2319,61 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         result?;
         Ok((String::from_utf8(stdout).unwrap(), String::from_utf8(stderr).unwrap()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_cli_invocation_recovers_crash_residue_and_reports_success() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let input = root.join("input.txt");
+        let output = root.join("output.md");
+        let report = root.join("report.json");
+        fs::write(&input, b"hello\n").unwrap();
+
+        let output_context = into_markdown::ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+        let residue = [Target { path: output.clone(), bytes: b"interrupted" }];
+        let mut transaction =
+            crate::transaction::prepare(&residue, false, &output_context).unwrap();
+        let error = transaction
+            .commit_with_hook(|phase, index| {
+                if phase == "targetInstalled" && index == 0 {
+                    Ok(HookDecision::SimulateCrash)
+                } else {
+                    Ok(HookDecision::Continue)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "simulatedCrash");
+        drop(transaction);
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![
+                input.into_os_string(),
+                OsString::from("-o"),
+                output.clone().into_os_string(),
+                OsString::from("--report"),
+                report.clone().into_os_string(),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&output).unwrap(), "hello\n");
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["succeeded"], 1);
+        assert_eq!(report["failed"], 0);
+        assert_eq!(report["items"][0]["status"], "success");
     }
 
     #[test]

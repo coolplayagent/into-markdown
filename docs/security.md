@@ -58,8 +58,10 @@
   stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
   FIFO、设备、符号链接和 Windows reparse point 均拒绝。
 - 输出事务只恢复带随机 nonce、固定签名、版本、精确 root/相对目标清单和排他锁的
-  私有 registry 条目，并通过每目标完整摘要 lease 和 root 文件系统身份认证。相关写出
-  沿目标有限祖先扫描，只处理目标集合相交的事务并限制单次扫描数量。Unix 变更只使用
+  私有 registry 条目。每个物理目标父目录包含固定名称、由 no-replace hard link 发布的
+  管理器 lease，绑定父目录 dev/inode、root 身份和事务内受签名标记；既有目标身份另绑定
+  dev/inode，缺失目标保守互斥整个父目录。相关写出通过已认证父目录 handle 读取 lease，
+  不扫描祖先或不相关目录；恢复后有界重做完整预检，超限返回 `recoveryLimit`。Unix 变更只使用
   已认证目录 handle 上的相对 `*at` 操作；Windows 输出事务稳定返回
   `componentUnavailable`。journal generation 的每次转换都在继续文件变更前
   持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与

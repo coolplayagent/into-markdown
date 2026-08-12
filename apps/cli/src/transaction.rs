@@ -7,7 +7,7 @@ use crate::error::{CliError, ExitClass};
 use into_markdown::{ExecutionContext, ResourceReservation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 #[cfg(windows)]
 use std::fs::OpenOptions;
@@ -26,14 +26,15 @@ const JOURNAL_VERSION: u32 = 1;
 const TRANSACTION_PREFIX: &str = ".into-md-txn-01-";
 const INITIAL_PREFIX: &str = ".into-md-init-01-";
 const CLEANUP_PREFIX: &str = ".into-md-clean-01-";
-const TARGET_MARKER_PREFIX: &str = "target-";
+const PARENT_MARKER_PREFIX: &str = "parent-";
+const PARENT_LEASE_NAME: &str = ".into-md-output-parent-lease-01";
 const REGISTRY_NAME: &str = ".into-md-output-transactions-01";
 const MAX_RECOVERY_TRANSACTIONS: usize = 128;
+const MAX_RECOVERY_RETRIES: usize = 8;
 const MAX_RECOVERY_DIRECTORY_ENTRIES: usize = 16_384;
 const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JOURNAL_ENTRIES: usize = 100_001;
 const MAX_PATH_UNITS: usize = 32_768;
-const MAX_COORDINATION_ANCESTORS: usize = 128;
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_TRANSACTIONS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
@@ -55,14 +56,14 @@ enum EntryState {
     Installed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JournalPath {
     encoding: String,
     units: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FileIdentity {
     platform: String,
@@ -89,6 +90,7 @@ struct Journal {
     nonce: String,
     root: JournalPath,
     root_identity: FileIdentity,
+    parent_identities: Vec<FileIdentity>,
     generation: u64,
     phase: JournalPhase,
     entries: Vec<JournalEntry>,
@@ -96,11 +98,13 @@ struct Journal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TargetLease {
+struct ParentLease {
     signature: String,
     version: u32,
     nonce: String,
-    target_sha256: String,
+    root: JournalPath,
+    root_identity: FileIdentity,
+    parent_identity: FileIdentity,
 }
 
 /// One requested target and its complete staged contents.
@@ -453,7 +457,7 @@ impl PreparedTransaction {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn commit_with_hook(
+    pub(crate) fn commit_with_hook(
         &mut self,
         mut hook: impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
     ) -> Result<Vec<PathBuf>, CliError> {
@@ -473,7 +477,7 @@ impl PreparedTransaction {
             Err(error) => return self.fail_and_recover(error),
         };
         if let Err(error) =
-            validate_target_leases(&self.handles.directory, &authenticated, &self.journal)
+            validate_parent_leases(&self.handles.directory, &authenticated, &self.journal)
         {
             return self.fail_and_recover_authenticated(error, &authenticated);
         }
@@ -731,11 +735,50 @@ pub fn prepare(
     overwrite: bool,
     context: &ExecutionContext,
 ) -> Result<PreparedTransaction, CliError> {
-    prepare_with_hook(targets, overwrite, context, |_, _| Ok(HookDecision::Continue))
+    for recovered in 0..=MAX_RECOVERY_RETRIES {
+        context.checkpoint().map_err(CliError::from)?;
+        match prepare_with_hook(targets, overwrite, context, |_, _| Ok(HookDecision::Continue)) {
+            Err(error) if error.code() == "transactionRecoveredRetry" => {
+                if recovered == MAX_RECOVERY_RETRIES {
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "recoveryLimit",
+                        "output transaction recovery retry limit exceeded",
+                    ));
+                }
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded recovery loop always returns")
+}
+
+/// Recover any interrupted transaction owning one of these physical parent
+/// directories before higher-level conflict planning observes the filesystem.
+pub fn recover_for_paths(paths: &[PathBuf], context: &ExecutionContext) -> Result<(), CliError> {
+    ensure_transaction_platform()?;
+    let paths = paths.iter().map(|path| absolute_lexical(path)).collect::<Result<Vec<_>, _>>()?;
+    for recovered in 0..=MAX_RECOVERY_RETRIES {
+        context.checkpoint().map_err(CliError::from)?;
+        let parents = open_target_parents(&paths)?;
+        match recover_parent_transactions(&parents) {
+            Err(error) if error.code() == "transactionRecoveredRetry" => {
+                if recovered == MAX_RECOVERY_RETRIES {
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "recoveryLimit",
+                        "output transaction recovery retry limit exceeded",
+                    ));
+                }
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded recovery loop always returns")
 }
 
 #[allow(clippy::too_many_lines)]
-fn prepare_with_hook(
+pub(crate) fn prepare_with_hook(
     targets: &[Target<'_>],
     overwrite: bool,
     context: &ExecutionContext,
@@ -760,19 +803,16 @@ fn prepare_with_hook(
             .iter()
             .map(|target| absolute_lexical(&target.path))
             .collect::<Result<Vec<_>, _>>()?;
+        let parent_handles = open_target_parents(&paths)?;
+        recover_parent_transactions(&parent_handles)?;
         let root = common_existing_ancestor(&paths)?;
-        recover_overlapping(&paths)?;
         ensure_same_filesystem(&root, &paths)?;
-        #[cfg(unix)]
-        for path in &paths {
-            let parent = path.parent().ok_or_else(|| recovery_error("target has no parent"))?;
-            let _ = SafeDir::open_or_create_absolute(parent)?;
-        }
         #[cfg(unix)]
         let root_handle = SafeDir::open_absolute(&root)?;
 
         let mut entries = Vec::with_capacity(targets.len());
         let mut seen = BTreeSet::new();
+        let mut seen_originals = BTreeSet::new();
         for (target, absolute) in targets.iter().zip(&paths) {
             let relative = absolute.strip_prefix(&root).map_err(|_| {
                 CliError::new(
@@ -814,6 +854,15 @@ fn prepare_with_hook(
                     format!("output target already exists: {}", absolute.display()),
                 ));
             }
+            if let Some(identity) = &original
+                && !seen_originals.insert(identity.clone())
+            {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "outputConflict",
+                    "multiple output paths resolve to the same existing file",
+                ));
+            }
             entries.push(JournalEntry {
                 target: encoded,
                 original,
@@ -830,6 +879,8 @@ fn prepare_with_hook(
         }
 
         let encoded_root = encode_path(&root)?;
+        let parent_identities =
+            parent_handles.iter().map(|parent| parent.identity.clone()).collect::<Vec<_>>();
         let (nonce, initial_directory, directory, lock) = create_initial_transaction(&root)?;
         #[cfg(unix)]
         let registry_handle = transaction_registry(&root_handle, false)?
@@ -847,6 +898,7 @@ fn prepare_with_hook(
             root: encoded_root,
             #[cfg(unix)]
             root_identity: root_handle.identity.clone(),
+            parent_identities,
             #[cfg(not(unix))]
             root_identity: FileIdentity {
                 platform: "unsupported".into(),
@@ -854,6 +906,8 @@ fn prepare_with_hook(
                 second: 0,
                 size: 0,
             },
+            #[cfg(not(unix))]
+            parent_identities: Vec::new(),
             generation: 0,
             phase: JournalPhase::Staging,
             entries,
@@ -866,13 +920,49 @@ fn prepare_with_hook(
             );
             return Err(error);
         }
+        if let Err(error) = create_parent_leases(&parent_handles, &initial_handle, &journal) {
+            let cleanup = remove_parent_leases(&parent_handles, &initial_handle, &journal);
+            drop(lock);
+            if let Err(cleanup) = cleanup {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "output transaction lease creation failed ({}: {}); lease rollback failed and the initial journal was preserved ({}: {})",
+                        error.code(),
+                        error.message(),
+                        cleanup.code(),
+                        cleanup.message()
+                    ),
+                ));
+            }
+            let _ = remove_initial_transaction_handle(
+                &registry_handle,
+                initial_directory.file_name().expect("initial transaction has a name"),
+            );
+            return Err(error);
+        }
         if let Err(error) = handle_rename(
             &registry_handle,
             initial_directory.file_name().expect("initial transaction has a name"),
             &registry_handle,
             directory.file_name().expect("transaction has a name"),
         ) {
+            let cleanup = remove_parent_leases(&parent_handles, &initial_handle, &journal);
             drop(lock);
+            if let Err(cleanup) = cleanup {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "output transaction publication failed ({}: {}); lease rollback failed and the initial journal was preserved ({}: {})",
+                        error.code(),
+                        error.message(),
+                        cleanup.code(),
+                        cleanup.message()
+                    ),
+                ));
+            }
             let _ = remove_initial_transaction_handle(
                 &registry_handle,
                 initial_directory.file_name().expect("initial transaction has a name"),
@@ -913,14 +1003,6 @@ fn prepare_with_hook(
                 directory: SafeDir,
             },
         };
-        #[cfg(unix)]
-        if let Err(error) = create_target_leases(
-            &transaction.handles.root,
-            &transaction.handles.directory,
-            &transaction.journal,
-        ) {
-            return transaction.fail_and_recover(error);
-        }
         if let Err(error) = crash_point(&mut hook, "journalCreated", usize::MAX, &mut transaction) {
             if error.code() == "simulatedCrash" {
                 return Err(error);
@@ -1062,102 +1144,132 @@ fn transaction_platform_unavailable() -> CliError {
     )
 }
 
-/// Find interrupted transactions through the bounded ancestor scopes of every
-/// requested target. A recovered overlap makes this invocation stop so a
-/// caller cannot silently publish a third value immediately after recovery.
+#[cfg(unix)]
+fn open_target_parents(targets: &[PathBuf]) -> Result<Vec<SafeDir>, CliError> {
+    let mut parents = BTreeMap::new();
+    for target in targets {
+        let name = target.file_name().ok_or_else(|| recovery_error("target has no file name"))?;
+        if name == OsStr::new(PARENT_LEASE_NAME) || name == OsStr::new(REGISTRY_NAME) {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "outputPathUnsupported",
+                "output target conflicts with the transaction manager namespace",
+            ));
+        }
+        let parent = target.parent().ok_or_else(|| recovery_error("target has no parent"))?;
+        let handle = SafeDir::open_or_create_absolute(parent)?;
+        parents.entry(handle.identity.clone()).or_insert(handle);
+    }
+    Ok(parents.into_values().collect())
+}
+
+#[cfg(not(unix))]
+fn open_target_parents(_targets: &[PathBuf]) -> Result<Vec<SafeDir>, CliError> {
+    Err(transaction_platform_unavailable())
+}
+
+#[cfg(unix)]
+struct RecoveryReference {
+    root: PathBuf,
+    directory: PathBuf,
+    directory_handle: SafeDir,
+    initial: bool,
+}
+
+/// Recover transactions named by the fixed leases in the authenticated
+/// physical target-parent directories. Recovery completes before this call
+/// asks the caller to repeat preflight.
 #[allow(clippy::too_many_lines)]
-fn recover_overlapping(targets: &[PathBuf]) -> Result<(), CliError> {
+fn recover_parent_transactions(parents: &[SafeDir]) -> Result<(), CliError> {
     #[cfg(not(unix))]
     {
-        let _ = targets;
+        let _ = parents;
         return Err(transaction_platform_unavailable());
     }
     #[cfg(unix)]
     {
-        let requested = targets.iter().cloned().collect::<BTreeSet<_>>();
-        let mut scopes = BTreeSet::new();
-        for target in targets {
-            let mut current = target.parent();
-            let mut count = 0_usize;
-            while let Some(scope) = current {
-                if count >= MAX_COORDINATION_ANCESTORS {
-                    return Err(CliError::new(
-                        ExitClass::Io,
-                        "transactionRecoveryLimit",
-                        "output transaction ancestor scan exceeded its bound",
-                    ));
-                }
-                scopes.insert(scope.to_path_buf());
-                current = scope.parent();
-                count += 1;
+        let mut references = BTreeMap::new();
+        for parent in parents {
+            let Some(lease) = load_parent_lease(parent)? else { continue };
+            let root_path = decode_path(&lease.root)?;
+            let root = SafeDir::open_absolute(&root_path)
+                .map_err(|error| recovery_failed("open leased transaction root", &error))?;
+            if root.identity != lease.root_identity {
+                return Err(recovery_error("leased transaction root identity changed"));
             }
-        }
-        let active =
-            active_transactions().lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        let mut overlaps = Vec::new();
-        let mut overlapping_count = 0_usize;
-        for scope in scopes {
-            let Ok(scope_handle) = SafeDir::open_absolute(&scope) else { continue };
-            let Ok(Some(registry)) = transaction_registry(&scope_handle, false) else { continue };
-            for name in registry.names()? {
-                let Some(nonce) = managed_nonce(&name) else { continue };
-                let directory = scope.join(REGISTRY_NAME).join(&name);
-                let Ok(directory_handle) = registry.open_child(&name) else { continue };
-                let Ok(journal) =
-                    load_journal_handle(&scope_handle, &directory_handle, &directory, &nonce)
-                else {
-                    continue;
+            let registry = transaction_registry(&root, false)?
+                .ok_or_else(|| recovery_error("leased transaction registry is missing"))?;
+            let managed_name = OsString::from(format!("{TRANSACTION_PREFIX}{}", lease.nonce));
+            let initial_name = OsString::from(format!("{INITIAL_PREFIX}{}", lease.nonce));
+            let cleanup_name = OsString::from(format!("{CLEANUP_PREFIX}{}", lease.nonce));
+            let (name, directory_handle, initial) =
+                if let Ok(handle) = registry.open_child(&managed_name) {
+                    (managed_name, handle, false)
+                } else if let Ok(handle) = registry.open_child(&initial_name) {
+                    (initial_name, handle, true)
+                } else if let Ok(handle) = registry.open_child(&cleanup_name) {
+                    (cleanup_name, handle, false)
+                } else {
+                    return Err(recovery_error("leased transaction directory is missing"));
                 };
-                let journal_targets = journal
-                    .entries
-                    .iter()
-                    .map(|entry| target_path(&scope, entry))
-                    .collect::<Result<BTreeSet<_>, _>>()?;
-                if journal_targets.is_disjoint(&requested) {
-                    continue;
-                }
-                overlapping_count += 1;
-                if overlapping_count > MAX_RECOVERY_TRANSACTIONS {
-                    return Err(CliError::new(
-                        ExitClass::Io,
-                        "transactionRecoveryLimit",
-                        "ancestor recovery scan found too many overlapping transactions",
-                    ));
-                }
-                overlaps.push((
-                    scope.clone(),
-                    directory.clone(),
-                    nonce,
-                    active.contains(&directory),
-                ));
-            }
+            let directory = root.path.join(REGISTRY_NAME).join(&name);
+            let journal = load_journal_handle(&root, &directory_handle, &directory, &lease.nonce)?;
+            validate_parent_lease(parent, &directory_handle, &journal, &lease)?;
+            let key = (root.identity.clone(), lease.nonce.clone());
+            references.entry(key).or_insert(RecoveryReference {
+                root: root.path.clone(),
+                directory,
+                directory_handle,
+                initial,
+            });
         }
-        overlaps.sort_by(|left, right| left.1.cmp(&right.1));
-        overlaps.dedup_by(|left, right| left.1 == right.1);
-        if overlaps.is_empty() {
+        if references.is_empty() {
             return Ok(());
         }
-        for (root, directory, _, active_here) in &overlaps {
-            if *active_here {
-                return Err(CliError::new(
-                    ExitClass::Io,
-                    "transactionBusy",
-                    format!("an active output transaction covers {}", directory.display()),
-                ));
-            }
-            let directory_handle = registry_for_directory(root, directory)?;
-            let lock = try_recovery_lock_handle(&directory_handle)
+        if references.len() > MAX_RECOVERY_TRANSACTIONS {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "transactionRecoveryLimit",
+                "too many physical parent transactions require recovery",
+            ));
+        }
+        for reference in references.into_values() {
+            let lock = try_recovery_lock_handle(&reference.directory_handle)
                 .map_err(|error| recovery_failed("authenticate transaction lock", &error))?
                 .ok_or_else(|| {
                     CliError::new(
                         ExitClass::Io,
                         "transactionBusy",
-                        format!("an active output transaction covers {}", directory.display()),
+                        format!(
+                            "an active output transaction covers {}",
+                            reference.directory.display()
+                        ),
                     )
                 })?;
-            recover_transaction(root, directory, Some(lock)).map_err(|error| {
-                recovery_failed("recover overlapping output transaction", &error)
-            })?;
+            if reference.initial {
+                recover_initial_transaction(
+                    &reference.root,
+                    &reference.directory,
+                    &reference.directory_handle,
+                    Some(lock),
+                )?;
+            } else if reference
+                .directory
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with(CLEANUP_PREFIX))
+            {
+                recover_cleanup_transaction(
+                    &reference.root,
+                    &reference.directory,
+                    &reference.directory_handle,
+                    Some(lock),
+                )?;
+            } else {
+                recover_transaction(&reference.root, &reference.directory, Some(lock)).map_err(
+                    |error| recovery_failed("recover physical parent transaction", &error),
+                )?;
+            }
         }
         Err(CliError::new(
             ExitClass::Io,
@@ -1283,6 +1395,69 @@ fn recover_transaction(root: &Path, directory: &Path, lock: Option<File>) -> Res
     } else {
         rollback_transaction(root, directory, &journal, lock)
     }
+}
+
+#[cfg(unix)]
+fn recover_initial_transaction(
+    root: &Path,
+    directory: &Path,
+    directory_handle: &SafeDir,
+    lock: Option<File>,
+) -> Result<(), CliError> {
+    let lock = lock.ok_or_else(|| recovery_error("initial recovery requires an owned lock"))?;
+    let nonce = directory
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|name| name.strip_prefix(INITIAL_PREFIX))
+        .ok_or_else(|| recovery_error("invalid initial transaction name"))?;
+    let root_handle = SafeDir::open_absolute(root)?;
+    let journal = load_journal_handle(&root_handle, directory_handle, directory, nonce)?;
+    if journal.phase != JournalPhase::Staging {
+        return Err(recovery_error("initial transaction has advanced beyond staging"));
+    }
+    validate_recovery_layout(root, directory, &journal)?;
+    let parents = journal_parent_handles(&root_handle, &journal)?;
+    remove_parent_leases(&parents, directory_handle, &journal)?;
+    drop(lock);
+    let registry = transaction_registry(&root_handle, false)?
+        .ok_or_else(|| recovery_error("initial transaction registry is missing"))?;
+    remove_initial_transaction_handle(
+        &registry,
+        directory.file_name().ok_or_else(|| recovery_error("initial transaction has no name"))?,
+    )
+}
+
+#[cfg(unix)]
+fn recover_cleanup_transaction(
+    root: &Path,
+    directory: &Path,
+    directory_handle: &SafeDir,
+    lock: Option<File>,
+) -> Result<(), CliError> {
+    let lock = lock.ok_or_else(|| recovery_error("cleanup recovery requires an owned lock"))?;
+    let nonce = directory
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|name| name.strip_prefix(CLEANUP_PREFIX))
+        .ok_or_else(|| recovery_error("invalid cleanup transaction name"))?;
+    let root_handle = SafeDir::open_absolute(root)?;
+    let journal = load_journal_handle(&root_handle, directory_handle, directory, nonce)?;
+    validate_recovery_layout(root, directory, &journal)?;
+    let parents = journal_parent_handles(&root_handle, &journal)?;
+    remove_parent_leases(&parents, directory_handle, &journal)?;
+    drop(lock);
+    let registry = transaction_registry(&root_handle, false)?
+        .ok_or_else(|| recovery_error("cleanup transaction registry is missing"))?;
+    for name in ["journal-a.json", "journal-b.json", "transaction.lock"] {
+        remove_regular_handle_if_present(directory_handle, OsStr::new(name))?;
+    }
+    directory_handle.sync()?;
+    rustix::fs::unlinkat(
+        &registry.fd,
+        directory.file_name().ok_or_else(|| recovery_error("cleanup has no name"))?,
+        rustix::fs::AtFlags::REMOVEDIR,
+    )?;
+    registry.sync()
 }
 
 fn rollback_transaction(
@@ -1498,31 +1673,11 @@ fn remove_transaction_directory(
         remove_regular_handle_if_present(&directory_handle, &backup_name(index))?;
     }
     #[cfg(unix)]
-    for entry in &journal.entries {
-        let target = target_path(root, entry)?;
-        let parent_relative = target
-            .parent()
-            .ok_or_else(|| recovery_error("target has no parent"))?
-            .strip_prefix(root)
-            .map_err(|_| recovery_error("target parent outside transaction root"))?;
-        if let Ok(target_parent) = root_handle.open_descendant(parent_relative) {
-            let lease = lease_name(entry);
-            let transaction_identity = directory_handle.inspect_regular(&lease)?;
-            let target_identity = target_parent.inspect_regular(&lease)?;
-            if transaction_identity.is_some() && transaction_identity == target_identity {
-                remove_regular_handle_if_present(&target_parent, &lease)?;
-            }
-            target_parent.sync()?;
-        }
-        remove_regular_handle_if_present(&directory_handle, &lease_name(entry))?;
-    }
-    #[cfg(unix)]
     directory_handle.sync()?;
 
     // Atomically remove the directory from the recovery namespace while its
     // signed journals and exclusive lock still exist. Cleanup failures after
     // this point cannot cause a later recovery to reinterpret a completed set.
-    let parent = directory.parent().ok_or_else(|| recovery_error("transaction has no parent"))?;
     let nonce = managed_nonce(
         directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
     )
@@ -1547,10 +1702,14 @@ fn remove_transaction_directory(
     )?;
     #[cfg(unix)]
     registry_handle.sync()?;
-    drop(lock);
 
     #[cfg(unix)]
     let cleanup_handle = registry_handle.open_child(&cleanup_name)?;
+    #[cfg(unix)]
+    let parents = journal_parent_handles(&root_handle, journal)?;
+    #[cfg(unix)]
+    remove_parent_leases(&parents, &cleanup_handle, journal)?;
+    drop(lock);
     #[cfg(unix)]
     for name in ["journal-a.json", "journal-b.json", "transaction.lock"] {
         remove_regular_handle_if_present(&cleanup_handle, OsStr::new(name))?;
@@ -1563,7 +1722,6 @@ fn remove_transaction_directory(
     registry_handle.sync()?;
     #[cfg(not(unix))]
     return Err(transaction_platform_unavailable());
-    let _ = parent;
     Ok(())
 }
 
@@ -1596,8 +1754,8 @@ fn allowed_transaction_names(journal: &Journal) -> BTreeSet<OsString> {
         names.insert(OsString::from(format!("stage-{index}")));
         names.insert(OsString::from(format!("backup-{index}")));
     }
-    for entry in &journal.entries {
-        names.insert(lease_name(entry));
+    for identity in &journal.parent_identities {
+        names.insert(parent_marker_name(identity));
     }
     names
 }
@@ -1709,10 +1867,11 @@ fn validate_journal_handle(
     if journal.signature != JOURNAL_SIGNATURE || journal.version != JOURNAL_VERSION {
         return Err(recovery_error("invalid transaction signature or version"));
     }
-    let expected_name = format!("{TRANSACTION_PREFIX}{}", journal.nonce);
-    if directory.file_name() != Some(OsStr::new(&expected_name))
-        || managed_nonce(OsStr::new(&expected_name)).is_none()
-    {
+    let valid_nonce = journal.nonce.len() == 32
+        && journal.nonce.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    let valid_names = [TRANSACTION_PREFIX, INITIAL_PREFIX, CLEANUP_PREFIX]
+        .map(|prefix| OsString::from(format!("{prefix}{}", journal.nonce)));
+    if !valid_nonce || !valid_names.iter().any(|name| directory.file_name() == Some(name)) {
         return Err(recovery_error("transaction nonce does not match directory"));
     }
     if journal.entries.is_empty() || journal.entries.len() > MAX_JOURNAL_ENTRIES {
@@ -1735,6 +1894,13 @@ fn validate_journal_handle(
             return Err(recovery_error("duplicate transaction target"));
         }
     }
+    if journal.parent_identities.is_empty()
+        || journal.parent_identities.len() > journal.entries.len()
+        || !journal.parent_identities.windows(2).all(|pair| pair[0] < pair[1])
+    {
+        return Err(recovery_error("journal physical parent identities are invalid"));
+    }
+    let _ = journal_parent_handles(root, journal)?;
     Ok(())
 }
 
@@ -1834,7 +2000,7 @@ fn remove_initial_transaction_handle(registry: &SafeDir, name: &OsStr) -> Result
         if !matches!(
             member.to_str(),
             Some("journal-a.json" | "journal-b.json" | "transaction.lock")
-        ) && !member.to_string_lossy().starts_with(TARGET_MARKER_PREFIX)
+        ) && !member.to_string_lossy().starts_with(PARENT_MARKER_PREFIX)
         {
             return Err(recovery_error("unexpected initial transaction member"));
         }
@@ -1844,15 +2010,6 @@ fn remove_initial_transaction_handle(registry: &SafeDir, name: &OsStr) -> Result
     rustix::fs::unlinkat(&registry.fd, name, rustix::fs::AtFlags::REMOVEDIR)?;
     registry.sync()?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn registry_for_directory(root: &Path, directory: &Path) -> Result<SafeDir, CliError> {
-    let root = SafeDir::open_absolute(root)?;
-    let registry = transaction_registry(&root, false)?
-        .ok_or_else(|| recovery_error("transaction registry is missing"))?;
-    registry
-        .open_child(directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?)
 }
 
 #[cfg(unix)]
@@ -1907,48 +2064,43 @@ fn backup_name(index: usize) -> OsString {
     OsString::from(format!("backup-{index}"))
 }
 
-fn target_digest(path: &JournalPath) -> String {
+fn parent_marker_name(identity: &FileIdentity) -> OsString {
     let mut digest = Sha256::new();
-    digest.update(path.encoding.as_bytes());
+    digest.update(identity.platform.as_bytes());
     digest.update([0]);
-    for unit in &path.units {
-        digest.update(unit.to_le_bytes());
-    }
-    hex_bytes(&digest.finalize())
-}
-
-fn lease_name(entry: &JournalEntry) -> OsString {
-    OsString::from(format!("{TARGET_MARKER_PREFIX}{}.json", target_digest(&entry.target)))
+    digest.update(identity.first.to_le_bytes());
+    digest.update(identity.second.to_le_bytes());
+    OsString::from(format!("{PARENT_MARKER_PREFIX}{}.json", hex_bytes(&digest.finalize())))
 }
 
 #[cfg(unix)]
-fn create_target_leases(
-    root: &SafeDir,
+fn create_parent_leases(
+    parents: &[SafeDir],
     transaction: &SafeDir,
     journal: &Journal,
 ) -> Result<(), CliError> {
-    for entry in &journal.entries {
-        let relative = decode_path(&entry.target)?;
-        let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
-        let target_parent = root.open_descendant(parent_relative)?;
-        let name = lease_name(entry);
-        let lease = TargetLease {
+    for parent in parents {
+        let name = parent_marker_name(&parent.identity);
+        let lease = ParentLease {
             signature: JOURNAL_SIGNATURE.into(),
             version: JOURNAL_VERSION,
             nonce: journal.nonce.clone(),
-            target_sha256: target_digest(&entry.target),
+            root: journal.root.clone(),
+            root_identity: journal.root_identity.clone(),
+            parent_identity: parent.identity.clone(),
         };
         let bytes = serde_json::to_vec(&lease)
-            .map_err(|error| CliError::internal(format!("serialize target lease: {error}")))?;
+            .map_err(|error| CliError::internal(format!("serialize parent lease: {error}")))?;
         let mut transaction_file = transaction.create_regular(&name)?;
         transaction_file.write_all(&bytes)?;
         transaction_file.write_all(b"\n")?;
         transaction_file.sync_all()?;
+        transaction.sync()?;
         rustix::fs::linkat(
             &transaction.fd,
             &name,
-            &target_parent.fd,
-            &name,
+            &parent.fd,
+            PARENT_LEASE_NAME,
             rustix::fs::AtFlags::empty(),
         )
         .map_err(|error| {
@@ -1956,60 +2108,137 @@ fn create_target_leases(
                 CliError::new(
                     ExitClass::Io,
                     "transactionBusy",
-                    format!(
-                        "another output transaction owns target {}",
-                        root.path.join(&relative).display()
-                    ),
+                    format!("another output transaction owns parent {}", parent.path.display()),
                 )
             } else {
                 error.into()
             }
         })?;
-        target_parent.sync()?;
+        parent.sync()?;
     }
     transaction.sync()
 }
 
 #[cfg(unix)]
-fn validate_target_leases(
+fn load_parent_lease(parent: &SafeDir) -> Result<Option<ParentLease>, CliError> {
+    if parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?.is_none() {
+        return Ok(None);
+    }
+    let bytes = read_limited_regular_handle(parent, OsStr::new(PARENT_LEASE_NAME), 8 * 1024)
+        .map_err(CliError::from)?;
+    let lease: ParentLease =
+        serde_json::from_slice(&bytes).map_err(|_| recovery_error("parent lease is malformed"))?;
+    if lease.signature != JOURNAL_SIGNATURE
+        || lease.version != JOURNAL_VERSION
+        || lease.nonce.len() != 32
+        || !lease.nonce.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || lease.parent_identity != parent.identity
+    {
+        return Err(recovery_error("parent lease authentication failed"));
+    }
+    Ok(Some(lease))
+}
+
+#[cfg(unix)]
+fn validate_parent_lease(
+    parent: &SafeDir,
+    transaction: &SafeDir,
+    journal: &Journal,
+    lease: &ParentLease,
+) -> Result<(), CliError> {
+    let name = parent_marker_name(&parent.identity);
+    let transaction_identity = transaction.inspect_regular(&name)?;
+    let parent_lease_identity = parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?;
+    let (Some(transaction_identity), Some(parent_lease_identity)) =
+        (transaction_identity, parent_lease_identity)
+    else {
+        return Err(recovery_error("physical parent lease is missing"));
+    };
+    if transaction_identity != parent_lease_identity {
+        return Err(recovery_error("physical parent lease identity mismatch"));
+    }
+    if lease.signature != JOURNAL_SIGNATURE
+        || lease.version != JOURNAL_VERSION
+        || lease.nonce != journal.nonce
+        || lease.root != journal.root
+        || lease.root_identity != journal.root_identity
+        || lease.parent_identity != parent.identity
+        || journal.parent_identities.binary_search(&parent.identity).is_err()
+    {
+        return Err(recovery_error("physical parent lease does not match journal"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_parent_leases(
     transaction: &SafeDir,
     targets: &[AuthenticatedTarget],
     journal: &Journal,
 ) -> Result<(), CliError> {
-    for (entry, target) in journal.entries.iter().zip(targets) {
-        let name = lease_name(entry);
-        let transaction_identity = transaction.inspect_regular(&name)?;
-        let target_identity = target.parent.inspect_regular(&name)?;
-        let (Some(transaction_identity), Some(target_identity)) =
-            (transaction_identity, target_identity)
-        else {
-            return Err(recovery_error("target lease is missing"));
-        };
-        if transaction_identity != target_identity {
-            return Err(recovery_error("target lease identity mismatch"));
-        }
-        let bytes =
-            read_limited_regular_handle(transaction, &name, 4 * 1024).map_err(CliError::from)?;
-        let lease: TargetLease = serde_json::from_slice(&bytes)
-            .map_err(|_| recovery_error("target lease is malformed"))?;
-        if lease.signature != JOURNAL_SIGNATURE
-            || lease.version != JOURNAL_VERSION
-            || lease.nonce != journal.nonce
-            || lease.target_sha256 != target_digest(&entry.target)
-        {
-            return Err(recovery_error("target lease authentication failed"));
-        }
+    let mut parents = BTreeMap::new();
+    for target in targets {
+        parents.entry(target.parent.identity.clone()).or_insert(&target.parent);
+    }
+    for parent in parents.into_values() {
+        let lease = load_parent_lease(parent)?
+            .ok_or_else(|| recovery_error("physical parent lease is missing"))?;
+        validate_parent_lease(parent, transaction, journal, &lease)?;
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn validate_target_leases(
+fn validate_parent_leases(
     _transaction: &SafeDir,
     _targets: &[AuthenticatedTarget],
     _journal: &Journal,
 ) -> Result<(), CliError> {
     Err(transaction_platform_unavailable())
+}
+
+#[cfg(unix)]
+fn remove_parent_leases(
+    parents: &[SafeDir],
+    transaction: &SafeDir,
+    journal: &Journal,
+) -> Result<(), CliError> {
+    for parent in parents {
+        let marker = parent_marker_name(&parent.identity);
+        let transaction_identity = transaction.inspect_regular(&marker)?;
+        let parent_identity = parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?;
+        let Some(transaction_identity) = transaction_identity else {
+            continue;
+        };
+        if parent_identity.as_ref() == Some(&transaction_identity) {
+            let lease = load_parent_lease(parent)?
+                .ok_or_else(|| recovery_error("physical parent lease disappeared"))?;
+            validate_parent_lease(parent, transaction, journal, &lease)?;
+            remove_regular_handle_if_present(parent, OsStr::new(PARENT_LEASE_NAME))?;
+            parent.sync()?;
+        }
+        remove_regular_handle_if_present(transaction, &marker)?;
+        transaction.sync()?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn journal_parent_handles(root: &SafeDir, journal: &Journal) -> Result<Vec<SafeDir>, CliError> {
+    let mut parents = BTreeMap::new();
+    for entry in &journal.entries {
+        let relative = decode_path(&entry.target)?;
+        let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent = root.open_descendant(parent_relative)?;
+        parents.entry(parent.identity.clone()).or_insert(parent);
+    }
+    let identities = parents.keys().cloned().collect::<Vec<_>>();
+    if identities != journal.parent_identities {
+        return Err(recovery_error(
+            "journal physical parent identities do not match its target paths",
+        ));
+    }
+    Ok(parents.into_values().collect())
 }
 
 #[cfg(unix)]
@@ -2397,7 +2626,14 @@ fn common_existing_ancestor(paths: &[PathBuf]) -> Result<PathBuf, CliError> {
             })?
             .to_path_buf();
     }
-    candidate.canonicalize().map_err(Into::into)
+    // Keep the spelling through which the authenticated directory handle was
+    // opened.  A case- or normalization-insensitive filesystem may expose the
+    // same physical directory through a different lexical spelling; replacing
+    // it with `canonicalize` would make otherwise valid target paths fail the
+    // subsequent root-relative check.  Every mutation is still relative to the
+    // no-follow handle opened below, and the durable lease records its physical
+    // identity.
+    Ok(candidate)
 }
 
 #[cfg(unix)]
@@ -2688,6 +2924,9 @@ mod tests {
         ];
 
         for requested in [&first, &second, &parent_level] {
+            fs::write(&first, b"old-one").unwrap();
+            fs::write(&second, b"old-two").unwrap();
+            fs::write(&parent_level, b"old-parent").unwrap();
             let mut transaction = prepare(&targets, true, &context()).unwrap();
             let error = transaction
                 .commit_with_hook(|phase, index| {
@@ -2702,13 +2941,155 @@ mod tests {
             drop(transaction);
 
             let third = [Target { path: requested.clone(), bytes: b"third" }];
-            let error = prepare(&third, true, &context()).err().expect("recovery retry boundary");
-            assert_eq!(error.code(), "transactionRecoveredRetry");
-            assert_eq!(fs::read(&first).unwrap(), b"old-one");
-            assert_eq!(fs::read(&second).unwrap(), b"old-two");
-            assert_eq!(fs::read(&parent_level).unwrap(), b"old-parent");
-            assert_ne!(fs::read(requested).unwrap(), b"third");
+            prepare(&third, true, &context()).unwrap().commit().unwrap();
+            assert_eq!(fs::read(requested).unwrap(), b"third");
+            for untouched in [&first, &second, &parent_level] {
+                if untouched != requested {
+                    let expected = if untouched == &first {
+                        b"old-one".as_slice()
+                    } else if untouched == &second {
+                        b"old-two".as_slice()
+                    } else {
+                        b"old-parent".as_slice()
+                    };
+                    assert_eq!(fs::read(untouched).unwrap(), expected);
+                }
+            }
             assert!(manager_directories(&root).is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_parent_lease_serializes_an_absent_different_basename() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let first_path = root.join("first.md");
+        let second_path = root.join("second.md");
+        fs::write(&first_path, b"old").unwrap();
+        let first = [Target { path: first_path.clone(), bytes: b"interrupted" }];
+        let mut transaction = prepare(&first, true, &context()).unwrap();
+
+        let active = [Target { path: second_path.clone(), bytes: b"blocked" }];
+        let error = prepare(&active, false, &context()).err().expect("physical parent is leased");
+        assert_eq!(error.code(), "transactionBusy");
+
+        let error = transaction
+            .commit_with_hook(|phase, index| {
+                if phase == "targetInstalled" && index == 0 {
+                    Ok(HookDecision::SimulateCrash)
+                } else {
+                    Ok(HookDecision::Continue)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "simulatedCrash");
+        drop(transaction);
+
+        let second = [Target { path: second_path.clone(), bytes: b"final" }];
+        prepare(&second, false, &context()).unwrap().commit().unwrap();
+        assert_eq!(fs::read(first_path).unwrap(), b"old");
+        assert_eq!(fs::read(second_path).unwrap(), b"final");
+        assert!(manager_directories(&root).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_alias_observes_the_same_physical_parent_lease() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let original = root.join("original.md");
+        let alias = root.join("alias.md");
+        fs::write(&original, b"old").unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        let first = [Target { path: original.clone(), bytes: b"first" }];
+        let mut transaction = prepare(&first, true, &context()).unwrap();
+        let error = transaction
+            .commit_with_hook(|phase, index| {
+                if phase == "targetInstalled" && index == 0 {
+                    Ok(HookDecision::SimulateCrash)
+                } else {
+                    Ok(HookDecision::Continue)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "simulatedCrash");
+        drop(transaction);
+
+        let second = [Target { path: alias.clone(), bytes: b"second" }];
+        prepare(&second, true, &context()).unwrap().commit().unwrap();
+        assert_eq!(fs::read(&original).unwrap(), b"old");
+        assert_eq!(fs::read(&alias).unwrap(), b"second");
+        assert!(manager_directories(&root).is_empty());
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn case_and_unicode_parent_aliases_share_the_physical_lease() {
+        for (created_name, alias_name) in [("CaseParent", "caseparent"), ("é", "e\u{301}")] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let created = root.join(created_name);
+            fs::create_dir(&created).unwrap();
+            let alias = root.join(alias_name);
+            let (Ok(created_handle), Ok(alias_handle)) =
+                (SafeDir::open_absolute(&created), SafeDir::open_absolute(&alias))
+            else {
+                continue;
+            };
+            if created_handle.identity != alias_handle.identity {
+                continue;
+            }
+            let first_path = created.join("first.md");
+            let alias_path = alias.join("second.md");
+            fs::write(&first_path, b"old").unwrap();
+            let first = [Target { path: first_path.clone(), bytes: b"interrupted" }];
+            let mut transaction = prepare(&first, true, &context()).unwrap();
+            let error = transaction
+                .commit_with_hook(|phase, index| {
+                    if phase == "targetInstalled" && index == 0 {
+                        Ok(HookDecision::SimulateCrash)
+                    } else {
+                        Ok(HookDecision::Continue)
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(error.code(), "simulatedCrash");
+            drop(transaction);
+
+            let second = [Target { path: alias_path.clone(), bytes: b"final" }];
+            prepare(&second, false, &context()).unwrap().commit().unwrap();
+            assert_eq!(fs::read(first_path).unwrap(), b"old");
+            assert_eq!(fs::read(alias_path).unwrap(), b"final");
+            assert!(manager_directories(&created).is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deep_parent_without_a_lease_never_uses_an_ancestor_scan_limit() {
+        for depth in [130_usize, 500] {
+            let temporary = tempfile::tempdir().unwrap();
+            let mut parent = temporary.path().canonicalize().unwrap();
+            let mut supported = true;
+            for _ in 0..depth {
+                parent.push("d");
+                if let Err(error) = fs::create_dir(&parent) {
+                    assert!(
+                        matches!(error.raw_os_error(), Some(libc::ENAMETOOLONG | libc::EINVAL)),
+                        "unexpected deep directory failure: {error}"
+                    );
+                    supported = false;
+                    break;
+                }
+            }
+            if !supported {
+                continue;
+            }
+            let target = parent.join("document.md");
+            let output = [Target { path: target.clone(), bytes: b"deep" }];
+            prepare(&output, false, &context()).unwrap().commit().unwrap();
+            assert_eq!(fs::read(target).unwrap(), b"deep");
         }
     }
 

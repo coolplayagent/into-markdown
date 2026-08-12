@@ -63,11 +63,14 @@ SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器�
 非空资源目标；稳定资源路径已经存在时，`rename` 与 `error` 都返回
 `assetConflict`，只有 `overwrite` 会原子替换。`rename` 与 `error` 的每个精确目标
 都使用原子 no-clobber 写入，因此预检后的竞态文件不会被覆盖。提交前完整 stage 和
-fsync，并持久记录签名 journal、递增 generation、目标身份、备份与安装状态。相关
-输出开始前会沿 canonical target 的有限祖先查找受控 registry，并只恢复目标集合相交
-的事务：`committed` 之前恢复旧集合，之后验证并
+fsync，并持久记录签名 journal、递增 generation、目标身份、备份与安装状态。每个
+物理目标父目录由固定管理器 lease 保守互斥；lease 绑定父目录身份、事务 root 身份和
+随机 nonce，所有查询、发布与移除均相对已认证目录 handle 完成，不依赖路径字节比较或
+祖先扫描。相关输出开始前只通过目标父目录 lease 恢复相交事务：`committed` 之前恢复旧集合，之后验证并
 完成新集合清理，所以 `overwrite` 只产生完整旧集合或完整新集合。回滚失败返回稳定
 `rollbackFailed` 并保留 journal/备份；下一次恢复可继续已完成一部分的幂等步骤。
+恢复成功后会在 `ExecutionContext` checkpoint 间有界重做预检；只重试精确内部恢复信号，
+超限返回 `recoveryLimit`。该过程发生在 stdout 写入之前，不能导致 stdout 重复输出。
 Unix 的所有目标变更绑定已认证目录 handle，使用相对 no-follow/no-replace 操作；跨
 文件系统、符号链接与非 regular file 在任何目标变更前拒绝。Windows 输出事务返回
 稳定 `componentUnavailable`，路径规划与 bundle 编码不受影响。stdout 的外部 extract

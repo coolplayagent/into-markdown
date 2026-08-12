@@ -110,7 +110,8 @@ into-md <INPUT...>
   已存在时 `rename` 安全降级为 `assetConflict`；`overwrite` 才会原子替换稳定目标。
   `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
   失败而不会被覆盖。主产物与全部资源完整 stage、fsync 并写入持久事务 journal 后
-  作为一个集合提交；相关输出开始前会受限恢复中断事务。失败会恢复完整旧集合，恢复
+  作为一个集合提交；每个物理目标父目录以身份绑定的固定 lease 保守互斥，相关输出开始
+  前只从这些父目录受限恢复中断事务并有界重做预检，不扫描祖先。失败会恢复完整旧集合，恢复
   本身失败则返回 `rollbackFailed` 并保留 journal/备份，`overwrite` 不产生新旧混合
   集合。stdout 的外部资源使用同一事务，先 stage，stdout 成功或 EPIPE 后提交；非
   EPIPE 失败不落资源，但已经写出的 stdout 字节无法撤回。跨文件系统、符号链接、

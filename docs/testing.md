@@ -92,7 +92,10 @@ commit/rename 竞态、取消、临时预算与 overwrite 回滚；每个 phase 
 目录/FIFO/设备与 symlink swap 均需 fail closed，且不递归删除非管理器路径。跨
 `a/b` 事务中断后，分别从 `a`、`b`、更深子目录与父目录发起的相交写入必须先恢复或
 阻塞，绝不能写第三套值；认证完成后的 parent rename+symlink 替换也必须证明外部目录
-无文件。Windows 检查覆盖稳定 `componentUnavailable`。bundle 重复运行应逐字节一致，manifest
+无文件。物理父目录 lease 测试覆盖既有文件 hard-link 身份、支持时的大小写与
+NFC/NFD 别名，以及 130/500 层合法目录无需祖先扫描；CLI 测试从真实崩溃残留开始，
+断言单次命令完成恢复、写出并在 report 中记录 success。Windows 检查覆盖稳定
+`componentUnavailable`。bundle 重复运行应逐字节一致，manifest
 schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测试。
 
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending

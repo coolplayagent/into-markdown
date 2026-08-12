@@ -58,7 +58,7 @@ pub fn stage_assets(
     conflict: ConflictPolicy,
     context: &ExecutionContext,
 ) -> Result<StagedAssets, CliError> {
-    let planned = plan_asset_writes(result, directory, mode, conflict)?;
+    let planned = plan_asset_writes(result, directory, mode, conflict, Some(context))?;
     if planned.is_empty() {
         return Ok(StagedAssets { transaction: None, targets: vec![] });
     }
@@ -100,7 +100,7 @@ fn write_assets_with_hook(
     conflict: ConflictPolicy,
     after_preflight: impl FnOnce() -> Result<(), CliError>,
 ) -> Result<Vec<WriteOutcome>, CliError> {
-    let planned = plan_asset_writes(result, directory, mode, conflict)?;
+    let planned = plan_asset_writes(result, directory, mode, conflict, None)?;
     if planned.is_empty() {
         return Ok(Vec::new());
     }
@@ -123,6 +123,7 @@ fn plan_asset_writes(
     directory: &Path,
     mode: AssetModeArg,
     conflict: ConflictPolicy,
+    context: Option<&ExecutionContext>,
 ) -> Result<Vec<(usize, PathBuf)>, CliError> {
     if mode != AssetModeArg::Extract || result.assets.is_empty() {
         return Ok(Vec::new());
@@ -139,17 +140,23 @@ fn plan_asset_writes(
                 path.display()
             )));
         }
-        if path.exists() && conflict != ConflictPolicy::Overwrite {
-            return Err(CliError::new(
-                ExitClass::Io,
-                "assetConflict",
-                format!(
-                    "stable asset output already exists and cannot be renamed safely: {}",
-                    path.display()
-                ),
-            ));
-        }
         planned.push((asset.source_index, path));
+    }
+    if let Some(context) = context {
+        let paths = planned.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
+        transaction::recover_for_paths(&paths, context)?;
+    }
+    if let Some((_, path)) =
+        planned.iter().find(|(_, path)| path.exists() && conflict != ConflictPolicy::Overwrite)
+    {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "assetConflict",
+            format!(
+                "stable asset output already exists and cannot be renamed safely: {}",
+                path.display()
+            ),
+        ));
     }
     Ok(planned)
 }
@@ -177,7 +184,7 @@ pub fn write_output_set(
 ) -> Result<WriteOutcome, CliError> {
     let primary = primary.to_path_buf();
     let planned_assets = asset_directory
-        .map(|directory| plan_asset_writes(result, directory, mode, conflict))
+        .map(|directory| plan_asset_writes(result, directory, mode, conflict, Some(context)))
         .transpose()?
         .unwrap_or_default();
     let mut targets = Vec::with_capacity(planned_assets.len() + 1);
@@ -199,6 +206,7 @@ pub fn write_file(
     conflict: ConflictPolicy,
     context: &ExecutionContext,
 ) -> Result<WriteOutcome, CliError> {
+    transaction::recover_for_paths(&[requested.to_path_buf()], context)?;
     let (path, renamed) = resolve_conflict(requested, conflict)?;
     transaction::prepare(
         &[Target { path: path.clone(), bytes }],
@@ -210,7 +218,12 @@ pub fn write_file(
 }
 
 /// Resolve an output conflict without writing the file.
-pub fn preflight_file(path: &Path, conflict: ConflictPolicy) -> Result<PathBuf, CliError> {
+pub fn preflight_file(
+    path: &Path,
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<PathBuf, CliError> {
+    transaction::recover_for_paths(&[path.to_path_buf()], context)?;
     resolve_conflict(path, conflict).map(|(resolved, _)| resolved)
 }
 
@@ -450,6 +463,24 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
+    fn leave_installed_residue(path: &Path, bytes: &[u8], overwrite: bool) {
+        let context = output_context();
+        let targets = [Target { path: path.to_path_buf(), bytes }];
+        let mut transaction = transaction::prepare(&targets, overwrite, &context).unwrap();
+        let error = transaction
+            .commit_with_hook(|phase, index| {
+                if phase == "targetInstalled" && index == 0 {
+                    Ok(transaction::HookDecision::SimulateCrash)
+                } else {
+                    Ok(transaction::HookDecision::Continue)
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "simulatedCrash");
+        drop(transaction);
+    }
+
     fn image_result(prefix: &str) -> ConversionResult {
         let asset = Asset {
             id: AssetId("bundle-image".into()),
@@ -659,6 +690,20 @@ mod tests {
         assert_eq!(BatchReport::from_json(&json).unwrap(), report);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn report_writer_recovers_an_interrupted_output_before_replacing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().canonicalize().unwrap().join("report.json");
+        fs::write(&path, b"old-report").unwrap();
+        leave_installed_residue(&path, b"interrupted-report", true);
+
+        let report = BatchReport::try_new(vec![]).unwrap();
+        write_report(&path, &report, &output_context()).unwrap();
+        let json = fs::read_to_string(path).unwrap();
+        assert_eq!(BatchReport::from_json(&json).unwrap(), report);
+    }
+
     #[test]
     fn bundle_markdown_image_href_exactly_matches_its_zip_entry() {
         let result = image_result("assets");
@@ -729,10 +774,12 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
 
         let requested = root.join("document.md");
         fs::write(&requested, b"original").unwrap();
-        let planned = preflight_file(&requested, ConflictPolicy::Rename).unwrap();
+        let context = output_context();
+        let planned = preflight_file(&requested, ConflictPolicy::Rename, &context).unwrap();
         assert_eq!(planned, root.join("document-1.md"));
         fs::write(&planned, b"racer").unwrap();
         let error = write_preflighted_file(&planned, b"new", ConflictPolicy::Rename).unwrap_err();
@@ -833,9 +880,14 @@ mod tests {
         let assets = temporary.path().canonicalize().unwrap().join("assets");
         fs::create_dir(&assets).unwrap();
         let result = empty_result();
-        let planned =
-            plan_asset_writes(&result, &assets, AssetModeArg::Extract, ConflictPolicy::Overwrite)
-                .unwrap();
+        let planned = plan_asset_writes(
+            &result,
+            &assets,
+            AssetModeArg::Extract,
+            ConflictPolicy::Overwrite,
+            None,
+        )
+        .unwrap();
         let target = planned[0].1.clone();
         fs::write(&target, b"old").unwrap();
         let context = output_context();
@@ -862,5 +914,37 @@ mod tests {
         .unwrap();
         staged.abort().unwrap();
         assert_eq!(fs::read(&target).unwrap(), [1, 2, 3]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdout_asset_staging_recovers_before_the_stream_boundary() {
+        let temporary = tempfile::tempdir().unwrap();
+        let assets = temporary.path().canonicalize().unwrap().join("assets");
+        fs::create_dir(&assets).unwrap();
+        let result = empty_result();
+        let planned = plan_asset_writes(
+            &result,
+            &assets,
+            AssetModeArg::Extract,
+            ConflictPolicy::Overwrite,
+            None,
+        )
+        .unwrap();
+        let target = planned[0].1.clone();
+        fs::write(&target, b"old-asset").unwrap();
+        leave_installed_residue(&target, b"interrupted-asset", true);
+
+        let staged = stage_assets(
+            &result,
+            &assets,
+            AssetModeArg::Extract,
+            ConflictPolicy::Overwrite,
+            &output_context(),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"old-asset");
+        staged.commit().unwrap();
+        assert_eq!(fs::read(target).unwrap(), [1, 2, 3]);
     }
 }
