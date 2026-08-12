@@ -459,6 +459,7 @@ impl FormatDetector for ContentFormatDetector {
 const ZIP_INSPECTION_ENTRY_LIMIT: usize = 4096;
 const ZIP_MIMETYPE_READ_LIMIT: u64 = 128;
 const ZIP_NAME_READ_LIMIT: usize = 1024 * 1024;
+const ZIP_METADATA_READ_LIMIT: u64 = 256 * 1024;
 const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 
@@ -498,15 +499,10 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         (InputFormat::Audio, 0.92, "MPEG audio frame header")
     } else if bytes.starts_with(b"OggS") {
         return Some(detect_ogg(bytes));
-    } else if bytes.len() >= 12
-        && &bytes[4..8] == b"ftyp"
-        && matches!(&bytes[8..12], b"M4A " | b"M4B " | b"F4A ")
-    {
-        (InputFormat::Audio, 0.96, "audio ISO base media signature")
     } else if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
         return Some(detect_ebml(bytes));
-    } else if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        return Some(detect_iso_media(bytes));
+    } else if bytes.get(4..8) == Some(b"ftyp") {
+        return detect_iso_media(bytes);
     } else {
         return None;
     };
@@ -613,19 +609,27 @@ fn detect_ebml(bytes: &[u8]) -> FormatCandidate {
         .with_diagnostic("container type does not prove that a video track is present")
 }
 
-fn detect_iso_media(bytes: &[u8]) -> FormatCandidate {
-    let brand = &bytes[8..12];
+fn detect_iso_media(bytes: &[u8]) -> Option<FormatCandidate> {
+    let box_size = usize::try_from(u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?)).ok()?;
+    if box_size < 16 || box_size > bytes.len() || (box_size - 16) % 4 != 0 {
+        return None;
+    }
+    let brand = bytes.get(8..12)?;
     if matches!(brand, b"M4A " | b"M4B " | b"F4A ") {
-        FormatCandidate::new(InputFormat::Audio, 0.96, "audio ISO base media brand")
+        Some(FormatCandidate::new(InputFormat::Audio, 0.96, "audio ISO base media brand"))
     } else if matches!(
         brand,
         b"avc1" | b"iso2" | b"isom" | b"mp41" | b"mp42" | b"qt  " | b"M4V " | b"F4V "
     ) {
-        FormatCandidate::new(InputFormat::Video, 0.70, "video-capable ISO base media brand")
-            .with_diagnostic("container brand does not prove that a video track is present")
+        Some(
+            FormatCandidate::new(InputFormat::Video, 0.70, "video-capable ISO base media brand")
+                .with_diagnostic("container brand does not prove that a video track is present"),
+        )
     } else {
-        FormatCandidate::new(InputFormat::Video, 0.40, "unknown ISO base media brand")
-            .with_diagnostic("ISO base media brand is not recognized as audio or video")
+        Some(
+            FormatCandidate::new(InputFormat::Video, 0.40, "unknown ISO base media brand")
+                .with_diagnostic("ISO base media brand is not recognized as audio or video"),
+        )
     }
 }
 
@@ -705,7 +709,8 @@ fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> 
 }
 
 fn starts_with_tag(text: &str, name: &str) -> bool {
-    text.get(1..1 + name.len()).is_some_and(|value| value.eq_ignore_ascii_case(name))
+    text.starts_with('<')
+        && text.get(1..1 + name.len()).is_some_and(|value| value.eq_ignore_ascii_case(name))
         && text
             .as_bytes()
             .get(1 + name.len())
@@ -744,14 +749,19 @@ fn xml_root_name(mut text: &str) -> Option<&str> {
 
 fn detect_zip(bytes: &[u8]) -> Vec<FormatCandidate> {
     let mut candidates = vec![FormatCandidate::new(InputFormat::Zip, 0.90, "ZIP magic bytes")];
-    if let Some(entry_count) = zip_claimed_entry_count(bytes)
-        && entry_count > ZIP_INSPECTION_ENTRY_LIMIT
-    {
-        candidates[0].diagnostics.push(format!(
-            "ZIP inspection stopped: {entry_count} entries exceed the {ZIP_INSPECTION_ENTRY_LIMIT} entry limit"
-        ));
-        return candidates;
-    }
+    let entry_count = match zip_preflight(bytes) {
+        Ok(entry_count) if entry_count <= ZIP_INSPECTION_ENTRY_LIMIT => entry_count,
+        Ok(entry_count) => {
+            candidates[0].diagnostics.push(format!(
+                "ZIP inspection stopped before archive construction: {entry_count} entries exceed the {ZIP_INSPECTION_ENTRY_LIMIT} entry limit"
+            ));
+            return candidates;
+        }
+        Err(diagnostic) => {
+            candidates[0].diagnostics.push(diagnostic);
+            return candidates;
+        }
+    };
     let mut archive = match zip::ZipArchive::new(Cursor::new(bytes)) {
         Ok(archive) => archive,
         Err(error) => {
@@ -761,11 +771,10 @@ fn detect_zip(bytes: &[u8]) -> Vec<FormatCandidate> {
             return candidates;
         }
     };
-    if archive.len() > ZIP_INSPECTION_ENTRY_LIMIT {
+    if archive.len() != entry_count {
         candidates[0].diagnostics.push(format!(
-            "ZIP inspection stopped: {} entries exceed the {} entry limit",
-            archive.len(),
-            ZIP_INSPECTION_ENTRY_LIMIT
+            "ZIP entry count changed after validated EOCD preflight: {entry_count} != {}",
+            archive.len()
         ));
         return candidates;
     }
@@ -789,72 +798,298 @@ fn detect_zip(bytes: &[u8]) -> Vec<FormatCandidate> {
                 .push(format!("ZIP entry {index} could not be inspected: {error}")),
         }
     }
-    let mimetype = match archive.by_name("mimetype") {
-        Ok(entry) => {
-            let mut raw = Vec::new();
-            match entry.take(ZIP_MIMETYPE_READ_LIMIT + 1).read_to_end(&mut raw) {
-                Ok(_) if raw.len() as u64 > ZIP_MIMETYPE_READ_LIMIT => {
-                    candidates[0].diagnostics.push(format!(
-                        "ZIP mimetype exceeds the {ZIP_MIMETYPE_READ_LIMIT} byte read limit"
-                    ));
-                    None
-                }
-                Ok(_) => {
-                    if let Ok(value) = String::from_utf8(raw) {
-                        Some(value.trim().to_owned())
-                    } else {
-                        candidates[0].diagnostics.push("ZIP mimetype is not UTF-8".into());
-                        None
-                    }
-                }
-                Err(error) => {
-                    candidates[0]
-                        .diagnostics
-                        .push(format!("ZIP mimetype could not be inspected: {error}"));
-                    None
-                }
-            }
-        }
-        Err(zip::result::ZipError::FileNotFound) => None,
-        Err(error) => {
-            candidates[0].diagnostics.push(format!("ZIP mimetype could not be opened: {error}"));
-            None
-        }
-    };
-
-    let specialized = if names.iter().any(|name| name == "word/document.xml") {
-        Some((InputFormat::Docx, "OOXML word/document.xml package part"))
-    } else if names.iter().any(|name| name == "ppt/presentation.xml") {
-        Some((InputFormat::Pptx, "OOXML ppt/presentation.xml package part"))
-    } else if names.iter().any(|name| name == "xl/workbook.xml" || name == "xl/workbook.bin") {
-        Some((InputFormat::Xlsx, "OOXML xl/workbook.xml package part"))
-    } else if mimetype.as_deref() == Some("application/epub+zip")
-        && names.iter().any(|name| name == "META-INF/container.xml")
-    {
-        Some((InputFormat::Epub, "EPUB mimetype and container package parts"))
-    } else if mimetype.as_deref() == Some("application/vnd.oasis.opendocument.text") {
-        Some((InputFormat::Odt, "OpenDocument text mimetype"))
-    } else if mimetype.as_deref() == Some("application/vnd.oasis.opendocument.spreadsheet") {
-        Some((InputFormat::Ods, "OpenDocument spreadsheet mimetype"))
-    } else if mimetype.as_deref() == Some("application/vnd.oasis.opendocument.presentation") {
-        Some((InputFormat::Odp, "OpenDocument presentation mimetype"))
-    } else {
-        None
-    };
-    if let Some((format, evidence)) = specialized {
+    let specialized = inspect_zip_package(&mut archive, &names, &mut candidates[0].diagnostics);
+    if specialized.len() == 1 {
+        let (format, evidence) = specialized[0];
         candidates.push(FormatCandidate::new(format, 0.99, evidence));
+    } else if specialized.len() > 1 {
+        candidates[0].diagnostics.push(format!(
+            "conflicting package structures detected: {}",
+            specialized.iter().map(|(format, _)| format.as_str()).collect::<Vec<_>>().join(",")
+        ));
     }
     candidates
 }
 
-fn zip_claimed_entry_count(bytes: &[u8]) -> Option<usize> {
+fn inspect_zip_package(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    names: &[String],
+    diagnostics: &mut Vec<String>,
+) -> Vec<(InputFormat, &'static str)> {
+    let mimetype = read_zip_text(archive, "mimetype", ZIP_MIMETYPE_READ_LIMIT, diagnostics);
+    let content_types =
+        read_zip_text(archive, "[Content_Types].xml", ZIP_METADATA_READ_LIMIT, diagnostics);
+    let mut matches = Vec::new();
+    if let Some(content_types) = content_types.as_deref() {
+        let ooxml = [
+            (
+                InputFormat::Docx,
+                "word/document.xml",
+                &[
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+                    "application/vnd.ms-word.document.macroEnabled.main+xml",
+                ][..],
+                "validated OOXML Word content type and package part",
+            ),
+            (
+                InputFormat::Pptx,
+                "ppt/presentation.xml",
+                &[
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+                    "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml",
+                    "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml",
+                    "application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml",
+                    "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml",
+                    "application/vnd.ms-powerpoint.template.macroEnabled.main+xml",
+                ][..],
+                "validated OOXML presentation content type and package part",
+            ),
+            (
+                InputFormat::Xlsx,
+                "xl/workbook.xml",
+                &[
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+                    "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                ][..],
+                "validated OOXML workbook content type and package part",
+            ),
+            (
+                InputFormat::Xlsx,
+                "xl/workbook.bin",
+                &["application/vnd.ms-excel.sheet.binary.macroEnabled.main"][..],
+                "validated OOXML binary workbook content type and package part",
+            ),
+        ];
+        for (format, part, content_types_allowed, evidence) in ooxml {
+            if names.iter().any(|name| name == part)
+                && zip_entry_nonempty(archive, part, diagnostics)
+                && content_types_allowed
+                    .iter()
+                    .any(|content_type| content_type_override(content_types, part, content_type))
+                && !matches.iter().any(|(existing, _)| *existing == format)
+            {
+                matches.push((format, evidence));
+            }
+        }
+    }
+
+    if mimetype.as_deref() == Some("application/epub+zip")
+        && let Some(container) =
+            read_zip_text(archive, "META-INF/container.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
+        && let Some(rootfile) = xml_element_attribute(&container, "rootfile", "full-path")
+        && is_safe_archive_name(rootfile)
+        && names.iter().any(|name| name == rootfile)
+        && zip_entry_nonempty(archive, rootfile, diagnostics)
+    {
+        matches.push((InputFormat::Epub, "validated EPUB mimetype, container, and rootfile"));
+    }
+
+    let odf = [
+        (
+            "application/vnd.oasis.opendocument.text",
+            InputFormat::Odt,
+            "validated OpenDocument text package",
+        ),
+        (
+            "application/vnd.oasis.opendocument.spreadsheet",
+            InputFormat::Ods,
+            "validated OpenDocument spreadsheet package",
+        ),
+        (
+            "application/vnd.oasis.opendocument.presentation",
+            InputFormat::Odp,
+            "validated OpenDocument presentation package",
+        ),
+    ];
+    for (expected_mimetype, format, evidence) in odf {
+        if mimetype.as_deref() == Some(expected_mimetype)
+            && zip_entry_nonempty(archive, "content.xml", diagnostics)
+            && read_zip_text(archive, "META-INF/manifest.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
+                .is_some_and(|manifest| manifest.contains(expected_mimetype))
+        {
+            matches.push((format, evidence));
+        }
+    }
+    matches
+}
+
+fn read_zip_text(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+    limit: u64,
+    diagnostics: &mut Vec<String>,
+) -> Option<String> {
+    let mut entry = match archive.by_name(name) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => return None,
+        Err(error) => {
+            diagnostics.push(format!("ZIP {name} could not be opened: {error}"));
+            return None;
+        }
+    };
+    let mut raw = Vec::new();
+    if let Err(error) = entry.by_ref().take(limit + 1).read_to_end(&mut raw) {
+        diagnostics.push(format!("ZIP {name} could not be inspected: {error}"));
+        return None;
+    }
+    if raw.len() as u64 > limit {
+        diagnostics.push(format!("ZIP {name} exceeds the {limit} byte read limit"));
+        return None;
+    }
+    if let Ok(value) = String::from_utf8(raw) {
+        Some(value.trim().to_owned())
+    } else {
+        diagnostics.push(format!("ZIP {name} is not UTF-8"));
+        None
+    }
+}
+
+fn zip_entry_nonempty(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    match archive.by_name(name) {
+        Ok(mut entry) => {
+            let mut byte = [0_u8; 1];
+            entry.read(&mut byte).is_ok_and(|read| read == 1)
+        }
+        Err(zip::result::ZipError::FileNotFound) => false,
+        Err(error) => {
+            diagnostics.push(format!("ZIP {name} could not be opened: {error}"));
+            false
+        }
+    }
+}
+
+fn content_types_override(document: &str) -> impl Iterator<Item = &str> {
+    document.split('<').filter_map(|fragment| {
+        let tag = fragment.split_once('>')?.0;
+        let element = tag.split_ascii_whitespace().next()?.rsplit(':').next()?;
+        element.eq_ignore_ascii_case("Override").then_some(tag)
+    })
+}
+
+fn content_type_override(document: &str, part: &str, content_type: &str) -> bool {
+    let expected_part = format!("/{part}");
+    content_types_override(document).any(|tag| {
+        xml_attribute(tag, "PartName") == Some(expected_part.as_str())
+            && xml_attribute(tag, "ContentType") == Some(content_type)
+    })
+}
+
+fn xml_element_attribute<'a>(document: &'a str, element: &str, attribute: &str) -> Option<&'a str> {
+    document.split('<').find_map(|fragment| {
+        let tag = fragment.split_once('>')?.0;
+        let name = tag.split_ascii_whitespace().next()?.rsplit(':').next()?;
+        name.eq_ignore_ascii_case(element).then(|| xml_attribute(tag, attribute)).flatten()
+    })
+}
+
+fn xml_attribute<'a>(tag: &'a str, attribute: &str) -> Option<&'a str> {
+    let mut offset = 0;
+    while let Some(found) = tag[offset..].find(attribute) {
+        let start = offset + found;
+        let before = tag[..start].chars().next_back();
+        let after_name = start + attribute.len();
+        if before.is_none_or(char::is_whitespace)
+            && tag[after_name..]
+                .chars()
+                .next()
+                .is_some_and(|value| value.is_whitespace() || value == '=')
+        {
+            let rest = tag[after_name..].trim_start();
+            let rest = rest.strip_prefix('=')?.trim_start();
+            let quote = rest.chars().next()?;
+            if matches!(quote, '\'' | '"') {
+                let value = &rest[quote.len_utf8()..];
+                return value.split_once(quote).map(|(value, _)| value);
+            }
+        }
+        offset = after_name;
+    }
+    None
+}
+
+fn is_safe_archive_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('/')
+        && !name.contains('\\')
+        && name.split('/').all(|component| !matches!(component, "" | "." | ".."))
+}
+
+fn zip_preflight(bytes: &[u8]) -> Result<usize, String> {
     const EOCD_MIN_SIZE: usize = 22;
     const MAX_COMMENT_SIZE: usize = u16::MAX as usize;
     let search_start = bytes.len().saturating_sub(EOCD_MIN_SIZE + MAX_COMMENT_SIZE);
-    let eocd = bytes[search_start..].windows(4).rposition(|window| window == b"PK\x05\x06")?
-        + search_start;
-    let record = bytes.get(eocd..eocd + EOCD_MIN_SIZE)?;
-    Some(usize::from(u16::from_le_bytes([record[10], record[11]])))
+    let mut last_error = "ZIP EOCD record is missing or invalid".to_owned();
+    for relative in (0..=bytes.len().saturating_sub(search_start + 4)).rev() {
+        let eocd = search_start + relative;
+        if bytes.get(eocd..eocd + 4) != Some(b"PK\x05\x06") {
+            continue;
+        }
+        let Some(record) = bytes.get(eocd..eocd + EOCD_MIN_SIZE) else {
+            continue;
+        };
+        let comment_size = usize::from(u16::from_le_bytes([record[20], record[21]]));
+        if eocd.checked_add(EOCD_MIN_SIZE + comment_size) != Some(bytes.len()) {
+            continue;
+        }
+        match validate_classic_eocd(bytes, eocd, record) {
+            Ok(entry_count) => return Ok(entry_count),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+fn validate_classic_eocd(bytes: &[u8], eocd: usize, record: &[u8]) -> Result<usize, String> {
+    let disk = u16::from_le_bytes([record[4], record[5]]);
+    let central_disk = u16::from_le_bytes([record[6], record[7]]);
+    let disk_entries = u16::from_le_bytes([record[8], record[9]]);
+    let total_entries = u16::from_le_bytes([record[10], record[11]]);
+    let central_size = u32::from_le_bytes(record[12..16].try_into().map_err(|_| "invalid EOCD")?);
+    let central_offset = u32::from_le_bytes(record[16..20].try_into().map_err(|_| "invalid EOCD")?);
+    if disk != 0 || central_disk != 0 || disk_entries != total_entries {
+        return Err("multi-disk ZIP structure inspection is unsupported".into());
+    }
+    if total_entries == u16::MAX
+        || central_size == u32::MAX
+        || central_offset == u32::MAX
+        || eocd >= 20 && bytes.get(eocd - 20..eocd - 16) == Some(b"PK\x06\x07")
+    {
+        return Err("ZIP64 structure inspection is unsupported; using ZIP-only evidence".into());
+    }
+    let entry_count = usize::from(total_entries);
+    let central_size =
+        usize::try_from(central_size).map_err(|_| "ZIP central size is too large")?;
+    let central_offset =
+        usize::try_from(central_offset).map_err(|_| "ZIP central offset is too large")?;
+    if central_offset.checked_add(central_size) != Some(eocd) {
+        return Err("ZIP central directory does not end at the validated EOCD".into());
+    }
+    if entry_count > ZIP_INSPECTION_ENTRY_LIMIT {
+        return Ok(entry_count);
+    }
+    let mut cursor = central_offset;
+    for _ in 0..entry_count {
+        let header =
+            bytes.get(cursor..cursor + 46).ok_or("ZIP central directory header is truncated")?;
+        if &header[..4] != b"PK\x01\x02" {
+            return Err("ZIP central directory entry signature is invalid".into());
+        }
+        let variable_size = usize::from(u16::from_le_bytes([header[28], header[29]]))
+            + usize::from(u16::from_le_bytes([header[30], header[31]]))
+            + usize::from(u16::from_le_bytes([header[32], header[33]]));
+        cursor = cursor
+            .checked_add(46 + variable_size)
+            .filter(|end| *end <= eocd)
+            .ok_or("ZIP central directory entry exceeds the EOCD boundary")?;
+    }
+    if cursor != eocd {
+        return Err("ZIP central directory count or size is inconsistent".into());
+    }
+    Ok(entry_count)
 }
 
 fn detect_ole(bytes: &[u8]) -> Vec<FormatCandidate> {
@@ -1130,6 +1365,13 @@ mod tests {
         archive.finish().unwrap().into_inner()
     }
 
+    fn ooxml_content_type(part: &str, content_type: &str) -> Vec<u8> {
+        format!(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/{part}" ContentType="{content_type}"/></Types>"#
+        )
+        .into_bytes()
+    }
+
     fn cfb_with_stream(name: &str) -> Vec<u8> {
         let mut bytes = vec![0_u8; 3 * 512];
         bytes[..8].copy_from_slice(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
@@ -1241,13 +1483,16 @@ mod tests {
             structured_text_candidate(b"<?xml version='1.0'?><document/>").unwrap().format,
             InputFormat::Xml
         );
+        assert!(!starts_with_tag("xhtml>", "html"));
+        assert!(!starts_with_tag("zhtml>", "html"));
+        assert_eq!(structured_text_candidate(b"<xhtml>").unwrap().format, InputFormat::Xml);
     }
 
     #[test]
     fn ambiguous_media_containers_do_not_receive_high_confidence() {
         let ogg = detect_content(b"OggS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
         let ebml = detect_content(b"\x1a\x45\xdf\xa3unknown");
-        let iso = detect_content(b"\0\0\0\x18ftypzzzz");
+        let iso = detect_content(b"\0\0\0\x10ftypzzzz\0\0\0\0");
         for candidate in [&ogg[0], &ebml[0], &iso[0]] {
             assert!(candidate.confidence <= 0.60);
             assert!(!candidate.diagnostics.is_empty());
@@ -1261,19 +1506,50 @@ mod tests {
     }
 
     #[test]
+    fn iso_media_requires_a_complete_bounded_ftyp_box() {
+        let audio = detect_content(b"\0\0\0\x10ftypM4A \0\0\0\0");
+        assert_eq!(audio[0].format, InputFormat::Audio);
+        assert!((audio[0].confidence - 0.96).abs() < f32::EPSILON);
+        assert!(detect_content(b"\0\0\0\x10ftypM4A ").is_empty());
+        assert!(detect_content(b"\0\0\0\x0cftypM4A ").is_empty());
+        assert!(detect_content(b"\0\0\0\x20ftypM4A \0\0\0\0").is_empty());
+    }
+
+    #[test]
     fn zip_parts_distinguish_ooxml_epub_and_odf() {
         let detector = ContentFormatDetector;
+        let word_types = ooxml_content_type(
+            "word/document.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+        );
         let fixtures = [
-            (zip_with(&[("word/document.xml", b"<w:document/>" as &[u8])]), InputFormat::Docx),
+            (
+                zip_with(&[
+                    ("[Content_Types].xml", word_types.as_slice()),
+                    ("word/document.xml", b"<w:document/>"),
+                ]),
+                InputFormat::Docx,
+            ),
             (
                 zip_with(&[
                     ("mimetype", b"application/epub+zip"),
-                    ("META-INF/container.xml", b"<container/>"),
+                    (
+                        "META-INF/container.xml",
+                        b"<container><rootfiles><rootfile full-path='OPS/content.opf'/></rootfiles></container>",
+                    ),
+                    ("OPS/content.opf", b"<package/>"),
                 ]),
                 InputFormat::Epub,
             ),
             (
-                zip_with(&[("mimetype", b"application/vnd.oasis.opendocument.text")]),
+                zip_with(&[
+                    ("mimetype", b"application/vnd.oasis.opendocument.text"),
+                    ("content.xml", b"<office:document-content/>"),
+                    (
+                        "META-INF/manifest.xml",
+                        b"<manifest:file-entry manifest:full-path='/' manifest:media-type='application/vnd.oasis.opendocument.text'/>",
+                    ),
+                ]),
                 InputFormat::Odt,
             ),
         ];
@@ -1305,10 +1581,77 @@ mod tests {
         bytes.extend_from_slice(&5000_u16.to_le_bytes());
         bytes.extend_from_slice(&0_u32.to_le_bytes());
         bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&22_u16.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x05\x06");
         bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&22_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        assert_eq!(zip_preflight(&bytes).unwrap(), 5000);
         let candidates = detect_zip(&bytes);
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].diagnostics[0].contains("5000 entries"));
+        assert!(candidates[0].diagnostics[0].contains("before archive construction"));
+    }
+
+    #[test]
+    fn zip64_safely_skips_structure_inspection() {
+        let mut bytes = b"PK\x05\x06".to_vec();
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        let candidates = detect_zip(&bytes);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].diagnostics[0].contains("ZIP64"));
+    }
+
+    #[test]
+    fn package_detection_rejects_empty_plain_and_conflicting_archives() {
+        let word_type = ooxml_content_type(
+            "word/document.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+        );
+        let ppt_type = ooxml_content_type(
+            "ppt/presentation.xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+        );
+        let combined_types = format!(
+            "<Types>{}{}</Types>",
+            String::from_utf8_lossy(&word_type)
+                .trim_start_matches(
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                )
+                .trim_end_matches("</Types>"),
+            String::from_utf8_lossy(&ppt_type)
+                .trim_start_matches(
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                )
+                .trim_end_matches("</Types>")
+        )
+        .into_bytes();
+        let ordinary = zip_with(&[("ordinary.txt", b"hello")]);
+        let empty_part =
+            zip_with(&[("[Content_Types].xml", word_type.as_slice()), ("word/document.xml", b"")]);
+        for (index, bytes) in [ordinary, empty_part].into_iter().enumerate() {
+            let candidates = detect_zip(&bytes);
+            assert_eq!(candidates.len(), 1, "fixture {index}");
+            assert_eq!(candidates[0].format, InputFormat::Zip);
+        }
+        let conflict_bytes = zip_with(&[
+            ("[Content_Types].xml", combined_types.as_slice()),
+            ("word/document.xml", b"<w:document/>"),
+            ("ppt/presentation.xml", b"<p:presentation/>"),
+        ]);
+        let conflict = detect_zip(&conflict_bytes);
+        assert_eq!(conflict.len(), 1);
+        assert!(conflict[0].diagnostics.iter().any(|value| value.contains("conflicting")));
     }
 
     #[test]

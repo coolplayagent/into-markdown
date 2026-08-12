@@ -173,6 +173,7 @@ impl Engine {
                     ProbeOutcome::Match { confidence } => attempts.push(Attempt {
                         converter: Arc::clone(converter),
                         candidate: candidate.clone(),
+                        explicit: candidate.explicit,
                         confidence: candidate.confidence * normalize_confidence(confidence),
                         priority: converter.priority(),
                     }),
@@ -182,8 +183,9 @@ impl Engine {
 
         attempts.sort_by(|left, right| {
             right
-                .confidence
-                .total_cmp(&left.confidence)
+                .explicit
+                .cmp(&left.explicit)
+                .then_with(|| right.confidence.total_cmp(&left.confidence))
                 .then_with(|| right.priority.cmp(&left.priority))
                 .then_with(|| left.converter.id().cmp(right.converter.id()))
         });
@@ -289,6 +291,7 @@ impl Engine {
 struct Attempt {
     converter: Arc<dyn Converter>,
     candidate: FormatCandidate,
+    explicit: bool,
     confidence: f32,
     priority: i32,
 }
@@ -381,6 +384,28 @@ mod tests {
     }
 
     struct MaliciousDetector;
+
+    struct PdfMagicDetector;
+
+    impl FormatDetector for PdfMagicDetector {
+        fn id(&self) -> &'static str {
+            "test.pdf-magic"
+        }
+        fn detect<'a>(
+            &'a self,
+            input: &'a ResolvedInput,
+            _: &'a FormatHint,
+        ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
+            Box::pin(async move {
+                Ok(input
+                    .bytes
+                    .starts_with(b"%PDF-")
+                    .then(|| FormatCandidate::new(InputFormat::Pdf, 0.99, "PDF magic bytes"))
+                    .into_iter()
+                    .collect())
+            })
+        }
+    }
 
     impl FormatDetector for MaliciousDetector {
         fn id(&self) -> &'static str {
@@ -486,6 +511,46 @@ mod tests {
                 if id == "invalid.converter" {
                     document.schema_version += 1;
                 }
+                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+            })
+        }
+    }
+
+    struct FormatAwareConverter {
+        id: &'static str,
+        format: InputFormat,
+        probe_confidence: f32,
+    }
+
+    impl Converter for FormatAwareConverter {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            match self.format {
+                InputFormat::Text => &[InputFormat::Text],
+                InputFormat::Pdf => &[InputFormat::Pdf],
+                _ => &[],
+            }
+        }
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            Box::pin(async move { Ok(ProbeOutcome::Match { confidence: self.probe_confidence }) })
+        }
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            let id = self.id;
+            Box::pin(async move {
+                let mut document = Document::default();
+                document.metadata.title = Some(id.into());
                 Ok(ConverterOutput { document, ..ConverterOutput::default() })
             })
         }
@@ -668,5 +733,30 @@ mod tests {
             result.candidates.iter().any(|candidate| candidate.format == InputFormat::Markdown
                 && (candidate.confidence - 1.0).abs() < f32::EPSILON)
         );
+    }
+
+    #[test]
+    fn explicit_format_attempt_precedes_higher_combined_inferred_attempt() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(PdfMagicDetector))
+            .register_converter(Arc::new(FormatAwareConverter {
+                id: "explicit.text",
+                format: InputFormat::Text,
+                probe_confidence: 0.5,
+            }))
+            .register_converter(Arc::new(FormatAwareConverter {
+                id: "inferred.pdf",
+                format: InputFormat::Pdf,
+                probe_confidence: 1.0,
+            }));
+        let engine = builder.build().unwrap();
+        let mut request =
+            ConversionRequest::new(InputRef::bytes(b"%PDF-1.7".as_slice(), Some("conflict.pdf")));
+        request.hint.format = Some(InputFormat::Text);
+        let result = block_on(engine.convert(request)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("explicit.text"));
     }
 }
