@@ -252,6 +252,8 @@ impl Engine {
         }
         for detector in &self.format_detectors {
             for mut candidate in detector.detect(input, hint).await? {
+                candidate.explicit = false;
+                candidate.confidence = normalize_confidence(candidate.confidence);
                 candidate.detector_id = detector.id().into();
                 candidate.detector_priority = detector.priority();
                 let replace = best.get(&candidate.format).is_none_or(|existing| {
@@ -273,8 +275,9 @@ impl Engine {
         let mut candidates = best.into_values().collect::<Vec<_>>();
         candidates.sort_by(|left, right| {
             right
-                .confidence
-                .total_cmp(&left.confidence)
+                .explicit
+                .cmp(&left.explicit)
+                .then_with(|| right.confidence.total_cmp(&left.confidence))
                 .then_with(|| right.detector_priority.cmp(&left.detector_priority))
                 .then_with(|| left.detector_id.cmp(&right.detector_id))
                 .then_with(|| left.format.cmp(&right.format))
@@ -375,6 +378,36 @@ mod tests {
         priority: i32,
         format: InputFormat,
         confidence: f32,
+    }
+
+    struct MaliciousDetector;
+
+    impl FormatDetector for MaliciousDetector {
+        fn id(&self) -> &'static str {
+            "malicious.detector"
+        }
+        fn priority(&self) -> i32 {
+            i32::MAX
+        }
+        fn detect<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatHint,
+        ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
+            Box::pin(async {
+                let mut nan = FormatCandidate::new(InputFormat::Pdf, 0.5, "malicious NaN");
+                nan.confidence = f32::NAN;
+                nan.explicit = true;
+                let mut infinity = FormatCandidate::new(InputFormat::Html, 0.5, "malicious Inf");
+                infinity.confidence = f32::INFINITY;
+                infinity.explicit = true;
+                let mut oversized =
+                    FormatCandidate::new(InputFormat::Markdown, 42.0, "malicious oversized");
+                oversized.confidence = 42.0;
+                oversized.explicit = true;
+                Ok(vec![nan, infinity, oversized])
+            })
+        }
     }
 
     impl FormatDetector for FixedDetector {
@@ -611,5 +644,29 @@ mod tests {
             .unwrap();
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].detector_id, "a.detector");
+    }
+
+    #[test]
+    fn detector_cannot_forge_explicit_or_non_finite_confidence() {
+        let mut builder = EngineBuilder::new();
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(MaliciousDetector));
+        let engine = builder.build().unwrap();
+        let mut request =
+            DetectionRequest::new(InputRef::bytes(b"data".as_slice(), Some("data.bin")));
+        request.hint.format = Some(InputFormat::Json);
+        let result = block_on(engine.detect(request)).unwrap();
+        assert_eq!(result.candidates[0].format, InputFormat::Json);
+        assert!(result.candidates[0].explicit);
+        for candidate in &result.candidates[1..] {
+            assert!(!candidate.explicit);
+            assert!((0.0..=1.0).contains(&candidate.confidence));
+        }
+        assert!(
+            result.candidates.iter().any(|candidate| candidate.format == InputFormat::Markdown
+                && (candidate.confidence - 1.0).abs() < f32::EPSILON)
+        );
     }
 }
