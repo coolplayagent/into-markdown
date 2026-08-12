@@ -221,9 +221,7 @@ fn detect_format(
 ) -> Result<(), CliError> {
     loaded.options.network.enabled = arguments.allow_network;
     loaded.options.network.deny_private_networks = !arguments.allow_private_network;
-    if !arguments.allow_host.is_empty() {
-        loaded.options.network.allowed_hosts = arguments.allow_host;
-    }
+    narrow_allowed_hosts(&mut loaded.options.network.allowed_hosts, &arguments.allow_host)?;
     let input = parse_input(&arguments.input)?;
     validate_input_network(&input, &loaded.options)?;
     let mut request = DetectionRequest::new(input);
@@ -428,7 +426,8 @@ fn run_providers(
             let host = parsed
                 .host_str()
                 .ok_or_else(|| CliError::config("provider URL has no hostname"))?;
-            if !arguments.allow_private_network && is_obviously_private_host(host) {
+            let normalized_host = config::normalize_allowed_host(host)?;
+            if !arguments.allow_private_network && is_obviously_private_host(&normalized_host) {
                 return Err(CliError::new(
                     ExitClass::Policy,
                     "privateNetworkDenied",
@@ -1062,9 +1061,7 @@ fn apply_conversion_overrides(
     }
     options.network.enabled = arguments.allow_network;
     options.network.deny_private_networks = !arguments.allow_private_network;
-    if !arguments.allow_host.is_empty() {
-        options.network.allowed_hosts.clone_from(&arguments.allow_host);
-    }
+    narrow_allowed_hosts(&mut options.network.allowed_hosts, &arguments.allow_host)?;
     macro_rules! assign {
         ($argument:ident, $field:ident) => {
             if let Some(value) = arguments.$argument {
@@ -1563,16 +1560,17 @@ fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Resu
     let parsed = url::Url::parse(value)
         .map_err(|error| CliError::usage(format!("invalid input URI: {error}")))?;
     let host = parsed.host_str().ok_or_else(|| CliError::usage("input URI has no hostname"))?;
-    if !options.network.allowed_hosts.is_empty()
-        && !options.network.allowed_hosts.iter().any(|allowed| allowed.eq_ignore_ascii_case(host))
+    let normalized_host = config::normalize_allowed_host(host)?;
+    let allowed_hosts = config::normalize_allowed_hosts(&options.network.allowed_hosts)?;
+    if !allowed_hosts.is_empty() && !allowed_hosts.iter().any(|allowed| allowed == &normalized_host)
     {
         return Err(CliError::new(
             ExitClass::Policy,
             "hostDenied",
-            format!("hostname '{host}' is not in --allow-host"),
+            format!("hostname '{host}' is not in the effective host allowlist"),
         ));
     }
-    if options.network.deny_private_networks && is_obviously_private_host(host) {
+    if options.network.deny_private_networks && is_obviously_private_host(&normalized_host) {
         return Err(CliError::new(
             ExitClass::Policy,
             "privateNetworkDenied",
@@ -1582,10 +1580,40 @@ fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Resu
     Ok(())
 }
 
+fn narrow_allowed_hosts(
+    configured: &mut Vec<String>,
+    requested: &[String],
+) -> Result<(), CliError> {
+    let configured_hosts = config::normalize_allowed_hosts(configured)?;
+    let requested_hosts = config::normalize_allowed_hosts(requested)?;
+    *configured = match (configured_hosts.is_empty(), requested_hosts.is_empty()) {
+        (true, true) => Vec::new(),
+        (false, true) => configured_hosts,
+        (true, false) => requested_hosts,
+        (false, false) => {
+            let requested = requested_hosts.into_iter().collect::<std::collections::BTreeSet<_>>();
+            let intersection = configured_hosts
+                .into_iter()
+                .filter(|host| requested.contains(host))
+                .collect::<Vec<_>>();
+            if intersection.is_empty() {
+                return Err(CliError::new(
+                    ExitClass::Policy,
+                    "hostAllowlistConflict",
+                    "--allow-host does not overlap conversion.network.allowed_hosts; networking remains denied",
+                ));
+            }
+            intersection
+        }
+    };
+    Ok(())
+}
+
 fn is_obviously_private_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
         return true;
     }
+    let host = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')).unwrap_or(host);
     host.parse::<std::net::IpAddr>().is_ok_and(|address| match address {
         std::net::IpAddr::V4(address) => {
             address.is_loopback()
@@ -1917,6 +1945,67 @@ mod tests {
         options.network.enabled = true;
         let error = validate_input_network(&input, &options).unwrap_err();
         assert_eq!(error.code(), "privateNetworkDenied");
+
+        for uri in ["http://LOCALHOST./document.pdf", "http://[::1]/document.pdf"] {
+            let error = validate_input_network(&InputRef::Uri(uri.into()), &options).unwrap_err();
+            assert_eq!(error.code(), "privateNetworkDenied");
+        }
+    }
+
+    #[test]
+    fn command_line_host_allowlist_can_only_narrow_configured_hosts() {
+        let mut configured_only = vec!["CONFIGURED.example".into()];
+        narrow_allowed_hosts(&mut configured_only, &[]).unwrap();
+        assert_eq!(configured_only, vec!["configured.example"]);
+
+        let mut requested_only = Vec::new();
+        narrow_allowed_hosts(&mut requested_only, &["REQUESTED.example.".into()]).unwrap();
+        assert_eq!(requested_only, vec!["requested.example"]);
+
+        let mut allowed = vec!["EXAMPLE.com.".into(), "api.example.com".into()];
+        narrow_allowed_hosts(&mut allowed, &["example.com".into(), "unconfigured.example".into()])
+            .unwrap();
+        assert_eq!(allowed, vec!["example.com"]);
+
+        let error = narrow_allowed_hosts(&mut allowed, &["other.example".into()]).unwrap_err();
+        assert_eq!(error.code(), "hostAllowlistConflict");
+        assert_eq!(error.exit_code(), 5);
+    }
+
+    #[test]
+    fn disjoint_config_and_cli_host_allowlists_fail_before_networking() {
+        let root = std::env::temp_dir().join(format!("into-md-host-list-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("config.toml"),
+            "schema_version = 1\n[conversion.network]\nallowed_hosts = [\"configured.example\"]\n",
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            vec![
+                OsString::from("--no-config"),
+                OsString::from("--config"),
+                root.join("config.toml").into_os_string(),
+                OsString::from("https://requested.example/document.pdf"),
+                OsString::from("--allow-network"),
+                OsString::from("--allow-host"),
+                OsString::from("requested.example"),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "hostAllowlistConflict");
+        assert_eq!(error.exit_code(), 5);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

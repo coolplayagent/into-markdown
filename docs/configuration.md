@@ -106,6 +106,13 @@ formula_repair = "prefer"
 into-md report.pdf --profile quality --allow-network --allow-private-network
 ```
 
+若配置与当前调用都指定主机 allowlist，最终范围是两者规范化后的交集；只有一方非空
+时保留该方。交集为空会在联网前以 `hostAllowlistConflict` 拒绝，不会把命令行列表
+当成对配置限制的替换。主机按 URL 标准规范化：DNS 名不区分 ASCII 大小写，允许一个
+表示 DNS 根的尾随点，IDN 转为 ASCII Punycode，IP 地址使用标准文本形式。allowlist
+条目只接受主机或方括号包裹的 IPv6，不接受 scheme、路径或端口；目标 URL 的端口不
+参与主机匹配。
+
 ## 配置操作
 
 ```shell

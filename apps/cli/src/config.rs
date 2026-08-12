@@ -5,7 +5,7 @@ use crate::error::CliError;
 use directories::ProjectDirs;
 use into_markdown::{AiMode, AssetMode, ConversionOptions, OcrPolicy};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -426,7 +426,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
         options.network.max_redirects = value;
     }
     if !network.allowed_hosts.is_empty() {
-        options.network.allowed_hosts.clone_from(&network.allowed_hosts);
+        options.network.allowed_hosts = normalize_allowed_hosts(&network.allowed_hosts)?;
     }
     if let Some(value) = network.deny_private_networks {
         options.network.deny_private_networks = value;
@@ -488,6 +488,7 @@ fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
             "conversion.network.deny_private_networks cannot be false; private-network access requires --allow-private-network on the current invocation",
         ));
     }
+    normalize_allowed_hosts(&config.conversion.network.allowed_hosts)?;
     parse_emit(config.conversion.output.emit.as_deref())?;
     parse_conflict(config.conversion.output.conflict.as_deref())?;
     for (name, provider) in &config.providers {
@@ -937,6 +938,36 @@ pub fn validate_environment_name(value: &str) -> Result<(), CliError> {
     }
 }
 
+/// Normalize a hostname allowlist for exact, port-independent comparisons.
+pub fn normalize_allowed_hosts(values: &[String]) -> Result<Vec<String>, CliError> {
+    values
+        .iter()
+        .map(|value| normalize_allowed_host(value))
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map(|hosts| hosts.into_iter().collect())
+}
+
+/// Normalize one DNS name or IP address to the URL parser's ASCII host representation.
+pub fn normalize_allowed_host(value: &str) -> Result<String, CliError> {
+    if value.is_empty() || value.trim() != value {
+        return Err(CliError::config(format!(
+            "invalid allowed host '{value}': expected a hostname without whitespace"
+        )));
+    }
+    let without_root_dot = value.strip_suffix('.').unwrap_or(value);
+    if without_root_dot.is_empty() || without_root_dot.ends_with('.') {
+        return Err(CliError::config(format!(
+            "invalid allowed host '{value}': expected at most one trailing dot"
+        )));
+    }
+    let host = url::Host::parse(without_root_dot).map_err(|error| {
+        CliError::config(format!(
+            "invalid allowed host '{value}': use a hostname or IP address without a scheme or port ({error})"
+        ))
+    })?;
+    Ok(host.to_string().to_ascii_lowercase())
+}
+
 fn validate_id(kind: &str, value: &str) -> Result<(), CliError> {
     if !value.is_empty()
         && value
@@ -1263,6 +1294,21 @@ api_key_env = "VISION_API_KEY"
         assert!(validate_capability("vision-ocr").is_ok());
         assert!(validate_capability("magic").is_err());
         assert!(validate_sha256(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn allowed_hosts_use_url_host_normalization_and_reject_ports() {
+        let normalized = normalize_allowed_hosts(&[
+            "EXAMPLE.COM.".into(),
+            "bücher.example".into(),
+            "xn--bcher-kva.example".into(),
+            "[2001:0DB8::1]".into(),
+        ])
+        .unwrap();
+        assert_eq!(normalized, vec!["[2001:db8::1]", "example.com", "xn--bcher-kva.example"]);
+        assert!(normalize_allowed_host("example.com:443").is_err());
+        assert!(normalize_allowed_host("https://example.com").is_err());
+        assert!(normalize_allowed_host("example.com..").is_err());
     }
 
     #[test]
