@@ -251,11 +251,19 @@ impl Engine {
             best.insert(format, FormatCandidate::explicit(format));
         }
         for detector in &self.format_detectors {
-            for candidate in detector.detect(input, hint).await? {
+            for mut candidate in detector.detect(input, hint).await? {
+                candidate.detector_id = detector.id().into();
+                candidate.detector_priority = detector.priority();
                 let replace = best.get(&candidate.format).is_none_or(|existing| {
                     candidate.explicit && !existing.explicit
                         || candidate.explicit == existing.explicit
-                            && candidate.confidence > existing.confidence
+                            && (candidate.confidence > existing.confidence
+                                || candidate.confidence.total_cmp(&existing.confidence)
+                                    == std::cmp::Ordering::Equal
+                                    && (candidate.detector_priority > existing.detector_priority
+                                        || candidate.detector_priority
+                                            == existing.detector_priority
+                                            && candidate.detector_id < existing.detector_id))
                 });
                 if replace {
                     best.insert(candidate.format, candidate);
@@ -265,9 +273,10 @@ impl Engine {
         let mut candidates = best.into_values().collect::<Vec<_>>();
         candidates.sort_by(|left, right| {
             right
-                .explicit
-                .cmp(&left.explicit)
-                .then_with(|| right.confidence.total_cmp(&left.confidence))
+                .confidence
+                .total_cmp(&left.confidence)
+                .then_with(|| right.detector_priority.cmp(&left.detector_priority))
+                .then_with(|| left.detector_id.cmp(&right.detector_id))
                 .then_with(|| left.format.cmp(&right.format))
         });
         Ok(candidates)
@@ -358,6 +367,31 @@ mod tests {
             _: &'a FormatHint,
         ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
             Box::pin(async { Ok(vec![FormatCandidate::new(InputFormat::Text, 0.8, "test")]) })
+        }
+    }
+
+    struct FixedDetector {
+        id: &'static str,
+        priority: i32,
+        format: InputFormat,
+        confidence: f32,
+    }
+
+    impl FormatDetector for FixedDetector {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn priority(&self) -> i32 {
+            self.priority
+        }
+        fn detect<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatHint,
+        ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
+            Box::pin(async move {
+                Ok(vec![FormatCandidate::new(self.format, self.confidence, "fixed")])
+            })
         }
     }
 
@@ -503,5 +537,79 @@ mod tests {
         let error = block_on(engine.convert(request)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
         assert!(error.to_string().contains("unsupportedSchemaVersion"));
+    }
+
+    #[test]
+    fn detection_candidates_sort_by_confidence_priority_and_stable_id() {
+        let mut builder = EngineBuilder::new();
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "z.detector",
+                priority: 20,
+                format: InputFormat::Json,
+                confidence: 0.8,
+            }))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "b.detector",
+                priority: 30,
+                format: InputFormat::Html,
+                confidence: 0.8,
+            }))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "a.detector",
+                priority: 30,
+                format: InputFormat::Markdown,
+                confidence: 0.8,
+            }))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "low-priority-high-confidence",
+                priority: -100,
+                format: InputFormat::Pdf,
+                confidence: 0.9,
+            }));
+        let engine = builder.build().unwrap();
+        let result =
+            block_on(engine.detect(DetectionRequest::new(InputRef::bytes(
+                b"data".as_slice(),
+                Some("data.bin"),
+            ))))
+            .unwrap();
+        assert_eq!(
+            result.candidates.iter().map(|candidate| candidate.format).collect::<Vec<_>>(),
+            vec![InputFormat::Pdf, InputFormat::Markdown, InputFormat::Html, InputFormat::Json]
+        );
+        assert_eq!(result.candidates[1].detector_id, "a.detector");
+        assert_eq!(result.candidates[1].detector_priority, 30);
+    }
+
+    #[test]
+    fn stable_detector_id_selects_equal_candidates_for_one_format() {
+        let mut builder = EngineBuilder::new();
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "z.detector",
+                priority: 10,
+                format: InputFormat::Pdf,
+                confidence: 0.9,
+            }))
+            .register_format_detector(Arc::new(FixedDetector {
+                id: "a.detector",
+                priority: 10,
+                format: InputFormat::Pdf,
+                confidence: 0.9,
+            }));
+        let engine = builder.build().unwrap();
+        let result =
+            block_on(engine.detect(DetectionRequest::new(InputRef::bytes(
+                b"data".as_slice(),
+                Some("data.bin"),
+            ))))
+            .unwrap();
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].detector_id, "a.detector");
     }
 }

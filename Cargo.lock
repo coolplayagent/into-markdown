@@ -604,6 +604,7 @@ name = "into-markdown-converters"
 version = "0.0.0"
 dependencies = [
  "into-markdown-core",
+ "zip",
 ]
 
 [[package]]

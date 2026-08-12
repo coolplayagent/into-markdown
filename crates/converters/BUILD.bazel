@@ -7,12 +7,18 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "into_markdown_converters",
     edition = "2024",
-    deps = ["//crates/core"],
+    deps = [
+        "//crates/core",
+        "@crates//:zip",
+    ],
 )
 
 rust_test(
     name = "converters_test",
     crate = ":converters",
     edition = "2024",
-    deps = ["//crates/core"],
+    deps = [
+        "//crates/core",
+        "@crates//:zip",
+    ],
 )

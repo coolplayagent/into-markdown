@@ -151,6 +151,15 @@ pub struct FormatCandidate {
     pub confidence: f32,
     /// Human-readable evidence, useful in diagnostics.
     pub evidence: String,
+    /// Stable ID of the detector that produced this hypothesis.
+    #[serde(default)]
+    pub detector_id: String,
+    /// Detector priority used as a deterministic confidence tie breaker.
+    #[serde(default)]
+    pub detector_priority: i32,
+    /// Non-fatal details about conflicts, limits, or partial inspection.
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
     /// Whether the caller explicitly selected this format.
     pub explicit: bool,
 }
@@ -160,12 +169,35 @@ impl FormatCandidate {
     #[must_use]
     pub fn new(format: InputFormat, confidence: f32, evidence: impl Into<String>) -> Self {
         let confidence = if confidence.is_finite() { confidence.clamp(0.0, 1.0) } else { 0.0 };
-        Self { format, confidence, evidence: evidence.into(), explicit: false }
+        Self {
+            format,
+            confidence,
+            evidence: evidence.into(),
+            detector_id: String::new(),
+            detector_priority: 0,
+            diagnostics: Vec::new(),
+            explicit: false,
+        }
     }
 
     /// Mark a candidate as explicitly selected by the caller.
     #[must_use]
     pub fn explicit(format: InputFormat) -> Self {
-        Self { format, confidence: 1.0, evidence: "explicit format hint".into(), explicit: true }
+        Self {
+            format,
+            confidence: 1.0,
+            evidence: "explicit format hint".into(),
+            detector_id: "builtin.detector.explicit".into(),
+            detector_priority: i32::MAX,
+            diagnostics: Vec::new(),
+            explicit: true,
+        }
+    }
+
+    /// Attach one non-fatal diagnostic to this hypothesis.
+    #[must_use]
+    pub fn with_diagnostic(mut self, diagnostic: impl Into<String>) -> Self {
+        self.diagnostics.push(diagnostic.into());
+        self
     }
 }
