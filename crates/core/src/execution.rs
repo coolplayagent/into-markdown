@@ -355,6 +355,22 @@ impl ExecutionContext {
     ///
     /// Returns a cancellation, timeout, resource-limit, or local I/O error.
     pub fn temporary_file(&self, prefix: &str) -> Result<TemporaryFile, ConversionError> {
+        self.temporary_file_in(std::env::temp_dir(), prefix)
+    }
+
+    /// Create an automatically cleaned, accounted temporary file in `directory`.
+    ///
+    /// Callers use this form when a later atomic rename requires the stage file
+    /// to reside on a specific filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, resource-limit, or local I/O error.
+    pub fn temporary_file_in(
+        &self,
+        directory: impl AsRef<std::path::Path>,
+        prefix: &str,
+    ) -> Result<TemporaryFile, ConversionError> {
         self.checkpoint()?;
         let safe_prefix = prefix
             .chars()
@@ -364,7 +380,8 @@ impl ExecutionContext {
         let safe_prefix = if safe_prefix.is_empty() { "into-md" } else { &safe_prefix };
         for attempt in 0_u32..128 {
             let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let path = std::env::temp_dir()
+            let path = directory
+                .as_ref()
                 .join(format!("{safe_prefix}-{}-{nonce}-{attempt}.tmp", std::process::id()));
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(file) => {
@@ -380,6 +397,25 @@ impl ExecutionContext {
             }
         }
         Err(ConversionError::Io { detail: "could not allocate a temporary file".into() })
+    }
+
+    /// Create an automatically cleaned, accounted temporary file at an exact path.
+    ///
+    /// The path is opened with create-new semantics. This form is intended for a
+    /// caller which has already reserved and authenticated a private staging
+    /// directory and needs every possible crash artifact to have a journaled name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, already-existing-path, or local I/O error.
+    pub fn temporary_file_at(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<TemporaryFile, ConversionError> {
+        self.checkpoint()?;
+        let path = path.as_ref().to_path_buf();
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        Ok(TemporaryFile { path, file: Some(file), context: self.clone(), charged: 0 })
     }
 
     fn reserve(
@@ -584,6 +620,29 @@ impl TemporaryFile {
             .map_err(Into::into)
     }
 
+    /// Flush file contents and metadata to stable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, closed-file, or local I/O error.
+    pub fn sync_all(&mut self) -> Result<(), ConversionError> {
+        self.context.checkpoint()?;
+        self.file
+            .as_mut()
+            .ok_or_else(|| ConversionError::Internal { detail: "temporary file is closed".into() })?
+            .sync_all()
+            .map_err(Into::into)
+    }
+
+    /// Close the file and transfer cleanup responsibility to the caller.
+    #[must_use]
+    pub fn persist(mut self) -> PathBuf {
+        self.file.take();
+        self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
+        self.charged = 0;
+        std::mem::take(&mut self.path)
+    }
+
     /// Write the complete buffer with stable cancellation and budget errors.
     ///
     /// # Errors
@@ -663,7 +722,9 @@ impl Write for TemporaryFile {
 impl Drop for TemporaryFile {
     fn drop(&mut self) {
         self.file.take();
-        let _ = std::fs::remove_file(&self.path);
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
         self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
     }
 }
@@ -885,6 +946,21 @@ mod tests {
         let path = temporary.path().to_path_buf();
         let error = temporary.write_all_checked(b"four").unwrap_err();
         assert_eq!(error.code(), crate::ErrorCode::ResourceLimit);
+        drop(temporary);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn exact_temporary_path_is_create_new_accounted_and_scoped() {
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let seed = context.temporary_file("exact-path-test").unwrap();
+        let path = seed.path().to_path_buf();
+        drop(seed);
+
+        let mut temporary = context.temporary_file_at(&path).unwrap();
+        assert!(context.temporary_file_at(&path).is_err());
+        temporary.write_all_checked(b"accounted").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"accounted");
         drop(temporary);
         assert!(!path.exists());
     }

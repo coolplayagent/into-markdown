@@ -11,7 +11,10 @@ pub use into_markdown_ocr::{
     ModelManagerError, ModelManifest, ModelStatus, ProductTarget, RuntimeArtifact,
     model_data_directory,
 };
-pub use into_markdown_render_markdown::{asset_filename, render as render_markdown};
+pub use into_markdown_render_markdown::{
+    AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
+    render as render_markdown,
+};
 
 /// Create the standard builder with safe local source resolvers, hint
 /// detection, the deterministic GFM renderer, plain-text conversion, and

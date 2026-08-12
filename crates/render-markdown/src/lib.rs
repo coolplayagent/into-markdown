@@ -16,6 +16,63 @@ use std::fmt::Write as _;
 #[derive(Debug, Default)]
 pub struct GfmRenderer;
 
+/// Immutable routing decision shared by Markdown rendering and output writers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPlan {
+    entries: Vec<PlannedAsset>,
+    by_id: BTreeMap<String, PlannedAssetReference>,
+}
+
+/// One physical extracted resource. Several document asset IDs may share it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedAsset {
+    /// Asset IDs whose identical content and representation share this entry.
+    pub asset_ids: Vec<String>,
+    /// Index of the authoritative bytes in the caller's asset slice.
+    pub source_index: usize,
+    /// Safe portable basename.
+    pub filename: String,
+    /// Renderer-visible URI for this entry.
+    pub uri: String,
+    /// Normalized media type.
+    pub media_type: String,
+    /// Uncompressed byte length.
+    pub size: u64,
+    /// Complete lowercase SHA-256 content digest.
+    pub sha256: String,
+}
+
+/// Per-ID lookup result retained by [`AssetPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedAssetReference {
+    /// Index in [`AssetPlan::entries`], absent for an external-only asset.
+    pub entry_index: Option<usize>,
+    /// Index in the original asset slice.
+    pub source_index: usize,
+}
+
+impl AssetPlan {
+    /// Physical entries in deterministic filename order.
+    #[must_use]
+    pub fn entries(&self) -> &[PlannedAsset] {
+        &self.entries
+    }
+
+    /// Resolve a document-scoped asset ID.
+    #[must_use]
+    pub fn reference(&self, id: &str) -> Option<&PlannedAssetReference> {
+        self.by_id.get(id)
+    }
+
+    /// Resolve the extracted URI for an ID with bytes.
+    #[must_use]
+    pub fn uri(&self, id: &str) -> Option<&str> {
+        self.reference(id)
+            .and_then(|reference| reference.entry_index)
+            .map(|index| self.entries[index].uri.as_str())
+    }
+}
+
 /// Allocate the cross-platform filename used for one extracted asset.
 ///
 /// The basename is a fixed SHA-256 digest of the UTF-8 asset ID. A suggested
@@ -36,6 +93,149 @@ pub fn asset_filename(asset_id: &str, suggested_filename: Option<&str>) -> Strin
         filename.push_str(&extension);
     }
     filename
+}
+
+/// Plan validated, content-addressed resources before rendering or writing.
+///
+/// Physical entries are deduplicated only when their complete bytes, normalized
+/// media type, and safe extension agree. The complete 256-bit digest is kept in
+/// every filename; a second complete digest separates representation semantics.
+///
+/// # Errors
+///
+/// Returns a stable conversion error for invalid IR, asset inventories, URI
+/// prefixes, metadata conflicts, hash collisions, or resource-limit excess.
+#[allow(clippy::too_many_lines)]
+pub fn plan_assets(
+    document: &Document,
+    assets: &[Asset],
+    options: &ConversionOptions,
+) -> Result<AssetPlan, ConversionError> {
+    document.validate().map_err(|error| ConversionError::Internal {
+        detail: format!(
+            "asset planner received invalid document IR ({} at {}): {}",
+            error.code.as_str(),
+            error.path,
+            error.detail
+        ),
+    })?;
+    validate_asset_uri_prefix(options.output.asset_uri_prefix.as_deref())?;
+
+    let mut by_id = BTreeMap::new();
+    let mut groups: BTreeMap<String, (usize, String, Option<String>, Vec<String>)> =
+        BTreeMap::new();
+    let mut total = 0_u64;
+    for (source_index, asset) in assets.iter().enumerate() {
+        let id = asset.id.0.as_str();
+        if id.trim().is_empty() {
+            return Err(render_error("asset inventory contains an empty asset ID"));
+        }
+        if by_id.contains_key(id) {
+            return Err(render_error(format!("duplicate asset ID {id}")));
+        }
+        let media_type = normalize_media_type(&asset.media_type)?;
+        let size =
+            u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: format!("asset {id} size cannot be represented as u64"),
+            })?;
+        if size > options.limits.max_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: format!("asset {id}: {size} > {}", options.limits.max_asset_bytes),
+            });
+        }
+        total = total.checked_add(size).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_total_asset_bytes",
+            detail: "asset byte count overflowed".into(),
+        })?;
+        if total > options.limits.max_total_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_total_asset_bytes",
+                detail: format!("{total} > {}", options.limits.max_total_asset_bytes),
+            });
+        }
+        if asset.bytes.is_empty() {
+            validate_external_uri(asset.external_uri.as_deref(), id)?;
+            by_id.insert(id.to_owned(), PlannedAssetReference { entry_index: None, source_index });
+            continue;
+        }
+        let content_hash = sha256_hex(&asset.bytes);
+        let extension = media_type_extension(&media_type);
+        match groups.get_mut(&content_hash) {
+            Some((planned_source, planned_media_type, _, ids)) => {
+                if assets[*planned_source].bytes != asset.bytes {
+                    return Err(asset_plan_error(
+                        "contentHashCollision",
+                        "SHA-256 collision between distinct asset bytes",
+                    ));
+                }
+                if planned_media_type != &media_type {
+                    return Err(asset_plan_error(
+                        "assetMetadataConflict",
+                        format!(
+                            "identical asset bytes have conflicting media types {planned_media_type} and {media_type}"
+                        ),
+                    ));
+                }
+                ids.push(id.to_owned());
+            }
+            None => {
+                groups.insert(
+                    content_hash,
+                    (source_index, media_type, extension, vec![id.to_owned()]),
+                );
+            }
+        }
+        by_id.insert(id.to_owned(), PlannedAssetReference { entry_index: None, source_index });
+    }
+
+    let mut entries = groups
+        .into_iter()
+        .map(|(sha256, (source_index, media_type, extension, mut asset_ids))| {
+            asset_ids.sort();
+            let mut filename = format!("asset-{sha256}");
+            if let Some(extension) = extension {
+                filename.push('.');
+                filename.push_str(&extension);
+            }
+            let uri = join_uri_prefix(options.output.asset_uri_prefix.as_deref(), &filename);
+            PlannedAsset {
+                asset_ids,
+                source_index,
+                filename,
+                uri,
+                media_type,
+                size: u64::try_from(assets[source_index].bytes.len()).unwrap_or(u64::MAX),
+                sha256,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+    for (entry_index, entry) in entries.iter().enumerate() {
+        for id in &entry.asset_ids {
+            let Some(reference) = by_id.get_mut(id) else {
+                return Err(render_error(format!("planned asset ID disappeared: {id}")));
+            };
+            reference.entry_index = Some(entry_index);
+        }
+    }
+    let plan = AssetPlan { entries, by_id };
+    let mut referenced = BTreeSet::new();
+    validate_planned_references(&document.blocks, &plan, &mut referenced)?;
+    for id in referenced {
+        if options.output.asset_mode != AssetMode::Omit && plan.uri(id).is_none() {
+            return Err(render_error(format!(
+                "asset {id} has no bytes for {} mode",
+                match options.output.asset_mode {
+                    AssetMode::Extract => "extract",
+                    AssetMode::Embed => "embed",
+                    AssetMode::Omit => unreachable!(),
+                }
+            )));
+        }
+    }
+    Ok(plan)
 }
 
 impl MarkdownRenderer for GfmRenderer {
@@ -79,21 +279,8 @@ pub fn render(
             ),
         });
     }
-    document.validate().map_err(|error| ConversionError::Internal {
-        detail: format!(
-            "renderer received invalid document IR ({} at {}): {}",
-            error.code.as_str(),
-            error.path,
-            error.detail
-        ),
-    })?;
-    let inventory = AssetInventory::new(assets)?;
-    let mut referenced_assets = BTreeSet::new();
-    validate_image_references(&document.blocks, &inventory, &mut referenced_assets)?;
-    if options.output.asset_mode == AssetMode::Extract {
-        inventory.validate_extract_targets(&referenced_assets)?;
-    }
-    let context = RenderContext { inventory, options };
+    let plan = plan_assets(document, assets, options)?;
+    let context = RenderContext { plan: &plan, assets, options };
     let mut output = context.render_blocks(&document.blocks)?;
     trim_blank_lines(&mut output);
     if !output.is_empty() {
@@ -102,56 +289,9 @@ pub fn render(
     Ok(output)
 }
 
-struct AssetInventory<'a> {
-    by_id: BTreeMap<&'a str, &'a Asset>,
-}
-
-impl<'a> AssetInventory<'a> {
-    fn new(assets: &'a [Asset]) -> Result<Self, ConversionError> {
-        let mut by_id = BTreeMap::new();
-        for asset in assets {
-            if asset.id.0.trim().is_empty() {
-                return Err(render_error("asset inventory contains an empty asset ID"));
-            }
-            if !valid_media_type(&asset.media_type) {
-                return Err(render_error(format!(
-                    "asset {} has an invalid media type",
-                    asset.id.0
-                )));
-            }
-            if by_id.insert(asset.id.0.as_str(), asset).is_some() {
-                return Err(render_error(format!("duplicate asset ID {}", asset.id.0)));
-            }
-        }
-        Ok(Self { by_id })
-    }
-
-    fn get(&self, id: &str) -> Result<&'a Asset, ConversionError> {
-        self.by_id
-            .get(id)
-            .copied()
-            .ok_or_else(|| render_error(format!("image references missing asset {id}")))
-    }
-
-    fn validate_extract_targets(
-        &self,
-        referenced_assets: &BTreeSet<&str>,
-    ) -> Result<(), ConversionError> {
-        for id in referenced_assets {
-            let asset = self.get(id)?;
-            if asset.bytes.is_empty() {
-                return Err(render_error(format!(
-                    "asset {} has no bytes for extract mode",
-                    asset.id.0
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
 struct RenderContext<'a> {
-    inventory: AssetInventory<'a>,
+    plan: &'a AssetPlan,
+    assets: &'a [Asset],
     options: &'a ConversionOptions,
 }
 
@@ -377,7 +517,11 @@ impl RenderContext<'_> {
         if self.options.output.asset_mode == AssetMode::Omit {
             return Ok(alt);
         }
-        let asset = self.inventory.get(id)?;
+        let reference = self
+            .plan
+            .reference(id)
+            .ok_or_else(|| render_error(format!("image references missing asset {id}")))?;
+        let asset = &self.assets[reference.source_index];
         let target = match self.options.output.asset_mode {
             AssetMode::Omit => return Ok(alt),
             AssetMode::Embed if !asset.bytes.is_empty() => format!(
@@ -388,10 +532,11 @@ impl RenderContext<'_> {
             AssetMode::Embed => {
                 return Err(render_error(format!("asset {id} has no bytes for embed mode")));
             }
-            AssetMode::Extract => {
-                let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
-                join_uri_prefix(self.options.output.asset_uri_prefix.as_deref(), &filename)
-            }
+            AssetMode::Extract => self
+                .plan
+                .uri(id)
+                .ok_or_else(|| render_error(format!("asset {id} has no extracted URI")))?
+                .to_owned(),
         };
         let destination = if self.options.output.asset_mode == AssetMode::Embed {
             escape_generated_destination(&target)
@@ -631,6 +776,78 @@ fn valid_media_type(value: &str) -> bool {
         })
 }
 
+fn normalize_media_type(value: &str) -> Result<String, ConversionError> {
+    if !valid_media_type(value) {
+        return Err(asset_plan_error(
+            "invalidAssetMediaType",
+            format!("invalid asset media type {value}"),
+        ));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn media_type_extension(media_type: &str) -> Option<String> {
+    let extension = match media_type {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "image/avif" => "avif",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        "application/zip" => "zip",
+        _ => return None,
+    };
+    Some(extension.into())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        output.push(hex_digit(byte >> 4, false));
+        output.push(hex_digit(byte & 0x0f, false));
+    }
+    output
+}
+
+fn validate_asset_uri_prefix(prefix: Option<&str>) -> Result<(), ConversionError> {
+    let Some(prefix) = prefix else { return Ok(()) };
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty()
+        || prefix.starts_with(['/', '\\'])
+        || prefix.starts_with("//")
+        || prefix.contains(['\\', '?', '#'])
+        || prefix.chars().any(char::is_control)
+        || contains_html_entity(prefix)
+    {
+        return Err(asset_plan_error("unsafeAssetUriPrefix", "unsafe asset URI prefix"));
+    }
+    if prefix.split('/').any(|segment| segment.is_empty() || segment == ".") {
+        return Err(asset_plan_error(
+            "unsafeAssetUriPrefix",
+            "asset URI prefix is not a portable relative path",
+        ));
+    }
+    if prefix.find(':').is_some() {
+        return Err(asset_plan_error(
+            "unsafeAssetUriPrefix",
+            "absolute and scheme-bearing asset URI prefixes are not permitted",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_external_uri(uri: Option<&str>, id: &str) -> Result<(), ConversionError> {
+    let Some(uri) = uri else { return Ok(()) };
+    validate_link_target(uri).map_err(|_| {
+        asset_plan_error("unsafeExternalAssetUri", format!("asset {id} has an unsafe external URI"))
+    })
+}
+
 fn validate_link_target(value: &str) -> Result<(), ConversionError> {
     if value.chars().any(char::is_control) {
         return Err(render_error("link target contains a control character"));
@@ -745,26 +962,34 @@ fn render_error(detail: impl Into<String>) -> ConversionError {
     ConversionError::Internal { detail: format!("Markdown rendering failed: {}", detail.into()) }
 }
 
-fn validate_image_references<'a>(
+fn asset_plan_error(code: &str, detail: impl Into<String>) -> ConversionError {
+    ConversionError::Internal {
+        detail: format!("asset planning failed ({code}): {}", detail.into()),
+    }
+}
+
+fn validate_planned_references<'a>(
     nodes: &[BlockNode],
-    inventory: &AssetInventory<'a>,
+    plan: &'a AssetPlan,
     referenced_assets: &mut BTreeSet<&'a str>,
 ) -> Result<(), ConversionError> {
     for node in nodes {
         match &node.block {
             Block::Image { asset, .. } => {
-                let asset = inventory.get(&asset.0)?;
-                referenced_assets.insert(asset.id.0.as_str());
+                let (id, _) = plan.by_id.get_key_value(&asset.0).ok_or_else(|| {
+                    render_error(format!("image references missing asset {}", asset.0))
+                })?;
+                referenced_assets.insert(id.as_str());
             }
             Block::List { items, .. } => {
                 for item in items {
-                    validate_image_references(&item.blocks, inventory, referenced_assets)?;
+                    validate_planned_references(&item.blocks, plan, referenced_assets)?;
                 }
             }
             Block::Table { rows } => {
                 for row in rows {
                     for cell in &row.cells {
-                        validate_image_references(&cell.blocks, inventory, referenced_assets)?;
+                        validate_planned_references(&cell.blocks, plan, referenced_assets)?;
                     }
                 }
             }
@@ -772,7 +997,7 @@ fn validate_image_references<'a>(
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                validate_image_references(blocks, inventory, referenced_assets)?;
+                validate_planned_references(blocks, plan, referenced_assets)?;
             }
             _ => {}
         }
@@ -1079,6 +1304,65 @@ mod tests {
     }
 
     #[test]
+    fn content_plan_deduplicates_ids_and_uses_mime_authoritatively() {
+        let doc = document(vec![
+            node("a", Block::Image { asset: AssetId("upper".into()), alt: None }),
+            node("b", Block::Image { asset: AssetId("lower".into()), alt: None }),
+        ]);
+        let assets = [
+            Asset {
+                id: AssetId("upper".into()),
+                filename: Some("CON.HTML".into()),
+                media_type: "IMAGE/PNG".into(),
+                bytes: vec![1, 2, 3],
+                external_uri: None,
+            },
+            Asset {
+                id: AssetId("lower".into()),
+                filename: Some("../aux.jpg:stream".into()),
+                media_type: "image/png".into(),
+                bytes: vec![1, 2, 3],
+                external_uri: None,
+            },
+        ];
+        let plan = plan_assets(&doc, &assets, &ConversionOptions::default()).unwrap();
+        assert_eq!(plan.entries().len(), 1);
+        assert_eq!(plan.entries()[0].asset_ids, ["lower", "upper"]);
+        assert!(
+            std::path::Path::new(&plan.entries()[0].filename)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        );
+        assert_eq!(plan.entries()[0].sha256.len(), 64);
+        assert_eq!(plan.uri("lower"), plan.uri("upper"));
+    }
+
+    #[test]
+    fn content_plan_rejects_conflicting_metadata_and_unsafe_prefixes() {
+        let doc = document(vec![node("a", Block::Image { asset: AssetId("a".into()), alt: None })]);
+        let asset = |id: &str, media_type: &str| Asset {
+            id: AssetId(id.into()),
+            filename: None,
+            media_type: media_type.into(),
+            bytes: vec![7],
+            external_uri: None,
+        };
+        let error = plan_assets(
+            &doc,
+            &[asset("a", "image/png"), asset("b", "image/jpeg")],
+            &ConversionOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("assetMetadataConflict"));
+
+        for prefix in ["/tmp/assets", "//server/share", "C:/assets", "data:x"] {
+            let mut options = ConversionOptions::default();
+            options.output.asset_uri_prefix = Some(prefix.into());
+            assert!(plan_assets(&doc, &[asset("a", "image/png")], &options).is_err(), "{prefix}");
+        }
+    }
+
+    #[test]
     fn commonmark_decodes_colon_entities_but_renderer_rejects_them() {
         for entity in ["&colon;", "&#58;", "&#x3a;"] {
             let markdown = format!("[x](<javascript{entity}alert(1)>)");
@@ -1153,7 +1437,13 @@ mod tests {
         options.output.asset_uri_prefix = Some("assets/".into());
         assert_eq!(
             render(&image, std::slice::from_ref(&asset), &options).unwrap(),
-            format!("![a\\]lt ](<assets/{}>)\n", asset_filename("img", Some("../bad:name.png")))
+            format!(
+                "![a\\]lt ](<{}>)\n",
+                plan_assets(&image, std::slice::from_ref(&asset), &options)
+                    .unwrap()
+                    .uri("img")
+                    .unwrap()
+            )
         );
         options.output.asset_mode = AssetMode::Embed;
         assert_eq!(

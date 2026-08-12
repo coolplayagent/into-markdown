@@ -619,13 +619,16 @@ dependencies = [
  "futures",
  "globset",
  "into-markdown",
+ "libc",
  "pulldown-cmark",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "toml",
  "url",
+ "winapi-util",
  "zip",
 ]
 

@@ -6,7 +6,8 @@ Engine 的内部结构或 CLI 私有结构当作线协议，也不得让 Web cra
 
 ## 版本与兼容规则
 
-所有顶层 DTO 都包含必填的 `schemaVersion`，当前值为数字 `1`。字段名使用
+所有顶层 DTO 都包含必填的 `schemaVersion`。结果、诊断、溯源和批量报告当前为数字
+`1`；Bundle manifest 当前为数字 `2`，reader 仍接受 manifest schema 1。字段名使用
 lower camel case，枚举值、状态和错误码使用稳定英文标识，不随界面语言变化。
 Document IR 自己的 `schemaVersion` 与外围 DTO 独立演进；例如 result 同时包含外围
 版本和 `document.schemaVersion`。
@@ -35,11 +36,14 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   `TryFrom<ResultDto>` 是经验证的反向边界。
 - `DiagnosticsDto`：独立 HTTP/库诊断响应使用的版本化包裹。
 - `ProvenanceListDto`：独立 HTTP/库溯源响应使用的版本化包裹。
-- `BundleManifestDto`：固定产物路径及资源索引。schema 1 强制使用 `document.md`、
+- `BundleManifestDto`：固定产物路径及资源索引。schema 2 强制使用 `document.md`、
   `document.ir.json`、`diagnostics.json` 和 `provenance.json`，并以
   `diagnosticsSchemaVersion`、`provenanceSchemaVersion` 声明成员版本。资源路径只允许
   使用 `/`、ASCII 字母数字、`.`、`-`、`_` 的 portable 相对路径；拒绝非 ASCII、
   大小写折叠碰撞、ADS 冒号、Windows 保留设备名、尾随点/空格、超长片段和路径穿越。
+  每个资源项代表一个物理 ZIP entry；`id` 是稳定 canonical ID，`sourceAssetIds` 是
+  非空、唯一、按字节序排列的完整别名集合。schema 1 输入归一为 `[id]`，写出端生成
+  schema 2。
 - `BatchReportDto`：包含派生的 `succeeded`、`failed` 和输入稳定顺序的 `items`；状态
   只有 `success`、`failed`。失败项必须有 `errorCode`，成功项不得有 `errorCode`。
 
@@ -131,7 +135,7 @@ JSON 副本。完整预检通过后，`write_json_from_result` 把非资源字�
 `Pretty` 并直接使用该借用写接口，因此缩进导致的额外字节也在任何 base64 编码前计入；
 成功的 compact 或 pretty 输出都能由默认入口读回。
 
-Bundle schema 1 保留既有 `diagnostics.json` 与 `provenance.json` 裸数组形状，成员版本
+Bundle manifest schema 2 保留既有 `diagnostics.json` 与 `provenance.json` 裸数组形状，成员版本
 由 manifest 统辖；`to_bundle_pretty_json` / `from_bundle_json` 是这两个成员的专用边界。
 带 `schemaVersion` 的 envelope 只用于独立 HTTP/库响应。这样不会把曾经改变过的成员
 形状伪称为兼容。`assets/` 目录成员始终存在，即使没有资源。

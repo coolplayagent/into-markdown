@@ -76,19 +76,50 @@ Document metadata 不进入 Markdown，防止 namespaced properties 意外泄漏
 仍可从结构化 Document 读取它。provenance 和诊断同样只存在于结构化转换结果中。
 页面、幻灯片、工作表与时间片段使用可见、稳定的标题或时间标签表达。
 
-渲染器只生成资源引用，不创建目录或写文件。`extract` 使用
-`asset_uri_prefix + asset-<SHA-256(asset ID)>.<安全扩展名>`；建议文件名只贡献
-最长 16 字节的 ASCII 字母数字扩展名。该纯函数由渲染器和 CLI 写出层共享，结果
-长度有界、全 ASCII，且不受路径分隔符、Unicode、大小写折叠与 Windows 保留名影响。
+渲染前由统一资源规划器冻结 `AssetId -> 物理条目 -> URI` 映射。`extract` 使用
+`asset_uri_prefix + asset-<SHA-256(bytes)>.<MIME 权威扩展名>`；完整 256 位摘要进入
+文件名，建议文件名不参与路径或扩展名决策。不同 ID 的相同字节与相同规范化 MIME
+共享一个物理条目；相同字节却声明不同 MIME 返回稳定的 `assetMetadataConflict`，
+摘要键命中后仍比较完整字节，差异返回 `contentHashCollision`。文件名为有界 ASCII，
+不受路径分隔符、Unicode 等价形式、大小写折叠、ADS 与 Windows 保留名影响。
 CLI 以 Markdown 所在目录（stdout 使用当前工作目录）为基准，对文件系统路径先按
 POSIX、Windows drive 或 UNC 语法做词法规范化，再在相同 root/drive/share 内生成
 逐段编码的相对 URI；跨 root/drive/share 稳定拒绝，避免把盘符解释为 scheme 或把
 UNC server 解释为网络 host。渲染器保留其中已经形成的 `%HH`，避免二次编码。bundle
 在渲染前固定使用 `assets` 前缀，其 `document.md` 只引用归档内条目，不执行额外的
 外部 extract。
-`embed` 只接受有字节且 MIME token 安全的资源并
-生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。资源落盘、冲突
-处理与原子写入属于调用方职责。
+资源 URI 前缀只接受 portable 相对 URI path；拒绝绝对路径、scheme-relative、盘符、
+控制字符、query、fragment 以及 `javascript`、`data`、`file` 等 scheme。`embed` 的
+data URI 只能由渲染器从已校验 MIME 与字节内部生成。`embed` 只接受有字节且 MIME token 安全的资源并
+生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。
+
+CLI 把主产物和所有去重后的资源视为一个输出集合：完整预检后，在同一文件系统的
+随机 nonce 事务目录写完并 fsync 全部 stage 文件。事务目录包含带签名、版本、root、
+严格相对目标清单、内容摘要和递增 generation 的持久 journal；两个 journal 槽交替
+写入并分别 fsync，状态转换完成后再同步目录。每个事务登记在 root 下固定、私有的
+管理器 registry，并在每个物理目标父目录通过已认证 handle 建立固定名称的 hard-link
+lease；lease 绑定父目录 dev/inode、随机 nonce、root 路径及 root 身份，并指向事务内的
+受签名标记。父目录身份按稳定顺序取得，缺失目标也保守锁定整个物理父目录；既有目标
+另在 journal 绑定 dev/inode。相关输出只读取目标物理父目录的固定 lease，不扫描祖先、
+根目录或无关路径；只有 lease、journal、registry、root 身份和排他锁全部匹配时才恢复。
+恢复完成后，输出边界在 `ExecutionContext` checkpoint 之间重新执行完整预检；仅内部
+`transactionRecoveredRetry` 会触发最多八次重试，超限返回稳定 `recoveryLimit`，不会
+写入第三套值或把该内部信号暴露为一次普通命令失败。无关或伪造目录不会被清理。
+
+提交前再次以 no-follow handle 核验每个既有目标为 regular file 且身份未变。Unix
+上的所有 rename/link/unlink/fsync 都绑定已认证目录 handle 并使用相对 `*at` 操作；
+认证后父目录被换成 symlink 时不会触碰外部目录。Windows 在安全相对目录 handle
+操作完成审计前，文件输出事务稳定返回 `componentUnavailable`；路径规划与 bundle
+编码仍可使用。
+`overwrite` 先把旧文件移入事务备份，再安装 stage；journal 尚未进入 `committed`
+时恢复旧集合，进入 `committed` 后验证完整新集合并清理备份。回滚会继续处理其它安全
+条目并汇总错误；如果任一恢复操作失败，返回 `rollbackFailed`，保留 journal 与尚存
+备份供下一次受限恢复，绝不由临时目录析构删除唯一副本。只有结果已经完整恢复或完成
+后，事务目录才会原子移出恢复命名空间再清理。`rename` 与 `error` 不覆盖竞态产生的
+文件；跨文件系统、符号链接、目录、FIFO、设备、Windows 输出事务或无法安全
+核验的路径在任何目标变更前拒绝。
+stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EPIPE 成功语义）后才
+提交；非 EPIPE 写失败丢弃 stage，已由操作系统接收的 stdout 前缀不能撤回。
 
 源文档链接会拒绝控制字符、任何 HTML character reference、`javascript`、
 `vbscript`、`data`、`file` scheme 和含 userinfo 的绝对 URL，再对 Markdown 目标

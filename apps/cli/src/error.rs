@@ -120,6 +120,13 @@ impl std::fmt::Display for CliError {
     }
 }
 
+#[cfg(unix)]
+impl From<rustix::io::Errno> for CliError {
+    fn from(error: rustix::io::Errno) -> Self {
+        std::io::Error::from_raw_os_error(error.raw_os_error()).into()
+    }
+}
+
 impl From<std::io::Error> for CliError {
     fn from(error: std::io::Error) -> Self {
         if error.kind() == std::io::ErrorKind::BrokenPipe {

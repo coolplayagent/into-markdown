@@ -114,8 +114,10 @@ pub struct ResourceLimits {
     pub max_nesting_depth: u16,
     /// Maximum PDF/page-like units.
     pub max_pages: u32,
-    /// Maximum retained asset bytes.
+    /// Maximum bytes retained by one asset.
     pub max_asset_bytes: u64,
+    /// Maximum bytes retained across all assets before content deduplication.
+    pub max_total_asset_bytes: u64,
     /// Maximum request-scoped memory explicitly reserved by implementations.
     pub max_memory_bytes: u64,
     /// Maximum bytes written to request-scoped temporary files.
@@ -139,6 +141,7 @@ impl Default for ResourceLimits {
             max_nesting_depth: 256,
             max_pages: 10_000,
             max_asset_bytes: 256 * 1024 * 1024,
+            max_total_asset_bytes: 1024 * 1024 * 1024,
             max_memory_bytes: 1024 * 1024 * 1024,
             max_temporary_bytes: 1024 * 1024 * 1024,
             max_table_rows: 100_000,

@@ -47,5 +47,26 @@
 - 日志和诊断不得包含文档原始字节、凭据、签名 URL 或不受限制的提供者载荷。
 
 资源限制错误是权威错误，绝不能作为可恢复的解析器错误被吞掉。
+
+## 输出资源与文件系统
+
+- 资源名称只来自完整内容 SHA-256 与 MIME allowlist 扩展，不采用源文件路径、Unicode
+  名称、盘符、UNC、ADS 或保留设备名。相同内容的 MIME 声明冲突会失败，不按扩展猜测。
+- `asset_uri_prefix` 仅接受 portable 相对 URI path；拒绝绝对路径、scheme-relative、
+  query、fragment、控制字符与 scheme。`data:` 仅由 embed renderer 内部生成。
+- CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
+  stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
+  FIFO、设备、符号链接和 Windows reparse point 均拒绝。
+- 输出事务只恢复带随机 nonce、固定签名、版本、精确 root/相对目标清单和排他锁的
+  私有 registry 条目。每个物理目标父目录包含固定名称、由 no-replace hard link 发布的
+  管理器 lease，绑定父目录 dev/inode、root 身份和事务内受签名标记；既有目标身份另绑定
+  dev/inode，缺失目标保守互斥整个父目录。相关写出通过已认证父目录 handle 读取 lease，
+  不扫描祖先或不相关目录；恢复后有界重做完整预检，超限返回 `recoveryLimit`。Unix 变更只使用
+  已认证目录 handle 上的相对 `*at` 操作；Windows 输出事务稳定返回
+  `componentUnavailable`。journal generation 的每次转换都在继续文件变更前
+  持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与
+  备份并返回 `rollbackFailed`，不会递归删除目录或触碰相似名称路径。
+- bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理
+  映射；ZIP 条目与 manifest path 双向一致，portable path 比较包含大小写折叠规则。
 取消与总 timeout 同样贯穿每个 SPI；长循环和外部服务等待必须设置协作检查点，不能
 依赖引擎外层检查来中断内部工作。

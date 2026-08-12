@@ -82,6 +82,22 @@ CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定
 Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与目录 `040755`，
 并在 Unix 临时目录真实解压有资源归档，验证 `assets/` 可遍历且资源可读取。
 
+资源规划测试还覆盖相同字节的跨 ID 去重、MIME 冲突、完整摘要、危险 URI prefix、
+悬空引用、单项与总量预算，以及 Windows reserved/ADS、大小写折叠和 Unicode 路径。
+输出集合以故障注入覆盖第 N 个 stage、fsync、每个持久 journal/backup/install phase、
+commit/rename 竞态、取消、临时预算与 overwrite 回滚；每个 phase 模拟进程终止后由
+新管理器实例恢复，并断言只出现完整旧集合或完整新集合。回滚失败测试必须把已安装
+目标替换为非空目录，验证稳定 `rollbackFailed`、唯一旧备份和 journal 仍在，移除阻塞
+后下一次恢复可以完成。跨文件系统、active lock、恶意 journal/nonce/root/member、
+目录/FIFO/设备与 symlink swap 均需 fail closed，且不递归删除非管理器路径。跨
+`a/b` 事务中断后，分别从 `a`、`b`、更深子目录与父目录发起的相交写入必须先恢复或
+阻塞，绝不能写第三套值；认证完成后的 parent rename+symlink 替换也必须证明外部目录
+无文件。物理父目录 lease 测试覆盖既有文件 hard-link 身份、支持时的大小写与
+NFC/NFD 别名，以及 130/500 层合法目录无需祖先扫描；CLI 测试从真实崩溃残留开始，
+断言单次命令完成恢复、写出并在 report 中记录 success。Windows 检查覆盖稳定
+`componentUnavailable`。bundle 重复运行应逐字节一致，manifest
+schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测试。
+
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending
 future 的取消和 deadline 唤醒、多 waiter 竞争、checked 预算累加，以及失败后临时
 产物清理。阻塞来源还要覆盖有界工作者过载、deadline 先于系统调用返回、增长文件只读

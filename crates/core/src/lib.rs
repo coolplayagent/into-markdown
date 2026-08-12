@@ -15,9 +15,9 @@ mod options;
 mod spi;
 
 pub use dto::{
-    AssetDto, BatchItemDto, BatchItemStatus, BatchReportDto, BundleAssetDto, BundleManifestDto,
-    DTO_SCHEMA_VERSION, DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto, DtoError,
-    DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
+    AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemStatus, BatchReportDto, BundleAssetDto,
+    BundleManifestDto, DTO_SCHEMA_VERSION, DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto,
+    DtoError, DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
     MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH, MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES,
     MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES, MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES,
     ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto,
