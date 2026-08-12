@@ -2288,6 +2288,7 @@ fn redact_url(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::transaction::{HookDecision, Target};
     use into_markdown::{
         Asset, AssetId, Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind,
