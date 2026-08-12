@@ -7,6 +7,9 @@ use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, FormatCandidate, FormatDetector, FormatHint,
     InputFormat, InputRef, ResolvedInput, SourceMetadata, SourceResolver,
 };
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::ResolveResult;
+use quick_xml::reader::NsReader;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -459,7 +462,9 @@ impl FormatDetector for ContentFormatDetector {
 const ZIP_INSPECTION_ENTRY_LIMIT: usize = 4096;
 const ZIP_MIMETYPE_READ_LIMIT: u64 = 128;
 const ZIP_NAME_READ_LIMIT: usize = 1024 * 1024;
+const ZIP_CENTRAL_DIRECTORY_LIMIT: usize = 8 * 1024 * 1024;
 const ZIP_METADATA_READ_LIMIT: u64 = 256 * 1024;
+const ZIP_XML_EVENT_LIMIT: usize = 32 * 1024;
 const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 
@@ -817,10 +822,35 @@ fn inspect_zip_package(
     diagnostics: &mut Vec<String>,
 ) -> Vec<(InputFormat, &'static str)> {
     let mimetype = read_zip_text(archive, "mimetype", ZIP_MIMETYPE_READ_LIMIT, diagnostics);
+    let mut matches = inspect_ooxml_package(archive, names, diagnostics);
+    if mimetype.as_deref() == Some("application/epub+zip")
+        && inspect_epub_package(archive, names, diagnostics)
+    {
+        matches.push((InputFormat::Epub, "validated EPUB mimetype, container, and rootfile"));
+    }
+    if let Some(candidate) = inspect_odf_package(archive, mimetype.as_deref(), diagnostics) {
+        matches.push(candidate);
+    }
+    matches
+}
+
+fn inspect_ooxml_package(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    names: &[String],
+    diagnostics: &mut Vec<String>,
+) -> Vec<(InputFormat, &'static str)> {
     let content_types =
         read_zip_text(archive, "[Content_Types].xml", ZIP_METADATA_READ_LIMIT, diagnostics);
     let mut matches = Vec::new();
-    if let Some(content_types) = content_types.as_deref() {
+    let ooxml_overrides =
+        content_types.as_deref().and_then(|document| match parse_ooxml_content_types(document) {
+            Ok(overrides) => Some(overrides),
+            Err(error) => {
+                diagnostics.push(format!("ZIP [Content_Types].xml was rejected: {error}"));
+                None
+            }
+        });
+    if let Some(overrides) = ooxml_overrides.as_ref() {
         let ooxml = [
             (
                 InputFormat::Docx,
@@ -863,27 +893,44 @@ fn inspect_zip_package(
         for (format, part, content_types_allowed, evidence) in ooxml {
             if names.iter().any(|name| name == part)
                 && zip_entry_nonempty(archive, part, diagnostics)
-                && content_types_allowed
-                    .iter()
-                    .any(|content_type| content_type_override(content_types, part, content_type))
+                && overrides.get(&format!("/{part}")).is_some_and(|content_type| {
+                    content_types_allowed.contains(&content_type.as_str())
+                })
                 && !matches.iter().any(|(existing, _)| *existing == format)
             {
                 matches.push((format, evidence));
             }
         }
     }
+    matches
+}
 
-    if mimetype.as_deref() == Some("application/epub+zip")
-        && let Some(container) =
-            read_zip_text(archive, "META-INF/container.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
-        && let Some(rootfile) = xml_element_attribute(&container, "rootfile", "full-path")
-        && is_safe_archive_name(rootfile)
-        && names.iter().any(|name| name == rootfile)
-        && zip_entry_nonempty(archive, rootfile, diagnostics)
-    {
-        matches.push((InputFormat::Epub, "validated EPUB mimetype, container, and rootfile"));
-    }
+fn inspect_epub_package(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    names: &[String],
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    let rootfile =
+        read_zip_text(archive, "META-INF/container.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
+            .and_then(|document| match parse_epub_container(&document) {
+                Ok(rootfile) => Some(rootfile),
+                Err(error) => {
+                    diagnostics.push(format!("ZIP META-INF/container.xml was rejected: {error}"));
+                    None
+                }
+            });
+    rootfile.is_some_and(|rootfile| {
+        is_safe_archive_name(&rootfile)
+            && names.iter().any(|name| name == &rootfile)
+            && zip_entry_nonempty(archive, &rootfile, diagnostics)
+    })
+}
 
+fn inspect_odf_package(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    mimetype: Option<&str>,
+    diagnostics: &mut Vec<String>,
+) -> Option<(InputFormat, &'static str)> {
     let odf = [
         (
             "application/vnd.oasis.opendocument.text",
@@ -901,16 +948,23 @@ fn inspect_zip_package(
             "validated OpenDocument presentation package",
         ),
     ];
-    for (expected_mimetype, format, evidence) in odf {
-        if mimetype.as_deref() == Some(expected_mimetype)
-            && zip_entry_nonempty(archive, "content.xml", diagnostics)
-            && read_zip_text(archive, "META-INF/manifest.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
-                .is_some_and(|manifest| manifest.contains(expected_mimetype))
-        {
-            matches.push((format, evidence));
+    if let Some((expected_mimetype, format, evidence)) =
+        odf.into_iter().find(|(expected, _, _)| mimetype == Some(*expected))
+        && zip_entry_nonempty(archive, "content.xml", diagnostics)
+        && let Some(manifest) =
+            read_zip_text(archive, "META-INF/manifest.xml", ZIP_METADATA_READ_LIMIT, diagnostics)
+    {
+        match parse_odf_manifest(&manifest) {
+            Ok(Some(media_type)) if media_type == expected_mimetype => {
+                return Some((format, evidence));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                diagnostics.push(format!("ZIP META-INF/manifest.xml was rejected: {error}"));
+            }
         }
     }
-    matches
+    None
 }
 
 fn read_zip_text(
@@ -962,53 +1016,275 @@ fn zip_entry_nonempty(
     }
 }
 
-fn content_types_override(document: &str) -> impl Iterator<Item = &str> {
-    document.split('<').filter_map(|fragment| {
-        let tag = fragment.split_once('>')?.0;
-        let element = tag.split_ascii_whitespace().next()?.rsplit(':').next()?;
-        element.eq_ignore_ascii_case("Override").then_some(tag)
-    })
+const OOXML_CONTENT_TYPES_NAMESPACE: &[u8] =
+    b"http://schemas.openxmlformats.org/package/2006/content-types";
+const EPUB_CONTAINER_NAMESPACE: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:container";
+const ODF_MANIFEST_NAMESPACE: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct XmlName {
+    namespace: Option<Vec<u8>>,
+    local: Vec<u8>,
 }
 
-fn content_type_override(document: &str, part: &str, content_type: &str) -> bool {
-    let expected_part = format!("/{part}");
-    content_types_override(document).any(|tag| {
-        xml_attribute(tag, "PartName") == Some(expected_part.as_str())
-            && xml_attribute(tag, "ContentType") == Some(content_type)
-    })
+impl XmlName {
+    fn matches(&self, namespace: &[u8], local: &[u8]) -> bool {
+        self.namespace.as_deref() == Some(namespace) && self.local == local
+    }
 }
 
-fn xml_element_attribute<'a>(document: &'a str, element: &str, attribute: &str) -> Option<&'a str> {
-    document.split('<').find_map(|fragment| {
-        let tag = fragment.split_once('>')?.0;
-        let name = tag.split_ascii_whitespace().next()?.rsplit(':').next()?;
-        name.eq_ignore_ascii_case(element).then(|| xml_attribute(tag, attribute)).flatten()
-    })
+#[derive(Debug)]
+struct XmlAttribute {
+    namespace: Option<Vec<u8>>,
+    local: Vec<u8>,
+    value: String,
 }
 
-fn xml_attribute<'a>(tag: &'a str, attribute: &str) -> Option<&'a str> {
-    let mut offset = 0;
-    while let Some(found) = tag[offset..].find(attribute) {
-        let start = offset + found;
-        let before = tag[..start].chars().next_back();
-        let after_name = start + attribute.len();
-        if before.is_none_or(char::is_whitespace)
-            && tag[after_name..]
-                .chars()
-                .next()
-                .is_some_and(|value| value.is_whitespace() || value == '=')
-        {
-            let rest = tag[after_name..].trim_start();
-            let rest = rest.strip_prefix('=')?.trim_start();
-            let quote = rest.chars().next()?;
-            if matches!(quote, '\'' | '"') {
-                let value = &rest[quote.len_utf8()..];
-                return value.split_once(quote).map(|(value, _)| value);
+fn parse_ooxml_content_types(document: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut root_valid = false;
+    let mut overrides = BTreeMap::new();
+    parse_package_xml(document, |depth, name, parent, attributes| {
+        if depth == 1 {
+            if !name.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Types") {
+                return Err("expected the OOXML Types root and namespace".into());
+            }
+            root_valid = true;
+        } else if name.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Override") {
+            if depth != 2
+                || !parent
+                    .is_some_and(|parent| parent.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Types"))
+            {
+                return Err("OOXML Override is not a direct child of Types".into());
+            }
+            let part = required_xml_attribute(attributes, None, b"PartName")?.to_owned();
+            let content_type = required_xml_attribute(attributes, None, b"ContentType")?.to_owned();
+            if overrides.insert(part, content_type).is_some() {
+                return Err("duplicate OOXML Override PartName".into());
             }
         }
-        offset = after_name;
+        Ok(())
+    })?;
+    if !root_valid {
+        return Err("OOXML Types root is missing".into());
     }
-    None
+    Ok(overrides)
+}
+
+fn parse_epub_container(document: &str) -> Result<String, String> {
+    let mut root_valid = false;
+    let mut rootfiles_seen = false;
+    let mut rootfile = None;
+    parse_package_xml(document, |depth, name, parent, attributes| {
+        if depth == 1 {
+            if !name.matches(EPUB_CONTAINER_NAMESPACE, b"container") {
+                return Err("expected the EPUB container root and namespace".into());
+            }
+            root_valid = true;
+        } else if name.matches(EPUB_CONTAINER_NAMESPACE, b"rootfiles") {
+            if depth != 2
+                || !parent
+                    .is_some_and(|parent| parent.matches(EPUB_CONTAINER_NAMESPACE, b"container"))
+            {
+                return Err("EPUB rootfiles is not a direct child of container".into());
+            }
+            if rootfiles_seen {
+                return Err("duplicate EPUB rootfiles element".into());
+            }
+            rootfiles_seen = true;
+        } else if name.matches(EPUB_CONTAINER_NAMESPACE, b"rootfile") {
+            if depth != 3
+                || !parent
+                    .is_some_and(|parent| parent.matches(EPUB_CONTAINER_NAMESPACE, b"rootfiles"))
+            {
+                return Err("EPUB rootfile is not a direct child of rootfiles".into());
+            }
+            let path = required_xml_attribute(attributes, None, b"full-path")?.to_owned();
+            if rootfile.replace(path).is_some() {
+                return Err("duplicate EPUB rootfile element".into());
+            }
+        }
+        Ok(())
+    })?;
+    if !root_valid || !rootfiles_seen {
+        return Err("EPUB container structure is incomplete".into());
+    }
+    rootfile.ok_or_else(|| "EPUB rootfile is missing".into())
+}
+
+fn parse_odf_manifest(document: &str) -> Result<Option<String>, String> {
+    let mut root_valid = false;
+    let mut package_media_type = None;
+    parse_package_xml(document, |depth, name, parent, attributes| {
+        if depth == 1 {
+            if !name.matches(ODF_MANIFEST_NAMESPACE, b"manifest") {
+                return Err("expected the ODF manifest root and namespace".into());
+            }
+            root_valid = true;
+        } else if name.matches(ODF_MANIFEST_NAMESPACE, b"file-entry") {
+            if depth != 2
+                || !parent.is_some_and(|parent| parent.matches(ODF_MANIFEST_NAMESPACE, b"manifest"))
+            {
+                return Err("ODF file-entry is not a direct child of manifest".into());
+            }
+            let path =
+                required_xml_attribute(attributes, Some(ODF_MANIFEST_NAMESPACE), b"full-path")?;
+            if path == "/" {
+                let media_type = required_xml_attribute(
+                    attributes,
+                    Some(ODF_MANIFEST_NAMESPACE),
+                    b"media-type",
+                )?
+                .to_owned();
+                if package_media_type.replace(media_type).is_some() {
+                    return Err("duplicate ODF package file-entry".into());
+                }
+            }
+        }
+        Ok(())
+    })?;
+    if !root_valid {
+        return Err("ODF manifest root is missing".into());
+    }
+    Ok(package_media_type)
+}
+
+fn parse_package_xml(
+    document: &str,
+    mut inspect: impl FnMut(usize, &XmlName, Option<&XmlName>, &[XmlAttribute]) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut reader = NsReader::from_str(document);
+    let config = reader.config_mut();
+    config.allow_dangling_amp = false;
+    config.allow_unmatched_ends = false;
+    config.check_end_names = true;
+    config.check_comments = true;
+    let mut ancestors = Vec::new();
+    let mut root_seen = false;
+    let mut events = 0_usize;
+    loop {
+        events += 1;
+        if events > ZIP_XML_EVENT_LIMIT {
+            return Err(format!("XML exceeds the {ZIP_XML_EVENT_LIMIT} event limit"));
+        }
+        let event = reader.read_event().map_err(|error| format!("invalid XML: {error}"))?;
+        match event {
+            Event::Start(element) => {
+                if ancestors.is_empty() && root_seen {
+                    return Err("XML contains multiple root elements".into());
+                }
+                let name = xml_name(&reader, &element)?;
+                let attributes = checked_xml_attributes(&reader, &element)?;
+                inspect(ancestors.len() + 1, &name, ancestors.last(), &attributes)?;
+                if ancestors.is_empty() {
+                    root_seen = true;
+                }
+                ancestors.push(name);
+            }
+            Event::Empty(element) => {
+                if ancestors.is_empty() && root_seen {
+                    return Err("XML contains multiple root elements".into());
+                }
+                let name = xml_name(&reader, &element)?;
+                let attributes = checked_xml_attributes(&reader, &element)?;
+                inspect(ancestors.len() + 1, &name, ancestors.last(), &attributes)?;
+                if ancestors.is_empty() {
+                    root_seen = true;
+                }
+            }
+            Event::End(element) => {
+                let expected = ancestors.pop().ok_or("XML end tag has no open element")?;
+                let (namespace, local) = reader.resolve_element(element.name());
+                let actual = XmlName {
+                    namespace: owned_xml_namespace(namespace)?,
+                    local: local.as_ref().to_vec(),
+                };
+                if actual != expected {
+                    return Err("XML end tag namespace does not match its start tag".into());
+                }
+            }
+            Event::Text(text)
+                if ancestors.is_empty() && !text.as_ref().iter().all(u8::is_ascii_whitespace) =>
+            {
+                return Err("XML has character data outside its root".into());
+            }
+            Event::CData(text) if ancestors.is_empty() && !text.as_ref().is_empty() => {
+                return Err("XML has CDATA outside its root".into());
+            }
+            Event::DocType(_) | Event::GeneralRef(_) => {
+                return Err("DTD and entity references are not allowed".into());
+            }
+            Event::Eof => break,
+            Event::Text(_)
+            | Event::CData(_)
+            | Event::Comment(_)
+            | Event::Decl(_)
+            | Event::PI(_) => {}
+        }
+    }
+    if !root_seen || !ancestors.is_empty() {
+        return Err("XML root is missing or incomplete".into());
+    }
+    Ok(())
+}
+
+fn xml_name(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<XmlName, String> {
+    let (namespace, local) = reader.resolve_element(element.name());
+    Ok(XmlName { namespace: owned_xml_namespace(namespace)?, local: local.as_ref().to_vec() })
+}
+
+fn checked_xml_attributes(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<Vec<XmlAttribute>, String> {
+    let mut attributes = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| format!("invalid XML attribute: {error}"))?;
+        if attribute.value.contains(&b'&') {
+            return Err("entity references in XML attributes are not allowed".into());
+        }
+        let raw_name = attribute.key.as_ref();
+        if raw_name == b"xmlns" || raw_name.starts_with(b"xmlns:") {
+            continue;
+        }
+        let (namespace, local) = reader.resolve_attribute(attribute.key);
+        let value = std::str::from_utf8(attribute.value.as_ref())
+            .map_err(|_| "XML attribute is not UTF-8")?
+            .to_owned();
+        attributes.push(XmlAttribute {
+            namespace: owned_xml_namespace(namespace)?,
+            local: local.as_ref().to_vec(),
+            value,
+        });
+    }
+    Ok(attributes)
+}
+
+fn owned_xml_namespace(namespace: ResolveResult<'_>) -> Result<Option<Vec<u8>>, String> {
+    match namespace {
+        ResolveResult::Unbound => Ok(None),
+        ResolveResult::Bound(namespace) => Ok(Some(namespace.as_ref().to_vec())),
+        ResolveResult::Unknown(prefix) => Err(format!(
+            "XML namespace prefix is not declared: {}",
+            String::from_utf8_lossy(&prefix)
+        )),
+    }
+}
+
+fn required_xml_attribute<'a>(
+    attributes: &'a [XmlAttribute],
+    namespace: Option<&[u8]>,
+    local: &[u8],
+) -> Result<&'a str, String> {
+    let mut values = attributes.iter().filter(|attribute| {
+        attribute.namespace.as_deref() == namespace && attribute.local == local
+    });
+    let value = values.next().ok_or_else(|| {
+        format!("required XML attribute {} is missing", String::from_utf8_lossy(local))
+    })?;
+    if values.next().is_some() {
+        return Err(format!("duplicate XML attribute {}", String::from_utf8_lossy(local)));
+    }
+    Ok(&value.value)
 }
 
 fn is_safe_archive_name(name: &str) -> bool {
@@ -1071,14 +1347,29 @@ fn validate_classic_eocd(bytes: &[u8], eocd: usize, record: &[u8]) -> Result<usi
     if entry_count > ZIP_INSPECTION_ENTRY_LIMIT {
         return Ok(entry_count);
     }
+    if central_size > ZIP_CENTRAL_DIRECTORY_LIMIT {
+        return Err(format!(
+            "ZIP central directory exceeds the {ZIP_CENTRAL_DIRECTORY_LIMIT} byte limit before archive construction"
+        ));
+    }
     let mut cursor = central_offset;
+    let mut name_bytes = 0_usize;
     for _ in 0..entry_count {
         let header =
             bytes.get(cursor..cursor + 46).ok_or("ZIP central directory header is truncated")?;
         if &header[..4] != b"PK\x01\x02" {
             return Err("ZIP central directory entry signature is invalid".into());
         }
-        let variable_size = usize::from(u16::from_le_bytes([header[28], header[29]]))
+        let name_size = usize::from(u16::from_le_bytes([header[28], header[29]]));
+        name_bytes = name_bytes
+            .checked_add(name_size)
+            .filter(|total| *total <= ZIP_NAME_READ_LIMIT)
+            .ok_or_else(|| {
+                format!(
+                    "ZIP entry names exceed the {ZIP_NAME_READ_LIMIT} byte limit before archive construction"
+                )
+            })?;
+        let variable_size = name_size
             + usize::from(u16::from_le_bytes([header[30], header[31]]))
             + usize::from(u16::from_le_bytes([header[32], header[33]]));
         cursor = cursor
@@ -1367,9 +1658,32 @@ mod tests {
 
     fn ooxml_content_type(part: &str, content_type: &str) -> Vec<u8> {
         format!(
-            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/{part}" ContentType="{content_type}"/></Types>"#
+            r#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/{part}" ContentType="{content_type}"/></ct:Types>"#
         )
         .into_bytes()
+    }
+
+    fn central_directory_with_name_lengths(name_lengths: &[usize]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (index, name_length) in name_lengths.iter().copied().enumerate() {
+            let mut header = [0_u8; 46];
+            header[..4].copy_from_slice(b"PK\x01\x02");
+            header[28..30].copy_from_slice(&u16::try_from(name_length).unwrap().to_le_bytes());
+            bytes.extend_from_slice(&header);
+            bytes
+                .extend(std::iter::repeat_n(b'a' + u8::try_from(index % 26).unwrap(), name_length));
+        }
+        let central_size = u32::try_from(bytes.len()).unwrap();
+        let entries = u16::try_from(name_lengths.len()).unwrap();
+        bytes.extend_from_slice(b"PK\x05\x06");
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&entries.to_le_bytes());
+        bytes.extend_from_slice(&entries.to_le_bytes());
+        bytes.extend_from_slice(&central_size.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes
     }
 
     fn cfb_with_stream(name: &str) -> Vec<u8> {
@@ -1535,7 +1849,7 @@ mod tests {
                     ("mimetype", b"application/epub+zip"),
                     (
                         "META-INF/container.xml",
-                        b"<container><rootfiles><rootfile full-path='OPS/content.opf'/></rootfiles></container>",
+                        b"<ocf:container xmlns:ocf='urn:oasis:names:tc:opendocument:xmlns:container'><ocf:rootfiles><ocf:rootfile full-path='OPS/content.opf'/></ocf:rootfiles></ocf:container>",
                     ),
                     ("OPS/content.opf", b"<package/>"),
                 ]),
@@ -1547,7 +1861,7 @@ mod tests {
                     ("content.xml", b"<office:document-content/>"),
                     (
                         "META-INF/manifest.xml",
-                        b"<manifest:file-entry manifest:full-path='/' manifest:media-type='application/vnd.oasis.opendocument.text'/>",
+                        b"<manifest:manifest xmlns:manifest='urn:oasis:names:tc:opendocument:xmlns:manifest:1.0'><manifest:file-entry manifest:full-path='/' manifest:media-type='application/vnd.oasis.opendocument.text'/></manifest:manifest>",
                     ),
                 ]),
                 InputFormat::Odt,
@@ -1598,6 +1912,17 @@ mod tests {
     }
 
     #[test]
+    fn zip_name_budget_is_checked_before_archive_construction() {
+        let bytes = central_directory_with_name_lengths(&[u16::MAX as usize; 17]);
+        let error = zip_preflight(&bytes).unwrap_err();
+        assert!(error.contains("entry names exceed"));
+        assert!(error.contains("before archive construction"));
+        let candidates = detect_zip(&bytes);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].diagnostics[0].contains("entry names exceed"));
+    }
+
+    #[test]
     fn zip64_safely_skips_structure_inspection() {
         let mut bytes = b"PK\x05\x06".to_vec();
         bytes.extend_from_slice(&0_u16.to_le_bytes());
@@ -1618,24 +1943,7 @@ mod tests {
             "word/document.xml",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
         );
-        let ppt_type = ooxml_content_type(
-            "ppt/presentation.xml",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
-        );
-        let combined_types = format!(
-            "<Types>{}{}</Types>",
-            String::from_utf8_lossy(&word_type)
-                .trim_start_matches(
-                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
-                )
-                .trim_end_matches("</Types>"),
-            String::from_utf8_lossy(&ppt_type)
-                .trim_start_matches(
-                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
-                )
-                .trim_end_matches("</Types>")
-        )
-        .into_bytes();
+        let combined_types = br#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><ct:Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></ct:Types>"#;
         let ordinary = zip_with(&[("ordinary.txt", b"hello")]);
         let empty_part =
             zip_with(&[("[Content_Types].xml", word_type.as_slice()), ("word/document.xml", b"")]);
@@ -1652,6 +1960,66 @@ mod tests {
         let conflict = detect_zip(&conflict_bytes);
         assert_eq!(conflict.len(), 1);
         assert!(conflict[0].diagnostics.iter().any(|value| value.contains("conflicting")));
+    }
+
+    #[test]
+    fn package_xml_comments_cannot_spoof_structure() {
+        let word_content_type =
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+        let ooxml = format!(
+            r#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><!-- <ct:Override PartName="/word/document.xml" ContentType="{word_content_type}"/> --></ct:Types>"#
+        );
+        let epub = b"<ocf:container xmlns:ocf='urn:oasis:names:tc:opendocument:xmlns:container'><ocf:rootfiles><!-- <ocf:rootfile full-path='OPS/content.opf'/> --></ocf:rootfiles></ocf:container>";
+        let odf = b"<manifest:manifest xmlns:manifest='urn:oasis:names:tc:opendocument:xmlns:manifest:1.0'><!-- <manifest:file-entry manifest:full-path='/' manifest:media-type='application/vnd.oasis.opendocument.text'/> --></manifest:manifest>";
+        let fixtures = [
+            zip_with(&[
+                ("[Content_Types].xml", ooxml.as_bytes()),
+                ("word/document.xml", b"<w:document/>"),
+            ]),
+            zip_with(&[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", epub),
+                ("OPS/content.opf", b"<package/>"),
+            ]),
+            zip_with(&[
+                ("mimetype", b"application/vnd.oasis.opendocument.text"),
+                ("content.xml", b"<office:document-content/>"),
+                ("META-INF/manifest.xml", odf),
+            ]),
+        ];
+        for (index, bytes) in fixtures.into_iter().enumerate() {
+            let candidates = detect_zip(&bytes);
+            assert_eq!(candidates.len(), 1, "fixture {index}");
+            assert_eq!(candidates[0].format, InputFormat::Zip, "fixture {index}");
+        }
+    }
+
+    #[test]
+    fn invalid_or_ambiguous_package_xml_is_rejected() {
+        let content_type =
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+        let wrong_root = format!(
+            r#"<ct:NotTypes xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/word/document.xml" ContentType="{content_type}"/></ct:NotTypes>"#
+        );
+        let entity = format!(
+            r#"<!DOCTYPE ct:Types [<!ENTITY target "/word/document.xml">]><ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="&target;" ContentType="{content_type}"/></ct:Types>"#
+        );
+        let duplicate = format!(
+            r#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Override PartName="/word/document.xml" ContentType="{content_type}"/><ct:Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></ct:Types>"#
+        );
+        for (index, metadata) in [wrong_root, entity, duplicate].into_iter().enumerate() {
+            let bytes = zip_with(&[
+                ("[Content_Types].xml", metadata.as_bytes()),
+                ("word/document.xml", b"<w:document/>"),
+            ]);
+            let candidates = detect_zip(&bytes);
+            assert_eq!(candidates.len(), 1, "fixture {index}");
+            assert_eq!(candidates[0].format, InputFormat::Zip, "fixture {index}");
+            assert!(
+                candidates[0].diagnostics.iter().any(|value| value.contains("rejected")),
+                "fixture {index}"
+            );
+        }
     }
 
     #[test]
