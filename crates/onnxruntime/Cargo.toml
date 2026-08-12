@@ -16,6 +16,7 @@ into-markdown-core = { path = "../core" }
 into-markdown-ocr = { path = "../ocr" }
 libloading.workspace = true
 libc.workspace = true
+object.workspace = true
 ort.workspace = true
 rustix.workspace = true
 serde.workspace = true

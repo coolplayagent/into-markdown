@@ -12,6 +12,12 @@ const MAX_THREADS: u16 = 64;
 const MAX_PROTO_FIELDS: usize = 1_000_000;
 const MAX_OPSET_IMPORTS: usize = 64;
 const MAX_DOMAIN_BYTES: usize = 256;
+/// Maximum rank accepted for any runtime tensor or contract entry.
+pub const MAX_TENSOR_RANK: usize = 16;
+/// Maximum number of inputs or outputs accepted by one runtime session.
+pub const MAX_TENSORS: usize = 64;
+/// Maximum UTF-8 byte length of an ONNX input or output name.
+pub const MAX_TENSOR_NAME_BYTES: usize = 256;
 
 /// Tensor element types accepted at the OCR/runtime boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -569,16 +575,7 @@ impl TensorRuntime for OnnxRuntime {
                 context,
             )?;
             context.checkpoint()?;
-            let input_bytes = tensor_bytes(inputs)?;
-            let input_peak =
-                input_bytes.checked_mul(2).ok_or_else(|| resource_error("tensorMemory"))?;
-            let output_peak = max_tensor_bytes(&model.contract.outputs)?
-                .checked_mul(2)
-                .ok_or_else(|| resource_error("tensorMemory"))?;
-            let run_peak = input_peak
-                .checked_add(output_peak)
-                .and_then(|bytes| bytes.checked_add(model.contract.run_memory_bytes))
-                .ok_or_else(|| resource_error("tensorMemory"))?;
+            let run_peak = run_memory_peak(inputs, &model.contract)?;
             // Held before adapters clone input backing, ORT executes, or output
             // values are copied out of native storage.
             let _run_reservation = context.reserve_memory(run_peak)?;
@@ -625,7 +622,16 @@ fn validate_resolved_model(model: &ResolvedModel) -> Result<(), ConversionError>
                 || i64::try_from(*version).is_err()
         })
         || model.contract.session_memory_bytes == 0
-        || model.contract.session_memory_bytes < model.identity.bytes
+        || model.contract.session_memory_bytes
+            < model
+                .identity
+                .bytes
+                .checked_add(
+                    contract_metadata_bytes(&model.contract)?
+                        .checked_mul(2)
+                        .ok_or_else(|| resource_error("tensorMemory"))?,
+                )
+                .ok_or_else(|| resource_error("tensorMemory"))?
         || model.contract.run_memory_bytes == 0
     {
         return Err(runtime_error("invalidModelContract"));
@@ -661,11 +667,17 @@ fn validate_specs(specs: &[TensorSpec]) -> Result<(), ConversionError> {
     if specs.is_empty() {
         return Err(runtime_error("emptyTensorContract"));
     }
+    if specs.len() > MAX_TENSORS {
+        return Err(runtime_error("invalidTensorContract"));
+    }
+    let mut names = std::collections::BTreeSet::new();
     for spec in specs {
         if spec.name.is_empty()
-            || spec.name.len() > 1024
+            || spec.name.len() > MAX_TENSOR_NAME_BYTES
             || spec.name.as_bytes().contains(&0)
             || spec.dimensions.is_empty()
+            || spec.dimensions.len() > MAX_TENSOR_RANK
+            || !names.insert(spec.name.as_str())
             || spec.dimensions.iter().any(|dimension| match dimension {
                 Dimension::Exact(value) => *value == 0,
                 Dimension::Dynamic { min, max } => *min == 0 || min > max,
@@ -682,6 +694,12 @@ fn validate_tensors(
     tensors: &[Tensor],
     direction: &'static str,
 ) -> Result<(), ConversionError> {
+    if specs.len() > MAX_TENSORS
+        || tensors.len() > MAX_TENSORS
+        || tensors.iter().any(|tensor| tensor.shape.len() > MAX_TENSOR_RANK)
+    {
+        return Err(runtime_error("invalidTensorContract"));
+    }
     if specs.len() != tensors.len() {
         return Err(runtime_error(if direction == "input" {
             "inputCountMismatch"
@@ -711,16 +729,25 @@ fn validate_tensors(
     Ok(())
 }
 
-fn tensor_bytes(tensors: &[Tensor]) -> Result<u64, ConversionError> {
+fn tensor_storage_bytes(tensors: &[Tensor]) -> Result<u64, ConversionError> {
     tensors.iter().try_fold(0_u64, |total, tensor| {
         let values =
             u64::try_from(tensor.values.len()).map_err(|_| resource_error("tensorMemory"))?;
-        let bytes = values.checked_mul(4).ok_or_else(|| resource_error("tensorMemory"))?;
+        let shape =
+            u64::try_from(tensor.shape.len()).map_err(|_| resource_error("tensorMemory"))?;
+        let bytes = values
+            .checked_mul(u64::try_from(std::mem::size_of::<f32>()).unwrap())
+            .and_then(|bytes| {
+                shape
+                    .checked_mul(u64::try_from(std::mem::size_of::<usize>()).unwrap())
+                    .and_then(|shape_bytes| bytes.checked_add(shape_bytes))
+            })
+            .ok_or_else(|| resource_error("tensorMemory"))?;
         total.checked_add(bytes).ok_or_else(|| resource_error("tensorMemory"))
     })
 }
 
-fn max_tensor_bytes(specs: &[TensorSpec]) -> Result<u64, ConversionError> {
+fn max_tensor_storage_bytes(specs: &[TensorSpec]) -> Result<u64, ConversionError> {
     specs.iter().try_fold(0_u64, |total, spec| {
         let elements = spec.dimensions.iter().try_fold(1_u64, |count, dimension| {
             let maximum = match dimension {
@@ -731,10 +758,75 @@ fn max_tensor_bytes(specs: &[TensorSpec]) -> Result<u64, ConversionError> {
                 .checked_mul(u64::try_from(maximum).map_err(|_| resource_error("tensorMemory"))?)
                 .ok_or_else(|| resource_error("tensorMemory"))
         })?;
+        let shape_bytes = u64::try_from(spec.dimensions.len())
+            .map_err(|_| resource_error("tensorMemory"))?
+            .checked_mul(u64::try_from(std::mem::size_of::<usize>()).unwrap())
+            .ok_or_else(|| resource_error("tensorMemory"))?;
         total
-            .checked_add(elements.checked_mul(4).ok_or_else(|| resource_error("tensorMemory"))?)
+            .checked_add(
+                elements
+                    .checked_mul(u64::try_from(std::mem::size_of::<f32>()).unwrap())
+                    .and_then(|bytes| bytes.checked_add(shape_bytes))
+                    .ok_or_else(|| resource_error("tensorMemory"))?,
+            )
             .ok_or_else(|| resource_error("tensorMemory"))
     })
+}
+
+fn contract_metadata_bytes(contract: &ModelContract) -> Result<u64, ConversionError> {
+    fn specs_bytes(specs: &[TensorSpec]) -> Result<u64, ConversionError> {
+        specs.iter().try_fold(0_u64, |total, spec| {
+            let name =
+                u64::try_from(spec.name.len()).map_err(|_| resource_error("tensorMemory"))?;
+            let dimensions = u64::try_from(spec.dimensions.len())
+                .map_err(|_| resource_error("tensorMemory"))?
+                .checked_mul(u64::try_from(std::mem::size_of::<Dimension>()).unwrap())
+                .ok_or_else(|| resource_error("tensorMemory"))?;
+            let structure = u64::try_from(std::mem::size_of::<TensorSpec>()).unwrap();
+            total
+                .checked_add(name)
+                .and_then(|bytes| bytes.checked_add(dimensions))
+                .and_then(|bytes| bytes.checked_add(structure))
+                .ok_or_else(|| resource_error("tensorMemory"))
+        })
+    }
+    let opsets = contract.opsets.iter().try_fold(0_u64, |total, (domain, _)| {
+        let domain = u64::try_from(domain.len()).map_err(|_| resource_error("tensorMemory"))?;
+        total
+            .checked_add(domain)
+            .and_then(|bytes| {
+                bytes.checked_add(u64::try_from(std::mem::size_of::<(String, u64)>()).unwrap())
+            })
+            .ok_or_else(|| resource_error("tensorMemory"))
+    })?;
+    specs_bytes(&contract.inputs)?
+        .checked_add(specs_bytes(&contract.outputs)?)
+        .and_then(|bytes| bytes.checked_add(opsets))
+        .and_then(|bytes| {
+            bytes.checked_add(u64::try_from(std::mem::size_of::<ModelMetadata>()).unwrap())
+        })
+        .ok_or_else(|| resource_error("tensorMemory"))
+}
+
+fn run_memory_peak(inputs: &[Tensor], contract: &ModelContract) -> Result<u64, ConversionError> {
+    let input_clone = tensor_storage_bytes(inputs)?;
+    let input_entries = u64::try_from(inputs.len())
+        .map_err(|_| resource_error("tensorMemory"))?
+        .checked_mul(u64::try_from(std::mem::size_of::<(String, Tensor)>()).unwrap())
+        .ok_or_else(|| resource_error("tensorMemory"))?;
+    let output_entries = u64::try_from(contract.outputs.len())
+        .map_err(|_| resource_error("tensorMemory"))?
+        .checked_mul(u64::try_from(std::mem::size_of::<Tensor>()).unwrap())
+        .ok_or_else(|| resource_error("tensorMemory"))?;
+    let output_storage = max_tensor_storage_bytes(&contract.outputs)?;
+    // Output storage is charged twice: once for ORT-owned tensor backing and
+    // once for the checked Rust copy returned across the runtime boundary.
+    input_clone
+        .checked_add(input_entries)
+        .and_then(|bytes| bytes.checked_add(output_entries))
+        .and_then(|bytes| output_storage.checked_mul(2).and_then(|peak| bytes.checked_add(peak)))
+        .and_then(|bytes| bytes.checked_add(contract.run_memory_bytes))
+        .ok_or_else(|| resource_error("tensorMemory"))
 }
 
 fn contract_sha256(contract: &ModelContract) -> Result<String, ConversionError> {
@@ -1186,6 +1278,36 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{error}").contains("inputShapeMismatch"));
+    }
+
+    #[test]
+    fn tensor_count_name_rank_and_storage_budgets_are_bounded() {
+        let mut too_many = Vec::new();
+        for index in 0..=MAX_TENSORS {
+            too_many.push(spec(&format!("tensor-{index}"), vec![Dimension::Exact(1)]));
+        }
+        assert!(
+            format!("{}", validate_specs(&too_many).unwrap_err()).contains("invalidTensorContract")
+        );
+        assert!(
+            validate_specs(&[spec(
+                &"n".repeat(MAX_TENSOR_NAME_BYTES + 1),
+                vec![Dimension::Exact(1)],
+            )])
+            .is_err()
+        );
+        assert!(
+            validate_specs(&[spec("rank", vec![Dimension::Exact(1); MAX_TENSOR_RANK + 1],)])
+                .is_err()
+        );
+
+        let contract = contract();
+        let inputs = [Tensor { shape: vec![1, 2], values: vec![1.0, 2.0] }];
+        let peak = run_memory_peak(&inputs, &contract).unwrap();
+        let value_only = contract.run_memory_bytes + 2 * 4 + 4;
+        assert!(peak > value_only, "shape and adapter slots must be charged");
+        let invalid_tensor = Tensor { shape: vec![1; MAX_TENSOR_RANK + 1], values: vec![1.0] };
+        assert!(validate_tensors(&contract.inputs, &[invalid_tensor], "input").is_err());
     }
 
     #[test]

@@ -58,7 +58,10 @@ ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包�
 为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
 默认 feature、二进制下载和 build.rs 链接，仅启用 `std`、`alternative-backend` 与
 API 28 兼容绑定；安全 loader 将已验证的 API table 显式交给 wrapper，运行时仍以
-authority 的 API 29 和精确 `GetVersionString` 做探针。当前默认
+authority 的 API 29 和精确 `GetVersionString` 做探针。
+`object` 固定为 `0.40.0`，从上游 Apache-2.0 OR MIT 中选择 Apache-2.0，关闭默认压缩 feature 且该 crate
+没有 build.rs；它只在加载前离线解析固定 ELF、Mach-O 与 PE 头，不下载或链接原生代码。
+当前默认
 发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
 发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。
 

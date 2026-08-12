@@ -6,10 +6,11 @@
 
 use into_markdown_core::{ConversionError, ExecutionContext, Tensor};
 use into_markdown_ocr::{
-    Dimension, ModelMetadata, ResolvedModel, SessionAdapter, SessionFactory, SessionOptions,
-    TensorElementType as ContractElementType, TensorSpec,
+    Dimension, MAX_TENSOR_RANK, MAX_TENSORS, ModelMetadata, ResolvedModel, SessionAdapter,
+    SessionFactory, SessionOptions, TensorElementType as ContractElementType, TensorSpec,
 };
 use libloading::Library;
+use object::{Object, read::elf::FileHeader as ElfFileHeader, read::macho::MachHeader};
 use ort::sys::OrtApiBase;
 use ort::{AsPointer, session::RunOptions, value::ValueType};
 use serde::Deserialize;
@@ -23,6 +24,9 @@ use tempfile::TempDir;
 use thiserror::Error;
 
 const MAX_VERSION_BYTES: usize = 64;
+const MAX_BINARY_DEPENDENCIES: usize = 128;
+const MAX_BINARY_PATH_BYTES: usize = 1024;
+const MAX_RUNTIME_LIBRARY_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Stable failures produced before any session is created.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -75,9 +79,39 @@ struct Target {
     asset: String,
     sha256: String,
     library: String,
+    library_bytes: u64,
+    binary_format: String,
+    binary_architecture: String,
     load_identity: String,
     library_sha256: String,
-    system_dependencies: Vec<String>,
+    rpaths: Vec<String>,
+    system_dependencies: Vec<SystemDependency>,
+    companion_dependencies: Vec<CompanionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SystemDependency {
+    load_name: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompanionDependency {
+    load_name: String,
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BinaryMetadata {
+    format: &'static str,
+    architecture: &'static str,
+    load_identity: String,
+    dependencies: Vec<String>,
+    rpaths: Vec<String>,
 }
 
 /// Loaded exact CPU runtime. The private verified copy and dynamic handle live
@@ -120,6 +154,9 @@ impl RuntimeLibrary {
         let target = authority.targets.get(target_name).ok_or(LoadError::UnsupportedTarget)?;
         validate_authority(&authority, target_name, target)?;
         let (mut source, canonical) = open_explicit_no_follow(trusted_root, library_path)?;
+        if source.metadata().map_err(|_| LoadError::Io)?.len() != target.library_bytes {
+            return Err(LoadError::HashMismatch);
+        }
         let private_dir =
             tempfile::Builder::new().prefix("into-md-ort-").tempdir().map_err(|_| LoadError::Io)?;
         let file_name = Path::new(&target.library).file_name().ok_or(LoadError::UnsafePath)?;
@@ -129,7 +166,7 @@ impl RuntimeLibrary {
             .create_new(true)
             .open(&private_path)
             .map_err(|_| LoadError::Io)?;
-        let actual_hash = copy_and_hash(&mut source, &mut destination)?;
+        let actual_hash = copy_and_hash(&mut source, &mut destination, target.library_bytes)?;
         if actual_hash != target.library_sha256 {
             return Err(LoadError::HashMismatch);
         }
@@ -137,16 +174,13 @@ impl RuntimeLibrary {
         drop(destination);
         ensure_same_open_file(&source, &canonical)?;
         let private_path = private_path.canonicalize().map_err(|_| LoadError::UnsafePath)?;
+        let binary = read_binary_metadata(&private_path, target.library_bytes)?;
+        validate_binary_metadata(target, &binary)?;
 
         ensure_loader_environment_clean()?;
-        audit_loaded_modules(file_name, &target.load_identity, &target.system_dependencies, None)?;
+        audit_loaded_modules(target, None)?;
         let library = load_verified_library(&private_path)?;
-        audit_loaded_modules(
-            file_name,
-            &target.load_identity,
-            &target.system_dependencies,
-            Some(&private_path),
-        )?;
+        audit_loaded_modules(target, Some(&private_path))?;
         let (version, api) = probe(&library, authority.api_version)?;
         if version != authority.version {
             return Err(LoadError::VersionMismatch);
@@ -327,17 +361,27 @@ impl SessionAdapter for OrtSession {
         context: &ExecutionContext,
     ) -> Result<Vec<Tensor>, ConversionError> {
         context.checkpoint()?;
-        let values = self
-            .metadata
-            .inputs
-            .iter()
-            .zip(inputs)
-            .map(|(spec, tensor)| {
-                ort::value::Tensor::from_array((tensor.shape.clone(), tensor.values.clone()))
-                    .map(|value| (spec.name.clone(), value))
-                    .map_err(|_| ort_error("inputTensor"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        if inputs.len() > MAX_TENSORS || self.metadata.inputs.len() != inputs.len() {
+            return Err(ort_error("inputCountMismatch"));
+        }
+        let mut values = Vec::new();
+        values.try_reserve_exact(inputs.len()).map_err(|_| ort_error("tensorMemory"))?;
+        for (spec, tensor) in self.metadata.inputs.iter().zip(inputs) {
+            if tensor.shape.len() > MAX_TENSOR_RANK {
+                return Err(ort_error("inputShapeMismatch"));
+            }
+            let mut shape = Vec::new();
+            shape.try_reserve_exact(tensor.shape.len()).map_err(|_| ort_error("tensorMemory"))?;
+            shape.extend_from_slice(&tensor.shape);
+            let mut backing = Vec::new();
+            backing
+                .try_reserve_exact(tensor.values.len())
+                .map_err(|_| ort_error("tensorMemory"))?;
+            backing.extend_from_slice(&tensor.values);
+            let value = ort::value::Tensor::from_array((shape, backing))
+                .map_err(|_| ort_error("inputTensor"))?;
+            values.push((spec.name.as_str(), value));
+        }
         let run_options = Arc::new(RunOptions::new().map_err(|_| ort_error("runOptions"))?);
         let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let monitor = {
@@ -358,27 +402,82 @@ impl SessionAdapter for OrtSession {
             .run_with_options(values, &run_options)
             .map_err(|_| ort_error("inference"))
             .and_then(|outputs| {
-                outputs
-                    .iter()
-                    .map(|(_, value)| {
-                        let (shape, values) = value
-                            .try_extract_tensor::<f32>()
-                            .map_err(|_| ort_error("outputTensor"))?;
-                        let shape = shape
-                            .iter()
-                            .map(|dimension| {
-                                usize::try_from(*dimension).map_err(|_| ort_error("outputShape"))
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        Ok(Tensor { shape, values: values.to_vec() })
-                    })
-                    .collect::<Result<Vec<_>, ConversionError>>()
+                if outputs.len() != self.metadata.outputs.len() || outputs.len() > MAX_TENSORS {
+                    return Err(ort_error("outputCountMismatch"));
+                }
+                let mut checked = Vec::new();
+                checked.try_reserve_exact(outputs.len()).map_err(|_| ort_error("tensorMemory"))?;
+                for ((_, value), expected) in outputs.iter().zip(&self.metadata.outputs) {
+                    let ValueType::Tensor { ty, shape, .. } = value.dtype() else {
+                        return Err(ort_error("outputTensor"));
+                    };
+                    if *ty != ort::value::TensorElementType::Float32 {
+                        return Err(ort_error("outputTensor"));
+                    }
+                    // This checked bound runs before `try_extract_tensor`, whose
+                    // wrapper forms a native slice from the shape element count.
+                    validated_output_elements(shape, expected)?;
+                    let (shape, values) =
+                        value.try_extract_tensor::<f32>().map_err(|_| ort_error("outputTensor"))?;
+                    checked.push(copy_checked_output(shape, values, expected, || {})?);
+                }
+                Ok(checked)
             });
         stopped.store(true, std::sync::atomic::Ordering::Release);
         let _ = monitor.join();
         context.checkpoint()?;
         result
     }
+}
+
+fn copy_checked_output(
+    native_shape: &[i64],
+    native_values: &[f32],
+    expected: &TensorSpec,
+    before_value_copy: impl FnOnce(),
+) -> Result<Tensor, ConversionError> {
+    let elements = validated_output_elements(native_shape, expected)?;
+    if elements != native_values.len() {
+        return Err(ort_error("outputElementCount"));
+    }
+    let mut shape = Vec::new();
+    shape.try_reserve_exact(native_shape.len()).map_err(|_| ort_error("tensorMemory"))?;
+    shape.extend(native_shape.iter().map(|dimension| usize::try_from(*dimension).unwrap()));
+    let mut values = Vec::new();
+    values.try_reserve_exact(native_values.len()).map_err(|_| ort_error("tensorMemory"))?;
+    before_value_copy();
+    values.extend_from_slice(native_values);
+    Ok(Tensor { shape, values })
+}
+
+fn validated_output_elements(
+    native_shape: &[i64],
+    expected: &TensorSpec,
+) -> Result<usize, ConversionError> {
+    if native_shape.is_empty()
+        || native_shape.len() > MAX_TENSOR_RANK
+        || native_shape.len() != expected.dimensions.len()
+    {
+        return Err(ort_error("outputShapeMismatch"));
+    }
+    let mut elements = 1_usize;
+    for (actual, bound) in native_shape.iter().zip(&expected.dimensions) {
+        let actual = usize::try_from(*actual).map_err(|_| ort_error("outputShapeMismatch"))?;
+        let in_contract = match bound {
+            Dimension::Exact(value) => actual == *value,
+            Dimension::Dynamic { min, max } => actual >= *min && actual <= *max,
+        };
+        if !in_contract {
+            return Err(ort_error("outputShapeMismatch"));
+        }
+        elements = elements.checked_mul(actual).ok_or_else(|| ort_error("outputElementCount"))?;
+    }
+    if elements.checked_mul(std::mem::size_of::<f32>()).is_none()
+        || native_shape.len().checked_mul(std::mem::size_of::<usize>()).is_none()
+    {
+        return Err(ort_error("outputElementCount"));
+    }
+    Ok(elements)
 }
 
 fn configure_cpu_arena(
@@ -486,15 +585,30 @@ fn validate_authority(
         || !is_safe_file_name(&target.asset)
         || !is_sha256(&target.sha256)
         || !is_sha256(&target.library_sha256)
-        || !is_safe_file_name(&target.load_identity)
+        || target.library_bytes == 0
+        || target.library_bytes > MAX_RUNTIME_LIBRARY_BYTES
+        || !matches!(target.binary_format.as_str(), "elf" | "mach-o" | "pe")
+        || !load_identity_is_safe(&target.binary_format, &target.load_identity)
+        || target.rpaths.len() > MAX_BINARY_DEPENDENCIES
+        || target.system_dependencies.len() > MAX_BINARY_DEPENDENCIES
+        || target.companion_dependencies.len() > MAX_BINARY_DEPENDENCIES
+        || !target.companion_dependencies.is_empty()
         || target.system_dependencies.is_empty()
-        || target.system_dependencies.iter().any(String::is_empty)
         || !dependencies_are_system_only(target_name, &target.system_dependencies)
+        || !companions_are_safe(&target.companion_dependencies)
         || !is_safe_relative(Path::new(&target.library))
     {
         return Err(LoadError::VersionMismatch);
     }
     Ok(())
+}
+
+fn load_identity_is_safe(format: &str, identity: &str) -> bool {
+    match format {
+        "elf" | "pe" => is_safe_file_name(identity),
+        "mach-o" => identity.strip_prefix("@rpath/").is_some_and(is_safe_file_name),
+        _ => false,
+    }
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -514,26 +628,230 @@ fn is_safe_file_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
 }
 
-fn dependencies_are_system_only(target_name: &str, dependencies: &[String]) -> bool {
+fn dependencies_are_system_only(target_name: &str, dependencies: &[SystemDependency]) -> bool {
     let mut unique = std::collections::BTreeSet::new();
     dependencies.iter().all(|dependency| {
+        if dependency.load_name.is_empty() || dependency.load_name.len() > MAX_BINARY_PATH_BYTES {
+            return false;
+        }
         let normalized = if target_name == "x86_64-pc-windows-msvc" {
-            dependency.to_ascii_lowercase()
+            dependency.load_name.to_ascii_lowercase()
         } else {
-            dependency.clone()
+            dependency.load_name.clone()
         };
         unique.insert(normalized)
             && if target_name == "aarch64-apple-darwin" {
-                let path = Path::new(dependency);
+                let Some(expected_path) = dependency.path.as_deref() else {
+                    return false;
+                };
+                if expected_path != dependency.load_name {
+                    return false;
+                }
+                let path = Path::new(expected_path);
                 path.is_absolute()
                     && (path.starts_with("/System/Library") || path.starts_with("/usr/lib"))
                     && path.components().all(|component| {
                         matches!(component, Component::RootDir | Component::Normal(_))
                     })
             } else {
-                is_safe_file_name(dependency)
+                dependency.path.is_none() && is_safe_file_name(&dependency.load_name)
             }
     })
+}
+
+fn companions_are_safe(dependencies: &[CompanionDependency]) -> bool {
+    let mut names = std::collections::BTreeSet::new();
+    dependencies.iter().all(|dependency| {
+        !dependency.load_name.is_empty()
+            && dependency.load_name.len() <= MAX_BINARY_PATH_BYTES
+            && names.insert(dependency.load_name.as_str())
+            && is_safe_relative(Path::new(&dependency.path))
+            && is_sha256(&dependency.sha256)
+    })
+}
+
+fn read_binary_metadata(path: &Path, expected_bytes: u64) -> Result<BinaryMetadata, LoadError> {
+    let file = File::open(path).map_err(|_| LoadError::Io)?;
+    if file.metadata().map_err(|_| LoadError::Io)?.len() != expected_bytes {
+        return Err(LoadError::DependencyMismatch);
+    }
+    let capacity = usize::try_from(expected_bytes).map_err(|_| LoadError::DependencyMismatch)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|_| LoadError::Io)?;
+    file.take(expected_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| LoadError::Io)?;
+    if bytes.len() != capacity {
+        return Err(LoadError::DependencyMismatch);
+    }
+    parse_binary_metadata(&bytes, path.file_name().ok_or(LoadError::DependencyMismatch)?)
+}
+
+fn parse_binary_metadata(
+    bytes: &[u8],
+    file_name: &std::ffi::OsStr,
+) -> Result<BinaryMetadata, LoadError> {
+    let file = object::File::parse(bytes).map_err(|_| LoadError::DependencyMismatch)?;
+    let architecture = match file.architecture() {
+        object::Architecture::Aarch64 => "aarch64",
+        object::Architecture::X86_64 => "x86_64",
+        _ => return Err(LoadError::DependencyMismatch),
+    };
+    let mut dependencies = file
+        .import_libraries()
+        .map_err(|_| LoadError::DependencyMismatch)?
+        .map(|library| {
+            let library = library.map_err(|_| LoadError::DependencyMismatch)?;
+            checked_binary_string(library.name())
+        })
+        .collect::<Result<Vec<_>, LoadError>>()?;
+    canonicalize_binary_names(&mut dependencies)?;
+    let (format, load_identity, mut rpaths) = match &file {
+        object::File::Elf32(file) => elf_identity_and_rpaths(file)?,
+        object::File::Elf64(file) => elf_identity_and_rpaths(file)?,
+        object::File::MachO32(file) => macho_identity_and_rpaths(file)?,
+        object::File::MachO64(file) => macho_identity_and_rpaths(file)?,
+        object::File::Pe32(_) | object::File::Pe64(_) => {
+            ("pe", file_name.to_str().ok_or(LoadError::DependencyMismatch)?.to_owned(), Vec::new())
+        }
+        _ => return Err(LoadError::DependencyMismatch),
+    };
+    canonicalize_binary_names(&mut rpaths)?;
+    Ok(BinaryMetadata { format, architecture, load_identity, dependencies, rpaths })
+}
+
+fn checked_binary_string(bytes: &[u8]) -> Result<String, LoadError> {
+    if bytes.is_empty() || bytes.len() > MAX_BINARY_PATH_BYTES || bytes.contains(&0) {
+        return Err(LoadError::DependencyMismatch);
+    }
+    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| LoadError::DependencyMismatch)
+}
+
+fn canonicalize_binary_names(values: &mut [String]) -> Result<(), LoadError> {
+    if values.len() > MAX_BINARY_DEPENDENCIES {
+        return Err(LoadError::DependencyMismatch);
+    }
+    values.sort();
+    if values.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(LoadError::DependencyMismatch);
+    }
+    Ok(())
+}
+
+fn elf_identity_and_rpaths<Elf>(
+    file: &object::read::elf::ElfFile<'_, Elf>,
+) -> Result<(&'static str, String, Vec<String>), LoadError>
+where
+    Elf: ElfFileHeader,
+{
+    let (identity, rpaths) = elf_optional_identity_and_rpaths(file)?;
+    Ok(("elf", identity.ok_or(LoadError::DependencyMismatch)?, rpaths))
+}
+
+fn elf_optional_identity_and_rpaths<Elf>(
+    file: &object::read::elf::ElfFile<'_, Elf>,
+) -> Result<(Option<String>, Vec<String>), LoadError>
+where
+    Elf: ElfFileHeader,
+{
+    let dynamic = file.elf_dynamic_table().map_err(|_| LoadError::DependencyMismatch)?;
+    let mut identity = None;
+    let mut rpaths = Vec::new();
+    for entry in &dynamic {
+        if entry.tag == object::elf::DT_SONAME {
+            if identity.is_some() {
+                return Err(LoadError::DependencyMismatch);
+            }
+            identity = Some(checked_binary_string(
+                dynamic.string(entry).map_err(|_| LoadError::DependencyMismatch)?,
+            )?);
+        } else if entry.tag == object::elf::DT_RPATH || entry.tag == object::elf::DT_RUNPATH {
+            let joined = checked_binary_string(
+                dynamic.string(entry).map_err(|_| LoadError::DependencyMismatch)?,
+            )?;
+            for path in joined.split(':') {
+                rpaths.push(checked_binary_string(path.as_bytes())?);
+            }
+        }
+    }
+    Ok((identity, rpaths))
+}
+
+fn macho_identity_and_rpaths<Mach>(
+    file: &object::read::macho::MachOFile<'_, Mach>,
+) -> Result<(&'static str, String, Vec<String>), LoadError>
+where
+    Mach: MachHeader,
+{
+    let (identity, rpaths) = macho_optional_identity_and_rpaths(file)?;
+    Ok(("mach-o", identity.ok_or(LoadError::DependencyMismatch)?, rpaths))
+}
+
+fn macho_optional_identity_and_rpaths<Mach>(
+    file: &object::read::macho::MachOFile<'_, Mach>,
+) -> Result<(Option<String>, Vec<String>), LoadError>
+where
+    Mach: MachHeader,
+{
+    let endian = file.endian();
+    let mut commands = file.macho_load_commands().map_err(|_| LoadError::DependencyMismatch)?;
+    let mut identity = None;
+    let mut rpaths = Vec::new();
+    while let Some(command) = commands.next().map_err(|_| LoadError::DependencyMismatch)? {
+        match command.variant().map_err(|_| LoadError::DependencyMismatch)? {
+            object::read::macho::LoadCommandVariant::IdDylib(dylib) => {
+                if identity.is_some() {
+                    return Err(LoadError::DependencyMismatch);
+                }
+                identity = Some(checked_binary_string(
+                    command
+                        .string(endian, dylib.dylib.name)
+                        .map_err(|_| LoadError::DependencyMismatch)?,
+                )?);
+            }
+            object::read::macho::LoadCommandVariant::Rpath(rpath) => {
+                rpaths.push(checked_binary_string(
+                    command
+                        .string(endian, rpath.path)
+                        .map_err(|_| LoadError::DependencyMismatch)?,
+                )?);
+            }
+            _ => {}
+        }
+    }
+    Ok((identity, rpaths))
+}
+
+fn validate_binary_metadata(target: &Target, actual: &BinaryMetadata) -> Result<(), LoadError> {
+    let mut expected_dependencies = target
+        .system_dependencies
+        .iter()
+        .map(|dependency| dependency.load_name.clone())
+        .chain(target.companion_dependencies.iter().map(|dependency| dependency.load_name.clone()))
+        .collect::<Vec<_>>();
+    canonicalize_binary_names(&mut expected_dependencies)?;
+    let mut expected_rpaths = target.rpaths.clone();
+    canonicalize_binary_names(&mut expected_rpaths)?;
+    if actual.format != target.binary_format
+        || actual.architecture != target.binary_architecture
+        || actual.load_identity != target.load_identity
+        || actual.dependencies != expected_dependencies
+        || actual.rpaths != expected_rpaths
+        || !rpaths_are_safe(&target.binary_format, &actual.rpaths)
+    {
+        return Err(LoadError::DependencyMismatch);
+    }
+    Ok(())
+}
+
+fn rpaths_are_safe(format: &str, rpaths: &[String]) -> bool {
+    match format {
+        // These exact paths refer only to the create-new private directory.
+        "elf" => rpaths == ["$ORIGIN"],
+        "mach-o" => rpaths == ["@loader_path"],
+        "pe" => rpaths.is_empty(),
+        _ => false,
+    }
 }
 
 fn ensure_loader_environment_clean() -> Result<(), LoadError> {
@@ -586,34 +904,21 @@ fn load_verified_library(path: &Path) -> Result<Library, LoadError> {
     Err(LoadError::UnsupportedTarget)
 }
 
-fn audit_loaded_modules(
-    main_file: &std::ffi::OsStr,
-    load_identity: &str,
-    dependencies: &[String],
-    trusted_main: Option<&Path>,
-) -> Result<(), LoadError> {
+fn audit_loaded_modules(target: &Target, trusted_main: Option<&Path>) -> Result<(), LoadError> {
     #[cfg(target_os = "linux")]
-    return audit_loaded_linux(main_file, load_identity, dependencies, trusted_main);
+    return audit_loaded_linux(target, trusted_main);
     #[cfg(target_os = "macos")]
-    return audit_loaded_macos(main_file, load_identity, dependencies, trusted_main);
+    return audit_loaded_macos(target, trusted_main);
     #[cfg(windows)]
-    return audit_loaded_windows(main_file, load_identity, dependencies, trusted_main);
+    return audit_loaded_windows(target, trusted_main);
     #[allow(unreachable_code)]
     Err(LoadError::UnsupportedTarget)
 }
 
 #[cfg(target_os = "linux")]
-fn audit_loaded_linux(
-    main_file: &std::ffi::OsStr,
-    load_identity: &str,
-    dependencies: &[String],
-    trusted_main: Option<&Path>,
-) -> Result<(), LoadError> {
-    struct Audit<'a> {
-        main_file: &'a std::ffi::OsStr,
-        load_identity: &'a str,
-        dependencies: &'a [String],
-        trusted_main: Option<&'a Path>,
+fn audit_loaded_linux(target: &Target, trusted_main: Option<&Path>) -> Result<(), LoadError> {
+    struct Audit {
+        paths: Vec<PathBuf>,
         rejected: bool,
     }
     unsafe extern "C" fn inspect(
@@ -623,54 +928,35 @@ fn audit_loaded_linux(
     ) -> std::ffi::c_int {
         // SAFETY: `dl_iterate_phdr` calls synchronously with the exact context
         // pointer and a live `dl_phdr_info` for the duration of this callback.
-        let (information, audit) = unsafe { (&*information, &mut *opaque.cast::<Audit<'_>>()) };
+        let (information, audit) = unsafe { (&*information, &mut *opaque.cast::<Audit>()) };
         if information.dlpi_name.is_null() {
             return 0;
         }
         // SAFETY: the platform loader supplies a NUL-terminated image name.
         let path = unsafe { CStr::from_ptr(information.dlpi_name) };
         let path = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
-        let Some(name) = path.file_name() else {
-            return 0;
-        };
-        if name == audit.main_file || name == std::ffi::OsStr::new(audit.load_identity) {
-            if audit.trusted_main != Some(path) {
-                audit.rejected = true;
-                return 1;
-            }
-            return 0;
-        }
-        let is_dependency = audit
-            .dependencies
-            .iter()
-            .any(|dependency| Path::new(dependency).file_name() == Some(name));
-        if is_dependency
-            && (!path.is_absolute()
-                || !(path.starts_with("/lib")
-                    || path.starts_with("/lib64")
-                    || path.starts_with("/usr/lib")
-                    || path.starts_with("/usr/lib64")))
-        {
+        if path.is_absolute() {
+            audit.paths.push(path.to_owned());
+        } else if path != Path::new("linux-vdso.so.1") {
             audit.rejected = true;
             return 1;
         }
         0
     }
     use std::os::unix::ffi::OsStrExt;
-    let mut audit = Audit { main_file, load_identity, dependencies, trusted_main, rejected: false };
+    let mut audit = Audit { paths: Vec::new(), rejected: false };
     // SAFETY: the callback and opaque context remain valid for this synchronous
     // enumeration and do not escape it.
     unsafe { libc::dl_iterate_phdr(Some(inspect), (&raw mut audit).cast()) };
-    if audit.rejected { Err(LoadError::DependencyMismatch) } else { Ok(()) }
+    if audit.rejected {
+        Err(LoadError::DependencyMismatch)
+    } else {
+        audit_loaded_paths(target, trusted_main, &audit.paths)
+    }
 }
 
 #[cfg(target_os = "macos")]
-fn audit_loaded_macos(
-    main_file: &std::ffi::OsStr,
-    load_identity: &str,
-    dependencies: &[String],
-    trusted_main: Option<&Path>,
-) -> Result<(), LoadError> {
+fn audit_loaded_macos(target: &Target, trusted_main: Option<&Path>) -> Result<(), LoadError> {
     unsafe extern "C" {
         fn _dyld_image_count() -> u32;
         fn _dyld_get_image_name(index: u32) -> *const std::ffi::c_char;
@@ -678,6 +964,7 @@ fn audit_loaded_macos(
     // SAFETY: dyld image enumeration returns process-lifetime NUL-terminated
     // names for indices below the captured image count.
     let count = unsafe { _dyld_image_count() };
+    let mut paths = Vec::new();
     for index in 0..count {
         // SAFETY: `index` is below the count captured immediately above.
         let pointer = unsafe { _dyld_get_image_name(index) };
@@ -690,18 +977,53 @@ fn audit_loaded_macos(
                 .to_str()
                 .map_err(|_| LoadError::DependencyMismatch)?,
         );
-        let Some(name) = path.file_name() else {
+        if path.is_absolute() {
+            paths.push(path.to_owned());
+        }
+    }
+    audit_loaded_paths(target, trusted_main, &paths)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn audit_loaded_paths(
+    target: &Target,
+    trusted_main: Option<&Path>,
+    paths: &[PathBuf],
+) -> Result<(), LoadError> {
+    for path in paths {
+        let Some(identity) = loaded_binary_identity(path)? else {
             continue;
         };
-        if name == main_file || name == std::ffi::OsStr::new(load_identity) {
-            if trusted_main != Some(path) {
+        if identity == target.load_identity {
+            if trusted_main != Some(path.as_path()) || hash_file(path)? != target.library_sha256 {
                 return Err(LoadError::DependencyMismatch);
             }
             continue;
         }
-        for dependency in dependencies {
-            let expected = Path::new(dependency);
-            if expected.file_name() == Some(name) && path != expected {
+        if let Some(companion) =
+            target.companion_dependencies.iter().find(|dependency| dependency.load_name == identity)
+        {
+            let Some(root) = trusted_main.and_then(Path::parent) else {
+                return Err(LoadError::DependencyMismatch);
+            };
+            let expected = root.join(&companion.path);
+            if path != &expected || hash_file(path)? != companion.sha256 {
+                return Err(LoadError::DependencyMismatch);
+            }
+            continue;
+        }
+        if let Some(system) =
+            target.system_dependencies.iter().find(|dependency| dependency.load_name == identity)
+        {
+            let safe = if let Some(expected) = system.path.as_deref() {
+                path == Path::new(expected)
+            } else {
+                path.starts_with("/lib")
+                    || path.starts_with("/lib64")
+                    || path.starts_with("/usr/lib")
+                    || path.starts_with("/usr/lib64")
+            };
+            if !safe {
                 return Err(LoadError::DependencyMismatch);
             }
         }
@@ -709,13 +1031,56 @@ fn audit_loaded_macos(
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn loaded_binary_identity(path: &Path) -> Result<Option<String>, LoadError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        // System images in dyld's shared cache need not exist as standalone
+        // files. Their absolute authority path is still checked by dyld.
+        Err(_) if path.starts_with("/System/Library") || path.starts_with("/usr/lib") => {
+            return Ok(path.to_str().map(str::to_owned));
+        }
+        Err(_) => return Err(LoadError::DependencyMismatch),
+    };
+    if metadata.len() == 0 || metadata.len() > MAX_RUNTIME_LIBRARY_BYTES {
+        return Err(LoadError::DependencyMismatch);
+    }
+    let bytes = fs::read(path).map_err(|_| LoadError::DependencyMismatch)?;
+    let Ok(file) = object::File::parse(bytes.as_slice()) else {
+        return Ok(None);
+    };
+    match file {
+        object::File::Elf32(file) => {
+            elf_optional_identity_and_rpaths(&file).map(|(identity, _)| identity)
+        }
+        object::File::Elf64(file) => {
+            elf_optional_identity_and_rpaths(&file).map(|(identity, _)| identity)
+        }
+        object::File::MachO32(file) => {
+            macho_optional_identity_and_rpaths(&file).map(|(identity, _)| identity)
+        }
+        object::File::MachO64(file) => {
+            macho_optional_identity_and_rpaths(&file).map(|(identity, _)| identity)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn hash_file(path: &Path) -> Result<String, LoadError> {
+    let mut file = File::open(path).map_err(|_| LoadError::DependencyMismatch)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|_| LoadError::DependencyMismatch)?;
+        if count == 0 {
+            return Ok(format!("{:x}", digest.finalize()));
+        }
+        digest.update(&buffer[..count]);
+    }
+}
+
 #[cfg(windows)]
-fn audit_loaded_windows(
-    main_file: &std::ffi::OsStr,
-    load_identity: &str,
-    dependencies: &[String],
-    trusted_main: Option<&Path>,
-) -> Result<(), LoadError> {
+fn audit_loaded_windows(target: &Target, trusted_main: Option<&Path>) -> Result<(), LoadError> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -730,10 +1095,11 @@ fn audit_loaded_windows(
     let system = normalize_windows_path(&String::from_utf16_lossy(
         &system[..usize::try_from(count).unwrap()],
     ));
-    let main = main_file.to_string_lossy();
-    let names = std::iter::once(main.as_ref())
-        .chain(std::iter::once(load_identity))
-        .chain(dependencies.iter().map(String::as_str));
+    let names = std::iter::once(target.load_identity.as_str())
+        .chain(target.system_dependencies.iter().map(|dependency| dependency.load_name.as_str()))
+        .chain(
+            target.companion_dependencies.iter().map(|dependency| dependency.load_name.as_str()),
+        );
     for name in names {
         let wide: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().chain(Some(0)).collect();
         // SAFETY: `wide` is NUL terminated and retained through the call.
@@ -741,8 +1107,7 @@ fn audit_loaded_windows(
         if module.is_null() {
             continue;
         }
-        let is_main =
-            name.eq_ignore_ascii_case(main.as_ref()) || name.eq_ignore_ascii_case(load_identity);
+        let is_main = name.eq_ignore_ascii_case(&target.load_identity);
         let mut path = vec![0_u16; 32_768];
         // SAFETY: `module` is a live loaded module and `path` is writable for
         // the supplied capacity.
@@ -762,6 +1127,9 @@ fn audit_loaded_windows(
         if is_main {
             let trusted = trusted_main.map(|path| normalize_windows_path(&path.to_string_lossy()));
             if trusted.as_deref() != Some(loaded.as_str()) {
+                return Err(LoadError::DependencyMismatch);
+            }
+            if hash_file(Path::new(&loaded))? != target.library_sha256 {
                 return Err(LoadError::DependencyMismatch);
             }
             continue;
@@ -915,17 +1283,29 @@ const fn is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn copy_and_hash(source: &mut File, destination: &mut File) -> Result<String, LoadError> {
+fn copy_and_hash(
+    source: &mut File,
+    destination: &mut File,
+    expected_bytes: u64,
+) -> Result<String, LoadError> {
     source.seek(SeekFrom::Start(0)).map_err(|_| LoadError::Io)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 16 * 1024];
+    let mut total = 0_u64;
     loop {
         let count = source.read(&mut buffer).map_err(|_| LoadError::Io)?;
         if count == 0 {
             break;
         }
+        total = total
+            .checked_add(u64::try_from(count).map_err(|_| LoadError::Io)?)
+            .filter(|total| *total <= expected_bytes)
+            .ok_or(LoadError::HashMismatch)?;
         digest.update(&buffer[..count]);
         destination.write_all(&buffer[..count]).map_err(|_| LoadError::Io)?;
+    }
+    if total != expected_bytes {
+        return Err(LoadError::HashMismatch);
     }
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -1089,20 +1469,29 @@ mod tests {
     fn dependency_authority_accepts_only_platform_system_names() {
         assert!(dependencies_are_system_only(
             "aarch64-apple-darwin",
-            &["/usr/lib/libSystem.B.dylib".into()]
+            &[SystemDependency {
+                load_name: "/usr/lib/libSystem.B.dylib".into(),
+                path: Some("/usr/lib/libSystem.B.dylib".into()),
+            }]
         ));
         assert!(!dependencies_are_system_only(
             "aarch64-apple-darwin",
-            &["@rpath/libc++.dylib".into()]
+            &[SystemDependency { load_name: "@rpath/libc++.dylib".into(), path: None }]
         ));
-        assert!(dependencies_are_system_only("x86_64-unknown-linux-gnu", &["libc.so.6".into()]));
+        assert!(dependencies_are_system_only(
+            "x86_64-unknown-linux-gnu",
+            &[SystemDependency { load_name: "libc.so.6".into(), path: None }]
+        ));
         assert!(!dependencies_are_system_only(
             "x86_64-unknown-linux-gnu",
-            &["../libc.so.6".into()]
+            &[SystemDependency { load_name: "../libc.so.6".into(), path: None }]
         ));
         assert!(!dependencies_are_system_only(
             "x86_64-pc-windows-msvc",
-            &["KERNEL32.dll".into(), "kernel32.DLL".into()]
+            &[
+                SystemDependency { load_name: "KERNEL32.dll".into(), path: None },
+                SystemDependency { load_name: "kernel32.DLL".into(), path: None },
+            ]
         ));
     }
 
@@ -1145,6 +1534,57 @@ mod tests {
             true
         }));
         assert!(!observed.get());
+    }
+
+    #[test]
+    fn oversized_native_output_is_rejected_before_value_copy() {
+        let copied = std::sync::atomic::AtomicUsize::new(0);
+        let expected = TensorSpec {
+            name: "y".into(),
+            element_type: ContractElementType::Float32,
+            dimensions: vec![Dimension::Dynamic { min: 1, max: 2 }],
+        };
+        let error = copy_checked_output(&[3], &[1.0, 2.0, 3.0], &expected, || {
+            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .unwrap_err();
+        assert_eq!(error.code().as_str(), "ocr");
+        assert_eq!(copied.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let valid = copy_checked_output(&[2], &[1.0, 2.0], &expected, || {
+            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+        .unwrap();
+        assert_eq!(valid.values, [1.0, 2.0]);
+        assert_eq!(copied.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn explicit_archives_match_preload_binary_authority() {
+        if option_env!("ORT_AUDIT_ALL_ARCHIVES").is_none() {
+            return;
+        }
+        let root = PathBuf::from(std::env::var_os("TEST_SRCDIR").unwrap());
+        let locations = [
+            ("aarch64-apple-darwin", "+downloads+onnxruntime_macos_arm64/lib/libonnxruntime.dylib"),
+            (
+                "aarch64-unknown-linux-gnu",
+                "+downloads+onnxruntime_linux_arm64/lib/libonnxruntime.so.1.29.0",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "+downloads+onnxruntime_linux_x86_64/lib/libonnxruntime.so.1.29.0",
+            ),
+            ("x86_64-pc-windows-msvc", "+downloads+onnxruntime_windows_x86_64/lib/onnxruntime.dll"),
+        ];
+        let authority = authority().unwrap();
+        for (name, location) in locations {
+            let target = authority.targets.get(name).unwrap();
+            let metadata =
+                read_binary_metadata(&root.join(location), target.library_bytes).unwrap();
+            validate_binary_metadata(target, &metadata)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}: {metadata:?}"));
+        }
     }
 
     #[test]

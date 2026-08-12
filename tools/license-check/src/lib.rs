@@ -50,9 +50,29 @@ struct OrtTarget {
     asset: String,
     sha256: String,
     library: String,
+    library_bytes: u64,
+    binary_format: String,
+    binary_architecture: String,
     load_identity: String,
     library_sha256: String,
-    system_dependencies: Vec<String>,
+    rpaths: Vec<String>,
+    system_dependencies: Vec<OrtSystemDependency>,
+    companion_dependencies: Vec<OrtCompanionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtSystemDependency {
+    load_name: String,
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtCompanionDependency {
+    load_name: String,
+    path: String,
+    sha256: String,
 }
 
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
@@ -660,15 +680,7 @@ fn validate_ort_manifest(
         else {
             continue;
         };
-        if !is_safe_model_file_name(&asset.asset)
-            || !is_sha256(&asset.sha256)
-            || !is_safe_relative_path(&asset.library)
-            || !is_safe_model_file_name(&asset.load_identity)
-            || !is_sha256(&asset.library_sha256)
-            || asset.system_dependencies.is_empty()
-            || asset.system_dependencies.iter().any(String::is_empty)
-            || !ort_dependencies_are_system_only(target, &asset.system_dependencies)
-        {
+        if !ort_target_audit_is_valid(target, asset) {
             errors.push(format!("ONNX Runtime target {target} has invalid audited fields"));
         }
         let expected_url = format!(
@@ -689,18 +701,54 @@ fn validate_ort_manifest(
     }
 }
 
-fn ort_dependencies_are_system_only(target: &str, dependencies: &[String]) -> bool {
+fn ort_target_audit_is_valid(target: &str, asset: &OrtTarget) -> bool {
+    is_safe_model_file_name(&asset.asset)
+        && is_sha256(&asset.sha256)
+        && is_safe_relative_path(&asset.library)
+        && asset.library_bytes != 0
+        && asset.library_bytes <= 512 * 1024 * 1024
+        && matches!(asset.binary_format.as_str(), "elf" | "mach-o" | "pe")
+        && matches!(asset.binary_architecture.as_str(), "aarch64" | "x86_64")
+        && match asset.binary_format.as_str() {
+            "elf" | "pe" => is_safe_model_file_name(&asset.load_identity),
+            "mach-o" => {
+                asset.load_identity.strip_prefix("@rpath/").is_some_and(is_safe_model_file_name)
+            }
+            _ => false,
+        }
+        && is_sha256(&asset.library_sha256)
+        && asset.rpaths.len() <= 128
+        && !asset.system_dependencies.is_empty()
+        && !asset.system_dependencies.iter().any(|dependency| {
+            dependency.load_name.is_empty()
+                || dependency.path.as_ref().is_some_and(String::is_empty)
+        })
+        && asset.companion_dependencies.is_empty()
+        && !asset.companion_dependencies.iter().any(|dependency| {
+            dependency.load_name.is_empty()
+                || !is_safe_relative_path(&dependency.path)
+                || !is_sha256(&dependency.sha256)
+        })
+        && ort_dependencies_are_system_only(target, &asset.system_dependencies)
+}
+
+fn ort_dependencies_are_system_only(target: &str, dependencies: &[OrtSystemDependency]) -> bool {
     let mut unique = BTreeSet::new();
     dependencies.iter().all(|dependency| {
         let normalized = if target == "x86_64-pc-windows-msvc" {
-            dependency.to_ascii_lowercase()
+            dependency.load_name.to_ascii_lowercase()
         } else {
-            dependency.clone()
+            dependency.load_name.clone()
         };
         unique.insert(normalized)
             && if target == "aarch64-apple-darwin" {
-                let path = Path::new(dependency);
-                (dependency.starts_with("/System/Library/") || dependency.starts_with("/usr/lib/"))
+                let Some(expected_path) = dependency.path.as_deref() else {
+                    return false;
+                };
+                let path = Path::new(expected_path);
+                expected_path == dependency.load_name
+                    && (expected_path.starts_with("/System/Library/")
+                        || expected_path.starts_with("/usr/lib/"))
                     && path.components().all(|component| {
                         matches!(
                             component,
@@ -708,7 +756,7 @@ fn ort_dependencies_are_system_only(target: &str, dependencies: &[String]) -> bo
                         )
                     })
             } else {
-                is_safe_model_file_name(dependency)
+                dependency.path.is_none() && is_safe_model_file_name(&dependency.load_name)
             }
     })
 }
@@ -1217,6 +1265,10 @@ mod tests {
         (artifact, download)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "four-platform authority fixture is intentionally explicit"
+    )]
     fn ort_fixture() -> (OrtManifest, Inventory, DownloadManifest) {
         let version = "1.2.3";
         let target_repositories = [
@@ -1235,15 +1287,50 @@ mod tests {
                     asset: asset.to_owned(),
                     sha256: sha256.clone(),
                     library: "lib/libonnxruntime.so".to_owned(),
-                    load_identity: "libonnxruntime.so.1".to_owned(),
-                    library_sha256: marker.to_string().repeat(64),
-                    system_dependencies: vec![if target == "aarch64-apple-darwin" {
-                        "/usr/lib/libSystem.B.dylib".to_owned()
+                    library_bytes: 1024,
+                    binary_format: if target == "aarch64-apple-darwin" {
+                        "mach-o"
                     } else if target == "x86_64-pc-windows-msvc" {
-                        "KERNEL32.dll".to_owned()
+                        "pe"
                     } else {
-                        "libc.so.6".to_owned()
+                        "elf"
+                    }
+                    .to_owned(),
+                    binary_architecture: if target.starts_with("aarch64") {
+                        "aarch64"
+                    } else {
+                        "x86_64"
+                    }
+                    .to_owned(),
+                    load_identity: if target == "aarch64-apple-darwin" {
+                        "@rpath/libonnxruntime.1.dylib"
+                    } else if target == "x86_64-pc-windows-msvc" {
+                        "onnxruntime.dll"
+                    } else {
+                        "libonnxruntime.so.1"
+                    }
+                    .to_owned(),
+                    library_sha256: marker.to_string().repeat(64),
+                    rpaths: if target == "aarch64-apple-darwin" {
+                        vec!["@loader_path".to_owned()]
+                    } else if target.ends_with("linux-gnu") {
+                        vec!["$ORIGIN".to_owned()]
+                    } else {
+                        Vec::new()
+                    },
+                    system_dependencies: vec![OrtSystemDependency {
+                        load_name: if target == "aarch64-apple-darwin" {
+                            "/usr/lib/libSystem.B.dylib"
+                        } else if target == "x86_64-pc-windows-msvc" {
+                            "KERNEL32.dll"
+                        } else {
+                            "libc.so.6"
+                        }
+                        .to_owned(),
+                        path: (target == "aarch64-apple-darwin")
+                            .then(|| "/usr/lib/libSystem.B.dylib".to_owned()),
                     }],
+                    companion_dependencies: Vec::new(),
                 },
             );
             native_archives.push(NativeDownload {
@@ -1444,8 +1531,10 @@ version = "9.9.9"
         }
 
         let (mut manifest, inventory, downloads) = ort_fixture();
-        manifest.targets.get_mut("aarch64-apple-darwin").unwrap().system_dependencies =
-            vec!["relative.dylib".into(), "relative.dylib".into()];
+        manifest.targets.get_mut("aarch64-apple-darwin").unwrap().system_dependencies = vec![
+            OrtSystemDependency { load_name: "relative.dylib".into(), path: None },
+            OrtSystemDependency { load_name: "relative.dylib".into(), path: None },
+        ];
         manifest.targets.get_mut("x86_64-pc-windows-msvc").unwrap().load_identity =
             "../onnxruntime.dll".into();
         let mut errors = Vec::new();

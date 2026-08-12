@@ -24,9 +24,10 @@ use std::path::{Component, Path, PathBuf};
 mod runtime;
 
 pub use runtime::{
-    CacheLimits, Dimension, ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata,
-    ModelResolver, OnnxRuntime, ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory,
-    SessionOptions, TensorElementType, TensorSpec,
+    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,
+    ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime,
+    ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory, SessionOptions,
+    TensorElementType, TensorSpec,
 };
 
 const SUPPORTED_TARGETS: [&str; 4] = [
@@ -119,9 +120,29 @@ struct OrtTarget {
     asset: String,
     sha256: String,
     library: String,
+    library_bytes: u64,
+    binary_format: String,
+    binary_architecture: String,
     load_identity: String,
     library_sha256: String,
-    system_dependencies: Vec<String>,
+    rpaths: Vec<String>,
+    system_dependencies: Vec<OrtSystemDependency>,
+    companion_dependencies: Vec<OrtCompanionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtSystemDependency {
+    load_name: String,
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtCompanionDependency {
+    load_name: String,
+    path: String,
+    sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -435,10 +456,34 @@ fn validate_native_downloads(
         validate_file_name(&target.asset)?;
         validate_hash(&target.sha256)?;
         validate_relative_path(&target.library)?;
-        validate_file_name(&target.load_identity)?;
+        if target.library_bytes == 0
+            || target.library_bytes > 512 * 1024 * 1024
+            || !matches!(target.binary_format.as_str(), "elf" | "mach-o" | "pe")
+            || !matches!(target.binary_architecture.as_str(), "aarch64" | "x86_64")
+            || !match target.binary_format.as_str() {
+                "elf" | "pe" => validate_file_name(&target.load_identity).is_ok(),
+                "mach-o" => target
+                    .load_identity
+                    .strip_prefix("@rpath/")
+                    .is_some_and(|name| validate_file_name(name).is_ok()),
+                _ => false,
+            }
+            || target.rpaths.len() > 128
+        {
+            return Err(invalid_manifest("invalid ONNX Runtime binary audit"));
+        }
         validate_hash(&target.library_sha256)?;
         if target.system_dependencies.is_empty()
-            || target.system_dependencies.iter().any(String::is_empty)
+            || target.system_dependencies.iter().any(|dependency| {
+                dependency.load_name.is_empty()
+                    || dependency.path.as_ref().is_some_and(String::is_empty)
+            })
+            || target.companion_dependencies.iter().any(|dependency| {
+                dependency.load_name.is_empty()
+                    || validate_relative_path(&dependency.path).is_err()
+                    || validate_hash(&dependency.sha256).is_err()
+            })
+            || !target.companion_dependencies.is_empty()
         {
             return Err(invalid_manifest("invalid ONNX Runtime dependency audit"));
         }

@@ -69,3 +69,27 @@ rust_test(
     ] + all_crate_deps(normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
 )
+
+# Explicit cross-package header audit. It parses every official CPU binary and
+# compares architecture, SONAME/install-name, imports, and rpaths with the
+# authority before any platform loader or constructor can run.
+rust_test(
+    name = "native_archive_binary_audit",
+    crate = ":onnxruntime",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    data = [
+        "//third_party/onnxruntime:linux_arm64",
+        "//third_party/onnxruntime:linux_x86_64",
+        "//third_party/onnxruntime:macos_arm64",
+        "//third_party/onnxruntime:windows_x86_64",
+    ],
+    edition = "2024",
+    rustc_env = {"ORT_AUDIT_ALL_ARCHIVES": "1"},
+    tags = ["manual"],
+    deps = [
+        "//crates/core",
+        "//crates/ocr",
+    ] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

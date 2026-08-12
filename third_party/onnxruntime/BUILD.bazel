@@ -28,6 +28,7 @@ filegroup(
     name = "linux_arm64",
     srcs = ["@onnxruntime_linux_arm64//:lib/libonnxruntime.so.1.29.0"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
@@ -47,16 +48,19 @@ filegroup(
     name = "linux_x86_64",
     srcs = ["@onnxruntime_linux_x86_64//:lib/libonnxruntime.so.1.29.0"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
     name = "macos_arm64",
     srcs = ["@onnxruntime_macos_arm64//:lib/libonnxruntime.dylib"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
     name = "windows_x86_64",
     srcs = ["@onnxruntime_windows_x86_64//:lib/onnxruntime.dll"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )

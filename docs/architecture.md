@@ -146,3 +146,6 @@ stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EP
 bytes，预算直到底层 session 的最后一个 `Arc` 完成析构才释放；因此在途 clone 不会因
 LRU eviction 被误算为空闲。加载失败、panic 或取消会同时移除 loading entry 和预留，
 不会污染缓存。GPU 仅保留独立构建 feature 名称，默认 CPU artifact 不包含 GPU provider。
+张量边界统一限制每侧 64 个名称、256 字节名称和 rank 16；run 预算覆盖输入值/shape
+副本、调用槽位、native 最大输出、返回值/shape 副本和 scratch。真实 adapter 借用
+authority 中的输入名，原生输出在 shape/元素/字节契约校验通过后才分配 Rust 返回 `Vec`。

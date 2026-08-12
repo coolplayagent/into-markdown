@@ -33,6 +33,7 @@ getrandom = "0.4.3"
 globset = "0.4.16"
 libc = "0.2.189"
 libloading = "0.9.0"
+object = { version = "=0.40.0", default-features = false, features = ["read", "std"] }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "alternative-backend", "api-28"] }
 pulldown-cmark = "=0.13.4"
 quick-xml = "=0.38.3"

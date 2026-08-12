@@ -82,6 +82,11 @@ x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称
 显式 native target 会用完整的极小 Identity `ModelProto` 创建真实 ORT session 并执行一次
 CPU 推理，以验证 adapter、factory 重建和退出析构顺序。该 fixture 不是产品 OCR 模型；
 当前模型 authority 没有 ONNX runtime artifact，因而没有产品模型推理验证。
+独立 `native_archive_binary_audit` 显式 target 会下载四个固定官方包，但不执行异平台
+代码；它有界解析并精确核对四个平台的格式、架构、SONAME/install name、imports 与
+RPATH。macOS ARM64 的独立 native smoke 还在子进程内验证加载、禁 telemetry、factory
+析构后的再次建 session/推理与退出析构顺序。普通 `//...` 不包含这些 manual targets。
+native adapter 的 oversized-output hook 断言 shape 超出 authority 时值复制计数保持为零。
 
 常用定向命令如下：
 

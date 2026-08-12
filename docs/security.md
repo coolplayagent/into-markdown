@@ -48,9 +48,13 @@
   reparse point，源文件以 no-follow handle 打开并核对文件身份，再按 authority 中的
   解包动态库 SHA-256 复制到进程私有目录。只有该私有副本会进入动态加载器；加载后
   `GetVersionString` 必须与 authority 版本完全相等，且 `GetApi` 必须接受 authority 的
-  C API level。authority 同时记录从固定官方二进制审计得到的 `NEEDED`、
-  `LC_LOAD_DYLIB` 或 PE import 系统依赖闭包；Unix 在加载前拒绝 loader 环境变量及已加载
-  的同名非系统对象，私有目录只含主库，Windows 使用
+  C API level。authority 同时记录固定文件大小、格式、架构、SONAME/install name、
+  `NEEDED`/`LC_LOAD_DYLIB`/PE import、RPATH/RUNPATH 和 companion 的相对路径与哈希。
+  loader 在 `dlopen`/`LoadLibraryExW` 以及任何 native constructor 前用受审 `object`
+  parser 对实际主库做有界解析，与 authority 双向精确比对；只接受私有目录语义明确的
+  `$ORIGIN` 或 `@loader_path`，当前官方 CPU 包没有 companion。Unix 同时拒绝 loader
+  环境变量，并以已加载对象的真实 SONAME/install name 和文件哈希审计冲突，而非按
+  basename 推断；私有目录只含主库，Windows 使用
   `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`。主库 load identity
   已在进程中出现时同样拒绝，防止 loader 复用任意同名对象。动态句柄、API table 与
   ORT 环境固定为进程生命周期，只允许一个 authority identity；已有全局 ORT 配置、
@@ -97,7 +101,11 @@ memory pattern；CPU arena 默认关闭并可经 C API 显式设置。模型 aut
 保守的 session 与每次 run 上界；session 上界在 loading 前按 live count/bytes 计入缓存，
 不会因仍在使用的条目被移出 LRU 而提前释放。这里是保守的逻辑预算，不声称测量 ORT
 物理 RSS；arena 关闭、模型上界和 run 上界共同约束未直接暴露的 native 分配。
-`ExecutionContext` 在克隆输入前预留输入副本与 ORT backing，在执行前按输出 contract
-的最大 shape 预留 native 输出与 `to_vec` 副本，并全程持有 run scratch 预算；无最大值
+`ExecutionContext` 在克隆输入前预留输入值/shape 副本、输入槽位与 ORT backing，在执行前
+按输出 contract 的最大 shape 预留 native 输出、返回值/shape 副本，并全程持有 run scratch
+预算；contract metadata 的名称、shape 和结构容量计入 session 上界。输入/输出各最多 64
+个，名称最多 256 UTF-8 字节，rank 最多 16；所有元素数和字节数用 checked arithmetic。
+ORT 返回后先从 native view 读取有界 shape，并在任何 Rust 输出 `Vec` 分配或值复制前验证
+Exact/Dynamic 上界、元素数和字节数；越界时直接释放 native tensor 并返回稳定错误。无最大值
 的动态维度不是合法 contract。创建前后、等待 single-flight、推理前后均检查取消和
 deadline；推理期间监控线程把失败 checkpoint 连接到 ORT `RunOptions::terminate`。
