@@ -6,6 +6,44 @@ use thiserror::Error;
 /// JSON schema version emitted and accepted by this library.
 pub const DOCUMENT_SCHEMA_VERSION: u32 = 1;
 
+/// Maximum nested block-node depth accepted by the default validator.
+pub const MAX_DOCUMENT_DEPTH: usize = 16;
+/// Maximum structural-node count accepted by the default validator.
+pub const MAX_DOCUMENT_NODES: usize = 100_000;
+/// Maximum inline-node count accepted by the default validator.
+pub const MAX_DOCUMENT_INLINES: usize = 1_000_000;
+/// Maximum UTF-8 JSON input size accepted by the default decoder.
+pub const MAX_DOCUMENT_JSON_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum logical column count accepted for one table.
+pub const MAX_TABLE_COLUMNS: usize = 16_384;
+
+/// Structural budgets applied while validating untrusted document IR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidationLimits {
+    /// Maximum nested block-node depth; document-root nodes have depth one.
+    pub max_depth: usize,
+    /// Maximum number of block, list-item, table-row, and table-cell nodes.
+    pub max_nodes: usize,
+    /// Maximum number of inline nodes across the document.
+    pub max_inlines: usize,
+    /// Maximum UTF-8 byte length accepted by the JSON decoder.
+    pub max_json_bytes: usize,
+    /// Maximum logical width of any table.
+    pub max_table_columns: usize,
+}
+
+impl Default for ValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: MAX_DOCUMENT_DEPTH,
+            max_nodes: MAX_DOCUMENT_NODES,
+            max_inlines: MAX_DOCUMENT_INLINES,
+            max_json_bytes: MAX_DOCUMENT_JSON_BYTES,
+            max_table_columns: MAX_TABLE_COLUMNS,
+        }
+    }
+}
+
 /// Stable categories returned while decoding or validating document IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +61,8 @@ pub enum IrErrorCode {
     InvalidLocator,
     /// A document-scoped node identifier occurs more than once.
     DuplicateNodeId,
+    /// A structural validation budget was exceeded.
+    ResourceLimit,
 }
 
 impl IrErrorCode {
@@ -36,6 +76,7 @@ impl IrErrorCode {
             Self::InvalidProvenance => "invalidProvenance",
             Self::InvalidLocator => "invalidLocator",
             Self::DuplicateNodeId => "duplicateNodeId",
+            Self::ResourceLimit => "resourceLimit",
         }
     }
 }
@@ -115,7 +156,7 @@ pub struct SourceLocator {
     pub bounds: Option<Rect>,
     /// Media time range.
     pub time: Option<TimeRange>,
-    /// Format-specific part name that is safe to expose.
+    /// Safe container-relative part name, using `/` separators.
     pub part: Option<String>,
 }
 
@@ -441,6 +482,19 @@ impl Document {
     /// Returns [`IrErrorCode::InvalidJson`] for malformed JSON/schema shapes,
     /// or the applicable validation code for invalid IR.
     pub fn from_json(json: &str) -> Result<Self, IrError> {
+        Self::from_json_with_limits(json, &ValidationLimits::default())
+    }
+
+    /// Decode and validate a document with explicit structural budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same stable errors as [`Self::from_json`], including
+    /// [`IrErrorCode::ResourceLimit`] when a supplied budget is exceeded.
+    pub fn from_json_with_limits(json: &str, limits: &ValidationLimits) -> Result<Self, IrError> {
+        if json.len() > limits.max_json_bytes {
+            return resource_limit("$", "documentJsonBytes", limits.max_json_bytes);
+        }
         let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
             IrError::new(IrErrorCode::InvalidJson, "$", format!("decode document: {error}"))
         })?;
@@ -462,7 +516,7 @@ impl Document {
         let document: Self = serde_json::from_value(value).map_err(|error| {
             IrError::new(IrErrorCode::InvalidJson, "$", format!("decode document: {error}"))
         })?;
-        document.validate()?;
+        document.validate_with_limits(limits)?;
         Ok(document)
     }
 
@@ -472,6 +526,16 @@ impl Document {
     ///
     /// Returns a stable, path-addressed [`IrError`] without panicking.
     pub fn validate(&self) -> Result<(), IrError> {
+        self.validate_with_limits(&ValidationLimits::default())
+    }
+
+    /// Validate all IR invariants with explicit structural budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, path-addressed [`IrError`], including
+    /// [`IrErrorCode::ResourceLimit`] when a budget is exceeded.
+    pub fn validate_with_limits(&self, limits: &ValidationLimits) -> Result<(), IrError> {
         if self.schema_version != DOCUMENT_SCHEMA_VERSION {
             return Err(IrError::new(
                 IrErrorCode::UnsupportedSchemaVersion,
@@ -479,32 +543,49 @@ impl Document {
                 format!("expected {DOCUMENT_SCHEMA_VERSION}, got {}", self.schema_version),
             ));
         }
-        let mut node_ids = BTreeSet::new();
-        let mut footnotes = BTreeSet::new();
-        let mut footnote_references = BTreeSet::new();
-        validate_nodes(
-            &self.blocks,
-            "$.blocks",
-            &mut node_ids,
-            &mut footnotes,
-            &mut footnote_references,
-        )?;
-        if let Some(label) = footnote_references.difference(&footnotes).next() {
+        let mut state = ValidationState::new(limits);
+        validate_nodes(&self.blocks, "$.blocks", 1, &mut state)?;
+        if let Some(label) = state.footnote_references.difference(&state.footnotes).next() {
             return invalid_node("$.blocks", format!("undefined footnote reference {label}"));
         }
         Ok(())
     }
 }
 
+struct ValidationState<'a> {
+    limits: &'a ValidationLimits,
+    node_count: usize,
+    inline_count: usize,
+    node_ids: BTreeSet<String>,
+    footnotes: BTreeSet<String>,
+    footnote_references: BTreeSet<String>,
+}
+
+impl<'a> ValidationState<'a> {
+    fn new(limits: &'a ValidationLimits) -> Self {
+        Self {
+            limits,
+            node_count: 0,
+            inline_count: 0,
+            node_ids: BTreeSet::new(),
+            footnotes: BTreeSet::new(),
+            footnote_references: BTreeSet::new(),
+        }
+    }
+}
+
 fn validate_nodes(
     nodes: &[BlockNode],
     path: &str,
-    node_ids: &mut BTreeSet<String>,
-    footnotes: &mut BTreeSet<String>,
-    footnote_references: &mut BTreeSet<String>,
+    depth: usize,
+    state: &mut ValidationState<'_>,
 ) -> Result<(), IrError> {
+    if !nodes.is_empty() && depth > state.limits.max_depth {
+        return resource_limit(path, "documentDepth", state.limits.max_depth);
+    }
     for (index, node) in nodes.iter().enumerate() {
         let node_path = format!("{path}[{index}]");
+        consume_structural_node(state, &node_path)?;
         if node.id.0.trim().is_empty() {
             return Err(IrError::new(
                 IrErrorCode::InvalidNode,
@@ -512,7 +593,7 @@ fn validate_nodes(
                 "node ID must not be empty",
             ));
         }
-        if !node_ids.insert(node.id.0.clone()) {
+        if !state.node_ids.insert(node.id.0.clone()) {
             return Err(IrError::new(
                 IrErrorCode::DuplicateNodeId,
                 format!("{node_path}.id"),
@@ -520,13 +601,7 @@ fn validate_nodes(
             ));
         }
         validate_provenance(&node.provenance, &format!("{node_path}.provenance"))?;
-        validate_block(
-            &node.block,
-            &format!("{node_path}.block"),
-            node_ids,
-            footnotes,
-            footnote_references,
-        )?;
+        validate_block(&node.block, &format!("{node_path}.block"), depth, state)?;
     }
     Ok(())
 }
@@ -604,11 +679,26 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> 
             "time range start must precede end",
         ));
     }
-    if locator.part.as_ref().is_some_and(|value| value.trim().is_empty()) {
+    if let Some(part) = &locator.part {
+        validate_part_name(part, &format!("{path}.part"))?;
+    }
+    Ok(())
+}
+
+fn validate_part_name(part: &str, path: &str) -> Result<(), IrError> {
+    let has_drive_prefix = part.as_bytes().get(1) == Some(&b':')
+        && part.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    let invalid = part.is_empty()
+        || part.starts_with('/')
+        || has_drive_prefix
+        || part.contains('\\')
+        || part.chars().any(char::is_control)
+        || part.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | ".."));
+    if invalid {
         return Err(IrError::new(
             IrErrorCode::InvalidLocator,
-            format!("{path}.part"),
-            "part name must not be empty",
+            path,
+            "part must be a safe container-relative path",
         ));
     }
     Ok(())
@@ -617,26 +707,23 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> 
 fn validate_block(
     block: &Block,
     path: &str,
-    node_ids: &mut BTreeSet<String>,
-    footnotes: &mut BTreeSet<String>,
-    footnote_references: &mut BTreeSet<String>,
+    depth: usize,
+    state: &mut ValidationState<'_>,
 ) -> Result<(), IrError> {
     match block {
         Block::Paragraph(content) => {
-            validate_inlines(content, &format!("{path}.data"), false, footnote_references)
+            validate_inlines(content, &format!("{path}.data"), false, state)
         }
         Block::Heading { level, content } => {
             if !(1..=6).contains(level) {
                 return invalid_node(format!("{path}.data.level"), "heading level must be 1..=6");
             }
-            validate_inlines(content, &format!("{path}.data.content"), false, footnote_references)
+            validate_inlines(content, &format!("{path}.data.content"), false, state)
         }
         Block::List { kind, start, items } => {
-            validate_list(*kind, *start, items, path, node_ids, footnotes, footnote_references)
+            validate_list(*kind, *start, items, path, depth, state)
         }
-        Block::Table { rows } => {
-            validate_table(rows, path, node_ids, footnotes, footnote_references)
-        }
+        Block::Table { rows } => validate_table(rows, path, depth, state),
         Block::Code { language, .. } => {
             if language.as_ref().is_some_and(|value| value.trim().is_empty()) {
                 return invalid_node(
@@ -649,50 +736,26 @@ fn validate_block(
         Block::Formula(value) => nonempty(value, &format!("{path}.data"), "formula"),
         Block::Footnote { label, blocks } => {
             nonempty(label, &format!("{path}.data.label"), "footnote label")?;
-            if !footnotes.insert(label.clone()) {
+            if !state.footnotes.insert(label.clone()) {
                 return invalid_node(
                     format!("{path}.data.label"),
                     format!("duplicate footnote label {label}"),
                 );
             }
-            validate_nodes(
-                blocks,
-                &format!("{path}.data.blocks"),
-                node_ids,
-                footnotes,
-                footnote_references,
-            )
+            validate_nodes(blocks, &format!("{path}.data.blocks"), depth + 1, state)
         }
         Block::Image { asset, .. } => nonempty(&asset.0, &format!("{path}.data.asset"), "asset ID"),
         Block::Page { number, blocks } => {
             positive(*number, &format!("{path}.data.number"), "page number")?;
-            validate_nodes(
-                blocks,
-                &format!("{path}.data.blocks"),
-                node_ids,
-                footnotes,
-                footnote_references,
-            )
+            validate_nodes(blocks, &format!("{path}.data.blocks"), depth + 1, state)
         }
         Block::Slide { number, blocks, .. } => {
             positive(*number, &format!("{path}.data.number"), "slide number")?;
-            validate_nodes(
-                blocks,
-                &format!("{path}.data.blocks"),
-                node_ids,
-                footnotes,
-                footnote_references,
-            )
+            validate_nodes(blocks, &format!("{path}.data.blocks"), depth + 1, state)
         }
         Block::Sheet { name, blocks } => {
             nonempty(name, &format!("{path}.data.name"), "worksheet name")?;
-            validate_nodes(
-                blocks,
-                &format!("{path}.data.blocks"),
-                node_ids,
-                footnotes,
-                footnote_references,
-            )
+            validate_nodes(blocks, &format!("{path}.data.blocks"), depth + 1, state)
         }
         Block::TimedSegment { range, content, .. } => {
             if range.start_ms >= range.end_ms {
@@ -701,7 +764,7 @@ fn validate_block(
                     "time range start must precede end",
                 );
             }
-            validate_inlines(content, &format!("{path}.data.content"), false, footnote_references)
+            validate_inlines(content, &format!("{path}.data.content"), false, state)
         }
         Block::Rule => Ok(()),
     }
@@ -712,9 +775,8 @@ fn validate_list(
     start: u64,
     items: &[ListItem],
     path: &str,
-    node_ids: &mut BTreeSet<String>,
-    footnotes: &mut BTreeSet<String>,
-    footnote_references: &mut BTreeSet<String>,
+    depth: usize,
+    state: &mut ValidationState<'_>,
 ) -> Result<(), IrError> {
     if items.is_empty() {
         return invalid_node(format!("{path}.data.items"), "list must contain an item");
@@ -724,19 +786,14 @@ fn validate_list(
     }
     for (index, item) in items.iter().enumerate() {
         let item_path = format!("{path}.data.items[{index}]");
+        consume_structural_node(state, &item_path)?;
         if (kind == ListKind::Task) != item.checked.is_some() {
             return invalid_node(
                 format!("{item_path}.checked"),
                 "checked must be present only for task-list items",
             );
         }
-        validate_nodes(
-            &item.blocks,
-            &format!("{item_path}.blocks"),
-            node_ids,
-            footnotes,
-            footnote_references,
-        )?;
+        validate_nodes(&item.blocks, &format!("{item_path}.blocks"), depth + 1, state)?;
     }
     Ok(())
 }
@@ -744,36 +801,87 @@ fn validate_list(
 fn validate_table(
     rows: &[TableRow],
     path: &str,
-    node_ids: &mut BTreeSet<String>,
-    footnotes: &mut BTreeSet<String>,
-    footnote_references: &mut BTreeSet<String>,
+    depth: usize,
+    state: &mut ValidationState<'_>,
 ) -> Result<(), IrError> {
     if rows.is_empty() {
         return invalid_node(format!("{path}.data.rows"), "table must contain a row");
     }
+    let mut occupancy = Vec::<u32>::new();
+    let mut table_width = None;
     for (row_index, row) in rows.iter().enumerate() {
-        if row.cells.is_empty() {
-            return invalid_node(
-                format!("{path}.data.rows[{row_index}].cells"),
-                "table row must contain a cell",
-            );
-        }
+        let row_path = format!("{path}.data.rows[{row_index}]");
+        consume_structural_node(state, &row_path)?;
+        let mut column = 0_usize;
         for (cell_index, cell) in row.cells.iter().enumerate() {
-            let cell_path = format!("{path}.data.rows[{row_index}].cells[{cell_index}]");
+            while occupancy.get(column).is_some_and(|remaining| *remaining > 0) {
+                column += 1;
+            }
+            let cell_path = format!("{row_path}.cells[{cell_index}]");
+            consume_structural_node(state, &cell_path)?;
             if cell.row_span == 0 || cell.column_span == 0 {
                 return invalid_node(
                     format!("{cell_path}.rowSpan"),
                     "table spans must be positive",
                 );
             }
-            validate_nodes(
-                &cell.blocks,
-                &format!("{cell_path}.blocks"),
-                node_ids,
-                footnotes,
-                footnote_references,
-            )?;
+            let column_span = usize::try_from(cell.column_span).map_err(|_| {
+                IrError::new(
+                    IrErrorCode::ResourceLimit,
+                    format!("{cell_path}.columnSpan"),
+                    "column span cannot be represented on this platform",
+                )
+            })?;
+            let end = column.checked_add(column_span).ok_or_else(|| {
+                IrError::new(
+                    IrErrorCode::ResourceLimit,
+                    format!("{cell_path}.columnSpan"),
+                    "logical table width overflowed",
+                )
+            })?;
+            if end > state.limits.max_table_columns {
+                return resource_limit(
+                    format!("{cell_path}.columnSpan"),
+                    "tableColumns",
+                    state.limits.max_table_columns,
+                );
+            }
+            if table_width.is_some_and(|width| end > width) {
+                return invalid_node(
+                    format!("{cell_path}.columnSpan"),
+                    "cell extends beyond the table's logical width",
+                );
+            }
+            if occupancy.get(column..end).is_some_and(|slots| slots.iter().any(|value| *value > 0))
+            {
+                return invalid_node(
+                    format!("{cell_path}.columnSpan"),
+                    "cell overlaps a row-spanning cell",
+                );
+            }
+            if occupancy.len() < end {
+                occupancy.resize(end, 0);
+            }
+            occupancy[column..end].fill(cell.row_span);
+            column = end;
+            validate_nodes(&cell.blocks, &format!("{cell_path}.blocks"), depth + 1, state)?;
         }
+        let width = *table_width.get_or_insert(occupancy.len());
+        if width == 0 {
+            return invalid_node(format!("{row_path}.cells"), "table must have a logical column");
+        }
+        if occupancy.len() != width || occupancy.contains(&0) {
+            return invalid_node(row_path, "table rows must have the same logical width");
+        }
+        for remaining in &mut occupancy {
+            *remaining -= 1;
+        }
+    }
+    if occupancy.iter().any(|remaining| *remaining > 0) {
+        return invalid_node(
+            format!("{path}.data.rows"),
+            "row span extends beyond the final table row",
+        );
     }
     Ok(())
 }
@@ -782,10 +890,14 @@ fn validate_inlines(
     content: &[Inline],
     path: &str,
     inside_link: bool,
-    footnote_references: &mut BTreeSet<String>,
+    state: &mut ValidationState<'_>,
 ) -> Result<(), IrError> {
     for (index, inline) in content.iter().enumerate() {
         let inline_path = format!("{path}[{index}]");
+        state.inline_count = state.inline_count.saturating_add(1);
+        if state.inline_count > state.limits.max_inlines {
+            return resource_limit(&inline_path, "documentInlines", state.limits.max_inlines);
+        }
         match inline {
             Inline::Text { marks, .. } => {
                 let unique = marks.iter().copied().collect::<BTreeSet<_>>();
@@ -810,17 +922,12 @@ fn validate_inlines(
                 if inside_link {
                     return invalid_node(inline_path, "links must not be nested");
                 }
-                validate_inlines(
-                    content,
-                    &format!("{inline_path}.data.content"),
-                    true,
-                    footnote_references,
-                )?;
+                validate_inlines(content, &format!("{inline_path}.data.content"), true, state)?;
             }
             Inline::Formula(value) => nonempty(value, &format!("{inline_path}.data"), "formula")?,
             Inline::FootnoteReference(label) => {
                 nonempty(label, &format!("{inline_path}.data"), "footnote reference")?;
-                footnote_references.insert(label.clone());
+                state.footnote_references.insert(label.clone());
             }
         }
     }
@@ -841,6 +948,23 @@ fn nonempty(value: &str, path: &str, label: &str) -> Result<(), IrError> {
 
 fn invalid_node<T>(path: impl Into<String>, detail: impl Into<String>) -> Result<T, IrError> {
     Err(IrError::new(IrErrorCode::InvalidNode, path, detail))
+}
+
+fn resource_limit<T>(path: impl Into<String>, limit: &str, maximum: usize) -> Result<T, IrError> {
+    Err(IrError::new(
+        IrErrorCode::ResourceLimit,
+        path,
+        format!("{limit} limit exceeded (maximum {maximum})"),
+    ))
+}
+
+fn consume_structural_node(state: &mut ValidationState<'_>, path: &str) -> Result<(), IrError> {
+    state.node_count = state.node_count.saturating_add(1);
+    if state.node_count > state.limits.max_nodes {
+        resource_limit(path, "documentNodes", state.limits.max_nodes)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1125,5 +1249,155 @@ mod tests {
             let document = Document { blocks: vec![node("invalid", block)], ..Document::default() };
             assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidNode);
         }
+    }
+
+    #[test]
+    fn part_names_are_safe_container_relative_paths() {
+        for part in [
+            "word/document.xml",
+            "word/_rels/document.xml.rels",
+            "META-INF/manifest.xml",
+            "[Content_Types].xml",
+        ] {
+            let mut document =
+                Document { blocks: vec![node("part", Block::Rule)], ..Document::default() };
+            document.blocks[0].provenance.locator.part = Some(part.into());
+            assert!(document.validate().is_ok(), "rejected safe part {part}");
+        }
+
+        for part in [
+            "",
+            "/word/document.xml",
+            "//server/share.xml",
+            "C:/word/document.xml",
+            "word\\document.xml",
+            "word//document.xml",
+            "word/./document.xml",
+            "word/../document.xml",
+            "word/document.xml/",
+            "word/\0document.xml",
+            "word/\ndocument.xml",
+        ] {
+            let mut document =
+                Document { blocks: vec![node("part", Block::Rule)], ..Document::default() };
+            document.blocks[0].provenance.locator.part = Some(part.into());
+            let error = document.validate().unwrap_err();
+            assert_eq!(error.code, IrErrorCode::InvalidLocator, "accepted unsafe part {part:?}");
+            assert_eq!(error.path, "$.blocks[0].provenance.locator.part");
+        }
+    }
+
+    #[test]
+    fn structural_budgets_return_stable_errors() {
+        let mut nested = node("depth-0", Block::Paragraph(vec![]));
+        for level in 1..=3 {
+            nested =
+                node(&format!("depth-{level}"), Block::Page { number: 1, blocks: vec![nested] });
+        }
+        let document = Document { blocks: vec![nested], ..Document::default() };
+        let limits = ValidationLimits { max_depth: 3, ..ValidationLimits::default() };
+        let error = document.validate_with_limits(&limits).unwrap_err();
+        assert_eq!(error.code, IrErrorCode::ResourceLimit);
+        assert_eq!(error.code.as_str(), "resourceLimit");
+        assert!(error.path.contains(".blocks"));
+        let json = document.to_json().unwrap();
+        assert_eq!(
+            Document::from_json_with_limits(&json, &limits).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
+
+        let mut default_limited = node("default-depth-0", Block::Paragraph(vec![]));
+        for level in 1..=MAX_DOCUMENT_DEPTH {
+            default_limited = node(
+                &format!("default-depth-{level}"),
+                Block::Page { number: 1, blocks: vec![default_limited] },
+            );
+        }
+        let default_limited = Document { blocks: vec![default_limited], ..Document::default() };
+        assert_eq!(default_limited.validate().unwrap_err().code, IrErrorCode::ResourceLimit);
+        let json = serde_json::to_string(&default_limited).unwrap();
+        assert_eq!(Document::from_json(&json).unwrap_err().code, IrErrorCode::ResourceLimit);
+
+        let document = Document {
+            blocks: vec![node("one", Block::Rule), node("two", Block::Rule)],
+            ..Document::default()
+        };
+        let limits = ValidationLimits { max_nodes: 1, ..ValidationLimits::default() };
+        assert_eq!(
+            document.validate_with_limits(&limits).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
+
+        let document = Document {
+            blocks: vec![node(
+                "inline",
+                Block::Paragraph(vec![Inline::LineBreak, Inline::LineBreak]),
+            )],
+            ..Document::default()
+        };
+        let limits = ValidationLimits { max_inlines: 1, ..ValidationLimits::default() };
+        assert_eq!(
+            document.validate_with_limits(&limits).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
+
+        let json = Document::default().to_json().unwrap();
+        let limits =
+            ValidationLimits { max_json_bytes: json.len() - 1, ..ValidationLimits::default() };
+        assert_eq!(
+            Document::from_json_with_limits(&json, &limits).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
+    }
+
+    fn cell(row_span: u32, column_span: u32) -> Cell {
+        Cell { row_span, column_span, header: false, blocks: vec![] }
+    }
+
+    fn table_document(rows: Vec<TableRow>) -> Document {
+        Document { blocks: vec![node("table-grid", Block::Table { rows })], ..Document::default() }
+    }
+
+    #[test]
+    fn table_grid_accepts_consistent_column_and_row_spans() {
+        let document = table_document(vec![
+            TableRow { cells: vec![cell(2, 1), cell(1, 2)] },
+            TableRow { cells: vec![cell(1, 2)] },
+            TableRow { cells: vec![cell(1, 3)] },
+        ]);
+        assert!(document.validate().is_ok());
+
+        let fully_spanned_row =
+            table_document(vec![TableRow { cells: vec![cell(2, 1)] }, TableRow { cells: vec![] }]);
+        assert!(fully_spanned_row.validate().is_ok());
+    }
+
+    #[test]
+    fn table_grid_rejects_inconsistent_width_overlap_and_out_of_bounds_spans() {
+        let invalid_tables = [
+            table_document(vec![
+                TableRow { cells: vec![cell(1, 2)] },
+                TableRow { cells: vec![cell(1, 1)] },
+            ]),
+            table_document(vec![
+                TableRow { cells: vec![cell(1, 1), cell(2, 1)] },
+                TableRow { cells: vec![cell(1, 2)] },
+            ]),
+            table_document(vec![
+                TableRow { cells: vec![cell(1, 2)] },
+                TableRow { cells: vec![cell(1, 3)] },
+            ]),
+            table_document(vec![TableRow { cells: vec![cell(2, 1)] }]),
+        ];
+        for document in invalid_tables {
+            assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidNode);
+        }
+
+        let document = table_document(vec![TableRow { cells: vec![cell(1, 3)] }]);
+        let limits = ValidationLimits { max_table_columns: 2, ..ValidationLimits::default() };
+        assert_eq!(
+            document.validate_with_limits(&limits).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
     }
 }
