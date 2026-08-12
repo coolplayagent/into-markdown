@@ -96,17 +96,24 @@ data URI 只能由渲染器从已校验 MIME 与字节内部生成。`embed` 只
 CLI 把主产物和所有去重后的资源视为一个输出集合：完整预检后，在同一文件系统的
 随机 nonce 事务目录写完并 fsync 全部 stage 文件。事务目录包含带签名、版本、root、
 严格相对目标清单、内容摘要和递增 generation 的持久 journal；两个 journal 槽交替
-写入并分别 fsync，状态转换完成后再同步目录。进程启动后的相关输出会在同一 root
-内有界扫描精确的管理器目录，只恢复签名、nonce、root 和成员清单全部匹配且能取得
-排他锁的事务；不会推测或清理相似名称目录。
+写入并分别 fsync，状态转换完成后再同步目录。每个事务登记在 root 下固定、私有的
+管理器 registry，并为每个 canonical target 建立完整 SHA-256 命名的 hard-link lease；
+相关输出开始前沿各目标的有限祖先查找 registry，只恢复签名、nonce、root 身份和目标
+清单全部匹配且能取得排他锁的事务；每目标 lease 另用于并发所有权的 no-replace 竞争。
+发现并恢复相交事务后，本次写出返回
+`transactionRecoveredRetry`，不会继续写入第三套值；无关或伪造目录不会被清理。
 
-提交前再次以 no-follow handle 核验每个既有目标为 regular file 且身份未变。
+提交前再次以 no-follow handle 核验每个既有目标为 regular file 且身份未变。Unix
+上的所有 rename/link/unlink/fsync 都绑定已认证目录 handle 并使用相对 `*at` 操作；
+认证后父目录被换成 symlink 时不会触碰外部目录。Windows 在安全相对目录 handle
+操作完成审计前，文件输出事务稳定返回 `componentUnavailable`；路径规划与 bundle
+编码仍可使用。
 `overwrite` 先把旧文件移入事务备份，再安装 stage；journal 尚未进入 `committed`
 时恢复旧集合，进入 `committed` 后验证完整新集合并清理备份。回滚会继续处理其它安全
 条目并汇总错误；如果任一恢复操作失败，返回 `rollbackFailed`，保留 journal 与尚存
 备份供下一次受限恢复，绝不由临时目录析构删除唯一副本。只有结果已经完整恢复或完成
 后，事务目录才会原子移出恢复命名空间再清理。`rename` 与 `error` 不覆盖竞态产生的
-文件；跨文件系统、符号链接、目录、FIFO、设备、Windows reparse point 或无法安全
+文件；跨文件系统、符号链接、目录、FIFO、设备、Windows 输出事务或无法安全
 核验的路径在任何目标变更前拒绝。
 stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EPIPE 成功语义）后才
 提交；非 EPIPE 写失败丢弃 stage，已由操作系统接收的 stdout 前缀不能撤回。

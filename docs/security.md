@@ -58,7 +58,10 @@
   stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
   FIFO、设备、符号链接和 Windows reparse point 均拒绝。
 - 输出事务只恢复带随机 nonce、固定签名、版本、精确 root/相对目标清单和排他锁的
-  管理器目录，并限制单次扫描数量。journal generation 的每次转换都在继续文件变更前
+  私有 registry 条目，并通过每目标完整摘要 lease 和 root 文件系统身份认证。相关写出
+  沿目标有限祖先扫描，只处理目标集合相交的事务并限制单次扫描数量。Unix 变更只使用
+  已认证目录 handle 上的相对 `*at` 操作；Windows 输出事务稳定返回
+  `componentUnavailable`。journal generation 的每次转换都在继续文件变更前
   持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与
   备份并返回 `rollbackFailed`，不会递归删除目录或触碰相似名称路径。
 - bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理

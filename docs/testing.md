@@ -89,8 +89,10 @@ commit/rename 竞态、取消、临时预算与 overwrite 回滚；每个 phase 
 新管理器实例恢复，并断言只出现完整旧集合或完整新集合。回滚失败测试必须把已安装
 目标替换为非空目录，验证稳定 `rollbackFailed`、唯一旧备份和 journal 仍在，移除阻塞
 后下一次恢复可以完成。跨文件系统、active lock、恶意 journal/nonce/root/member、
-目录/FIFO/设备/reparse point 与 symlink swap 均需 fail closed，且不递归删除非管理器
-路径。bundle 重复运行应逐字节一致，manifest
+目录/FIFO/设备与 symlink swap 均需 fail closed，且不递归删除非管理器路径。跨
+`a/b` 事务中断后，分别从 `a`、`b`、更深子目录与父目录发起的相交写入必须先恢复或
+阻塞，绝不能写第三套值；认证完成后的 parent rename+symlink 替换也必须证明外部目录
+无文件。Windows 检查覆盖稳定 `componentUnavailable`。bundle 重复运行应逐字节一致，manifest
 schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测试。
 
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending

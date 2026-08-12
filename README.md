@@ -67,7 +67,9 @@ archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳
 
 抽取资源按完整内容 SHA-256 去重并使用 MIME 权威扩展名；主 Markdown 与全部资源
 通过带持久 journal 的同一输出事务提交，进程中断后会恢复为完整旧集合或完成完整
-新集合。portable bundle manifest 使用 `schemaVersion: 2`，以
+新集合。该安全写出事务当前在 Unix 平台可用；Windows 返回稳定
+`componentUnavailable`，资源规划与 bundle 编码不受影响。portable bundle manifest 使用
+`schemaVersion: 2`，以
 `sourceAssetIds` 表达多个文档资源 ID 到一个物理条目的映射。
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、

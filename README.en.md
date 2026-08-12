@@ -53,6 +53,8 @@ base64 `assets`, `diagnostics`, and `provenance`.
 
 Extracted assets are deduplicated by the complete content SHA-256 and use a
 MIME-authoritative extension. Markdown and all assets commit as one output set.
+The secure output transaction is available on Unix; Windows returns stable
+`componentUnavailable`, while asset planning and bundle encoding remain available.
 Portable bundle manifests use `schemaVersion: 2`; `sourceAssetIds` maps multiple
 document asset IDs to one physical entry.
 [DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.

@@ -621,6 +621,7 @@ dependencies = [
  "into-markdown",
  "libc",
  "pulldown-cmark",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
