@@ -219,9 +219,12 @@ fn detect_format(
     mut loaded: LoadedConfig,
     stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
-    loaded.options.network.enabled = arguments.allow_network;
-    loaded.options.network.deny_private_networks = !arguments.allow_private_network;
-    narrow_allowed_hosts(&mut loaded.options.network.allowed_hosts, &arguments.allow_host)?;
+    apply_network_authorization(
+        &mut loaded.options,
+        arguments.allow_network,
+        arguments.allow_private_network,
+        &arguments.allow_host,
+    )?;
     let input = parse_input(&arguments.input)?;
     validate_input_network(&input, &loaded.options)?;
     let mut request = DetectionRequest::new(input);
@@ -410,30 +413,18 @@ fn run_providers(
             Ok(())
         }
         Some(ProvidersCommand::Test(arguments)) => {
-            if !arguments.allow_network {
-                return Err(CliError::new(
-                    ExitClass::Policy,
-                    "networkDenied",
-                    "providers test requires --allow-network",
-                ));
-            }
             let provider =
                 loaded.effective.providers.get(&arguments.name).ok_or_else(|| {
                     CliError::usage(format!("unknown provider '{}'", arguments.name))
                 })?;
-            let parsed = url::Url::parse(&provider.base_url)
-                .map_err(|error| CliError::config(format!("provider URL is invalid: {error}")))?;
-            let host = parsed
-                .host_str()
-                .ok_or_else(|| CliError::config("provider URL has no hostname"))?;
-            let normalized_host = config::normalize_allowed_host(host)?;
-            if !arguments.allow_private_network && is_obviously_private_host(&normalized_host) {
-                return Err(CliError::new(
-                    ExitClass::Policy,
-                    "privateNetworkDenied",
-                    format!("provider hostname '{host}' requires --allow-private-network"),
-                ));
-            }
+            let mut options = loaded.options.clone();
+            apply_network_authorization(
+                &mut options,
+                arguments.allow_network,
+                arguments.allow_private_network,
+                &arguments.allow_host,
+            )?;
+            validate_network_url(&provider.base_url, &options, "provider")?;
             Err(CliError::component(format!(
                 "providers test {}: {}",
                 arguments.name,
@@ -1059,9 +1050,12 @@ fn apply_conversion_overrides(
     if let Some(value) = arguments.max_redirects {
         options.network.max_redirects = value;
     }
-    options.network.enabled = arguments.allow_network;
-    options.network.deny_private_networks = !arguments.allow_private_network;
-    narrow_allowed_hosts(&mut options.network.allowed_hosts, &arguments.allow_host)?;
+    apply_network_authorization(
+        options,
+        arguments.allow_network,
+        arguments.allow_private_network,
+        &arguments.allow_host,
+    )?;
     macro_rules! assign {
         ($argument:ident, $field:ident) => {
             if let Some(value) = arguments.$argument {
@@ -1109,18 +1103,17 @@ fn apply_conversion_overrides(
         loaded.ai_model = Some(model.clone());
     }
     if ai_is_enabled(options) {
-        if loaded.ai_provider.is_none() {
-            return Err(CliError::usage(
+        let provider_name = loaded.ai_provider.as_deref().ok_or_else(|| {
+            CliError::usage(
                 "an enabled AI capability requires --ai-provider or a configured default provider",
-            ));
-        }
-        if !arguments.allow_network {
-            return Err(CliError::new(
-                ExitClass::Policy,
-                "networkDenied",
-                "enabled AI capabilities require --allow-network",
-            ));
-        }
+            )
+        })?;
+        let provider = loaded
+            .effective
+            .providers
+            .get(provider_name)
+            .ok_or_else(|| CliError::usage(format!("unknown AI provider '{provider_name}'")))?;
+        validate_network_url(&provider.base_url, options, "AI provider")?;
     }
     Ok(())
 }
@@ -1550,16 +1543,44 @@ fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Resu
     let InputRef::Uri(value) = input else {
         return Ok(());
     };
+    validate_network_url(value, options, "URI input")
+}
+
+fn validate_network_url(
+    value: &str,
+    options: &ConversionOptions,
+    target: &str,
+) -> Result<(), CliError> {
     if !options.network.enabled {
         return Err(CliError::new(
             ExitClass::Policy,
             "networkDenied",
-            "URI input requires --allow-network",
+            format!("{target} requires --allow-network"),
         ));
     }
     let parsed = url::Url::parse(value)
-        .map_err(|error| CliError::usage(format!("invalid input URI: {error}")))?;
-    let host = parsed.host_str().ok_or_else(|| CliError::usage("input URI has no hostname"))?;
+        .map_err(|error| CliError::usage(format!("invalid {target} URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "networkUrlDenied",
+            format!("{target} URL must use http or https"),
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "networkUrlDenied",
+            format!("{target} URL must not include user information"),
+        ));
+    }
+    let host = parsed.host_str().ok_or_else(|| {
+        CliError::new(
+            ExitClass::Policy,
+            "networkUrlDenied",
+            format!("{target} URL must include a hostname"),
+        )
+    })?;
     let normalized_host = config::normalize_allowed_host(host)?;
     let allowed_hosts = config::normalize_allowed_hosts(&options.network.allowed_hosts)?;
     if !allowed_hosts.is_empty() && !allowed_hosts.iter().any(|allowed| allowed == &normalized_host)
@@ -1567,17 +1588,28 @@ fn validate_input_network(input: &InputRef, options: &ConversionOptions) -> Resu
         return Err(CliError::new(
             ExitClass::Policy,
             "hostDenied",
-            format!("hostname '{host}' is not in the effective host allowlist"),
+            format!("{target} hostname '{host}' is not in the effective host allowlist"),
         ));
     }
     if options.network.deny_private_networks && is_obviously_private_host(&normalized_host) {
         return Err(CliError::new(
             ExitClass::Policy,
             "privateNetworkDenied",
-            format!("hostname '{host}' requires --allow-private-network"),
+            format!("{target} hostname '{host}' requires --allow-private-network"),
         ));
     }
     Ok(())
+}
+
+fn apply_network_authorization(
+    options: &mut ConversionOptions,
+    allow_network: bool,
+    allow_private_network: bool,
+    allow_hosts: &[String],
+) -> Result<(), CliError> {
+    options.network.enabled = allow_network;
+    options.network.deny_private_networks = !allow_private_network;
+    narrow_allowed_hosts(&mut options.network.allowed_hosts, allow_hosts)
 }
 
 fn narrow_allowed_hosts(
@@ -1615,17 +1647,28 @@ fn is_obviously_private_host(host: &str) -> bool {
     }
     let host = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')).unwrap_or(host);
     host.parse::<std::net::IpAddr>().is_ok_and(|address| match address {
-        std::net::IpAddr::V4(address) => {
-            address.is_loopback()
-                || address.is_private()
-                || address.is_link_local()
-                || address.is_unspecified()
-                || address.is_multicast()
-        }
+        std::net::IpAddr::V4(address) => is_private_ipv4(address),
         std::net::IpAddr::V6(address) => {
-            address.is_loopback() || address.is_unspecified() || address.is_multicast()
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                is_private_ipv4(mapped)
+            } else {
+                let first = address.segments()[0];
+                address.is_loopback()
+                    || address.is_unspecified()
+                    || address.is_multicast()
+                    || first & 0xfe00 == 0xfc00
+                    || first & 0xffc0 == 0xfe80
+            }
         }
     })
+}
+
+fn is_private_ipv4(address: std::net::Ipv4Addr) -> bool {
+    address.is_loopback()
+        || address.is_private()
+        || address.is_link_local()
+        || address.is_unspecified()
+        || address.is_multicast()
 }
 
 fn default_asset_directory(path: &Path) -> PathBuf {
@@ -1940,15 +1983,26 @@ mod tests {
 
     #[test]
     fn private_network_needs_additional_authorization() {
-        let input = InputRef::Uri("http://127.0.0.1/document.pdf".into());
         let mut options = ConversionOptions::default();
         options.network.enabled = true;
-        let error = validate_input_network(&input, &options).unwrap_err();
-        assert_eq!(error.code(), "privateNetworkDenied");
-
-        for uri in ["http://LOCALHOST./document.pdf", "http://[::1]/document.pdf"] {
+        for uri in [
+            "http://127.0.0.1/document.pdf",
+            "http://LOCALHOST./document.pdf",
+            "http://[::1]/document.pdf",
+            "http://[fc00::1]/document.pdf",
+            "http://[fe80::1]/document.pdf",
+            "http://[::ffff:127.0.0.1]/document.pdf",
+            "http://[::ffff:10.0.0.1]/document.pdf",
+        ] {
             let error = validate_input_network(&InputRef::Uri(uri.into()), &options).unwrap_err();
             assert_eq!(error.code(), "privateNetworkDenied");
+        }
+        for uri in [
+            "https://8.8.8.8/document.pdf",
+            "https://[2001:4860:4860::8888]/document.pdf",
+            "https://[::ffff:8.8.8.8]/document.pdf",
+        ] {
+            validate_input_network(&InputRef::Uri(uri.into()), &options).unwrap();
         }
     }
 
@@ -2046,6 +2100,117 @@ api_key_env = "LOCAL_KEY"
         .unwrap_err();
         assert_eq!(error.code(), "privateNetworkDenied");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_test_enforces_configured_host_allowlist_before_backend() {
+        let root =
+            std::env::temp_dir().join(format!("into-md-provider-allowlist-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("provider.toml"),
+            r#"schema_version = 1
+[conversion.network]
+allowed_hosts = ["allowed.example"]
+[providers.remote]
+type = "openai-compatible"
+base_url = "https://other.example/v1"
+model = "vision"
+api_key_env = "REMOTE_KEY"
+"#,
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            vec![
+                OsString::from("--no-config"),
+                OsString::from("--config"),
+                root.join("provider.toml").into_os_string(),
+                OsString::from("providers"),
+                OsString::from("test"),
+                OsString::from("remote"),
+                OsString::from("--allow-network"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "hostDenied");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn enabled_ai_provider_uses_effective_url_policy_before_conversion() {
+        let root = std::env::temp_dir().join(format!("into-md-ai-provider-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("provider.toml"),
+            r#"schema_version = 1
+default_provider = "remote"
+[conversion.network]
+allowed_hosts = ["allowed.example"]
+[conversion.ai]
+vision_ocr = "only"
+[providers.remote]
+type = "openai-compatible"
+base_url = "https://other.example/v1"
+model = "vision"
+api_key_env = "REMOTE_KEY"
+"#,
+        )
+        .unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            vec![
+                OsString::from("--no-config"),
+                OsString::from("--config"),
+                root.join("provider.toml").into_os_string(),
+                OsString::from("-"),
+                OsString::from("--allow-network"),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: false,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "hostDenied");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_url_policy_normalizes_idn_and_ipv6_provider_targets() {
+        let mut options = ConversionOptions::default();
+        options.network.enabled = true;
+        options.network.allowed_hosts = vec!["xn--bcher-kva.example".into()];
+        validate_network_url("https://bücher.example/v1", &options, "provider").unwrap();
+
+        options.network.allowed_hosts = vec!["[2001:4860:4860::8888]".into()];
+        validate_network_url("https://[2001:4860:4860:0:0:0:0:8888]/v1", &options, "provider")
+            .unwrap();
+
+        for url in ["https://[fc00::1]/v1", "https://[fe80::1]/v1", "https://[::ffff:10.0.0.1]/v1"]
+        {
+            options.network.allowed_hosts.clear();
+            let error = validate_network_url(url, &options, "provider").unwrap_err();
+            assert_eq!(error.code(), "privateNetworkDenied");
+        }
+
+        for url in ["ftp://example.com/v1", "https://user@example.com/v1"] {
+            let error = validate_network_url(url, &options, "provider").unwrap_err();
+            assert_eq!(error.code(), "networkUrlDenied");
+        }
     }
 
     #[test]

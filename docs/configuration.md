@@ -113,6 +113,10 @@ into-md report.pdf --profile quality --allow-network --allow-private-network
 条目只接受主机或方括号包裹的 IPv6，不接受 scheme、路径或端口；目标 URL 的端口不
 参与主机匹配。
 
+回环、IPv4 私网与链路本地地址、IPv6 ULA (`fc00::/7`) 与链路本地地址
+(`fe80::/10`) 均视为私网。IPv4-mapped IPv6 会先还原为 IPv4，再执行相同检查。
+Provider URL 与远程输入采用同一套规则，且 URL 不得包含用户名或密码。
+
 ## 配置操作
 
 ```shell
@@ -142,6 +146,11 @@ fragment。resolved 输出的 `_sources` 表按点分字段名记录最终值来
 Profile 是同一配置层中的覆盖表。选定 profile 后，先合并该层的普通配置，再合并
 profile 内容，然后继续处理更高优先级配置层。Profile 可以覆盖转换、CLI、
 Provider 和插件配置，但不能赋予联网或私网权限。
+
+普通配置层和 Profile 都可以只写 Provider 的部分字段，以覆盖更低层的同名
+Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL、类型、环境变量名和能力；
+全部层合并后，Provider 必须包含 `type`、`base_url`、`model` 与 `api_key_env`，否则
+配置整体无效。单独校验一个不完整文件也会失败。
 
 `conversion.network.deny_private_networks` 只能省略或设为 `true`；设为 `false` 会被
 拒绝。配置文件和 Profile 中的 `allow_network`、`allow_private_network` 及任何未知

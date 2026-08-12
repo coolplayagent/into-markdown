@@ -217,10 +217,13 @@ into-md providers remove <NAME> [--scope <global|project>]
 into-md providers set-default <NAME> [--scope <global|project>]
 into-md providers capabilities <NAME> [--json]
 into-md providers test <NAME> --allow-network [--allow-private-network]
+                            [--allow-host <HOST>]...
 ```
 
 CLI 只接受 API Key 的环境变量名，不提供明文 `--api-key`。`providers test` 只允许
-发送最小能力探测请求，不发送文档内容。
+发送最小能力探测请求，不发送文档内容。远程输入、转换选定的 AI Provider 与
+`providers test` 共用相同的 URL 策略：仅允许无用户信息的 HTTP(S) URL，并执行配置
+与当前调用的主机交集及私网双重授权检查，之后才能进入具体后端。
 
 ### 插件
 

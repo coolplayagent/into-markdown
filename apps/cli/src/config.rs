@@ -201,7 +201,24 @@ pub fn load(
     selected_profile: Option<&str>,
     language_override: Option<Language>,
 ) -> Result<LoadedConfig, CliError> {
-    let global = global_config_path()?;
+    load_with_global(
+        cwd,
+        global_config_path()?,
+        explicit,
+        no_automatic,
+        selected_profile,
+        language_override,
+    )
+}
+
+fn load_with_global(
+    cwd: &Path,
+    global: PathBuf,
+    explicit: &[PathBuf],
+    no_automatic: bool,
+    selected_profile: Option<&str>,
+    language_override: Option<Language>,
+) -> Result<LoadedConfig, CliError> {
     let project = find_project_config(cwd);
     let mut candidates = Vec::new();
     if !no_automatic {
@@ -231,7 +248,7 @@ pub fn load(
             }
             continue;
         }
-        let value = read_validated_value(&path)?;
+        let value = read_layer_value(&path)?;
         profile_found |= merge_layer(
             value,
             &path,
@@ -457,7 +474,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     Ok(options)
 }
 
-fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
+fn validate_common(config: &RawConfig) -> Result<(), CliError> {
     if let Some(version) = config.schema_version
         && version != 1
     {
@@ -491,24 +508,6 @@ fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
     normalize_allowed_hosts(&config.conversion.network.allowed_hosts)?;
     parse_emit(config.conversion.output.emit.as_deref())?;
     parse_conflict(config.conversion.output.conflict.as_deref())?;
-    for (name, provider) in &config.providers {
-        validate_id("provider", name)?;
-        if provider.provider_type != "openai-compatible" {
-            return Err(CliError::config(format!(
-                "provider '{name}' has unsupported type '{}'",
-                provider.provider_type
-            )));
-        }
-        let url = url::Url::parse(&provider.base_url)
-            .map_err(|error| CliError::config(format!("provider '{name}' URL: {error}")))?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(CliError::config(format!("provider '{name}' URL must use http or https")));
-        }
-        validate_environment_name(&provider.api_key_env)?;
-        for capability in &provider.capabilities {
-            validate_capability(capability)?;
-        }
-    }
     for (id, plugin) in &config.plugins {
         validate_id("plugin", id)?;
         if !matches!(plugin.protocol.as_str(), "process-v1" | "wasi-v1") {
@@ -523,30 +522,153 @@ fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn validate_file(path: &Path) -> Result<(), CliError> {
-    read_validated_value(path).map(|_| ())
+fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
+    validate_common(config)?;
+    for (name, provider) in &config.providers {
+        validate_provider(name, provider, true)?;
+    }
+    Ok(())
 }
 
-fn read_validated_value(path: &Path) -> Result<toml::Value, CliError> {
+fn validate_layer(config: &RawConfig) -> Result<(), CliError> {
+    validate_common(config)?;
+    for (name, provider) in &config.providers {
+        validate_provider(name, provider, false)?;
+    }
+    Ok(())
+}
+
+fn validate_provider(
+    name: &str,
+    provider: &ProviderConfig,
+    require_complete: bool,
+) -> Result<(), CliError> {
+    validate_id("provider", name)?;
+    if !provider.provider_type.is_empty() && provider.provider_type != "openai-compatible" {
+        return Err(CliError::config(format!(
+            "provider '{name}' has unsupported type '{}'",
+            provider.provider_type
+        )));
+    }
+    if !provider.base_url.is_empty() {
+        validate_provider_url(name, &provider.base_url)?;
+    }
+    if !provider.api_key_env.is_empty() {
+        validate_environment_name(&provider.api_key_env)?;
+    }
+    for capability in &provider.capabilities {
+        validate_capability(capability)?;
+    }
+    if require_complete {
+        let missing = [
+            ("type", provider.provider_type.is_empty()),
+            ("base_url", provider.base_url.is_empty()),
+            ("model", provider.model.is_empty()),
+            ("api_key_env", provider.api_key_env.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(field, missing)| missing.then_some(field))
+        .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(CliError::config(format!(
+                "provider '{name}' is incomplete after merging: missing {}",
+                missing.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_provider_url(name: &str, value: &str) -> Result<(), CliError> {
+    let url = url::Url::parse(value)
+        .map_err(|error| CliError::config(format!("provider '{name}' URL: {error}")))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(CliError::config(format!("provider '{name}' URL must use http or https")));
+    }
+    if url.host_str().is_none() {
+        return Err(CliError::config(format!("provider '{name}' URL must include a hostname")));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(CliError::config(format!(
+            "provider '{name}' URL must not include user information"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_file(path: &Path) -> Result<(), CliError> {
+    read_config_value(path, true).map(|_| ())
+}
+
+fn read_layer_value(path: &Path) -> Result<toml::Value, CliError> {
+    read_config_value(path, false)
+}
+
+fn read_config_value(path: &Path, require_complete: bool) -> Result<toml::Value, CliError> {
     let text = fs::read_to_string(path).map_err(|error| {
         CliError::config(format!("read configuration {}: {error}", path.display()))
     })?;
     let value: toml::Value = toml::from_str(&text).map_err(|error| {
         CliError::config(format!("parse configuration {}: {error}", path.display()))
     })?;
+    validate_explicit_provider_values(&value)?;
     let parsed: RawConfig = value.clone().try_into().map_err(|error| {
         CliError::config(format!("validate configuration {}: {error}", path.display()))
     })?;
-    validate_document(&parsed, true)
+    validate_document(&parsed, true, require_complete)
         .map_err(|error| CliError::config(format!("configuration {}: {error}", path.display())))?;
     Ok(value)
 }
 
-fn validate_document(parsed: &RawConfig, require_schema: bool) -> Result<(), CliError> {
+fn validate_explicit_provider_values(value: &toml::Value) -> Result<(), CliError> {
+    if let Some(providers) = value.get("providers").and_then(toml::Value::as_table) {
+        validate_explicit_provider_table(providers, "provider")?;
+    }
+    if let Some(profiles) = value.get("profiles").and_then(toml::Value::as_table) {
+        for (profile, value) in profiles {
+            if let Some(providers) = value.get("providers").and_then(toml::Value::as_table) {
+                validate_explicit_provider_table(
+                    providers,
+                    &format!("profile '{profile}' provider"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_explicit_provider_table(
+    providers: &toml::map::Map<String, toml::Value>,
+    context: &str,
+) -> Result<(), CliError> {
+    for (name, provider) in providers {
+        let Some(table) = provider.as_table() else {
+            continue;
+        };
+        for field in ["type", "base_url", "model", "api_key_env"] {
+            if table.get(field).and_then(toml::Value::as_str) == Some("") {
+                return Err(CliError::config(format!(
+                    "{context} '{name}' field '{field}' must not be empty"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_document(
+    parsed: &RawConfig,
+    require_schema: bool,
+    require_complete: bool,
+) -> Result<(), CliError> {
     if require_schema && parsed.schema_version != Some(1) {
         return Err(CliError::config("must declare schema_version = 1"));
     }
-    validate_raw(parsed)?;
+    if require_complete {
+        validate_raw(parsed)?;
+    } else {
+        validate_layer(parsed)?;
+    }
     for (name, profile) in &parsed.profiles {
         validate_id("profile", name)?;
         validate_profile(name, profile)?;
@@ -560,33 +682,10 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), CliError>
         conversion: profile.conversion.clone(),
         ..RawConfig::default()
     };
-    validate_raw(&partial)?;
+    validate_layer(&partial)?;
     for (provider_name, provider) in &profile.providers {
-        validate_id("provider", provider_name)?;
-        if !provider.provider_type.is_empty() && provider.provider_type != "openai-compatible" {
-            return Err(CliError::config(format!(
-                "profile '{name}' provider '{provider_name}' has unsupported type '{}'",
-                provider.provider_type
-            )));
-        }
-        if !provider.base_url.is_empty() {
-            let url = url::Url::parse(&provider.base_url).map_err(|error| {
-                CliError::config(format!(
-                    "profile '{name}' provider '{provider_name}' URL: {error}"
-                ))
-            })?;
-            if !matches!(url.scheme(), "http" | "https") {
-                return Err(CliError::config(format!(
-                    "profile '{name}' provider '{provider_name}' URL must use http or https"
-                )));
-            }
-        }
-        if !provider.api_key_env.is_empty() {
-            validate_environment_name(&provider.api_key_env)?;
-        }
-        for capability in &provider.capabilities {
-            validate_capability(capability)?;
-        }
+        validate_provider(provider_name, provider, false)
+            .map_err(|error| CliError::config(format!("profile '{name}': {error}")))?;
     }
     for (plugin_id, plugin) in &profile.plugins {
         validate_id("plugin", plugin_id)?;
@@ -734,7 +833,7 @@ fn mutate_scope(
     operation: impl FnOnce(&mut toml::Value) -> Result<(), CliError>,
 ) -> Result<PathBuf, CliError> {
     let path = scope_path(scope, cwd)?;
-    let mut value = if path.exists() { read_validated_value(&path)? } else { empty_table() };
+    let mut value = if path.exists() { read_layer_value(&path)? } else { empty_table() };
     operation(&mut value)?;
     if value.get("schema_version").is_none() {
         value
@@ -746,7 +845,8 @@ fn mutate_scope(
         .clone()
         .try_into()
         .map_err(|error| CliError::config(format!("updated configuration is invalid: {error}")))?;
-    validate_document(&parsed, false)?;
+    validate_explicit_provider_values(&value)?;
+    validate_document(&parsed, false, false)?;
     let text = toml::to_string_pretty(&value)
         .map_err(|error| CliError::internal(format!("serialize configuration: {error}")))?;
     atomic_write(&path, text.as_bytes(), true)?;
@@ -1170,6 +1270,93 @@ model = "quality"
             loaded.sources["providers.vision.model"],
             format!("{}#profile:quality", root.join("overlay.toml").display())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ordinary_layers_can_partially_override_provider_fields() {
+        let root = temporary_directory("partial-provider-layers");
+        let global = root.join("global/config.toml");
+        let project = root.join("project");
+        let cwd = project.join("nested");
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(
+            &global,
+            r#"schema_version = 1
+[providers.vision]
+type = "openai-compatible"
+base_url = "https://global.example/v1"
+model = "global"
+api_key_env = "GLOBAL_KEY"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            project.join(CONFIG_FILENAME),
+            r#"schema_version = 1
+[providers.vision]
+model = "project"
+"#,
+        )
+        .unwrap();
+        let explicit_one = root.join("explicit-one.toml");
+        fs::write(
+            &explicit_one,
+            r#"schema_version = 1
+[providers.vision]
+base_url = "https://explicit.example/v1"
+"#,
+        )
+        .unwrap();
+        let explicit_two = root.join("explicit-two.toml");
+        fs::write(
+            &explicit_two,
+            r#"schema_version = 1
+[providers.vision]
+api_key_env = "EXPLICIT_KEY"
+"#,
+        )
+        .unwrap();
+        let loaded =
+            load_with_global(&cwd, global, &[explicit_one, explicit_two], false, None, None)
+                .unwrap();
+        let provider = &loaded.effective.providers["vision"];
+        assert_eq!(provider.provider_type, "openai-compatible");
+        assert_eq!(provider.base_url, "https://explicit.example/v1");
+        assert_eq!(provider.model, "project");
+        assert_eq!(provider.api_key_env, "EXPLICIT_KEY");
+        assert!(loaded.sources["providers.vision.model"].ends_with(".into-markdown.toml"));
+        assert!(loaded.sources["providers.vision.api_key_env"].ends_with("explicit-two.toml"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_provider_is_rejected_after_final_merge() {
+        let root = temporary_directory("incomplete-provider");
+        let path = root.join("partial.toml");
+        fs::write(&path, "schema_version = 1\n[providers.vision]\nmodel = \"override\"\n").unwrap();
+        let validation = validate_file(&path).unwrap_err();
+        assert!(validation.to_string().contains("incomplete after merging"));
+        let loading = load(&root, &[path], true, None, None).unwrap_err();
+        assert!(loading.to_string().contains("incomplete after merging"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_provider_layers_still_validate_present_fields() {
+        let root = temporary_directory("invalid-partial-provider");
+        let path = root.join("partial.toml");
+        fs::write(
+            &path,
+            "schema_version = 1\n[providers.vision]\nbase_url = \"https://user@example.com/v1\"\n",
+        )
+        .unwrap();
+        let error = read_layer_value(&path).unwrap_err();
+        assert!(error.to_string().contains("must not include user information"));
+        fs::write(&path, "schema_version = 1\n[providers.vision]\nmodel = \"\"\n").unwrap();
+        let error = read_layer_value(&path).unwrap_err();
+        assert!(error.to_string().contains("field 'model' must not be empty"));
         fs::remove_dir_all(root).unwrap();
     }
 
