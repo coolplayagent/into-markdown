@@ -25,6 +25,7 @@ DATA = [
     "//crates/engine:Cargo.toml",
     "//crates/ocr:Cargo.toml",
     "//crates/render-markdown:Cargo.toml",
+    "//tests/contracts:Cargo.toml",
 ]
 
 rust_library(

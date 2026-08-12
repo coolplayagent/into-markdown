@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_test(
+    name = "contracts_test",
+    srcs = ["src/lib.rs"],
+    compile_data = glob(["fixtures/**"]),
+    crate_name = "into_markdown_contracts",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    deps = ["//crates/api:into_markdown"],
+)
+
+rust_binary(
+    name = "public_api_consumer",
+    srcs = ["consumer/main.rs"],
+    crate_name = "public_api_consumer",
+    edition = "2024",
+    deps = ["//crates/api:into_markdown"],
+)

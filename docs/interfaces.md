@@ -155,3 +155,9 @@ ASCII 不区分大小写的方式识别 doctype 与 HTML/XHTML 根元素。
 CLI、未来 HTTP/SSE 服务和 Bundle 共用 `into_markdown` 导出的应用 DTO，不直接序列化
 上述内部模型。版本、additive 兼容、解码资源预算和恶意输入规则见
 [稳定数据传输契约](dto.md)。
+
+公共 SPI 的兼容性由独立 consumer target 验证，而不是只依赖定义 SPI 的 crate 单测。
+`ResolvedInput` 的 `bytes` 与 `metadata` 两字段 struct literal、请求构造器以及
+`SourceResolver::resolve_accounted` 的默认适配器属于受保护的源码兼容面。公共 DTO
+刻意不实现通用 serde trait；调用方必须使用带 schema 和预算的 `to_json`、
+`from_json` 或对应 writer 方法。Cargo 与 Bazel 对这两类边界运行等价的编译契约。

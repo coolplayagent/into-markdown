@@ -163,9 +163,33 @@ mod tests {
 
     #[test]
     fn conversion_errors_map_to_stable_shell_classes() {
-        let no_converter = CliError::from(ConversionError::NoConverter { format: "pdf".into() });
-        assert_eq!(no_converter.exit_code(), 3);
-        assert_eq!(no_converter.code(), "noConverter");
+        let cases = [
+            (ConversionError::Unsupported { detail: String::new() }, 3),
+            (ConversionError::NoConverter { format: "pdf".into() }, 3),
+            (ConversionError::Malformed { part: None, detail: String::new() }, 3),
+            (ConversionError::Encrypted, 3),
+            (ConversionError::ResourceLimit { limit: "bytes", detail: String::new() }, 5),
+            (ConversionError::Timeout, 5),
+            (ConversionError::Ocr { provider: "ocr".into(), detail: String::new() }, 6),
+            (ConversionError::Ai { provider: "ai".into(), detail: String::new() }, 7),
+            (ConversionError::Network { detail: String::new() }, 8),
+            (ConversionError::Io { detail: String::new() }, 4),
+            (
+                ConversionError::ComponentUnavailable {
+                    component: "x".into(),
+                    detail: String::new(),
+                },
+                9,
+            ),
+            (ConversionError::Cancelled, 130),
+            (ConversionError::Internal { detail: String::new() }, 70),
+        ];
+        for (source, exit) in cases {
+            let code = source.code().as_str();
+            let error = CliError::from(source);
+            assert_eq!(error.code(), code);
+            assert_eq!(error.exit_code(), exit);
+        }
         assert_eq!(CliError::component("missing").exit_code(), 9);
     }
 }

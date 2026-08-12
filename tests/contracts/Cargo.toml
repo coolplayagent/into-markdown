@@ -1,0 +1,17 @@
+[package]
+name = "into-markdown-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+into-markdown = { path = "../../crates/api" }
+
+[[bin]]
+name = "public-api-consumer"
+path = "consumer/main.rs"
+
+[lints]
+workspace = true

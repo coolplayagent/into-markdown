@@ -23,3 +23,13 @@ rust_test(
     deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
 )
+
+rust_test(
+    name = "exit_contract_test",
+    srcs = ["tests/exit_contract.rs"],
+    crate_name = "into_md_exit_contract",
+    crate_root = "tests/exit_contract.rs",
+    data = [":into-md"],
+    edition = "2024",
+    env = {"INTO_MD_BIN": "$(location :into-md)"},
+)

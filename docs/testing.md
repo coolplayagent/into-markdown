@@ -1,6 +1,43 @@
 # 测试策略
 
-仓库已经为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
+## 公共契约套件
+
+`tests/contracts` 是下游调用方视角的黑盒公共契约套件。它只通过公开 crate
+访问 SPI、Engine、DTO 和安全默认值，不导入私有模块；`Cargo.toml` 与
+`tests/contracts/BUILD.bazel` 直接编译同一份 `src/lib.rs` 和 fixtures。独立的
+`public-api-consumer` target 固定使用 workspace 的 Rust 1.97.1、edition 2024，
+验证两字段 `ResolvedInput` struct literal、`SourceResolver::resolve_accounted` 默认
+适配器以及请求构造器。Cargo 测试与 Bazel 构建都会编译该 target，因此只在实现
+crate 内保持源码兼容不能通过检查。
+
+契约套件逐项覆盖八个公共 SPI：`SourceResolver`、`FormatDetector`、`Converter`、
+`MarkdownRenderer`、`OcrEngine`、`Transcriber`、`TensorRuntime` 和 `AiProvider`。
+每个接口必须可形成 `Send + Sync` trait object；异步返回值会被实际轮询至完成、取消
+或超时，不使用无法终止的 pending future。Engine 契约覆盖重复 ID、显式 hint、
+confidence/priority/稳定 ID 排序、仅 `NotApplicable` 回退、其它错误立即短路、IR
+验证早于渲染，以及完成进度的单一终态。
+
+默认安全契约不访问网络、不读取环境秘密且不下载模型。测试断言联网默认关闭、所有
+AI 能力默认 `Off`、OCR 的 `Auto` 默认不指定或获取模型，以及 URI 在没有当前调用授权
+时返回稳定策略错误。恶意输入 fixture 使用测试侧 `catch_unwind` 包裹，并将异步调用
+轮询至 Ready，证明公开边界返回受控错误而不是 panic。DTO 的受预算编解码测试与
+`core_doc_test` 的 compile-fail 示例共同保证 DTO 不能绕过受控方法直接进入 serde；
+后者同时由 Cargo doctest 和 Bazel `rust_doc_test` 执行。
+
+CLI 的错误分类表在 CLI crate 内穷举全部 `ConversionError`，另由
+`apps/cli/tests/exit_contract.rs` 启动真实 `into-md` 进程，验证 usage、policy 与
+component 的稳定退出状态。该测试同样由 Cargo 与 Bazel 执行。
+
+常用定向命令如下：
+
+```shell
+cargo test -p into-markdown-contracts
+cargo test -p into-markdown-cli --test exit_contract
+bazel test //tests/contracts:contracts_test //crates/core:core_doc_test //apps/cli:exit_contract_test
+bazel build //tests/contracts:public_api_consumer
+```
+
+仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
 逐类覆盖全部 IR 节点，并覆盖恶意链接、HTML/Markdown 字符、动态围栏、表格换行、
 交错 span、脚注标签、资源模式、空内容、最深合法嵌套、LF 和重复运行确定性。
