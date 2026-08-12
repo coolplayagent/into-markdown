@@ -147,6 +147,7 @@ pub struct LimitsConfig {
     pub max_nesting_depth: Option<u16>,
     pub max_pages: Option<u32>,
     pub max_asset_bytes: Option<u64>,
+    pub max_total_asset_bytes: Option<u64>,
     pub max_memory_bytes: Option<u64>,
     pub max_temporary_bytes: Option<u64>,
     pub max_table_rows: Option<u64>,
@@ -501,6 +502,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     assign!(max_nesting_depth);
     assign!(max_pages);
     assign!(max_asset_bytes);
+    assign!(max_total_asset_bytes);
     assign!(max_memory_bytes);
     assign!(max_temporary_bytes);
     assign!(max_table_rows);

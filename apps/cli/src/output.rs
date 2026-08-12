@@ -3,8 +3,9 @@
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
 use into_markdown::{
-    Asset, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionResult, DTO_SCHEMA_VERSION,
-    DiagnosticsDto, DtoJsonStyle, ProvenanceListDto, ResultDto, asset_filename,
+    BUNDLE_SCHEMA_VERSION, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionOptions,
+    ConversionResult, DTO_SCHEMA_VERSION, DiagnosticsDto, DtoJsonStyle, ExecutionContext,
+    ProvenanceListDto, ResultDto, plan_assets,
 };
 use std::fs;
 use std::io::{Cursor, Write};
@@ -31,62 +32,158 @@ pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8
 }
 
 /// Write extracted assets using safe, deterministic filenames.
+#[cfg(test)]
 pub fn write_assets(
-    assets: &[Asset],
+    result: &ConversionResult,
     directory: &Path,
     mode: AssetModeArg,
     conflict: ConflictPolicy,
 ) -> Result<Vec<WriteOutcome>, CliError> {
-    write_assets_with_hook(assets, directory, mode, conflict, || Ok(()))
+    write_assets_with_hook(result, directory, mode, conflict, || Ok(()))
 }
 
+/// Fully staged external assets whose targets have not been mutated yet.
+pub struct StagedAssets {
+    stage: tempfile::TempDir,
+    targets: Vec<PathBuf>,
+    staged: Vec<PathBuf>,
+    conflict: ConflictPolicy,
+    context: ExecutionContext,
+}
+
+/// Preflight, write, and fsync every external asset without changing targets.
+pub fn stage_assets(
+    result: &ConversionResult,
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<StagedAssets, CliError> {
+    let planned = plan_asset_writes(result, directory, mode, conflict)?;
+    if planned.is_empty() {
+        return Ok(StagedAssets {
+            stage: tempfile::tempdir()?,
+            targets: vec![],
+            staged: vec![],
+            conflict,
+            context: context.clone(),
+        });
+    }
+    let targets_with_bytes = planned
+        .iter()
+        .map(|(source_index, path)| (path.clone(), result.assets[*source_index].bytes.as_slice()))
+        .collect::<Vec<_>>();
+    let root = common_existing_ancestor(&targets_with_bytes)?;
+    reject_symlink_components(&root)?;
+    ensure_same_filesystem(&root, &targets_with_bytes)?;
+    let stage = tempfile::Builder::new().prefix(".into-md-txn-").tempdir_in(root)?;
+    let mut staged = Vec::with_capacity(planned.len());
+    for (index, (source_index, _)) in planned.iter().enumerate() {
+        let mut file = context
+            .temporary_file_in(stage.path(), &format!("stage-{index}"))
+            .map_err(CliError::from)?;
+        file.write_all_checked(&result.assets[*source_index].bytes).map_err(CliError::from)?;
+        file.sync_all().map_err(CliError::from)?;
+        staged.push(file.persist());
+    }
+    sync_directory(stage.path())?;
+    Ok(StagedAssets {
+        stage,
+        targets: planned.into_iter().map(|(_, path)| path).collect(),
+        staged,
+        conflict,
+        context: context.clone(),
+    })
+}
+
+impl StagedAssets {
+    /// Commit all staged assets after the stdout stream succeeds.
+    pub fn commit(self) -> Result<Vec<WriteOutcome>, CliError> {
+        let mut backups = Vec::new();
+        let mut installed = Vec::new();
+        for (index, (target, staged)) in self.targets.iter().zip(&self.staged).enumerate() {
+            if let Err(error) = self.context.checkpoint().map_err(CliError::from) {
+                rollback_output_set(&installed, &backups);
+                return Err(error);
+            }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+                reject_symlink_components(parent)?;
+            }
+            if target.exists() {
+                if self.conflict != ConflictPolicy::Overwrite {
+                    rollback_output_set(&installed, &backups);
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "assetConflict",
+                        format!("asset appeared after preflight: {}", target.display()),
+                    ));
+                }
+                let backup = self.stage.path().join(format!("backup-{index}"));
+                if let Err(error) = fs::rename(target, &backup) {
+                    rollback_output_set(&installed, &backups);
+                    return Err(error.into());
+                }
+                backups.push((target.clone(), backup));
+            }
+            if let Err(error) = fs::rename(staged, target) {
+                rollback_output_set(&installed, &backups);
+                return Err(error.into());
+            }
+            installed.push(target.clone());
+            if let Err(error) = sync_parent(target) {
+                rollback_output_set(&installed, &backups);
+                return Err(error);
+            }
+        }
+        for (_, backup) in backups {
+            fs::remove_file(backup)?;
+        }
+        Ok(self.targets.into_iter().map(|path| WriteOutcome { path, renamed: false }).collect())
+    }
+}
+
+#[cfg(test)]
 fn write_assets_with_hook(
-    assets: &[Asset],
+    result: &ConversionResult,
     directory: &Path,
     mode: AssetModeArg,
     conflict: ConflictPolicy,
     after_preflight: impl FnOnce() -> Result<(), CliError>,
 ) -> Result<Vec<WriteOutcome>, CliError> {
-    let planned = plan_asset_writes(assets, directory, mode, conflict)?;
+    let planned = plan_asset_writes(result, directory, mode, conflict)?;
     if planned.is_empty() {
         return Ok(Vec::new());
     }
     fs::create_dir_all(directory)?;
     after_preflight()?;
     let mut outcomes = Vec::with_capacity(planned.len());
-    for (asset, path) in planned {
-        write_exact_file(&path, &asset.bytes, conflict == ConflictPolicy::Overwrite)?;
+    for (source_index, path) in planned {
+        write_exact_file(
+            &path,
+            &result.assets[source_index].bytes,
+            conflict == ConflictPolicy::Overwrite,
+        )?;
         outcomes.push(WriteOutcome { path, renamed: false });
     }
     Ok(outcomes)
 }
 
-/// Validate every extracted-asset target without mutating the filesystem.
-pub fn preflight_assets(
-    assets: &[Asset],
+fn plan_asset_writes(
+    result: &ConversionResult,
     directory: &Path,
     mode: AssetModeArg,
     conflict: ConflictPolicy,
-) -> Result<(), CliError> {
-    plan_asset_writes(assets, directory, mode, conflict).map(|_| ())
-}
-
-fn plan_asset_writes<'a>(
-    assets: &'a [Asset],
-    directory: &Path,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-) -> Result<Vec<(&'a Asset, PathBuf)>, CliError> {
-    if mode != AssetModeArg::Extract || assets.is_empty() {
+) -> Result<Vec<(usize, PathBuf)>, CliError> {
+    if mode != AssetModeArg::Extract || result.assets.is_empty() {
         return Ok(Vec::new());
     }
-    let mut planned = Vec::with_capacity(assets.len());
+    let plan = plan_assets(&result.document, &result.assets, &ConversionOptions::default())
+        .map_err(CliError::from)?;
+    let mut planned = Vec::with_capacity(plan.entries().len());
     let mut targets = std::collections::BTreeSet::new();
-    for asset in assets {
-        if asset.bytes.is_empty() {
-            continue;
-        }
-        let path = directory.join(asset_filename(&asset.id.0, asset.filename.as_deref()));
+    for asset in plan.entries() {
+        let path = directory.join(&asset.filename);
         if !targets.insert(path.clone()) {
             return Err(CliError::internal(format!(
                 "multiple assets resolve to {}",
@@ -103,7 +200,7 @@ fn plan_asset_writes<'a>(
                 ),
             ));
         }
-        planned.push((asset, path));
+        planned.push((asset.source_index, path));
     }
     Ok(planned)
 }
@@ -113,6 +210,227 @@ fn plan_asset_writes<'a>(
 pub struct WriteOutcome {
     pub path: PathBuf,
     pub renamed: bool,
+}
+
+/// Atomically replace one primary artifact and all extracted resources as a set.
+///
+/// Every byte is staged and synced before the first target is changed. A failed
+/// commit restores overwritten targets and removes targets created by this
+/// transaction.
+pub fn write_output_set(
+    primary: &Path,
+    primary_bytes: &[u8],
+    result: &ConversionResult,
+    asset_directory: Option<&Path>,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<WriteOutcome, CliError> {
+    let primary = primary.to_path_buf();
+    let planned_assets = asset_directory
+        .map(|directory| plan_asset_writes(result, directory, mode, conflict))
+        .transpose()?
+        .unwrap_or_default();
+    let mut targets = Vec::with_capacity(planned_assets.len() + 1);
+    targets.push((primary.clone(), primary_bytes));
+    for (source_index, path) in &planned_assets {
+        targets.push((path.clone(), result.assets[*source_index].bytes.as_slice()));
+    }
+    commit_output_set(&targets, conflict, context)?;
+    Ok(WriteOutcome { path: primary, renamed: false })
+}
+
+fn commit_output_set(
+    targets: &[(PathBuf, &[u8])],
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<(), CliError> {
+    commit_output_set_with_hook(targets, conflict, context, |_, _| Ok(()))
+}
+
+fn commit_output_set_with_hook(
+    targets: &[(PathBuf, &[u8])],
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+    mut hook: impl FnMut(&str, usize) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    let transaction_root = common_existing_ancestor(targets)?;
+    reject_symlink_components(&transaction_root)?;
+    ensure_same_filesystem(&transaction_root, targets)?;
+    let stage = tempfile::Builder::new().prefix(".into-md-txn-").tempdir_in(&transaction_root)?;
+    let mut staged = Vec::with_capacity(targets.len());
+    for (index, (_, bytes)) in targets.iter().enumerate() {
+        hook("stage", index)?;
+        let mut file = context
+            .temporary_file_in(stage.path(), &format!("stage-{index}"))
+            .map_err(CliError::from)?;
+        file.write_all_checked(bytes).map_err(CliError::from)?;
+        hook("fsync", index)?;
+        file.sync_all().map_err(CliError::from)?;
+        staged.push(file.persist());
+    }
+    sync_directory(stage.path())?;
+
+    let mut backups = Vec::new();
+    let mut installed = Vec::new();
+    for (index, ((target, _), staged_path)) in targets.iter().zip(&staged).enumerate() {
+        if let Err(error) = context.checkpoint().map_err(CliError::from) {
+            rollback_output_set(&installed, &backups);
+            return Err(error);
+        }
+        if let Err(error) = hook("commit", index) {
+            rollback_output_set(&installed, &backups);
+            return Err(error);
+        }
+        if let Some(parent) = target.parent() {
+            if let Err(error) = fs::create_dir_all(parent).map_err(CliError::from) {
+                rollback_output_set(&installed, &backups);
+                return Err(error);
+            }
+            if let Err(error) = reject_symlink_components(parent) {
+                rollback_output_set(&installed, &backups);
+                return Err(error);
+            }
+        }
+        if target.exists() {
+            if conflict != ConflictPolicy::Overwrite {
+                rollback_output_set(&installed, &backups);
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    if index == 0 { "outputConflict" } else { "assetConflict" },
+                    format!("output appeared after preflight: {}", target.display()),
+                ));
+            }
+            let backup = stage.path().join(format!("backup-{index}"));
+            if let Err(error) = fs::rename(target, &backup) {
+                rollback_output_set(&installed, &backups);
+                return Err(error.into());
+            }
+            backups.push((target.clone(), backup));
+        }
+        if let Err(error) = fs::rename(staged_path, target) {
+            rollback_output_set(&installed, &backups);
+            return Err(error.into());
+        }
+        installed.push(target.clone());
+        if let Err(error) = sync_parent(target) {
+            rollback_output_set(&installed, &backups);
+            return Err(error);
+        }
+    }
+    for (_, backup) in backups {
+        fs::remove_file(backup)?;
+    }
+    sync_directory(stage.path())?;
+    Ok(())
+}
+
+fn rollback_output_set(installed: &[PathBuf], backups: &[(PathBuf, PathBuf)]) {
+    for target in installed.iter().rev() {
+        let _ = fs::remove_file(target);
+    }
+    for (target, backup) in backups.iter().rev() {
+        let _ = fs::rename(backup, target);
+        let _ = sync_parent(target);
+    }
+}
+
+fn common_existing_ancestor(targets: &[(PathBuf, &[u8])]) -> Result<PathBuf, CliError> {
+    let first = targets.first().ok_or_else(|| CliError::internal("empty output transaction"))?;
+    let mut candidate = first.0.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    while !candidate.exists() {
+        candidate = candidate
+            .parent()
+            .ok_or_else(|| {
+                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
+            })?
+            .to_path_buf();
+    }
+    Ok(candidate)
+}
+
+fn reject_symlink_components(path: &Path) -> Result<(), CliError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        if current.exists() && fs::symlink_metadata(&current)?.file_type().is_symlink() {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "symlinkDenied",
+                format!("output path contains a symbolic link: {}", current.display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_same_filesystem(root: &Path, targets: &[(PathBuf, &[u8])]) -> Result<(), CliError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let device = fs::metadata(root)?.dev();
+    for (target, _) in targets {
+        let mut ancestor = target.parent().unwrap_or_else(|| Path::new("."));
+        while !ancestor.exists() {
+            ancestor = ancestor.parent().ok_or_else(|| {
+                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
+            })?;
+        }
+        if fs::metadata(ancestor)?.dev() != device {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "crossFilesystemTransaction",
+                "an output set cannot be committed across filesystems",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_same_filesystem(root: &Path, targets: &[(PathBuf, &[u8])]) -> Result<(), CliError> {
+    let root = root.canonicalize()?;
+    let root_prefix = root.components().next();
+    for (target, _) in targets {
+        let mut ancestor = target.parent().unwrap_or_else(|| Path::new("."));
+        while !ancestor.exists() {
+            ancestor = ancestor.parent().ok_or_else(|| {
+                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
+            })?;
+        }
+        let canonical = ancestor.canonicalize()?;
+        if canonical.components().next() != root_prefix {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "crossFilesystemTransaction",
+                "an output set cannot be committed across filesystem roots",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent(path: &Path) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<(), CliError> {
+    fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> Result<(), CliError> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), CliError> {
+    Ok(())
 }
 
 /// Write a primary artifact using the requested conflict policy.
@@ -132,6 +450,7 @@ pub fn preflight_file(path: &Path, conflict: ConflictPolicy) -> Result<PathBuf, 
 }
 
 /// Atomically write a previously resolved path without recalculating its name.
+#[cfg(test)]
 pub fn write_preflighted_file(
     path: &Path,
     bytes: &[u8],
@@ -165,29 +484,29 @@ fn encode_document(document: &into_markdown::Document) -> Result<Vec<u8>, CliErr
 }
 
 fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
-    let mut assets = Vec::new();
-    let mut asset_entries = Vec::new();
-    for asset in &result.assets {
-        if asset.bytes.is_empty() {
-            continue;
-        }
-        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
-        let path = format!("assets/{filename}");
-        asset_entries.push(path.clone());
-        assets.push(BundleAssetDto {
-            id: asset.id.0.clone(),
-            path,
-            media_type: asset.media_type.clone(),
-            size: u64::try_from(asset.bytes.len()).map_err(|_| {
-                CliError::internal(format!(
-                    "asset {} size cannot be represented by the DTO",
-                    asset.id.0
-                ))
-            })?,
-        });
+    if let Some(asset) = result.assets.iter().find(|asset| asset.bytes.is_empty()) {
+        return Err(CliError::new(
+            ExitClass::Conversion,
+            "bundleAssetMissingContent",
+            format!("bundle asset {} has no portable content", asset.id.0),
+        ));
     }
+    let mut options = ConversionOptions::default();
+    options.output.asset_uri_prefix = Some("assets".into());
+    let plan = plan_assets(&result.document, &result.assets, &options).map_err(CliError::from)?;
+    let assets = plan
+        .entries()
+        .iter()
+        .map(|entry| BundleAssetDto {
+            id: entry.asset_ids[0].clone(),
+            source_asset_ids: entry.asset_ids.clone(),
+            path: format!("assets/{}", entry.filename),
+            media_type: entry.media_type.clone(),
+            size: entry.size,
+        })
+        .collect();
     let manifest = BundleManifestDto {
-        schema_version: DTO_SCHEMA_VERSION,
+        schema_version: BUNDLE_SCHEMA_VERSION,
         markdown: "document.md".into(),
         document_ir: "document.ir.json".into(),
         diagnostics: "diagnostics.json".into(),
@@ -239,13 +558,11 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
         archive.add_directory("assets/", directory_options).map_err(|error| {
             CliError::internal(format!("create bundle assets directory: {error}"))
         })?;
-        for (asset, entry) in
-            result.assets.iter().filter(|asset| !asset.bytes.is_empty()).zip(asset_entries)
-        {
+        for entry in plan.entries() {
             archive
-                .start_file(entry, file_options)
+                .start_file(format!("assets/{}", entry.filename), file_options)
                 .map_err(|error| CliError::internal(format!("create bundle asset: {error}")))?;
-            archive.write_all(&asset.bytes)?;
+            archive.write_all(&result.assets[entry.source_index].bytes)?;
         }
         archive.finish().map_err(|error| CliError::internal(format!("finish bundle: {error}")))?;
     }
@@ -323,7 +640,7 @@ fn write_exact_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), Cl
 mod tests {
     use super::*;
     use into_markdown::{
-        AssetId, Block, BlockNode, BundleManifestDto, ConversionOptions, ConversionResult,
+        Asset, AssetId, Block, BlockNode, BundleManifestDto, ConversionOptions, ConversionResult,
         DiagnosticsDto, Document, NodeId, Provenance, ProvenanceKind, ProvenanceListDto,
         SourceLocator, render_markdown,
     };
@@ -341,6 +658,16 @@ mod tests {
                 bytes: vec![1, 2, 3],
                 external_uri: None,
             }],
+            diagnostics: vec![],
+            provenance: vec![],
+        }
+    }
+
+    fn result_with_assets(document: Document, assets: Vec<Asset>) -> ConversionResult {
+        ConversionResult {
+            document,
+            markdown: String::new(),
+            assets,
             diagnostics: vec![],
             provenance: vec![],
         }
@@ -405,7 +732,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
         let manifest: serde_json::Value =
             serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
-        assert_eq!(manifest["schemaVersion"], DTO_SCHEMA_VERSION);
+        assert_eq!(manifest["schemaVersion"], BUNDLE_SCHEMA_VERSION);
 
         let report = BatchReport::try_new(vec![]).unwrap();
         assert_eq!(report.schema_version, DTO_SCHEMA_VERSION);
@@ -422,12 +749,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"manifest.json".to_owned()));
         assert!(names.contains(&"assets/".to_owned()));
-        assert!(
-            names.contains(&format!(
-                "assets/{}",
-                asset_filename("image", Some("../unsafe image.png"))
-            ))
-        );
+        let planned =
+            plan_assets(&result.document, &result.assets, &ConversionOptions::default()).unwrap();
+        assert!(names.contains(&format!("assets/{}", planned.entries()[0].filename)));
         assert!(!names.iter().any(|name| name.contains("..")));
 
         let mut manifest = String::new();
@@ -468,7 +792,11 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let result = empty_result();
-        let filename = asset_filename("image", Some("../unsafe image.png"));
+        let filename = plan_assets(&result.document, &result.assets, &ConversionOptions::default())
+            .unwrap()
+            .entries()[0]
+            .filename
+            .clone();
         let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let destination = tempfile::tempdir().unwrap();
@@ -521,11 +849,10 @@ mod tests {
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_owned())
             .collect::<Vec<_>>();
-        for asset in &result.assets {
-            assert!(names.contains(&format!(
-                "assets/{}",
-                asset_filename(&asset.id.0, asset.filename.as_deref())
-            )));
+        let plan =
+            plan_assets(&result.document, &result.assets, &ConversionOptions::default()).unwrap();
+        for asset in plan.entries() {
+            assert!(names.contains(&format!("assets/{}", asset.filename)));
         }
         let asset_entries = names
             .iter()
@@ -573,10 +900,9 @@ mod tests {
             })
             .unwrap();
         assert!(archive.by_name(&href).is_ok(), "missing ZIP entry for image href {href}");
-        assert_eq!(
-            href,
-            format!("assets/{}", asset_filename("bundle-image", Some("bundle image.png")))
-        );
+        let plan =
+            plan_assets(&result.document, &result.assets, &ConversionOptions::default()).unwrap();
+        assert_eq!(href, format!("assets/{}", plan.entries()[0].filename));
     }
 
     #[test]
@@ -604,12 +930,15 @@ mod tests {
                 external_uri: None,
             },
         ];
-        let second = root.join(asset_filename("second", Some("same.png")));
+        let result = result_with_assets(Document::default(), assets);
+        let planned =
+            plan_assets(&result.document, &result.assets, &ConversionOptions::default()).unwrap();
+        let second = root.join(planned.uri("second").unwrap());
         fs::write(&second, b"existing").unwrap();
-        let error = write_assets(&assets, &root, AssetModeArg::Extract, ConflictPolicy::Rename)
+        let error = write_assets(&result, &root, AssetModeArg::Extract, ConflictPolicy::Rename)
             .unwrap_err();
         assert_eq!(error.code(), "assetConflict");
-        assert!(!root.join(asset_filename("first", Some("same.PNG"))).exists());
+        assert!(!root.join(planned.uri("first").unwrap()).exists());
         assert_eq!(fs::read(second).unwrap(), b"existing");
         fs::remove_dir_all(root).unwrap();
     }
@@ -640,9 +969,15 @@ mod tests {
             bytes: vec![9],
             external_uri: None,
         };
-        let asset_target = root.join(asset_filename(&asset.id.0, asset.filename.as_deref()));
+        let result = result_with_assets(Document::default(), vec![asset]);
+        let asset_target = root.join(
+            &plan_assets(&result.document, &result.assets, &ConversionOptions::default())
+                .unwrap()
+                .entries()[0]
+                .filename,
+        );
         let error = write_assets_with_hook(
-            &[asset],
+            &result,
             &root,
             AssetModeArg::Extract,
             ConflictPolicy::Rename,
@@ -685,12 +1020,16 @@ mod tests {
             }],
             ..Document::default()
         };
-        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
         let mut options = ConversionOptions::default();
         options.output.asset_uri_prefix = Some("assets".into());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
+        let filename =
+            plan_assets(&document, std::slice::from_ref(&asset), &options).unwrap().entries()[0]
+                .filename
+                .clone();
         assert!(markdown.contains(&format!("assets/{filename}")));
-        write_assets(&[asset], &root.join("assets"), AssetModeArg::Extract, ConflictPolicy::Error)
+        let result = result_with_assets(document, vec![asset]);
+        write_assets(&result, &root.join("assets"), AssetModeArg::Extract, ConflictPolicy::Error)
             .unwrap();
         assert_eq!(fs::read(root.join("assets").join(filename)).unwrap(), [1, 2, 3]);
         fs::remove_dir_all(root).unwrap();
@@ -707,5 +1046,112 @@ mod tests {
         assert_eq!(outcome.path, root.join("document-1.md"));
         assert!(outcome.renamed);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_and_commit_failures_leave_old_output_set_intact() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = root.path().canonicalize().unwrap();
+        let primary = canonical_root.join("document.md");
+        let asset = canonical_root.join("assets/image.png");
+        fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        fs::write(&primary, b"old-document").unwrap();
+        fs::write(&asset, b"old-asset").unwrap();
+        let targets = vec![
+            (primary.clone(), b"new-document".as_slice()),
+            (asset.clone(), b"new-asset".as_slice()),
+        ];
+        let context = ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+
+        let error = commit_output_set_with_hook(
+            &targets,
+            ConflictPolicy::Overwrite,
+            &context,
+            |phase, index| {
+                if phase == "stage" && index == 1 {
+                    Err(CliError::new(ExitClass::Io, "injectedStageFailure", "test"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "injectedStageFailure");
+        assert_eq!(fs::read(&primary).unwrap(), b"old-document");
+        assert_eq!(fs::read(&asset).unwrap(), b"old-asset");
+
+        let error = commit_output_set_with_hook(
+            &targets,
+            ConflictPolicy::Overwrite,
+            &context,
+            |phase, index| {
+                if phase == "commit" && index == 1 {
+                    Err(CliError::new(ExitClass::Io, "injectedCommitFailure", "test"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "injectedCommitFailure");
+        assert_eq!(fs::read(primary).unwrap(), b"old-document");
+        assert_eq!(fs::read(asset).unwrap(), b"old-asset");
+
+        let limits = into_markdown::ResourceLimits { max_temporary_bytes: 5, ..Default::default() };
+        let limited = ExecutionContext::new(into_markdown::ExecutionOptions::default(), limits);
+        let error = commit_output_set(&targets, ConflictPolicy::Overwrite, &limited).unwrap_err();
+        assert_eq!(error.code(), "resourceLimit");
+
+        let token = into_markdown::CancellationToken::new();
+        let cancelled = ExecutionContext::new(
+            into_markdown::ExecutionOptions { cancellation: token.clone(), ..Default::default() },
+            into_markdown::ResourceLimits::default(),
+        );
+        token.cancel();
+        let error = commit_output_set(&targets, ConflictPolicy::Overwrite, &cancelled).unwrap_err();
+        assert_eq!(error.code(), "cancelled");
+        assert_eq!(fs::read(&targets[0].0).unwrap(), b"old-document");
+        assert_eq!(fs::read(&targets[1].0).unwrap(), b"old-asset");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swap_is_rejected_and_rolls_back_primary() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let primary = root.join("document.md");
+        let asset_parent = root.join("assets");
+        let attacker = root.join("attacker");
+        fs::create_dir_all(&asset_parent).unwrap();
+        fs::create_dir_all(&attacker).unwrap();
+        fs::write(&primary, b"old").unwrap();
+        let asset = asset_parent.join("image.png");
+        let targets =
+            vec![(primary.clone(), b"new".as_slice()), (asset.clone(), b"image".as_slice())];
+        let context = ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+        let error = commit_output_set_with_hook(
+            &targets,
+            ConflictPolicy::Overwrite,
+            &context,
+            |phase, index| {
+                if phase == "commit" && index == 1 {
+                    fs::remove_dir(&asset_parent)?;
+                    symlink(&attacker, &asset_parent)?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "symlinkDenied");
+        assert_eq!(fs::read(primary).unwrap(), b"old");
+        assert!(!attacker.join("image.png").exists());
     }
 }

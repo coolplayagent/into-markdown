@@ -31,6 +31,8 @@ use thiserror::Error;
 
 /// Schema version emitted and accepted by application DTOs.
 pub const DTO_SCHEMA_VERSION: u32 = 1;
+/// Current portable bundle manifest schema version.
+pub const BUNDLE_SCHEMA_VERSION: u32 = 2;
 /// Maximum JSON bytes accepted by the default DTO decoder.
 pub const MAX_DTO_JSON_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum JSON nesting accepted by the default DTO decoder.
@@ -261,6 +263,8 @@ pub struct ResultDto {
 pub struct BundleAssetDto {
     /// Stable asset identifier.
     pub id: String,
+    /// All document-scoped IDs represented by this physical content entry.
+    pub source_asset_ids: Vec<String>,
     /// Safe bundle-relative path.
     pub path: String,
     /// MIME media type.
@@ -408,6 +412,8 @@ struct RawResultDto {
 #[serde(rename_all = "camelCase")]
 struct RawBundleAssetDto {
     id: String,
+    #[serde(default)]
+    source_asset_ids: Vec<String>,
     path: String,
     media_type: String,
     size: u64,
@@ -733,6 +739,7 @@ fn encode_manifest(value: &BundleManifestDto) -> RawBundleManifestDto {
             .iter()
             .map(|asset| RawBundleAssetDto {
                 id: asset.id.clone(),
+                source_asset_ids: asset.source_asset_ids.clone(),
                 path: asset.path.clone(),
                 media_type: asset.media_type.clone(),
                 size: asset.size,
@@ -939,7 +946,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
 }
 
 macro_rules! json_api {
-    ($type:ty, $validate:ident, $preflight:ident, $decode:ident, $encode:ident) => {
+    ($type:ty, $version:ident, $validate:ident, $preflight:ident, $decode:ident, $encode:ident) => {
         impl $type {
             /// Serialize this DTO after validating protocol invariants.
             ///
@@ -989,7 +996,7 @@ macro_rules! json_api {
             /// over-budget input.
             pub fn from_json_with_limits(json: &str, limits: &DtoLimits) -> Result<Self, DtoError> {
                 let mut value = decode_value(json, limits)?;
-                require_version(&value)?;
+                $version(&value)?;
                 $preflight(&mut value, limits)?;
                 let decoded: Self = $decode(value)?;
                 decoded.$validate(limits)?;
@@ -999,11 +1006,46 @@ macro_rules! json_api {
     };
 }
 
-json_api!(ResultDto, validate, preflight_result_document, decode_result, encode_result);
-json_api!(DiagnosticsDto, validate, no_preflight, decode_diagnostics, encode_diagnostics);
-json_api!(ProvenanceListDto, validate, no_preflight, decode_provenance, encode_provenance);
-json_api!(BundleManifestDto, validate, no_preflight, decode_manifest, encode_manifest);
-json_api!(BatchReportDto, validate, no_preflight, decode_batch_report, encode_batch_report);
+json_api!(
+    ResultDto,
+    require_version,
+    validate,
+    preflight_result_document,
+    decode_result,
+    encode_result
+);
+json_api!(
+    DiagnosticsDto,
+    require_version,
+    validate,
+    no_preflight,
+    decode_diagnostics,
+    encode_diagnostics
+);
+json_api!(
+    ProvenanceListDto,
+    require_version,
+    validate,
+    no_preflight,
+    decode_provenance,
+    encode_provenance
+);
+json_api!(
+    BundleManifestDto,
+    require_bundle_version,
+    validate,
+    no_preflight,
+    decode_manifest,
+    encode_manifest
+);
+json_api!(
+    BatchReportDto,
+    require_version,
+    validate,
+    no_preflight,
+    decode_batch_report,
+    encode_batch_report
+);
 
 impl ResultDto {
     /// Stream a conversion result directly to a JSON writer without constructing an owned DTO or
@@ -1181,8 +1223,15 @@ impl ProvenanceListDto {
 }
 
 impl BundleManifestDto {
+    #[allow(clippy::too_many_lines)]
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
-        validate_version(self.schema_version)?;
+        if !matches!(self.schema_version, 1 | BUNDLE_SCHEMA_VERSION) {
+            return Err(DtoError::new(
+                DtoErrorCode::UnsupportedSchemaVersion,
+                "$.schemaVersion",
+                format!("expected 1 or {BUNDLE_SCHEMA_VERSION}, got {}", self.schema_version),
+            ));
+        }
         let fixed_entries = [
             ("$.markdown", &self.markdown, "document.md"),
             ("$.documentIr", &self.document_ir, "document.ir.json"),
@@ -1225,9 +1274,56 @@ impl BundleManifestDto {
             return limit("$.assets", "assets", limits.max_assets);
         }
         let mut ids = BTreeSet::new();
+        let mut all_source_ids = BTreeSet::new();
         for (index, asset) in self.assets.iter().enumerate() {
             let path = format!("$.assets[{index}]");
             validate_id(&asset.id, &format!("{path}.id"))?;
+            if self.schema_version == 1 {
+                if asset.source_asset_ids != [asset.id.clone()] {
+                    return Err(DtoError::new(
+                        DtoErrorCode::InvalidField,
+                        format!("{path}.sourceAssetIds"),
+                        "bundle schema 1 represents exactly its canonical asset ID",
+                    ));
+                }
+            } else {
+                if asset.source_asset_ids.is_empty()
+                    || asset.source_asset_ids.first() != Some(&asset.id)
+                {
+                    return Err(DtoError::new(
+                        DtoErrorCode::InvalidField,
+                        format!("{path}.sourceAssetIds"),
+                        "source asset IDs must start with the canonical ID",
+                    ));
+                }
+                let mut aliases = BTreeSet::new();
+                let mut previous = None;
+                for (alias_index, alias) in asset.source_asset_ids.iter().enumerate() {
+                    validate_id(alias, &format!("{path}.sourceAssetIds[{alias_index}]"))?;
+                    if !aliases.insert(alias) {
+                        return Err(DtoError::new(
+                            DtoErrorCode::DuplicateId,
+                            format!("{path}.sourceAssetIds[{alias_index}]"),
+                            "duplicate source asset ID",
+                        ));
+                    }
+                    if previous.is_some_and(|value: &String| value >= alias) {
+                        return Err(DtoError::new(
+                            DtoErrorCode::InvalidField,
+                            format!("{path}.sourceAssetIds"),
+                            "source asset IDs must be in stable byte order",
+                        ));
+                    }
+                    previous = Some(alias);
+                    if !all_source_ids.insert(alias) {
+                        return Err(DtoError::new(
+                            DtoErrorCode::DuplicateId,
+                            format!("{path}.sourceAssetIds[{alias_index}]"),
+                            "source asset ID appears in more than one physical entry",
+                        ));
+                    }
+                }
+            }
             validate_bundle_path(&asset.path, &format!("{path}.path"))?;
             if !asset.path.starts_with("assets/") {
                 return Err(DtoError::new(
@@ -1557,6 +1653,25 @@ fn require_version(value: &serde_json::Value) -> Result<(), DtoError> {
     Ok(())
 }
 
+fn require_bundle_version(value: &serde_json::Value) -> Result<(), DtoError> {
+    let version =
+        value.get("schemaVersion").and_then(serde_json::Value::as_u64).ok_or_else(|| {
+            DtoError::new(
+                DtoErrorCode::InvalidJson,
+                "$.schemaVersion",
+                "schemaVersion is required and must be an unsigned integer",
+            )
+        })?;
+    if !matches!(version, 1 | 2) {
+        return Err(DtoError::new(
+            DtoErrorCode::UnsupportedSchemaVersion,
+            "$.schemaVersion",
+            format!("expected 1 or {BUNDLE_SCHEMA_VERSION}, got {version}"),
+        ));
+    }
+    Ok(())
+}
+
 fn decode_typed<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, DtoError> {
     serde_json::from_value(value).map_err(|error| {
         DtoError::new(DtoErrorCode::InvalidJson, "$", format!("decode DTO fields: {error}"))
@@ -1593,8 +1708,9 @@ fn decode_provenance(value: serde_json::Value) -> Result<ProvenanceListDto, DtoE
 
 fn decode_manifest(value: serde_json::Value) -> Result<BundleManifestDto, DtoError> {
     let raw: RawBundleManifestDto = decode_typed(value)?;
+    let schema_version = raw.schema_version;
     Ok(BundleManifestDto {
-        schema_version: raw.schema_version,
+        schema_version,
         markdown: raw.markdown,
         document_ir: raw.document_ir,
         diagnostics: raw.diagnostics,
@@ -1604,11 +1720,20 @@ fn decode_manifest(value: serde_json::Value) -> Result<BundleManifestDto, DtoErr
         assets: raw
             .assets
             .into_iter()
-            .map(|asset| BundleAssetDto {
-                id: asset.id,
-                path: asset.path,
-                media_type: asset.media_type,
-                size: asset.size,
+            .map(|asset| {
+                let id = asset.id;
+                let source_asset_ids = if schema_version == 1 && asset.source_asset_ids.is_empty() {
+                    vec![id.clone()]
+                } else {
+                    asset.source_asset_ids
+                };
+                BundleAssetDto {
+                    id,
+                    source_asset_ids,
+                    path: asset.path,
+                    media_type: asset.media_type,
+                    size: asset.size,
+                }
             })
             .collect(),
     })
@@ -2816,6 +2941,7 @@ mod tests {
             provenance_schema_version: DTO_SCHEMA_VERSION,
             assets: vec![BundleAssetDto {
                 id: "a".into(),
+                source_asset_ids: vec!["a".into()],
                 path: "../escape".into(),
                 media_type: "text/plain".into(),
                 size: 0,
@@ -2833,6 +2959,7 @@ mod tests {
             provenance_schema_version: DTO_SCHEMA_VERSION,
             assets: vec![BundleAssetDto {
                 id: "a".into(),
+                source_asset_ids: vec!["a".into()],
                 path: "document.md".into(),
                 media_type: "text/plain".into(),
                 size: 0,
@@ -2866,12 +2993,14 @@ mod tests {
         case_collision.assets = vec![
             BundleAssetDto {
                 id: "a".into(),
+                source_asset_ids: vec!["a".into()],
                 path: "assets/Image.png".into(),
                 media_type: "image/png".into(),
                 size: 1,
             },
             BundleAssetDto {
                 id: "b".into(),
+                source_asset_ids: vec!["b".into()],
                 path: "assets/image.png".into(),
                 media_type: "image/png".into(),
                 size: 1,
@@ -2883,6 +3012,23 @@ mod tests {
         wrong_fixed_path.assets.clear();
         wrong_fixed_path.markdown = "other.md".into();
         assert_eq!(wrong_fixed_path.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+    }
+
+    #[test]
+    fn bundle_manifest_one_migrates_aliases_and_two_enforces_canonical_order() {
+        let legacy = r#"{"schemaVersion":1,"markdown":"document.md","documentIr":"document.ir.json","diagnostics":"diagnostics.json","diagnosticsSchemaVersion":1,"provenance":"provenance.json","provenanceSchemaVersion":1,"assets":[{"id":"image","path":"assets/image.png","mediaType":"image/png","size":3}]}"#;
+        let decoded = BundleManifestDto::from_json(legacy).unwrap();
+        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.assets[0].source_asset_ids, ["image"]);
+        assert_eq!(BundleManifestDto::from_json(&decoded.to_json().unwrap()).unwrap(), decoded);
+
+        let mut current = decoded;
+        current.schema_version = BUNDLE_SCHEMA_VERSION;
+        current.assets[0].id = "a".into();
+        current.assets[0].source_asset_ids = vec!["a".into(), "z".into()];
+        assert!(current.to_json().is_ok());
+        current.assets[0].source_asset_ids.reverse();
+        assert_eq!(current.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
     }
 
     #[test]

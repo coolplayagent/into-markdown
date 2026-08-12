@@ -76,19 +76,29 @@ Document metadata 不进入 Markdown，防止 namespaced properties 意外泄漏
 仍可从结构化 Document 读取它。provenance 和诊断同样只存在于结构化转换结果中。
 页面、幻灯片、工作表与时间片段使用可见、稳定的标题或时间标签表达。
 
-渲染器只生成资源引用，不创建目录或写文件。`extract` 使用
-`asset_uri_prefix + asset-<SHA-256(asset ID)>.<安全扩展名>`；建议文件名只贡献
-最长 16 字节的 ASCII 字母数字扩展名。该纯函数由渲染器和 CLI 写出层共享，结果
-长度有界、全 ASCII，且不受路径分隔符、Unicode、大小写折叠与 Windows 保留名影响。
+渲染前由统一资源规划器冻结 `AssetId -> 物理条目 -> URI` 映射。`extract` 使用
+`asset_uri_prefix + asset-<SHA-256(bytes)>.<MIME 权威扩展名>`；完整 256 位摘要进入
+文件名，建议文件名不参与路径或扩展名决策。不同 ID 的相同字节与相同规范化 MIME
+共享一个物理条目；相同字节却声明不同 MIME 返回稳定的 `assetMetadataConflict`，
+摘要键命中后仍比较完整字节，差异返回 `contentHashCollision`。文件名为有界 ASCII，
+不受路径分隔符、Unicode 等价形式、大小写折叠、ADS 与 Windows 保留名影响。
 CLI 以 Markdown 所在目录（stdout 使用当前工作目录）为基准，对文件系统路径先按
 POSIX、Windows drive 或 UNC 语法做词法规范化，再在相同 root/drive/share 内生成
 逐段编码的相对 URI；跨 root/drive/share 稳定拒绝，避免把盘符解释为 scheme 或把
 UNC server 解释为网络 host。渲染器保留其中已经形成的 `%HH`，避免二次编码。bundle
 在渲染前固定使用 `assets` 前缀，其 `document.md` 只引用归档内条目，不执行额外的
 外部 extract。
-`embed` 只接受有字节且 MIME token 安全的资源并
-生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。资源落盘、冲突
-处理与原子写入属于调用方职责。
+资源 URI 前缀只接受 portable 相对 URI path；拒绝绝对路径、scheme-relative、盘符、
+控制字符、query、fragment 以及 `javascript`、`data`、`file` 等 scheme。`embed` 的
+data URI 只能由渲染器从已校验 MIME 与字节内部生成。`embed` 只接受有字节且 MIME token 安全的资源并
+生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。
+
+CLI 把主产物和所有去重后的资源视为一个输出集合：完整预检后，在同一文件系统的
+事务目录写完并 fsync 全部 stage 文件，再提交目标。`overwrite` 会先把旧文件移入
+事务备份，任一 rename 或目录同步失败都会反向恢复；`rename` 与 `error` 不覆盖
+竞态产生的文件。跨文件系统、符号链接或无法安全核验的路径在任何目标变更前拒绝。
+stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EPIPE 成功语义）后才
+提交；非 EPIPE 写失败丢弃 stage，已由操作系统接收的 stdout 前缀不能撤回。
 
 源文档链接会拒绝控制字符、任何 HTML character reference、`javascript`、
 `vbscript`、`data`、`file` scheme 和含 userinfo 的绝对 URL，再对 Markdown 目标

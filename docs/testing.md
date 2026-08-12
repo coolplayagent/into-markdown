@@ -82,6 +82,13 @@ CommonMark href 与 file-URL 回读，并断言跨 root/drive/share 返回稳定
 Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与目录 `040755`，
 并在 Unix 临时目录真实解压有资源归档，验证 `assets/` 可遍历且资源可读取。
 
+资源规划测试还覆盖相同字节的跨 ID 去重、MIME 冲突、完整摘要、危险 URI prefix、
+悬空引用、单项与总量预算，以及 Windows reserved/ADS、大小写折叠和 Unicode 路径。
+输出集合以故障注入覆盖第 N 个 stage、fsync、commit/rename 竞态与 overwrite 回滚；
+任何失败都断言旧集合完整保留且事务 stage 不泄漏。跨文件系统与 symlink swap 测试
+必须在首次目标 mutation 前得到稳定拒绝。bundle 重复运行应逐字节一致，manifest
+schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测试。
+
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending
 future 的取消和 deadline 唤醒、多 waiter 竞争、checked 预算累加，以及失败后临时
 产物清理。阻塞来源还要覆盖有界工作者过载、deadline 先于系统调用返回、增长文件只读

@@ -355,6 +355,22 @@ impl ExecutionContext {
     ///
     /// Returns a cancellation, timeout, resource-limit, or local I/O error.
     pub fn temporary_file(&self, prefix: &str) -> Result<TemporaryFile, ConversionError> {
+        self.temporary_file_in(std::env::temp_dir(), prefix)
+    }
+
+    /// Create an automatically cleaned, accounted temporary file in `directory`.
+    ///
+    /// Callers use this form when a later atomic rename requires the stage file
+    /// to reside on a specific filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, resource-limit, or local I/O error.
+    pub fn temporary_file_in(
+        &self,
+        directory: impl AsRef<std::path::Path>,
+        prefix: &str,
+    ) -> Result<TemporaryFile, ConversionError> {
         self.checkpoint()?;
         let safe_prefix = prefix
             .chars()
@@ -364,7 +380,8 @@ impl ExecutionContext {
         let safe_prefix = if safe_prefix.is_empty() { "into-md" } else { &safe_prefix };
         for attempt in 0_u32..128 {
             let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let path = std::env::temp_dir()
+            let path = directory
+                .as_ref()
                 .join(format!("{safe_prefix}-{}-{nonce}-{attempt}.tmp", std::process::id()));
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(file) => {
@@ -584,6 +601,29 @@ impl TemporaryFile {
             .map_err(Into::into)
     }
 
+    /// Flush file contents and metadata to stable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cancellation, timeout, closed-file, or local I/O error.
+    pub fn sync_all(&mut self) -> Result<(), ConversionError> {
+        self.context.checkpoint()?;
+        self.file
+            .as_mut()
+            .ok_or_else(|| ConversionError::Internal { detail: "temporary file is closed".into() })?
+            .sync_all()
+            .map_err(Into::into)
+    }
+
+    /// Close the file and transfer cleanup responsibility to the caller.
+    #[must_use]
+    pub fn persist(mut self) -> PathBuf {
+        self.file.take();
+        self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
+        self.charged = 0;
+        std::mem::take(&mut self.path)
+    }
+
     /// Write the complete buffer with stable cancellation and budget errors.
     ///
     /// # Errors
@@ -663,7 +703,9 @@ impl Write for TemporaryFile {
 impl Drop for TemporaryFile {
     fn drop(&mut self) {
         self.file.take();
-        let _ = std::fs::remove_file(&self.path);
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
         self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
     }
 }

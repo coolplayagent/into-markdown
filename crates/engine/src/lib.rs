@@ -248,15 +248,24 @@ impl Engine {
                     limit: "max_asset_bytes",
                     detail: "asset size cannot be represented as u64".into(),
                 })?;
+            if size > request.options.limits.max_asset_bytes {
+                return Err(ConversionError::ResourceLimit {
+                    limit: "max_asset_bytes",
+                    detail: format!(
+                        "asset {}: {size} > {}",
+                        asset.id.0, request.options.limits.max_asset_bytes
+                    ),
+                });
+            }
             total.checked_add(size).ok_or_else(|| ConversionError::ResourceLimit {
                 limit: "max_asset_bytes",
                 detail: "asset byte count overflowed".into(),
             })
         })?;
-        if asset_bytes > request.options.limits.max_asset_bytes {
+        if asset_bytes > request.options.limits.max_total_asset_bytes {
             return Err(ConversionError::ResourceLimit {
-                limit: "max_asset_bytes",
-                detail: format!("{asset_bytes} > {}", request.options.limits.max_asset_bytes),
+                limit: "max_total_asset_bytes",
+                detail: format!("{asset_bytes} > {}", request.options.limits.max_total_asset_bytes),
             });
         }
         let _asset_memory = context.reserve_memory(asset_bytes)?;

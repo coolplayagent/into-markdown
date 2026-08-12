@@ -46,10 +46,15 @@ JSON, portable bundles, layered configuration, providers, models, and plugins.
 Network and AI access are disabled by default; remote sources and providers
 require an explicit `--allow-network` on every invocation.
 
-Structured artifacts start at `schemaVersion: 1`. Conversion results, bundles,
-and batch reports use public DTOs shared by the CLI and future HTTP service.
+Conversion results and batch reports use public DTO schema 1 shared by the CLI
+and future HTTP service.
 For example, `--emit result-json` returns `markdown`, a versioned `document`,
-base64 `assets`, `diagnostics`, and `provenance`. The authoritative Chinese
+base64 `assets`, `diagnostics`, and `provenance`.
+
+Extracted assets are deduplicated by the complete content SHA-256 and use a
+MIME-authoritative extension. Markdown and all assets commit as one output set.
+Portable bundle manifests use `schemaVersion: 2`; `sourceAssetIds` maps multiple
+document asset IDs to one physical entry.
 [DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.
 
 TXT conversion is available for UTF-8, BOM-marked UTF-16, and a bounded set of

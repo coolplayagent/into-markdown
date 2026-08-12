@@ -987,6 +987,7 @@ struct WorkPlan {
 struct ExecutionPolicy {
     options: ConversionOptions,
     execution: into_markdown::ExecutionOptions,
+    output_context: into_markdown::ExecutionContext,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -1048,14 +1049,15 @@ fn run_conversion(
         return Ok(());
     }
 
+    let execution = into_markdown::ExecutionOptions {
+        timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
+        ..into_markdown::ExecutionOptions::default()
+    };
+    let output_context =
+        into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
-        execution: into_markdown::ExecutionOptions {
-            timeout: arguments
-                .timeout_ms
-                .or(loaded.timeout_ms)
-                .map(std::time::Duration::from_millis),
-            ..into_markdown::ExecutionOptions::default()
-        },
+        execution,
+        output_context,
         options: loaded.options,
         hint: FormatHint {
             format: arguments.format.as_deref().map(parse_format).transpose()?,
@@ -1199,6 +1201,7 @@ fn apply_conversion_overrides(
     assign!(max_table_columns, max_table_columns);
     assign!(max_table_cells, max_table_cells);
     assign!(max_field_size, max_field_bytes);
+    assign!(max_total_asset_size, max_total_asset_bytes);
     if let Some(mode) = arguments.asset_mode {
         options.output.asset_mode = match mode {
             AssetModeArg::Extract => AssetMode::Extract,
@@ -1528,8 +1531,8 @@ fn add_numeric_suffix(path: &Path, number: usize) -> PathBuf {
 fn process_stdout(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
-    catalog: Catalog,
-    json_log: bool,
+    _catalog: Catalog,
+    _json_log: bool,
     context: &mut RunContext<'_>,
 ) -> Result<BatchItemReport, CliError> {
     let asset_output = plan_stdout_asset_output(
@@ -1540,40 +1543,41 @@ fn process_stdout(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
-    if let Some(assets_dir) = asset_output.external_directory {
-        if !result.assets.is_empty() {
-            for outcome in output::write_assets(
-                &result.assets,
-                &assets_dir,
-                policy.asset_mode,
-                policy.conflict,
-            )? {
-                if outcome.renamed {
-                    write_stderr_event(
-                        context.stderr,
-                        json_log,
-                        "warning",
-                        "assetRenamed",
-                        &format!("asset output renamed to {}", outcome.path.display()),
-                        Some(&plan.item.display),
-                        &format!(
-                            "{}: asset output renamed to {}",
-                            catalog.warning_prefix(),
-                            outcome.path.display()
-                        ),
-                    )?;
-                }
-            }
-        }
+    let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
+        (!result.assets.is_empty())
+            .then(|| {
+                output::stage_assets(
+                    &result,
+                    &assets_dir,
+                    policy.asset_mode,
+                    policy.conflict,
+                    &policy.output_context,
+                )
+            })
+            .transpose()?
     } else if policy.asset_mode == AssetModeArg::Extract
         && policy.emit != EmitKind::Bundle
         && !result.assets.is_empty()
     {
-        return Err({
-            CliError::usage("stdin and URI inputs with extracted assets require --assets-dir")
-        });
+        return Err(CliError::usage(
+            "stdin and URI inputs with extracted assets require --assets-dir",
+        ));
+    } else {
+        None
+    };
+    let encoded = output::encode_result(&result, policy.emit)?;
+    if let Err(error) = context.stdout.write_all(&encoded) {
+        let error = CliError::from(error);
+        if error.is_broken_pipe()
+            && let Some(staged) = staged_assets
+        {
+            staged.commit()?;
+        }
+        return Err(error);
     }
-    context.stdout.write_all(&output::encode_result(&result, policy.emit)?)?;
+    if let Some(staged) = staged_assets {
+        staged.commit()?;
+    }
     Ok(BatchItemReport {
         input: plan.item.display.clone(),
         output: None,
@@ -1667,31 +1671,21 @@ fn process_file_task_inner(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
-    if let Some(assets_dir) = asset_output.external_directory.as_deref() {
-        output::preflight_assets(&result.assets, assets_dir, policy.asset_mode, policy.conflict)?;
-    }
-    let outcome = output::write_preflighted_file(
+    let outcome = output::write_output_set(
         &output_path,
         &output::encode_result(&result, policy.emit)?,
+        &result,
+        asset_output.external_directory.as_deref(),
+        policy.asset_mode,
         policy.conflict,
+        &policy.output_context,
     )?;
     let mut warnings = Vec::new();
-    if output_path != requested {
+    if outcome.renamed || output_path != requested {
         warnings.push(format!(
             "output renamed to {} because the requested path existed",
             outcome.path.display()
         ));
-    }
-    if let Some(assets_dir) = asset_output.external_directory
-        && !result.assets.is_empty()
-    {
-        for asset in
-            output::write_assets(&result.assets, &assets_dir, policy.asset_mode, policy.conflict)?
-        {
-            if asset.renamed {
-                warnings.push(format!("asset renamed to {}", asset.path.display()));
-            }
-        }
     }
     Ok((outcome.path, result.diagnostics, warnings))
 }
@@ -2255,7 +2249,7 @@ mod tests {
     use super::*;
     use into_markdown::{
         Asset, AssetId, Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind,
-        SourceLocator, asset_filename, render_markdown,
+        SourceLocator, render_markdown,
     };
     use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
@@ -2487,13 +2481,15 @@ mod tests {
             Some(asset_uri_prefix_for_file(&output, &directory, root.path()).unwrap());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
         let href = markdown_image_href(&markdown);
-        output::write_assets(
-            std::slice::from_ref(&asset),
-            &directory,
-            AssetModeArg::Extract,
-            ConflictPolicy::Error,
-        )
-        .unwrap();
+        let result = into_markdown::ConversionResult {
+            document: document.clone(),
+            markdown,
+            assets: vec![asset.clone()],
+            diagnostics: vec![],
+            provenance: vec![],
+        };
+        output::write_assets(&result, &directory, AssetModeArg::Extract, ConflictPolicy::Error)
+            .unwrap();
         let base_url = url::Url::from_directory_path(output.parent().unwrap()).unwrap();
         let resolved = base_url.join(&href).unwrap();
         assert_eq!(resolved.scheme(), "file");
@@ -2514,7 +2510,11 @@ mod tests {
         let markdown = render_markdown(document, std::slice::from_ref(asset), &options).unwrap();
         let href = markdown_image_href(&markdown);
         let resolved = url::Url::parse(base).unwrap().join(&href).unwrap();
-        let filename = asset_filename(&asset.id.0, asset.filename.as_deref());
+        let filename = into_markdown::plan_assets(document, std::slice::from_ref(asset), &options)
+            .unwrap()
+            .entries()[0]
+            .filename
+            .clone();
         assert_eq!(resolved.as_str(), format!("{expected_directory}/{filename}"));
         assert_eq!(resolved.scheme(), "file");
         assert!(resolved.query().is_none());

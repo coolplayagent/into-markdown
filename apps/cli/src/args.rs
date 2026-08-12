@@ -228,6 +228,10 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
     pub max_asset_size: Option<u64>,
 
+    /// Maximum retained bytes across all assets.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_total_asset_size: Option<u64>,
+
     /// Total conversion timeout in milliseconds.
     #[arg(long, value_name = "MILLISECONDS", value_parser = parse_duration_ms)]
     pub timeout_ms: Option<u64>,

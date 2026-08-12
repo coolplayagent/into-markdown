@@ -47,5 +47,16 @@
 - 日志和诊断不得包含文档原始字节、凭据、签名 URL 或不受限制的提供者载荷。
 
 资源限制错误是权威错误，绝不能作为可恢复的解析器错误被吞掉。
+
+## 输出资源与文件系统
+
+- 资源名称只来自完整内容 SHA-256 与 MIME allowlist 扩展，不采用源文件路径、Unicode
+  名称、盘符、UNC、ADS 或保留设备名。相同内容的 MIME 声明冲突会失败，不按扩展猜测。
+- `asset_uri_prefix` 仅接受 portable 相对 URI path；拒绝绝对路径、scheme-relative、
+  query、fragment、控制字符与 scheme。`data:` 仅由 embed renderer 内部生成。
+- CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
+  stage 和 fsync。提交中断会反向恢复备份，避免 Markdown 指向旧资源或半成品。
+- bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理
+  映射；ZIP 条目与 manifest path 双向一致，portable path 比较包含大小写折叠规则。
 取消与总 timeout 同样贯穿每个 SPI；长循环和外部服务等待必须设置协作检查点，不能
 依赖引擎外层检查来中断内部工作。

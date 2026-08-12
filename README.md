@@ -42,8 +42,8 @@ CLI 采用直接输入形式，不提供 `convert` 子命令。支持多文件�
 URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider、模型与插件管理。
 联网与 AI 默认关闭，远程输入和 Provider 每次都需要显式 `--allow-network`。
 
-结构化产物以 `schemaVersion: 1` 开始；转换结果、Bundle 和批量报告使用 CLI 与未来
-HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`、版本化
+转换结果和批量报告使用 CLI 与未来 HTTP 服务共享的公共 DTO schema 1。例如
+`--emit result-json` 返回 `markdown`、版本化
 `document`、base64 `assets`、`diagnostics` 和 `provenance`。协议细节、兼容策略与
 不可信 JSON 资源预算见[稳定数据传输契约](docs/dto.md)。
 
@@ -64,6 +64,10 @@ archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳
 不会读取伪造安装状态或伪装成功。其他格式转换、OCR 推理、Provider 请求和插件
 执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 同样 fail closed；目录解析和离线元数据查询不受影响。
+
+抽取资源按完整内容 SHA-256 去重并使用 MIME 权威扩展名；主 Markdown 与全部资源
+作为同一输出集合提交。portable bundle manifest 使用 `schemaVersion: 2`，以
+`sourceAssetIds` 表达多个文档资源 ID 到一个物理条目的映射。
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、

@@ -104,12 +104,13 @@ into-md <INPUT...>
   `<文档名>_assets/`；stdin 和 URI 若产生资源，必须指定 `--assets-dir`。
 - 文件冲突默认改名为 `name-1.ext` 并发出 warning；`error` 拒绝写入，
   `overwrite` 通过同目录临时文件原子替换。
-- extract 资源使用 `asset-<SHA-256(asset ID)>.<安全扩展名>` 稳定命名，并在主产物
+- extract 资源使用 `asset-<完整 SHA-256(bytes)>.<MIME 权威扩展名>` 稳定命名；
+  相同内容与 MIME 的多个 ID 只写一个物理文件，并在主产物
   或任何资源写入前预检全部非空资源。为了防止 Markdown 链接因改名漂移，资源目标
   已存在时 `rename` 安全降级为 `assetConflict`；`overwrite` 才会原子替换稳定目标。
   `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
-  失败而不会被覆盖。当前不承诺主产物与多个资源之间的整体回滚，跨文件事务边界由
-  资源写出策略任务处理。
+  失败而不会被覆盖。主产物与全部资源完整 stage、fsync 后作为一个集合提交；失败会
+  回滚已提交目标，`overwrite` 不产生新旧混合集合。跨文件系统或符号链接路径提前拒绝。
 - CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
   规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
   目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定
@@ -165,6 +166,7 @@ AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allo
 --max-depth <N>
 --max-pages <N>
 --max-asset-size <SIZE>
+--max-total-asset-size <SIZE>
 --max-memory-size <SIZE>
 --max-temporary-size <SIZE>
 --timeout-ms <MILLISECONDS>

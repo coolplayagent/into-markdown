@@ -55,15 +55,21 @@ byte-range 查询对 run 起点做二分，TXT 的顺序分行则使用单调游
 SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器诊断和引擎按深度优先
 阅读顺序收集的 provenance 原样保留在 `ConversionResult` 中。
 
-资源模式只决定 Markdown 表示：`extract` 生成与资源写出层共享的
-`asset-<SHA-256(asset ID)>.<安全扩展名>` 有界 ASCII 文件名，
+资源模式只决定 Markdown 表示：统一规划器在渲染前生成并冻结与资源写出层共享的
+`asset-<完整 SHA-256(bytes)>.<MIME 权威扩展名>` 有界 ASCII 文件名，
 `embed` 生成 base64 data URI，`omit` 保留 alt 而不生成悬空链接。资源写出层必须
-使用相同名字且不能在写出后单方面改名。CLI 在主产物或任何资源写入前预检全部
+使用相同计划且不能在写出后单方面改名。相同内容和规范化 MIME 按完整字节去重；
+多个 `AssetId` 可映射到同一 URI，相同内容的 MIME 冲突稳定失败。CLI 在主产物或任何资源写入前预检全部
 非空资源目标；稳定资源路径已经存在时，`rename` 与 `error` 都返回
 `assetConflict`，只有 `overwrite` 会原子替换。`rename` 与 `error` 的每个精确目标
-都使用原子 no-clobber 写入，因此预检后的竞态文件不会被覆盖；若竞态发生在一组
-输出的中途，已完成的主产物或资源不会自动回滚。跨主产物与全部资源的事务式提交
-由资源写出策略任务统一实现。
+都使用原子 no-clobber 写入，因此预检后的竞态文件不会被覆盖。提交前完整 stage 和
+fsync；提交失败会恢复全部旧目标并删除本事务新建目标，所以 `overwrite` 只产生完整
+旧集合或完整新集合。跨文件系统和符号链接路径在任何目标变更前拒绝。
+
+Bundle manifest 使用独立的 `schemaVersion: 2`，不改变结果 DTO、Document IR、
+diagnostics 与 provenance 的 schema 1。每个物理资源只有一个 path；`id` 是按字节序
+排序后的 canonical ID，`sourceAssetIds` 列出映射到该内容的所有 ID。reader 同时接受
+manifest schema 1 和 2，并把 schema 1 条目归一成 `sourceAssetIds=[id]`。
 
 CLI 将文件系统路径按 POSIX、Windows drive 和 UNC 语法独立做词法规范化，并只在
 相同 root/drive/share 内生成相对于 Markdown 基准目录的 percent-encoded URI path
