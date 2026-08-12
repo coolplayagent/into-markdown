@@ -1,5 +1,62 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use thiserror::Error;
+
+/// JSON schema version emitted and accepted by this library.
+pub const DOCUMENT_SCHEMA_VERSION: u32 = 1;
+
+/// Stable categories returned while decoding or validating document IR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum IrErrorCode {
+    /// The input is not syntactically valid JSON or does not match the schema.
+    InvalidJson,
+    /// The document declares a schema version this library cannot read.
+    UnsupportedSchemaVersion,
+    /// A node violates a structural or semantic invariant.
+    InvalidNode,
+    /// A provenance record is missing or internally inconsistent.
+    InvalidProvenance,
+    /// A source locator is invalid.
+    InvalidLocator,
+    /// A document-scoped node identifier occurs more than once.
+    DuplicateNodeId,
+}
+
+impl IrErrorCode {
+    /// Stable lower-camel-case representation for machine consumers.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidJson => "invalidJson",
+            Self::UnsupportedSchemaVersion => "unsupportedSchemaVersion",
+            Self::InvalidNode => "invalidNode",
+            Self::InvalidProvenance => "invalidProvenance",
+            Self::InvalidLocator => "invalidLocator",
+            Self::DuplicateNodeId => "duplicateNodeId",
+        }
+    }
+}
+
+/// Controlled failure from an IR wire or validation boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{code}: {path}: {detail}", code = code.as_str())]
+pub struct IrError {
+    /// Stable machine-readable category.
+    pub code: IrErrorCode,
+    /// Stable JSON-style path to the rejected value.
+    pub path: String,
+    /// Human-readable explanation; callers must branch on [`Self::code`].
+    pub detail: String,
+}
+
+impl IrError {
+    fn new(code: IrErrorCode, path: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { code, path: path.into(), detail: detail.into() }
+    }
+}
 
 /// Stable node identifier within a document.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -24,6 +81,7 @@ pub struct Rect {
 
 /// Spreadsheet cell address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CellRef {
     /// Zero-based row.
     pub row: u32,
@@ -33,6 +91,7 @@ pub struct CellRef {
 
 /// Time range in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimeRange {
     /// Inclusive start.
     pub start_ms: u64,
@@ -42,6 +101,7 @@ pub struct TimeRange {
 
 /// Location of extracted content in the source.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceLocator {
     /// One-based page number.
     pub page: Option<u32>,
@@ -77,6 +137,7 @@ pub enum ProvenanceKind {
 
 /// Provenance attached to every material IR node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Provenance {
     /// Origin class.
     pub kind: ProvenanceKind,
@@ -89,7 +150,7 @@ pub struct Provenance {
 }
 
 /// Inline formatting mark.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InlineMark {
     /// Bold text.
@@ -109,6 +170,7 @@ pub enum InlineMark {
 /// Inline content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum Inline {
     /// Plain or styled text.
     Text {
@@ -128,6 +190,8 @@ pub enum Inline {
     },
     /// Inline formula, preferably LaTeX.
     Formula(String),
+    /// Reference to a document footnote definition.
+    FootnoteReference(String),
     /// Explicit source line break.
     LineBreak,
 }
@@ -146,6 +210,7 @@ pub enum ListKind {
 
 /// List item containing arbitrary blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListItem {
     /// Optional task state.
     pub checked: Option<bool>,
@@ -157,6 +222,7 @@ pub struct ListItem {
 
 /// Table cell containing arbitrary blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Cell {
     /// Row span, at least one after validation.
     pub row_span: u32,
@@ -170,6 +236,7 @@ pub struct Cell {
 
 /// Logical table row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TableRow {
     /// Origin cells in display order.
     pub cells: Vec<Cell>,
@@ -178,6 +245,7 @@ pub struct TableRow {
 /// Structural block content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum Block {
     /// Paragraph.
     Paragraph(Vec<Inline>),
@@ -263,6 +331,7 @@ pub enum Block {
 
 /// Block plus identity and provenance.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockNode {
     /// Document-scoped stable identifier.
     pub id: NodeId,
@@ -274,6 +343,7 @@ pub struct BlockNode {
 
 /// Embedded or external resource returned separately from Markdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Asset {
     /// Stable document-scoped ID.
     pub id: AssetId,
@@ -289,6 +359,7 @@ pub struct Asset {
 
 /// General source metadata that remains deterministic and non-secret.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentMetadata {
     /// Document title.
     pub title: Option<String>,
@@ -299,12 +370,25 @@ pub struct DocumentMetadata {
 }
 
 /// Format-independent document representation.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Document {
+    /// Version of the serialized document contract.
+    pub schema_version: u32,
     /// Document metadata.
     pub metadata: DocumentMetadata,
     /// Body content in source reading order.
     pub blocks: Vec<BlockNode>,
+}
+
+impl Default for Document {
+    fn default() -> Self {
+        Self {
+            schema_version: DOCUMENT_SCHEMA_VERSION,
+            metadata: DocumentMetadata::default(),
+            blocks: Vec::new(),
+        }
+    }
 }
 
 /// Diagnostic severity.
@@ -321,6 +405,7 @@ pub enum DiagnosticSeverity {
 
 /// Structured non-fatal diagnostic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     /// Stable machine-readable code.
     pub code: String,
@@ -330,4 +415,715 @@ pub struct Diagnostic {
     pub message: String,
     /// Optional source location.
     pub locator: Option<SourceLocator>,
+}
+
+impl Document {
+    /// Serialize a validated document using the stable JSON contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`IrErrorCode`] when the document is invalid or JSON
+    /// serialization fails.
+    pub fn to_json(&self) -> Result<String, IrError> {
+        self.validate()?;
+        serde_json::to_string(self).map_err(|error| {
+            IrError::new(IrErrorCode::InvalidJson, "$", format!("serialize document: {error}"))
+        })
+    }
+
+    /// Decode and validate a document from the stable JSON contract.
+    ///
+    /// Unknown object fields are ignored for additive compatibility within a
+    /// schema version. A different schema version is rejected before use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IrErrorCode::InvalidJson`] for malformed JSON/schema shapes,
+    /// or the applicable validation code for invalid IR.
+    pub fn from_json(json: &str) -> Result<Self, IrError> {
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
+            IrError::new(IrErrorCode::InvalidJson, "$", format!("decode document: {error}"))
+        })?;
+        let version =
+            value.get("schemaVersion").and_then(serde_json::Value::as_u64).ok_or_else(|| {
+                IrError::new(
+                    IrErrorCode::InvalidJson,
+                    "$.schemaVersion",
+                    "schemaVersion must be an unsigned integer",
+                )
+            })?;
+        if version != u64::from(DOCUMENT_SCHEMA_VERSION) {
+            return Err(IrError::new(
+                IrErrorCode::UnsupportedSchemaVersion,
+                "$.schemaVersion",
+                format!("expected {DOCUMENT_SCHEMA_VERSION}, got {version}"),
+            ));
+        }
+        let document: Self = serde_json::from_value(value).map_err(|error| {
+            IrError::new(IrErrorCode::InvalidJson, "$", format!("decode document: {error}"))
+        })?;
+        document.validate()?;
+        Ok(document)
+    }
+
+    /// Validate the schema version and all recursive IR invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, path-addressed [`IrError`] without panicking.
+    pub fn validate(&self) -> Result<(), IrError> {
+        if self.schema_version != DOCUMENT_SCHEMA_VERSION {
+            return Err(IrError::new(
+                IrErrorCode::UnsupportedSchemaVersion,
+                "$.schemaVersion",
+                format!("expected {DOCUMENT_SCHEMA_VERSION}, got {}", self.schema_version),
+            ));
+        }
+        let mut node_ids = BTreeSet::new();
+        let mut footnotes = BTreeSet::new();
+        let mut footnote_references = BTreeSet::new();
+        validate_nodes(
+            &self.blocks,
+            "$.blocks",
+            &mut node_ids,
+            &mut footnotes,
+            &mut footnote_references,
+        )?;
+        if let Some(label) = footnote_references.difference(&footnotes).next() {
+            return invalid_node("$.blocks", format!("undefined footnote reference {label}"));
+        }
+        Ok(())
+    }
+}
+
+fn validate_nodes(
+    nodes: &[BlockNode],
+    path: &str,
+    node_ids: &mut BTreeSet<String>,
+    footnotes: &mut BTreeSet<String>,
+    footnote_references: &mut BTreeSet<String>,
+) -> Result<(), IrError> {
+    for (index, node) in nodes.iter().enumerate() {
+        let node_path = format!("{path}[{index}]");
+        if node.id.0.trim().is_empty() {
+            return Err(IrError::new(
+                IrErrorCode::InvalidNode,
+                format!("{node_path}.id"),
+                "node ID must not be empty",
+            ));
+        }
+        if !node_ids.insert(node.id.0.clone()) {
+            return Err(IrError::new(
+                IrErrorCode::DuplicateNodeId,
+                format!("{node_path}.id"),
+                format!("duplicate node ID {}", node.id.0),
+            ));
+        }
+        validate_provenance(&node.provenance, &format!("{node_path}.provenance"))?;
+        validate_block(
+            &node.block,
+            &format!("{node_path}.block"),
+            node_ids,
+            footnotes,
+            footnote_references,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_provenance(provenance: &Provenance, path: &str) -> Result<(), IrError> {
+    if provenance.provider.trim().is_empty() {
+        return Err(IrError::new(
+            IrErrorCode::InvalidProvenance,
+            format!("{path}.provider"),
+            "provider ID must not be empty",
+        ));
+    }
+    if provenance
+        .confidence
+        .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidProvenance,
+            format!("{path}.confidence"),
+            "confidence must be finite and in 0.0..=1.0",
+        ));
+    }
+    validate_locator(&provenance.locator, &format!("{path}.locator"))
+}
+
+fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> {
+    if locator.page == Some(0) {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.page"),
+            "page numbers are one-based",
+        ));
+    }
+    if locator.slide == Some(0) {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.slide"),
+            "slide numbers are one-based",
+        ));
+    }
+    if locator.sheet.as_ref().is_some_and(|value| value.trim().is_empty()) {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.sheet"),
+            "worksheet name must not be empty",
+        ));
+    }
+    if locator.cell.is_some() && locator.sheet.is_none() {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.cell"),
+            "cell coordinates require a worksheet name",
+        ));
+    }
+    if let Some(bounds) = locator.bounds
+        && (!bounds.x.is_finite()
+            || !bounds.y.is_finite()
+            || !bounds.width.is_finite()
+            || !bounds.height.is_finite()
+            || bounds.width < 0.0
+            || bounds.height < 0.0)
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.bounds"),
+            "bounds must be finite with non-negative dimensions",
+        ));
+    }
+    if let Some(range) = locator.time
+        && range.start_ms >= range.end_ms
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.time"),
+            "time range start must precede end",
+        ));
+    }
+    if locator.part.as_ref().is_some_and(|value| value.trim().is_empty()) {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.part"),
+            "part name must not be empty",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_block(
+    block: &Block,
+    path: &str,
+    node_ids: &mut BTreeSet<String>,
+    footnotes: &mut BTreeSet<String>,
+    footnote_references: &mut BTreeSet<String>,
+) -> Result<(), IrError> {
+    match block {
+        Block::Paragraph(content) => {
+            validate_inlines(content, &format!("{path}.data"), false, footnote_references)
+        }
+        Block::Heading { level, content } => {
+            if !(1..=6).contains(level) {
+                return invalid_node(format!("{path}.data.level"), "heading level must be 1..=6");
+            }
+            validate_inlines(content, &format!("{path}.data.content"), false, footnote_references)
+        }
+        Block::List { kind, start, items } => {
+            validate_list(*kind, *start, items, path, node_ids, footnotes, footnote_references)
+        }
+        Block::Table { rows } => {
+            validate_table(rows, path, node_ids, footnotes, footnote_references)
+        }
+        Block::Code { language, .. } => {
+            if language.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                return invalid_node(
+                    format!("{path}.data.language"),
+                    "code language must not be empty",
+                );
+            }
+            Ok(())
+        }
+        Block::Formula(value) => nonempty(value, &format!("{path}.data"), "formula"),
+        Block::Footnote { label, blocks } => {
+            nonempty(label, &format!("{path}.data.label"), "footnote label")?;
+            if !footnotes.insert(label.clone()) {
+                return invalid_node(
+                    format!("{path}.data.label"),
+                    format!("duplicate footnote label {label}"),
+                );
+            }
+            validate_nodes(
+                blocks,
+                &format!("{path}.data.blocks"),
+                node_ids,
+                footnotes,
+                footnote_references,
+            )
+        }
+        Block::Image { asset, .. } => nonempty(&asset.0, &format!("{path}.data.asset"), "asset ID"),
+        Block::Page { number, blocks } => {
+            positive(*number, &format!("{path}.data.number"), "page number")?;
+            validate_nodes(
+                blocks,
+                &format!("{path}.data.blocks"),
+                node_ids,
+                footnotes,
+                footnote_references,
+            )
+        }
+        Block::Slide { number, blocks, .. } => {
+            positive(*number, &format!("{path}.data.number"), "slide number")?;
+            validate_nodes(
+                blocks,
+                &format!("{path}.data.blocks"),
+                node_ids,
+                footnotes,
+                footnote_references,
+            )
+        }
+        Block::Sheet { name, blocks } => {
+            nonempty(name, &format!("{path}.data.name"), "worksheet name")?;
+            validate_nodes(
+                blocks,
+                &format!("{path}.data.blocks"),
+                node_ids,
+                footnotes,
+                footnote_references,
+            )
+        }
+        Block::TimedSegment { range, content, .. } => {
+            if range.start_ms >= range.end_ms {
+                return invalid_node(
+                    format!("{path}.data.range"),
+                    "time range start must precede end",
+                );
+            }
+            validate_inlines(content, &format!("{path}.data.content"), false, footnote_references)
+        }
+        Block::Rule => Ok(()),
+    }
+}
+
+fn validate_list(
+    kind: ListKind,
+    start: u64,
+    items: &[ListItem],
+    path: &str,
+    node_ids: &mut BTreeSet<String>,
+    footnotes: &mut BTreeSet<String>,
+    footnote_references: &mut BTreeSet<String>,
+) -> Result<(), IrError> {
+    if items.is_empty() {
+        return invalid_node(format!("{path}.data.items"), "list must contain an item");
+    }
+    if kind == ListKind::Ordered && start == 0 {
+        return invalid_node(format!("{path}.data.start"), "ordered list start must be positive");
+    }
+    for (index, item) in items.iter().enumerate() {
+        let item_path = format!("{path}.data.items[{index}]");
+        if (kind == ListKind::Task) != item.checked.is_some() {
+            return invalid_node(
+                format!("{item_path}.checked"),
+                "checked must be present only for task-list items",
+            );
+        }
+        validate_nodes(
+            &item.blocks,
+            &format!("{item_path}.blocks"),
+            node_ids,
+            footnotes,
+            footnote_references,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_table(
+    rows: &[TableRow],
+    path: &str,
+    node_ids: &mut BTreeSet<String>,
+    footnotes: &mut BTreeSet<String>,
+    footnote_references: &mut BTreeSet<String>,
+) -> Result<(), IrError> {
+    if rows.is_empty() {
+        return invalid_node(format!("{path}.data.rows"), "table must contain a row");
+    }
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.cells.is_empty() {
+            return invalid_node(
+                format!("{path}.data.rows[{row_index}].cells"),
+                "table row must contain a cell",
+            );
+        }
+        for (cell_index, cell) in row.cells.iter().enumerate() {
+            let cell_path = format!("{path}.data.rows[{row_index}].cells[{cell_index}]");
+            if cell.row_span == 0 || cell.column_span == 0 {
+                return invalid_node(
+                    format!("{cell_path}.rowSpan"),
+                    "table spans must be positive",
+                );
+            }
+            validate_nodes(
+                &cell.blocks,
+                &format!("{cell_path}.blocks"),
+                node_ids,
+                footnotes,
+                footnote_references,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_inlines(
+    content: &[Inline],
+    path: &str,
+    inside_link: bool,
+    footnote_references: &mut BTreeSet<String>,
+) -> Result<(), IrError> {
+    for (index, inline) in content.iter().enumerate() {
+        let inline_path = format!("{path}[{index}]");
+        match inline {
+            Inline::Text { marks, .. } => {
+                let unique = marks.iter().copied().collect::<BTreeSet<_>>();
+                if unique.len() != marks.len() {
+                    return invalid_node(
+                        format!("{inline_path}.data.marks"),
+                        "text marks must be unique",
+                    );
+                }
+                if unique.contains(&InlineMark::Superscript)
+                    && unique.contains(&InlineMark::Subscript)
+                {
+                    return invalid_node(
+                        format!("{inline_path}.data.marks"),
+                        "text cannot be both superscript and subscript",
+                    );
+                }
+            }
+            Inline::Code(_) | Inline::LineBreak => {}
+            Inline::Link { target, content } => {
+                nonempty(target, &format!("{inline_path}.data.target"), "link target")?;
+                if inside_link {
+                    return invalid_node(inline_path, "links must not be nested");
+                }
+                validate_inlines(
+                    content,
+                    &format!("{inline_path}.data.content"),
+                    true,
+                    footnote_references,
+                )?;
+            }
+            Inline::Formula(value) => nonempty(value, &format!("{inline_path}.data"), "formula")?,
+            Inline::FootnoteReference(label) => {
+                nonempty(label, &format!("{inline_path}.data"), "footnote reference")?;
+                footnote_references.insert(label.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn positive(value: u32, path: &str, label: &str) -> Result<(), IrError> {
+    if value == 0 { invalid_node(path, format!("{label} must be positive")) } else { Ok(()) }
+}
+
+fn nonempty(value: &str, path: &str, label: &str) -> Result<(), IrError> {
+    if value.trim().is_empty() {
+        invalid_node(path, format!("{label} must not be empty"))
+    } else {
+        Ok(())
+    }
+}
+
+fn invalid_node<T>(path: impl Into<String>, detail: impl Into<String>) -> Result<T, IrError> {
+    Err(IrError::new(IrErrorCode::InvalidNode, path, detail))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provenance() -> Provenance {
+        Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: "test.parser".into(),
+            locator: SourceLocator {
+                page: Some(1),
+                slide: Some(1),
+                sheet: Some("Data".into()),
+                cell: Some(CellRef { row: 0, column: 0 }),
+                bounds: Some(Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 }),
+                time: Some(TimeRange { start_ms: 1, end_ms: 2 }),
+                part: Some("content.xml".into()),
+            },
+            confidence: Some(0.9),
+        }
+    }
+
+    fn node(id: &str, block: Block) -> BlockNode {
+        BlockNode { id: NodeId(id.into()), block, provenance: provenance() }
+    }
+
+    #[allow(clippy::too_many_lines)] // The fixture deliberately spells out every wire variant.
+    fn all_nodes_document() -> Document {
+        let inlines = vec![
+            Inline::Text {
+                value: "rich".into(),
+                marks: vec![
+                    InlineMark::Bold,
+                    InlineMark::Italic,
+                    InlineMark::Strikethrough,
+                    InlineMark::Underline,
+                    InlineMark::Superscript,
+                ],
+            },
+            Inline::Text { value: "subscript".into(), marks: vec![InlineMark::Subscript] },
+            Inline::Code("code".into()),
+            Inline::Link {
+                target: "https://example.invalid".into(),
+                content: vec![Inline::Text { value: "link".into(), marks: vec![] }],
+            },
+            Inline::Formula("x^2".into()),
+            Inline::FootnoteReference("note".into()),
+            Inline::LineBreak,
+        ];
+        Document {
+            schema_version: DOCUMENT_SCHEMA_VERSION,
+            metadata: DocumentMetadata {
+                title: Some("Contract".into()),
+                authors: vec!["Author".into()],
+                properties: BTreeMap::from([("source.kind".into(), "fixture".into())]),
+            },
+            blocks: vec![
+                node("paragraph", Block::Paragraph(inlines)),
+                node(
+                    "heading",
+                    Block::Heading {
+                        level: 2,
+                        content: vec![Inline::Text { value: "Heading".into(), marks: vec![] }],
+                    },
+                ),
+                node(
+                    "list",
+                    Block::List {
+                        kind: ListKind::Task,
+                        start: 1,
+                        items: vec![ListItem {
+                            checked: Some(true),
+                            marker_label: Some("[x]".into()),
+                            blocks: vec![node(
+                                "nested-list",
+                                Block::List {
+                                    kind: ListKind::Bullet,
+                                    start: 1,
+                                    items: vec![ListItem {
+                                        checked: None,
+                                        marker_label: None,
+                                        blocks: vec![node(
+                                            "list-text",
+                                            Block::Paragraph(vec![Inline::Text {
+                                                value: "item".into(),
+                                                marks: vec![],
+                                            }]),
+                                        )],
+                                    }],
+                                },
+                            )],
+                        }],
+                    },
+                ),
+                node(
+                    "table",
+                    Block::Table {
+                        rows: vec![TableRow {
+                            cells: vec![Cell {
+                                row_span: 1,
+                                column_span: 2,
+                                header: true,
+                                blocks: vec![node("cell", Block::Paragraph(vec![]))],
+                            }],
+                        }],
+                    },
+                ),
+                node(
+                    "code",
+                    Block::Code { language: Some("rust".into()), text: "fn main() {}".into() },
+                ),
+                node("formula", Block::Formula("E=mc^2".into())),
+                node(
+                    "footnote",
+                    Block::Footnote {
+                        label: "note".into(),
+                        blocks: vec![node("footnote-text", Block::Paragraph(vec![]))],
+                    },
+                ),
+                node(
+                    "image",
+                    Block::Image { asset: AssetId("image-1".into()), alt: Some("diagram".into()) },
+                ),
+                node(
+                    "page",
+                    Block::Page {
+                        number: 1,
+                        blocks: vec![node("page-text", Block::Paragraph(vec![]))],
+                    },
+                ),
+                node(
+                    "slide",
+                    Block::Slide {
+                        number: 1,
+                        title: Some("Slide".into()),
+                        blocks: vec![node("slide-text", Block::Paragraph(vec![]))],
+                    },
+                ),
+                node(
+                    "sheet",
+                    Block::Sheet {
+                        name: "Data".into(),
+                        blocks: vec![node("sheet-text", Block::Paragraph(vec![]))],
+                    },
+                ),
+                node(
+                    "timed",
+                    Block::TimedSegment {
+                        range: TimeRange { start_ms: 10, end_ms: 20 },
+                        speaker: Some("Speaker".into()),
+                        content: vec![Inline::Text { value: "transcript".into(), marks: vec![] }],
+                    },
+                ),
+                node("rule", Block::Rule),
+            ],
+        }
+    }
+
+    #[test]
+    fn every_node_round_trips_through_stable_json() {
+        let document = all_nodes_document();
+        let json = document.to_json().unwrap();
+        assert!(json.contains("\"schemaVersion\":1"));
+        for kind in [
+            "paragraph",
+            "heading",
+            "list",
+            "table",
+            "code",
+            "formula",
+            "footnote",
+            "image",
+            "page",
+            "slide",
+            "sheet",
+            "timedSegment",
+            "rule",
+            "text",
+            "link",
+            "footnoteReference",
+        ] {
+            assert!(json.contains(&format!("\"type\":\"{kind}\"")), "missing {kind}");
+        }
+        assert_eq!(Document::from_json(&json).unwrap(), document);
+    }
+
+    #[test]
+    fn additive_unknown_fields_are_accepted() {
+        let json = r#"{"schemaVersion":1,"metadata":{"title":null,"authors":[],"properties":{},"future":true},"blocks":[],"futureRoot":{}}"#;
+        assert_eq!(Document::from_json(json).unwrap(), Document::default());
+    }
+
+    #[test]
+    fn auxiliary_ir_types_and_provenance_kinds_round_trip() {
+        let asset = Asset {
+            id: AssetId("asset".into()),
+            filename: Some("image.png".into()),
+            media_type: "image/png".into(),
+            bytes: vec![1, 2, 3],
+            external_uri: Some("https://example.invalid/image.png".into()),
+        };
+        let encoded = serde_json::to_string(&asset).unwrap();
+        assert!(encoded.contains("\"mediaType\""));
+        assert_eq!(serde_json::from_str::<Asset>(&encoded).unwrap(), asset);
+
+        let diagnostic = Diagnostic {
+            code: "recovered".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "recovered content".into(),
+            locator: Some(provenance().locator),
+        };
+        let encoded = serde_json::to_string(&diagnostic).unwrap();
+        assert_eq!(serde_json::from_str::<Diagnostic>(&encoded).unwrap(), diagnostic);
+
+        for kind in [
+            ProvenanceKind::NativeParser,
+            ProvenanceKind::LocalOcr,
+            ProvenanceKind::AiProvider,
+            ProvenanceKind::Metadata,
+            ProvenanceKind::Postprocessor,
+        ] {
+            let encoded = serde_json::to_string(&kind).unwrap();
+            assert_eq!(serde_json::from_str::<ProvenanceKind>(&encoded).unwrap(), kind);
+        }
+    }
+
+    #[test]
+    fn invalid_json_and_schema_versions_have_stable_codes() {
+        assert_eq!(Document::from_json("{").unwrap_err().code, IrErrorCode::InvalidJson);
+        assert_eq!(
+            Document::from_json(r#"{"schemaVersion":2,"futureShape":true}"#).unwrap_err().code,
+            IrErrorCode::UnsupportedSchemaVersion
+        );
+        let document =
+            Document { schema_version: DOCUMENT_SCHEMA_VERSION + 1, ..Document::default() };
+        assert_eq!(document.validate().unwrap_err().code, IrErrorCode::UnsupportedSchemaVersion);
+    }
+
+    #[test]
+    fn invalid_nodes_and_provenance_return_paths_without_panicking() {
+        let mut document = all_nodes_document();
+        document.blocks[0].provenance.confidence = Some(f32::NAN);
+        let error = document.validate().unwrap_err();
+        assert_eq!(error.code, IrErrorCode::InvalidProvenance);
+        assert_eq!(error.path, "$.blocks[0].provenance.confidence");
+
+        let mut document = all_nodes_document();
+        document.blocks[0].provenance.locator.page = Some(0);
+        assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidLocator);
+
+        let mut document = all_nodes_document();
+        document.blocks[1].id = document.blocks[0].id.clone();
+        assert_eq!(document.validate().unwrap_err().code, IrErrorCode::DuplicateNodeId);
+
+        let mut document = all_nodes_document();
+        document.blocks[1].block = Block::Heading { level: 0, content: Vec::new() };
+        assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidNode);
+    }
+
+    #[test]
+    fn dangling_footnotes_and_invalid_container_values_are_rejected() {
+        let mut document = all_nodes_document();
+        document.blocks.retain(|node| node.id.0 != "footnote");
+        assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidNode);
+
+        let invalid_blocks = [
+            Block::List { kind: ListKind::Bullet, start: 1, items: vec![] },
+            Block::Table { rows: vec![] },
+            Block::Formula(String::new()),
+            Block::Image { asset: AssetId(String::new()), alt: None },
+            Block::Page { number: 0, blocks: vec![] },
+            Block::Slide { number: 0, title: None, blocks: vec![] },
+            Block::Sheet { name: String::new(), blocks: vec![] },
+            Block::TimedSegment {
+                range: TimeRange { start_ms: 2, end_ms: 2 },
+                speaker: None,
+                content: vec![],
+            },
+        ];
+        for block in invalid_blocks {
+            let document = Document { blocks: vec![node("invalid", block)], ..Document::default() };
+            assert_eq!(document.validate().unwrap_err().code, IrErrorCode::InvalidNode);
+        }
+    }
 }

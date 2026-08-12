@@ -16,9 +16,10 @@ pub use error::{ConversionError, ErrorCode};
 pub use format::{FormatCandidate, InputFormat};
 pub use input::{FormatHint, InputRef, ResolvedInput, SourceMetadata};
 pub use ir::{
-    Asset, AssetId, Block, BlockNode, Cell, CellRef, Diagnostic, DiagnosticSeverity, Document,
-    DocumentMetadata, Inline, InlineMark, ListItem, ListKind, NodeId, Provenance, ProvenanceKind,
-    Rect, SourceLocator, TableRow, TimeRange,
+    Asset, AssetId, Block, BlockNode, Cell, CellRef, DOCUMENT_SCHEMA_VERSION, Diagnostic,
+    DiagnosticSeverity, Document, DocumentMetadata, Inline, InlineMark, IrError, IrErrorCode,
+    ListItem, ListKind, NodeId, Provenance, ProvenanceKind, Rect, SourceLocator, TableRow,
+    TimeRange,
 };
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy,

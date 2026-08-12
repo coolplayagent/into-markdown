@@ -3,20 +3,14 @@
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
 use base64::Engine as _;
-use into_markdown::{Asset, ConversionResult, Diagnostic, Document, Provenance};
+use into_markdown::{
+    Asset, ConversionResult, DOCUMENT_SCHEMA_VERSION, Diagnostic, Document, Provenance,
+};
 use serde::Serialize;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
-
-/// Versioned IR transport envelope.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IrDocument<'a> {
-    schema_version: u32,
-    document: &'a Document,
-}
 
 /// Versioned conversion result transport envelope.
 #[derive(Serialize)]
@@ -92,7 +86,7 @@ impl BatchReport {
     pub fn new(items: Vec<BatchItemReport>) -> Self {
         let succeeded = items.iter().filter(|item| item.status == "success").count();
         let failed = items.iter().filter(|item| item.status == "failed").count();
-        Self { schema_version: 1, succeeded, failed, items }
+        Self { schema_version: DOCUMENT_SCHEMA_VERSION, succeeded, failed, items }
     }
 }
 
@@ -100,11 +94,9 @@ impl BatchReport {
 pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
     match emit {
         EmitKind::Markdown => Ok(result.markdown.as_bytes().to_vec()),
-        EmitKind::IrJson => {
-            pretty_json(&IrDocument { schema_version: 1, document: &result.document })
-        }
+        EmitKind::IrJson => pretty_json(&result.document),
         EmitKind::ResultJson => pretty_json(&ResultDocument {
-            schema_version: 1,
+            schema_version: DOCUMENT_SCHEMA_VERSION,
             markdown: &result.markdown,
             document: &result.document,
             assets: result
@@ -197,7 +189,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
         });
     }
     let manifest = BundleManifest {
-        schema_version: 1,
+        schema_version: DOCUMENT_SCHEMA_VERSION,
         markdown: "document.md",
         document_ir: "document.ir.json",
         diagnostics: "diagnostics.json",
@@ -206,10 +198,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     };
     let entries = [
         ("diagnostics.json", pretty_json(&result.diagnostics)?),
-        (
-            "document.ir.json",
-            pretty_json(&IrDocument { schema_version: 1, document: &result.document })?,
-        ),
+        ("document.ir.json", pretty_json(&result.document)?),
         ("document.md", result.markdown.as_bytes().to_vec()),
         ("manifest.json", pretty_json(&manifest)?),
         ("provenance.json", pretty_json(&result.provenance)?),
