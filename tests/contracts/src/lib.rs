@@ -7,8 +7,9 @@ mod tests {
     use std::future::Future;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard};
     use std::task::{Context, Poll, Waker};
+    use std::time::{Duration, Instant};
 
     fn block_on<F: Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
@@ -539,37 +540,95 @@ mod tests {
         assert!(errors.iter().all(|error| error.code() == ErrorCode::ResourceLimit));
     }
 
-    struct Events(Mutex<Vec<ProgressEvent>>);
+    #[derive(Default)]
+    struct EventState {
+        inner: Mutex<EventStateInner>,
+        changed: Condvar,
+    }
+
+    #[derive(Default)]
+    struct EventStateInner {
+        events: Vec<ProgressEvent>,
+        terminal_seen: bool,
+        listener_dropped: bool,
+    }
+
+    struct Events {
+        state: Arc<EventState>,
+    }
+
     impl ProgressListener for Events {
         fn on_progress(&self, event: ProgressEvent) {
-            self.0.lock().unwrap().push(event);
+            let mut inner = lock_unpoisoned(&self.state.inner);
+            inner.terminal_seen |= event.stage == ExecutionStage::Completed;
+            inner.events.push(event);
+            drop(inner);
+            self.state.changed.notify_all();
         }
+    }
+
+    impl Drop for Events {
+        fn drop(&mut self) {
+            let mut inner = lock_unpoisoned(&self.state.inner);
+            inner.listener_dropped = true;
+            drop(inner);
+            self.state.changed.notify_all();
+        }
+    }
+
+    fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn wait_for_terminal_and_release(
+        state: &EventState,
+        timeout: Duration,
+    ) -> Result<Vec<ProgressEvent>, String> {
+        let deadline = Instant::now().checked_add(timeout).unwrap_or(Instant::now());
+        let mut inner = lock_unpoisoned(&state.inner);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        (inner, _) = state
+            .changed
+            .wait_timeout_while(inner, remaining, |inner| {
+                !inner.terminal_seen && !inner.listener_dropped
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.terminal_seen {
+            return Err(format!(
+                "progress listener ended without Completed; dropped={}, events={:?}",
+                inner.listener_dropped, inner.events
+            ));
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        (inner, _) = state
+            .changed
+            .wait_timeout_while(inner, remaining, |inner| !inner.listener_dropped)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inner.listener_dropped {
+            return Err(format!(
+                "progress listener was not released after Completed; events={:?}",
+                inner.events
+            ));
+        }
+        Ok(inner.events.clone())
     }
 
     #[test]
     fn successful_pipeline_emits_one_terminal_completed_event() {
-        let listener = Arc::new(Events(Mutex::new(vec![])));
+        let state = Arc::new(EventState::default());
+        let listener = Arc::new(Events { state: Arc::clone(&state) });
         let mut request = request();
-        request.execution.progress_listener = Some(listener.clone());
+        request.execution.progress_listener = Some(listener);
         let yes = converter("success", 0, Probe::Match(1.0), false, false);
         block_on(engine(vec![yes], Arc::new(AtomicUsize::new(0))).convert(request)).unwrap();
-        for _ in 0..100 {
-            if listener
-                .0
-                .lock()
-                .unwrap()
-                .last()
-                .is_some_and(|event| event.stage == ExecutionStage::Completed)
-            {
-                break;
-            }
-            std::thread::yield_now();
-        }
-        let events = listener.0.lock().unwrap();
+        let events = wait_for_terminal_and_release(&state, Duration::from_secs(5))
+            .unwrap_or_else(|detail| panic!("{detail}"));
         assert_eq!(
             events.iter().filter(|event| event.stage == ExecutionStage::Completed).count(),
             1
         );
+        assert_eq!(events.last().map(|event| event.stage), Some(ExecutionStage::Completed));
         assert_eq!(events.last().map(|event| event.basis_points), Some(10_000));
         assert!(events.windows(2).all(|pair| pair[0].basis_points <= pair[1].basis_points));
     }
