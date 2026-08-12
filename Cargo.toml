@@ -9,6 +9,7 @@ members = [
     "crates/engine",
     "crates/ocr",
     "crates/render-markdown",
+    "tests/contracts",
     "tools/license-check",
 ]
 
