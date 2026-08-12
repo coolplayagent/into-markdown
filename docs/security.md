@@ -43,6 +43,13 @@
   私有、链路本地、组播和云元数据地址，在配置时执行白名单，并限制响应字节数。
 - AI 响应是不可信的结构化输入，必须验证补丁或 Schema、溯源、节点引用和资源。
 - 模型通过 HTTPS 下载并固定 SHA-256，同时携带许可证元数据。
+- ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
+  cwd、`PATH`、`LD_LIBRARY_PATH`、`DYLD_*` 或其它隐式环境。路径逐段拒绝 symlink/
+  reparse point，源文件以 no-follow handle 打开并核对文件身份，再按 authority 中的
+  解包动态库 SHA-256 复制到进程私有目录。只有该私有副本会进入动态加载器；加载后
+  `GetVersionString` 必须与 authority 版本完全相等，且 `GetApi` 必须接受 authority 的
+  C API level。所有 FFI unsafe 集中在 `into-markdown-onnxruntime` crate，并启用
+  `deny(unsafe_op_in_unsafe_fn)` 与逐块 SAFETY invariant。
 - 模型 source archives 与最终 runtime files 分开建模，缺少最终文件、字符表、大小、
   平台或许可证审核时禁止安装。运行时清单必须与权威下载清单逐项一致。
 - 模型写入使用同文件系统 staging、逐文件大小/哈希校验、`fsync`、版本化持久 journal
@@ -77,3 +84,9 @@
   映射；ZIP 条目与 manifest path 双向一致，portable path 比较包含大小写折叠规则。
 取消与总 timeout 同样贯穿每个 SPI；长循环和外部服务等待必须设置协作检查点，不能
 依赖引擎外层检查来中断内部工作。
+
+ONNX session 固定使用 CPU provider、顺序图执行、显式 intra/inter-op 线程数和关闭的
+memory pattern；CPU arena 开关经 C API 设置。session 的保守内存估算同时受单 session
+上限与 LRU 总字节上限约束，输入输出再由 `ExecutionContext` 计费。创建前后、等待
+single-flight、推理前后均检查取消和 deadline；推理期间监控线程把失败 checkpoint
+连接到 ORT `RunOptions::terminate`。

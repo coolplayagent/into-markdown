@@ -137,3 +137,10 @@ stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EP
 项目明确不支持 macOS x86_64。CPU 推理是跨平台基线；未来可通过独立 Bazel
 配置增加可选 GPU Execution Provider，而无需修改 `OcrEngine` 或
 `TensorRuntime` 接口。
+
+固定 CPU 运行层由两部分组成：`crates/ocr` 提供对象安全 `TensorRuntime`、模型契约、
+并发 single-flight 和 bounded LRU；`crates/onnxruntime` 隔离动态加载与 ORT C ABI，
+并实现真实 CPU session adapter。缓存 key 包含 canonical model identity、模型 SHA-256、
+全部 session options 和经验证的 runtime 版本；加载失败或取消不会进入缓存，Arc clone
+和 eviction 不会使在途 session 失效。GPU 仅保留独立构建 feature 名称，默认 CPU
+artifact 不包含 GPU provider。

@@ -21,6 +21,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+mod runtime;
+
+pub use runtime::{
+    CacheLimits, Dimension, ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata,
+    ModelResolver, OnnxRuntime, ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory,
+    SessionOptions, TensorElementType, TensorSpec,
+};
+
 const SUPPORTED_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
@@ -99,6 +107,7 @@ struct DownloadManifest {
 #[serde(deny_unknown_fields)]
 struct OrtManifest {
     version: String,
+    api_version: u32,
     source: String,
     license: String,
     targets: BTreeMap<String, OrtTarget>,
@@ -109,6 +118,8 @@ struct OrtManifest {
 struct OrtTarget {
     asset: String,
     sha256: String,
+    library: String,
+    library_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,6 +395,7 @@ fn validate_native_downloads(
 ) -> Result<(), ConversionError> {
     validate_https(&onnxruntime.source)?;
     if onnxruntime.version.is_empty()
+        || onnxruntime.api_version == 0
         || onnxruntime.license != "MIT"
         || onnxruntime.source
             != format!(
@@ -420,6 +432,8 @@ fn validate_native_downloads(
             .ok_or_else(|| invalid_manifest("native target absent from ONNX Runtime authority"))?;
         validate_file_name(&target.asset)?;
         validate_hash(&target.sha256)?;
+        validate_relative_path(&target.library)?;
+        validate_hash(&target.library_sha256)?;
         let strip_prefix = target
             .asset
             .strip_suffix(".tgz")
@@ -517,6 +531,17 @@ fn validate_file_name(value: &str) -> Result<(), ConversionError> {
         || !matches!(path.components().next(), Some(Component::Normal(_)))
     {
         return Err(invalid_manifest(format!("unsafe file name {value:?}")));
+    }
+    Ok(())
+}
+
+fn validate_relative_path(value: &str) -> Result<(), ConversionError> {
+    let path = Path::new(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(invalid_manifest(format!("unsafe relative path {value:?}")));
     }
     Ok(())
 }

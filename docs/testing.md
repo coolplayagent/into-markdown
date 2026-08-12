@@ -65,6 +65,20 @@ U+FFFE，以及 UTF-8/UTF-16 的独立属性 QName/value 原始 byte span。
 500001 行输入必须在创建 IR 节点前以 `resourceLimit` 和退出码 5 失败，不得退化为
 `internal`。
 
+ONNX 安全层测试使用 fake `SessionFactory`/`SessionAdapter`，离线覆盖 runtime 版本
+authority、ABI/API mismatch 策略、opset、输入输出 name/dtype/rank/shape、非法 C 字符串、
+并发 single-flight、失败重试、按 count/bytes 的 LRU 回收、取消和资源预算。普通
+`bazel build/test //...` 不获取 native archive；真正动态库的哈希、版本和 API
+探针只由显式 manual target 执行：
+
+```shell
+bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
+```
+
+其它三个配置分别为 `linux_x86_64`、`linux_arm64` 和 `windows_x86_64`。没有 macOS
+x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称完成真实模型推理；
+当前模型 authority 没有 ONNX runtime artifact，因而不存在可执行的真实推理验证。
+
 常用定向命令如下：
 
 ```shell

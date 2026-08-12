@@ -52,6 +52,15 @@ TXT 字符集实现使用 `chardetng 0.1.17` 与 `encoding_rs 0.8.35`。前者�
 cargo run --locked --offline -p license-check --bin release-audit
 ```
 
+ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包动态库 SHA-256
+记录在 `third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
+为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
+默认 feature、二进制下载和 build.rs 链接，仅启用 `std`、`alternative-backend` 与
+API 28 兼容绑定；安全 loader 将已验证的 API table 显式交给 wrapper，运行时仍以
+authority 的 API 29 和精确 `GetVersionString` 做探针。当前默认
+发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
+发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。
+
 模型清单的每个 bundle 都是 OCR bundle，bundle ID 必须唯一，并且必须各自包含唯一
 `detector` 与 `recognizer-and-dictionary` 角色。`default_bundle` 必须非空、存在，且
 默认 bundle 自身必须包含受管的 detector 与 recognizer/dictionary 源产物；其他

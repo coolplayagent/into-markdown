@@ -4,9 +4,9 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、TXT/Markdown/CSV/TSV/JSON/XML 与字符集转换器、命令行程序及契约测试；暂未实现
-OCR 推理、
-网络客户端或 LLM 调用。
+GFM 渲染器、TXT/Markdown/CSV/TSV/JSON/XML 与字符集转换器、固定的 ONNX Runtime CPU 安全运行层、命令行程序
+及契约测试；当前模型清单尚无可执行 ONNX 产物，因此 OCR 请求会稳定报告模型不可用，
+不会把 Paddle source archive 当作模型。网络客户端与 LLM 调用尚未实现。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
 和 AI 生成内容在内的所有输入，都必须先进入带溯源信息的统一中间表示（IR），

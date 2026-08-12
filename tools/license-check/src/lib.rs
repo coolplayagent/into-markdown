@@ -38,6 +38,7 @@ struct Inventory {
 #[serde(deny_unknown_fields)]
 struct OrtManifest {
     version: String,
+    api_version: u32,
     source: String,
     license: String,
     targets: BTreeMap<String, OrtTarget>,
@@ -48,6 +49,8 @@ struct OrtManifest {
 struct OrtTarget {
     asset: String,
     sha256: String,
+    library: String,
+    library_sha256: String,
 }
 
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
@@ -503,6 +506,13 @@ fn is_safe_model_file_name(value: &str) -> bool {
         && matches!(path.components().next(), Some(std::path::Component::Normal(_)))
 }
 
+fn is_safe_relative_path(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
 fn is_canonical_https(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         url.scheme() == "https"
@@ -609,6 +619,7 @@ fn validate_ort_manifest(
     let expected_source =
         format!("https://github.com/microsoft/onnxruntime/releases/tag/v{}", manifest.version);
     if manifest.version.is_empty()
+        || manifest.api_version == 0
         || manifest.source != expected_source
         || !is_canonical_https(&manifest.source)
         || manifest.license != "MIT"
@@ -647,7 +658,11 @@ fn validate_ort_manifest(
         else {
             continue;
         };
-        if !is_safe_model_file_name(&asset.asset) || !is_sha256(&asset.sha256) {
+        if !is_safe_model_file_name(&asset.asset)
+            || !is_sha256(&asset.sha256)
+            || !is_safe_relative_path(&asset.library)
+            || !is_sha256(&asset.library_sha256)
+        {
             errors.push(format!("ONNX Runtime target {target} lacks a valid SHA-256"));
         }
         let expected_url = format!(
@@ -1186,7 +1201,12 @@ mod tests {
             let sha256 = marker.to_string().repeat(64);
             targets.insert(
                 target.to_owned(),
-                OrtTarget { asset: asset.to_owned(), sha256: sha256.clone() },
+                OrtTarget {
+                    asset: asset.to_owned(),
+                    sha256: sha256.clone(),
+                    library: "lib/libonnxruntime.so".to_owned(),
+                    library_sha256: marker.to_string().repeat(64),
+                },
             );
             native_archives.push(NativeDownload {
                 target: target.to_owned(),
@@ -1205,6 +1225,7 @@ mod tests {
         let source = format!("https://github.com/microsoft/onnxruntime/releases/tag/v{version}");
         let manifest = OrtManifest {
             version: version.to_owned(),
+            api_version: 29,
             source: source.clone(),
             license: "MIT".to_owned(),
             targets,
@@ -1326,6 +1347,7 @@ version = "9.9.9"
     fn missing_onnx_inventory_component_is_rejected() {
         let manifest = OrtManifest {
             version: "1.0.0".to_owned(),
+            api_version: 29,
             source: "https://github.com/microsoft/onnxruntime/releases/tag/v1.0.0".to_owned(),
             license: "MIT".to_owned(),
             targets: BTreeMap::new(),
