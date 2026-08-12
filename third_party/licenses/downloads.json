@@ -16,6 +16,7 @@
       "sha256": "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604"
     }
   ],
+  "model_runtime_files": [],
   "native_archives": [
     {
       "target": "aarch64-apple-darwin",

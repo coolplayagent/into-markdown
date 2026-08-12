@@ -653,6 +653,10 @@ dependencies = [
  "into-markdown-core",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "url",
 ]
 
 [[package]]

@@ -8,7 +8,10 @@ exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
 rust_library(
     name = "ocr",
     srcs = glob(["src/**/*.rs"]),
-    compile_data = ["//models:manifest.json"],
+    compile_data = [
+        "//models:manifest.json",
+        "//third_party/licenses:downloads.json",
+    ],
     crate_name = "into_markdown_ocr",
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal = True),
@@ -19,7 +22,10 @@ rust_test(
     name = "ocr_test",
     crate = ":ocr",
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
-    compile_data = ["//models:manifest.json"],
+    compile_data = [
+        "//models:manifest.json",
+        "//third_party/licenses:downloads.json",
+    ],
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),

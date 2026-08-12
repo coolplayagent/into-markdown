@@ -281,18 +281,34 @@ fn run_models(
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     let manifest = into_markdown::model_manifest().map_err(CliError::from)?;
+    let manager = model_manager(manifest)?;
     match command {
         None => {
             if json {
-                write_json(context.stdout, &manifest)
+                write_json(
+                    context.stdout,
+                    &serde_json::json!({
+                        "schemaVersion": 1,
+                        "defaultBundle": manager.manifest().default_bundle,
+                        "models": manager.list().map_err(model_error)?,
+                    }),
+                )
             } else {
-                writeln!(context.stdout, "MODEL\tDEFAULT\tRUNTIME\tLANGUAGES\tSTATUS")?;
-                for bundle in manifest.bundles {
+                writeln!(
+                    context.stdout,
+                    "MODEL\tDEFAULT\tAVAILABILITY\tSTATE\tOWNERSHIP\tRUNTIME\tLANGUAGES"
+                )?;
+                for (bundle, status) in
+                    manager.manifest().bundles.iter().zip(manager.list().map_err(model_error)?)
+                {
                     writeln!(
                         context.stdout,
-                        "{}\t{}\t{}\t{}\tplanned",
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                         bundle.id,
-                        bundle.id == manifest.default_bundle,
+                        bundle.id == manager.manifest().default_bundle,
+                        bundle.availability,
+                        status.state,
+                        status.ownership,
                         bundle.runtime_format,
                         bundle.languages.join(",")
                     )?;
@@ -301,36 +317,96 @@ fn run_models(
             }
         }
         Some(ModelsCommand::Show { id, json }) => {
-            let bundle = manifest
+            let bundle = manager
+                .manifest()
                 .bundles
                 .iter()
                 .find(|bundle| bundle.id == id)
                 .ok_or_else(|| CliError::usage(format!("unknown model bundle '{id}'")))?;
+            let status = manager.status(&id).map_err(model_error)?;
             if json {
-                write_json(context.stdout, bundle)
+                write_json(
+                    context.stdout,
+                    &serde_json::json!({
+                        "schemaVersion": 1,
+                        "model": bundle,
+                        "status": status,
+                    }),
+                )
             } else {
                 writeln!(context.stdout, "model: {}", bundle.id)?;
+                writeln!(context.stdout, "availability: {}", bundle.availability)?;
+                writeln!(context.stdout, "state: {}", status.state)?;
+                writeln!(context.stdout, "ownership: {}", status.ownership)?;
                 writeln!(context.stdout, "upstream: {}", bundle.upstream_version)?;
                 writeln!(context.stdout, "runtime: {}", bundle.runtime_format)?;
                 writeln!(context.stdout, "languages: {}", bundle.languages.join(", "))?;
+                writeln!(context.stdout, "platforms: {}", bundle.platforms.join(", "))?;
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id }) => Err(CliError::component(format!(
-            "models install {}: {}",
-            id.as_deref().unwrap_or(&manifest.default_bundle),
-            catalog.unavailable()
-        ))),
-        Some(ModelsCommand::Verify { id, json: _ }) => Err(CliError::component(format!(
-            "models verify {}: {}",
-            id.as_deref().unwrap_or(&manifest.default_bundle),
-            catalog.unavailable()
-        ))),
+        Some(ModelsCommand::Install { id }) => {
+            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            manager.require_installable(id).map_err(model_error)?;
+            Err(CliError::component(format!("models install {id}: {}", catalog.unavailable())))
+        }
+        Some(ModelsCommand::Verify { id, json }) => {
+            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            let status = manager.verify(id).map_err(model_error)?;
+            if json {
+                write_json(context.stdout, &status)
+            } else {
+                writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
+                Ok(())
+            }
+        }
         Some(ModelsCommand::Remove { id }) => {
-            Err(CliError::component(format!("models remove {id}: {}", catalog.unavailable())))
+            manager.remove(&id).map_err(model_error)?;
+            writeln!(context.stdout, "removed {id}")?;
+            Ok(())
         }
         Some(ModelsCommand::Path { id }) => {
-            Err(CliError::component(format!("models path {id}: {}", catalog.unavailable())))
+            writeln!(context.stdout, "{}", manager.path(&id).map_err(model_error)?.display())?;
+            Ok(())
+        }
+    }
+}
+
+fn model_manager(
+    manifest: into_markdown::ModelManifest,
+) -> Result<into_markdown::ModelManager, CliError> {
+    let writable_root = directories::ProjectDirs::from("", "", "into-markdown")
+        .map(|directories| directories.data_dir().join("models"))
+        .ok_or_else(|| {
+            CliError::new(
+                ExitClass::Io,
+                "modelDataDirectoryUnavailable",
+                "cannot determine the platform model data directory",
+            )
+        })?;
+    let bundled_root = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("models")))
+        .filter(|path| path.is_dir());
+    Ok(into_markdown::ModelManager::new(manifest, writable_root, bundled_root))
+}
+
+fn model_error(error: into_markdown::ModelManagerError) -> CliError {
+    use into_markdown::ModelManagerError;
+    match error {
+        ModelManagerError::UnknownBundle => CliError::usage(error.to_string()),
+        ModelManagerError::ComponentUnavailable => CliError::component(error.to_string()),
+        ModelManagerError::ReadOnly
+        | ModelManagerError::UnsafePath
+        | ModelManagerError::DataDirectoryUnsafe => {
+            CliError::new(ExitClass::Policy, "modelPolicy", error.to_string())
+        }
+        ModelManagerError::NotInstalled | ModelManagerError::Corrupt(_) => {
+            CliError::new(ExitClass::Ocr, "modelInvalid", error.to_string())
+        }
+        ModelManagerError::Busy => CliError::new(ExitClass::Io, "modelBusy", error.to_string()),
+        ModelManagerError::DataDirectoryUnavailable | ModelManagerError::Io(_) => {
+            CliError::new(ExitClass::Io, "modelIo", error.to_string())
         }
     }
 }
