@@ -33,6 +33,13 @@ TXT 契约覆盖 UTF-8 BOM、UTF-16LE/BE BOM、Windows-1252、GB18030、Big5、S
 中英文混排、combining mark、非 BMP scalar、CRLF/LF/CR、空输入、超长行、奇数 UTF-16、
 截断多字节序列、严格与 replacement 模式、converter 双重输入预算及二进制伪装。
 locator 与 replacement diagnostic 必须断言原始半开 byte range，不能只断言正文。
+字符集边界用固定字节覆盖 GB18030 的双字节与四字节序列、Shift_JIS 和 Big5；损坏序列
+后跟合法内容时必须保留合法内容，连续相邻损坏既要断言实际 U+FFFD 数量，也要断言合并
+后的诊断范围。带 BOM probe 还要分别覆盖安全文本、奇数或截断输入以及二进制伪装。
+
+真实 CLI 回归同时覆盖文件与 stdin：超过 1 MiB 的合法 JSON、CSV 和 TSV 不得被 TXT
+回退吞入，普通文本仍可自动转换。500001 行输入必须在创建 IR 节点前以 `resourceLimit`
+和退出码 5 失败，不得退化为 `internal`。
 
 常用定向命令如下：
 

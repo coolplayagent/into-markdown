@@ -9,10 +9,13 @@
 - 本地输入打开在 handle 层拒绝 Unix symlink 或 Windows reparse point，并只接受 regular
   file，不能把 CLI 规划时的路径检查当作最终安全边界。
 - XML 解析必须禁用外部实体以及 DTD/网络解析。
-- TXT 自动探测在字符集检测前拒绝 NUL、过量控制字节和过高替换率；结构化文本和已知
-  二进制 magic 优先。传统字符集只允许固定 allowlist，不能把任意字节流作为
-  `windows-1252` 静默吞入。replacement 不是静默容错，每个片段必须可按原始 byte range
-  审计。
+- TXT 自动探测在字符集检测前拒绝 NUL、过量控制字节和过高替换率；BOM 仅决定候选
+  编码，不能绕过有界严格解码与文本安全阈值。结构化文本、稳定 CSV/TSV 行启发式和
+  已知二进制 magic 优先。传统字符集只允许固定 allowlist，不能把任意字节流作为
+  `windows-1252` 静默吞入。replacement 不是静默容错，必须按 decoder 实际错误数插入
+  U+FFFD；相邻错误可合并诊断，但每条诊断都必须保留原始 byte range、编码名和替换数。
+- TXT 转换器在创建节点前以 checked arithmetic 核算 block、inline 与解码文本预算，
+  超限直接返回 `resourceLimit`，不能依赖 Engine 的 IR 验证把预算错误改写为内部错误。
 - 只有策略允许时，Office 宏和内嵌可执行文件才能作为惰性资源保留；它们永远
   不会被执行。
 - 网络访问默认关闭。未来 HTTP 解析器必须解析并验证每次重定向，拒绝回环、

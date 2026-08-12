@@ -1191,35 +1191,131 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 fn structured_text_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
-    let prefix = bytes.get(..bytes.len().min(TEXT_INSPECTION_BYTE_LIMIT))?;
-    let text = std::str::from_utf8(prefix).ok()?.trim_start_matches('\u{feff}').trim_start();
+    let (prefix, truncated) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT)?;
+    let text = prefix.trim_start_matches('\u{feff}').trim_start();
     if html_prelude_identifies_html(text) {
         return Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup"));
     }
-    if (text.starts_with('{') || text.starts_with('['))
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(text)
-    {
-        if value.as_object().is_some_and(|object| {
-            object.get("nbformat").is_some_and(serde_json::Value::is_number)
-                && object.get("cells").is_some_and(serde_json::Value::is_array)
-                && object.get("metadata").is_some_and(serde_json::Value::is_object)
-        }) {
-            return Some(FormatCandidate::new(
-                InputFormat::Ipynb,
-                0.99,
-                "Jupyter notebook JSON structure",
-            ));
+    if text.starts_with('{') || text.starts_with('[') {
+        match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(value) => {
+                if value.as_object().is_some_and(|object| {
+                    object.get("nbformat").is_some_and(serde_json::Value::is_number)
+                        && object.get("cells").is_some_and(serde_json::Value::is_array)
+                        && object.get("metadata").is_some_and(serde_json::Value::is_object)
+                }) {
+                    return Some(FormatCandidate::new(
+                        InputFormat::Ipynb,
+                        0.99,
+                        "Jupyter notebook JSON structure",
+                    ));
+                }
+                return Some(FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content"));
+            }
+            Err(error) if truncated && error.is_eof() => {
+                return Some(FormatCandidate::new(
+                    InputFormat::Json,
+                    0.94,
+                    "valid bounded prefix of an open JSON structure",
+                ));
+            }
+            Err(_) => {}
         }
-        return Some(FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content"));
     }
-    let root = xml_root_name(text)?;
-    if root.eq_ignore_ascii_case("html") {
-        Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
-    } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
-        Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
+    if let Some(root) = xml_root_name(text) {
+        return if root.eq_ignore_ascii_case("html") {
+            Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
+        } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
+            Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
+        } else {
+            Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
+        };
+    }
+    delimited_text_candidate(text)
+}
+
+fn bounded_utf8_prefix(bytes: &[u8], limit: usize) -> Option<(&str, bool)> {
+    let bounded_len = bytes.len().min(limit);
+    let bounded = bytes.get(..bounded_len)?;
+    match std::str::from_utf8(bounded) {
+        Ok(text) => Some((text, bytes.len() > bounded_len)),
+        Err(error) if bytes.len() > bounded_len && error.error_len().is_none() => {
+            let valid = bounded.get(..error.valid_up_to())?;
+            std::str::from_utf8(valid).ok().map(|text| (text, true))
+        }
+        Err(_) => None,
+    }
+}
+
+fn delimited_text_candidate(text: &str) -> Option<FormatCandidate> {
+    let mut csv = DelimitedRows::new(',');
+    let mut tsv = DelimitedRows::new('\t');
+    for line in text.lines().filter(|line| !line.trim().is_empty()).take(64) {
+        csv.observe(line);
+        tsv.observe(line);
+    }
+    let (format, delimiter, fields, rows) = if tsv.is_tabular() {
+        (InputFormat::Tsv, "tab", tsv.fields?, tsv.rows)
+    } else if csv.is_tabular() {
+        (InputFormat::Csv, "comma", csv.fields?, csv.rows)
     } else {
-        Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
+        return None;
+    };
+    Some(FormatCandidate::new(
+        format,
+        0.90,
+        format!("{rows} bounded rows with {fields} consistent {delimiter}-delimited fields"),
+    ))
+}
+
+struct DelimitedRows {
+    delimiter: char,
+    fields: Option<usize>,
+    rows: usize,
+    invalid: bool,
+}
+
+impl DelimitedRows {
+    const fn new(delimiter: char) -> Self {
+        Self { delimiter, fields: None, rows: 0, invalid: false }
     }
+
+    fn observe(&mut self, line: &str) {
+        if self.invalid {
+            return;
+        }
+        let Some(fields) = count_delimited_fields(line, self.delimiter) else {
+            self.invalid = true;
+            return;
+        };
+        if fields < 2 || self.fields.is_some_and(|expected| expected != fields) {
+            self.invalid = true;
+            return;
+        }
+        self.fields.get_or_insert(fields);
+        self.rows += 1;
+    }
+
+    const fn is_tabular(&self) -> bool {
+        !self.invalid && self.rows >= 2
+    }
+}
+
+fn count_delimited_fields(line: &str, delimiter: char) -> Option<usize> {
+    let mut fields = 1_usize;
+    let mut quoted = false;
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' if quoted && characters.peek() == Some(&'"') => {
+                characters.next();
+            }
+            '"' => quoted = !quoted,
+            value if value == delimiter && !quoted => fields = fields.checked_add(1)?,
+            _ => {}
+        }
+    }
+    (!quoted).then_some(fields)
 }
 
 fn html_prelude_identifies_html(mut text: &str) -> bool {
@@ -2682,6 +2778,32 @@ mod tests {
             .unwrap();
             assert_eq!(candidates[0].format, expected);
         }
+    }
+
+    #[test]
+    fn bounded_structured_detection_protects_large_json_csv_and_tsv_from_text() {
+        let mut large_json = String::from("{\"records\":[");
+        while large_json.len() <= TEXT_INSPECTION_BYTE_LIMIT + 4096 {
+            large_json.push_str("{\"name\":\"中文\",\"value\":123},");
+        }
+        large_json.push_str("null]}");
+        let candidate = structured_text_candidate(large_json.as_bytes()).unwrap();
+        assert_eq!(candidate.format, InputFormat::Json);
+        assert!(candidate.evidence.contains("bounded prefix"));
+
+        let fixtures = [
+            (b"name,city\nAlice,London\nBob,Shanghai\n".as_slice(), InputFormat::Csv),
+            (b"name\tcity\nAlice\tLondon\nBob\tShanghai\n".as_slice(), InputFormat::Tsv),
+        ];
+        for (bytes, expected) in fixtures {
+            let candidates = detect_content(bytes);
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].format, expected);
+        }
+        assert_eq!(
+            detect_content(b"ordinary prose, with one comma\nand a second plain line")[0].format,
+            InputFormat::Text
+        );
     }
 
     #[test]

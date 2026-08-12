@@ -143,8 +143,10 @@ handoff。`Vec` 转换为共享 bytes 前按可能复制的峰值预留，转换
 内嵌对象。OLE 检测会验证 CFB header 并沿 DIFAT、FAT 和 directory chain 遍历，
 只有 directory stream 中的流名可产生高置信候选；损坏或超限结构只产生带诊断的
 低置信歧义候选。结构化文本探测最多检查 1 MiB UTF-8 前缀，可识别 HTML、XML、
-RSS/Atom、JSON 和 Jupyter Notebook；不会猜测 CSV、纯文本或 Markdown。媒体容器
-必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
+RSS/Atom、JSON 和 Jupyter Notebook；JSON 前缀到采样边界仍保持语法开放时不要求完整
+输入即可保留候选。至少两行且字段数一致的逗号或 Tab 分隔启发式会保留 planned
+CSV/TSV 候选，防止普通文本回退抢占；它不会执行 CSV/TSV 转换。不会猜测 Markdown。
+媒体容器必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
 歧义诊断。无 ID3 的 MP3 会验证 MPEG frame header 的版本、层、码率和采样率字段；
 BMP 会验证 file/DIB header、声明大小、像素偏移和基本图像字段，不能只凭短签名获得
 高置信度。HTML 探测可在有界前缀内跳过 BOM、空白、XML declaration 和注释，并以

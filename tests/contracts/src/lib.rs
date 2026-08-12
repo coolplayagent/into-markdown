@@ -58,6 +58,22 @@ mod tests {
         assert_eq!(available, vec![InputFormat::Text]);
     }
 
+    #[test]
+    fn default_engine_bom_probe_is_safe_but_truncation_remains_authoritative() {
+        let engine = default_engine().unwrap();
+        let truncated = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from([0xff, 0xfe, b'A']),
+            Some("truncated.txt"),
+        ));
+        assert_eq!(block_on(engine.convert(truncated)).unwrap_err().code(), ErrorCode::Malformed);
+
+        let disguised = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from([0xff, 0xfe, 0, 0, 1, 0, 2, 0]),
+            Some("disguised.txt"),
+        ));
+        assert_eq!(block_on(engine.convert(disguised)).unwrap_err().code(), ErrorCode::NoConverter);
+    }
+
     #[derive(Default)]
     struct Resolver;
     impl SourceResolver for Resolver {

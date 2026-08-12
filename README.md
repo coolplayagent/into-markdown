@@ -47,7 +47,8 @@ HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`�
 
 TXT 转换可用，支持 UTF-8、带 BOM 的 UTF-16 与受限的常见字符集自动检测；显式
 `--charset` 支持 `windows-1252`、`gb18030`、`big5` 和 `shift_jis`。无效序列默认
-严格失败，`--encoding-errors replace` 会替换并输出带原始字节范围的诊断。
+严格失败，`--encoding-errors replace` 会替换并输出带原始字节范围和替换数量的诊断。
+自动检测会为 JSON 及稳定的 CSV/TSV 候选让路，带 BOM 的输入也必须通过文本安全检查。
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定

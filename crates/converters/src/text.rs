@@ -1,12 +1,12 @@
 use chardetng::EncodingDetector;
 use encoding_rs::{
-    BIG5, Encoding, GB18030, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252,
+    BIG5, DecoderResult, Encoding, GB18030, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252,
 };
 use into_markdown_core::{
     Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
     Diagnostic, DiagnosticSeverity, Document, ExecutionContext, FormatCandidate, Inline,
-    InputFormat, MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance, ProvenanceKind,
-    ResolvedInput, Services, SourceLocator, TextDecodingMode,
+    InputFormat, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance,
+    ProvenanceKind, ResolvedInput, Services, SourceLocator, TextDecodingMode,
 };
 
 const TEXT_FORMATS: &[InputFormat] = &[InputFormat::Text];
@@ -14,6 +14,7 @@ const PROVIDER_ID: &str = "builtin.converter.text";
 const INVALID_SEQUENCE_CODE: &str = "text.invalidByteSequenceReplaced";
 const MAX_UNSAFE_PERCENT: usize = 1;
 const MIN_PRINTABLE_PERCENT: usize = 95;
+const TEXT_SNIFF_BYTE_LIMIT: usize = 64 * 1024;
 
 /// Plain-text converter with bounded character-set decoding and source-byte provenance.
 #[derive(Debug, Default)]
@@ -138,20 +139,70 @@ pub(crate) fn sniff_text(bytes: &[u8]) -> Option<f32> {
     if bytes.is_empty() {
         return Some(0.80);
     }
-    if bom(bytes).is_some() {
-        return Some(0.99);
-    }
-    if !raw_text_safe(bytes) {
+    if super::structured_text_candidate(bytes).is_some() {
         return None;
     }
-    if let Ok(text) = std::str::from_utf8(bytes)
+    if let Some((charset, bom_len)) = bom(bytes) {
+        return sniff_bom_text(bytes.get(bom_len..)?, charset);
+    }
+    let sample = bytes.get(..bytes.len().min(TEXT_SNIFF_BYTE_LIMIT))?;
+    if !raw_text_safe(sample) {
+        return None;
+    }
+    if let Ok(text) = std::str::from_utf8(sample)
         && decoded_text_safe(text)
     {
         return Some(0.88);
     }
-    let charset = detect_legacy(bytes)?;
-    let text = charset.encoding().decode_without_bom_handling_and_without_replacement(bytes)?;
-    (decoded_text_safe(&text) && legacy_roundtrips(charset, bytes, &text)).then_some(0.72)
+    let charset = detect_legacy(sample)?;
+    let text = charset.encoding().decode_without_bom_handling_and_without_replacement(sample)?;
+    (decoded_text_safe(&text) && legacy_roundtrips(charset, sample, &text)).then_some(0.72)
+}
+
+fn sniff_bom_text(bytes: &[u8], charset: Charset) -> Option<f32> {
+    let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
+    let sample = bytes.get(..sample_len)?;
+    let source_truncated = bytes.len() > sample_len;
+    let (decoded, trailing_malformed) = match charset {
+        Charset::Utf8 => strict_utf8_sample(sample, source_truncated)?,
+        Charset::Utf16Le | Charset::Utf16Be => {
+            strict_utf16_sample(sample, source_truncated, charset)?
+        }
+        _ => return None,
+    };
+    decoded_text_safe(&decoded).then_some(if trailing_malformed { 0.80 } else { 0.95 })
+}
+
+fn strict_utf8_sample(bytes: &[u8], source_truncated: bool) -> Option<(String, bool)> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Some((text.into(), false)),
+        Err(error) if error.error_len().is_none() => {
+            let valid = std::str::from_utf8(bytes.get(..error.valid_up_to())?).ok()?;
+            Some((valid.into(), !source_truncated))
+        }
+        Err(_) => None,
+    }
+}
+
+fn strict_utf16_sample(
+    bytes: &[u8],
+    source_truncated: bool,
+    charset: Charset,
+) -> Option<(String, bool)> {
+    let mut complete_len = bytes.len() - bytes.len() % 2;
+    let mut trailing_malformed = !bytes.len().is_multiple_of(2) && !source_truncated;
+    let read = |at: usize| match charset {
+        Charset::Utf16Le => u16::from_le_bytes([bytes[at], bytes[at + 1]]),
+        _ => u16::from_be_bytes([bytes[at], bytes[at + 1]]),
+    };
+    if complete_len >= 2 && (0xd800..=0xdbff).contains(&read(complete_len - 2)) {
+        complete_len -= 2;
+        trailing_malformed |= !source_truncated;
+    }
+    let complete = bytes.get(..complete_len)?;
+    let decoded =
+        charset.encoding().decode_without_bom_handling_and_without_replacement(complete)?;
+    Some((decoded.into_owned(), trailing_malformed))
 }
 
 fn raw_text_safe(bytes: &[u8]) -> bool {
@@ -300,7 +351,12 @@ fn convert_text(
         options.text.decoding_mode,
         context,
     )?;
-    let document = build_document(lines, context)?;
+    let max_decoded_text_bytes =
+        size.checked_mul(3).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_text_decoded_bytes",
+            detail: "decoded text byte budget overflowed".into(),
+        })?;
+    let document = build_document(lines, max_decoded_text_bytes, context)?;
     Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
 }
 
@@ -326,7 +382,7 @@ fn decode_utf8(
     context: &ExecutionContext,
 ) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
     let mut decoded = DecodedLines::default();
-    let mut diagnostics = Vec::new();
+    let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
         if offset % 4096 == 0 {
@@ -350,7 +406,7 @@ fn decode_utf8(
                 let invalid_len = error.error_len().unwrap_or(bytes.len() - offset).max(1);
                 recover_invalid(
                     &mut decoded,
-                    &mut diagnostics,
+                    &mut recoveries,
                     base + offset,
                     base + offset + invalid_len,
                     charset,
@@ -360,7 +416,7 @@ fn decode_utf8(
             }
         }
     }
-    Ok((decoded.finish(), diagnostics))
+    Ok((decoded.finish(), recoveries.into_diagnostics(charset)))
 }
 
 fn push_str_units(decoded: &mut DecodedLines, text: &str, base: usize) {
@@ -377,7 +433,7 @@ fn decode_utf16(
     context: &ExecutionContext,
 ) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
     let mut decoded = DecodedLines::default();
-    let mut diagnostics = Vec::new();
+    let mut recoveries = RecoveryTracker::default();
     let mut offset = 0;
     while offset < bytes.len() {
         if offset % 4096 == 0 {
@@ -386,7 +442,7 @@ fn decode_utf16(
         if bytes.len() - offset < 2 {
             recover_invalid(
                 &mut decoded,
-                &mut diagnostics,
+                &mut recoveries,
                 base + offset,
                 base + bytes.len(),
                 charset,
@@ -403,7 +459,7 @@ fn decode_utf16(
             if bytes.len() - offset < 4 {
                 recover_invalid(
                     &mut decoded,
-                    &mut diagnostics,
+                    &mut recoveries,
                     base + offset,
                     base + bytes.len(),
                     charset,
@@ -415,7 +471,7 @@ fn decode_utf16(
             if !(0xdc00..=0xdfff).contains(&second) {
                 recover_invalid(
                     &mut decoded,
-                    &mut diagnostics,
+                    &mut recoveries,
                     base + offset,
                     base + offset + 2,
                     charset,
@@ -437,7 +493,7 @@ fn decode_utf16(
         } else {
             recover_invalid(
                 &mut decoded,
-                &mut diagnostics,
+                &mut recoveries,
                 base + offset,
                 base + offset + width,
                 charset,
@@ -446,7 +502,7 @@ fn decode_utf16(
         }
         offset += width;
     }
-    Ok((decoded.finish(), diagnostics))
+    Ok((decoded.finish(), recoveries.into_diagnostics(charset)))
 }
 
 fn decode_legacy(
@@ -456,52 +512,194 @@ fn decode_legacy(
     charset: Charset,
     context: &ExecutionContext,
 ) -> Result<(Vec<Line>, Vec<Diagnostic>), ConversionError> {
-    let mut decoded = DecodedLines::default();
-    let mut diagnostics = Vec::new();
+    let mut lines_builder = DecodedLines::default();
+    let mut recoveries = RecoveryTracker::default();
+    let mut charset_decoder = charset.encoding().new_decoder_without_bom_handling();
+    let mut output = String::with_capacity(16);
     let mut offset = 0;
+    let mut sequence_start = 0;
     while offset < bytes.len() {
         if offset % 4096 == 0 {
             context.checkpoint()?;
         }
-        let width = legacy_width(charset, &bytes[offset..]);
-        let end = offset.saturating_add(width).min(bytes.len());
-        let decoded_text = charset
-            .encoding()
-            .decode_without_bom_handling_and_without_replacement(&bytes[offset..end]);
-        if let Some(text) = decoded_text.filter(|value| !value.is_empty()) {
-            for value in text.chars() {
-                decoded.push(value, base + offset, base + end);
+        output.clear();
+        let (result, read) = charset_decoder.decode_to_string_without_replacement(
+            &bytes[offset..=offset],
+            &mut output,
+            false,
+        );
+        let consumed_end =
+            offset.checked_add(read).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: "legacy decoder input position overflowed".into(),
+            })?;
+        match result {
+            DecoderResult::InputEmpty => {
+                if !output.is_empty() {
+                    push_str_range(
+                        &mut lines_builder,
+                        &output,
+                        base + sequence_start,
+                        base + consumed_end,
+                    );
+                    sequence_start = consumed_end;
+                }
+                if consumed_end <= offset {
+                    return Err(ConversionError::Internal {
+                        detail: format!("{} decoder made no input progress", charset.name()),
+                    });
+                }
+                offset = consumed_end;
             }
-        } else {
-            recover_invalid(
-                &mut decoded,
-                &mut diagnostics,
-                base + offset,
-                base + end,
-                charset,
-                mode,
-            )?;
+            DecoderResult::Malformed(malformed, after) => {
+                let error_end = consumed_end.checked_sub(usize::from(after)).ok_or_else(|| {
+                    ConversionError::Internal {
+                        detail: format!(
+                            "{} decoder returned an invalid malformed range",
+                            charset.name()
+                        ),
+                    }
+                })?;
+                let error_start =
+                    error_end.checked_sub(usize::from(malformed)).ok_or_else(|| {
+                        ConversionError::Internal {
+                            detail: format!(
+                                "{} decoder malformed range precedes the input",
+                                charset.name()
+                            ),
+                        }
+                    })?;
+                if !output.is_empty() {
+                    push_str_range(
+                        &mut lines_builder,
+                        &output,
+                        base + sequence_start,
+                        base + error_start,
+                    );
+                }
+                recover_invalid(
+                    &mut lines_builder,
+                    &mut recoveries,
+                    base + error_start,
+                    base + error_end,
+                    charset,
+                    mode,
+                )?;
+                sequence_start = error_end;
+                offset = consumed_end;
+            }
+            DecoderResult::OutputFull => {
+                return Err(ConversionError::Internal {
+                    detail: format!(
+                        "{} decoder exhausted its bounded scalar buffer",
+                        charset.name()
+                    ),
+                });
+            }
         }
-        offset = end;
     }
-    Ok((decoded.finish(), diagnostics))
+
+    finish_legacy_decoder(
+        &mut charset_decoder,
+        &mut output,
+        &mut lines_builder,
+        &mut recoveries,
+        bytes.len(),
+        base,
+        sequence_start,
+        charset,
+        mode,
+    )?;
+    Ok((lines_builder.finish(), recoveries.into_diagnostics(charset)))
 }
 
-fn legacy_width(charset: Charset, bytes: &[u8]) -> usize {
-    let first = bytes[0];
-    match charset {
-        Charset::ShiftJis if (0x81..=0x9f).contains(&first) || (0xe0..=0xfc).contains(&first) => 2,
-        Charset::Big5 if (0x81..=0xfe).contains(&first) => 2,
-        Charset::Gb18030 if (0x81..=0xfe).contains(&first) => {
-            if bytes.get(1).is_some_and(|value| (0x30..=0x39).contains(value)) { 4 } else { 2 }
+#[allow(clippy::too_many_arguments)]
+fn finish_legacy_decoder(
+    decoder: &mut encoding_rs::Decoder,
+    output: &mut String,
+    lines_builder: &mut DecodedLines,
+    recoveries: &mut RecoveryTracker,
+    input_len: usize,
+    base: usize,
+    mut sequence_start: usize,
+    charset: Charset,
+    mode: TextDecodingMode,
+) -> Result<(), ConversionError> {
+    for _ in 0..8 {
+        output.clear();
+        let (result, read) = decoder.decode_to_string_without_replacement(b"", output, true);
+        if read != 0 {
+            return Err(ConversionError::Internal {
+                detail: format!("{} decoder consumed bytes from empty final input", charset.name()),
+            });
         }
-        _ => 1,
+        match result {
+            DecoderResult::InputEmpty => {
+                if !output.is_empty() {
+                    push_str_range(lines_builder, output, base + sequence_start, base + input_len);
+                }
+                return Ok(());
+            }
+            DecoderResult::Malformed(malformed, after) => {
+                let error_end = input_len.checked_sub(usize::from(after)).ok_or_else(|| {
+                    ConversionError::Internal {
+                        detail: format!(
+                            "{} decoder returned an invalid final range",
+                            charset.name()
+                        ),
+                    }
+                })?;
+                let error_start =
+                    error_end.checked_sub(usize::from(malformed)).ok_or_else(|| {
+                        ConversionError::Internal {
+                            detail: format!(
+                                "{} decoder final range precedes the input",
+                                charset.name()
+                            ),
+                        }
+                    })?;
+                if !output.is_empty() {
+                    push_str_range(
+                        lines_builder,
+                        output,
+                        base + sequence_start,
+                        base + error_start,
+                    );
+                }
+                recover_invalid(
+                    lines_builder,
+                    recoveries,
+                    base + error_start,
+                    base + error_end,
+                    charset,
+                    mode,
+                )?;
+                sequence_start = error_end;
+            }
+            DecoderResult::OutputFull => {
+                return Err(ConversionError::Internal {
+                    detail: format!(
+                        "{} decoder exhausted its bounded final buffer",
+                        charset.name()
+                    ),
+                });
+            }
+        }
+    }
+    Err(ConversionError::Internal {
+        detail: format!("{} decoder did not finalize after recovery", charset.name()),
+    })
+}
+
+fn push_str_range(decoded: &mut DecodedLines, text: &str, start: usize, end: usize) {
+    for value in text.chars() {
+        decoded.push(value, start, end);
     }
 }
 
 fn recover_invalid(
     decoded: &mut DecodedLines,
-    diagnostics: &mut Vec<Diagnostic>,
+    recoveries: &mut RecoveryTracker,
     start: usize,
     end: usize,
     charset: Charset,
@@ -517,13 +715,57 @@ fn recover_invalid(
         });
     }
     decoded.push('\u{fffd}', start, end);
-    diagnostics.push(Diagnostic {
-        code: INVALID_SEQUENCE_CODE.into(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("replaced invalid {} byte sequence at {start}..{end}", charset.name()),
-        locator: Some(byte_locator(start, end)),
-    });
+    recoveries.record(start, end)?;
     Ok(())
+}
+
+#[derive(Debug)]
+struct RecoverySpan {
+    start: usize,
+    end: usize,
+    replacements: usize,
+}
+
+#[derive(Debug, Default)]
+struct RecoveryTracker {
+    spans: Vec<RecoverySpan>,
+}
+
+impl RecoveryTracker {
+    fn record(&mut self, start: usize, end: usize) -> Result<(), ConversionError> {
+        if let Some(previous) = self.spans.last_mut()
+            && previous.end == start
+        {
+            previous.end = end;
+            previous.replacements = previous.replacements.checked_add(1).ok_or_else(|| {
+                ConversionError::ResourceLimit {
+                    limit: "max_document_inlines",
+                    detail: "text replacement count overflowed".into(),
+                }
+            })?;
+            return Ok(());
+        }
+        self.spans.push(RecoverySpan { start, end, replacements: 1 });
+        Ok(())
+    }
+
+    fn into_diagnostics(self, charset: Charset) -> Vec<Diagnostic> {
+        self.spans
+            .into_iter()
+            .map(|span| Diagnostic {
+                code: INVALID_SEQUENCE_CODE.into(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!(
+                    "inserted {} U+FFFD replacement character(s) for invalid {} byte sequence(s) at {}..{}",
+                    span.replacements,
+                    charset.name(),
+                    span.start,
+                    span.end
+                ),
+                locator: Some(byte_locator(span.start, span.end)),
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -575,34 +817,95 @@ impl DecodedLines {
 
 fn build_document(
     lines: Vec<Line>,
+    max_decoded_text_bytes: u64,
     context: &ExecutionContext,
 ) -> Result<Document, ConversionError> {
     let mut document = Document::default();
     let mut paragraph: Vec<Line> = Vec::new();
+    let mut stats = DocumentStats::default();
     for (index, line) in lines.into_iter().enumerate() {
         if index % 4096 == 0 {
             context.checkpoint()?;
         }
         if line.text.is_empty() {
-            flush_paragraph(&mut document, &mut paragraph)?;
+            flush_paragraph(&mut document, &mut paragraph, &mut stats, max_decoded_text_bytes)?;
         } else {
             paragraph.push(line);
         }
     }
-    flush_paragraph(&mut document, &mut paragraph)?;
+    flush_paragraph(&mut document, &mut paragraph, &mut stats, max_decoded_text_bytes)?;
     Ok(document)
 }
 
-fn flush_paragraph(document: &mut Document, lines: &mut Vec<Line>) -> Result<(), ConversionError> {
+#[derive(Debug, Default)]
+struct DocumentStats {
+    blocks: usize,
+    inlines: usize,
+    text_bytes: u64,
+}
+
+fn flush_paragraph(
+    document: &mut Document,
+    lines: &mut Vec<Line>,
+    stats: &mut DocumentStats,
+    max_decoded_text_bytes: u64,
+) -> Result<(), ConversionError> {
     if lines.is_empty() {
         return Ok(());
     }
-    if document.blocks.len() >= MAX_DOCUMENT_NODES {
+    let blocks = stats.blocks.checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
+        limit: "max_document_nodes",
+        detail: "plain-text block count overflowed".into(),
+    })?;
+    if blocks > MAX_DOCUMENT_NODES {
         return Err(ConversionError::ResourceLimit {
             limit: "max_document_nodes",
             detail: format!("plain text exceeds {MAX_DOCUMENT_NODES} paragraph nodes"),
         });
     }
+    let new_inlines =
+        lines.len().checked_mul(2).and_then(|count| count.checked_sub(1)).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_document_inlines",
+                detail: "plain-text inline count overflowed".into(),
+            }
+        })?;
+    let inlines =
+        stats.inlines.checked_add(new_inlines).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_document_inlines",
+            detail: "plain-text inline count overflowed".into(),
+        })?;
+    if inlines > MAX_DOCUMENT_INLINES {
+        return Err(ConversionError::ResourceLimit {
+            limit: "max_document_inlines",
+            detail: format!("plain text exceeds {MAX_DOCUMENT_INLINES} inline nodes"),
+        });
+    }
+    let added_text_bytes = lines.iter().try_fold(0_u64, |total, line| {
+        let bytes = u64::try_from(line.text.len()).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_text_decoded_bytes",
+            detail: "decoded line length cannot be represented as u64".into(),
+        })?;
+        total.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_text_decoded_bytes",
+            detail: "decoded text byte count overflowed".into(),
+        })
+    })?;
+    let text_bytes = stats.text_bytes.checked_add(added_text_bytes).ok_or_else(|| {
+        ConversionError::ResourceLimit {
+            limit: "max_text_decoded_bytes",
+            detail: "decoded text byte count overflowed".into(),
+        }
+    })?;
+    if text_bytes > max_decoded_text_bytes {
+        return Err(ConversionError::ResourceLimit {
+            limit: "max_text_decoded_bytes",
+            detail: format!("{text_bytes} > {max_decoded_text_bytes}"),
+        });
+    }
+    stats.blocks = blocks;
+    stats.inlines = inlines;
+    stats.text_bytes = text_bytes;
     let start = lines.first().and_then(|line| line.start).unwrap_or(0);
     let end = lines.last().and_then(|line| line.end).unwrap_or(start);
     let mut content = Vec::with_capacity(lines.len().saturating_mul(2).saturating_sub(1));
@@ -686,6 +989,20 @@ mod tests {
     }
 
     #[test]
+    fn bom_probe_decodes_safe_sample_and_rejects_binary_masquerades() {
+        assert_eq!(sniff_text(&[0xff, 0xfe, b'A']), Some(0.80));
+        assert!(sniff_text(&[0xff, 0xfe, b'A', 0]).is_some_and(|value| value < 0.99));
+        assert_eq!(sniff_text(&[0xef, 0xbb, 0xbf, b'M', b'Z', 0, 1, 2]), None);
+        assert_eq!(sniff_text(&[0xff, 0xfe, 0, 0, 1, 0, 2, 0]), None);
+        assert_eq!(sniff_text(&[0xff, 0xfe, 0x00, 0xdc, b'A', 0]), None);
+
+        let error =
+            convert_text(&input(&[0xff, 0xfe, b'A']), &ConversionOptions::default(), &context())
+                .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed);
+    }
+
+    #[test]
     fn legacy_allowlist_decodes_mixed_language_text() {
         for (charset, sample) in [
             (Charset::Windows1252, "Café déjà vu — naïve façade €"),
@@ -736,6 +1053,84 @@ mod tests {
     }
 
     #[test]
+    fn legacy_decoder_preserves_ascii_after_exact_invalid_ranges() {
+        let cases = [
+            ("shift_jis", &[0x82, 0x20, b'A'][..], "� A", 0_u64, 1_u64),
+            ("big5", &[0x81, 0x20, b'B'][..], "� B", 0, 1),
+            ("gb18030", &[0x81, 0x20, b'C'][..], "� C", 0, 1),
+            ("gb18030", &[0x81, 0x30, 0x81, b'D'][..], "�0丏", 0, 1),
+        ];
+        for (charset, bytes, expected, invalid_start, invalid_end) in cases {
+            let mut options = ConversionOptions::default();
+            options.text.charset = Some(charset.into());
+            let strict = convert_text(&input(bytes), &options, &context()).unwrap_err();
+            assert!(strict.to_string().contains(&format!("{invalid_start}..{invalid_end}")));
+            options.text.decoding_mode = TextDecodingMode::Replace;
+            let output = convert_text(&input(bytes), &options, &context()).unwrap();
+            let Block::Paragraph(content) = &output.document.blocks[0].block else {
+                unreachable!();
+            };
+            assert_eq!(content[0], Inline::Text { value: expected.into(), marks: Vec::new() });
+            assert_eq!(
+                output.diagnostics[0].locator.as_ref().unwrap().byte_start,
+                Some(invalid_start)
+            );
+            assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().byte_end, Some(invalid_end));
+        }
+    }
+
+    #[test]
+    fn fixed_multibyte_boundaries_decode_without_replacement() {
+        let cases = [
+            ("shift_jis", &[0x82, 0xa0][..], "あ"),
+            ("big5", &[0xa4, 0xa4][..], "中"),
+            ("gb18030", &[0xd6, 0xd0][..], "中"),
+            ("gb18030", &[0x94, 0x39, 0xfc, 0x36][..], "😀"),
+        ];
+        for (charset, bytes, expected) in cases {
+            let mut options = ConversionOptions::default();
+            options.text.charset = Some(charset.into());
+            let output = convert_text(&input(bytes), &options, &context()).unwrap();
+            assert!(output.diagnostics.is_empty());
+            let Block::Paragraph(content) = &output.document.blocks[0].block else {
+                unreachable!();
+            };
+            assert_eq!(content[0], Inline::Text { value: expected.into(), marks: Vec::new() });
+            assert_eq!(
+                output.document.blocks[0].provenance.locator.byte_end,
+                Some(bytes.len() as u64)
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_invalid_sequences_merge_diagnostic_but_keep_decoder_replacements() {
+        let mut options = ConversionOptions::default();
+        options.text.charset = Some("utf-8".into());
+        options.text.decoding_mode = TextDecodingMode::Replace;
+        let output = convert_text(&input(&[0xff, 0xfd, b'A']), &options, &context()).unwrap();
+        assert_eq!(output.diagnostics.len(), 1);
+        assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().byte_start, Some(0));
+        assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().byte_end, Some(2));
+        assert!(output.diagnostics[0].message.contains("2 U+FFFD"));
+        let Block::Paragraph(content) = &output.document.blocks[0].block else {
+            unreachable!();
+        };
+        assert_eq!(content[0], Inline::Text { value: "��A".into(), marks: Vec::new() });
+
+        options.text.charset = Some("big5".into());
+        let output = convert_text(&input(&[0x81, 0x81, 0x81, 0x30]), &options, &context()).unwrap();
+        assert_eq!(output.diagnostics.len(), 1);
+        assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().byte_start, Some(0));
+        assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().byte_end, Some(3));
+        assert!(output.diagnostics[0].message.contains("2 U+FFFD"));
+        let Block::Paragraph(content) = &output.document.blocks[0].block else {
+            unreachable!();
+        };
+        assert_eq!(content[0], Inline::Text { value: "��0".into(), marks: Vec::new() });
+    }
+
+    #[test]
     fn empty_and_long_lines_are_bounded_and_deterministic() {
         let empty = convert_text(&input(b""), &ConversionOptions::default(), &context()).unwrap();
         assert!(empty.document.blocks.is_empty());
@@ -751,6 +1146,16 @@ mod tests {
             convert_text(&input(b"four"), &limited, &context()).unwrap_err().code(),
             into_markdown_core::ErrorCode::ResourceLimit
         );
+    }
+
+    #[test]
+    fn excessive_soft_lines_fail_as_resource_limit_before_invalid_ir() {
+        let source = "x\n".repeat(500_001);
+        let error =
+            convert_text(&input(source.as_bytes()), &ConversionOptions::default(), &context())
+                .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(error.to_string().contains("max_document_inlines"));
     }
 
     #[test]
