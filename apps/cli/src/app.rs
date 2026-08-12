@@ -1570,6 +1570,7 @@ fn convert_item(
     if policy.asset_mode == AssetModeArg::Extract {
         request.options.output.asset_uri_prefix = asset_uri_prefix;
     }
+    request.execution = policy.execution.clone();
     request.hint = policy.hint.clone();
     let engine = into_markdown::default_engine().map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)

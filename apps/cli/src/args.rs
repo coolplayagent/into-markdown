@@ -215,6 +215,18 @@ pub struct ConversionArgs {
     /// Maximum retained asset bytes.
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
     pub max_asset_size: Option<u64>,
+
+    /// Total conversion timeout in milliseconds.
+    #[arg(long, value_name = "MILLISECONDS")]
+    pub timeout_ms: Option<u64>,
+
+    /// Maximum request-scoped accounted memory.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_memory_size: Option<u64>,
+
+    /// Maximum request-scoped temporary file bytes.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_temporary_size: Option<u64>,
 }
 
 /// Management command tree.

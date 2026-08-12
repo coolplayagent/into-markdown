@@ -159,6 +159,9 @@ AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allo
 --max-depth <N>
 --max-pages <N>
 --max-asset-size <SIZE>
+--max-memory-size <SIZE>
+--max-temporary-size <SIZE>
+--timeout-ms <MILLISECONDS>
 ```
 
 - 配置文件不能启用联网；只有当前命令行的 `--allow-network` 可以授权远程输入和
@@ -169,6 +172,9 @@ AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allo
   DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
   目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
+- `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回
+  稳定的 `timeout` 错误码。内存限制统计执行上下文中显式预留的内存，临时空间限制
+  统计请求临时文件实际写入的字节。
 - 网络实现必须在 DNS 解析及每次重定向后重新执行地址与主机策略。
 
 ### 通用界面

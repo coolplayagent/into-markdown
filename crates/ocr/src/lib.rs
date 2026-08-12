@@ -5,7 +5,8 @@
 //! targets.
 
 use into_markdown_core::{
-    BoxFuture, ConversionError, OcrEngine, OcrRequest, OcrResult, Tensor, TensorRuntime,
+    BoxFuture, ConversionError, ExecutionContext, ExecutionStage, OcrEngine, OcrRequest, OcrResult,
+    Tensor, TensorRuntime,
 };
 use serde::{Deserialize, Serialize};
 
@@ -131,8 +132,11 @@ impl OcrEngine for PlaceholderOcrEngine {
     fn recognize<'a>(
         &'a self,
         _: OcrRequest<'a>,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
-        Box::pin(async {
+        Box::pin(async move {
+            context.checkpoint()?;
+            context.report(ExecutionStage::Ocr, None, None, Some("builtin.ocr.placeholder"))?;
             Err(ConversionError::Ocr {
                 provider: "builtin.ocr.placeholder".into(),
                 detail: "PP-OCRv6 inference is not implemented in the scaffold".into(),
@@ -154,8 +158,16 @@ impl TensorRuntime for PlaceholderTensorRuntime {
         &'a self,
         _: &'a str,
         _: &'a [Tensor],
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<Tensor>, ConversionError>> {
-        Box::pin(async {
+        Box::pin(async move {
+            context.checkpoint()?;
+            context.report(
+                ExecutionStage::Ocr,
+                None,
+                None,
+                Some("builtin.tensor-runtime.placeholder"),
+            )?;
             Err(ConversionError::Ocr {
                 provider: "builtin.tensor-runtime.placeholder".into(),
                 detail: "ONNX Runtime integration is not implemented in the scaffold".into(),

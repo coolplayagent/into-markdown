@@ -6,7 +6,7 @@
 use base64::Engine as _;
 use into_markdown_core::{
     Asset, AssetMode, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
-    Document, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer, TableRow,
+    Document, ExecutionContext, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer, TableRow,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,8 +48,12 @@ impl MarkdownRenderer for GfmRenderer {
         document: &'a Document,
         assets: &'a [Asset],
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<String, ConversionError>> {
-        Box::pin(async move { render(document, assets, options) })
+        Box::pin(async move {
+            context.checkpoint()?;
+            render(document, assets, options)
+        })
     }
 }
 

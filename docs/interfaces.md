@@ -59,6 +59,36 @@ reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported
 当前工作目录为基准。bundle 是自包含输出，渲染前固定使用 `assets` 前缀，归档内
 `document.md` 的每个抽取资源 href 必须精确命中对应 ZIP entry，且不额外写外部资源。
 
+## 执行上下文
+
+`ConversionRequest` 与 `DetectionRequest` 都携带 `ExecutionOptions`。引擎为每次调用
+创建一个 `ExecutionContext`，并把同一个上下文显式传给 `SourceResolver`、
+`FormatDetector`、`Converter::probe`、`Converter::convert`、`OcrEngine`、
+`TensorRuntime`、`Transcriber`、`AiProvider` 和 `MarkdownRenderer`。实现必须在读取循环、
+解压循环、页面循环、模型批次和网络等待边界调用 `checkpoint`，异步等待应通过
+`ExecutionContext::run` 包装；只在引擎入口检查一次不符合接口契约。
+
+`CancellationToken` 是协作式、可克隆的取消句柄。总 timeout 从引擎接收请求时开始，
+覆盖解析、检测、探测、转换、OCR、AI 与渲染，并以 `timeout` 稳定错误码失败；显式取消
+使用 `cancelled`。取消、超时和完成以最后一次检查点线性化，成功完成事件发布后到达的
+取消不会改写已经完成的结果。
+
+阶段进度使用 `ProgressEvent` 和对象安全的 `ProgressListener`。总体进度以 basis points
+表达并保持单调。OCR 与 AI 是转换期间可以交错出现的活动，而不是互斥的线性总体阶段。
+监听器运行在隔离线程上；固定容量 mailbox 会合并同阶段更新，并在饱和时保留最新边界
+与最终完成事件，因此慢监听器不会阻塞转换，监听器 panic 也不会穿透执行边界。回调期间
+不持有进度状态锁，监听器可以安全地请求取消。接口不依赖特定异步运行时，也不创建
+无界事件队列。
+
+`ResourceLimits` 除格式专用限制外，还提供 `max_memory_bytes` 与
+`max_temporary_bytes`。`ExecutionContext::reserve_memory` 使用 checked arithmetic 和
+RAII guard；`temporary_file` 在写入时计费，并在成功、错误、取消、超时或预算超限后
+删除临时产物。实现仍需使用格式专用预算，例如解压字节、条目、页数和资源大小；通用
+内存预算只统计实现显式保留的内存，不声称代表进程 RSS。
+提供者在分配大块输入副本、模型 tensor、解压缓冲或输出缓冲前必须调用
+`reserve_memory`，并在需要磁盘暂存时使用 `temporary_file`；引擎在 SPI 边界的计费只是
+补充防线，不能替代提供者内部检查。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，

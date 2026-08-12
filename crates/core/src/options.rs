@@ -102,6 +102,7 @@ impl Default for NetworkOptions {
 
 /// Fixed resource budgets used by every implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ResourceLimits {
     /// Maximum source bytes.
     pub max_input_bytes: u64,
@@ -115,6 +116,10 @@ pub struct ResourceLimits {
     pub max_pages: u32,
     /// Maximum retained asset bytes.
     pub max_asset_bytes: u64,
+    /// Maximum request-scoped memory explicitly reserved by implementations.
+    pub max_memory_bytes: u64,
+    /// Maximum bytes written to request-scoped temporary files.
+    pub max_temporary_bytes: u64,
 }
 
 impl Default for ResourceLimits {
@@ -126,6 +131,8 @@ impl Default for ResourceLimits {
             max_nesting_depth: 256,
             max_pages: 10_000,
             max_asset_bytes: 256 * 1024 * 1024,
+            max_memory_bytes: 1024 * 1024 * 1024,
+            max_temporary_bytes: 1024 * 1024 * 1024,
         }
     }
 }

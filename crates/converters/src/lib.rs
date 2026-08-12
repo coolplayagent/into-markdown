@@ -4,8 +4,9 @@
 //! this scaffold.
 
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, FormatCandidate, FormatDetector, FormatHint,
-    InputFormat, InputRef, ResolvedInput, SourceMetadata, SourceResolver,
+    BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
+    FormatDetector, FormatHint, InputFormat, InputRef, ResolvedInput, SourceMetadata,
+    SourceResolver,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
@@ -244,6 +245,7 @@ impl SourceResolver for MemorySourceResolver {
         &'a self,
         input: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         Box::pin(async move {
             let InputRef::Bytes { data, name } = input else {
@@ -251,6 +253,7 @@ impl SourceResolver for MemorySourceResolver {
                     detail: "expected memory input".into(),
                 });
             };
+            context.checkpoint()?;
             enforce_input_limit(data.len() as u64, options)?;
             Ok(ResolvedInput {
                 bytes: Arc::clone(data),
@@ -281,6 +284,7 @@ impl SourceResolver for LocalFileSourceResolver {
         &'a self,
         input: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         let result = (|| {
             let InputRef::Path(path) = input else {
@@ -288,7 +292,19 @@ impl SourceResolver for LocalFileSourceResolver {
             };
             let metadata = std::fs::metadata(path)?;
             enforce_input_limit(metadata.len(), options)?;
-            let bytes = std::fs::read(path)?;
+            let _memory = context.reserve_memory(metadata.len())?;
+            let mut file = std::fs::File::open(path)?;
+            let capacity = usize::try_from(metadata.len()).unwrap_or(0).min(8 * 1024 * 1024);
+            let mut bytes = Vec::with_capacity(capacity);
+            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
+            loop {
+                context.checkpoint()?;
+                let read = file.read(&mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..read]);
+            }
             Ok(ResolvedInput {
                 bytes: Arc::from(bytes),
                 metadata: SourceMetadata {
@@ -319,11 +335,28 @@ impl SourceResolver for StdinSourceResolver {
         &'a self,
         _: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         let result = (|| {
             let limit = options.limits.max_input_bytes;
             let mut bytes = Vec::new();
-            std::io::stdin().take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+            let mut reservations = Vec::new();
+            let mut stdin = std::io::stdin().take(limit.saturating_add(1));
+            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
+            loop {
+                context.checkpoint()?;
+                let read = stdin.read(&mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                reservations.push(context.reserve_memory(u64::try_from(read).map_err(
+                    |_| ConversionError::ResourceLimit {
+                        limit: "max_memory_bytes",
+                        detail: "stdin read size cannot be represented as u64".into(),
+                    },
+                )?)?);
+                bytes.extend_from_slice(&chunk[..read]);
+            }
             enforce_input_limit(bytes.len() as u64, options)?;
             Ok(ResolvedInput {
                 metadata: SourceMetadata {
@@ -355,8 +388,10 @@ impl SourceResolver for UriSourceResolver {
         &'a self,
         _: &'a InputRef,
         options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
         Box::pin(async move {
+            context.checkpoint()?;
             if options.network.enabled {
                 Err(ConversionError::ComponentUnavailable {
                     component: "builtin.source.uri".into(),
@@ -399,8 +434,10 @@ impl FormatDetector for HintFormatDetector {
         &'a self,
         input: &'a ResolvedInput,
         hint: &'a FormatHint,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
         Box::pin(async move {
+            context.checkpoint()?;
             let mut evidence: BTreeMap<InputFormat, Vec<&str>> = BTreeMap::new();
             let extension = hint
                 .extension
@@ -454,8 +491,12 @@ impl FormatDetector for ContentFormatDetector {
         &'a self,
         input: &'a ResolvedInput,
         _: &'a FormatHint,
+        context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
-        Box::pin(async move { Ok(detect_content(&input.bytes)) })
+        Box::pin(async move {
+            context.checkpoint()?;
+            Ok(detect_content(&input.bytes))
+        })
     }
 }
 
@@ -1618,13 +1659,21 @@ mod tests {
         }
     }
 
+    fn execution_context() -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        )
+    }
+
     #[test]
     fn memory_resolver_enforces_input_budget() {
         let resolver = MemorySourceResolver;
         let input = InputRef::bytes(b"large".as_slice(), Some("x.txt"));
         let mut options = ConversionOptions::default();
         options.limits.max_input_bytes = 2;
-        let error = block_on(resolver.resolve(&input, &options)).unwrap_err();
+        let context = execution_context();
+        let error = block_on(resolver.resolve(&input, &options, &context)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
     }
 
@@ -1632,7 +1681,9 @@ mod tests {
     fn remote_resolution_is_disabled_by_default() {
         let resolver = UriSourceResolver;
         let input = InputRef::Uri("https://example.com/a.pdf".into());
-        let error = block_on(resolver.resolve(&input, &ConversionOptions::default())).unwrap_err();
+        let options = ConversionOptions::default();
+        let context = execution_context();
+        let error = block_on(resolver.resolve(&input, &options, &context)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Network);
     }
 
@@ -1721,7 +1772,7 @@ mod tests {
         let input = resolved(b"ignored".to_vec(), "report.docx");
         let hint =
             FormatHint { media_type: Some("application/pdf".into()), ..FormatHint::default() };
-        let candidates = block_on(detector.detect(&input, &hint)).unwrap();
+        let candidates = block_on(detector.detect(&input, &hint, &execution_context())).unwrap();
         assert_eq!(candidates.len(), 2);
         assert!(candidates.iter().all(|candidate| !candidate.diagnostics.is_empty()));
     }
@@ -1730,7 +1781,9 @@ mod tests {
     fn magic_identification_does_not_trust_a_misleading_name() {
         let detector = ContentFormatDetector;
         let input = resolved(b"%PDF-1.7\n".to_vec(), "report.docx");
-        let candidates = block_on(detector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates =
+            block_on(detector.detect(&input, &FormatHint::default(), &execution_context()))
+                .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Pdf);
         assert!((candidates[0].confidence - 0.99).abs() < f32::EPSILON);
     }
@@ -1775,8 +1828,12 @@ mod tests {
         ];
         for (bytes, expected) in fixtures {
             let input = resolved(bytes.to_vec(), "misleading.txt");
-            let candidates =
-                block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+            let candidates = block_on(ContentFormatDetector.detect(
+                &input,
+                &FormatHint::default(),
+                &execution_context(),
+            ))
+            .unwrap();
             assert_eq!(candidates[0].format, expected);
         }
     }
@@ -1869,7 +1926,9 @@ mod tests {
         ];
         for (bytes, expected) in fixtures {
             let input = resolved(bytes, "misleading.zip");
-            let candidates = block_on(detector.detect(&input, &FormatHint::default())).unwrap();
+            let candidates =
+                block_on(detector.detect(&input, &FormatHint::default(), &execution_context()))
+                    .unwrap();
             assert_eq!(candidates[1].format, expected);
             assert_eq!(candidates[0].format, InputFormat::Zip);
         }
@@ -1879,8 +1938,12 @@ mod tests {
     fn zip_mimetype_read_is_bounded_and_explained() {
         let bytes = zip_with(&[("mimetype", &[b'x'; 129])]);
         let input = resolved(bytes, "oversized.odt");
-        let candidates =
-            block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates = block_on(ContentFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].format, InputFormat::Zip);
         assert!(candidates[0].diagnostics[0].contains("128 byte read limit"));
@@ -2025,8 +2088,12 @@ mod tests {
     #[test]
     fn cfb_directory_chain_distinguishes_legacy_office() {
         let input = resolved(cfb_with_stream("PowerPoint Document"), "slides.doc");
-        let candidates =
-            block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
+        let candidates = block_on(ContentFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Ppt);
         assert!((candidates[0].confidence - 0.98).abs() < f32::EPSILON);
     }

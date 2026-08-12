@@ -28,6 +28,8 @@ pub enum ErrorCode {
     ComponentUnavailable,
     /// The caller cancelled conversion.
     Cancelled,
+    /// The total execution deadline elapsed.
+    Timeout,
     /// An invariant or unavailable internal component prevented conversion.
     Internal,
 }
@@ -48,6 +50,7 @@ impl ErrorCode {
             Self::Io => "io",
             Self::ComponentUnavailable => "componentUnavailable",
             Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
             Self::Internal => "internal",
         }
     }
@@ -127,6 +130,9 @@ pub enum ConversionError {
     /// The caller cancelled conversion.
     #[error("conversion cancelled")]
     Cancelled,
+    /// The total request deadline elapsed.
+    #[error("conversion timed out")]
+    Timeout,
     /// An internal invariant or required component was unavailable.
     #[error("internal conversion error: {detail}")]
     Internal {
@@ -151,6 +157,7 @@ impl ConversionError {
             Self::Io { .. } => ErrorCode::Io,
             Self::ComponentUnavailable { .. } => ErrorCode::ComponentUnavailable,
             Self::Cancelled => ErrorCode::Cancelled,
+            Self::Timeout => ErrorCode::Timeout,
             Self::Internal { .. } => ErrorCode::Internal,
         }
     }
@@ -189,6 +196,7 @@ mod tests {
                 "componentUnavailable",
             ),
             (ConversionError::Cancelled, "cancelled"),
+            (ConversionError::Timeout, "timeout"),
             (ConversionError::Internal { detail: String::new() }, "internal"),
         ];
         for (error, expected) in cases {

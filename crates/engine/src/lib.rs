@@ -2,8 +2,8 @@
 
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionRequest, ConversionResult, Converter,
-    DetectionRequest, DetectionResult, FormatCandidate, FormatDetector, InputFormat,
-    MarkdownRenderer, ProbeOutcome, Services, SourceResolver,
+    DetectionRequest, DetectionResult, ExecutionContext, ExecutionStage, FormatCandidate,
+    FormatDetector, InputFormat, MarkdownRenderer, ProbeOutcome, Services, SourceResolver,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -138,8 +138,14 @@ impl Engine {
         &self,
         request: DetectionRequest,
     ) -> Result<DetectionResult, ConversionError> {
-        let input = self.resolve_input(&request.input, &request.options).await?;
-        let candidates = self.detect_formats(&input, &request.hint).await?;
+        let context = ExecutionContext::new(request.execution, request.options.limits.clone());
+        context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
+        let input = self.resolve_input(&request.input, &request.options, &context).await?;
+        let input_bytes = measured_input_bytes(&input, &request.options)?;
+        let _input_memory = context.reserve_memory(input_bytes)?;
+        context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
+        let candidates = self.detect_formats(&input, &request.hint, &context).await?;
+        context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
         Ok(DetectionResult { source: input.metadata, candidates })
     }
 
@@ -149,26 +155,33 @@ impl Engine {
     ///
     /// Returns a typed [`ConversionError`] from source resolution, detection,
     /// converter selection/conversion, or Markdown rendering.
+    #[allow(clippy::too_many_lines)]
     pub async fn convert(
         &self,
         request: ConversionRequest,
     ) -> Result<ConversionResult, ConversionError> {
-        let input = self.resolve_input(&request.input, &request.options).await?;
+        let context = ExecutionContext::new(request.execution, request.options.limits.clone());
+        context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
+        let input = self.resolve_input(&request.input, &request.options, &context).await?;
+        let input_bytes = measured_input_bytes(&input, &request.options)?;
+        let _input_memory = context.reserve_memory(input_bytes)?;
 
-        let candidates = self.detect_formats(&input, &request.hint).await?;
+        context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
+        let candidates = self.detect_formats(&input, &request.hint, &context).await?;
         if candidates.is_empty() {
             return Err(ConversionError::Unsupported {
                 detail: "format detectors produced no candidates".into(),
             });
         }
 
+        context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
         let mut attempts = Vec::new();
         for candidate in &candidates {
             for converter in &self.converters {
                 if !converter.supported_formats().contains(&candidate.format) {
                     continue;
                 }
-                match converter.probe(&input, candidate).await? {
+                match context.run(converter.probe(&input, candidate, &context)).await?? {
                     ProbeOutcome::NotApplicable => {}
                     ProbeOutcome::Match { confidence } => attempts.push(Attempt {
                         converter: Arc::clone(converter),
@@ -201,10 +214,16 @@ impl Engine {
 
         // A successful probe makes conversion authoritative. Conversion errors
         // are returned immediately rather than being hidden by another parser.
-        let output = attempt
-            .converter
-            .convert(&input, &attempt.candidate, &request.options, &self.services)
-            .await?;
+        context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
+        let output = context
+            .run(attempt.converter.convert(
+                &input,
+                &attempt.candidate,
+                &request.options,
+                &self.services,
+                &context,
+            ))
+            .await??;
         output.document.validate().map_err(|error| ConversionError::Internal {
             detail: format!(
                 "converter {} returned invalid document IR ({} at {}): {}",
@@ -217,22 +236,52 @@ impl Engine {
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
-        let markdown = renderer.render(&output.document, &output.assets, &request.options).await?;
+        let asset_bytes = output.assets.iter().try_fold(0_u64, |total, asset| {
+            let size =
+                u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                    limit: "max_asset_bytes",
+                    detail: "asset size cannot be represented as u64".into(),
+                })?;
+            total.checked_add(size).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: "asset byte count overflowed".into(),
+            })
+        })?;
+        if asset_bytes > request.options.limits.max_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: format!("{asset_bytes} > {}", request.options.limits.max_asset_bytes),
+            });
+        }
+        let _asset_memory = context.reserve_memory(asset_bytes)?;
+        context.report(ExecutionStage::Rendering, None, None, Some(renderer.id()))?;
+        let markdown = context
+            .run(renderer.render(&output.document, &output.assets, &request.options, &context))
+            .await??;
+        let markdown_bytes =
+            u64::try_from(markdown.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "rendered Markdown size cannot be represented as u64".into(),
+            })?;
+        let _markdown_memory = context.reserve_memory(markdown_bytes)?;
         let mut provenance = Vec::new();
         collect_provenance(&output.document.blocks, &mut provenance);
-        Ok(ConversionResult {
+        let result = ConversionResult {
             document: output.document,
             markdown,
             assets: output.assets,
             diagnostics: output.diagnostics,
             provenance,
-        })
+        };
+        context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
+        Ok(result)
     }
 
     async fn resolve_input(
         &self,
         input: &into_markdown_core::InputRef,
         options: &into_markdown_core::ConversionOptions,
+        context: &ExecutionContext,
     ) -> Result<into_markdown_core::ResolvedInput, ConversionError> {
         let resolver =
             self.source_resolvers.iter().find(|resolver| resolver.supports(input)).ok_or_else(
@@ -240,20 +289,21 @@ impl Engine {
                     detail: "no source resolver accepts the requested input".into(),
                 },
             )?;
-        resolver.resolve(input, options).await
+        context.run(resolver.resolve(input, options, context)).await?
     }
 
     async fn detect_formats(
         &self,
         input: &into_markdown_core::ResolvedInput,
         hint: &into_markdown_core::FormatHint,
+        context: &ExecutionContext,
     ) -> Result<Vec<FormatCandidate>, ConversionError> {
         let mut best: BTreeMap<InputFormat, FormatCandidate> = BTreeMap::new();
         if let Some(format) = hint.format {
             best.insert(format, FormatCandidate::explicit(format));
         }
         for detector in &self.format_detectors {
-            for mut candidate in detector.detect(input, hint).await? {
+            for mut candidate in context.run(detector.detect(input, hint, context)).await?? {
                 candidate.explicit = false;
                 candidate.confidence = normalize_confidence(candidate.confidence);
                 candidate.detector_id = detector.id().into();
@@ -286,6 +336,23 @@ impl Engine {
         });
         Ok(candidates)
     }
+}
+
+fn measured_input_bytes(
+    input: &into_markdown_core::ResolvedInput,
+    options: &into_markdown_core::ConversionOptions,
+) -> Result<u64, ConversionError> {
+    let size = u64::try_from(input.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_input_bytes",
+        detail: "resolved input size cannot be represented as u64".into(),
+    })?;
+    if size > options.limits.max_input_bytes {
+        return Err(ConversionError::ResourceLimit {
+            limit: "max_input_bytes",
+            detail: format!("{size} > {}", options.limits.max_input_bytes),
+        });
+    }
+    Ok(size)
 }
 
 struct Attempt {
@@ -345,6 +412,7 @@ mod tests {
             &'a self,
             input: &'a InputRef,
             _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
             Box::pin(async move {
                 let InputRef::Bytes { data, name } = input else {
@@ -371,6 +439,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatHint,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
             Box::pin(async { Ok(vec![FormatCandidate::new(InputFormat::Text, 0.8, "test")]) })
         }
@@ -395,6 +464,7 @@ mod tests {
             &'a self,
             input: &'a ResolvedInput,
             _: &'a FormatHint,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
             Box::pin(async move {
                 Ok(input
@@ -418,6 +488,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatHint,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
             Box::pin(async {
                 let mut nan = FormatCandidate::new(InputFormat::Pdf, 0.5, "malicious NaN");
@@ -446,6 +517,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatHint,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
             Box::pin(async move {
                 Ok(vec![FormatCandidate::new(self.format, self.confidence, "fixed")])
@@ -468,6 +540,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
             Box::pin(async { Ok(ProbeOutcome::NotApplicable) })
         }
@@ -477,6 +550,7 @@ mod tests {
             _: &'a FormatCandidate,
             _: &'a ConversionOptions,
             _: &'a Services,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             Box::pin(async { Err(ConversionError::Internal { detail: "must not run".into() }) })
         }
@@ -494,6 +568,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
@@ -503,6 +578,7 @@ mod tests {
             _: &'a FormatCandidate,
             _: &'a ConversionOptions,
             _: &'a Services,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             let id = self.0;
             Box::pin(async move {
@@ -537,6 +613,7 @@ mod tests {
             &'a self,
             _: &'a ResolvedInput,
             _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
             Box::pin(async move { Ok(ProbeOutcome::Match { confidence: self.probe_confidence }) })
         }
@@ -546,6 +623,7 @@ mod tests {
             _: &'a FormatCandidate,
             _: &'a ConversionOptions,
             _: &'a Services,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             let id = self.id;
             Box::pin(async move {
@@ -566,6 +644,7 @@ mod tests {
             _: &'a Document,
             _: &'a [Asset],
             _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<String, ConversionError>> {
             Box::pin(async { Ok(String::new()) })
         }
@@ -758,5 +837,172 @@ mod tests {
         request.hint.format = Some(InputFormat::Text);
         let result = block_on(engine.convert(request)).unwrap();
         assert_eq!(result.document.metadata.title.as_deref(), Some("explicit.text"));
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CancelStage {
+        Resolve,
+        Detect,
+        Probe,
+        Convert,
+        Render,
+    }
+
+    struct CancellingPipeline {
+        target: CancelStage,
+        token: into_markdown_core::CancellationToken,
+    }
+
+    impl CancellingPipeline {
+        fn cancel<'a, T: Send + 'a>(&self) -> BoxFuture<'a, Result<T, ConversionError>> {
+            let token = self.token.clone();
+            Box::pin(async move {
+                token.cancel();
+                std::future::pending::<Result<T, ConversionError>>().await
+            })
+        }
+    }
+
+    impl SourceResolver for CancellingPipeline {
+        fn id(&self) -> &'static str {
+            "test.cancelling.source"
+        }
+        fn supports(&self, _: &InputRef) -> bool {
+            true
+        }
+        fn resolve<'a>(
+            &'a self,
+            input: &'a InputRef,
+            _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+            if self.target == CancelStage::Resolve {
+                return self.cancel();
+            }
+            Box::pin(async move {
+                let InputRef::Bytes { data, name } = input else {
+                    return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
+                };
+                Ok(ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
+                        name: name.clone(),
+                        size: data.len() as u64,
+                        ..SourceMetadata::default()
+                    },
+                })
+            })
+        }
+    }
+
+    impl FormatDetector for CancellingPipeline {
+        fn id(&self) -> &'static str {
+            "test.cancelling.detector"
+        }
+        fn detect<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatHint,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
+            if self.target == CancelStage::Detect {
+                return self.cancel();
+            }
+            Box::pin(async {
+                Ok(vec![FormatCandidate::new(InputFormat::Text, 1.0, "cancellation test")])
+            })
+        }
+    }
+
+    impl Converter for CancellingPipeline {
+        fn id(&self) -> &'static str {
+            "test.cancelling.converter"
+        }
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            &[InputFormat::Text]
+        }
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            if self.target == CancelStage::Probe {
+                return self.cancel();
+            }
+            Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+        }
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            if self.target == CancelStage::Convert {
+                return self.cancel();
+            }
+            Box::pin(async { Ok(ConverterOutput::default()) })
+        }
+    }
+
+    impl MarkdownRenderer for CancellingPipeline {
+        fn id(&self) -> &'static str {
+            "test.cancelling.renderer"
+        }
+        fn render<'a>(
+            &'a self,
+            _: &'a Document,
+            _: &'a [Asset],
+            _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<String, ConversionError>> {
+            if self.target == CancelStage::Render {
+                return self.cancel();
+            }
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    #[test]
+    fn cancellation_propagates_through_every_engine_spi_stage() {
+        for stage in [
+            CancelStage::Resolve,
+            CancelStage::Detect,
+            CancelStage::Probe,
+            CancelStage::Convert,
+            CancelStage::Render,
+        ] {
+            let token = into_markdown_core::CancellationToken::new();
+            let pipeline = Arc::new(CancellingPipeline { target: stage, token: token.clone() });
+            let mut builder = EngineBuilder::new().renderer(pipeline.clone());
+            builder
+                .registry_mut()
+                .register_source_resolver(pipeline.clone())
+                .register_format_detector(pipeline.clone())
+                .register_converter(pipeline);
+            let engine = builder.build().unwrap();
+            let mut request =
+                ConversionRequest::new(InputRef::bytes(b"cancel".as_slice(), Some("cancel.txt")));
+            request.execution.cancellation = token;
+            let error = block_on(engine.convert(request)).unwrap_err();
+            assert_eq!(error.code(), into_markdown_core::ErrorCode::Cancelled);
+        }
+    }
+
+    #[test]
+    fn total_deadline_interrupts_a_pending_resolver() {
+        let pipeline = Arc::new(CancellingPipeline {
+            target: CancelStage::Resolve,
+            token: into_markdown_core::CancellationToken::new(),
+        });
+        let mut builder = EngineBuilder::new().renderer(pipeline.clone());
+        builder.registry_mut().register_source_resolver(pipeline);
+        let engine = builder.build().unwrap();
+        let mut request = ConversionRequest::new(InputRef::bytes(b"wait".as_slice(), Some("x")));
+        request.execution.timeout = Some(std::time::Duration::from_millis(20));
+        let error = block_on(engine.convert(request)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Timeout);
     }
 }
