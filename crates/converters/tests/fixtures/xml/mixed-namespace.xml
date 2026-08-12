@@ -1,0 +1,4 @@
+<root xmlns="urn:default" xmlns:a="urn:a" xmlns:b="urn:b" id="1">
+  before<a:item b:kind="example"><![CDATA[middle]]></a:item>after
+  <!--audit note--><?process safely?>
+</root>

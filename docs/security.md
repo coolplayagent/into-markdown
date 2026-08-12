@@ -8,7 +8,9 @@
 - 归档路径必须规范化，拒绝路径穿越和绝对路径，解压时不得跟随符号链接。
 - 本地输入打开在 handle 层拒绝 Unix symlink 或 Windows reparse point，并只接受 regular
   file，不能把 CLI 规划时的路径检查当作最终安全边界。
-- XML 解析必须禁用外部实体以及 DTD/网络解析。
+- XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
+  实体和合法 numeric character reference；namespace 作用域、重复 expanded attribute、
+  closing tag、深度、事件数、属性/文本与扩张预算均在构造 IR 前校验。
 - TXT 自动探测按候选字符集增量解码完整输入；除 TAB、LF、CR 外，NUL、C0、DEL 或 C1
   都会拒绝自动候选，多字节编码不能借原始字节形态绕过规则。BOM 仅决定候选编码，
   不能绕过完整控制字符扫描、有界严格解码与文本安全阈值。结构化文本、具备三行及

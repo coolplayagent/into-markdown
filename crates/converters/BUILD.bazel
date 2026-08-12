@@ -24,6 +24,7 @@ rust_library(
 rust_test(
     name = "converters_test",
     crate = ":converters",
+    compile_data = glob(["tests/fixtures/**"]),
     edition = "2024",
     deps = [
         "//crates/core",

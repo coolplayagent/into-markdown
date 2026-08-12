@@ -32,6 +32,12 @@ run 压缩；ASCII identity 通常只占一个 run。Big5 等把一个原始序�
 scalar 时，这些 scalar 共用一个 span，任一重叠子范围均覆盖完整原始序列。随机
 byte-range 查询对 run 起点做二分，TXT 的顺序分行则使用单调游标。
 
+JSON/XML 共用 `max_input_bytes`、`max_nesting_depth`、`max_field_bytes`、IR node/inline
+上限及 ExecutionContext 内存预算。JSON detector 与 converter 先通过同一完整结构扫描器，
+converter 再施加重复键和 decoded string 策略。XML 的 UTF-16 decoder 维护 decoded UTF-8
+boundary 到原始 byte boundary 的映射；converter 交给 quick-xml 的只是解码文本，公开
+provenance 始终回映到原始输入。
+
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 

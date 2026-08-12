@@ -3,9 +3,11 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod delimited;
+mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
+pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 
 use into_markdown_core::{
@@ -169,13 +171,13 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Json,
         family: "text",
         extensions: &["json"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Xml,
         family: "text",
         extensions: &["xml"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Feed,
@@ -1217,6 +1219,31 @@ fn structured_text_candidate(
                 FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content")
             }));
         }
+        if strong_json_prefix(json) {
+            return Ok(Some(FormatCandidate::new(
+                InputFormat::Json,
+                0.94,
+                "JSON structural prefix with invalid or incomplete syntax",
+            )));
+        }
+    }
+
+    if let Some(decoded) = structured::decode_xml_for_detection(bytes) {
+        let text = decoded.trim_start();
+        if let Some(root) = xml_root_name(text) {
+            return Ok(Some(FormatCandidate::new(
+                InputFormat::Xml,
+                0.92,
+                format!("UTF-16 XML {root} root element"),
+            )));
+        }
+        if strong_xml_prefix(text) {
+            return Ok(Some(FormatCandidate::new(
+                InputFormat::Xml,
+                0.90,
+                "UTF-16 XML declaration or paired markup",
+            )));
+        }
     }
 
     let Some((prefix, _)) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT) else {
@@ -1235,11 +1262,33 @@ fn structured_text_candidate(
             Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
         });
     }
+    if strong_xml_prefix(text) {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Xml,
+            0.90,
+            "XML declaration or paired markup with invalid structure",
+        )));
+    }
     let delimited_bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
     let Ok(delimited_text) = std::str::from_utf8(delimited_bytes) else {
         return Ok(None);
     };
     delimited::detected_candidate(delimited_text, context)
+}
+
+fn strong_json_prefix(json: &[u8]) -> bool {
+    let Some(first) = json.first() else { return false };
+    let next = json[1..].iter().copied().find(|byte| !byte.is_ascii_whitespace());
+    matches!(
+        (*first, next),
+        (b'{', Some(b'"'))
+            | (b'[', Some(b'{' | b'[' | b'"' | b'-' | b'0'..=b'9' | b't' | b'f' | b'n'))
+    )
+}
+
+fn strong_xml_prefix(text: &str) -> bool {
+    text.starts_with("<?xml")
+        || (text.starts_with('<') && (text.contains("</") || text.contains("/>")))
 }
 
 fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {
@@ -3284,8 +3333,8 @@ mod tests {
         complete_at_boundary.push_str(suffix);
         assert_eq!(complete_at_boundary.len(), TEXT_INSPECTION_BYTE_LIMIT);
         complete_at_boundary.push_str(" trailing prose");
-        assert_eq!(structured(complete_at_boundary.as_bytes()), None);
-        assert_eq!(detect(complete_at_boundary.as_bytes())[0].format, InputFormat::Text);
+        assert_eq!(structured(complete_at_boundary.as_bytes()).unwrap().format, InputFormat::Json);
+        assert_eq!(detect(complete_at_boundary.as_bytes())[0].format, InputFormat::Json);
 
         assert_eq!(
             scan_json(b"{\"open\":[1,", &execution_context()).unwrap().status,
@@ -3362,8 +3411,8 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(invalid)
             );
-            assert_eq!(structured(invalid), None);
-            assert_eq!(detect(invalid)[0].format, InputFormat::Text);
+            assert_eq!(structured(invalid).unwrap().format, InputFormat::Json);
+            assert_eq!(detect(invalid)[0].format, InputFormat::Json);
         }
     }
 

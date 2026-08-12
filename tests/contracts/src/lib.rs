@@ -55,7 +55,16 @@ mod tests {
             .filter(|descriptor| descriptor.status == FormatStatus::Available)
             .map(|descriptor| descriptor.format)
             .collect::<Vec<_>>();
-        assert_eq!(available, vec![InputFormat::Text, InputFormat::Csv, InputFormat::Tsv]);
+        assert_eq!(
+            available,
+            vec![
+                InputFormat::Text,
+                InputFormat::Csv,
+                InputFormat::Tsv,
+                InputFormat::Json,
+                InputFormat::Xml,
+            ]
+        );
     }
 
     #[test]
