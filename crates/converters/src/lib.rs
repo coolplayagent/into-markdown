@@ -484,15 +484,18 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         || bytes.starts_with(&[0xff, 0xd8, 0xff])
         || bytes.starts_with(b"II*\0")
         || bytes.starts_with(b"MM\0*")
-        || bytes.starts_with(b"BM")
         || bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
     {
         (InputFormat::Image, 0.98, "image magic bytes")
+    } else if valid_bmp_header(bytes) {
+        (InputFormat::Image, 0.98, "validated BMP file and DIB headers")
     } else if bytes.starts_with(b"fLaC")
         || bytes.starts_with(b"ID3")
         || bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE"
     {
         (InputFormat::Audio, 0.96, "audio magic bytes")
+    } else if valid_mpeg_audio_frame_header(bytes) {
+        (InputFormat::Audio, 0.92, "MPEG audio frame header")
     } else if bytes.starts_with(b"OggS") {
         return Some(detect_ogg(bytes));
     } else if bytes.len() >= 12
@@ -508,6 +511,75 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         return None;
     };
     Some(FormatCandidate::new(format, confidence, evidence))
+}
+
+fn valid_mpeg_audio_frame_header(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.get(..4) else {
+        return false;
+    };
+    let version = (header[1] >> 3) & 0b11;
+    let layer = (header[1] >> 1) & 0b11;
+    let bitrate_index = header[2] >> 4;
+    let sample_rate_index = (header[2] >> 2) & 0b11;
+    header[0] == 0xff
+        && header[1] & 0xe0 == 0xe0
+        && version != 0b01
+        && layer != 0
+        && !matches!(bitrate_index, 0 | 0x0f)
+        && sample_rate_index != 0b11
+}
+
+fn valid_bmp_header(bytes: &[u8]) -> bool {
+    if bytes.get(..2) != Some(b"BM") {
+        return false;
+    }
+    let Some(file_size) = little_u32(bytes, 2).and_then(|value| usize::try_from(value).ok()) else {
+        return false;
+    };
+    let Some(pixel_offset) = little_u32(bytes, 10).and_then(|value| usize::try_from(value).ok())
+    else {
+        return false;
+    };
+    let Some(dib_size) = little_u32(bytes, 14).and_then(|value| usize::try_from(value).ok()) else {
+        return false;
+    };
+    let Some(headers_end) = 14_usize.checked_add(dib_size) else {
+        return false;
+    };
+    if !matches!(dib_size, 12 | 40 | 52 | 56 | 64 | 108 | 124)
+        || headers_end > bytes.len()
+        || pixel_offset < headers_end
+        || file_size <= pixel_offset
+        || file_size > bytes.len()
+    {
+        return false;
+    }
+    let (dimensions_valid, planes, bits_per_pixel) = if dib_size == 12 {
+        let dimensions_valid = little_u16(bytes, 18).is_some_and(|value| value != 0)
+            && little_u16(bytes, 20).is_some_and(|value| value != 0);
+        (dimensions_valid, little_u16(bytes, 22), little_u16(bytes, 24))
+    } else {
+        let dimensions_valid = little_i32(bytes, 18).is_some_and(|value| value != 0)
+            && little_i32(bytes, 22).is_some_and(|value| value != 0);
+        (dimensions_valid, little_u16(bytes, 26), little_u16(bytes, 28))
+    };
+    dimensions_valid
+        && planes == Some(1)
+        && bits_per_pixel.is_some_and(|value| matches!(value, 1 | 4 | 8 | 16 | 24 | 32))
+}
+
+fn little_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let value = bytes.get(offset..offset + 2)?;
+    Some(u16::from_le_bytes([value[0], value[1]]))
+}
+
+fn little_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let value = bytes.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn little_i32(bytes: &[u8], offset: usize) -> Option<i32> {
+    little_u32(bytes, offset).map(|value| i32::from_le_bytes(value.to_le_bytes()))
 }
 
 fn detect_ogg(bytes: &[u8]) -> FormatCandidate {
@@ -564,10 +636,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
 fn structured_text_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
     let prefix = bytes.get(..bytes.len().min(TEXT_INSPECTION_BYTE_LIMIT))?;
     let text = std::str::from_utf8(prefix).ok()?.trim_start_matches('\u{feff}').trim_start();
-    if text.starts_with("<!DOCTYPE html")
-        || text.starts_with("<!doctype html")
-        || starts_with_tag(text, "html")
-    {
+    if html_prelude_identifies_html(text) {
         return Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup"));
     }
     if (text.starts_with('{') || text.starts_with('['))
@@ -587,11 +656,52 @@ fn structured_text_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         return Some(FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content"));
     }
     let root = xml_root_name(text)?;
-    if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
+    if root.eq_ignore_ascii_case("html") {
+        Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
+    } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
         Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
     } else {
         Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
     }
+}
+
+fn html_prelude_identifies_html(mut text: &str) -> bool {
+    loop {
+        text = text.trim_start();
+        if let Some(rest) = text.strip_prefix("<?") {
+            let Some((_, after)) = rest.split_once("?>") else {
+                return false;
+            };
+            text = after;
+        } else if let Some(rest) = text.strip_prefix("<!--") {
+            let Some((_, after)) = rest.split_once("-->") else {
+                return false;
+            };
+            text = after;
+        } else if let Some(rest) = strip_ascii_case_prefix(text, "<!doctype") {
+            let Some((declaration, after)) = rest.split_once('>') else {
+                return false;
+            };
+            if declaration
+                .trim_start()
+                .split(|character: char| character.is_ascii_whitespace() || character == '[')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("html"))
+            {
+                return true;
+            }
+            text = after;
+        } else {
+            return starts_with_tag(text, "html");
+        }
+    }
+}
+
+fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        .then(|| &value[prefix.len()..])
 }
 
 fn starts_with_tag(text: &str, name: &str) -> bool {
@@ -609,7 +719,7 @@ fn xml_root_name(mut text: &str) -> Option<&str> {
             text = rest.split_once("?>")?.1;
         } else if let Some(rest) = text.strip_prefix("<!--") {
             text = rest.split_once("-->")?.1;
-        } else if let Some(rest) = text.strip_prefix("<!DOCTYPE") {
+        } else if let Some(rest) = strip_ascii_case_prefix(text, "<!doctype") {
             text = rest.split_once('>')?.1;
         } else {
             break;
@@ -1070,6 +1180,34 @@ mod tests {
     }
 
     #[test]
+    fn mpeg_audio_frame_header_detects_mp3_without_id3() {
+        let candidate = magic_candidate(&[0xff, 0xfb, 0x90, 0x64]).unwrap();
+        assert_eq!(candidate.format, InputFormat::Audio);
+        assert_eq!(candidate.evidence, "MPEG audio frame header");
+        assert!(magic_candidate(&[0xff, 0xff, 0xff, 0xff]).is_none());
+        assert!(magic_candidate(&[0x12, 0xff, 0xfb, 0x90, 0x64]).is_none());
+        assert!(magic_candidate(&[0xff, 0xfb, 0xf0, 0x64]).is_none());
+    }
+
+    #[test]
+    fn bmp_requires_consistent_file_and_dib_headers() {
+        let mut bmp = vec![0_u8; 58];
+        bmp[..2].copy_from_slice(b"BM");
+        bmp[2..6].copy_from_slice(&58_u32.to_le_bytes());
+        bmp[10..14].copy_from_slice(&54_u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&1_i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&1_i32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&24_u16.to_le_bytes());
+        assert_eq!(magic_candidate(&bmp).unwrap().format, InputFormat::Image);
+        assert!(magic_candidate(b"BM").is_none());
+        assert!(magic_candidate(&[b'B', b'M', 0, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0]).is_none());
+        bmp[10..14].copy_from_slice(&200_u32.to_le_bytes());
+        assert!(magic_candidate(&bmp).is_none());
+    }
+
+    #[test]
     fn structured_text_detection_orders_specific_formats_first() {
         let fixtures = [
             (b"<!doctype html><html></html>".as_slice(), InputFormat::Html),
@@ -1085,6 +1223,24 @@ mod tests {
                 block_on(ContentFormatDetector.detect(&input, &FormatHint::default())).unwrap();
             assert_eq!(candidates[0].format, expected);
         }
+    }
+
+    #[test]
+    fn html_detection_handles_bounded_preludes_case_and_xhtml() {
+        let fixtures = [
+            "\u{feff}  <?xml version='1.0'?><!--lead--><HtMl xmlns='http://www.w3.org/1999/xhtml'>",
+            " \n<!--lead--><!DoCtYpE HtMl><HTML>",
+            "<?xml version='1.0'?><html xmlns='http://www.w3.org/1999/xhtml'/>",
+            "<?xml version='1.0'?><xhtml:html xmlns:xhtml='http://www.w3.org/1999/xhtml'/>",
+        ];
+        for fixture in fixtures {
+            let candidate = structured_text_candidate(fixture.as_bytes()).unwrap();
+            assert_eq!(candidate.format, InputFormat::Html);
+        }
+        assert_eq!(
+            structured_text_candidate(b"<?xml version='1.0'?><document/>").unwrap().format,
+            InputFormat::Xml
+        );
     }
 
     #[test]

@@ -44,7 +44,10 @@
 低置信歧义候选。结构化文本探测最多检查 1 MiB UTF-8 前缀，可识别 HTML、XML、
 RSS/Atom、JSON 和 Jupyter Notebook；不会猜测 CSV、纯文本或 Markdown。媒体容器
 必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
-歧义诊断。
+歧义诊断。无 ID3 的 MP3 会验证 MPEG frame header 的版本、层、码率和采样率字段；
+BMP 会验证 file/DIB header、声明大小、像素偏移和基本图像字段，不能只凭短签名获得
+高置信度。HTML 探测可在有界前缀内跳过 BOM、空白、XML declaration 和注释，并以
+ASCII 不区分大小写的方式识别 doctype 与 HTML/XHTML 根元素。
 
 ## 兼容性
 
