@@ -144,6 +144,12 @@ pub struct TimeRange {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocator {
+    /// Inclusive byte offset in the original encoded source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_start: Option<u64>,
+    /// Exclusive byte offset in the original encoded source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_end: Option<u64>,
     /// One-based page number.
     pub page: Option<u32>,
     /// One-based slide number.
@@ -963,6 +969,15 @@ fn validate_provenance(provenance: &Provenance, path: &str) -> Result<(), IrErro
 }
 
 fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> {
+    if locator.byte_start.is_some() != locator.byte_end.is_some()
+        || locator.byte_start.zip(locator.byte_end).is_some_and(|(start, end)| start > end)
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.byteStart"),
+            "byteStart and byteEnd must be present together and form an ordered half-open range",
+        ));
+    }
     if locator.page == Some(0) {
         return Err(IrError::new(
             IrErrorCode::InvalidLocator,
@@ -1311,6 +1326,8 @@ mod tests {
             kind: ProvenanceKind::NativeParser,
             provider: "test.parser".into(),
             locator: SourceLocator {
+                byte_start: Some(0),
+                byte_end: Some(1),
                 page: Some(1),
                 slide: Some(1),
                 sheet: Some("Data".into()),

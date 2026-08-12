@@ -7,6 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+chardetng.workspace = true
+encoding_rs.workspace = true
 into-markdown-core = { path = "../core" }
 quick-xml.workspace = true
 serde_json.workspace = true

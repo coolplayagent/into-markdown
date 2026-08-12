@@ -38,7 +38,7 @@ pub use ir::{
 };
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, NetworkOptions, OcrOptions, OcrPolicy,
-    OutputOptions, ResourceLimits,
+    OutputOptions, ResourceLimits, TextDecodingMode, TextOptions,
 };
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,

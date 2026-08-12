@@ -48,6 +48,10 @@ model_bundle = "pp-ocrv6-tiny-zh-en"
 languages = ["zh-Hans", "zh-Hant", "en"]
 minimum_confidence = 0.70
 
+[conversion.text]
+# strict（默认）或 replace；replace 会逐段输出带原始字节范围的诊断。
+decoding_mode = "strict"
+
 [conversion.ai]
 vision_ocr = "fallback"
 image_description = "off"

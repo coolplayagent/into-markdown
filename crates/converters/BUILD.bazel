@@ -11,6 +11,8 @@ rust_library(
     edition = "2024",
     deps = [
         "//crates/core",
+        "@crates//:chardetng",
+        "@crates//:encoding_rs",
         "@crates//:libc",
         "@crates//:quick-xml",
         "@crates//:serde_json",
@@ -25,6 +27,8 @@ rust_test(
     edition = "2024",
     deps = [
         "//crates/core",
+        "@crates//:chardetng",
+        "@crates//:encoding_rs",
         "@crates//:libc",
         "@crates//:quick-xml",
         "@crates//:serde_json",

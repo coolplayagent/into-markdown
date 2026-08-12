@@ -18,6 +18,11 @@
 适用性测试，不得执行实际转换。`Converter::convert` 只能生成 `Document`、
 资源和诊断。包括 PDF 与多媒体适配器在内的所有格式实现都必须遵守此契约。
 
+TXT 的 `FormatHint.charset` 会由 Engine 复制到请求级 `ConversionOptions.text.charset`，
+供不改变 Converter SPI 的实现读取。显式字符集权威且必须在确定 allowlist 内规范化；
+默认 `TextDecodingMode::Strict`。`Replace` 只能在每段恢复都附带稳定 diagnostic code、
+encoding 与原始 byte range 时继续。转换器必须在 resolver 之后再次执行输入大小检查。
+
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 
@@ -137,9 +142,13 @@ handoff。`Vec` 转换为共享 bytes 前按可能复制的峰值预留，转换
 项和受限长度的 `mimetype` 内容；OLE 探测只检查有界的目录项区域，不提取宏或
 内嵌对象。OLE 检测会验证 CFB header 并沿 DIFAT、FAT 和 directory chain 遍历，
 只有 directory stream 中的流名可产生高置信候选；损坏或超限结构只产生带诊断的
-低置信歧义候选。结构化文本探测最多检查 1 MiB UTF-8 前缀，可识别 HTML、XML、
-RSS/Atom、JSON 和 Jupyter Notebook；不会猜测 CSV、纯文本或 Markdown。媒体容器
-必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
+低置信歧义候选。HTML、XML 与 RSS/Atom 探测最多检查 1 MiB UTF-8 前缀。JSON 与
+Jupyter Notebook 使用带 checkpoint 和 nesting 上限的非递归状态机扫描完整 resolved
+bytes；采样边界处无论结构开放还是恰好闭合都不会提前定案，完整结构后的非空白尾部
+使 JSON 判定失效。至少三行、字段数一致、quote 合法且具备表头/数字数据类型证据的
+逗号或 Tab 分隔启发式会保留 planned CSV/TSV 候选，防止普通文本回退抢占；它不会执行
+CSV/TSV 转换，也不会把两行散文或 Markdown 当作表格。
+媒体容器必须具备可识别品牌或 codec signature 才能获得高置信度，否则输出较低置信度与
 歧义诊断。无 ID3 的 MP3 会验证 MPEG frame header 的版本、层、码率和采样率字段；
 BMP 会验证 file/DIB header、声明大小、像素偏移和基本图像字段，不能只凭短签名获得
 高置信度。HTML 探测可在有界前缀内跳过 BOM、空白、XML declaration 和注释，并以

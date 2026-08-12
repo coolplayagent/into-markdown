@@ -1,7 +1,10 @@
 //! Converter and source-resolution catalog.
 //!
-//! Format descriptors are present, but no production parser is registered by
-//! this scaffold.
+//! Built-in source resolvers, format detectors, and converters.
+
+mod text;
+
+pub use text::TextConverter;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
@@ -55,6 +58,7 @@ pub struct FormatDescriptor {
 }
 
 const PLANNED: FormatStatus = FormatStatus::Planned;
+const AVAILABLE: FormatStatus = FormatStatus::Available;
 
 const FORMATS: &[FormatDescriptor] = &[
     FormatDescriptor {
@@ -133,7 +137,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Text,
         family: "text",
         extensions: &["txt", "text", "log"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Markdown,
@@ -939,6 +943,9 @@ impl FormatDetector for HintFormatDetector {
             if let Some(format) = media_type.and_then(format_from_media_type) {
                 evidence.entry(format).or_default().push("media type");
             }
+            if hint.charset.is_some() {
+                evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
+            }
             let conflict = evidence.len() > 1;
             Ok(evidence
                 .into_iter()
@@ -983,7 +990,7 @@ impl FormatDetector for ContentFormatDetector {
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            Ok(detect_content(&input.bytes))
+            detect_content(&input.bytes, context)
         })
     }
 }
@@ -996,18 +1003,40 @@ const ZIP_METADATA_READ_LIMIT: u64 = 256 * 1024;
 const ZIP_XML_EVENT_LIMIT: usize = 32 * 1024;
 const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
+const JSON_SCAN_DEPTH_LIMIT: usize = 4096;
+const JSON_SCAN_CHECKPOINT_BYTES: usize = 4096;
+const DELIMITED_ROW_LIMIT: usize = 64;
+const DELIMITED_FIELD_LIMIT: usize = 1024;
 
-fn detect_content(bytes: &[u8]) -> Vec<FormatCandidate> {
+fn detect_content(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Vec<FormatCandidate>, ConversionError> {
     if bytes.starts_with(b"PK\x03\x04")
         || bytes.starts_with(b"PK\x05\x06")
         || bytes.starts_with(b"PK\x07\x08")
     {
-        return detect_zip(bytes);
+        return Ok(detect_zip(bytes));
     }
     if bytes.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
-        return detect_ole(bytes);
+        return Ok(detect_ole(bytes));
     }
-    magic_candidate(bytes).or_else(|| structured_text_candidate(bytes)).into_iter().collect()
+    if let Some(candidate) = magic_candidate(bytes) {
+        return Ok(vec![candidate]);
+    }
+    if let Some(candidate) = structured_text_candidate(bytes, context)? {
+        return Ok(vec![candidate]);
+    }
+    Ok(text::sniff_unstructured_text(bytes, context)?
+        .map(|confidence| {
+            FormatCandidate::new(
+                InputFormat::Text,
+                confidence,
+                "plain-text safety and encoding thresholds",
+            )
+        })
+        .into_iter()
+        .collect())
 }
 
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
@@ -1171,36 +1200,695 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
 }
 
-fn structured_text_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
-    let prefix = bytes.get(..bytes.len().min(TEXT_INSPECTION_BYTE_LIMIT))?;
-    let text = std::str::from_utf8(prefix).ok()?.trim_start_matches('\u{feff}').trim_start();
-    if html_prelude_identifies_html(text) {
-        return Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup"));
-    }
-    if (text.starts_with('{') || text.starts_with('['))
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(text)
-    {
-        if value.as_object().is_some_and(|object| {
-            object.get("nbformat").is_some_and(serde_json::Value::is_number)
-                && object.get("cells").is_some_and(serde_json::Value::is_array)
-                && object.get("metadata").is_some_and(serde_json::Value::is_object)
-        }) {
-            return Some(FormatCandidate::new(
-                InputFormat::Ipynb,
-                0.99,
-                "Jupyter notebook JSON structure",
-            ));
+fn structured_text_candidate(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<FormatCandidate>, ConversionError> {
+    if let Some(json) = json_payload(bytes) {
+        let summary = scan_json(json, context)?;
+        if summary.status == JsonScanStatus::Complete {
+            return Ok(Some(if summary.notebook {
+                FormatCandidate::new(InputFormat::Ipynb, 0.99, "Jupyter notebook JSON structure")
+            } else {
+                FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content")
+            }));
         }
-        return Some(FormatCandidate::new(InputFormat::Json, 0.96, "valid JSON content"));
     }
-    let root = xml_root_name(text)?;
-    if root.eq_ignore_ascii_case("html") {
-        Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
-    } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
-        Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
+
+    let Some((prefix, _)) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT) else {
+        return Ok(None);
+    };
+    let text = prefix.trim_start_matches('\u{feff}').trim_start();
+    if html_prelude_identifies_html(text) {
+        return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup")));
+    }
+    if let Some(root) = xml_root_name(text) {
+        return Ok(if root.eq_ignore_ascii_case("html") {
+            Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
+        } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
+            Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
+        } else {
+            Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
+        });
+    }
+    Ok(delimited_text_candidate(text))
+}
+
+fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {
+    if let Some(rest) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        bytes = rest;
+    }
+    let start = bytes.iter().position(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))?;
+    matches!(bytes[start], b'{' | b'[').then_some(&bytes[start..])
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonScanStatus {
+    Complete,
+    Open,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JsonScanSummary {
+    status: JsonScanStatus,
+    notebook: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonRootState {
+    Value,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonArrayState {
+    FirstValueOrEnd,
+    Value,
+    CommaOrEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonObjectState {
+    FirstKeyOrEnd,
+    Key,
+    Colon,
+    Value,
+    CommaOrEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonTopKey {
+    Nbformat,
+    Cells,
+    Metadata,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonValueKind {
+    Object,
+    Array,
+    String,
+    Number,
+    Other,
+}
+
+#[derive(Debug)]
+enum JsonFrame {
+    Array(JsonArrayState),
+    Object { state: JsonObjectState, pending_key: Option<JsonTopKey> },
+}
+
+#[derive(Debug)]
+struct JsonParser {
+    root: JsonRootState,
+    frames: Vec<JsonFrame>,
+    nbformat_number: bool,
+    cells_array: bool,
+    metadata_object: bool,
+}
+
+impl JsonParser {
+    fn new() -> Self {
+        Self {
+            root: JsonRootState::Value,
+            frames: Vec::with_capacity(32),
+            nbformat_number: false,
+            cells_array: false,
+            metadata_object: false,
+        }
+    }
+
+    fn consume_value(&mut self, kind: JsonValueKind) -> bool {
+        let top_level = self.frames.len() == 1;
+        let pending_key = if let Some(frame) = self.frames.last_mut() {
+            match frame {
+                JsonFrame::Array(state)
+                    if matches!(state, JsonArrayState::FirstValueOrEnd | JsonArrayState::Value) =>
+                {
+                    *state = JsonArrayState::CommaOrEnd;
+                    None
+                }
+                JsonFrame::Object { state, pending_key } if *state == JsonObjectState::Value => {
+                    *state = JsonObjectState::CommaOrEnd;
+                    pending_key.take()
+                }
+                _ => return false,
+            }
+        } else if self.root == JsonRootState::Value {
+            self.root = JsonRootState::Complete;
+            None
+        } else {
+            return false;
+        };
+        if top_level {
+            match (pending_key, kind) {
+                (Some(JsonTopKey::Nbformat), value) => {
+                    self.nbformat_number = value == JsonValueKind::Number;
+                }
+                (Some(JsonTopKey::Cells), value) => {
+                    self.cells_array = value == JsonValueKind::Array;
+                }
+                (Some(JsonTopKey::Metadata), value) => {
+                    self.metadata_object = value == JsonValueKind::Object;
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    fn push_container(&mut self, kind: JsonValueKind) -> Result<bool, ConversionError> {
+        if !self.consume_value(kind) {
+            return Ok(false);
+        }
+        let depth =
+            self.frames.len().checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "json_scan_depth",
+                detail: "JSON detector nesting depth overflowed".into(),
+            })?;
+        if depth > JSON_SCAN_DEPTH_LIMIT {
+            return Err(ConversionError::ResourceLimit {
+                limit: "json_scan_depth",
+                detail: format!("JSON detector exceeds {JSON_SCAN_DEPTH_LIMIT} nested containers"),
+            });
+        }
+        self.frames.push(match kind {
+            JsonValueKind::Object => {
+                JsonFrame::Object { state: JsonObjectState::FirstKeyOrEnd, pending_key: None }
+            }
+            JsonValueKind::Array => JsonFrame::Array(JsonArrayState::FirstValueOrEnd),
+            _ => return Ok(false),
+        });
+        Ok(true)
+    }
+
+    fn consume_string(&mut self, key: Option<JsonTopKey>) -> bool {
+        let top_level = self.frames.len() == 1;
+        if let Some(JsonFrame::Object { state, pending_key }) = self.frames.last_mut()
+            && matches!(*state, JsonObjectState::FirstKeyOrEnd | JsonObjectState::Key)
+        {
+            *state = JsonObjectState::Colon;
+            *pending_key = top_level.then_some(key).flatten();
+            return true;
+        }
+        self.consume_value(JsonValueKind::String)
+    }
+
+    fn consume_colon(&mut self) -> bool {
+        if let Some(JsonFrame::Object { state, .. }) = self.frames.last_mut()
+            && *state == JsonObjectState::Colon
+        {
+            *state = JsonObjectState::Value;
+            return true;
+        }
+        false
+    }
+
+    fn consume_comma(&mut self) -> bool {
+        match self.frames.last_mut() {
+            Some(JsonFrame::Array(state)) if *state == JsonArrayState::CommaOrEnd => {
+                *state = JsonArrayState::Value;
+                true
+            }
+            Some(JsonFrame::Object { state, .. }) if *state == JsonObjectState::CommaOrEnd => {
+                *state = JsonObjectState::Key;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn close_array(&mut self) -> bool {
+        if !matches!(
+            self.frames.last(),
+            Some(JsonFrame::Array(JsonArrayState::FirstValueOrEnd | JsonArrayState::CommaOrEnd))
+        ) {
+            return false;
+        }
+        self.frames.pop();
+        true
+    }
+
+    fn close_object(&mut self) -> bool {
+        if !matches!(
+            self.frames.last(),
+            Some(JsonFrame::Object {
+                state: JsonObjectState::FirstKeyOrEnd | JsonObjectState::CommaOrEnd,
+                ..
+            })
+        ) {
+            return false;
+        }
+        self.frames.pop();
+        true
+    }
+
+    fn summary(&self, status: JsonScanStatus) -> JsonScanSummary {
+        JsonScanSummary {
+            status,
+            notebook: status == JsonScanStatus::Complete
+                && self.nbformat_number
+                && self.cells_array
+                && self.metadata_object,
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.root == JsonRootState::Complete && self.frames.is_empty()
+    }
+}
+
+struct JsonScanBudget<'a> {
+    context: &'a ExecutionContext,
+    next_checkpoint: usize,
+}
+
+impl JsonScanBudget<'_> {
+    fn checkpoint(&mut self, offset: usize) -> Result<(), ConversionError> {
+        if offset >= self.next_checkpoint {
+            self.context.checkpoint()?;
+            self.next_checkpoint = offset.saturating_add(JSON_SCAN_CHECKPOINT_BYTES);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonLexeme {
+    Complete(usize),
+    Open,
+    Invalid,
+}
+
+fn scan_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonScanSummary, ConversionError> {
+    let mut parser = JsonParser::new();
+    let mut budget = JsonScanBudget { context, next_checkpoint: 0 };
+    let mut offset = 0_usize;
+    while offset < bytes.len() {
+        budget.checkpoint(offset)?;
+        if matches!(bytes[offset], b' ' | b'\t' | b'\n' | b'\r') {
+            offset += 1;
+            continue;
+        }
+        let accepted = match bytes[offset] {
+            b'{' => {
+                offset += 1;
+                parser.push_container(JsonValueKind::Object)?
+            }
+            b'[' => {
+                offset += 1;
+                parser.push_container(JsonValueKind::Array)?
+            }
+            b'}' => {
+                offset += 1;
+                parser.close_object()
+            }
+            b']' => {
+                offset += 1;
+                parser.close_array()
+            }
+            b':' => {
+                offset += 1;
+                parser.consume_colon()
+            }
+            b',' => {
+                offset += 1;
+                parser.consume_comma()
+            }
+            b'"' => match scan_json_string(bytes, offset, &mut budget)? {
+                JsonLexeme::Complete(next) => {
+                    let key = json_top_key(&bytes[offset + 1..next - 1]);
+                    offset = next;
+                    parser.consume_string(key)
+                }
+                JsonLexeme::Open => return Ok(parser.summary(JsonScanStatus::Open)),
+                JsonLexeme::Invalid => return Ok(parser.summary(JsonScanStatus::Invalid)),
+            },
+            b'-' | b'0'..=b'9' => match scan_json_number(bytes, offset, &mut budget)? {
+                JsonLexeme::Complete(next) => {
+                    offset = next;
+                    parser.consume_value(JsonValueKind::Number)
+                }
+                JsonLexeme::Open => return Ok(parser.summary(JsonScanStatus::Open)),
+                JsonLexeme::Invalid => return Ok(parser.summary(JsonScanStatus::Invalid)),
+            },
+            b't' => match scan_json_literal(bytes, offset, b"true") {
+                JsonLexeme::Complete(next) => {
+                    offset = next;
+                    parser.consume_value(JsonValueKind::Other)
+                }
+                JsonLexeme::Open => return Ok(parser.summary(JsonScanStatus::Open)),
+                JsonLexeme::Invalid => return Ok(parser.summary(JsonScanStatus::Invalid)),
+            },
+            b'f' => match scan_json_literal(bytes, offset, b"false") {
+                JsonLexeme::Complete(next) => {
+                    offset = next;
+                    parser.consume_value(JsonValueKind::Other)
+                }
+                JsonLexeme::Open => return Ok(parser.summary(JsonScanStatus::Open)),
+                JsonLexeme::Invalid => return Ok(parser.summary(JsonScanStatus::Invalid)),
+            },
+            b'n' => match scan_json_literal(bytes, offset, b"null") {
+                JsonLexeme::Complete(next) => {
+                    offset = next;
+                    parser.consume_value(JsonValueKind::Other)
+                }
+                JsonLexeme::Open => return Ok(parser.summary(JsonScanStatus::Open)),
+                JsonLexeme::Invalid => return Ok(parser.summary(JsonScanStatus::Invalid)),
+            },
+            _ => false,
+        };
+        if !accepted {
+            return Ok(parser.summary(JsonScanStatus::Invalid));
+        }
+    }
+    Ok(parser.summary(if parser.is_complete() {
+        JsonScanStatus::Complete
     } else {
-        Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
+        JsonScanStatus::Open
+    }))
+}
+
+fn scan_json_string(
+    bytes: &[u8],
+    start: usize,
+    budget: &mut JsonScanBudget<'_>,
+) -> Result<JsonLexeme, ConversionError> {
+    let mut offset = start + 1;
+    while offset < bytes.len() {
+        budget.checkpoint(offset)?;
+        match bytes[offset] {
+            b'"' => {
+                return Ok(JsonLexeme::Complete(offset + 1));
+            }
+            b'\\' => {
+                offset += 1;
+                let Some(&escape) = bytes.get(offset) else {
+                    return Ok(JsonLexeme::Open);
+                };
+                if escape == b'u' {
+                    offset = match scan_json_unicode_escape(bytes, offset) {
+                        Ok(next) => next,
+                        Err(status) => return Ok(status),
+                    };
+                    continue;
+                }
+                if !matches!(escape, b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') {
+                    return Ok(JsonLexeme::Invalid);
+                }
+            }
+            0x00..=0x1f => return Ok(JsonLexeme::Invalid),
+            0x80..=0xff => {
+                let width = match bytes[offset] {
+                    0xc2..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf4 => 4,
+                    _ => return Ok(JsonLexeme::Invalid),
+                };
+                let Some(encoded) = bytes.get(offset..offset + width) else {
+                    return Ok(JsonLexeme::Open);
+                };
+                if std::str::from_utf8(encoded).is_err() {
+                    return Ok(JsonLexeme::Invalid);
+                }
+                offset += width;
+                continue;
+            }
+            _ => {}
+        }
+        offset += 1;
     }
+    Ok(JsonLexeme::Open)
+}
+
+fn scan_json_unicode_escape(bytes: &[u8], u_offset: usize) -> Result<usize, JsonLexeme> {
+    let first = parse_json_hex_quad(bytes, u_offset + 1)?;
+    let next = u_offset + 5;
+    if (0xdc00..=0xdfff).contains(&first) {
+        return Err(JsonLexeme::Invalid);
+    }
+    if !(0xd800..=0xdbff).contains(&first) {
+        return Ok(next);
+    }
+    if bytes.get(next..next + 2) != Some(b"\\u") {
+        return Err(JsonLexeme::Invalid);
+    }
+    let low = parse_json_hex_quad(bytes, next + 2).map_err(|_| JsonLexeme::Invalid)?;
+    if !(0xdc00..=0xdfff).contains(&low) {
+        return Err(JsonLexeme::Invalid);
+    }
+    Ok(next + 6)
+}
+
+fn parse_json_hex_quad(bytes: &[u8], start: usize) -> Result<u16, JsonLexeme> {
+    let Some(hex) = bytes.get(start..start + 4) else {
+        return Err(
+            if bytes.get(start..).is_some_and(|tail| tail.iter().all(u8::is_ascii_hexdigit)) {
+                JsonLexeme::Open
+            } else {
+                JsonLexeme::Invalid
+            },
+        );
+    };
+    let mut value = 0_u16;
+    for &digit in hex {
+        let Some(nibble) = char::from(digit).to_digit(16) else {
+            return Err(JsonLexeme::Invalid);
+        };
+        value = value
+            .checked_mul(16)
+            .and_then(|value| value.checked_add(u16::try_from(nibble).ok()?))
+            .ok_or(JsonLexeme::Invalid)?;
+    }
+    Ok(value)
+}
+
+fn scan_json_number(
+    bytes: &[u8],
+    start: usize,
+    budget: &mut JsonScanBudget<'_>,
+) -> Result<JsonLexeme, ConversionError> {
+    let mut offset = start;
+    if bytes[offset] == b'-' {
+        offset += 1;
+        if offset == bytes.len() {
+            return Ok(JsonLexeme::Open);
+        }
+    }
+    match bytes[offset] {
+        b'0' => {
+            offset += 1;
+            if bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+                return Ok(JsonLexeme::Invalid);
+            }
+        }
+        b'1'..=b'9' => {
+            offset += 1;
+            while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+                budget.checkpoint(offset)?;
+                offset += 1;
+            }
+        }
+        _ => return Ok(JsonLexeme::Invalid),
+    }
+    if bytes.get(offset) == Some(&b'.') {
+        offset += 1;
+        if offset == bytes.len() {
+            return Ok(JsonLexeme::Open);
+        }
+        if !bytes[offset].is_ascii_digit() {
+            return Ok(JsonLexeme::Invalid);
+        }
+        while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+            budget.checkpoint(offset)?;
+            offset += 1;
+        }
+    }
+    if bytes.get(offset).is_some_and(|byte| matches!(byte, b'e' | b'E')) {
+        offset += 1;
+        if bytes.get(offset).is_some_and(|byte| matches!(byte, b'+' | b'-')) {
+            offset += 1;
+        }
+        if offset == bytes.len() {
+            return Ok(JsonLexeme::Open);
+        }
+        if !bytes[offset].is_ascii_digit() {
+            return Ok(JsonLexeme::Invalid);
+        }
+        while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+            budget.checkpoint(offset)?;
+            offset += 1;
+        }
+    }
+    Ok(JsonLexeme::Complete(offset))
+}
+
+fn scan_json_literal(bytes: &[u8], start: usize, literal: &[u8]) -> JsonLexeme {
+    let remaining = &bytes[start..];
+    if remaining.len() < literal.len() {
+        return if literal.starts_with(remaining) { JsonLexeme::Open } else { JsonLexeme::Invalid };
+    }
+    if remaining.starts_with(literal) {
+        JsonLexeme::Complete(start + literal.len())
+    } else {
+        JsonLexeme::Invalid
+    }
+}
+
+fn json_top_key(raw: &[u8]) -> Option<JsonTopKey> {
+    match raw {
+        b"nbformat" => Some(JsonTopKey::Nbformat),
+        b"cells" => Some(JsonTopKey::Cells),
+        b"metadata" => Some(JsonTopKey::Metadata),
+        _ => None,
+    }
+}
+
+fn bounded_utf8_prefix(bytes: &[u8], limit: usize) -> Option<(&str, bool)> {
+    let bounded_len = bytes.len().min(limit);
+    let bounded = bytes.get(..bounded_len)?;
+    match std::str::from_utf8(bounded) {
+        Ok(text) => Some((text, bytes.len() > bounded_len)),
+        Err(error) if bytes.len() > bounded_len && error.error_len().is_none() => {
+            let valid = bounded.get(..error.valid_up_to())?;
+            std::str::from_utf8(valid).ok().map(|text| (text, true))
+        }
+        Err(_) => None,
+    }
+}
+
+fn delimited_text_candidate(text: &str) -> Option<FormatCandidate> {
+    let mut csv = DelimitedRows::new(',');
+    let mut tsv = DelimitedRows::new('\t');
+    for line in text.lines().filter(|line| !line.trim().is_empty()).take(DELIMITED_ROW_LIMIT) {
+        csv.observe(line);
+        tsv.observe(line);
+    }
+    let (format, delimiter, fields, rows) = if tsv.is_tabular() {
+        (InputFormat::Tsv, "tab", tsv.fields?, tsv.rows)
+    } else if csv.is_tabular() {
+        (InputFormat::Csv, "comma", csv.fields?, csv.rows)
+    } else {
+        return None;
+    };
+    Some(FormatCandidate::new(
+        format,
+        0.90,
+        format!("{rows} bounded rows with {fields} consistent {delimiter}-delimited fields"),
+    ))
+}
+
+struct DelimitedRows {
+    delimiter: char,
+    fields: Option<usize>,
+    rows: usize,
+    invalid: bool,
+    header_numeric: Vec<bool>,
+    data_all_numeric: Vec<bool>,
+}
+
+impl DelimitedRows {
+    const fn new(delimiter: char) -> Self {
+        Self {
+            delimiter,
+            fields: None,
+            rows: 0,
+            invalid: false,
+            header_numeric: Vec::new(),
+            data_all_numeric: Vec::new(),
+        }
+    }
+
+    fn observe(&mut self, line: &str) {
+        if self.invalid {
+            return;
+        }
+        let Some(numeric_fields) = parse_delimited_fields(line, self.delimiter) else {
+            self.invalid = true;
+            return;
+        };
+        let fields = numeric_fields.len();
+        if fields < 2 || self.fields.is_some_and(|expected| expected != fields) {
+            self.invalid = true;
+            return;
+        }
+        if self.fields.is_none() {
+            self.fields = Some(fields);
+            self.header_numeric = numeric_fields;
+            self.data_all_numeric = vec![true; fields];
+        } else {
+            for (all_numeric, numeric) in self.data_all_numeric.iter_mut().zip(numeric_fields) {
+                *all_numeric &= numeric;
+            }
+        }
+        self.rows += 1;
+    }
+
+    fn is_tabular(&self) -> bool {
+        !self.invalid
+            && self.rows >= 3
+            && self
+                .header_numeric
+                .iter()
+                .zip(&self.data_all_numeric)
+                .any(|(&header, &data)| !header && data)
+    }
+}
+
+fn parse_delimited_fields(line: &str, delimiter: char) -> Option<Vec<bool>> {
+    let delimiter = u8::try_from(delimiter).ok()?;
+    let bytes = line.as_bytes();
+    let mut fields = Vec::new();
+    let mut field_start = 0_usize;
+    let mut offset = 0_usize;
+    let mut quoted = false;
+    let mut after_quote = false;
+    while offset < bytes.len() {
+        let byte = bytes[offset];
+        if quoted {
+            if byte == b'"' {
+                if bytes.get(offset + 1) == Some(&b'"') {
+                    offset += 2;
+                    continue;
+                }
+                quoted = false;
+                after_quote = true;
+            }
+        } else if after_quote {
+            if byte == delimiter {
+                push_delimited_field(&mut fields, &line[field_start..offset], true)?;
+                field_start = offset + 1;
+                after_quote = false;
+            } else {
+                return None;
+            }
+        } else if byte == delimiter {
+            push_delimited_field(&mut fields, &line[field_start..offset], false)?;
+            field_start = offset + 1;
+        } else if byte == b'"' {
+            if offset != field_start {
+                return None;
+            }
+            quoted = true;
+        }
+        offset += 1;
+    }
+    if quoted {
+        return None;
+    }
+    push_delimited_field(&mut fields, &line[field_start..], after_quote)?;
+    Some(fields)
+}
+
+fn push_delimited_field(fields: &mut Vec<bool>, raw: &str, quoted: bool) -> Option<()> {
+    if fields.len() >= DELIMITED_FIELD_LIMIT {
+        return None;
+    }
+    let value = if quoted { raw.strip_prefix('"')?.strip_suffix('"')? } else { raw.trim() };
+    let numeric = !value.is_empty() && value.parse::<f64>().ok().is_some_and(f64::is_finite);
+    fields.push(numeric);
+    Some(())
 }
 
 fn html_prelude_identifies_html(mut text: &str) -> bool {
@@ -2156,6 +2844,14 @@ mod tests {
         )
     }
 
+    fn detect(bytes: &[u8]) -> Vec<FormatCandidate> {
+        detect_content(bytes, &execution_context()).unwrap()
+    }
+
+    fn structured(bytes: &[u8]) -> Option<FormatCandidate> {
+        structured_text_candidate(bytes, &execution_context()).unwrap()
+    }
+
     #[test]
     fn blocking_worker_wait_is_deadline_interruptible() {
         let pool = BlockingPool::new("test-blocking", 1, 1, "test_blocking_queue").unwrap();
@@ -2666,6 +3362,132 @@ mod tests {
     }
 
     #[test]
+    fn bounded_structured_detection_protects_large_json_csv_and_tsv_from_text() {
+        let mut large_json = "[".repeat(200);
+        large_json.push('"');
+        large_json.extend(std::iter::repeat_n('x', TEXT_INSPECTION_BYTE_LIMIT + 50_000));
+        large_json.push('"');
+        large_json.push_str(&"]".repeat(200));
+        let candidate = structured(large_json.as_bytes()).unwrap();
+        assert_eq!(candidate.format, InputFormat::Json);
+        assert!(candidate.evidence.contains("valid JSON"));
+
+        let fixtures = [
+            (b"name,age\nAlice,42\nBob,30\n".as_slice(), InputFormat::Csv),
+            (b"name\tage\nAlice\t42\nBob\t30\n".as_slice(), InputFormat::Tsv),
+        ];
+        for (bytes, expected) in fixtures {
+            let candidates = detect(bytes);
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].format, expected);
+        }
+        assert_eq!(
+            detect(b"ordinary prose, with one comma\nand a second plain line")[0].format,
+            InputFormat::Text
+        );
+        assert_eq!(
+            detect(b"Today, we walked home\nTomorrow, we will rest")[0].format,
+            InputFormat::Text
+        );
+    }
+
+    #[test]
+    fn json_scanner_reads_past_complete_sample_boundaries_and_limits_depth() {
+        let prefix = "{\"value\":\"";
+        let suffix = "\"}";
+        let mut complete_at_boundary = String::with_capacity(TEXT_INSPECTION_BYTE_LIMIT + 16);
+        complete_at_boundary.push_str(prefix);
+        complete_at_boundary.extend(std::iter::repeat_n(
+            'x',
+            TEXT_INSPECTION_BYTE_LIMIT - prefix.len() - suffix.len(),
+        ));
+        complete_at_boundary.push_str(suffix);
+        assert_eq!(complete_at_boundary.len(), TEXT_INSPECTION_BYTE_LIMIT);
+        complete_at_boundary.push_str(" trailing prose");
+        assert_eq!(structured(complete_at_boundary.as_bytes()), None);
+        assert_eq!(detect(complete_at_boundary.as_bytes())[0].format, InputFormat::Text);
+
+        assert_eq!(
+            scan_json(b"{\"open\":[1,", &execution_context()).unwrap().status,
+            JsonScanStatus::Open
+        );
+        let too_deep = "[".repeat(JSON_SCAN_DEPTH_LIMIT + 1);
+        let error = scan_json(too_deep.as_bytes(), &execution_context()).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(error.to_string().contains("json_scan_depth"));
+    }
+
+    #[test]
+    fn json_scanner_validates_strings_numbers_literals_and_structure_without_recursion() {
+        let valid = r#"{
+            "escaped":"quote: \" slash: \\ unicode: \u4e2d 😀",
+            "numbers":[0,-1,2.5,6.02e23,-4E-2],
+            "literals":[true,false,null],
+            "nested":{"empty":[],"object":{}}
+        }"#
+        .as_bytes();
+        assert_eq!(
+            scan_json(valid, &execution_context()).unwrap().status,
+            JsonScanStatus::Complete
+        );
+
+        for invalid in [
+            br#"{"bad":"\x"}"#.as_slice(),
+            br#"{"bad":"\u12xz"}"#.as_slice(),
+            br#"{"bad":01}"#.as_slice(),
+            br#"{"bad":1.}"#.as_slice(),
+            br#"{"bad":truX}"#.as_slice(),
+            br#"{"bad":[1,]}"#.as_slice(),
+            br#"{"bad":{]}}"#.as_slice(),
+            b"{} trailing".as_slice(),
+        ] {
+            assert_eq!(
+                scan_json(invalid, &execution_context()).unwrap().status,
+                JsonScanStatus::Invalid,
+                "{}",
+                String::from_utf8_lossy(invalid)
+            );
+        }
+    }
+
+    #[test]
+    fn json_scanner_requires_well_formed_utf16_surrogate_escapes() {
+        for valid in [
+            br#"{"emoji":"\uD83D\uDE00"}"#.as_slice(),
+            br#"{"pairs":"\uD83D\uDE00\uD834\uDD1E"}"#.as_slice(),
+            br#"{"bmp":"\u4e2d\u0000"}"#.as_slice(),
+            br#"{"text":"\\uD800 is not a Unicode escape"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                scan_json(valid, &execution_context()).unwrap().status,
+                JsonScanStatus::Complete,
+                "{}",
+                String::from_utf8_lossy(valid)
+            );
+        }
+
+        for invalid in [
+            br#"{"bad":"\uD800"}"#.as_slice(),
+            br#"{"bad":"\uD800x"}"#.as_slice(),
+            br#"{"bad":"\uD800\u0041"}"#.as_slice(),
+            br#"{"bad":"\uDC00"}"#.as_slice(),
+            br#"{"bad":"\uD800\uD800"}"#.as_slice(),
+            br#"{"bad":"\uD800\u"}"#.as_slice(),
+            br#"{"bad":"\uD800"#.as_slice(),
+            br#"{"bad":"\uD800\uD"#.as_slice(),
+        ] {
+            assert_eq!(
+                scan_json(invalid, &execution_context()).unwrap().status,
+                JsonScanStatus::Invalid,
+                "{}",
+                String::from_utf8_lossy(invalid)
+            );
+            assert_eq!(structured(invalid), None);
+            assert_eq!(detect(invalid)[0].format, InputFormat::Text);
+        }
+    }
+
+    #[test]
     fn html_detection_handles_bounded_preludes_case_and_xhtml() {
         let fixtures = [
             "\u{feff}  <?xml version='1.0'?><!--lead--><HtMl xmlns='http://www.w3.org/1999/xhtml'>",
@@ -2674,23 +3496,23 @@ mod tests {
             "<?xml version='1.0'?><xhtml:html xmlns:xhtml='http://www.w3.org/1999/xhtml'/>",
         ];
         for fixture in fixtures {
-            let candidate = structured_text_candidate(fixture.as_bytes()).unwrap();
+            let candidate = structured(fixture.as_bytes()).unwrap();
             assert_eq!(candidate.format, InputFormat::Html);
         }
         assert_eq!(
-            structured_text_candidate(b"<?xml version='1.0'?><document/>").unwrap().format,
+            structured(b"<?xml version='1.0'?><document/>").unwrap().format,
             InputFormat::Xml
         );
         assert!(!starts_with_tag("xhtml>", "html"));
         assert!(!starts_with_tag("zhtml>", "html"));
-        assert_eq!(structured_text_candidate(b"<xhtml>").unwrap().format, InputFormat::Xml);
+        assert_eq!(structured(b"<xhtml>").unwrap().format, InputFormat::Xml);
     }
 
     #[test]
     fn ambiguous_media_containers_do_not_receive_high_confidence() {
-        let ogg = detect_content(b"OggS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
-        let ebml = detect_content(b"\x1a\x45\xdf\xa3unknown");
-        let iso = detect_content(b"\0\0\0\x10ftypzzzz\0\0\0\0");
+        let ogg = detect(b"OggS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
+        let ebml = detect(b"\x1a\x45\xdf\xa3unknown");
+        let iso = detect(b"\0\0\0\x10ftypzzzz\0\0\0\0");
         for candidate in [&ogg[0], &ebml[0], &iso[0]] {
             assert!(candidate.confidence <= 0.60);
             assert!(!candidate.diagnostics.is_empty());
@@ -2700,17 +3522,17 @@ mod tests {
         theora[26] = 1;
         theora[27] = 7;
         theora.extend_from_slice(b"\x80theora");
-        assert_eq!(detect_content(&theora)[0].format, InputFormat::Video);
+        assert_eq!(detect(&theora)[0].format, InputFormat::Video);
     }
 
     #[test]
     fn iso_media_requires_a_complete_bounded_ftyp_box() {
-        let audio = detect_content(b"\0\0\0\x10ftypM4A \0\0\0\0");
+        let audio = detect(b"\0\0\0\x10ftypM4A \0\0\0\0");
         assert_eq!(audio[0].format, InputFormat::Audio);
         assert!((audio[0].confidence - 0.96).abs() < f32::EPSILON);
-        assert!(detect_content(b"\0\0\0\x10ftypM4A ").is_empty());
-        assert!(detect_content(b"\0\0\0\x0cftypM4A ").is_empty());
-        assert!(detect_content(b"\0\0\0\x20ftypM4A \0\0\0\0").is_empty());
+        assert!(detect(b"\0\0\0\x10ftypM4A ").is_empty());
+        assert!(detect(b"\0\0\0\x0cftypM4A ").is_empty());
+        assert!(detect(b"\0\0\0\x20ftypM4A \0\0\0\0").is_empty());
     }
 
     #[test]

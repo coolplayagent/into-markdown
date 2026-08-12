@@ -41,6 +41,11 @@ Runtime 1.29.0、PP-OCRv6 detector/recognizer 源归档，与结构化权威清�
 本地 Bzlmod extension 从同一 JSON 生成下载仓库，不解析或重复维护 MODULE 语法。
 后两者没有进入普通构建产物。
 
+TXT 字符集实现使用 `chardetng 0.1.17` 与 `encoding_rs 0.8.35`。前者上游表达式为
+`Apache-2.0 OR MIT`，本仓库选择 MIT；后者为 `(Apache-2.0 OR MIT) AND BSD-3-Clause`，
+本仓库选择并保留 `MIT AND BSD-3-Clause` 的完整义务结论，因此策略明确允许
+`BSD-3-Clause`，且精确版本记录在 `rust-lock.tsv`。
+
 `release-audit` 是不可降级的独立入口，不接受 `check` 或其他模式参数：
 
 ```shell

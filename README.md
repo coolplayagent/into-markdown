@@ -4,7 +4,7 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、命令行程序及契约测试；暂未实现生产可用的格式解析、OCR 推理、
+GFM 渲染器、TXT 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
 网络客户端或 LLM 调用。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
@@ -26,6 +26,8 @@ x86_64。项目明确不支持 macOS x86_64。
 
 ```shell
 bazel run //apps/cli:into-md -- report.pdf
+bazel run //apps/cli:into-md -- notes.txt
+printf 'caf\351\n' | bazel run //apps/cli:into-md -- --charset windows-1252 -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
@@ -43,10 +45,16 @@ HTTP 服务共享的公共 DTO。例如 `--emit result-json` 返回 `markdown`�
 `document`、base64 `assets`、`diagnostics` 和 `provenance`。协议细节、兼容策略与
 不可信 JSON 资源预算见[稳定数据传输契约](docs/dto.md)。
 
+TXT 转换可用，支持 UTF-8、带 BOM 的 UTF-16 与受限的常见字符集自动检测；显式
+`--charset` 支持 `windows-1252`、`gb18030`、`big5` 和 `shift_jis`。无效序列默认
+严格失败，`--encoding-errors replace` 会替换并输出带原始字节范围和替换数量的诊断。
+自动检测会为完整 JSON 及具备三行和类型证据的 CSV/TSV 候选让路；带 BOM 的输入也会
+按实际字符集解码完整内容，除 TAB、LF、CR 外的 C0、DEL 或 C1 都会拒绝自动 TXT 候选。
+
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
 `componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
-不会读取伪造安装状态或伪装成功。格式转换、OCR 推理、Provider 请求和插件
+不会读取伪造安装状态或伪装成功。其他格式转换、OCR 推理、Provider 请求和插件
 执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 同样 fail closed；目录解析和离线元数据查询不受影响。
 

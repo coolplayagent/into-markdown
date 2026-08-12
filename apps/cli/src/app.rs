@@ -2,8 +2,8 @@
 
 use crate::args::{
     AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
-    ConversionArgs, DetectArgs, EmitKind, FormatsCommand, LogFormat, ModelsCommand, OcrPolicyArg,
-    PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
+    ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
+    ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
 };
 use crate::config::{self, LoadedConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -13,7 +13,7 @@ use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
     AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, FormatHint,
-    InputFormat, InputRef, OcrPolicy,
+    InputFormat, InputRef, OcrPolicy, TextDecodingMode,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -1162,6 +1162,12 @@ fn apply_conversion_overrides(
     if let Some(confidence) = arguments.ocr_min_confidence {
         config::validate_confidence(confidence)?;
         options.ocr.minimum_confidence = confidence;
+    }
+    if let Some(mode) = arguments.encoding_errors {
+        options.text.decoding_mode = match mode {
+            EncodingErrorsArg::Strict => TextDecodingMode::Strict,
+            EncodingErrorsArg::Replace => TextDecodingMode::Replace,
+        };
     }
     if let Some(value) = arguments.max_redirects {
         options.network.max_redirects = value;

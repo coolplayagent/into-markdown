@@ -13,6 +13,7 @@ block-buffer	0.10.4	MIT
 bstr	1.13.1	MIT
 bumpalo	3.20.3	MIT
 cfg-if	1.0.4	MIT
+chardetng	0.1.17	MIT
 clap	4.6.6	MIT
 clap_builder	4.6.6	MIT
 clap_complete	4.6.9	MIT
@@ -29,6 +30,7 @@ directories	6.0.0	MIT
 dirs-sys	0.5.0	MIT
 displaydoc	0.2.7	MIT
 equivalent	1.0.2	MIT
+encoding_rs	0.8.35	MIT AND BSD-3-Clause
 errno	0.3.14	MIT
 fastrand	2.5.0	MIT
 flate2	1.1.9	MIT
