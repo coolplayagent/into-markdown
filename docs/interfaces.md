@@ -18,6 +18,11 @@
 适用性测试，不得执行实际转换。`Converter::convert` 只能生成 `Document`、
 资源和诊断。包括 PDF 与多媒体适配器在内的所有格式实现都必须遵守此契约。
 
+TXT 的 `FormatHint.charset` 会由 Engine 复制到请求级 `ConversionOptions.text.charset`，
+供不改变 Converter SPI 的实现读取。显式字符集权威且必须在确定 allowlist 内规范化；
+默认 `TextDecodingMode::Strict`。`Replace` 只能在每段恢复都附带稳定 diagnostic code、
+encoding 与原始 byte range 时继续。转换器必须在 resolver 之后再次执行输入大小检查。
+
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 

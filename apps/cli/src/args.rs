@@ -112,6 +112,10 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "CHARSET")]
     pub charset: Option<String>,
 
+    /// Invalid character-sequence policy for plain text.
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub encoding_errors: Option<EncodingErrorsArg>,
+
     /// Output path for one input.
     #[arg(short = 'o', long, value_name = "PATH", conflicts_with = "output_dir")]
     pub output: Option<PathBuf>,
@@ -639,6 +643,14 @@ pub enum OcrPolicyArg {
     Off,
     Auto,
     Always,
+}
+
+/// Invalid-byte handling for plain-text decoding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum EncodingErrorsArg {
+    #[default]
+    Strict,
+    Replace,
 }
 
 /// Configuration mutation scope.

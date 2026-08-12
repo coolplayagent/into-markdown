@@ -14,8 +14,8 @@ pub use into_markdown_ocr::{
 pub use into_markdown_render_markdown::{asset_filename, render as render_markdown};
 
 /// Create the standard builder with safe local source resolvers, hint
-/// detection, the deterministic GFM renderer, and non-networking provider seams.
-/// No production converter is registered by the scaffold.
+/// detection, the deterministic GFM renderer, plain-text conversion, and
+/// non-networking provider seams.
 #[must_use]
 pub fn default_engine_builder() -> EngineBuilder {
     let services = into_markdown_core::Services {
@@ -33,7 +33,8 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_source_resolver(Arc::new(into_markdown_converters::StdinSourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::UriSourceResolver))
         .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
-        .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector));
+        .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
+        .register_converter(Arc::new(into_markdown_converters::TextConverter));
     builder
 }
 
@@ -74,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_engine_builds_without_converters() {
+    fn default_engine_builds_with_builtin_converters() {
         assert!(default_engine().is_ok());
     }
 }

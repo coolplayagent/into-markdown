@@ -1,7 +1,10 @@
 //! Converter and source-resolution catalog.
 //!
-//! Format descriptors are present, but no production parser is registered by
-//! this scaffold.
+//! Built-in source resolvers, format detectors, and converters.
+
+mod text;
+
+pub use text::TextConverter;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
@@ -55,6 +58,7 @@ pub struct FormatDescriptor {
 }
 
 const PLANNED: FormatStatus = FormatStatus::Planned;
+const AVAILABLE: FormatStatus = FormatStatus::Available;
 
 const FORMATS: &[FormatDescriptor] = &[
     FormatDescriptor {
@@ -133,7 +137,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Text,
         family: "text",
         extensions: &["txt", "text", "log"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Markdown,
@@ -939,6 +943,9 @@ impl FormatDetector for HintFormatDetector {
             if let Some(format) = media_type.and_then(format_from_media_type) {
                 evidence.entry(format).or_default().push("media type");
             }
+            if hint.charset.is_some() {
+                evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
+            }
             let conflict = evidence.len() > 1;
             Ok(evidence
                 .into_iter()
@@ -1007,7 +1014,19 @@ fn detect_content(bytes: &[u8]) -> Vec<FormatCandidate> {
     if bytes.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
         return detect_ole(bytes);
     }
-    magic_candidate(bytes).or_else(|| structured_text_candidate(bytes)).into_iter().collect()
+    magic_candidate(bytes)
+        .or_else(|| structured_text_candidate(bytes))
+        .or_else(|| {
+            text::sniff_text(bytes).map(|confidence| {
+                FormatCandidate::new(
+                    InputFormat::Text,
+                    confidence,
+                    "plain-text safety and encoding thresholds",
+                )
+            })
+        })
+        .into_iter()
+        .collect()
 }
 
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {

@@ -161,8 +161,11 @@ impl Engine {
     #[allow(clippy::too_many_lines)]
     pub async fn convert(
         &self,
-        request: ConversionRequest,
+        mut request: ConversionRequest,
     ) -> Result<ConversionResult, ConversionError> {
+        if request.options.text.charset.is_none() {
+            request.options.text.charset.clone_from(&request.hint.charset);
+        }
         let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
         let mut source = self.resolve_input(&request.input, &request.options, &context).await?;

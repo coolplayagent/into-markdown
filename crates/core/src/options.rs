@@ -152,6 +152,27 @@ pub struct OutputOptions {
     pub asset_uri_prefix: Option<String>,
 }
 
+/// Invalid-byte handling used by plain-text conversion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextDecodingMode {
+    /// Reject the first malformed or truncated byte sequence.
+    #[default]
+    Strict,
+    /// Insert U+FFFD and emit one byte-ranged diagnostic for every recovery.
+    Replace,
+}
+
+/// Plain-text decoding policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextOptions {
+    /// Explicit normalized or alias encoding label. Normally populated from `FormatHint`.
+    pub charset: Option<String>,
+    /// Invalid-byte handling. Strict is the safe default.
+    pub decoding_mode: TextDecodingMode,
+}
+
 /// Markdown representation policy for assets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -179,6 +200,9 @@ impl Default for OutputOptions {
 /// Complete policy passed through the conversion pipeline.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConversionOptions {
+    /// Plain-text decoding policy.
+    #[serde(default)]
+    pub text: TextOptions,
     /// Local OCR policy.
     pub ocr: OcrOptions,
     /// Optional AI capability policies.

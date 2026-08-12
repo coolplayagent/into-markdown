@@ -3,7 +3,7 @@
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind, Language, Scope};
 use crate::error::CliError;
 use directories::ProjectDirs;
-use into_markdown::{AiMode, AssetMode, ConversionOptions, OcrPolicy};
+use into_markdown::{AiMode, AssetMode, ConversionOptions, OcrPolicy, TextDecodingMode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -74,11 +74,19 @@ pub struct CliConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ConversionConfig {
     pub timeout_ms: Option<u64>,
+    pub text: TextConfig,
     pub ocr: OcrConfig,
     pub ai: AiConfig,
     pub network: NetworkConfig,
     pub limits: LimitsConfig,
     pub output: OutputConfig,
+}
+
+/// Partial plain-text decoding configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TextConfig {
+    pub decoding_mode: Option<TextDecodingMode>,
 }
 
 /// Partial local OCR configuration.
@@ -412,6 +420,9 @@ fn complete_sources(
 
 fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOptions, CliError> {
     let mut options = ConversionOptions::default();
+    if let Some(mode) = config.text.decoding_mode {
+        options.text.decoding_mode = mode;
+    }
     if let Some(policy) = config.ocr.policy {
         options.ocr.policy = policy;
     }

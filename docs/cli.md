@@ -65,10 +65,12 @@ into-md <INPUT...>
     --extension <EXT>
     --mime-type <TYPE>
     --charset <CHARSET>
+    --encoding-errors <strict|replace>
 ```
 
 显式格式优先于检测结果。扩展名可以带或不带前导点，Office 变体扩展名会映射到
-对应格式族。
+对应格式族。TXT 的字符集 allowlist 与别名见[格式矩阵](formats.md)。字符集提示权威；
+无效序列默认 `strict` 失败，`replace` 会为每个替换片段输出原始 byte range 诊断。
 
 ### 输出
 

@@ -2095,6 +2095,15 @@ fn validate_provenance(
 }
 
 fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), DtoError> {
+    if locator.byte_start.is_some() != locator.byte_end.is_some()
+        || locator.byte_start.zip(locator.byte_end).is_some_and(|(start, end)| start > end)
+    {
+        return Err(DtoError::new(
+            DtoErrorCode::InvalidField,
+            format!("{path}.byteStart"),
+            "byteStart and byteEnd must be present together and form an ordered half-open range",
+        ));
+    }
     if locator.page == Some(0) {
         return Err(DtoError::new(
             DtoErrorCode::InvalidField,

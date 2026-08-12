@@ -109,7 +109,8 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   fragment。内部模型和 JSON 输入只要带有未净化 URI 就拒绝转换，不会静默删除或改写
   provenance；`file:` 等本地语义 URI不进入协议，以防密钥、签名参数和本地路径泄露；
 - 同一 result 或 manifest 中的资源 ID 不能重复，manifest 路径也不能重复；
-- provenance confidence 必须是有限的 `0..=1`，locator 矩形坐标必须全部有限；
+- provenance confidence 必须是有限的 `0..=1`，locator 矩形坐标必须全部有限；可选
+  `byteStart`/`byteEnd` 必须同时出现并构成有序的原始输入半开字节范围；
 - 内嵌 Document IR 在反序列化为 `ResultDto` 前先调用 IR 的有界解码，必须通过它自己
   的版本、宽表预检、节点、重复 ID、路径及结构预算校验；
 - Bundle 路径只描述归档内成员，不能直接作为宿主文件系统写入目标。

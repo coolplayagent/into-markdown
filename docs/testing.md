@@ -26,7 +26,13 @@ AI 能力默认 `Off`、OCR 的 `Auto` 默认不指定或获取模型，以及 U
 
 CLI 的错误分类表在 CLI crate 内穷举全部 `ConversionError`，另由
 `apps/cli/tests/exit_contract.rs` 启动真实 `into-md` 进程，验证 usage、policy 与
-component 的稳定退出状态。该测试同样由 Cargo 与 Bazel 执行。
+component 的稳定退出状态。该测试同样由 Cargo 与 Bazel 执行，并以真实文件和 stdin
+覆盖默认 Engine 的 TXT 输出与显式字符集。
+
+TXT 契约覆盖 UTF-8 BOM、UTF-16LE/BE BOM、Windows-1252、GB18030、Big5、Shift_JIS、
+中英文混排、combining mark、非 BMP scalar、CRLF/LF/CR、空输入、超长行、奇数 UTF-16、
+截断多字节序列、严格与 replacement 模式、converter 双重输入预算及二进制伪装。
+locator 与 replacement diagnostic 必须断言原始半开 byte range，不能只断言正文。
 
 常用定向命令如下：
 

@@ -37,6 +37,27 @@ mod tests {
         })
     }
 
+    #[test]
+    fn default_engine_converts_text_and_only_txt_is_available() {
+        let engine = default_engine().unwrap();
+        let mut request = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from([0xff, 0xfe, b'A', 0, 0x3d, 0xd8, 0x00, 0xde]),
+            Some("unicode.txt"),
+        ));
+        request.hint.charset = Some("UTF_16LE".into());
+        let result = block_on(engine.convert(request)).unwrap();
+        assert_eq!(result.markdown, "A😀\n");
+        assert_eq!(result.provenance[0].locator.byte_start, Some(2));
+        assert_eq!(result.provenance[0].locator.byte_end, Some(8));
+
+        let available = planned_formats()
+            .iter()
+            .filter(|descriptor| descriptor.status == FormatStatus::Available)
+            .map(|descriptor| descriptor.format)
+            .collect::<Vec<_>>();
+        assert_eq!(available, vec![InputFormat::Text]);
+    }
+
     #[derive(Default)]
     struct Resolver;
     impl SourceResolver for Resolver {

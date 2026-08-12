@@ -30,6 +30,7 @@ rust_test(
     crate_name = "into_md_exit_contract",
     crate_root = "tests/exit_contract.rs",
     data = [":into-md"],
+    deps = ["@crates//:tempfile"],
     edition = "2024",
     env = {"INTO_MD_BIN": "$(location :into-md)"},
 )

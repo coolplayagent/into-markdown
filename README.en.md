@@ -5,8 +5,8 @@
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
-command-line shell, and contract tests. It does not yet contain production
-format parsers, OCR inference, network clients, or LLM calls.
+command-line shell, a production TXT/character-set converter, and contract
+tests. It does not yet contain OCR inference, network clients, or LLM calls.
 
 The project is implemented independently of the neighbouring `anydoc` and
 `markitdown` projects. Documents from every source, including PDF, OCR, and
@@ -28,6 +28,8 @@ x86_64. macOS x86_64 is intentionally unsupported.
 
 ```shell
 bazel run //apps/cli:into-md -- report.pdf
+bazel run //apps/cli:into-md -- notes.txt
+printf 'caf\351\n' | bazel run //apps/cli:into-md -- --charset windows-1252 -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
@@ -48,6 +50,11 @@ For example, `--emit result-json` returns `markdown`, a versioned `document`,
 base64 `assets`, `diagnostics`, and `provenance`. The authoritative Chinese
 [DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.
 
+TXT conversion is available for UTF-8, BOM-marked UTF-16, and a bounded set of
+detectable legacy encodings. Explicit `--charset` also accepts `windows-1252`,
+`gb18030`, `big5`, and `shift_jis`. Invalid sequences fail strictly by default;
+`--encoding-errors replace` emits byte-ranged diagnostics for every recovery.
+
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source
 archives but no reviewed final ONNX/character-table runtime files, so
@@ -56,7 +63,7 @@ that source archives are installed models. Verify, path, and remove return the
 same error for this source-only entry and ignore forged install-state directories.
 Windows model installation remains fail-closed until durable, reparse-safe
 directory-handle flushing is implemented; path resolution and offline metadata remain available.
-Format conversion, OCR inference,
+Other format conversion, OCR inference,
 provider requests, and plugin execution remain unavailable.
 
 The detailed design documents are maintained in Chinese. See the

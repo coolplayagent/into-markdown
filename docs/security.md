@@ -9,6 +9,10 @@
 - 本地输入打开在 handle 层拒绝 Unix symlink 或 Windows reparse point，并只接受 regular
   file，不能把 CLI 规划时的路径检查当作最终安全边界。
 - XML 解析必须禁用外部实体以及 DTD/网络解析。
+- TXT 自动探测在字符集检测前拒绝 NUL、过量控制字节和过高替换率；结构化文本和已知
+  二进制 magic 优先。传统字符集只允许固定 allowlist，不能把任意字节流作为
+  `windows-1252` 静默吞入。replacement 不是静默容错，每个片段必须可按原始 byte range
+  审计。
 - 只有策略允许时，Office 宏和内嵌可执行文件才能作为惰性资源保留；它们永远
   不会被执行。
 - 网络访问默认关闭。未来 HTTP 解析器必须解析并验证每次重定向，拒绝回环、
