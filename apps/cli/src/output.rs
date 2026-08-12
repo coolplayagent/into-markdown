@@ -2,120 +2,30 @@
 
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
-use base64::Engine as _;
-use into_markdown::{Asset, ConversionResult, Diagnostic, Document, Provenance};
-use serde::Serialize;
+use into_markdown::{
+    Asset, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionResult, DTO_SCHEMA_VERSION,
+    DiagnosticsDto, DtoJsonStyle, ProvenanceListDto, ResultDto,
+};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
-// These wire protocols evolve independently from the Document IR schema.
-const RESULT_DOCUMENT_SCHEMA_VERSION: u32 = 1;
-const BUNDLE_MANIFEST_SCHEMA_VERSION: u32 = 1;
-const BATCH_REPORT_SCHEMA_VERSION: u32 = 1;
-
-/// Versioned conversion result transport envelope.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResultDocument<'a> {
-    schema_version: u32,
-    markdown: &'a str,
-    document: &'a Document,
-    assets: Vec<JsonAsset<'a>>,
-    diagnostics: &'a [Diagnostic],
-    provenance: &'a [Provenance],
-}
-
-/// JSON representation of one asset with base64 content.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JsonAsset<'a> {
-    id: &'a str,
-    filename: &'a Option<String>,
-    media_type: &'a str,
-    data_base64: String,
-    external_uri: &'a Option<String>,
-}
-
-/// Portable bundle manifest.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BundleManifest {
-    schema_version: u32,
-    markdown: &'static str,
-    document_ir: &'static str,
-    diagnostics: &'static str,
-    provenance: &'static str,
-    assets: Vec<BundleAsset>,
-}
-
-/// One bundle asset entry.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BundleAsset {
-    id: String,
-    path: String,
-    media_type: String,
-    size: usize,
-}
-
-/// One batch report item.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BatchItemReport {
-    pub input: String,
-    pub output: Option<String>,
-    pub format: Option<String>,
-    pub status: String,
-    pub diagnostics: Vec<Diagnostic>,
-    pub error_code: Option<String>,
-    pub message: Option<String>,
-    pub warnings: Vec<String>,
-}
-
-/// Versioned machine-readable batch report.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BatchReport {
-    pub schema_version: u32,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub items: Vec<BatchItemReport>,
-}
-
-impl BatchReport {
-    /// Build a deterministic report from ordered items.
-    pub fn new(items: Vec<BatchItemReport>) -> Self {
-        let succeeded = items.iter().filter(|item| item.status == "success").count();
-        let failed = items.iter().filter(|item| item.status == "failed").count();
-        Self { schema_version: BATCH_REPORT_SCHEMA_VERSION, succeeded, failed, items }
-    }
-}
+pub use into_markdown::{BatchItemDto as BatchItemReport, BatchItemStatus};
+pub type BatchReport = BatchReportDto;
 
 /// Serialize a conversion result into the selected primary artifact.
 pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
     match emit {
         EmitKind::Markdown => Ok(result.markdown.as_bytes().to_vec()),
-        EmitKind::IrJson => pretty_json(&result.document),
-        EmitKind::ResultJson => pretty_json(&ResultDocument {
-            schema_version: RESULT_DOCUMENT_SCHEMA_VERSION,
-            markdown: &result.markdown,
-            document: &result.document,
-            assets: result
-                .assets
-                .iter()
-                .map(|asset| JsonAsset {
-                    id: &asset.id.0,
-                    filename: &asset.filename,
-                    media_type: &asset.media_type,
-                    data_base64: base64::engine::general_purpose::STANDARD.encode(&asset.bytes),
-                    external_uri: &asset.external_uri,
-                })
-                .collect(),
-            diagnostics: &result.diagnostics,
-            provenance: &result.provenance,
-        }),
+        EmitKind::IrJson => encode_document(&result.document),
+        EmitKind::ResultJson => {
+            let mut json = Vec::new();
+            ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut json)
+                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))?;
+            json.push(b'\n');
+            Ok(json)
+        }
         EmitKind::Bundle => encode_bundle(result),
     }
 }
@@ -163,14 +73,25 @@ pub fn write_file(
 
 /// Write a versioned JSON report atomically.
 pub fn write_report(path: &Path, report: &BatchReport) -> Result<WriteOutcome, CliError> {
-    write_file(path, &pretty_json(report)?, ConflictPolicy::Overwrite)
+    let json = report
+        .to_pretty_json()
+        .map_err(|error| CliError::internal(format!("serialize batch report DTO: {error}")))?;
+    write_file(path, &json_with_newline(json), ConflictPolicy::Overwrite)
 }
 
-fn pretty_json(value: &impl Serialize) -> Result<Vec<u8>, CliError> {
-    let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|error| CliError::internal(format!("serialize JSON: {error}")))?;
+fn json_with_newline(json: String) -> Vec<u8> {
+    let mut bytes = json.into_bytes();
     bytes.push(b'\n');
-    Ok(bytes)
+    bytes
+}
+
+fn encode_document(document: &into_markdown::Document) -> Result<Vec<u8>, CliError> {
+    document
+        .to_json()
+        .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
+    let json = serde_json::to_string_pretty(document)
+        .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
+    Ok(json_with_newline(json))
 }
 
 fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
@@ -184,27 +105,52 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
         let filename = sanitize_filename(asset.filename.as_deref().unwrap_or(&fallback));
         let path = unique_bundle_path(&asset_entries, &format!("assets/{filename}"));
         asset_entries.push(path.clone());
-        assets.push(BundleAsset {
+        assets.push(BundleAssetDto {
             id: asset.id.0.clone(),
             path,
             media_type: asset.media_type.clone(),
-            size: asset.bytes.len(),
+            size: u64::try_from(asset.bytes.len()).map_err(|_| {
+                CliError::internal(format!(
+                    "asset {} size cannot be represented by the DTO",
+                    asset.id.0
+                ))
+            })?,
         });
     }
-    let manifest = BundleManifest {
-        schema_version: BUNDLE_MANIFEST_SCHEMA_VERSION,
-        markdown: "document.md",
-        document_ir: "document.ir.json",
-        diagnostics: "diagnostics.json",
-        provenance: "provenance.json",
+    let manifest = BundleManifestDto {
+        schema_version: DTO_SCHEMA_VERSION,
+        markdown: "document.md".into(),
+        document_ir: "document.ir.json".into(),
+        diagnostics: "diagnostics.json".into(),
+        diagnostics_schema_version: DTO_SCHEMA_VERSION,
+        provenance: "provenance.json".into(),
+        provenance_schema_version: DTO_SCHEMA_VERSION,
         assets,
     };
+    let manifest_json = manifest
+        .to_pretty_json()
+        .map(json_with_newline)
+        .map_err(|error| CliError::internal(format!("serialize bundle manifest DTO: {error}")))?;
+    let diagnostics = DiagnosticsDto::try_from_diagnostics(&result.diagnostics)
+        .map_err(|error| CliError::internal(format!("build diagnostics DTO: {error}")))?;
+    let provenance = ProvenanceListDto::try_from_provenance(&result.provenance)
+        .map_err(|error| CliError::internal(format!("build provenance DTO: {error}")))?;
     let entries = [
-        ("diagnostics.json", pretty_json(&result.diagnostics)?),
-        ("document.ir.json", pretty_json(&result.document)?),
+        (
+            "diagnostics.json",
+            diagnostics.to_bundle_pretty_json().map(json_with_newline).map_err(|error| {
+                CliError::internal(format!("serialize diagnostics DTO: {error}"))
+            })?,
+        ),
+        ("document.ir.json", encode_document(&result.document)?),
         ("document.md", result.markdown.as_bytes().to_vec()),
-        ("manifest.json", pretty_json(&manifest)?),
-        ("provenance.json", pretty_json(&result.provenance)?),
+        ("manifest.json", manifest_json),
+        (
+            "provenance.json",
+            provenance.to_bundle_pretty_json().map(json_with_newline).map_err(|error| {
+                CliError::internal(format!("serialize provenance DTO: {error}"))
+            })?,
+        ),
     ];
     let mut cursor = Cursor::new(Vec::new());
     {
@@ -218,6 +164,9 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
                 .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
             archive.write_all(&bytes)?;
         }
+        archive.add_directory("assets/", options).map_err(|error| {
+            CliError::internal(format!("create bundle assets directory: {error}"))
+        })?;
         for (asset, entry) in
             result.assets.iter().filter(|asset| !asset.bytes.is_empty()).zip(asset_entries)
         {
@@ -232,7 +181,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
 }
 
 fn unique_bundle_path(existing: &[String], requested: &str) -> String {
-    if !existing.iter().any(|value| value == requested) {
+    if !existing.iter().any(|value| value.eq_ignore_ascii_case(requested)) {
         return requested.to_owned();
     }
     let path = Path::new(requested);
@@ -245,7 +194,7 @@ fn unique_bundle_path(existing: &[String], requested: &str) -> String {
             |extension| format!("{stem}-{number}.{extension}"),
         );
         let candidate = if parent.is_empty() { name } else { format!("{parent}/{name}") };
-        if !existing.iter().any(|value| value == &candidate) {
+        if !existing.iter().any(|value| value.eq_ignore_ascii_case(&candidate)) {
             return candidate;
         }
     }
@@ -254,21 +203,36 @@ fn unique_bundle_path(existing: &[String], requested: &str) -> String {
 
 fn sanitize_filename(value: &str) -> String {
     let filename = Path::new(value).file_name().and_then(|part| part.to_str()).unwrap_or("asset");
-    let sanitized = filename
+    let mut sanitized = filename
         .chars()
         .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
                 character
             } else {
                 '_'
             }
         })
         .collect::<String>();
-    if sanitized.is_empty() || matches!(sanitized.as_str(), "." | "..") {
+    sanitized.truncate(sanitized.len().min(200));
+    let sanitized = sanitized.trim_end_matches(['.', ' ']);
+    if sanitized.is_empty() || matches!(sanitized, "." | "..") {
         "asset".into()
+    } else if is_windows_reserved_filename(sanitized) {
+        format!("_{sanitized}")
     } else {
-        sanitized
+        sanitized.into()
     }
+}
+
+fn is_windows_reserved_filename(value: &str) -> bool {
+    let stem = value.split('.').next().unwrap_or(value).to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
+        || stem.strip_prefix("COM").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
+        || stem.strip_prefix("LPT").is_some_and(|suffix| {
+            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+        })
 }
 
 fn resolve_conflict(
@@ -329,7 +293,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use into_markdown::{AssetId, ConversionResult, Document};
+    use into_markdown::{
+        AssetId, BundleManifestDto, ConversionResult, DiagnosticsDto, Document, ProvenanceListDto,
+    };
+    use std::io::Read;
 
     fn empty_result() -> ConversionResult {
         ConversionResult {
@@ -351,29 +318,32 @@ mod tests {
     fn stable_json_envelopes_have_schema_versions() {
         let result = empty_result();
         let ir = String::from_utf8(encode_result(&result, EmitKind::IrJson).unwrap()).unwrap();
-        let full =
-            String::from_utf8(encode_result(&result, EmitKind::ResultJson).unwrap()).unwrap();
+        let encoded = encode_result(&result, EmitKind::ResultJson).unwrap();
+        let mut expected =
+            ResultDto::json_from_result(&result, DtoJsonStyle::Pretty).unwrap().into_bytes();
+        expected.push(b'\n');
+        assert_eq!(encoded, expected);
+        let full = String::from_utf8(encoded).unwrap();
         assert!(ir.contains("\"schemaVersion\": 1"));
         assert!(full.contains("\"dataBase64\": \"AQID\""));
     }
 
     #[test]
-    fn cli_dto_versions_are_independent_from_document_ir_version() {
-        let mut result = empty_result();
-        result.document.schema_version = 27;
+    fn cli_dto_versions_are_explicit_at_each_envelope() {
+        let result = empty_result();
         let full: serde_json::Value =
             serde_json::from_slice(&encode_result(&result, EmitKind::ResultJson).unwrap()).unwrap();
-        assert_eq!(full["schemaVersion"], RESULT_DOCUMENT_SCHEMA_VERSION);
-        assert_eq!(full["document"]["schemaVersion"], 27);
+        assert_eq!(full["schemaVersion"], DTO_SCHEMA_VERSION);
+        assert_eq!(full["document"]["schemaVersion"], into_markdown::DOCUMENT_SCHEMA_VERSION);
 
         let bundle = encode_result(&result, EmitKind::Bundle).unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
         let manifest: serde_json::Value =
             serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
-        assert_eq!(manifest["schemaVersion"], BUNDLE_MANIFEST_SCHEMA_VERSION);
+        assert_eq!(manifest["schemaVersion"], DTO_SCHEMA_VERSION);
 
-        let report = BatchReport::new(vec![]);
-        assert_eq!(report.schema_version, BATCH_REPORT_SCHEMA_VERSION);
+        let report = BatchReport::try_new(vec![]).unwrap();
+        assert_eq!(report.schema_version, DTO_SCHEMA_VERSION);
     }
 
     #[test]
@@ -386,8 +356,87 @@ mod tests {
             .map(|index| archive.by_index(index).unwrap().name().to_owned())
             .collect::<Vec<_>>();
         assert!(names.contains(&"manifest.json".to_owned()));
+        assert!(names.contains(&"assets/".to_owned()));
         assert!(names.contains(&"assets/unsafe_image.png".to_owned()));
         assert!(!names.iter().any(|name| name.contains("..")));
+
+        let mut manifest = String::new();
+        archive.by_name("manifest.json").unwrap().read_to_string(&mut manifest).unwrap();
+        let manifest = BundleManifestDto::from_json(&manifest).unwrap();
+        assert_eq!(manifest.diagnostics_schema_version, DTO_SCHEMA_VERSION);
+        assert_eq!(manifest.provenance_schema_version, DTO_SCHEMA_VERSION);
+        let mut diagnostics = String::new();
+        archive.by_name("diagnostics.json").unwrap().read_to_string(&mut diagnostics).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&diagnostics).unwrap().is_array());
+        assert!(DiagnosticsDto::from_bundle_json(&diagnostics, DTO_SCHEMA_VERSION).is_ok());
+        let mut provenance = String::new();
+        archive.by_name("provenance.json").unwrap().read_to_string(&mut provenance).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&provenance).unwrap().is_array());
+        assert!(ProvenanceListDto::from_bundle_json(&provenance, DTO_SCHEMA_VERSION).is_ok());
+    }
+
+    #[test]
+    fn bundle_renames_case_collisions_and_reserved_asset_names() {
+        let mut result = empty_result();
+        result.assets = vec![
+            Asset {
+                id: AssetId("upper".into()),
+                filename: Some("Image.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![1],
+                external_uri: None,
+            },
+            Asset {
+                id: AssetId("lower".into()),
+                filename: Some("image.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![2],
+                external_uri: None,
+            },
+            Asset {
+                id: AssetId("reserved".into()),
+                filename: Some("CON.txt".into()),
+                media_type: "text/plain".into(),
+                bytes: vec![3],
+                external_uri: None,
+            },
+            Asset {
+                id: AssetId("unicode".into()),
+                filename: Some("图片.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![4],
+                external_uri: None,
+            },
+        ];
+        let bytes = encode_result(&result, EmitKind::Bundle).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let names = (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_owned())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"assets/Image.png".into()));
+        assert!(names.contains(&"assets/image-1.png".into()));
+        assert!(names.contains(&"assets/_CON.txt".into()));
+        assert!(names.contains(&"assets/__.png".into()));
+    }
+
+    #[test]
+    fn report_writer_uses_the_public_batch_contract() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("report.json");
+        let report = BatchReport::try_new(vec![BatchItemReport {
+            input: "example.txt".into(),
+            output: Some("example.md".into()),
+            format: Some("text".into()),
+            status: BatchItemStatus::Success,
+            diagnostics: vec![],
+            error_code: None,
+            message: None,
+            warnings: vec![],
+        }])
+        .unwrap();
+        write_report(&path, &report).unwrap();
+        let json = fs::read_to_string(path).unwrap();
+        assert_eq!(BatchReport::from_json(&json).unwrap(), report);
     }
 
     #[test]

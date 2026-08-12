@@ -55,3 +55,7 @@ ASCII 不区分大小写的方式识别 doctype 与 HTML/XHTML 根元素。
 可选后端缺失使用 `componentUnavailable`，与内部不变量错误分开。
 提供者 ID、转换器 ID、节点 ID、模型包 ID 和线协议版本均为稳定标识符。枚举
 允许增加新变体，因此使用方应保留默认分支。
+
+CLI、未来 HTTP/SSE 服务和 Bundle 共用 `into_markdown` 导出的应用 DTO，不直接序列化
+上述内部模型。版本、additive 兼容、解码资源预算和恶意输入规则见
+[稳定数据传输契约](dto.md)。

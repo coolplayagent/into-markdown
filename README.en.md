@@ -41,6 +41,12 @@ JSON, portable bundles, layered configuration, providers, models, and plugins.
 Network and AI access are disabled by default; remote sources and providers
 require an explicit `--allow-network` on every invocation.
 
+Structured artifacts start at `schemaVersion: 1`. Conversion results, bundles,
+and batch reports use public DTOs shared by the CLI and future HTTP service.
+For example, `--emit result-json` returns `markdown`, a versioned `document`,
+base64 `assets`, `diagnostics`, and `provenance`. The authoritative Chinese
+[DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.
+
 Format conversion, OCR inference, model installation, provider requests, and
 plugin execution backends are not implemented yet. Their commands return stable
 errors and never report a false success.

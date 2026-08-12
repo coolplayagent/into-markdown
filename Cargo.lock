@@ -613,9 +613,11 @@ dependencies = [
 name = "into-markdown-core"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
  "thiserror",
+ "url",
 ]
 
 [[package]]
