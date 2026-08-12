@@ -75,6 +75,7 @@ pin-project-lite	0.2.17	MIT
 potential_utf	0.1.5	Unicode-3.0
 proc-macro2	1.0.107	MIT
 quote	1.0.47	MIT
+quick-xml	0.38.3	MIT
 r-efi	6.0.0	MIT
 redox_users	0.5.2	MIT
 regex-automata	0.4.18	MIT
