@@ -1,6 +1,7 @@
 use chardetng::EncodingDetector;
 use encoding_rs::{
-    BIG5, DecoderResult, Encoding, GB18030, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252,
+    BIG5, DecoderResult, EncoderResult, Encoding, GB18030, GBK, SHIFT_JIS, UTF_8, UTF_16BE,
+    UTF_16LE, WINDOWS_1252,
 };
 use into_markdown_core::{
     Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
@@ -16,6 +17,12 @@ const INVALID_SEQUENCE_CODE: &str = "text.invalidByteSequenceReplaced";
 const MAX_UNSAFE_PERCENT: usize = 1;
 const MIN_PRINTABLE_PERCENT: usize = 95;
 const TEXT_SNIFF_BYTE_LIMIT: usize = 64 * 1024;
+const SAFETY_DECODE_INPUT_CHUNK: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    static SAMPLE_DECODE_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Plain-text converter with bounded character-set decoding and source-byte provenance.
 #[derive(Debug, Default)]
@@ -108,23 +115,46 @@ impl Charset {
 }
 
 fn normalize_charset(label: &str) -> Result<Charset, ConversionError> {
-    let normalized = label.trim().to_ascii_lowercase().replace(['_', ' '], "-");
-    let charset = match normalized.as_str() {
-        "utf-8" | "utf8" => Charset::Utf8,
-        "utf-16le" | "utf16le" => Charset::Utf16Le,
-        "utf-16be" | "utf16be" => Charset::Utf16Be,
-        "windows-1252" | "windows1252" | "cp1252" => Charset::Windows1252,
-        "gb18030" | "gb-18030" => Charset::Gb18030,
-        "big5" | "big-5" => Charset::Big5,
-        "shift-jis" | "shiftjis" | "sjis" | "cp932" | "windows-31j" => Charset::ShiftJis,
-        _ => {
-            return Err(ConversionError::Malformed {
-                part: Some("charset".into()),
-                detail: format!("unsupported character encoding label: {label}"),
-            });
-        }
+    let label = label.trim();
+    let charset = if charset_label_eq(label, "utf-8") || charset_label_eq(label, "utf8") {
+        Charset::Utf8
+    } else if charset_label_eq(label, "utf-16le") || charset_label_eq(label, "utf16le") {
+        Charset::Utf16Le
+    } else if charset_label_eq(label, "utf-16be") || charset_label_eq(label, "utf16be") {
+        Charset::Utf16Be
+    } else if charset_label_eq(label, "windows-1252")
+        || charset_label_eq(label, "windows1252")
+        || charset_label_eq(label, "cp1252")
+    {
+        Charset::Windows1252
+    } else if charset_label_eq(label, "gb18030") || charset_label_eq(label, "gb-18030") {
+        Charset::Gb18030
+    } else if charset_label_eq(label, "big5") || charset_label_eq(label, "big-5") {
+        Charset::Big5
+    } else if charset_label_eq(label, "shift-jis")
+        || charset_label_eq(label, "shiftjis")
+        || charset_label_eq(label, "sjis")
+        || charset_label_eq(label, "cp932")
+        || charset_label_eq(label, "windows-31j")
+    {
+        Charset::ShiftJis
+    } else {
+        return Err(ConversionError::Malformed {
+            part: Some("charset".into()),
+            detail: format!("unsupported character encoding label: {label}"),
+        });
     };
     Ok(charset)
+}
+
+fn charset_label_eq(label: &str, expected: &str) -> bool {
+    label
+        .bytes()
+        .map(|byte| match byte {
+            b'_' | b' ' => b'-',
+            _ => byte.to_ascii_lowercase(),
+        })
+        .eq(expected.bytes())
 }
 
 fn bom(bytes: &[u8]) -> Option<(Charset, usize)> {
@@ -159,6 +189,7 @@ pub(crate) fn sniff_unstructured_text(
     if bytes.is_empty() {
         return Ok(Some(0.80));
     }
+    let mut memory = LogicalMemory::new(context)?;
     if let Some((charset, bom_len)) = bom(bytes) {
         return sniff_bom_text(
             bytes.get(bom_len..).ok_or_else(|| ConversionError::Internal {
@@ -166,6 +197,7 @@ pub(crate) fn sniff_unstructured_text(
             })?,
             charset,
             context,
+            &mut memory,
         );
     }
     let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
@@ -175,47 +207,56 @@ pub(crate) fn sniff_unstructured_text(
     if let Ok(text) = std::str::from_utf8(sample)
         && decoded_text_safe(text)
     {
-        return Ok(decoded_input_safe(bytes, Charset::Utf8, context)?.then_some(0.88));
+        return Ok(decoded_input_safe(bytes, Charset::Utf8, context, &mut memory)?.then_some(0.88));
     }
-    let Some(charset) = detect_legacy(sample) else {
+    let Some(charset) = detect_legacy(sample, context)? else {
         return Ok(None);
     };
-    let Some(text) = charset.encoding().decode_without_bom_handling_and_without_replacement(sample)
-    else {
+    let sample_memory = memory.mark();
+    let Some(text) = decode_sample(sample, charset, &mut memory)? else {
         return Ok(None);
     };
-    if !decoded_text_safe(&text) || !legacy_roundtrips(charset, sample, &text) {
+    let sample_safe = decoded_text_safe(&text) && legacy_text_roundtrips(charset, sample, &text);
+    drop(text);
+    memory.rewind(sample_memory)?;
+    if !sample_safe {
         return Ok(None);
     }
-    Ok(decoded_input_safe(bytes, charset, context)?.then_some(0.72))
+    Ok(decoded_input_safe(bytes, charset, context, &mut memory)?.then_some(0.72))
 }
 
 fn sniff_bom_text(
     bytes: &[u8],
     charset: Charset,
     context: &ExecutionContext,
+    memory: &mut LogicalMemory,
 ) -> Result<Option<f32>, ConversionError> {
     let sample_len = bytes.len().min(TEXT_SNIFF_BYTE_LIMIT);
     let sample = bytes.get(..sample_len).ok_or_else(|| ConversionError::Internal {
         detail: "bounded BOM text sample exceeds input".into(),
     })?;
     let source_truncated = bytes.len() > sample_len;
+    let sample_memory = memory.mark();
     let (decoded, trailing_malformed) = match charset {
         Charset::Utf8 => {
             let Some(decoded) = strict_utf8_sample(sample, source_truncated) else {
                 return Ok(None);
             };
-            decoded
+            (std::borrow::Cow::Borrowed(decoded.0), decoded.1)
         }
         Charset::Utf16Le | Charset::Utf16Be => {
-            let Some(decoded) = strict_utf16_sample(sample, source_truncated, charset) else {
+            let Some(decoded) = strict_utf16_sample(sample, source_truncated, charset, memory)?
+            else {
                 return Ok(None);
             };
-            decoded
+            (std::borrow::Cow::Owned(decoded.0), decoded.1)
         }
         _ => return Ok(None),
     };
-    if !decoded_text_safe(&decoded) || !decoded_input_safe(bytes, charset, context)? {
+    let sample_safe = decoded_text_safe(&decoded);
+    drop(decoded);
+    memory.rewind(sample_memory)?;
+    if !sample_safe || !decoded_input_safe(bytes, charset, context, memory)? {
         return Ok(None);
     }
     Ok(Some(if trailing_malformed { 0.80 } else { 0.95 }))
@@ -225,15 +266,22 @@ fn decoded_input_safe(
     bytes: &[u8],
     charset: Charset,
     context: &ExecutionContext,
+    memory: &mut LogicalMemory,
 ) -> Result<bool, ConversionError> {
     let mut decoder = charset.encoding().new_decoder_without_bom_handling();
-    let _output_memory = context.reserve_memory(16 * 1024)?;
-    let mut output = String::with_capacity(16 * 1024);
+    let capacity = decoder
+        .max_utf8_buffer_length_without_replacement(SAFETY_DECODE_INPUT_CHUNK)
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "text safety decoder output capacity overflowed".into(),
+        })?;
+    let mut output = String::new();
+    memory.reserve_string(&mut output, capacity)?;
     let mut offset = 0_usize;
     while offset < bytes.len() {
         context.checkpoint()?;
         output.clear();
-        let end = offset.saturating_add(4096).min(bytes.len());
+        let end = offset.saturating_add(SAFETY_DECODE_INPUT_CHUNK).min(bytes.len());
         let (result, read) =
             decoder.decode_to_string_without_replacement(&bytes[offset..end], &mut output, false);
         if !decoded_text_safe(&output) || matches!(result, DecoderResult::Malformed(_, _)) {
@@ -256,12 +304,12 @@ fn decoded_input_safe(
         && decoded_text_safe(&output))
 }
 
-fn strict_utf8_sample(bytes: &[u8], source_truncated: bool) -> Option<(String, bool)> {
+fn strict_utf8_sample(bytes: &[u8], source_truncated: bool) -> Option<(&str, bool)> {
     match std::str::from_utf8(bytes) {
-        Ok(text) => Some((text.into(), false)),
+        Ok(text) => Some((text, false)),
         Err(error) if error.error_len().is_none() => {
             let valid = std::str::from_utf8(bytes.get(..error.valid_up_to())?).ok()?;
-            Some((valid.into(), !source_truncated))
+            Some((valid, !source_truncated))
         }
         Err(_) => None,
     }
@@ -271,7 +319,8 @@ fn strict_utf16_sample(
     bytes: &[u8],
     source_truncated: bool,
     charset: Charset,
-) -> Option<(String, bool)> {
+    memory: &mut LogicalMemory,
+) -> Result<Option<(String, bool)>, ConversionError> {
     let mut complete_len = bytes.len() - bytes.len() % 2;
     let mut trailing_malformed = !bytes.len().is_multiple_of(2) && !source_truncated;
     let read = |at: usize| match charset {
@@ -282,10 +331,32 @@ fn strict_utf16_sample(
         complete_len -= 2;
         trailing_malformed |= !source_truncated;
     }
-    let complete = bytes.get(..complete_len)?;
-    let decoded =
-        charset.encoding().decode_without_bom_handling_and_without_replacement(complete)?;
-    Some((decoded.into_owned(), trailing_malformed))
+    let Some(complete) = bytes.get(..complete_len) else { return Ok(None) };
+    Ok(decode_sample(complete, charset, memory)?.map(|decoded| (decoded, trailing_malformed)))
+}
+
+fn decode_sample(
+    bytes: &[u8],
+    charset: Charset,
+    memory: &mut LogicalMemory,
+) -> Result<Option<String>, ConversionError> {
+    let mut decoder = charset.encoding().new_decoder_without_bom_handling();
+    let capacity =
+        decoder.max_utf8_buffer_length_without_replacement(bytes.len()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "bounded text sample output capacity overflowed".into(),
+            }
+        })?;
+    let mut output = String::new();
+    memory.reserve_string(&mut output, capacity)?;
+    #[cfg(test)]
+    SAMPLE_DECODE_INVOCATIONS.with(|count| count.set(count.get() + 1));
+    let (result, read) = decoder.decode_to_string_without_replacement(bytes, &mut output, true);
+    if read != bytes.len() || !matches!(result, DecoderResult::InputEmpty) {
+        return Ok(None);
+    }
+    Ok(Some(output))
 }
 
 fn decoded_text_safe(text: &str) -> bool {
@@ -311,16 +382,141 @@ fn is_unsafe_auto_control(value: char) -> bool {
     matches!(value, '\0'..='\u{8}' | '\u{b}'..='\u{c}' | '\u{e}'..='\u{1f}' | '\u{7f}'..='\u{9f}')
 }
 
-fn legacy_roundtrips(charset: Charset, bytes: &[u8], text: &str) -> bool {
-    let (encoded, _, had_errors) = charset.encoding().encode(text);
-    !had_errors && encoded.as_ref() == bytes
+fn legacy_text_roundtrips(charset: Charset, bytes: &[u8], text: &str) -> bool {
+    let mut encoder = charset.encoding().new_encoder();
+    let mut text_offset = 0_usize;
+    let mut byte_offset = 0_usize;
+    let mut output = [0; SAFETY_DECODE_INPUT_CHUNK];
+    loop {
+        let (result, read, written) =
+            encoder.encode_from_utf8_without_replacement(&text[text_offset..], &mut output, true);
+        let Some(expected) = bytes.get(byte_offset..byte_offset.saturating_add(written)) else {
+            return false;
+        };
+        if output[..written] != *expected {
+            return false;
+        }
+        text_offset = match text_offset.checked_add(read) {
+            Some(value) => value,
+            None => return false,
+        };
+        byte_offset = match byte_offset.checked_add(written) {
+            Some(value) => value,
+            None => return false,
+        };
+        match result {
+            EncoderResult::InputEmpty => {
+                return text_offset == text.len() && byte_offset == bytes.len();
+            }
+            EncoderResult::OutputFull if read != 0 || written != 0 => {}
+            EncoderResult::OutputFull | EncoderResult::Unmappable(_) => return false,
+        }
+    }
 }
 
-fn detect_legacy(bytes: &[u8]) -> Option<Charset> {
+fn legacy_input_safe_roundtrip(
+    bytes: &[u8],
+    charset: Charset,
+    context: &ExecutionContext,
+    memory: &mut LogicalMemory,
+) -> Result<bool, ConversionError> {
+    let mark = memory.mark();
+    let mut decoder = charset.encoding().new_decoder_without_bom_handling();
+    let capacity = decoder
+        .max_utf8_buffer_length_without_replacement(SAFETY_DECODE_INPUT_CHUNK)
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "legacy validation output capacity overflowed".into(),
+        })?;
+    let mut output = String::new();
+    memory.reserve_string(&mut output, capacity)?;
+    let mut encoder = charset.encoding().new_encoder();
+    let mut source_offset = 0;
+    let mut roundtrip_offset = 0;
+    let mut valid = true;
+    while source_offset < bytes.len() && valid {
+        context.checkpoint()?;
+        output.clear();
+        let end = source_offset.saturating_add(SAFETY_DECODE_INPUT_CHUNK).min(bytes.len());
+        let (result, read) = decoder.decode_to_string_without_replacement(
+            &bytes[source_offset..end],
+            &mut output,
+            false,
+        );
+        valid = !matches!(result, DecoderResult::Malformed(_, _))
+            && decoded_text_safe(&output)
+            && encode_chunk_matches(&mut encoder, &output, false, bytes, &mut roundtrip_offset);
+        if read == 0 && end > source_offset {
+            valid = false;
+            break;
+        }
+        source_offset =
+            source_offset.checked_add(read).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: "legacy validation input position overflowed".into(),
+            })?;
+    }
+    if valid {
+        output.clear();
+        let (result, read) = decoder.decode_to_string_without_replacement(b"", &mut output, true);
+        valid = read == 0
+            && result == DecoderResult::InputEmpty
+            && decoded_text_safe(&output)
+            && encode_chunk_matches(&mut encoder, &output, true, bytes, &mut roundtrip_offset)
+            && roundtrip_offset == bytes.len();
+    }
+    drop(output);
+    memory.rewind(mark)?;
+    Ok(valid)
+}
+
+fn encode_chunk_matches(
+    encoder: &mut encoding_rs::Encoder,
+    text: &str,
+    last: bool,
+    source: &[u8],
+    source_offset: &mut usize,
+) -> bool {
+    let mut input_offset = 0;
+    let mut output = [0; SAFETY_DECODE_INPUT_CHUNK];
+    loop {
+        let (result, read, written) =
+            encoder.encode_from_utf8_without_replacement(&text[input_offset..], &mut output, last);
+        let Some(expected) = source.get(*source_offset..source_offset.saturating_add(written))
+        else {
+            return false;
+        };
+        if output[..written] != *expected {
+            return false;
+        }
+        let Some(next_input) = input_offset.checked_add(read) else { return false };
+        let Some(next_source) = source_offset.checked_add(written) else { return false };
+        input_offset = next_input;
+        *source_offset = next_source;
+        match result {
+            EncoderResult::InputEmpty => return input_offset == text.len(),
+            EncoderResult::OutputFull if read != 0 || written != 0 => {}
+            EncoderResult::OutputFull | EncoderResult::Unmappable(_) => return false,
+        }
+    }
+}
+
+fn detect_legacy(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<Charset>, ConversionError> {
     let mut detector = EncodingDetector::new();
-    detector.feed(bytes, true);
+    if bytes.is_empty() {
+        detector.feed(bytes, true);
+    } else {
+        let mut chunks = bytes.chunks(SAFETY_DECODE_INPUT_CHUNK).peekable();
+        while let Some(chunk) = chunks.next() {
+            context.checkpoint()?;
+            detector.feed(chunk, chunks.peek().is_none());
+        }
+    }
     let guessed = detector.guess(None, true);
-    if guessed == WINDOWS_1252 {
+    Ok(if guessed == WINDOWS_1252 {
         Some(Charset::Windows1252)
     } else if guessed == GB18030 || guessed == GBK {
         Some(Charset::Gb18030)
@@ -330,12 +526,14 @@ fn detect_legacy(bytes: &[u8]) -> Option<Charset> {
         Some(Charset::ShiftJis)
     } else {
         None
-    }
+    })
 }
 
 fn select_charset(
     bytes: &[u8],
     explicit: Option<&str>,
+    context: &ExecutionContext,
+    memory: &mut LogicalMemory,
 ) -> Result<(Charset, usize), ConversionError> {
     let detected_bom = bom(bytes);
     if let Some(label) = explicit {
@@ -361,33 +559,31 @@ fn select_charset(
     if std::str::from_utf8(bytes).is_ok() {
         return Ok((Charset::Utf8, 0));
     }
-    let charset = detect_legacy(bytes).ok_or_else(|| ConversionError::Malformed {
+    let charset = detect_legacy(bytes, context)?.ok_or_else(|| ConversionError::Malformed {
         part: Some("charset".into()),
         detail: "character encoding could not be detected with sufficient confidence".into(),
     })?;
-    let _text = charset
-        .encoding()
-        .decode_without_bom_handling_and_without_replacement(bytes)
-        .filter(|text| decoded_text_safe(text) && legacy_roundtrips(charset, bytes, text))
-        .ok_or_else(|| ConversionError::Malformed {
+    if !legacy_input_safe_roundtrip(bytes, charset, context, memory)? {
+        return Err(ConversionError::Malformed {
             part: Some("charset".into()),
             detail:
                 "detected encoding did not pass replacement, printable, and round-trip thresholds"
                     .into(),
-        })?;
+        });
+    }
     Ok((charset, 0))
 }
 
-/// Decode text once for all built-in text converters while retaining exact
-/// original-byte spans for every Unicode scalar.
+/// Decode text once for all built-in text converters while retaining the exact
+/// original-byte span for every decoder output sequence.
 pub(crate) fn decode_source(
     bytes: &[u8],
     explicit_charset: Option<&str>,
     mode: TextDecodingMode,
     context: &ExecutionContext,
 ) -> Result<(DecodedText, Vec<Diagnostic>), ConversionError> {
-    let (charset, bom_len) = select_charset(bytes, explicit_charset)?;
-    let memory = LogicalMemory::new(context)?;
+    let mut memory = LogicalMemory::new(context)?;
+    let (charset, bom_len) = select_charset(bytes, explicit_charset, context, &mut memory)?;
     decode_mapped(&bytes[bom_len..], bom_len, charset, mode, context, memory)
 }
 
@@ -398,18 +594,45 @@ pub(crate) fn decode_source(
 /// every logical capacity increase is charged before its allocation request.
 pub(crate) struct LogicalMemory {
     reservation: ResourceReservation,
+    charged: usize,
 }
 
 impl LogicalMemory {
     pub(crate) fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
-        Ok(Self { reservation: context.reserve_memory(0)? })
+        Ok(Self { reservation: context.reserve_memory(0)?, charged: 0 })
     }
 
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ConversionError> {
-        self.reservation.grow(u64::try_from(bytes).map_err(|_| ConversionError::ResourceLimit {
+        let bytes_u64 = u64::try_from(bytes).map_err(|_| ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: "logical heap capacity cannot be represented as u64".into(),
-        })?)
+        })?;
+        let next =
+            self.charged.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical heap capacity overflowed".into(),
+            })?;
+        self.reservation.grow(bytes_u64)?;
+        self.charged = next;
+        Ok(())
+    }
+
+    fn mark(&self) -> usize {
+        self.charged
+    }
+
+    fn rewind(&mut self, mark: usize) -> Result<(), ConversionError> {
+        let released = self.charged.checked_sub(mark).ok_or_else(|| ConversionError::Internal {
+            detail: "logical memory mark exceeds current charge".into(),
+        })?;
+        self.reservation.shrink(u64::try_from(released).map_err(|_| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "logical memory release cannot be represented as u64".into(),
+            }
+        })?)?;
+        self.charged = mark;
+        Ok(())
     }
 
     pub(crate) fn reserve_vec<T>(
@@ -577,7 +800,7 @@ fn push_str_units(
     base: usize,
 ) -> Result<(), ConversionError> {
     for (offset, value) in text.char_indices() {
-        decoded.push(value, base + offset, base + offset + value.len_utf8())?;
+        push_scalar(decoded, value, base + offset, base + offset + value.len_utf8())?;
     }
     Ok(())
 }
@@ -647,7 +870,7 @@ fn decode_utf16(
             (char::from_u32(u32::from(first)), 2)
         };
         if let Some(value) = value {
-            decoded.push(value, base + offset, base + offset + width)?;
+            push_scalar(&mut decoded, value, base + offset, base + offset + width)?;
         } else {
             recover_invalid(
                 &mut decoded,
@@ -859,10 +1082,17 @@ fn push_str_range(
     start: usize,
     end: usize,
 ) -> Result<(), ConversionError> {
-    for value in text.chars() {
-        decoded.push(value, start, end)?;
-    }
-    Ok(())
+    decoded.push_sequence(text, start, end)
+}
+
+fn push_scalar(
+    decoded: &mut impl DecodedSink,
+    value: char,
+    start: usize,
+    end: usize,
+) -> Result<(), ConversionError> {
+    let mut buffer = [0; 4];
+    decoded.push_sequence(value.encode_utf8(&mut buffer), start, end)
 }
 
 fn recover_invalid(
@@ -882,7 +1112,7 @@ fn recover_invalid(
             ),
         });
     }
-    decoded.push('\u{fffd}', start, end)?;
+    push_scalar(decoded, '\u{fffd}', start, end)?;
     recoveries.record(start, end, decoded.memory())?;
     Ok(())
 }
@@ -959,7 +1189,12 @@ struct Line {
 }
 
 trait DecodedSink {
-    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError>;
+    fn push_sequence(
+        &mut self,
+        value: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<(), ConversionError>;
     fn memory(&mut self) -> &mut LogicalMemory;
 }
 
@@ -991,14 +1226,22 @@ pub(crate) struct DecodedText {
 }
 
 impl DecodedSink for DecodedText {
-    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError> {
+    fn push_sequence(
+        &mut self,
+        value: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<(), ConversionError> {
+        if value.is_empty() {
+            return Ok(());
+        }
         let decoded_start =
             u64::try_from(self.text.len()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: "decoded UTF-8 offset cannot be represented as u64".into(),
             })?;
         let decoded_width =
-            u32::try_from(value.len_utf8()).map_err(|_| ConversionError::ResourceLimit {
+            u32::try_from(value.len()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: "decoded scalar width cannot be represented as u32".into(),
             })?;
@@ -1012,7 +1255,7 @@ impl DecodedSink for DecodedText {
                 detail: "source scalar width cannot be represented as u32".into(),
             }
         })?;
-        self.memory.reserve_string(&mut self.text, value.len_utf8())?;
+        self.memory.reserve_string(&mut self.text, value.len())?;
         let merge = self.runs.last().is_some_and(|run| {
             run.decoded_end() == decoded_start
                 && run.source_end() == source_start
@@ -1023,7 +1266,7 @@ impl DecodedSink for DecodedText {
         if !merge {
             self.memory.reserve_vec(&mut self.runs, 1)?;
         }
-        self.text.push(value);
+        self.text.push_str(value);
         if merge {
             if let Some(run) = self.runs.last_mut() {
                 run.units += 1;
@@ -1091,8 +1334,9 @@ impl DecodedText {
             let unit = within / u64::from(run.decoded_width);
             let source_start = run.source_start + unit * u64::from(run.source_width);
             let source_end = source_start + u64::from(run.source_width);
-            lines.push(
-                value,
+            let mut buffer = [0; 4];
+            lines.push_sequence(
+                value.encode_utf8(&mut buffer),
                 usize::try_from(source_start).unwrap_or(initial_source),
                 usize::try_from(source_end).unwrap_or(initial_source),
             )?;
@@ -1109,9 +1353,14 @@ pub(crate) struct DecodedMapping<'a> {
 
 impl DecodedMapping<'_> {
     pub(crate) fn source_range(self, start: usize, end: usize) -> (usize, usize) {
-        let (start_source, _) = self.source_boundary(start);
-        let (end_source, _) = self.source_boundary(end.max(start));
-        (start_source, end_source)
+        if end <= start {
+            let (source, _) = self.source_boundary(start);
+            return (source, source);
+        }
+        let (start_source, start_lookups) = self.source_start_for_overlap(start);
+        let (end_source, end_lookups) = self.source_end_for_overlap(end);
+        let _ = start_lookups + end_lookups;
+        (start_source, end_source.max(start_source))
     }
 
     fn source_boundary(self, decoded: usize) -> (usize, usize) {
@@ -1143,9 +1392,65 @@ impl DecodedMapping<'_> {
         (usize::try_from(source).unwrap_or(usize::MAX), comparisons)
     }
 
+    fn source_start_for_overlap(self, decoded: usize) -> (usize, usize) {
+        if self.runs.is_empty() {
+            return (self.initial_source, 0);
+        }
+        let decoded = u64::try_from(decoded).unwrap_or(u64::MAX);
+        let mut low = 0;
+        let mut high = self.runs.len();
+        let mut comparisons = 0;
+        while low < high {
+            comparisons += 1;
+            let middle = low + (high - low) / 2;
+            if self.runs[middle].decoded_start <= decoded {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let run = self.runs[low.saturating_sub(1)];
+        let within = decoded
+            .saturating_sub(run.decoded_start)
+            .min(u64::from(run.units.saturating_sub(1)) * u64::from(run.decoded_width));
+        let unit = within / u64::from(run.decoded_width);
+        let source = run.source_start + unit * u64::from(run.source_width);
+        (usize::try_from(source).unwrap_or(usize::MAX), comparisons)
+    }
+
+    fn source_end_for_overlap(self, decoded_end: usize) -> (usize, usize) {
+        if self.runs.is_empty() {
+            return (self.initial_source, 0);
+        }
+        let decoded_end = u64::try_from(decoded_end).unwrap_or(u64::MAX);
+        let mut low = 0;
+        let mut high = self.runs.len();
+        let mut comparisons = 0;
+        while low < high {
+            comparisons += 1;
+            let middle = low + (high - low) / 2;
+            if self.runs[middle].decoded_start < decoded_end {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let run = self.runs[low.saturating_sub(1)];
+        let within = decoded_end
+            .saturating_sub(run.decoded_start)
+            .min(u64::from(run.units) * u64::from(run.decoded_width));
+        let units = within.div_ceil(u64::from(run.decoded_width));
+        let source = run.source_start + units * u64::from(run.source_width);
+        (usize::try_from(source).unwrap_or(usize::MAX), comparisons)
+    }
+
     #[cfg(test)]
     fn source_range_lookup_count(self, start: usize, end: usize) -> usize {
-        self.source_boundary(start).1 + self.source_boundary(end).1
+        if end <= start {
+            self.source_boundary(start).1
+        } else {
+            self.source_start_for_overlap(start).1 + self.source_end_for_overlap(end).1
+        }
     }
 }
 
@@ -1157,22 +1462,29 @@ struct DecodedLines {
 }
 
 impl DecodedSink for DecodedLines {
-    fn push(&mut self, value: char, start: usize, end: usize) -> Result<(), ConversionError> {
-        if self.pending_cr {
-            self.finish_line()?;
-            self.pending_cr = false;
-            if value == '\n' {
-                return Ok(());
+    fn push_sequence(
+        &mut self,
+        value: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<(), ConversionError> {
+        for value in value.chars() {
+            if self.pending_cr {
+                self.finish_line()?;
+                self.pending_cr = false;
+                if value == '\n' {
+                    continue;
+                }
             }
-        }
-        match value {
-            '\r' => self.pending_cr = true,
-            '\n' => self.finish_line()?,
-            _ => {
-                self.current.start.get_or_insert(start);
-                self.current.end = Some(end);
-                self.memory.reserve_string(&mut self.current.text, value.len_utf8())?;
-                self.current.text.push(value);
+            match value {
+                '\r' => self.pending_cr = true,
+                '\n' => self.finish_line()?,
+                _ => {
+                    self.current.start.get_or_insert(start);
+                    self.current.end = Some(end);
+                    self.memory.reserve_string(&mut self.current.text, value.len_utf8())?;
+                    self.current.text.push(value);
+                }
             }
         }
         Ok(())
@@ -1409,7 +1721,11 @@ mod tests {
             let mut unsafe_text = vec![b'A'; TEXT_SNIFF_BYTE_LIMIT + 4096];
             unsafe_text.extend_from_slice(suffix);
             assert_eq!(sniff(&unsafe_text), None);
-            assert!(!decoded_input_safe(&unsafe_text, Charset::Utf8, &context()).unwrap());
+            let context = context();
+            let mut memory = LogicalMemory::new(&context).unwrap();
+            assert!(
+                !decoded_input_safe(&unsafe_text, Charset::Utf8, &context, &mut memory).unwrap()
+            );
         }
 
         let (legacy_control, _, had_errors) = SHIFT_JIS.encode("\u{80}");
@@ -1421,7 +1737,9 @@ mod tests {
             .into_owned();
         legacy.extend(std::iter::repeat_n(b'A', TEXT_SNIFF_BYTE_LIMIT + 4096));
         legacy.extend_from_slice(&legacy_control);
-        assert!(!decoded_input_safe(&legacy, Charset::ShiftJis, &context()).unwrap());
+        let context = context();
+        let mut memory = LogicalMemory::new(&context).unwrap();
+        assert!(!decoded_input_safe(&legacy, Charset::ShiftJis, &context, &mut memory).unwrap());
         assert_eq!(sniff(&legacy), None);
     }
 
@@ -1618,6 +1936,67 @@ mod tests {
         let context = ExecutionContext::new(ExecutionOptions::default(), limits);
         let output = convert_text(&input, &ConversionOptions::default(), &context).unwrap();
         assert_eq!(output.document.blocks.len(), 1);
+    }
+
+    #[test]
+    fn decoding_allocations_are_budgeted_from_charset_selection_onward() {
+        let limits = ResourceLimits { max_memory_bytes: 1, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let error =
+            convert_text(&input(b"a"), &ConversionOptions::default(), &context).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+
+        let mut utf16 = vec![0xff, 0xfe];
+        for _ in 0..(TEXT_SNIFF_BYTE_LIMIT / 2) {
+            utf16.extend(u16::from(b'a').to_le_bytes());
+        }
+        SAMPLE_DECODE_INVOCATIONS.with(|count| count.set(0));
+        let error = sniff_unstructured_text(&utf16, &context).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        SAMPLE_DECODE_INVOCATIONS.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn hundred_kib_auto_legacy_and_utf16_avoid_full_input_selection_copies() {
+        let (legacy_unit, _, had_errors) =
+            SHIFT_JIS.encode("日本語の文字コード判定に十分な長さの文章です。");
+        assert!(!had_errors);
+        let mut legacy = Vec::new();
+        while legacy.len() + legacy_unit.len() <= 100 * 1024 {
+            legacy.extend_from_slice(&legacy_unit);
+        }
+        legacy.resize(100 * 1024, b'A');
+        let limits = ResourceLimits { max_memory_bytes: 700 * 1024, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits.clone());
+        let output =
+            convert_text(&input(&legacy), &ConversionOptions::default(), &context).unwrap();
+        assert_eq!(output.document.blocks.len(), 1);
+
+        let mut utf16 = vec![0xff, 0xfe];
+        utf16.extend(std::iter::repeat_n([b'a', 0], 50 * 1024).flatten());
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let output = convert_text(&input(&utf16), &ConversionOptions::default(), &context).unwrap();
+        assert_eq!(output.document.blocks.len(), 1);
+    }
+
+    #[test]
+    fn big5_multi_scalar_sequence_ranges_cover_both_source_bytes() {
+        let context = context();
+        let (decoded, diagnostics) =
+            decode_source(&[0x88, 0x62], Some("big5"), TextDecodingMode::Strict, &context).unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(decoded.text, "Ê\u{304}");
+        assert_eq!(decoded.source_range(0, 2), (0, 2));
+        assert_eq!(decoded.source_range(2, 4), (0, 2));
+        assert_eq!(decoded.source_range(0, 4), (0, 2));
+        assert_eq!(decoded.source_range(2, 2), (0, 0));
+        assert_eq!(decoded.source_range(4, 4), (2, 2));
+
+        let mut options = ConversionOptions::default();
+        options.text.charset = Some("big5".into());
+        let output = convert_text(&input(&[0x88, 0x62]), &options, &context).unwrap();
+        assert_eq!(output.document.blocks[0].provenance.locator.byte_start, Some(0));
+        assert_eq!(output.document.blocks[0].provenance.locator.byte_end, Some(2));
     }
 
     #[test]

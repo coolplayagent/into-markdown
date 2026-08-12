@@ -768,4 +768,17 @@ mod tests {
         let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 1);
     }
+
+    #[test]
+    fn big5_multi_scalar_cell_keeps_the_complete_source_sequence() {
+        let mut options = ConversionOptions::default();
+        options.text.charset = Some("big5".into());
+        let output = convert(&[0x88, 0x62, b',', b'1'], InputFormat::Csv, &options);
+        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let cell = &rows[0].cells[0].blocks[0];
+        let Block::Paragraph(content) = &cell.block else { panic!() };
+        assert!(matches!(&content[0], Inline::Text { value, .. } if value == "Ê\u{304}"));
+        assert_eq!(cell.provenance.locator.byte_start, Some(0));
+        assert_eq!(cell.provenance.locator.byte_end, Some(2));
+    }
 }
