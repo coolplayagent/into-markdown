@@ -1090,7 +1090,15 @@ fn run_conversion(
     } else {
         process_batch(plans, &policy, arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get))?
     };
-    finish_reports(reports, arguments.report.as_deref(), global, catalog, json_log, context.stderr)
+    finish_reports(
+        reports,
+        arguments.report.as_deref(),
+        global,
+        catalog,
+        json_log,
+        context.stderr,
+        &policy.output_context,
+    )
 }
 
 fn finish_reports(
@@ -1100,6 +1108,7 @@ fn finish_reports(
     catalog: Catalog,
     json_log: bool,
     stderr: &mut dyn Write,
+    output_context: &into_markdown::ExecutionContext,
 ) -> Result<(), CliError> {
     for report in &reports {
         for warning in &report.warnings {
@@ -1135,7 +1144,7 @@ fn finish_reports(
     let report = BatchReport::try_new(reports)
         .map_err(|error| CliError::internal(format!("build batch report DTO: {error}")))?;
     if let Some(path) = report_path {
-        output::write_report(path, &report)?;
+        output::write_report(path, &report, output_context)?;
     }
     if report.failed > 0 {
         Err(CliError::partial(format!(
@@ -1565,13 +1574,45 @@ fn process_stdout(
     } else {
         None
     };
-    let encoded = output::encode_result(&result, policy.emit)?;
+    let encoded = match output::encode_result(&result, policy.emit) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            if let Some(staged) = staged_assets
+                && let Err(recovery) = staged.abort()
+            {
+                return Err(CliError::new(
+                    crate::error::ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "output encoding failed ({}: {}); staged asset rollback failed ({}: {})",
+                        error.code(),
+                        error.message(),
+                        recovery.code(),
+                        recovery.message()
+                    ),
+                ));
+            }
+            return Err(error);
+        }
+    };
     if let Err(error) = context.stdout.write_all(&encoded) {
         let error = CliError::from(error);
-        if error.is_broken_pipe()
-            && let Some(staged) = staged_assets
-        {
-            staged.commit()?;
+        if let Some(staged) = staged_assets {
+            if error.is_broken_pipe() {
+                staged.commit()?;
+            } else if let Err(recovery) = staged.abort() {
+                return Err(CliError::new(
+                    crate::error::ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "stdout failed ({}: {}); staged asset rollback failed ({}: {})",
+                        error.code(),
+                        error.message(),
+                        recovery.code(),
+                        recovery.message()
+                    ),
+                ));
+            }
         }
         return Err(error);
     }

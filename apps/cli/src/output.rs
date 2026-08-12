@@ -2,11 +2,13 @@
 
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
+use crate::transaction::{self, PreparedTransaction, Target};
 use into_markdown::{
     BUNDLE_SCHEMA_VERSION, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionOptions,
     ConversionResult, DTO_SCHEMA_VERSION, DiagnosticsDto, DtoJsonStyle, ExecutionContext,
     ProvenanceListDto, ResultDto, plan_assets,
 };
+#[cfg(test)]
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -44,11 +46,8 @@ pub fn write_assets(
 
 /// Fully staged external assets whose targets have not been mutated yet.
 pub struct StagedAssets {
-    stage: tempfile::TempDir,
+    transaction: Option<PreparedTransaction>,
     targets: Vec<PathBuf>,
-    staged: Vec<PathBuf>,
-    conflict: ConflictPolicy,
-    context: ExecutionContext,
 }
 
 /// Preflight, write, and fsync every external asset without changing targets.
@@ -61,85 +60,35 @@ pub fn stage_assets(
 ) -> Result<StagedAssets, CliError> {
     let planned = plan_asset_writes(result, directory, mode, conflict)?;
     if planned.is_empty() {
-        return Ok(StagedAssets {
-            stage: tempfile::tempdir()?,
-            targets: vec![],
-            staged: vec![],
-            conflict,
-            context: context.clone(),
-        });
+        return Ok(StagedAssets { transaction: None, targets: vec![] });
     }
     let targets_with_bytes = planned
         .iter()
-        .map(|(source_index, path)| (path.clone(), result.assets[*source_index].bytes.as_slice()))
+        .map(|(source_index, path)| Target {
+            path: path.clone(),
+            bytes: result.assets[*source_index].bytes.as_slice(),
+        })
         .collect::<Vec<_>>();
-    let root = common_existing_ancestor(&targets_with_bytes)?;
-    reject_symlink_components(&root)?;
-    ensure_same_filesystem(&root, &targets_with_bytes)?;
-    let stage = tempfile::Builder::new().prefix(".into-md-txn-").tempdir_in(root)?;
-    let mut staged = Vec::with_capacity(planned.len());
-    for (index, (source_index, _)) in planned.iter().enumerate() {
-        let mut file = context
-            .temporary_file_in(stage.path(), &format!("stage-{index}"))
-            .map_err(CliError::from)?;
-        file.write_all_checked(&result.assets[*source_index].bytes).map_err(CliError::from)?;
-        file.sync_all().map_err(CliError::from)?;
-        staged.push(file.persist());
-    }
-    sync_directory(stage.path())?;
+    let transaction =
+        transaction::prepare(&targets_with_bytes, conflict == ConflictPolicy::Overwrite, context)?;
     Ok(StagedAssets {
-        stage,
+        transaction: Some(transaction),
         targets: planned.into_iter().map(|(_, path)| path).collect(),
-        staged,
-        conflict,
-        context: context.clone(),
     })
 }
 
 impl StagedAssets {
     /// Commit all staged assets after the stdout stream succeeds.
-    pub fn commit(self) -> Result<Vec<WriteOutcome>, CliError> {
-        let mut backups = Vec::new();
-        let mut installed = Vec::new();
-        for (index, (target, staged)) in self.targets.iter().zip(&self.staged).enumerate() {
-            if let Err(error) = self.context.checkpoint().map_err(CliError::from) {
-                rollback_output_set(&installed, &backups);
-                return Err(error);
-            }
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-                reject_symlink_components(parent)?;
-            }
-            if target.exists() {
-                if self.conflict != ConflictPolicy::Overwrite {
-                    rollback_output_set(&installed, &backups);
-                    return Err(CliError::new(
-                        ExitClass::Io,
-                        "assetConflict",
-                        format!("asset appeared after preflight: {}", target.display()),
-                    ));
-                }
-                let backup = self.stage.path().join(format!("backup-{index}"));
-                if let Err(error) = fs::rename(target, &backup) {
-                    rollback_output_set(&installed, &backups);
-                    return Err(error.into());
-                }
-                backups.push((target.clone(), backup));
-            }
-            if let Err(error) = fs::rename(staged, target) {
-                rollback_output_set(&installed, &backups);
-                return Err(error.into());
-            }
-            installed.push(target.clone());
-            if let Err(error) = sync_parent(target) {
-                rollback_output_set(&installed, &backups);
-                return Err(error);
-            }
-        }
-        for (_, backup) in backups {
-            fs::remove_file(backup)?;
+    pub fn commit(mut self) -> Result<Vec<WriteOutcome>, CliError> {
+        if let Some(transaction) = self.transaction.take() {
+            transaction.commit()?;
         }
         Ok(self.targets.into_iter().map(|path| WriteOutcome { path, renamed: false }).collect())
+    }
+
+    /// Discard staged resources without modifying external targets.
+    pub fn abort(mut self) -> Result<(), CliError> {
+        self.transaction.take().map_or(Ok(()), PreparedTransaction::abort)
     }
 }
 
@@ -232,205 +181,15 @@ pub fn write_output_set(
         .transpose()?
         .unwrap_or_default();
     let mut targets = Vec::with_capacity(planned_assets.len() + 1);
-    targets.push((primary.clone(), primary_bytes));
+    targets.push(Target { path: primary.clone(), bytes: primary_bytes });
     for (source_index, path) in &planned_assets {
-        targets.push((path.clone(), result.assets[*source_index].bytes.as_slice()));
+        targets.push(Target {
+            path: path.clone(),
+            bytes: result.assets[*source_index].bytes.as_slice(),
+        });
     }
-    commit_output_set(&targets, conflict, context)?;
+    transaction::prepare(&targets, conflict == ConflictPolicy::Overwrite, context)?.commit()?;
     Ok(WriteOutcome { path: primary, renamed: false })
-}
-
-fn commit_output_set(
-    targets: &[(PathBuf, &[u8])],
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-) -> Result<(), CliError> {
-    commit_output_set_with_hook(targets, conflict, context, |_, _| Ok(()))
-}
-
-fn commit_output_set_with_hook(
-    targets: &[(PathBuf, &[u8])],
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-    mut hook: impl FnMut(&str, usize) -> Result<(), CliError>,
-) -> Result<(), CliError> {
-    let transaction_root = common_existing_ancestor(targets)?;
-    reject_symlink_components(&transaction_root)?;
-    ensure_same_filesystem(&transaction_root, targets)?;
-    let stage = tempfile::Builder::new().prefix(".into-md-txn-").tempdir_in(&transaction_root)?;
-    let mut staged = Vec::with_capacity(targets.len());
-    for (index, (_, bytes)) in targets.iter().enumerate() {
-        hook("stage", index)?;
-        let mut file = context
-            .temporary_file_in(stage.path(), &format!("stage-{index}"))
-            .map_err(CliError::from)?;
-        file.write_all_checked(bytes).map_err(CliError::from)?;
-        hook("fsync", index)?;
-        file.sync_all().map_err(CliError::from)?;
-        staged.push(file.persist());
-    }
-    sync_directory(stage.path())?;
-
-    let mut backups = Vec::new();
-    let mut installed = Vec::new();
-    for (index, ((target, _), staged_path)) in targets.iter().zip(&staged).enumerate() {
-        if let Err(error) = context.checkpoint().map_err(CliError::from) {
-            rollback_output_set(&installed, &backups);
-            return Err(error);
-        }
-        if let Err(error) = hook("commit", index) {
-            rollback_output_set(&installed, &backups);
-            return Err(error);
-        }
-        if let Some(parent) = target.parent() {
-            if let Err(error) = fs::create_dir_all(parent).map_err(CliError::from) {
-                rollback_output_set(&installed, &backups);
-                return Err(error);
-            }
-            if let Err(error) = reject_symlink_components(parent) {
-                rollback_output_set(&installed, &backups);
-                return Err(error);
-            }
-        }
-        if target.exists() {
-            if conflict != ConflictPolicy::Overwrite {
-                rollback_output_set(&installed, &backups);
-                return Err(CliError::new(
-                    ExitClass::Io,
-                    if index == 0 { "outputConflict" } else { "assetConflict" },
-                    format!("output appeared after preflight: {}", target.display()),
-                ));
-            }
-            let backup = stage.path().join(format!("backup-{index}"));
-            if let Err(error) = fs::rename(target, &backup) {
-                rollback_output_set(&installed, &backups);
-                return Err(error.into());
-            }
-            backups.push((target.clone(), backup));
-        }
-        if let Err(error) = fs::rename(staged_path, target) {
-            rollback_output_set(&installed, &backups);
-            return Err(error.into());
-        }
-        installed.push(target.clone());
-        if let Err(error) = sync_parent(target) {
-            rollback_output_set(&installed, &backups);
-            return Err(error);
-        }
-    }
-    for (_, backup) in backups {
-        fs::remove_file(backup)?;
-    }
-    sync_directory(stage.path())?;
-    Ok(())
-}
-
-fn rollback_output_set(installed: &[PathBuf], backups: &[(PathBuf, PathBuf)]) {
-    for target in installed.iter().rev() {
-        let _ = fs::remove_file(target);
-    }
-    for (target, backup) in backups.iter().rev() {
-        let _ = fs::rename(backup, target);
-        let _ = sync_parent(target);
-    }
-}
-
-fn common_existing_ancestor(targets: &[(PathBuf, &[u8])]) -> Result<PathBuf, CliError> {
-    let first = targets.first().ok_or_else(|| CliError::internal("empty output transaction"))?;
-    let mut candidate = first.0.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    while !candidate.exists() {
-        candidate = candidate
-            .parent()
-            .ok_or_else(|| {
-                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
-            })?
-            .to_path_buf();
-    }
-    Ok(candidate)
-}
-
-fn reject_symlink_components(path: &Path) -> Result<(), CliError> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        current.push(component);
-        if current.exists() && fs::symlink_metadata(&current)?.file_type().is_symlink() {
-            return Err(CliError::new(
-                ExitClass::Io,
-                "symlinkDenied",
-                format!("output path contains a symbolic link: {}", current.display()),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn ensure_same_filesystem(root: &Path, targets: &[(PathBuf, &[u8])]) -> Result<(), CliError> {
-    use std::os::unix::fs::MetadataExt as _;
-    let device = fs::metadata(root)?.dev();
-    for (target, _) in targets {
-        let mut ancestor = target.parent().unwrap_or_else(|| Path::new("."));
-        while !ancestor.exists() {
-            ancestor = ancestor.parent().ok_or_else(|| {
-                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
-            })?;
-        }
-        if fs::metadata(ancestor)?.dev() != device {
-            return Err(CliError::new(
-                ExitClass::Io,
-                "crossFilesystemTransaction",
-                "an output set cannot be committed across filesystems",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_same_filesystem(root: &Path, targets: &[(PathBuf, &[u8])]) -> Result<(), CliError> {
-    let root = root.canonicalize()?;
-    let root_prefix = root.components().next();
-    for (target, _) in targets {
-        let mut ancestor = target.parent().unwrap_or_else(|| Path::new("."));
-        while !ancestor.exists() {
-            ancestor = ancestor.parent().ok_or_else(|| {
-                CliError::new(ExitClass::Io, "outputPathUnsupported", "no existing output ancestor")
-            })?;
-        }
-        let canonical = ancestor.canonicalize()?;
-        if canonical.components().next() != root_prefix {
-            return Err(CliError::new(
-                ExitClass::Io,
-                "crossFilesystemTransaction",
-                "an output set cannot be committed across filesystem roots",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_parent(path: &Path) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), CliError> {
-    fs::File::open(path)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> Result<(), CliError> {
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), CliError> {
-    Ok(())
 }
 
 /// Write a primary artifact using the requested conflict policy.
@@ -438,9 +197,15 @@ pub fn write_file(
     requested: &Path,
     bytes: &[u8],
     conflict: ConflictPolicy,
+    context: &ExecutionContext,
 ) -> Result<WriteOutcome, CliError> {
     let (path, renamed) = resolve_conflict(requested, conflict)?;
-    write_exact_file(&path, bytes, conflict == ConflictPolicy::Overwrite)?;
+    transaction::prepare(
+        &[Target { path: path.clone(), bytes }],
+        conflict == ConflictPolicy::Overwrite,
+        context,
+    )?
+    .commit()?;
     Ok(WriteOutcome { path, renamed })
 }
 
@@ -461,11 +226,15 @@ pub fn write_preflighted_file(
 }
 
 /// Write a versioned JSON report atomically.
-pub fn write_report(path: &Path, report: &BatchReport) -> Result<WriteOutcome, CliError> {
+pub fn write_report(
+    path: &Path,
+    report: &BatchReport,
+    context: &ExecutionContext,
+) -> Result<WriteOutcome, CliError> {
     let json = report
         .to_pretty_json()
         .map_err(|error| CliError::internal(format!("serialize batch report DTO: {error}")))?;
-    write_file(path, &json_with_newline(json), ConflictPolicy::Overwrite)
+    write_file(path, &json_with_newline(json), ConflictPolicy::Overwrite, context)
 }
 
 fn json_with_newline(json: String) -> Vec<u8> {
@@ -610,6 +379,7 @@ fn resolve_conflict(
     ))
 }
 
+#[cfg(test)]
 fn write_exact_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), CliError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
@@ -671,6 +441,13 @@ mod tests {
             diagnostics: vec![],
             provenance: vec![],
         }
+    }
+
+    fn output_context() -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        )
     }
 
     fn image_result(prefix: &str) -> ConversionResult {
@@ -865,7 +642,7 @@ mod tests {
     #[test]
     fn report_writer_uses_the_public_batch_contract() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("report.json");
+        let path = directory.path().canonicalize().unwrap().join("report.json");
         let report = BatchReport::try_new(vec![BatchItemReport {
             input: "example.txt".into(),
             output: Some("example.md".into()),
@@ -877,7 +654,7 @@ mod tests {
             warnings: vec![],
         }])
         .unwrap();
-        write_report(&path, &report).unwrap();
+        write_report(&path, &report, &output_context()).unwrap();
         let json = fs::read_to_string(path).unwrap();
         assert_eq!(BatchReport::from_json(&json).unwrap(), report);
     }
@@ -1040,118 +817,50 @@ mod tests {
         let root = std::env::temp_dir().join(format!("into-md-output-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         let requested = root.join("document.md");
         fs::write(&requested, "existing").unwrap();
-        let outcome = write_file(&requested, b"new", ConflictPolicy::Rename).unwrap();
+        let outcome =
+            write_file(&requested, b"new", ConflictPolicy::Rename, &output_context()).unwrap();
         assert_eq!(outcome.path, root.join("document-1.md"));
         assert!(outcome.renamed);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn staged_and_commit_failures_leave_old_output_set_intact() {
-        let root = tempfile::tempdir().unwrap();
-        let canonical_root = root.path().canonicalize().unwrap();
-        let primary = canonical_root.join("document.md");
-        let asset = canonical_root.join("assets/image.png");
-        fs::create_dir_all(asset.parent().unwrap()).unwrap();
-        fs::write(&primary, b"old-document").unwrap();
-        fs::write(&asset, b"old-asset").unwrap();
-        let targets = vec![
-            (primary.clone(), b"new-document".as_slice()),
-            (asset.clone(), b"new-asset".as_slice()),
-        ];
-        let context = ExecutionContext::new(
-            into_markdown::ExecutionOptions::default(),
-            into_markdown::ResourceLimits::default(),
-        );
+    fn stdout_assets_use_the_shared_transaction_for_commit_and_abort() {
+        let temporary = tempfile::tempdir().unwrap();
+        let assets = temporary.path().canonicalize().unwrap().join("assets");
+        fs::create_dir(&assets).unwrap();
+        let result = empty_result();
+        let planned =
+            plan_asset_writes(&result, &assets, AssetModeArg::Extract, ConflictPolicy::Overwrite)
+                .unwrap();
+        let target = planned[0].1.clone();
+        fs::write(&target, b"old").unwrap();
+        let context = output_context();
 
-        let error = commit_output_set_with_hook(
-            &targets,
+        let staged = stage_assets(
+            &result,
+            &assets,
+            AssetModeArg::Extract,
             ConflictPolicy::Overwrite,
             &context,
-            |phase, index| {
-                if phase == "stage" && index == 1 {
-                    Err(CliError::new(ExitClass::Io, "injectedStageFailure", "test"))
-                } else {
-                    Ok(())
-                }
-            },
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "injectedStageFailure");
-        assert_eq!(fs::read(&primary).unwrap(), b"old-document");
-        assert_eq!(fs::read(&asset).unwrap(), b"old-asset");
+        .unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        staged.commit().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), [1, 2, 3]);
 
-        let error = commit_output_set_with_hook(
-            &targets,
+        let staged = stage_assets(
+            &result,
+            &assets,
+            AssetModeArg::Extract,
             ConflictPolicy::Overwrite,
             &context,
-            |phase, index| {
-                if phase == "commit" && index == 1 {
-                    Err(CliError::new(ExitClass::Io, "injectedCommitFailure", "test"))
-                } else {
-                    Ok(())
-                }
-            },
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "injectedCommitFailure");
-        assert_eq!(fs::read(primary).unwrap(), b"old-document");
-        assert_eq!(fs::read(asset).unwrap(), b"old-asset");
-
-        let limits = into_markdown::ResourceLimits { max_temporary_bytes: 5, ..Default::default() };
-        let limited = ExecutionContext::new(into_markdown::ExecutionOptions::default(), limits);
-        let error = commit_output_set(&targets, ConflictPolicy::Overwrite, &limited).unwrap_err();
-        assert_eq!(error.code(), "resourceLimit");
-
-        let token = into_markdown::CancellationToken::new();
-        let cancelled = ExecutionContext::new(
-            into_markdown::ExecutionOptions { cancellation: token.clone(), ..Default::default() },
-            into_markdown::ResourceLimits::default(),
-        );
-        token.cancel();
-        let error = commit_output_set(&targets, ConflictPolicy::Overwrite, &cancelled).unwrap_err();
-        assert_eq!(error.code(), "cancelled");
-        assert_eq!(fs::read(&targets[0].0).unwrap(), b"old-document");
-        assert_eq!(fs::read(&targets[1].0).unwrap(), b"old-asset");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_swap_is_rejected_and_rolls_back_primary() {
-        use std::os::unix::fs::symlink;
-
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path().canonicalize().unwrap();
-        let primary = root.join("document.md");
-        let asset_parent = root.join("assets");
-        let attacker = root.join("attacker");
-        fs::create_dir_all(&asset_parent).unwrap();
-        fs::create_dir_all(&attacker).unwrap();
-        fs::write(&primary, b"old").unwrap();
-        let asset = asset_parent.join("image.png");
-        let targets =
-            vec![(primary.clone(), b"new".as_slice()), (asset.clone(), b"image".as_slice())];
-        let context = ExecutionContext::new(
-            into_markdown::ExecutionOptions::default(),
-            into_markdown::ResourceLimits::default(),
-        );
-        let error = commit_output_set_with_hook(
-            &targets,
-            ConflictPolicy::Overwrite,
-            &context,
-            |phase, index| {
-                if phase == "commit" && index == 1 {
-                    fs::remove_dir(&asset_parent)?;
-                    symlink(&attacker, &asset_parent)?;
-                }
-                Ok(())
-            },
-        )
-        .unwrap_err();
-        assert_eq!(error.code(), "symlinkDenied");
-        assert_eq!(fs::read(primary).unwrap(), b"old");
-        assert!(!attacker.join("image.png").exists());
+        .unwrap();
+        staged.abort().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), [1, 2, 3]);
     }
 }

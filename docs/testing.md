@@ -84,9 +84,13 @@ Bundle 权限契约直接检查 central directory 中普通文件 `0100644` 与�
 
 资源规划测试还覆盖相同字节的跨 ID 去重、MIME 冲突、完整摘要、危险 URI prefix、
 悬空引用、单项与总量预算，以及 Windows reserved/ADS、大小写折叠和 Unicode 路径。
-输出集合以故障注入覆盖第 N 个 stage、fsync、commit/rename 竞态与 overwrite 回滚；
-任何失败都断言旧集合完整保留且事务 stage 不泄漏。跨文件系统与 symlink swap 测试
-必须在首次目标 mutation 前得到稳定拒绝。bundle 重复运行应逐字节一致，manifest
+输出集合以故障注入覆盖第 N 个 stage、fsync、每个持久 journal/backup/install phase、
+commit/rename 竞态、取消、临时预算与 overwrite 回滚；每个 phase 模拟进程终止后由
+新管理器实例恢复，并断言只出现完整旧集合或完整新集合。回滚失败测试必须把已安装
+目标替换为非空目录，验证稳定 `rollbackFailed`、唯一旧备份和 journal 仍在，移除阻塞
+后下一次恢复可以完成。跨文件系统、active lock、恶意 journal/nonce/root/member、
+目录/FIFO/设备/reparse point 与 symlink swap 均需 fail closed，且不递归删除非管理器
+路径。bundle 重复运行应逐字节一致，manifest
 schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测试。
 
 执行模型的契约测试还覆盖阶段顺序与单调进度、慢速或 panic 的监听器、pending

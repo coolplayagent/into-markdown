@@ -55,7 +55,12 @@
 - `asset_uri_prefix` 仅接受 portable 相对 URI path；拒绝绝对路径、scheme-relative、
   query、fragment、控制字符与 scheme。`data:` 仅由 embed renderer 内部生成。
 - CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
-  stage 和 fsync。提交中断会反向恢复备份，避免 Markdown 指向旧资源或半成品。
+  stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
+  FIFO、设备、符号链接和 Windows reparse point 均拒绝。
+- 输出事务只恢复带随机 nonce、固定签名、版本、精确 root/相对目标清单和排他锁的
+  管理器目录，并限制单次扫描数量。journal generation 的每次转换都在继续文件变更前
+  持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与
+  备份并返回 `rollbackFailed`，不会递归删除目录或触碰相似名称路径。
 - bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理
   映射；ZIP 条目与 manifest path 双向一致，portable path 比较包含大小写折叠规则。
 取消与总 timeout 同样贯穿每个 SPI；长循环和外部服务等待必须设置协作检查点，不能

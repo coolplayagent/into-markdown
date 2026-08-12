@@ -94,9 +94,20 @@ data URI 只能由渲染器从已校验 MIME 与字节内部生成。`embed` 只
 生成 base64 data URI；`omit` 只保留 alt 文本，但仍验证引用存在。
 
 CLI 把主产物和所有去重后的资源视为一个输出集合：完整预检后，在同一文件系统的
-事务目录写完并 fsync 全部 stage 文件，再提交目标。`overwrite` 会先把旧文件移入
-事务备份，任一 rename 或目录同步失败都会反向恢复；`rename` 与 `error` 不覆盖
-竞态产生的文件。跨文件系统、符号链接或无法安全核验的路径在任何目标变更前拒绝。
+随机 nonce 事务目录写完并 fsync 全部 stage 文件。事务目录包含带签名、版本、root、
+严格相对目标清单、内容摘要和递增 generation 的持久 journal；两个 journal 槽交替
+写入并分别 fsync，状态转换完成后再同步目录。进程启动后的相关输出会在同一 root
+内有界扫描精确的管理器目录，只恢复签名、nonce、root 和成员清单全部匹配且能取得
+排他锁的事务；不会推测或清理相似名称目录。
+
+提交前再次以 no-follow handle 核验每个既有目标为 regular file 且身份未变。
+`overwrite` 先把旧文件移入事务备份，再安装 stage；journal 尚未进入 `committed`
+时恢复旧集合，进入 `committed` 后验证完整新集合并清理备份。回滚会继续处理其它安全
+条目并汇总错误；如果任一恢复操作失败，返回 `rollbackFailed`，保留 journal 与尚存
+备份供下一次受限恢复，绝不由临时目录析构删除唯一副本。只有结果已经完整恢复或完成
+后，事务目录才会原子移出恢复命名空间再清理。`rename` 与 `error` 不覆盖竞态产生的
+文件；跨文件系统、符号链接、目录、FIFO、设备、Windows reparse point 或无法安全
+核验的路径在任何目标变更前拒绝。
 stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EPIPE 成功语义）后才
 提交；非 EPIPE 写失败丢弃 stage，已由操作系统接收的 stdout 前缀不能撤回。
 

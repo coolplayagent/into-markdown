@@ -26,6 +26,12 @@ tempfile.workspace = true
 url.workspace = true
 zip.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winapi-util.workspace = true
+
 [dev-dependencies]
 pulldown-cmark = "0.13.0"
 

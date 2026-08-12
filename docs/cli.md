@@ -109,8 +109,12 @@ into-md <INPUT...>
   或任何资源写入前预检全部非空资源。为了防止 Markdown 链接因改名漂移，资源目标
   已存在时 `rename` 安全降级为 `assetConflict`；`overwrite` 才会原子替换稳定目标。
   `rename` 与 `error` 的最终写入使用原子 no-clobber；预检后出现的竞态文件会令该项
-  失败而不会被覆盖。主产物与全部资源完整 stage、fsync 后作为一个集合提交；失败会
-  回滚已提交目标，`overwrite` 不产生新旧混合集合。跨文件系统或符号链接路径提前拒绝。
+  失败而不会被覆盖。主产物与全部资源完整 stage、fsync 并写入持久事务 journal 后
+  作为一个集合提交；相关输出开始前会受限恢复中断事务。失败会恢复完整旧集合，恢复
+  本身失败则返回 `rollbackFailed` 并保留 journal/备份，`overwrite` 不产生新旧混合
+  集合。stdout 的外部资源使用同一事务，先 stage，stdout 成功或 EPIPE 后提交；非
+  EPIPE 失败不落资源，但已经写出的 stdout 字节无法撤回。跨文件系统、符号链接、
+  非 regular file 或 Windows reparse point 路径提前拒绝。
 - CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
   规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
   目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定
