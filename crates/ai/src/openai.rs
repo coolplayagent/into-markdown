@@ -1496,18 +1496,12 @@ fn read_response(
     } else {
         compressed
     };
-    let error_status = matches!(status, 401 | 403 | 404 | 408 | 409 | 429 | 500..=599);
     let body_or_framing =
         chunked || content_length.is_some() || saw_content_encoding || !body.is_empty();
-    if (200..=299).contains(&status) && body_or_framing && !json {
+    if matches!(status, 204 | 304) && body_or_framing {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    if error_status && body_or_framing && !json {
-        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
-    }
-    if matches!(status, 204 | 304)
-        && (chunked || content_length.is_some() || saw_content_encoding || !body.is_empty())
-    {
+    if !matches!(status, 204 | 304) && body_or_framing && !json {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
     Ok(HttpResponse { status, retry_after, body })
@@ -2877,6 +2871,12 @@ mod tests {
             b"HTTP/1.1 429 Slow Down\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
             b"HTTP/1.1 500 Server Error\r\nContent-Encoding: identity\r\n\r\n",
             b"HTTP/1.1 204 No Content\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 302 Found\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 302 Found\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 422 Unprocessable Content\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 422 Unprocessable Content\r\nContent-Length: 2\r\n\r\n{}",
         ];
         for raw in cases {
             assert_eq!(
@@ -2898,6 +2898,16 @@ mod tests {
         let no_body = parse_raw_response(b"HTTP/1.1 401 Unauthorized\r\n\r\n").unwrap();
         assert_eq!(no_body.status, 401);
         assert!(no_body.body.is_empty());
+        for (status, expected) in
+            [("302 Found", 302), ("400 Bad Request", 400), ("422 Unprocessable Content", 422)]
+        {
+            let raw = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}"
+            );
+            let response = parse_raw_response(raw.as_bytes()).unwrap();
+            assert_eq!(response.status, expected);
+            assert_eq!(response.body, b"{}");
+        }
     }
 
     #[test]
