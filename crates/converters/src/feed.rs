@@ -10,7 +10,6 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use url::Url;
 
@@ -41,6 +40,9 @@ thread_local! {
     static FEED_XHTML_ESCAPES: Cell<usize> = const { Cell::new(0) };
     static FEED_XHTML_ESCAPE_PEAK: Cell<usize> = const { Cell::new(0) };
     static FEED_XHTML_MEMORY_PEAK: Cell<usize> = const { Cell::new(0) };
+    static FEED_TARGET_ATTRIBUTE: Cell<usize> = const { Cell::new(usize::MAX) };
+    static FEED_TARGET_ATTRIBUTE_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+    static FEED_DIAGNOSTIC_PUBLICATION_SWAPS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn record_feed_xml_object() {
@@ -51,6 +53,22 @@ fn record_feed_xml_object() {
 fn record_feed_xml_string() {
     #[cfg(test)]
     FEED_XML_STRINGS.with(|count| count.set(count.get() + 1));
+}
+
+fn record_feed_attribute_construction(index: usize) {
+    #[cfg(test)]
+    FEED_TARGET_ATTRIBUTE.with(|target| {
+        if target.get() == index {
+            FEED_TARGET_ATTRIBUTE_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
+        }
+    });
+    #[cfg(not(test))]
+    let _ = index;
+}
+
+fn record_diagnostic_publication_swap() {
+    #[cfg(test)]
+    FEED_DIAGNOSTIC_PUBLICATION_SWAPS.with(|count| count.set(count.get() + 1));
 }
 
 fn record_feed_url_parse() {
@@ -89,6 +107,25 @@ fn reset_feed_xml_hooks() {
     FEED_XHTML_ESCAPES.with(|count| count.set(0));
     FEED_XHTML_ESCAPE_PEAK.with(|peak| peak.set(0));
     FEED_XHTML_MEMORY_PEAK.with(|peak| peak.set(0));
+    FEED_TARGET_ATTRIBUTE.with(|target| target.set(usize::MAX));
+    FEED_TARGET_ATTRIBUTE_CONSTRUCTIONS.with(|count| count.set(0));
+    FEED_DIAGNOSTIC_PUBLICATION_SWAPS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn watch_feed_attribute(index: usize) {
+    FEED_TARGET_ATTRIBUTE.with(|target| target.set(index));
+    FEED_TARGET_ATTRIBUTE_CONSTRUCTIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn target_attribute_constructions() -> usize {
+    FEED_TARGET_ATTRIBUTE_CONSTRUCTIONS.with(Cell::get)
+}
+
+#[cfg(test)]
+fn diagnostic_publication_swaps() -> usize {
+    FEED_DIAGNOSTIC_PUBLICATION_SWAPS.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -806,6 +843,78 @@ fn budgeted_copy(value: &str, budget: &mut FeedBudget) -> Result<String, Convers
     Ok(output)
 }
 
+fn budgeted_concat(
+    prefix: &str,
+    value: &str,
+    budget: &mut FeedBudget,
+) -> Result<String, ConversionError> {
+    let length = prefix
+        .len()
+        .checked_add(value.len())
+        .ok_or_else(|| limit("max_memory_bytes", "feed string length overflowed"))?;
+    let mut output = String::new();
+    budget.aggregate.reserve_string_capacity(&mut output, length)?;
+    record_feed_xml_string();
+    output.push_str(prefix);
+    output.push_str(value);
+    Ok(output)
+}
+
+fn decimal_digits(mut value: usize) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+fn budgeted_numbered(
+    prefix: &str,
+    number: usize,
+    minimum_digits: usize,
+    budget: &mut FeedBudget,
+) -> Result<String, ConversionError> {
+    let digits = decimal_digits(number).max(minimum_digits);
+    let length = prefix
+        .len()
+        .checked_add(digits)
+        .ok_or_else(|| limit("max_memory_bytes", "numbered feed string length overflowed"))?;
+    let mut output = String::new();
+    budget.aggregate.reserve_string_capacity(&mut output, length)?;
+    record_feed_xml_string();
+    write!(output, "{prefix}{number:0minimum_digits$}").map_err(|_| ConversionError::Internal {
+        detail: "numbered feed string formatting failed".into(),
+    })?;
+    debug_assert_eq!(output.len(), length);
+    Ok(output)
+}
+
+fn replace_counted_string(
+    destination: &mut String,
+    replacement: String,
+    old_bytes: usize,
+    new_bytes: usize,
+    budget: &mut FeedBudget,
+) -> Result<(), ConversionError> {
+    if let Err(error) = budget.aggregate.replacement_output_growth(old_bytes, new_bytes) {
+        let replacement_capacity = replacement.capacity();
+        drop(replacement);
+        budget.aggregate.release_temporary_capacity(replacement_capacity)?;
+        return Err(error);
+    }
+    let old_capacity = destination.capacity();
+    if let Err(error) = budget.aggregate.validate_temporary_capacity_release(old_capacity) {
+        let replacement_capacity = replacement.capacity();
+        drop(replacement);
+        budget.aggregate.release_temporary_capacity(replacement_capacity)?;
+        return Err(error);
+    }
+    let old = std::mem::replace(destination, replacement);
+    drop(old);
+    budget.aggregate.release_temporary_capacity(old_capacity)
+}
+
 /// Cooperative workspace bound for the pinned `url` parser. The persistent
 /// normalized URL is accounted separately at its actual `String` capacity.
 /// `url` 2.5.4 stores one serialization plus component/range tables; the 16x
@@ -874,7 +983,7 @@ fn attributes_inner(
     context: &ExecutionContext,
 ) -> Result<FeedAttributes, ConversionError> {
     let mut output = FeedAttributes::default();
-    for attribute in element.attributes() {
+    for (attribute_index, attribute) in element.attributes().enumerate() {
         if output.0.len() >= MAX_FEED_ATTRIBUTES_PER_ELEMENT {
             return Err(limit(
                 "feed_attributes",
@@ -914,6 +1023,7 @@ fn attributes_inner(
         }
         budget.aggregate.reserve_vec(&mut output.0, 1)?;
         let raw = budgeted_copy(raw, budget)?;
+        record_feed_attribute_construction(attribute_index + 1);
         record_feed_xml_object();
         output.0.push(FeedAttribute { raw, namespace, local, value });
     }
@@ -957,12 +1067,17 @@ fn xml_base(
     budget: &mut FeedBudget,
     context: &ExecutionContext,
 ) -> Result<Option<String>, ConversionError> {
+    let mut local_diagnostics = Vec::new();
     let transaction = budget.aggregate.transaction_snapshot();
-    let diagnostic_len = diagnostics.len();
-    match xml_base_inner(attributes, inherited, diagnostics, budget, context) {
+    let result = xml_base_inner(attributes, inherited, &mut local_diagnostics, budget, context)
+        .and_then(|base| {
+            publish_diagnostics(diagnostics, &mut local_diagnostics, budget)?;
+            Ok(base)
+        });
+    match result {
         Ok(base) => Ok(base),
         Err(error) => {
-            diagnostics.truncate(diagnostic_len);
+            drop(local_diagnostics);
             budget.aggregate.rewind(transaction)?;
             Err(error)
         }
@@ -1031,35 +1146,82 @@ fn push_diagnostic_parts(
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
     let transaction = budget.aggregate.transaction_snapshot();
-    let original_len = diagnostics.len();
+    let mut local = Vec::new();
     let result = (|| {
         budget.aggregate.begin_feed_diagnostic(code.len(), message.len())?;
-        budget.aggregate.reserve_vec(diagnostics, 1)?;
+        budget.aggregate.reserve_vec(&mut local, 1)?;
         let code = budgeted_copy(code, budget)?;
         let message = budgeted_copy(message, budget)?;
         record_feed_xml_object();
-        diagnostics.push(Diagnostic { code, severity, message, locator });
+        local.push(Diagnostic { code, severity, message, locator });
+        publish_diagnostics(diagnostics, &mut local, budget)?;
         Ok(())
     })();
     if let Err(error) = result {
-        diagnostics.truncate(original_len);
+        drop(local);
         budget.aggregate.rewind(transaction)?;
         return Err(error);
     }
     Ok(())
 }
 
-/// Move a diagnostic already charged by the nested HTML helper into the feed
-/// result. Only the destination vector capacity and any caller-side string
-/// replacement are additional allocations; the diagnostic object itself must
-/// not consume the aggregate object ceiling twice.
-fn push_precharged_diagnostic(
-    diagnostics: &mut Vec<Diagnostic>,
-    diagnostic: Diagnostic,
+/// Publish a fully-built local transaction while leaving the destination
+/// byte-for-byte unchanged until every fallible step has succeeded.
+///
+/// Both the destination and local capacities were reserved through the shared
+/// feed budget. A replacement vector is reserved while they remain live, so
+/// the lease covers the allocator peak. After the release amount is validated,
+/// `swap` and `append` cannot allocate: the replacement already has room for
+/// every element. Only then are the two superseded allocations dropped and
+/// their exact capacities released. An allocation failure therefore preserves
+/// the destination's pointer, length, contents, and capacity for a retry.
+fn publish_diagnostics(
+    destination: &mut Vec<Diagnostic>,
+    local: &mut Vec<Diagnostic>,
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
-    budget.aggregate.reserve_vec(diagnostics, 1)?;
-    diagnostics.push(diagnostic);
+    if local.is_empty() {
+        return Ok(());
+    }
+    let total = destination
+        .len()
+        .checked_add(local.len())
+        .ok_or_else(|| limit("max_memory_bytes", "diagnostic publication length overflowed"))?;
+    let old_capacity = destination
+        .capacity()
+        .checked_mul(std::mem::size_of::<Diagnostic>())
+        .ok_or_else(|| limit("max_memory_bytes", "diagnostic capacity overflowed"))?;
+    let local_capacity = local
+        .capacity()
+        .checked_mul(std::mem::size_of::<Diagnostic>())
+        .ok_or_else(|| limit("max_memory_bytes", "local diagnostic capacity overflowed"))?;
+    let released = old_capacity
+        .checked_add(local_capacity)
+        .ok_or_else(|| limit("max_memory_bytes", "diagnostic release overflowed"))?;
+
+    let allocation = budget.aggregate.transaction_snapshot();
+    let mut replacement = Vec::new();
+    if let Err(error) = budget.aggregate.reserve_vec(&mut replacement, total) {
+        drop(replacement);
+        budget.aggregate.rewind(allocation)?;
+        return Err(error);
+    }
+    if let Err(error) = budget.aggregate.validate_temporary_capacity_release(released) {
+        drop(replacement);
+        budget.aggregate.rewind(allocation)?;
+        return Err(error);
+    }
+
+    // Publication starts here. The replacement capacity is at least `total`,
+    // so these moves cannot allocate or fail.
+    record_diagnostic_publication_swap();
+    std::mem::swap(destination, &mut replacement);
+    destination.append(&mut replacement);
+    destination.append(local);
+    drop(replacement);
+    let empty_local = std::mem::take(local);
+    drop(empty_local);
+    budget.aggregate.release_temporary_capacity(released)?;
     Ok(())
 }
 
@@ -1511,11 +1673,19 @@ fn serialize_xhtml(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<String, ConversionError> {
     let transaction = budget.aggregate.transaction_snapshot();
-    let diagnostic_len = diagnostics.len();
-    match serialize_xhtml_inner(fragment, inherited_base, budget, context, diagnostics) {
-        Ok(output) => Ok(output),
+    let mut local_diagnostics = Vec::new();
+    match serialize_xhtml_inner(fragment, inherited_base, budget, context, &mut local_diagnostics) {
+        Ok(output) => {
+            if let Err(error) = publish_diagnostics(diagnostics, &mut local_diagnostics, budget) {
+                drop(output);
+                drop(local_diagnostics);
+                budget.aggregate.rewind(transaction)?;
+                return Err(error);
+            }
+            Ok(output)
+        }
         Err(error) => {
-            diagnostics.truncate(diagnostic_len);
+            drop(local_diagnostics);
             budget.aggregate.rewind(transaction)?;
             Err(error)
         }
@@ -1748,40 +1918,42 @@ fn canonical_link(
     budget: &mut FeedBudget,
 ) -> Result<Option<String>, ConversionError> {
     let transaction = budget.aggregate.transaction_snapshot();
-    let diagnostic_len = diagnostics.len();
-    let value = value.trim();
-    let workspace = url_workspace_bound(value, base)?;
-    budget.aggregate.prepay_parser_memory(workspace)?;
-    record_feed_url_parse();
-    let parsed = Url::parse(value).ok().or_else(|| Url::parse(base?).ok()?.join(value).ok());
-    let valid = parsed.filter(|url| {
-        matches!(url.scheme(), "http" | "https")
-            && url.host_str().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
-            && !url.as_str().chars().any(char::is_control)
-    });
-    let result = if let Some(url) = valid.as_ref() {
-        budgeted_copy(url.as_str(), budget).map(Some)
-    } else {
-        push_diagnostic_parts(
-            diagnostics,
-            DiagnosticSeverity::Warning,
-            "feed.linkRejected",
-            "unsafe or unresolved feed link was omitted; no network access occurred",
-            None,
-            budget,
-        )
-        .map(|()| None)
-    };
-    drop(valid);
+    let mut local_diagnostics = Vec::new();
+    let result = (|| {
+        let value = value.trim();
+        let workspace = url_workspace_bound(value, base)?;
+        budget.aggregate.prepay_parser_memory(workspace)?;
+        record_feed_url_parse();
+        let parsed = Url::parse(value).ok().or_else(|| Url::parse(base?).ok()?.join(value).ok());
+        let valid = parsed.filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && !url.as_str().chars().any(char::is_control)
+        });
+        let output = if let Some(url) = valid.as_ref() {
+            Some(budgeted_copy(url.as_str(), budget)?)
+        } else {
+            push_diagnostic_parts(
+                &mut local_diagnostics,
+                DiagnosticSeverity::Warning,
+                "feed.linkRejected",
+                "unsafe or unresolved feed link was omitted; no network access occurred",
+                None,
+                budget,
+            )?;
+            None
+        };
+        drop(valid);
+        budget.aggregate.release_parser_memory(workspace)?;
+        publish_diagnostics(diagnostics, &mut local_diagnostics, budget)?;
+        Ok(output)
+    })();
     match result {
-        Ok(output) => {
-            budget.aggregate.release_parser_memory(workspace)?;
-            Ok(output)
-        }
+        Ok(output) => Ok(output),
         Err(error) => {
-            diagnostics.truncate(diagnostic_len);
+            drop(local_diagnostics);
             budget.aggregate.rewind(transaction)?;
             Err(error)
         }
@@ -1806,49 +1978,14 @@ fn build_output(
         parsed.budget.aggregate.reserve_vec(&mut authors, 1)?;
         authors.push(author);
     }
-    parsed.budget.aggregate.charge_memory(256)?;
     let mut document = Document {
         metadata: DocumentMetadata {
             title: metadata_title,
             authors,
-            properties: BTreeMap::from([
-                (
-                    "feed.kind".into(),
-                    match parsed.kind {
-                        FeedKind::Rss => "rss2",
-                        FeedKind::Atom => "atom1",
-                    }
-                    .into(),
-                ),
-                ("feed.order".into(), "source".into()),
-            ]),
+            ..DocumentMetadata::default()
         },
         ..Document::default()
     };
-    if let Some(link) = parsed.link.take() {
-        parsed.budget.aggregate.charge_memory(link.target.len().saturating_add(32))?;
-        document.metadata.properties.insert("feed.link".into(), link.target);
-    }
-    if let Some(value) = parsed.updated.take() {
-        match parse_time(parsed.kind, &value) {
-            Ok(time) => {
-                parsed.budget.aggregate.charge_memory(time.len().saturating_add(64))?;
-                document.metadata.properties.insert("feed.updated".into(), time);
-            }
-            Err(detail) => {
-                parsed.budget.aggregate.charge_memory(value.len().saturating_add(64))?;
-                document.metadata.properties.insert("feed.updated.raw".into(), value);
-                push_diagnostic_parts(
-                    &mut parsed.diagnostics,
-                    DiagnosticSeverity::Warning,
-                    "feed.timeInvalid",
-                    &detail,
-                    None,
-                    &mut parsed.budget,
-                )?;
-            }
-        }
-    }
     push_diagnostic_parts(
         &mut parsed.diagnostics,
         DiagnosticSeverity::Info,
@@ -1857,7 +1994,7 @@ fn build_output(
         None,
         &mut parsed.budget,
     )?;
-    let mut seen = BTreeSet::new();
+    let mut seen = Vec::new();
     let mut assets = Vec::new();
     let mut node_index = 0_usize;
     let feed_locator = Entry {
@@ -1865,6 +2002,46 @@ fn build_output(
         end: parsed.decoded.source_range(parsed.decoded.text.len(), parsed.decoded.text.len()).1,
         ..Entry::default()
     };
+    if let Some(link) = parsed.link.take() {
+        push_labeled(
+            &mut document.blocks,
+            &mut node_index,
+            "Feed link",
+            &link.target,
+            &feed_locator,
+            &mut parsed.budget,
+        )?;
+    }
+    if let Some(value) = parsed.updated.take() {
+        match parse_time(parsed.kind, &value) {
+            Ok(time) => push_labeled(
+                &mut document.blocks,
+                &mut node_index,
+                "Feed updated",
+                &time,
+                &feed_locator,
+                &mut parsed.budget,
+            )?,
+            Err(detail) => {
+                push_diagnostic_parts(
+                    &mut parsed.diagnostics,
+                    DiagnosticSeverity::Warning,
+                    "feed.timeInvalid",
+                    &detail,
+                    None,
+                    &mut parsed.budget,
+                )?;
+                push_labeled(
+                    &mut document.blocks,
+                    &mut node_index,
+                    "Feed updated",
+                    &value,
+                    &feed_locator,
+                    &mut parsed.budget,
+                )?;
+            }
+        }
+    }
     if let Some(content) = title_content.filter(|content| content.kind != ContentType::Text) {
         append_content(
             "Title",
@@ -1896,8 +2073,7 @@ fn build_output(
     for (source_index, mut entry) in parsed.entries.into_iter().enumerate() {
         exec_context.checkpoint()?;
         let key = dedup_key(&entry, &mut parsed.budget)?;
-        parsed.budget.aggregate.charge_memory(key.len().saturating_add(64))?;
-        if !seen.insert(key.clone()) {
+        if seen.iter().any(|existing| existing == &key) {
             let duplicate_kind = key.split_once(':').map_or(key.as_str(), |(kind, _)| kind);
             let mut message = String::new();
             let message_capacity = 48_usize
@@ -1924,14 +2100,19 @@ fn build_output(
             let message_capacity = message.capacity();
             drop(message);
             parsed.budget.aggregate.release_temporary_capacity(message_capacity)?;
+            let key_capacity = key.capacity();
+            drop(key);
+            parsed.budget.aggregate.release_temporary_capacity(key_capacity)?;
             continue;
         }
+        parsed.budget.aggregate.reserve_vec(&mut seen, 1)?;
+        seen.push(key);
         let title_content = entry.title.take();
         let title = match title_content.as_ref() {
             Some(content) if content.kind == ContentType::Text => {
                 normalize_bounded(&content.value, &mut parsed.budget, exec_context)?
             }
-            _ => format!("Entry {}", source_index + 1),
+            _ => budgeted_numbered("Entry ", source_index + 1, 1, &mut parsed.budget)?,
         };
         push_node(
             &mut document.blocks,
@@ -2061,6 +2242,7 @@ fn build_output(
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_lines)]
 fn append_content(
     label: &str,
     content: Content,
@@ -2132,35 +2314,70 @@ fn append_content(
         )?;
         return Ok(());
     }
-    for mut diagnostic in output.diagnostics.drain(..) {
+    for diagnostic in &mut output.diagnostics {
         let old_code_len = diagnostic.code.len();
         let new_code_len = old_code_len.saturating_add("feed.".len());
-        budget.aggregate.replace_string(old_code_len, new_code_len)?;
-        diagnostic.code = format!("feed.{}", diagnostic.code);
+        let new_code = budgeted_concat("feed.", &diagnostic.code, budget)?;
+        replace_counted_string(&mut diagnostic.code, new_code, old_code_len, new_code_len, budget)?;
         diagnostic.locator = Some(entry_locator(entry));
-        push_precharged_diagnostic(diagnostics, diagnostic, budget)?;
     }
     let asset_offset = assets.len();
-    let mut asset_map = BTreeMap::new();
-    for (index, mut asset) in output.assets.drain(..).enumerate() {
-        let new_id_len = "feed-external-".len().saturating_add(6);
-        budget.aggregate.replace_string(asset.id.0.len(), new_id_len)?;
-        let new_id = AssetId(format!("feed-external-{:06}", asset_offset + index + 1));
-        let old = std::mem::replace(&mut asset.id, new_id);
-        budget.aggregate.temporary_string(asset.id.0.len())?;
-        budget
-            .aggregate
-            .memory
-            .charge(std::mem::size_of::<(AssetId, AssetId)>().saturating_add(48))?;
-        budget.aggregate.reserve_vec(assets, 1)?;
-        asset_map.insert(old, asset.id.clone());
-        assets.push(asset);
+    let mut asset_map: Vec<(AssetId, usize)> = Vec::new();
+    for (index, asset) in output.assets.iter_mut().enumerate() {
+        let number = asset_offset
+            .checked_add(index)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| limit("max_memory_bytes", "feed asset index overflowed"))?;
+        let new_id = budgeted_numbered("feed-external-", number, 6, budget)?;
+        let new_id_len = new_id.len();
+        let old_id_len = asset.id.0.len();
+        budget.aggregate.replacement_output_growth(old_id_len, new_id_len)?;
+        budget.aggregate.validate_temporary_capacity_release(asset.id.0.capacity())?;
+        let old = std::mem::replace(&mut asset.id, AssetId(new_id));
+        let old_capacity = old.0.capacity();
+        budget.aggregate.reserve_vec(&mut asset_map, 1)?;
+        asset_map.push((old, index));
+        // The old ID remains live in the lookup table until every node has
+        // been rewritten, so its capacity is released with that table below.
+        debug_assert_eq!(old_capacity, asset_map.last().map_or(0, |item| item.0.0.capacity()));
     }
+    for node in &mut output.document.blocks {
+        rewrite_node(node, &asset_map, &output.assets, node_index, entry, budget)?;
+    }
+    let asset_map_capacity = asset_map
+        .capacity()
+        .checked_mul(std::mem::size_of::<(AssetId, usize)>())
+        .and_then(|bytes| {
+            asset_map.iter().try_fold(bytes, |total, item| total.checked_add(item.0.0.capacity()))
+        })
+        .ok_or_else(|| limit("max_memory_bytes", "asset lookup capacity overflowed"))?;
+    drop(asset_map);
+    budget.aggregate.release_temporary_capacity(asset_map_capacity)?;
+
+    budget.aggregate.reserve_vec(assets, output.assets.len())?;
+    let output_asset_capacity = output
+        .assets
+        .capacity()
+        .checked_mul(std::mem::size_of::<Asset>())
+        .ok_or_else(|| limit("max_memory_bytes", "nested asset capacity overflowed"))?;
+    assets.append(&mut output.assets);
+    let old_assets = std::mem::take(&mut output.assets);
+    drop(old_assets);
+    budget.aggregate.release_temporary_capacity(output_asset_capacity)?;
+
     budget.aggregate.reserve_vec(blocks, output.document.blocks.len())?;
-    for mut node in output.document.blocks.drain(..) {
-        rewrite_node(&mut node, &asset_map, node_index, entry, budget)?;
-        blocks.push(node);
-    }
+    let output_block_capacity = output
+        .document
+        .blocks
+        .capacity()
+        .checked_mul(std::mem::size_of::<BlockNode>())
+        .ok_or_else(|| limit("max_memory_bytes", "nested block capacity overflowed"))?;
+    blocks.append(&mut output.document.blocks);
+    let old_blocks = std::mem::take(&mut output.document.blocks);
+    drop(old_blocks);
+    budget.aggregate.release_temporary_capacity(output_block_capacity)?;
+
+    publish_diagnostics(diagnostics, &mut output.diagnostics, budget)?;
     Ok(())
 }
 
@@ -2221,28 +2438,49 @@ fn inspect_asset_strings(asset: &Asset) -> (usize, usize) {
 
 fn rewrite_node(
     node: &mut BlockNode,
-    map: &BTreeMap<AssetId, AssetId>,
+    map: &[(AssetId, usize)],
+    rewritten_assets: &[Asset],
     index: &mut usize,
     entry: &Entry,
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
     *index += 1;
-    budget.aggregate.replace_string(node.id.0.len(), 11)?;
-    node.id = NodeId(format!("feed-{:06}", *index));
-    let provider_len =
-        PROVIDER_ID.len().saturating_add(1).saturating_add(node.provenance.provider.len());
-    budget.aggregate.replace_string(node.provenance.provider.len(), provider_len)?;
+    let new_id = budgeted_numbered("feed-", *index, 6, budget)?;
+    let old_id_len = node.id.0.len();
+    let new_id_len = new_id.len();
+    replace_counted_string(&mut node.id.0, new_id, old_id_len, new_id_len, budget)?;
+    let provider_prefix = budgeted_concat(PROVIDER_ID, "/", budget)?;
+    let provider = budgeted_concat(&provider_prefix, &node.provenance.provider, budget)?;
+    let provider_prefix_capacity = provider_prefix.capacity();
+    drop(provider_prefix);
+    budget.aggregate.release_temporary_capacity(provider_prefix_capacity)?;
+    let old_provider_len = node.provenance.provider.len();
+    let provider_len = provider.len();
+    replace_counted_string(
+        &mut node.provenance.provider,
+        provider,
+        old_provider_len,
+        provider_len,
+        budget,
+    )?;
     node.provenance = Provenance {
         kind: ProvenanceKind::NativeParser,
-        provider: format!("{PROVIDER_ID}/{}", node.provenance.provider),
+        provider: std::mem::take(&mut node.provenance.provider),
         locator: entry_locator(entry),
         confidence: node.provenance.confidence,
     };
     match &mut node.block {
         Block::Image { asset, .. } => {
-            if let Some(new) = map.get(asset) {
-                budget.aggregate.replace_string(asset.0.len(), new.0.len())?;
-                *asset = new.clone();
+            if let Some((_, asset_index)) = map.iter().find(|(old, _)| old == asset) {
+                let new = rewritten_assets.get(*asset_index).ok_or_else(|| {
+                    ConversionError::Internal {
+                        detail: "rewritten feed asset index is missing".into(),
+                    }
+                })?;
+                let replacement = budgeted_copy(&new.id.0, budget)?;
+                let old_len = asset.0.len();
+                let new_len = replacement.len();
+                replace_counted_string(&mut asset.0, replacement, old_len, new_len, budget)?;
             }
         }
         Block::Footnote { blocks: children, .. }
@@ -2250,13 +2488,13 @@ fn rewrite_node(
         | Block::Slide { blocks: children, .. }
         | Block::Sheet { blocks: children, .. } => {
             for child in children {
-                rewrite_node(child, map, index, entry, budget)?;
+                rewrite_node(child, map, rewritten_assets, index, entry, budget)?;
             }
         }
         Block::List { items, .. } => {
             for item in items {
                 for child in &mut item.blocks {
-                    rewrite_node(child, map, index, entry, budget)?;
+                    rewrite_node(child, map, rewritten_assets, index, entry, budget)?;
                 }
             }
         }
@@ -2264,7 +2502,7 @@ fn rewrite_node(
             for row in rows {
                 for cell in &mut row.cells {
                     for child in &mut cell.blocks {
-                        rewrite_node(child, map, index, entry, budget)?;
+                        rewrite_node(child, map, rewritten_assets, index, entry, budget)?;
                     }
                 }
             }
@@ -2400,12 +2638,10 @@ fn inspect_inlines(inlines: &[Inline], counts: &mut (usize, usize, usize, usize)
 
 fn dedup_key(entry: &Entry, budget: &mut FeedBudget) -> Result<String, ConversionError> {
     if let Some(id) = entry.id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        budget.aggregate.charge_memory(id.len().saturating_add(3))?;
-        return Ok(format!("id:{id}"));
+        return budgeted_concat("id:", id, budget);
     }
     if let Some(link) = &entry.link {
-        budget.aggregate.charge_memory(link.target.len().saturating_add(5))?;
-        return Ok(format!("link:{}", link.target));
+        return budgeted_concat("link:", &link.target, budget);
     }
     let mut digest = Sha256::new();
     for value in [
@@ -2420,8 +2656,16 @@ fn dedup_key(entry: &Entry, budget: &mut FeedBudget) -> Result<String, Conversio
         digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
         digest.update(bytes);
     }
-    budget.aggregate.charge_memory(71)?;
-    Ok(format!("digest:{:x}", digest.finalize()))
+    let mut output = String::new();
+    budget.aggregate.reserve_string_capacity(&mut output, 71)?;
+    record_feed_xml_string();
+    output.push_str("digest:");
+    for byte in digest.finalize() {
+        write!(output, "{byte:02x}").map_err(|_| ConversionError::Internal {
+            detail: "feed digest formatting failed".into(),
+        })?;
+    }
+    Ok(output)
 }
 
 fn push_labeled(
@@ -2432,14 +2676,17 @@ fn push_labeled(
     entry: &Entry,
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
-    push_node(
-        blocks,
-        index,
-        Block::Paragraph(vec![text_inline(format!("{label}: {value}"))]),
-        entry,
-        PROVIDER_ID,
-        budget,
-    )
+    let mut text = String::new();
+    let length = label
+        .len()
+        .checked_add(2)
+        .and_then(|length| length.checked_add(value.len()))
+        .ok_or_else(|| limit("max_memory_bytes", "labeled feed text overflowed"))?;
+    budget.aggregate.reserve_string_capacity(&mut text, length)?;
+    text.push_str(label);
+    text.push_str(": ");
+    text.push_str(value);
+    push_node(blocks, index, Block::Paragraph(vec![text_inline(text)]), entry, PROVIDER_ID, budget)
 }
 
 fn push_node(
@@ -2452,18 +2699,20 @@ fn push_node(
 ) -> Result<(), ConversionError> {
     let (nodes, inlines, strings, bytes) = inspect_block_value(&block);
     budget.ir(nodes, inlines)?;
-    let id_len = 11_usize;
-    let strings = strings.saturating_add(2);
-    let bytes = bytes.saturating_add(id_len).saturating_add(provider.len());
     budget.aggregate.strings(strings, bytes)?;
     budget.aggregate.reserve_vec(blocks, 1)?;
-    *index += 1;
+    let next =
+        index.checked_add(1).ok_or_else(|| limit("feed_nodes", "feed node index overflowed"))?;
+    let id = budgeted_numbered("feed-", next, 6, budget)?;
+    let provider = budgeted_copy(provider, budget)?;
+    budget.aggregate.record_output_strings(2, id.len().saturating_add(provider.len()))?;
+    *index = next;
     blocks.push(BlockNode {
-        id: NodeId(format!("feed-{:06}", *index)),
+        id: NodeId(id),
         block,
         provenance: Provenance {
             kind: ProvenanceKind::NativeParser,
-            provider: provider.into(),
+            provider,
             locator: entry_locator(entry),
             confidence: None,
         },
@@ -2766,9 +3015,40 @@ mod tests {
         )
     }
 
-    fn collect_ids(nodes: &[BlockNode], ids: &mut BTreeSet<String>) {
+    #[test]
+    fn allocation_container_audit_stays_fail_closed() {
+        let source = include_str!("feed.rs");
+        let production = source.split_once("#[cfg(test)]\nmod tests").unwrap().0;
+        for banned in [
+            concat!("BTree", "Map"),
+            concat!("BTree", "Set"),
+            concat!("Hash", "Map"),
+            concat!("Hash", "Set"),
+            concat!(".coll", "ect"),
+        ] {
+            assert!(!production.contains(banned), "unbudgeted container pattern {banned}");
+        }
+        for persistent_format in [
+            concat!("NodeId(for", "mat!"),
+            concat!("AssetId(for", "mat!"),
+            concat!("diagnostic.code = for", "mat!"),
+            concat!("text_inline(for", "mat!"),
+            concat!("Ok(for", "mat!(\"id:"),
+            concat!("Ok(for", "mat!(\"link:"),
+        ] {
+            assert!(
+                !production.contains(persistent_format),
+                "persistent formatting bypass {persistent_format}"
+            );
+        }
+        assert!(!production.contains(concat!("size_of", "+")));
+        assert!(!production.contains(concat!("size_of", ").saturating_add")));
+    }
+
+    fn collect_ids(nodes: &[BlockNode], ids: &mut Vec<String>) {
         for node in nodes {
-            assert!(ids.insert(node.id.0.clone()), "duplicate node id {}", node.id.0);
+            assert!(!ids.iter().any(|id| id == &node.id.0), "duplicate node id {}", node.id.0);
+            ids.push(node.id.0.clone());
             match &node.block {
                 Block::List { items, .. } => {
                     for item in items {
@@ -2835,7 +3115,7 @@ mod tests {
         let source = include_str!("../tests/fixtures/feed/rss2.xml");
         let output = convert(source).unwrap();
         assert_eq!(output.document.metadata.title.as_deref(), Some("Example RSS"));
-        assert_eq!(output.document.metadata.properties["feed.order"], "source");
+        assert!(output.diagnostics.iter().any(|diagnostic| diagnostic.code == "feed.sourceOrder"));
         assert!(output.document.blocks.iter().any(|node| matches!(&node.block, Block::Heading { content, .. } if matches!(&content[0], Inline::Text { value, .. } if value == "First"))));
         assert!(output.diagnostics.iter().any(|d| d.code == "feed.duplicateEntry"));
         assert_eq!(output.assets.len(), 1);
@@ -2845,7 +3125,7 @@ mod tests {
     #[test]
     fn atom_fixture_handles_html_xhtml_and_relative_links() {
         let output = convert(include_str!("../tests/fixtures/feed/atom.xml")).unwrap();
-        assert_eq!(output.document.metadata.properties["feed.kind"], "atom1");
+        assert!(output.document.metadata.properties.is_empty());
         assert!(output.document.blocks.iter().any(|node| matches!(&node.block, Block::Paragraph(content) if content.iter().any(|inline| matches!(inline, Inline::Link { target, .. } if target == "https://example.com/base/post?q=1#part")))));
         assert!(output.document.blocks.iter().any(|node| matches!(&node.block, Block::Paragraph(content) if content.iter().any(|inline| matches!(inline, Inline::Text { value, .. } if value.contains("XHTML body"))))));
     }
@@ -2900,7 +3180,7 @@ mod tests {
         let mut text = String::new();
         collect_text(&output.document.blocks, &mut text);
         assert!(!text.contains("TOP_SECRET") && !text.contains("STYLE_SECRET"));
-        let mut ids = BTreeSet::new();
+        let mut ids = Vec::new();
         collect_ids(&output.document.blocks, &mut ids);
         assert!(
             output
@@ -3265,9 +3545,11 @@ mod tests {
         let mut reader = NsReader::from_str(&source);
         let element = first_channel(&mut reader);
         reset_feed_xml_hooks();
+        watch_feed_attribute(1000);
         let error = attributes(&reader, &element, &mut limited, &context).err().unwrap();
         assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
         assert!(feed_xml_hook_counts().0 < 1000);
+        assert_eq!(target_attribute_constructions(), 0);
         assert_eq!(limited.aggregate.snapshot().persistent_memory_bytes, 0);
 
         let mut exact_budget = FeedBudget::new(&options, &context).unwrap();
@@ -3275,10 +3557,12 @@ mod tests {
         let mut reader = NsReader::from_str(&source);
         let element = first_channel(&mut reader);
         reset_feed_xml_hooks();
+        watch_feed_attribute(1000);
         let retried_attributes =
             attributes(&reader, &element, &mut exact_budget, &context).unwrap();
         assert_eq!(retried_attributes.0.len(), 1000);
         assert_eq!(feed_xml_hook_counts().0, 1000);
+        assert_eq!(target_attribute_constructions(), 1);
         assert_eq!(
             exact_budget.aggregate.snapshot().persistent_memory_bytes,
             exact.persistent_memory_bytes
@@ -3333,6 +3617,101 @@ mod tests {
             exact_budget.aggregate.snapshot().persistent_memory_bytes,
             exact.persistent_memory_bytes
         );
+
+        let boundary = format!("<div xmlns='{XHTML_NS}'><![CDATA[]]]]><![CDATA[>]]></div>");
+        let mut boundary_budget = FeedBudget::new(&options, &context).unwrap();
+        let escaped =
+            serialize_xhtml(&boundary, None, &mut boundary_budget, &context, &mut Vec::new())
+                .unwrap();
+        assert!(escaped.contains("]]&gt;"));
+        assert!(!escaped.contains("]]>"));
+    }
+
+    #[test]
+    fn diagnostic_publication_failure_preserves_external_vector_for_exact_retry() {
+        let options = ConversionOptions::default();
+        let context = context();
+        let mut budget = FeedBudget::new(&options, &context).unwrap();
+        let mut external = Vec::new();
+        push_diagnostic_parts(
+            &mut external,
+            DiagnosticSeverity::Info,
+            "feed.first",
+            "first",
+            None,
+            &mut budget,
+        )
+        .unwrap();
+
+        let mut local = Vec::new();
+        budget.aggregate.begin_feed_diagnostic("feed.second".len(), "second".len()).unwrap();
+        budget.aggregate.reserve_vec(&mut local, 1).unwrap();
+        let code = budgeted_copy("feed.second", &mut budget).unwrap();
+        let message = budgeted_copy("second", &mut budget).unwrap();
+        local.push(Diagnostic {
+            code,
+            severity: DiagnosticSeverity::Warning,
+            message,
+            locator: None,
+        });
+
+        let pointer = external.as_ptr();
+        let len = external.len();
+        let capacity = external.capacity();
+        let code = external[0].code.clone();
+        let message = external[0].message.clone();
+        let before = budget.aggregate.snapshot();
+        let target_slots = len.checked_add(local.len()).unwrap().max(4);
+        let mut allocator_probe: Vec<Diagnostic> = Vec::new();
+        allocator_probe.try_reserve_exact(target_slots).unwrap();
+        let replacement_bytes =
+            allocator_probe.capacity().checked_mul(std::mem::size_of::<Diagnostic>()).unwrap();
+        drop(allocator_probe);
+
+        budget.aggregate.set_test_limits(super::super::html::FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: before
+                .persistent_memory_bytes
+                .checked_add(replacement_bytes)
+                .unwrap()
+                - 1,
+        });
+        reset_feed_xml_hooks();
+        let error = publish_diagnostics(&mut external, &mut local, &mut budget).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(diagnostic_publication_swaps(), 0);
+        assert_eq!(external.as_ptr(), pointer);
+        assert_eq!(external.len(), len);
+        assert_eq!(external.capacity(), capacity);
+        assert_eq!(external[0].code, code);
+        assert_eq!(external[0].message, message);
+        assert_eq!(local.len(), 1);
+        assert_eq!(
+            budget.aggregate.snapshot().persistent_memory_bytes,
+            before.persistent_memory_bytes
+        );
+
+        budget.aggregate.set_test_limits(super::super::html::FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: before
+                .persistent_memory_bytes
+                .checked_add(replacement_bytes)
+                .unwrap(),
+        });
+        publish_diagnostics(&mut external, &mut local, &mut budget).unwrap();
+        assert_eq!(diagnostic_publication_swaps(), 1);
+        assert_eq!(external.len(), 2);
+        assert!(local.is_empty());
     }
 
     #[test]

@@ -89,7 +89,8 @@ title、subtitle、summary 与 content 均遵守 Text Construct：`type=text` �
 RSS `description` 与标准 namespace 的 `content:encoded` 统一经过同一 HTML 安全路径，不依赖
 标签字符串启发式；script、style、template 等 active content 被排除后不会以原始文本回显。
 
-条目按源顺序输出，并在 `feed.order=source` 中声明；时间不会触发重排。Atom 时间严格接受
+条目按源顺序输出，并通过 `feed.sourceOrder` 诊断声明；时间不会触发重排。Feed 层级的链接与
+更新时间作为文档开头的可见字段保留，避免用不可精确计量节点容量的映射容器暂存。Atom 时间严格接受
 RFC 3339，RSS 时间严格接受一至两位日期、四位年份、两位时分秒和 numeric/GMT/UT zone 的
 RFC 822 形式，统一规范化
 为 UTC；leap second、obsolete alphabetic zone、折行空白、两位年份与非法日期保留原值并产生

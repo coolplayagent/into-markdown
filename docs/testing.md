@@ -113,7 +113,11 @@ Feed XML 另有 1000 个唯一空属性的容量回归：记录实际 attribute 
 String capacity，精确峰值减一必须在下一对象 constructor hook 前失败并完整回滚，足额重试得到相同
 snapshot；75,000-byte request memory 复现稳定返回 `resourceLimit`。Atom XHTML 的大 CDATA
 `&<>` escape-growth 回归在真实 writer String reserve 后才触发 write hook，扩张峰值减一时 hook 保持
-为零，足额峰值可重试成功。
+为零，足额峰值可重试成功，并覆盖跨相邻 CDATA section 形成 `]]>` 的 escaping 边界。Feed、
+`xml:base` 与 XHTML 诊断先写入同一事务的局部预算 Vec；发布会先按 replacement 的真实 capacity
+预留，失败时外部 Vec 的 pointer、length、capacity 与内容完全不变，原对象可在精确足额预算下重试。
+去重键和 asset rewrite lookup 使用按真实 capacity 计费的线性 Vec，不依赖 allocator 节点容量不透明
+的树形或哈希容器。
 
 仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试

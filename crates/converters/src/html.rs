@@ -449,6 +449,14 @@ impl FeedHtmlBudget {
         self.charge_memory(bytes)
     }
 
+    pub(crate) fn record_output_strings(
+        &mut self,
+        count: usize,
+        bytes: usize,
+    ) -> Result<(), ConversionError> {
+        self.consume_strings(count, bytes)
+    }
+
     fn consume_strings(&mut self, count: usize, bytes: usize) -> Result<(), ConversionError> {
         Self::consume(&mut self.strings, self.max_strings, count, "feed_output_strings")?;
         let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
@@ -629,21 +637,36 @@ impl FeedHtmlBudget {
         Ok(())
     }
 
+    /// Validate a temporary-capacity release before a transaction publishes
+    /// any values. No allocation or counter mutation occurs here. A subsequent
+    /// release of the same byte count is infallible unless the budget has an
+    /// internal accounting defect; diagnostic publication performs no
+    /// fallible operation between this check and that release.
+    pub(crate) fn validate_temporary_capacity_release(
+        &self,
+        bytes: usize,
+    ) -> Result<(), ConversionError> {
+        if bytes > self.persistent_memory_bytes || bytes > self.memory.mark() {
+            return Err(ConversionError::Internal {
+                detail: "temporary capacity exceeds persistent feed memory".into(),
+            });
+        }
+        Ok(())
+    }
+
     fn constructed(kind: FeedHtmlObjectKind) {
         record_feed_html_object(kind);
     }
 
-    /// Account for a replacement allocation without counting the replacement
-    /// as another persistent output string. The old allocation remains leased
-    /// until the completed feed is returned, while only growth affects the
-    /// aggregate output-byte ceiling.
-    pub(crate) fn replace_string(
+    /// Update only the logical output-byte total for replacing an already
+    /// counted string. The caller reserves the replacement's real allocator
+    /// capacity separately and releases the old capacity after dropping it.
+    pub(crate) fn replacement_output_growth(
         &mut self,
         old_bytes: usize,
         new_bytes: usize,
     ) -> Result<(), ConversionError> {
-        let growth = new_bytes.saturating_sub(old_bytes);
-        let growth = u64::try_from(growth).unwrap_or(u64::MAX);
+        let growth = u64::try_from(new_bytes.saturating_sub(old_bytes)).unwrap_or(u64::MAX);
         let next = self.output_bytes.checked_add(growth).ok_or_else(|| {
             ConversionError::ResourceLimit {
                 limit: "max_feed_text_bytes",
@@ -656,18 +679,7 @@ impl FeedHtmlBudget {
                 detail: format!("aggregate feed output exceeds {} bytes", self.max_output_bytes),
             });
         }
-        self.charge_memory(new_bytes)?;
         self.output_bytes = next;
-        record_feed_html_object(FeedHtmlObjectKind::String);
-        Ok(())
-    }
-
-    /// Account memory for a temporary string retained while nested output is
-    /// merged. It is not another output string and therefore does not consume
-    /// the persistent string-count or output-byte ceilings.
-    pub(crate) fn temporary_string(&mut self, bytes: usize) -> Result<(), ConversionError> {
-        self.charge_memory(bytes)?;
-        record_feed_html_object(FeedHtmlObjectKind::String);
         Ok(())
     }
 
