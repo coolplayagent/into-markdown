@@ -1,5 +1,6 @@
 //! Inert EPUB navigation-label content and replacement-text policy.
 
+use super::super::budget::EpubBudget;
 use super::super::path::{BasePath, Reference};
 use super::super::xml::{self, Attribute, Name};
 use into_markdown_core::ConversionError;
@@ -60,6 +61,7 @@ pub(super) fn validate_element(
     name: &Name,
     attributes: &[Attribute],
     base: &BasePath,
+    budget: &mut EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
     if !is_label_content(name) {
         return Err(xml::malformed("unsupported element in EPUB navigation label"));
@@ -74,7 +76,7 @@ pub(super) fn validate_element(
     if name.namespace.as_deref() == Some(XHTML_NS) {
         validate_html_conditions(name, attributes)?;
     }
-    validate_url_attributes(attributes, base)
+    validate_url_attributes(attributes, base, budget)
 }
 
 pub(super) fn validate_child_count(name: &Name, count: usize) -> Result<(), ConversionError> {
@@ -291,42 +293,77 @@ fn has_any(attributes: &[Attribute], names: &[&[u8]]) -> bool {
 fn validate_url_attributes(
     attributes: &[Attribute],
     base: &BasePath,
+    budget: &mut EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
     for attribute in attributes {
-        if attribute.value.to_ascii_lowercase().contains("url(") {
+        let _scratch = budget.navigation_url_value(attribute.value.len())?;
+        if contains_ascii_case_insensitive(attribute.value.as_bytes(), b"url(") {
             return Err(xml::malformed("CSS-style URLs are forbidden in EPUB navigation labels"));
         }
-        if attribute.namespace.as_deref() == Some(XLINK_NS) && attribute.local == b"href" {
-            validate_internal(base, &attribute.value)?;
+        if attribute.namespace.as_deref() == Some(XLINK_NS) {
+            match attribute.local.as_slice() {
+                b"arcrole" | b"href" | b"role" => {
+                    validate_internal(base, &attribute.value, budget)?;
+                }
+                b"actuate" | b"show" | b"title" | b"type" => {}
+                _ => {
+                    return Err(xml::malformed(
+                        "unknown XLink attribute is forbidden in EPUB navigation labels",
+                    ));
+                }
+            }
+        } else if attribute.namespace.as_deref() == Some(xml::XML_NS) && attribute.local == b"base"
+        {
+            // The caller already applied and confined xml:base before label validation.
         } else if attribute.namespace.is_none() {
             match attribute.local.as_slice() {
-                b"imagesrcset" | b"srcset" => validate_srcset(base, &attribute.value)?,
+                b"imagesrcset" | b"srcset" => validate_srcset(base, &attribute.value, budget)?,
                 b"itemtype" | b"ping" => {
                     for value in attribute.value.split_whitespace() {
-                        validate_internal(base, value)?;
+                        validate_internal(base, value, budget)?;
                     }
                 }
-                b"action" | b"archive" | b"background" | b"cite" | b"classid" | b"codebase"
-                | b"data" | b"dynsrc" | b"formaction" | b"href" | b"itemid" | b"longdesc"
-                | b"lowsrc" | b"manifest" | b"poster" | b"profile" | b"src" | b"usemap" => {
-                    validate_internal(base, &attribute.value)?;
+                b"prefix" => validate_rdfa_prefix(base, &attribute.value, budget)?,
+                b"datatype" | b"itemprop" | b"property" | b"rel" | b"rev" | b"role" | b"typeof" => {
+                    validate_rdfa_terms(base, &attribute.value, budget)?;
+                }
+                b"about" | b"action" | b"archive" | b"background" | b"cite" | b"classid"
+                | b"codebase" | b"data" | b"dynsrc" | b"formaction" | b"href" | b"itemid"
+                | b"longdesc" | b"lowsrc" | b"manifest" | b"poster" | b"profile" | b"resource"
+                | b"src" | b"usemap" | b"vocab" => {
+                    validate_internal(base, &attribute.value, budget)?;
+                }
+                _ if potentially_url_bearing_name(&attribute.local) => {
+                    return Err(xml::malformed(
+                        "unknown URL-like attribute is forbidden in EPUB navigation labels",
+                    ));
                 }
                 _ => {}
             }
+        } else if potentially_url_bearing_name(&attribute.local) {
+            return Err(xml::malformed(
+                "unknown namespaced URL-like attribute is forbidden in EPUB navigation labels",
+            ));
         }
     }
     Ok(())
 }
 
-fn validate_srcset(base: &BasePath, value: &str) -> Result<(), ConversionError> {
+fn validate_srcset(
+    base: &BasePath,
+    value: &str,
+    budget: &mut EpubBudget<'_>,
+) -> Result<(), ConversionError> {
     let mut count = 0_usize;
     for candidate in value.split(',') {
         let url = candidate
             .split_whitespace()
             .next()
             .ok_or_else(|| xml::malformed("empty navigation srcset candidate"))?;
-        validate_internal(base, url)?;
-        count = count.saturating_add(1);
+        validate_internal(base, url, budget)?;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| xml::malformed("navigation srcset candidate count overflowed"))?;
     }
     if count == 0 {
         return Err(xml::malformed("empty navigation srcset"));
@@ -334,9 +371,92 @@ fn validate_srcset(base: &BasePath, value: &str) -> Result<(), ConversionError> 
     Ok(())
 }
 
-fn validate_internal(base: &BasePath, value: &str) -> Result<(), ConversionError> {
+fn validate_rdfa_prefix(
+    base: &BasePath,
+    value: &str,
+    budget: &mut EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    let mut tokens = value.split_whitespace();
+    let mut mappings = 0_usize;
+    while let Some(prefix) = tokens.next() {
+        budget.navigation_url_token(prefix.len())?;
+        if !prefix.ends_with(':')
+            || prefix.len() == 1
+            || !prefix[..prefix.len() - 1]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err(xml::malformed("invalid RDFa prefix mapping in EPUB navigation label"));
+        }
+        let iri = tokens.next().ok_or_else(|| xml::malformed("RDFa prefix mapping has no IRI"))?;
+        validate_internal(base, iri, budget)?;
+        mappings = mappings
+            .checked_add(1)
+            .ok_or_else(|| xml::malformed("RDFa prefix mapping count overflowed"))?;
+    }
+    if mappings == 0 {
+        return Err(xml::malformed("empty RDFa prefix mapping in EPUB navigation label"));
+    }
+    Ok(())
+}
+
+fn validate_rdfa_terms(
+    base: &BasePath,
+    value: &str,
+    budget: &mut EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    let mut count = 0_usize;
+    for token in value.split_whitespace() {
+        budget.navigation_url_token(token.len())?;
+        if token.contains(':') || token.starts_with(['/', '.', '#']) {
+            validate_internal_counted(base, token)?;
+        }
+        count =
+            count.checked_add(1).ok_or_else(|| xml::malformed("RDFa token count overflowed"))?;
+    }
+    if count == 0 {
+        return Err(xml::malformed("empty RDFa token list in EPUB navigation label"));
+    }
+    Ok(())
+}
+
+fn validate_internal(
+    base: &BasePath,
+    value: &str,
+    budget: &mut EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    budget.navigation_url_token(value.len())?;
+    validate_internal_counted(base, value)
+}
+
+fn validate_internal_counted(base: &BasePath, value: &str) -> Result<(), ConversionError> {
     if matches!(base.resolve(value)?, Reference::External(_)) {
         return Err(xml::malformed("navigation label URL must remain inside the EPUB container"));
     }
     Ok(())
 }
+
+fn contains_ascii_case_insensitive(value: &[u8], needle: &[u8]) -> bool {
+    value.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn potentially_url_bearing_name(local: &[u8]) -> bool {
+    [
+        b"href".as_slice(),
+        b"src",
+        b"url",
+        b"uri",
+        b"iri",
+        b"action",
+        b"resource",
+        b"vocab",
+        b"location",
+        b"schema",
+    ]
+    .into_iter()
+    .any(|part| local.windows(part.len()).any(|window| window.eq_ignore_ascii_case(part)))
+}
+
+#[cfg(test)]
+#[path = "label_policy_tests.rs"]
+mod tests;

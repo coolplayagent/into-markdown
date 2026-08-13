@@ -156,7 +156,7 @@ pub(super) fn parse_nav(
                         ));
                     }
                     if label_policy::is_label_content(&name) {
-                        label_policy::validate_element(&name, &attributes, &base)?;
+                        label_policy::validate_element(&name, &attributes, &base, budget)?;
                     }
                 }
                 let mut list_depth = stack.last().map_or(0, |frame| frame.list_depth);
