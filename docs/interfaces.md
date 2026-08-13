@@ -138,6 +138,10 @@ target。其他平台若没有经过审计的 no-follow 策略，则返回 `comp
 取消不会改写已经完成的结果。
 library 的零 `Duration` 表示立即 deadline；CLI 和配置拒绝零值。若极大 `Duration`
 无法转换为平台 `Instant`，则饱和为无 deadline，不能回绕成立即 timeout。
+可表示且尚未到期的 deadline 使用独立 timer 唤醒所有已注册 waiter；timer 线程无法创建时，
+上下文及其所有 clone 的 checkpoint 和异步等待稳定返回
+`componentUnavailable`（component 为 `deadline-timer`），不会把请求伪装成无 deadline，
+也不会等待原 deadline 才暴露失败。该初始化错误优先于同一上下文随后观察到的显式取消。
 
 阶段进度使用 `ProgressEvent` 和对象安全的 `ProgressListener`。总体进度以 basis points
 表达并保持单调。OCR 与 AI 是转换期间可以交错出现的活动，而不是互斥的线性总体阶段。
