@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "c854cebc898535f2490236d61f71b64657c49d3c06b9199c42882d81e80b29d9",
+    "sha256": "8f10627c76ab84cf3b05dd46b59d38db9fbb53118126a4d98b68bd7c0ca59c89",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -21,6 +21,7 @@
     "json",
     "markdown",
     "pdf",
+    "rtf",
     "text",
     "tsv",
     "xml",
@@ -1110,6 +1111,125 @@
         "error_code": "",
         "semantic_sha256": "4cf2715adb1376bf8eb1a85af435559110df8b6d3e720f44c918318398cc8745",
         "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "rtf-corrupt",
+      "format": "rtf",
+      "scenario": "corrupt",
+      "path": "small/rtf/corrupt.rtf",
+      "bytes": 25,
+      "sha256": "7525a12138ea95115341f6c8dd3abf935b080240085866a17cb98504f83b3aee",
+      "media_type": "application/rtf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "unterminated root group"
+      }
+    },
+    {
+      "id": "rtf-limit",
+      "format": "rtf",
+      "scenario": "limit",
+      "path": "small/rtf/limit.rtf",
+      "bytes": 34,
+      "sha256": "3d4cc5afbc934a1d2e5aae86269b363a23064184f84ec8dfb5736460e7168ed0",
+      "media_type": "application/rtf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "RTF group stack crosses the exact configured depth boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 8,
+          "passing_value": 9,
+          "error_limit": "max_nesting_depth",
+          "passing_semantic_sha256": "64896f89fd11190013b70103e603a1c5826e56b7fb7d2197ab279b0690043599"
+        }
+      }
+    },
+    {
+      "id": "rtf-malicious",
+      "format": "rtf",
+      "scenario": "malicious",
+      "path": "small/rtf/malicious.rtf",
+      "bytes": 143,
+      "sha256": "d83470a309fbcfe246da13cff1e01535317a872bece5fba8195074c0e111be3f",
+      "media_type": "application/rtf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "9501c19fc08744a6a9ec302c2304f9fe04d7f49061ed847b3d9cbd6b013154ed",
+        "description": "embedded object and local-file hyperlink remain inert"
+      }
+    },
+    {
+      "id": "rtf-normal",
+      "format": "rtf",
+      "scenario": "normal",
+      "path": "small/rtf/normal.rtf",
+      "bytes": 64,
+      "sha256": "420e8ecd1fe836c52e5d67dd444972a8e999646294ddb500a382670c1664f49b",
+      "media_type": "application/rtf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a",
+        "description": "styled English and Unicode Chinese paragraph"
       }
     },
     {

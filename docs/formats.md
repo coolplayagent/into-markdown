@@ -1,7 +1,7 @@
 # 规划格式矩阵
 
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、TXT、Markdown、HTML、
-CSV、TSV、JSON、XML、RSS/Atom、IPYNB 状态为 `available`，其余尚未
+CSV、TSV、JSON、XML、RSS/Atom、IPYNB、RTF 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -40,6 +40,21 @@ fail closed，转换过程从不访问 URI。真实 image object bitmap 会校�
 创建至多 4096 像素边长的页面 render asset，`ocr=always` 明确为每页创建，`off` 不 render。
 本层只准备 OCR 输入资产，不伪造 OCR 成功。PDFium 无法可靠区分缺密码和错误密码时，两者
 都映射为稳定 `encrypted`；损坏文件为 `malformed`，超页数为 `resourceLimit`。
+
+## RTF
+
+RTF 转换器要求严格的 `{\\rtfN` 根签名，并使用有界单遍状态机解析 group、destination、
+控制字、ANSI codepage、font charset、Unicode fallback、行内样式、段落、列表、表格、metadata
+和 `pict`。块级 provenance 始终保存原始 RTF 的半开 byte range；转义、hex 与 Unicode
+解码不会用解码字符位置冒充源偏移。allowlist 包含 Windows-1252、GBK、Big5 与 Shift-JIS；
+未知 codepage/font charset 稳定拒绝。
+
+PNG/JPEG `pict` 在单项/总资源、解码字节、尺寸与内存预算内实际解码审计后作为 Asset；
+EMF/WMF 只产生安全降级诊断。object、objdata、filetbl、datastore、field instruction、HTML
+及未知 ignorable destination 不执行、不读路径、不联网。只有 canonical HTTP(S) hyperlink
+保留结构化链接，危险 target 降级为纯文本并诊断。组深度、控制数、数字位数、Unicode
+膨胀、段落/inline/table/cell、图片、诊断与所有主动 Vec/String/Map capacity 均有硬上限，
+长循环执行 request checkpoint。
 
 ## HTML
 

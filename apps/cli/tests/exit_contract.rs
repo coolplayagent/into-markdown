@@ -151,6 +151,65 @@ fn real_cli_converts_notebook_without_executing_active_content() {
 }
 
 #[test]
+fn real_cli_converts_rtf_file_stdin_json_and_bundle_without_active_services() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("safe.rtf");
+    let png = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082";
+    let rtf = format!(
+        "{{\\rtf1\\ansi before{{\\object{{\\*\\objdata 010203}}{{\\result hidden}}}}{{\\pict\\pngblip {png}}}after\\par}}"
+    );
+    std::fs::write(&path, &rtf).unwrap();
+
+    let markdown = Command::new(binary())
+        .args(["--no-config", "--asset-mode", "embed", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(markdown.status.success(), "{}", String::from_utf8_lossy(&markdown.stderr));
+    let markdown = String::from_utf8(markdown.stdout).unwrap();
+    assert!(markdown.contains("before"));
+    assert!(markdown.contains("after"));
+    assert!(!markdown.contains("hidden"));
+    assert!(markdown.contains("!["));
+
+    let stdin = run_with_stdin(
+        &["--no-config", "--format", "rtf", "--asset-mode", "embed", "-"],
+        rtf.as_bytes(),
+    );
+    assert!(stdin.status.success(), "{}", String::from_utf8_lossy(&stdin.stderr));
+    assert!(String::from_utf8_lossy(&stdin.stdout).contains("before"));
+
+    let result = Command::new(binary())
+        .args([
+            "--no-config",
+            "--emit",
+            "result-json",
+            "--asset-mode",
+            "embed",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(result["assets"].as_array().unwrap().len(), 1);
+    assert_eq!(result["assets"][0]["mediaType"], "image/png");
+    assert!(!result["assets"][0]["dataBase64"].as_str().unwrap().is_empty());
+
+    let bundle = Command::new(binary())
+        .args(["--no-config", "--emit", "bundle", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(bundle.status.success(), "{}", String::from_utf8_lossy(&bundle.stderr));
+    let archive = zip::ZipArchive::new(std::io::Cursor::new(bundle.stdout)).unwrap();
+    assert!(archive.file_names().any(|name| {
+        name.starts_with("assets/")
+            && std::path::Path::new(name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    }));
+}
+
+#[test]
 fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
     let missing_id = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"cell_type":"raw","metadata":{},"source":"x"}]}"#;
     let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], missing_id);

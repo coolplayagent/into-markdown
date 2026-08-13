@@ -8,6 +8,11 @@ that are present on only one side of the manifest/filesystem relationship. Fixtu
 lowercase ASCII safe set, so their identity is portable without relying on platform Unicode
 case-folding behavior.
 
+RTF samples are repository-authored ASCII source files produced directly by `generate.py`; they do
+not contain copied Office documents. Their English/Chinese text, corruption, exact depth boundary,
+and inert object/local-file field scenarios are licensed with the rest of the corpus under
+Apache-2.0 and bound to byte and semantic hashes in the manifest.
+
 The corpus covers every format marked `available` by the product format registry. The converter
 test reads the same manifest, compares that registry dynamically, and runs each non-OCR fixture
 through its real converter and Markdown renderer. A limit fixture records an exact public
