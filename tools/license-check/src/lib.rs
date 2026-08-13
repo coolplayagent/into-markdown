@@ -104,6 +104,47 @@ struct PdfiumTarget {
     allowed_dependencies: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FfmpegSource {
+    schema_version: u32,
+    version: String,
+    source_url: String,
+    source_bytes: u64,
+    source_sha256: String,
+    source_date_epoch: u64,
+    signature_url: String,
+    signature_bytes: u64,
+    signature_sha256: String,
+    signing_key_url: String,
+    signing_key_bytes: u64,
+    signing_key_sha256: String,
+    signing_key_fingerprint: String,
+    license_conclusion: String,
+    supported_targets: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FfmpegFixtures {
+    schema_version: u32,
+    purpose: String,
+    distribution: String,
+    redistribution: String,
+    included_in_artifacts: bool,
+    provenance: String,
+    fixtures: Vec<FfmpegFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FfmpegFixture {
+    format: String,
+    url: String,
+    bytes: u64,
+    sha256: String,
+}
+
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
@@ -520,11 +561,22 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let models_text = read(&root.join("models/manifest.json"), errors);
     let downloads_text = read(&root.join("third_party/licenses/downloads.json"), errors);
     let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
+    let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
+    let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let downloads: Option<DownloadManifest> =
         parse_json("download manifest", &downloads_text, errors);
     let pdfium: Option<PdfiumManifest> = parse_json("PDFium manifest", &pdfium_text, errors);
+    let ffmpeg: Option<FfmpegSource> = parse_json("FFmpeg source manifest", &ffmpeg_text, errors);
+    let ffmpeg_fixtures: Option<FfmpegFixtures> =
+        parse_json("FFmpeg fixture policy", &ffmpeg_fixtures_text, errors);
+    if let Some(ffmpeg) = &ffmpeg {
+        validate_ffmpeg_source(inventory, ffmpeg, errors);
+    }
+    if let Some(fixtures) = &ffmpeg_fixtures {
+        validate_ffmpeg_fixtures(fixtures, errors);
+    }
 
     if let (Some(ort), Some(downloads)) = (&ort, &downloads) {
         validate_ort_manifest(inventory, ort, downloads, errors);
@@ -775,6 +827,64 @@ const PDFIUM_REQUIRED_EXPORTS: [&str; 24] = [
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",
 ];
+
+fn validate_ffmpeg_source(inventory: &Inventory, source: &FfmpegSource, errors: &mut Vec<String>) {
+    let Some(component) = exact_component(inventory, "ffmpeg", errors) else { return };
+    let expected_targets: BTreeSet<_> =
+        SUPPORTED_MODEL_TARGETS.iter().map(ToString::to_string).collect();
+    let actual_targets: BTreeSet<_> = source.supported_targets.iter().cloned().collect();
+    let expected_url = format!("https://ffmpeg.org/releases/ffmpeg-{}.tar.xz", source.version);
+    if source.schema_version != 1
+        || source.version != "8.1.2"
+        || source.source_url != expected_url
+        || !is_canonical_https(&source.source_url)
+        || source.source_bytes != 11_710_924
+        || source.source_sha256
+            != "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+        || source.source_date_epoch != 1_781_664_539
+        || source.signature_url != format!("{expected_url}.asc")
+        || source.signature_bytes != 520
+        || source.signature_sha256
+            != "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8"
+        || source.signing_key_url != "https://ffmpeg.org/ffmpeg-devel.asc"
+        || source.signing_key_bytes != 1_709
+        || source.signing_key_sha256
+            != "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5"
+        || source.signing_key_fingerprint != "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+        || source.license_conclusion != "LGPL-2.1-or-later"
+        || actual_targets != expected_targets
+        || component.status != "reviewed"
+        || component.kind != "native-runtime"
+        || component.version.as_deref() != Some(source.version.as_str())
+        || component.source.as_deref() != Some(source.source_url.as_str())
+        || component.license.as_deref() != Some(source.license_conclusion.as_str())
+    {
+        errors.push("FFmpeg source/build authority is incomplete or inconsistent".to_owned());
+    }
+}
+
+fn validate_ffmpeg_fixtures(manifest: &FfmpegFixtures, errors: &mut Vec<String>) {
+    let formats: BTreeSet<_> = manifest.fixtures.iter().map(|item| item.format.as_str()).collect();
+    if manifest.schema_version != 1
+        || manifest.purpose
+            != "positive decoder smoke for the production FfmpegRuntime load and normalize path"
+        || manifest.distribution != "transient-manual-ci-only"
+        || manifest.redistribution != "prohibited-license-unverified"
+        || manifest.included_in_artifacts
+        || manifest.provenance
+            != "FFmpeg project public samples server; individual authorship and redistribution grants are not documented"
+        || formats != BTreeSet::from(["flac", "m4a", "mp3", "ogg"])
+        || manifest.fixtures.len() != 4
+        || manifest.fixtures.iter().any(|item| {
+            !item.url.starts_with("https://samples.ffmpeg.org/")
+                || item.bytes == 0
+                || item.bytes > 1_048_576
+                || !is_sha256(&item.sha256)
+        })
+    {
+        errors.push("FFmpeg transient fixture policy is incomplete or distributable".to_owned());
+    }
+}
 
 fn is_sha256(value: &str) -> bool {
     value.len() == 64

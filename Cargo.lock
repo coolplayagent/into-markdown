@@ -1007,6 +1007,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "into-markdown-ffmpeg"
+version = "0.0.0"
+dependencies = [
+ "into-markdown-core",
+ "libc",
+ "object 0.40.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "into-markdown-ocr"
 version = "0.0.0"
 dependencies = [

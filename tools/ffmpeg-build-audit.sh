@@ -1,0 +1,164 @@
+#!/bin/sh
+set -eu
+
+if [ "${FFMPEG_AUDIT_NETWORK:-}" != 1 ]; then
+  echo "FFmpeg source build is networked and opt-in; set FFMPEG_AUDIT_NETWORK=1" >&2
+  exit 2
+fi
+command -v jq >/dev/null
+for audit_tool in curl gpg jq make file python3 shasum; do command -v "$audit_tool" >/dev/null; done
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+source_manifest="$root/third_party/ffmpeg/source.json"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+output_dir=${FFMPEG_AUDIT_OUTPUT_DIR:-$work/output}
+mkdir -p "$output_dir"
+if find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  echo "FFmpeg audit output directory must be empty" >&2; exit 2
+fi
+url=$(jq -er .source_url "$source_manifest")
+source_sha=$(jq -er .source_sha256 "$source_manifest")
+source_bytes=$(jq -er .source_bytes "$source_manifest")
+sig_url=$(jq -er .signature_url "$source_manifest")
+sig_sha=$(jq -er .signature_sha256 "$source_manifest")
+if [ -n "${FFMPEG_AUDIT_SOURCE:-}" ]; then cp "$FFMPEG_AUDIT_SOURCE" "$work/source.tar.xz"; else
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 12000000 "$url" -o "$work/source.tar.xz"
+fi
+test "$(wc -c < "$work/source.tar.xz" | tr -d ' ')" = "$source_bytes"
+printf '%s  %s\n' "$source_sha" "$work/source.tar.xz" | shasum -a 256 -c -
+if [ -n "${FFMPEG_AUDIT_SIGNATURE:-}" ]; then cp "$FFMPEG_AUDIT_SIGNATURE" "$work/source.asc"; else
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 1024 "$sig_url" -o "$work/source.asc"
+fi
+printf '%s  %s\n' "$sig_sha" "$work/source.asc" | shasum -a 256 -c -
+command -v gpg >/dev/null
+GNUPGHOME="$work/gnupg"; export GNUPGHOME; mkdir -m 700 "$GNUPGHOME"
+key_url=$(jq -er .signing_key_url "$source_manifest")
+key_sha=$(jq -er .signing_key_sha256 "$source_manifest")
+curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 4096 "$key_url" -o "$work/signing-key.asc"
+printf '%s  %s\n' "$key_sha" "$work/signing-key.asc" | shasum -a 256 -c -
+gpg --batch --import "$work/signing-key.asc"
+test "$(gpg --batch --with-colons --fingerprint FCF986EA15E6E293A5644F10B4322F04D67658D8 | awk -F: '$1 == "fpr" {print $10; exit}')" = FCF986EA15E6E293A5644F10B4322F04D67658D8
+gpg --batch --verify "$work/source.asc" "$work/source.tar.xz"
+tar -xJf "$work/source.tar.xz" -C "$work"
+src="$work/ffmpeg-8.1.2"
+test -s "$src/COPYING.LGPLv2.1"
+grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1"
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args= ;;
+  Linux-x86_64) target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args= ;;
+  Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
+  MINGW*-x86_64|MSYS*-x86_64) command -v cl >/dev/null; command -v objdump >/dev/null; target=x86_64-pc-windows-msvc; format=pe; arch=x86_64; toolchain_args='--toolchain=msvc --disable-x86asm' ;;
+  *) echo "unsupported audit host" >&2; exit 2 ;;
+esac
+
+prefix=/opt/into-markdown/ffmpeg
+stage="$work/stage"
+set -- \
+  --prefix="$prefix" --disable-everything --disable-gpl --disable-version3 --disable-nonfree \
+  --disable-network --disable-autodetect --disable-programs --enable-ffmpeg --disable-ffprobe \
+  --disable-doc --disable-debug --disable-devices --disable-avdevice \
+  --disable-swscale --enable-avutil --enable-avcodec --enable-avformat --enable-avfilter \
+  --enable-swresample --enable-protocol=file,pipe \
+  --enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav \
+  --enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le \
+  --enable-parser=aac,mpegaudio,opus,vorbis --enable-filter=aformat,aresample \
+  --enable-encoder=pcm_s16le --enable-muxer=pcm_s16le --enable-static --disable-shared $toolchain_args
+source_date_epoch=$(jq -er .source_date_epoch "$source_manifest")
+(cd "$src" && SOURCE_DATE_EPOCH="$source_date_epoch" ./configure "$@" && SOURCE_DATE_EPOCH="$source_date_epoch" make -j2 && make DESTDIR="$stage" install)
+if [ "$format" = pe ]; then tool="$stage$prefix/bin/ffmpeg.exe"; else tool="$stage$prefix/bin/ffmpeg"; fi
+test -x "$tool"
+report="$work/version.txt"
+"$tool" -hide_banner -version > "$report"
+grep -q '^ffmpeg version 8.1.2' "$report"
+grep -q -- '--disable-gpl' "$report"
+grep -q -- '--disable-nonfree' "$report"
+! grep -q -- '--enable-gpl' "$report"
+! grep -q -- '--enable-nonfree' "$report"
+for component in aac flac mp3 vorbis opus; do
+  "$tool" -hide_banner -decoders 2>/dev/null | awk -v name="$component" '$1 ~ /^A/ && $2 == name {found=1} END {exit !found}'
+done
+for demuxer in wav mp3 mov flac ogg matroska; do
+  "$tool" -hide_banner -demuxers 2>/dev/null | awk '$1 ~ /^D/ {print $2}' | tr ',' '\n' | grep -x "$demuxer" >/dev/null
+done
+if "$tool" -hide_banner -protocols 2>/dev/null | grep -E '^[[:space:]]+(http|https|tcp|udp)$'; then
+  echo "network protocol leaked into FFmpeg build" >&2; exit 1
+fi
+
+# Deterministic real WAV smoke and malformed/non-audio failures. Codec fixtures
+# are transient network inputs and are never copied to the artifact directory.
+python3 - "$work/tone.wav" <<'PY'
+import math, struct, sys, wave
+with wave.open(sys.argv[1], "wb") as f:
+    f.setnchannels(1); f.setsampwidth(2); f.setframerate(8000)
+    f.writeframes(b"".join(struct.pack("<h", int(12000*math.sin(2*math.pi*440*n/8000))) for n in range(800)))
+PY
+"$tool" -nostdin -v error -protocol_whitelist file -i "$work/tone.wav" -ar 16000 -ac 1 -c:a pcm_s16le -f s16le "$work/tone.pcm"
+test "$(wc -c < "$work/tone.pcm" | tr -d ' ')" = 3200
+tab=$(printf '\t')
+jq -e '.distribution == "transient-manual-ci-only" and .redistribution == "prohibited-license-unverified" and .included_in_artifacts == false' "$root/third_party/ffmpeg/fixtures.json" >/dev/null
+jq -er '.fixtures[] | [.format,.url,(.bytes|tostring),.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
+while IFS="$tab" read -r fixture_format fixture_url fixture_bytes fixture_sha; do
+  fixture="$work/fixture.$fixture_format"
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 \
+    --max-filesize 1048576 "$fixture_url" -o "$fixture"
+  test "$(wc -c < "$fixture" | tr -d ' ')" = "$fixture_bytes"
+  printf '%s  %s\n' "$fixture_sha" "$fixture" | shasum -a 256 -c -
+  "$tool" -nostdin -v error -protocol_whitelist pipe -i pipe:0 -frames:a 16000 \
+    -ar 16000 -ac 1 -c:a pcm_s16le -f s16le pipe:1 < "$fixture" > "$work/$fixture_format.pcm"
+  test -s "$work/$fixture_format.pcm"
+done
+if printf 'not media' | "$tool" -nostdin -v error -protocol_whitelist pipe -i pipe:0 -f s16le - >/dev/null 2>&1; then exit 1; fi
+
+bytes=$(wc -c < "$tool" | tr -d ' ')
+sha=$(shasum -a 256 "$tool" | awk '{print $1}')
+compiler=$(cc --version 2>/dev/null | head -n 1 || cl 2>&1 | head -n 1 || true)
+deps='[]'
+case "$format" in
+  mach-o) deps=$(otool -L "$tool" | tail -n +2 | awk '{print $1}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+esac
+case "$target" in
+  aarch64-apple-darwin) expected_deps='["/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation","/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia","/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo","/usr/lib/libSystem.B.dylib"]' ;;
+  *-unknown-linux-gnu) expected_deps='["libc.so.6","libm.so.6","libpthread.so.0"]' ;;
+  x86_64-pc-windows-msvc) expected_deps='["ADVAPI32.dll","KERNEL32.dll","OLE32.dll","USER32.dll"]' ;;
+esac
+test "$(printf '%s' "$deps" | jq -cS .)" = "$(printf '%s' "$expected_deps" | jq -cS .)"
+case "$format-$arch" in
+  mach-o-aarch64) file "$tool" | grep -q 'Mach-O 64-bit executable arm64' ;;
+  elf-x86_64) file "$tool" | grep -q 'ELF 64-bit.*x86-64' ;;
+  elf-aarch64) file "$tool" | grep -q 'ELF 64-bit.*ARM aarch64' ;;
+  pe-x86_64) file "$tool" | grep -Eq 'PE32\+ executable.*x86-64' ;;
+esac
+configure=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1]')
+jq -n --arg version 8.1.2 --arg target "$target" --arg sha "$sha" --argjson bytes "$bytes" \
+  --arg format "$format" --arg arch "$arch" --arg compiler "$compiler" --argjson configure "$configure" --argjson deps "$deps" \
+  '{schema_version:1,ffmpeg_version:$version,target:$target,executable_bytes:$bytes,executable_sha256:$sha,configure:$configure,binary_format:$format,binary_architecture:$arch,dependencies:$deps,toolchain:$compiler}' > "$output_dir/ffmpeg-authority-$target.json"
+cp "$tool" "$output_dir/ffmpeg-$target"
+cp "$src/COPYING.LGPLv2.1" "$output_dir/COPYING.LGPLv2.1"
+license_sha=$(shasum -a 256 "$output_dir/COPYING.LGPLv2.1" | awk '{print $1}')
+jq -n --arg target "$target" --arg binary "ffmpeg-$target" \
+  --arg authority "ffmpeg-authority-$target.json" --arg license_sha "$license_sha" \
+  '{schema_version:1,target:$target,distributed_files:[$binary,$authority,"COPYING.LGPLv2.1"],license_sha256:$license_sha,fixture_policy:{included:false,usage:"transient manual CI decoder smoke",redistribution:"prohibited-license-unverified"}}' \
+  > "$output_dir/ffmpeg-inventory-$target.json"
+artifact_sha_before=$(shasum -a 256 "$output_dir/ffmpeg-$target" | awk '{print $1}')
+artifact_bytes_before=$(wc -c < "$output_dir/ffmpeg-$target" | tr -d ' ')
+if [ "${FFMPEG_AUDIT_PRODUCTION_SMOKE:-}" = 1 ]; then
+  fixture_dir="$work/production-fixtures"; mkdir "$fixture_dir"
+  jq -er '.fixtures[] | [.format,.url,.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
+  while IFS="$tab" read -r fixture_format fixture_url fixture_sha; do
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors "$fixture_url" -o "$fixture_dir/sample.$fixture_format"
+    printf '%s  %s\n' "$fixture_sha" "$fixture_dir/sample.$fixture_format" | shasum -a 256 -c -
+  done
+  FFMPEG_TEST_EXECUTABLE="$output_dir/ffmpeg-$target" \
+    FFMPEG_TEST_AUTHORITY="$output_dir/ffmpeg-authority-$target.json" \
+    FFMPEG_TEST_FIXTURES="$fixture_dir" cargo test -p into-markdown-ffmpeg native_smoke -- --ignored
+fi
+test "$(shasum -a 256 "$output_dir/ffmpeg-$target" | awk '{print $1}')" = "$artifact_sha_before"
+test "$(wc -c < "$output_dir/ffmpeg-$target" | tr -d ' ')" = "$artifact_bytes_before"
+expected_files=$(printf '%s\n' "COPYING.LGPLv2.1" "ffmpeg-$target" "ffmpeg-authority-$target.json" "ffmpeg-inventory-$target.json" | sort)
+actual_files=$(find "$output_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort)
+test "$actual_files" = "$expected_files"
+test "$(find "$output_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" = ""
+echo "FFmpeg audit passed: $target $bytes bytes $sha"
