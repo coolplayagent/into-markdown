@@ -11,6 +11,9 @@ use std::collections::BTreeSet;
 const XHTML_NS: &[u8] = b"http://www.w3.org/1999/xhtml";
 const EPUB_NS: &[u8] = b"http://www.idpf.org/2007/ops";
 const NCX_NS: &[u8] = b"http://www.daisy.org/z3986/2005/ncx/";
+const MATHML_NS: &[u8] = b"http://www.w3.org/1998/Math/MathML";
+const SVG_NS: &[u8] = b"http://www.w3.org/2000/svg";
+const XLINK_NS: &[u8] = b"http://www.w3.org/1999/xlink";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NavEntry {
@@ -41,6 +44,10 @@ struct Frame {
     toc_root: bool,
     headings: u8,
     span_label: bool,
+    label_fallback: Option<String>,
+    embedded: bool,
+    alternative_declared: bool,
+    missing_alternative: bool,
 }
 
 #[allow(clippy::too_many_lines)] // Navigation XML is validated in one streaming state machine.
@@ -82,8 +89,8 @@ pub(super) fn parse_nav(
                     }
                     root_seen = true;
                 }
-                if name.namespace.as_deref().is_some_and(|namespace| namespace != XHTML_NS) {
-                    return Err(xml::malformed("navigation contains a foreign element namespace"));
+                if !is_known_navigation_namespace(name.namespace.as_deref()) {
+                    return Err(xml::malformed("navigation contains an unsupported namespace"));
                 }
                 let parent_in_toc = stack.last().is_some_and(|frame| frame.in_toc);
                 let declared_toc = name.matches(Some(XHTML_NS), b"nav")
@@ -97,6 +104,8 @@ pub(super) fn parse_nav(
                 }
                 let in_toc = parent_in_toc || declared_toc;
                 if in_toc && !declared_toc {
+                    let nested_anchor = name.matches(Some(XHTML_NS), b"a")
+                        && stack.iter().any(|frame| frame.name.matches(Some(XHTML_NS), b"a"));
                     let parent = stack
                         .last_mut()
                         .ok_or_else(|| xml::malformed("navigation toc has no parent"))?;
@@ -130,11 +139,8 @@ pub(super) fn parse_nav(
                         } else {
                             false
                         }
-                    } else if is_label_container(&parent.name)
-                        || is_heading(&parent.name)
-                        || is_phrasing(&parent.name)
-                    {
-                        is_phrasing(&name)
+                    } else if is_label_content(&parent.name) {
+                        !nested_anchor && is_label_child(&parent.name, &name)
                     } else {
                         false
                     };
@@ -143,25 +149,49 @@ pub(super) fn parse_nav(
                             "EPUB toc must follow nav/ol/li/(a|span) direct-child grammar",
                         ));
                     }
+                    validate_inert_label_element(&name, &attributes, &base)?;
                 }
                 let mut list_depth = stack.last().map_or(0, |frame| frame.list_depth);
                 if in_toc && name.namespace.as_deref() == Some(XHTML_NS) && name.local == b"ol" {
                     list_depth = list_depth.saturating_add(1);
                 }
-                let href = if in_toc && name.matches(Some(XHTML_NS), b"a") {
+                let direct_label = in_toc
+                    && stack.last().is_some_and(|parent| {
+                        parent.name.matches(Some(XHTML_NS), b"li") && is_label_container(&name)
+                    });
+                let href = if direct_label && name.matches(Some(XHTML_NS), b"a") {
                     let href = xml::required(&attributes, None, b"href", "navigation href")?;
                     Some(base.resolve(href)?.require_existing(archive)?)
                 } else {
+                    if in_toc
+                        && name.matches(Some(XHTML_NS), b"a")
+                        && let Some(value) = xml::optional(&attributes, None, b"href")
+                    {
+                        base.resolve(value)?;
+                    }
                     None
                 };
-                let group_label = in_toc
-                    && name.matches(Some(XHTML_NS), b"span")
-                    && stack
-                        .last()
-                        .is_some_and(|parent| parent.name.matches(Some(XHTML_NS), b"li"));
+                let group_label = direct_label && name.matches(Some(XHTML_NS), b"span");
                 let suppressed_text = stack.last().is_some_and(|frame| frame.suppressed_text)
                     || name.namespace.as_deref() == Some(XHTML_NS)
                         && matches!(name.local.as_slice(), b"script" | b"style");
+                let mut text = String::new();
+                let alternative =
+                    in_toc.then(|| accessible_alternative(&name, &attributes)).flatten();
+                if let Some(alternative) = alternative {
+                    append_text(&mut text, alternative, budget)?;
+                }
+                let label_fallback = if direct_label {
+                    xml::optional(&attributes, None, b"title")
+                        .filter(|value| !value.trim().is_empty())
+                        .map(str::to_owned)
+                } else {
+                    None
+                };
+                if let Some(value) = &label_fallback {
+                    budget.field("navigation label", value.len())?;
+                }
+                let embedded = is_embedded_content(&name);
                 let frame = Frame {
                     name,
                     base,
@@ -169,7 +199,7 @@ pub(super) fn parse_nav(
                     list_depth,
                     href,
                     group_label,
-                    text: String::new(),
+                    text,
                     suppressed_text,
                     label_sources: 0,
                     nested_lists: 0,
@@ -177,16 +207,20 @@ pub(super) fn parse_nav(
                     toc_root: declared_toc,
                     headings: 0,
                     span_label: false,
+                    label_fallback,
+                    embedded,
+                    alternative_declared: alternative.is_some(),
+                    missing_alternative: false,
                 };
                 if empty {
                     if in_toc
                         && matches!(frame.name.local.as_slice(), b"br" | b"wbr")
                         && let Some(parent) = stack.last_mut()
-                        && (is_label_container(&parent.name) || is_phrasing(&parent.name))
+                        && is_label_content(&parent.name)
                     {
                         append_label_text(parent, " ", budget)?;
                     }
-                    finish_nav_frame(frame, &mut entries, budget)?;
+                    close_nav_frame(frame, &mut stack, &mut entries, budget)?;
                 } else {
                     stack.push(frame);
                 }
@@ -197,18 +231,7 @@ pub(super) fn parse_nav(
                 if xml::end_name(&reader, element.name())? != frame.name {
                     return Err(xml::malformed("navigation end tag namespace mismatch"));
                 }
-                if frame.in_toc
-                    && is_phrasing(&frame.name)
-                    && frame.href.is_none()
-                    && !frame.group_label
-                    && let Some(parent) = stack.last_mut()
-                    && (is_label_container(&parent.name)
-                        || is_heading(&parent.name)
-                        || is_phrasing(&parent.name))
-                {
-                    append_label_text(parent, &frame.text, budget)?;
-                }
-                finish_nav_frame(frame, &mut entries, budget)?;
+                close_nav_frame(frame, &mut stack, &mut entries, budget)?;
             }
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
                 let text = xml::decoded_text(&event)?.unwrap_or_default();
@@ -244,6 +267,28 @@ pub(super) fn parse_nav(
     Ok(Navigation { source_path: path.into(), entries })
 }
 
+fn close_nav_frame(
+    mut frame: Frame,
+    stack: &mut [Frame],
+    entries: &mut Vec<NavEntry>,
+    budget: &EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    let missing_alternative = frame.missing_alternative
+        || frame.embedded && !frame.alternative_declared && normalize(&frame.text).is_empty();
+    if frame.in_toc
+        && is_label_content(&frame.name)
+        && frame.href.is_none()
+        && !frame.group_label
+        && let Some(parent) = stack.last_mut()
+        && is_label_content(&parent.name)
+    {
+        append_label_text(parent, &frame.text, budget)?;
+        parent.missing_alternative |= missing_alternative;
+    }
+    frame.missing_alternative = missing_alternative;
+    finish_nav_frame(frame, entries, budget)
+}
+
 fn finish_nav_frame(
     frame: Frame,
     entries: &mut Vec<NavEntry>,
@@ -266,7 +311,17 @@ fn finish_nav_frame(
         return Err(xml::malformed("EPUB toc span labels must introduce a nested ol"));
     }
     if frame.href.is_some() || frame.group_label {
-        let label = normalize(&frame.text);
+        if frame.missing_alternative && frame.label_fallback.is_none() {
+            return Err(xml::malformed(
+                "navigation label embedded content has no text alternative",
+            ));
+        }
+        let mut label = normalize(&frame.text);
+        if label.is_empty()
+            && let Some(fallback) = frame.label_fallback
+        {
+            label = normalize(&fallback);
+        }
         if label.is_empty() {
             return Err(xml::malformed("navigation link has no label"));
         }
@@ -282,9 +337,17 @@ fn append_label_text(
     text: &str,
     budget: &EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
-    let next = frame.text.len().saturating_add(text.len());
+    append_text(&mut frame.text, text, budget)
+}
+
+fn append_text(
+    output: &mut String,
+    text: &str,
+    budget: &EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    let next = output.len().saturating_add(text.len());
     budget.field("navigation label", next)?;
-    frame.text.push_str(text);
+    output.push_str(text);
     Ok(())
 }
 
@@ -297,38 +360,176 @@ fn is_heading(name: &Name) -> bool {
         && matches!(name.local.as_slice(), b"h1" | b"h2" | b"h3" | b"h4" | b"h5" | b"h6")
 }
 
-fn is_phrasing(name: &Name) -> bool {
+fn is_known_navigation_namespace(namespace: Option<&[u8]>) -> bool {
+    matches!(namespace, None | Some(XHTML_NS | MATHML_NS | SVG_NS))
+}
+
+fn is_label_content(name: &Name) -> bool {
+    is_label_container(name)
+        || is_heading(name)
+        || is_html_phrasing(name)
+        || name.namespace.as_deref() == Some(XHTML_NS)
+            && matches!(name.local.as_slice(), b"optgroup" | b"option" | b"source" | b"track")
+        || matches!(name.namespace.as_deref(), Some(MATHML_NS | SVG_NS))
+}
+
+fn is_label_child(parent: &Name, child: &Name) -> bool {
+    match parent.namespace.as_deref() {
+        Some(XHTML_NS) => {
+            is_html_phrasing(child)
+                || matches!(child.namespace.as_deref(), Some(MATHML_NS | SVG_NS))
+                || parent.local == b"picture" && child.matches(Some(XHTML_NS), b"source")
+                || parent.local == b"datalist" && child.matches(Some(XHTML_NS), b"option")
+                || matches!(parent.local.as_slice(), b"audio" | b"video")
+                    && child.namespace.as_deref() == Some(XHTML_NS)
+                    && matches!(child.local.as_slice(), b"source" | b"track")
+                || parent.local == b"select"
+                    && child.namespace.as_deref() == Some(XHTML_NS)
+                    && matches!(child.local.as_slice(), b"optgroup" | b"option")
+                || parent.local == b"optgroup" && child.matches(Some(XHTML_NS), b"option")
+        }
+        Some(MATHML_NS) => child.namespace.as_deref() == Some(MATHML_NS),
+        Some(SVG_NS) => child.namespace.as_deref() == Some(SVG_NS),
+        _ => false,
+    }
+}
+
+fn is_html_phrasing(name: &Name) -> bool {
     name.namespace.as_deref() == Some(XHTML_NS)
         && matches!(
             name.local.as_slice(),
-            b"abbr"
+            b"a" | b"abbr"
+                | b"area"
+                | b"audio"
                 | b"b"
                 | b"bdi"
                 | b"bdo"
                 | b"br"
+                | b"button"
+                | b"canvas"
                 | b"cite"
                 | b"code"
                 | b"data"
+                | b"datalist"
+                | b"del"
                 | b"dfn"
                 | b"em"
+                | b"embed"
                 | b"i"
+                | b"iframe"
+                | b"img"
+                | b"input"
+                | b"ins"
                 | b"kbd"
+                | b"label"
+                | b"link"
+                | b"map"
                 | b"mark"
+                | b"meta"
+                | b"meter"
+                | b"noscript"
+                | b"object"
+                | b"output"
+                | b"picture"
+                | b"progress"
                 | b"q"
                 | b"ruby"
+                | b"rb"
                 | b"rp"
                 | b"rt"
+                | b"rtc"
                 | b"s"
                 | b"samp"
+                | b"script"
+                | b"select"
+                | b"slot"
                 | b"small"
                 | b"span"
                 | b"strong"
                 | b"sub"
                 | b"sup"
+                | b"textarea"
                 | b"time"
+                | b"u"
                 | b"var"
+                | b"video"
                 | b"wbr"
         )
+}
+
+fn validate_inert_label_element(
+    name: &Name,
+    attributes: &[xml::Attribute],
+    base: &BasePath,
+) -> Result<(), ConversionError> {
+    let active = match name.namespace.as_deref() {
+        Some(XHTML_NS) => matches!(
+            name.local.as_slice(),
+            b"button"
+                | b"embed"
+                | b"iframe"
+                | b"object"
+                | b"script"
+                | b"style"
+                | b"template"
+                | b"textarea"
+        ),
+        Some(SVG_NS) => matches!(
+            name.local.as_slice(),
+            b"animate"
+                | b"animateMotion"
+                | b"animateTransform"
+                | b"discard"
+                | b"foreignObject"
+                | b"image"
+                | b"script"
+                | b"set"
+                | b"style"
+                | b"use"
+        ),
+        Some(MATHML_NS) => matches!(name.local.as_slice(), b"annotation-xml" | b"maction"),
+        _ => false,
+    };
+    let active_attribute = attributes.iter().any(|attribute| {
+        attribute.namespace.is_none()
+            && (attribute.local.starts_with(b"on") || attribute.local == b"srcdoc")
+    });
+    if active || active_attribute {
+        return Err(xml::malformed("active content is forbidden in EPUB navigation labels"));
+    }
+    if name.namespace.as_deref() == Some(XHTML_NS)
+        && matches!(name.local.as_slice(), b"link" | b"meta")
+        && xml::optional(attributes, None, b"itemprop").is_none()
+    {
+        return Err(xml::malformed("navigation label metadata phrasing content requires itemprop"));
+    }
+    for attribute in attributes {
+        let reference = (attribute.namespace.is_none()
+            && matches!(attribute.local.as_slice(), b"data" | b"href" | b"poster" | b"src"))
+            || attribute.namespace.as_deref() == Some(XLINK_NS) && attribute.local == b"href";
+        if reference {
+            base.resolve(&attribute.value)?;
+        }
+    }
+    Ok(())
+}
+
+fn accessible_alternative<'a>(name: &Name, attributes: &'a [xml::Attribute]) -> Option<&'a str> {
+    is_embedded_content(name).then(|| {
+        xml::optional(attributes, None, b"alt")
+            .or_else(|| xml::optional(attributes, None, b"alttext"))
+            .or_else(|| xml::optional(attributes, None, b"title"))
+    })?
+}
+
+fn is_embedded_content(name: &Name) -> bool {
+    name.matches(Some(MATHML_NS), b"math")
+        || name.matches(Some(SVG_NS), b"svg")
+        || name.namespace.as_deref() == Some(XHTML_NS)
+            && matches!(
+                name.local.as_slice(),
+                b"audio" | b"canvas" | b"embed" | b"iframe" | b"img" | b"object" | b"video"
+            )
 }
 
 struct NcxFrame {

@@ -154,10 +154,11 @@ fn retained_rasters_require_complete_payloads_and_bounded_pixels() {
 
 #[test]
 fn epub3_toc_requires_direct_children_and_one_label_per_item() {
-    let valid = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h2>Reader <em>contents</em></h2><ol><li><span>Part <em>One</em></span><ol><li><a href="text/one.xhtml">Read <em>One</em></a></li></ol></li></ol></nav></body></html>"#;
+    let valid = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h2>Reader <em>contents</em></h2><ol><li><span>Part <u>One</u><img alt=" icon"/><a href="text/two.xhtml"> related</a></span><ol><li><a href="text/one.xhtml"><img alt="Cover "/>Read <math xmlns="http://www.w3.org/1998/Math/MathML" alttext=" equation"/><svg xmlns="http://www.w3.org/2000/svg"><title> diagram</title></svg></a></li><li><a href="text/two.xhtml" title="Canvas fallback"><canvas/></a></li></ol></li></ol></nav></body></html>"#;
     let result = convert(epub3_book(epub3_package(), Some(valid))).unwrap();
-    assert!(result.markdown.contains("Part One"));
-    assert!(result.markdown.contains("Read One"));
+    assert!(result.markdown.contains("Part One icon related"));
+    assert!(result.markdown.contains("Cover Read equation diagram"));
+    assert!(result.markdown.contains("Canvas fallback"));
     assert!(super::epub_tests::has_nested_list(&result.document.blocks));
 
     for invalid in [
@@ -166,6 +167,12 @@ fn epub3_toc_requires_direct_children_and_one_label_per_item() {
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">One</a><span>Duplicate</span></li></ol></nav></body></html>"#.as_slice(),
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">One</a></li></ol><ol><li><a href="text/two.xhtml">Two</a></li></ol></nav></body></html>"#.as_slice(),
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><span>Leaf group</span></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><foreign xmlns="urn:invalid">bad</foreign></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><svg xmlns="http://www.w3.org/2000/svg"><script>bad</script></svg></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml" onclick="bad()">One</a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Outer <span><a href="text/two.xhtml">nested</a></span></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Label<img/></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Label<img alt="safe" src="javascript:bad"/></a></li></ol></nav></body></html>"#.as_slice(),
     ] {
         assert_eq!(
             convert(epub3_book(epub3_package(), Some(invalid))).unwrap_err().code(),

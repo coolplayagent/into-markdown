@@ -1439,8 +1439,7 @@ fn validate_fixture_corpus(
 
     let required_formats = BTreeSet::from([
         "csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text",
-        "tsv",
-        "xml", "zip",
+        "tsv", "xml", "zip",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
