@@ -1438,8 +1438,8 @@ fn validate_fixture_corpus(
     validate_fixture_generator(root, &corpus.generator, errors);
 
     let required_formats = BTreeSet::from([
-        "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text", "tsv",
-        "xml", "zip",
+        "csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text",
+        "tsv", "xml", "zip",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
@@ -1477,11 +1477,11 @@ fn validate_fixture_corpus(
         validate_fixture_file(root, fixture, &relative, errors);
     }
     for format in required_formats {
-        // PDF and ZIP fixtures are constructed byte-for-byte in their
+        // EPUB adversarial fixtures, plus PDF and ZIP fixtures, are constructed byte-for-byte in their
         // converter/API test modules. This keeps generated binary archives out
         // of the corpus while preserving deterministic normal/corrupt/limit
         // and adversarial contract coverage under the repository license.
-        if matches!(format, "pdf" | "zip") {
+        if matches!(format, "epub" | "pdf" | "zip") {
             continue;
         }
         let present = scenarios.get(format).cloned().unwrap_or_default();

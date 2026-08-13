@@ -52,6 +52,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
+        .register_converter(Arc::new(into_markdown_converters::EpubConverter))
         .register_converter(Arc::new(into_markdown_converters::ZipConverter))
         .register_converter(Arc::new(into_markdown_converters::RtfConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
@@ -94,6 +95,12 @@ pub fn planned_ai_providers() -> &'static [AiProviderDescriptor] {
 pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
     into_markdown_ocr::ModelManifest::embedded()
 }
+
+#[cfg(test)]
+mod epub_regression_tests;
+
+#[cfg(test)]
+mod epub_tests;
 
 #[cfg(test)]
 mod zip_recursive_tests;

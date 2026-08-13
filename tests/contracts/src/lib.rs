@@ -61,6 +61,7 @@ mod tests {
                 InputFormat::Pdf,
                 InputFormat::Docx,
                 InputFormat::Rtf,
+                InputFormat::Epub,
                 InputFormat::Text,
                 InputFormat::Markdown,
                 InputFormat::Html,

@@ -79,6 +79,42 @@ def docx(document_xml: bytes, relationships: bytes | None = None) -> bytes:
     return zip_bytes(entries)
 
 
+def epub3(chapter_xhtml: bytes) -> bytes:
+    return zip_bytes(
+        [
+            ("mimetype", b"application/epub+zip"),
+            (
+                "META-INF/container.xml",
+                b'<?xml version="1.0"?>'
+                b'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">'
+                b'<rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/>'
+                b'</rootfiles></container>',
+            ),
+            (
+                "EPUB/package.opf",
+                b'<?xml version="1.0"?>'
+                b'<package xmlns="http://www.idpf.org/2007/opf" version="3.3" unique-identifier="uid">'
+                b'<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                b'<dc:identifier id="uid">urn:uuid:repository-epub-corpus</dc:identifier>'
+                b'<dc:title>Corpus EPUB</dc:title><dc:language>en</dc:language>'
+                b'<meta property="dcterms:modified">2026-08-13T00:00:00Z</meta>'
+                b'</metadata><manifest>'
+                b'<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+                b'<item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>'
+                b'</manifest><spine><itemref idref="chapter"/></spine></package>',
+            ),
+            (
+                "EPUB/nav.xhtml",
+                b'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+                b'<head><title>Contents</title></head><body><nav epub:type="toc"><ol>'
+                b'<li><a href="chapter.xhtml#corpus">Corpus chapter</a></li>'
+                b'</ol></nav></body></html>',
+            ),
+            ("EPUB/chapter.xhtml", chapter_xhtml),
+        ]
+    )
+
+
 def expected(
     outcome: str,
     description: str,
@@ -328,6 +364,12 @@ def build(root: Path, font_path: Path) -> None:
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
 
+    epub_normal = epub3(
+        b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Corpus chapter</title></head>'
+        b'<body><main><h1 id="corpus">Corpus chapter</h1><p>Alpha EPUB text.</p></main></body></html>'
+    )
+    add("epub-normal", "epub", "normal", "small/epub/normal.epub", epub_normal, "application/epub+zip", expected("success", "EPUB 3 package with navigation and one XHTML spine item", "# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n"))
+
     ocr_fixtures, ocr_goldens = render_ocr(root, font_path)
     fixtures.extend(ocr_fixtures)
     fixtures.sort(key=lambda item: str(item["id"]))
@@ -346,7 +388,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text", "tsv", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text", "tsv", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {

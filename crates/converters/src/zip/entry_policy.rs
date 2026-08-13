@@ -131,6 +131,10 @@ fn canonical_name(name: &str, kind: EntryKind) -> Result<String, ConversionError
     Ok(canonical)
 }
 
+pub(crate) fn portable_identity(name: &str, directory: bool) -> Result<String, ConversionError> {
+    canonical_name(name, if directory { EntryKind::Directory } else { EntryKind::File })
+}
+
 /// Admit only names whose cross-platform alias behavior is provable without
 /// claiming Unicode full case folding. Compatibility spellings, combining
 /// sequences, non-ASCII case mappings, punctuation, and format characters are

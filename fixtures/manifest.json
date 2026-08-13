@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "8f10627c76ab84cf3b05dd46b59d38db9fbb53118126a4d98b68bd7c0ca59c89",
+    "sha256": "99cacf7e268ea04a4c10e0e717cf262c175b6fbb28e580995a3cfc6f3b7bc69e",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -15,6 +15,7 @@
   "available_formats": [
     "csv",
     "docx",
+    "epub",
     "feed",
     "html",
     "ipynb",
@@ -264,6 +265,34 @@
         "error_code": "",
         "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
         "description": "one WordprocessingML paragraph"
+      }
+    },
+    {
+      "id": "epub-normal",
+      "format": "epub",
+      "scenario": "normal",
+      "path": "small/epub/normal.epub",
+      "bytes": 1805,
+      "sha256": "530c1d404445613151a822dbb5d14ac1b0bec17a86cfe332be501f5b06c96d5b",
+      "media_type": "application/epub+zip",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6",
+        "description": "EPUB 3 package with navigation and one XHTML spine item"
       }
     },
     {

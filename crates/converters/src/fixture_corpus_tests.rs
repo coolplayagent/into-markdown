@@ -1,8 +1,9 @@
 use super::*;
 use into_markdown_core::{
     AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, Converter,
-    ErrorCode, ExecutionOptions, FormatCandidate, OcrEngine, OcrRequest, OcrResult, Services,
-    Transcriber, TranscriptionRequest, TranscriptionResult,
+    ConverterOutput, ErrorCode, ExecutionOptions, FormatCandidate, NestedConversionRequest,
+    NestedConversionService, OcrEngine, OcrRequest, OcrResult, Services, Transcriber,
+    TranscriptionRequest, TranscriptionResult,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -74,6 +75,29 @@ impl AiProvider for RequestCounter {
     }
 }
 
+struct HtmlNested;
+
+impl NestedConversionService for HtmlNested {
+    fn convert<'a>(
+        &'a self,
+        request: NestedConversionRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+        Box::pin(async move {
+            let services = Services::default();
+            HtmlConverter
+                .convert(
+                    request.input,
+                    &FormatCandidate::explicit(InputFormat::Html),
+                    request.options,
+                    &services,
+                    context,
+                )
+                .await
+        })
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -131,6 +155,7 @@ fn format(value: &str) -> InputFormat {
     match value {
         "csv" => InputFormat::Csv,
         "docx" => InputFormat::Docx,
+        "epub" => InputFormat::Epub,
         "feed" => InputFormat::Feed,
         "html" => InputFormat::Html,
         "ipynb" => InputFormat::Ipynb,
@@ -153,6 +178,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Json | InputFormat::Xml => Box::new(StructuredDataConverter),
         InputFormat::Ipynb => Box::new(NotebookConverter),
         InputFormat::Docx => Box::new(DocxConverter),
+        InputFormat::Epub => Box::new(EpubConverter),
         InputFormat::Feed => Box::new(FeedConverter),
         InputFormat::Rtf => Box::new(RtfConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
@@ -217,7 +243,7 @@ fn execute(
         ocr: Some(requests.clone()),
         transcriber: Some(requests.clone()),
         ai: Some(requests.clone()),
-        nested: None,
+        nested: Some(Arc::new(HtmlNested)),
     };
     let converted = block_on(converter(format).convert(
         &input,

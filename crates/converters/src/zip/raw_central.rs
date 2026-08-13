@@ -43,6 +43,8 @@ struct Record<'a> {
     expanded: u64,
     local_start: usize,
     physical_end: usize,
+    central_extra_len: usize,
+    local_extra_len: usize,
 }
 
 pub(super) fn preflight(
@@ -179,6 +181,9 @@ fn collect_records(
             compressed_size: record.compressed,
             expanded_size: record.expanded,
             deflated: record.method == 8,
+            physical_start: record.local_start,
+            central_extra_len: record.central_extra_len,
+            local_extra_len: record.local_extra_len,
         });
         cursor = next;
     }
@@ -243,7 +248,7 @@ fn record_at(
     if local_start >= layout.central_start {
         return Err(malformed("local header starts in the central directory"));
     }
-    let physical_end = validate_local(
+    let (physical_end, local_extra_len) = validate_local(
         bytes,
         layout.central_start,
         local_start,
@@ -269,6 +274,8 @@ fn record_at(
             expanded,
             local_start,
             physical_end,
+            central_extra_len: extra_len,
+            local_extra_len,
         },
         next,
     ))
@@ -285,7 +292,7 @@ fn validate_local(
     crc: u32,
     compressed: u32,
     expanded: u32,
-) -> Result<usize, ConversionError> {
+) -> Result<(usize, usize), ConversionError> {
     let local = slice(bytes, local_start, LOCAL_LEN, "local header")?;
     if local.get(..4) != Some(b"PK\x03\x04") {
         return Err(malformed("local header signature is invalid"));
@@ -323,7 +330,7 @@ fn validate_local(
     if physical_end > central_start {
         return Err(malformed("entry overlaps the central directory"));
     }
-    Ok(physical_end)
+    Ok((physical_end, extra_len))
 }
 
 fn validate_descriptor(
