@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import shutil
 import struct
@@ -13,6 +14,7 @@ import sys
 import tempfile
 import unicodedata
 import zipfile
+import zlib
 from pathlib import Path
 
 GENERATOR_VERSION = "1.0.0"
@@ -78,6 +80,175 @@ def docx(document_xml: bytes, relationships: bytes | None = None) -> bytes:
     if relationships is not None:
         entries.append(("word/_rels/document.xml.rels", relationships))
     return zip_bytes(entries)
+
+
+def odf(
+    format_name: str,
+    content_xml: bytes,
+    extra_entries: tuple[tuple[str, str, bytes], ...] = (),
+    content_media_type: str = "text/xml",
+    manifest_suffix: str = "",
+) -> bytes:
+    media_types = {
+        "odt": "application/vnd.oasis.opendocument.text",
+        "ods": "application/vnd.oasis.opendocument.spreadsheet",
+        "odp": "application/vnd.oasis.opendocument.presentation",
+    }
+    media_type = media_types[format_name]
+    manifest = (
+        f"<manifest:manifest xmlns:manifest='urn:oasis:names:tc:opendocument:xmlns:manifest:1.0' manifest:version='1.3'>"
+        f"<manifest:file-entry manifest:full-path='/' manifest:media-type='{media_type}'/>"
+        f"<manifest:file-entry manifest:full-path='content.xml' manifest:media-type='{content_media_type}'/>"
+        + "".join(
+            f"<manifest:file-entry manifest:full-path='{name}' manifest:media-type='{part_media}'/>"
+            for name, part_media, _ in extra_entries
+        )
+        + manifest_suffix
+        + "</manifest:manifest>"
+    ).encode()
+    return zip_bytes(
+        [
+            ("mimetype", media_type.encode()),
+            ("content.xml", content_xml),
+            ("META-INF/manifest.xml", manifest),
+            *((name, data) for name, _, data in extra_entries),
+        ]
+    )
+
+
+def odf_central_unicode_extra(package: bytes, target: bytes, replacement: bytes) -> bytes:
+    """Add a central-only Unicode Path extra field without changing the local raw name."""
+    output = bytearray(package)
+    eocd = len(output) - 22
+    central_start = struct.unpack_from("<I", output, eocd + 16)[0]
+    central_size = struct.unpack_from("<I", output, eocd + 12)[0]
+    cursor = central_start
+    while cursor < eocd:
+        name_len, extra_len, comment_len = struct.unpack_from("<HHH", output, cursor + 28)
+        name_start = cursor + 46
+        name = bytes(output[name_start : name_start + name_len])
+        next_cursor = name_start + name_len + extra_len + comment_len
+        if name == target:
+            payload = b"\x01" + struct.pack("<I", zlib.crc32(target)) + replacement
+            field = struct.pack("<HH", 0x7075, len(payload)) + payload
+            insert_at = name_start + name_len + extra_len
+            output[insert_at:insert_at] = field
+            struct.pack_into("<H", output, cursor + 30, extra_len + len(field))
+            eocd += len(field)
+            struct.pack_into("<I", output, eocd + 12, central_size + len(field))
+            return bytes(output)
+        cursor = next_cursor
+    raise ValueError(f"central entry not found: {target!r}")
+
+
+def odf_invalid_utf8_name(package: bytes, target: bytes) -> bytes:
+    """Bind the same invalid bit-11 UTF-8 bytes into local and central names."""
+    output = bytearray(package)
+    eocd = len(output) - 22
+    central_start = struct.unpack_from("<I", output, eocd + 16)[0]
+    cursor = 0
+    while cursor < central_start:
+        name_len, extra_len = struct.unpack_from("<HH", output, cursor + 26)
+        compressed = struct.unpack_from("<I", output, cursor + 18)[0]
+        name_start = cursor + 30
+        if bytes(output[name_start : name_start + name_len]) == target:
+            output[name_start] = 0xFF
+            flags = struct.unpack_from("<H", output, cursor + 6)[0] | (1 << 11)
+            struct.pack_into("<H", output, cursor + 6, flags)
+        cursor = name_start + name_len + extra_len + compressed
+    cursor = central_start
+    while cursor < eocd:
+        name_len, extra_len, comment_len = struct.unpack_from("<HHH", output, cursor + 28)
+        name_start = cursor + 46
+        if bytes(output[name_start : name_start + name_len]) == target:
+            output[name_start] = 0xFF
+            flags = struct.unpack_from("<H", output, cursor + 8)[0] | (1 << 11)
+            struct.pack_into("<H", output, cursor + 8, flags)
+        cursor = name_start + name_len + extra_len + comment_len
+    return bytes(output)
+
+
+def odf_fixtures(root: Path) -> list[dict[str, object]]:
+    fixtures: list[dict[str, object]] = []
+    add = lambda *args: fixtures.append(generated_fixture(root, *args))
+    namespaces = (
+        "xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0' "
+        "xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0' "
+        "xmlns:table='urn:oasis:names:tc:opendocument:xmlns:table:1.0' "
+        "xmlns:draw='urn:oasis:names:tc:opendocument:xmlns:drawing:1.0' "
+        "xmlns:presentation='urn:oasis:names:tc:opendocument:xmlns:presentation:1.0' "
+        "xmlns:style='urn:oasis:names:tc:opendocument:xmlns:style:1.0' "
+        "xmlns:dc='http://purl.org/dc/elements/1.1/' "
+        "xmlns:fo='urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0' "
+        "xmlns:xlink='http://www.w3.org/1999/xlink' "
+        "xmlns:svg='urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0'"
+    )
+    odt_normal_xml = (
+        f"<office:document-content {namespaces} office:version='1.3'>"
+        "<office:automatic-styles><style:style style:name='Strong' style:family='text'>"
+        "<style:text-properties fo:font-weight='bold'/></style:style>"
+        "<text:list-style style:name='Bullets'><text:list-level-style-bullet text:level='1' text:bullet-char='•'/></text:list-style></office:automatic-styles>"
+        "<office:body><office:text><text:h text:outline-level='2'>Corpus ODT</text:h>"
+        "<text:p>Alpha <text:span text:style-name='Strong'>中文</text:span></text:p>"
+        "<text:list text:style-name='Bullets'><text:list-item><text:p>item</text:p></text:list-item></text:list>"
+        "<table:table><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell>"
+        "<table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table>"
+        "</office:text></office:body></office:document-content>"
+    ).encode()
+    odt_normal = odf("odt", odt_normal_xml)
+    add("odt-normal", "odt", "normal", "small/odt/normal.odt", odt_normal, "application/vnd.oasis.opendocument.text", expected("success", "ODT heading, styled text, list, and table", "## Corpus ODT\n\nAlpha <strong>中文</strong>\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n"))
+    add("odt-corrupt", "odt", "corrupt", "small/odt/corrupt.odt", odt_normal[: len(odt_normal) // 2], "application/vnd.oasis.opendocument.text", expected("error", "truncated ODT ZIP package", error_code="malformed"))
+    odt_limit_xml = (f"<office:document-content {namespaces}><office:body><office:text><text:section><text:p>x</text:p></text:section></office:text></office:body></office:document-content>").encode()
+    add("odt-limit", "odt", "limit", "small/odt/limit.odt", odf("odt", odt_limit_xml), "application/vnd.oasis.opendocument.text", limit_expected("ODT XML crosses the exact nesting boundary", "max_nesting_depth", 4, 5, "max_nesting_depth", "x\n"))
+    add("odt-encrypted", "odt", "encrypted", "small/odt/encrypted.odt", patch_encrypted_flag(odt_normal), "application/vnd.oasis.opendocument.text", expected("error", "encrypted ODF ZIP flags are rejected before XML", error_code="encrypted"))
+    odt_mimetype = bytearray(odt_normal)
+    struct.pack_into("<H", odt_mimetype, 6, struct.unpack_from("<H", odt_mimetype, 6)[0] | (1 << 3))
+    add("odt-mimetype-malicious", "odt", "malicious", "small/odt/mimetype-malicious.odt", bytes(odt_mimetype), "application/vnd.oasis.opendocument.text", expected("error", "mimetype local data descriptor flag is rejected", error_code="malformed"))
+    odt_image_xml = (f"<office:document-content {namespaces}><office:body><office:text><draw:frame><draw:image xlink:type='simple' xlink:href='Pictures/bad.png'/></draw:frame></office:text></office:body></office:document-content>").encode()
+    add("odt-image-malicious", "odt", "malicious", "small/odt/image-malicious.odt", odf("odt", odt_image_xml, (("Pictures/bad.png", "image/png", b"not a png"),)), "application/vnd.oasis.opendocument.text", expected("error", "referenced image must pass MIME, extension, sniff, and full decode", error_code="malformed"))
+    odt_ranged_xml = (f"<office:document-content {namespaces}><office:body><office:text><text:p><office:annotation office:name='review-1'><dc:creator>Ada</dc:creator><dc:date>2026-08-13</dc:date><text:p>check range</text:p></office:annotation>selected<office:annotation-end office:name='review-1'/></text:p></office:text></office:body></office:document-content>").encode()
+    add("odt-ranged-annotation", "odt", "normal", "small/odt/ranged-annotation.odt", odf("odt", odt_ranged_xml), "application/vnd.oasis.opendocument.text", expected("success", "paired ranged annotation retains safe author/date and visible text", r"\[Comment by Ada (2026\-08\-13): check range\]selected" + "\n"))
+    odt_implicit_list_xml = (f"<office:document-content {namespaces}><office:automatic-styles><text:list-style style:name='N'><text:list-level-style-number text:level='1' style:num-format='1'/><text:list-level-style-bullet text:level='2' text:bullet-char='•'/></text:list-style></office:automatic-styles><office:body><office:text><text:list text:style-name='N'><text:list-header><text:p>Prefix</text:p></text:list-header><text:list-item><text:p>outer</text:p><text:list><text:list-item><text:p>nested</text:p></text:list-item></text:list></text:list-item></text:list></office:text></office:body></office:document-content>").encode()
+    add("odt-implicit-nested-list", "odt", "nested", "small/odt/implicit-nested-list.odt", odf("odt", odt_implicit_list_xml), "application/vnd.oasis.opendocument.text", expected("success", "nested list inherits outer style identity while header remains markerless", "Prefix\n\n1. outer\n    \n    - nested\n"))
+    dot_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+    odt_image_success_xml = (f"<office:document-content {namespaces}><office:body><office:text><draw:frame><draw:image draw:name='dot' xlink:type='simple' xlink:href='Pictures/dot.png'/></draw:frame></office:text></office:body></office:document-content>").encode()
+    odt_image_success = odf("odt", odt_image_success_xml, (("Pictures/dot.png", "image/png", dot_png),))
+    with zipfile.ZipFile(io.BytesIO(odt_image_success)) as image_archive:
+        core_bytes = image_archive.getinfo("content.xml").file_size + image_archive.getinfo("META-INF/manifest.xml").file_size
+        metadata_bytes = sum(len(info.filename.encode()) * 2 for info in image_archive.infolist())
+        package_peak = core_bytes * 64 + metadata_bytes + len(image_archive.infolist()) * 512 + 1024 * 1024 + 16 * 1024
+    image_peak = package_peak + len(dot_png) * 2 + 16_000_000 * 32 + len(dot_png) * 2 + 262_144
+    image_markdown = f"![dot](<asset-{sha256(dot_png)}.png>)\n"
+    add("odt-image-exact", "odt", "limit", "small/odt/image-exact.odt", odt_image_success, "application/vnd.oasis.opendocument.text", limit_expected("reachable image read and decoder require an authenticated exact memory plan", "max_memory_bytes", image_peak - 1, image_peak, "max_memory_bytes", image_markdown))
+    odt_central_extra = odf_central_unicode_extra(odt_normal, b"content.xml", b"renamed.xml")
+    add("odt-central-name-extra-malicious", "odt", "malicious", "small/odt/central-name-extra-malicious.odt", odt_central_extra, "application/vnd.oasis.opendocument.text", expected("error", "central Unicode Path extra cannot rename an authenticated raw part", error_code="malformed"))
+    add("odt-invalid-utf8-name-malicious", "odt", "malicious", "small/odt/invalid-utf8-name-malicious.odt", odf_invalid_utf8_name(odt_normal, b"content.xml"), "application/vnd.oasis.opendocument.text", expected("error", "bit-11 raw ZIP names must be strict UTF-8", error_code="malformed"))
+
+    ods_normal_xml = (f"<office:document-content {namespaces} office:version='1.3'><office:body><office:spreadsheet><table:table table:name='Data'><table:table-row><table:table-cell office:value-type='string' office:string-value='Alpha'/><table:table-cell office:value-type='float' office:value='1'/></table:table-row><table:table-row table:number-rows-repeated='2'><table:table-cell><text:p>tail</text:p></table:table-cell><table:table-cell table:number-columns-repeated='2'/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>").encode()
+    ods_normal = odf("ods", ods_normal_xml)
+    add("ods-normal", "ods", "normal", "small/ods/normal.ods", ods_normal, "application/vnd.oasis.opendocument.spreadsheet", expected("success", "ODS sparse sheet with repeated rows and columns", "## Sheet: Data\n\n|  |  |\n| --- | --- |\n| Alpha | 1 |\n| tail |  |\n| tail |  |\n"))
+    add("ods-corrupt", "ods", "corrupt", "small/ods/corrupt.ods", ods_normal[: len(ods_normal) // 2], "application/vnd.oasis.opendocument.spreadsheet", expected("error", "truncated ODS ZIP package", error_code="malformed"))
+    ods_limit_xml = (f"<office:document-content {namespaces}><office:body><office:spreadsheet><table:table table:name='S'><table:table-row><table:table-cell table:number-columns-repeated='3' office:value-type='string' office:string-value='x'/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>").encode()
+    add("ods-limit", "ods", "limit", "small/ods/limit.ods", odf("ods", ods_limit_xml), "application/vnd.oasis.opendocument.spreadsheet", limit_expected("ODS repeat crosses the exact column boundary", "max_table_columns", 2, 3, "max_table_columns", "## Sheet: S\n\n|  |  |  |\n| --- | --- | --- |\n| x | x | x |\n"))
+    add("ods-manifest-malicious", "ods", "malicious", "small/ods/manifest-malicious.ods", odf("ods", ods_normal_xml, content_media_type="application/xml"), "application/vnd.oasis.opendocument.spreadsheet", expected("error", "core part manifest media type must be exact text/xml", error_code="malformed"))
+    ods_span_xml = (f"<office:document-content {namespaces}><office:body><office:spreadsheet><table:table table:name='Spans'><table:table-row><table:table-cell table:number-columns-spanned='2' office:value-type='string' office:string-value='merged'/><table:covered-table-cell/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>").encode()
+    add("ods-span-nested", "ods", "nested", "small/ods/span-nested.ods", odf("ods", ods_span_xml), "application/vnd.oasis.opendocument.spreadsheet", expected("success", "merged cell span retains a bounded covered grid", "## Sheet: Spans\n\n|  |  |\n| --- | --- |\n| <span data-rowspan=\"1\" data-colspan=\"2\">merged</span> |  |\n"))
+    ods_repeat_xml = (f"<office:document-content {namespaces}><office:body><office:spreadsheet><table:table table:name='Overflow'><table:table-row><table:table-cell office:value-type='string' office:string-value='x'/><table:table-cell table:number-columns-repeated='18446744073709551615'/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>").encode()
+    add("ods-repeat-malicious", "ods", "malicious", "small/ods/repeat-malicious.ods", odf("ods", ods_repeat_xml), "application/vnd.oasis.opendocument.spreadsheet", expected("error", "repeat offset arithmetic fails closed", error_code="resourceLimit"))
+
+    odp_normal_xml = (f"<office:document-content {namespaces} office:version='1.3'><office:body><office:presentation><draw:page draw:name='Slide 1'><draw:frame presentation:class='title'><draw:text-box><text:p>Corpus ODP</text:p></draw:text-box></draw:frame><draw:frame svg:x='1cm' svg:y='1cm' svg:width='5cm' svg:height='2cm'><draw:text-box><text:p>Alpha 中文</text:p></draw:text-box></draw:frame><presentation:notes><text:p>Speaker cue</text:p></presentation:notes></draw:page></office:presentation></office:body></office:document-content>").encode()
+    odp_normal = odf("odp", odp_normal_xml)
+    add("odp-normal", "odp", "normal", "small/odp/normal.odp", odp_normal, "application/vnd.oasis.opendocument.presentation", expected("success", "ODP title, positioned shape, and speaker notes", "## Slide 1: Corpus ODP\n\nAlpha 中文\n\n<strong>Speaker notes</strong>\n\nSpeaker cue\n"))
+    add("odp-corrupt", "odp", "corrupt", "small/odp/corrupt.odp", odp_normal[: len(odp_normal) // 2], "application/vnd.oasis.opendocument.presentation", expected("error", "truncated ODP ZIP package", error_code="malformed"))
+    odp_limit_xml = (f"<office:document-content {namespaces}><office:body><office:presentation><draw:page><draw:frame><draw:text-box><text:p>x</text:p></draw:text-box></draw:frame></draw:page></office:presentation></office:body></office:document-content>").encode()
+    add("odp-limit", "odp", "limit", "small/odp/limit.odp", odf("odp", odp_limit_xml), "application/vnd.oasis.opendocument.presentation", limit_expected("ODP XML crosses the exact nesting boundary", "max_nesting_depth", 6, 7, "max_nesting_depth", "## Slide 1\n\nx\n"))
+    odp_script_xml = (f"<office:document-content {namespaces}><office:body><office:presentation><draw:page><draw:frame><office:event-listeners/></draw:frame></draw:page></office:presentation></office:body></office:document-content>").encode()
+    add("odp-script-malicious", "odp", "malicious", "small/odp/script-malicious.odp", odf("odp", odp_script_xml), "application/vnd.oasis.opendocument.presentation", expected("error", "empty active event nodes are rejected by the whole-tree profile", error_code="malformed"))
+    odp_rotation_xml = (f"<office:document-content {namespaces}><office:body><office:presentation><draw:page><draw:g draw:transform='translate(1cm 1cm) rotate(1.5707963)'><draw:frame svg:x='1cm' svg:y='1cm' svg:width='2cm' svg:height='1cm'><draw:text-box><text:p>rotated</text:p></draw:text-box></draw:frame></draw:g></draw:page></office:presentation></office:body></office:document-content>").encode()
+    add("odp-rotation", "odp", "normal", "small/odp/rotation.odp", odf("odp", odp_rotation_xml), "application/vnd.oasis.opendocument.presentation", expected("success", "finite nested affine rotation and bounds are retained", "## Slide 1\n\nrotated\n"))
+    odp_transform_overflow_xml = (f"<office:document-content {namespaces}><office:body><office:presentation><draw:page><draw:g draw:transform='scale(3.4e38)'><draw:g draw:transform='scale(3.4e38)'><draw:frame svg:x='1cm' svg:y='1cm' svg:width='1cm' svg:height='1cm'><draw:text-box><text:p>x</text:p></draw:text-box></draw:frame></draw:g></draw:g></draw:page></office:presentation></office:body></office:document-content>").encode()
+    add("odp-transform-overflow-malicious", "odp", "malicious", "small/odp/transform-overflow-malicious.odp", odf("odp", odp_transform_overflow_xml), "application/vnd.oasis.opendocument.presentation", expected("error", "every affine composition and transformed bound must remain finite", error_code="malformed"))
+    return fixtures
 
 
 def epub3(chapter_xhtml: bytes) -> bytes:
@@ -1122,6 +1293,7 @@ def build(root: Path, font_path: Path) -> None:
 
     fixtures.extend(workbook_fixtures(root))
     fixtures.extend(presentation_fixtures(root))
+    fixtures.extend(odf_fixtures(root))
     ocr_fixtures, ocr_goldens = render_ocr(root, font_path)
     fixtures.extend(ocr_fixtures)
     fixtures.sort(key=lambda item: str(item["id"]))
@@ -1140,7 +1312,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "pptx", "rtf", "text", "tsv", "wikipedia", "xlsx", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "odp", "ods", "odt", "outlook-msg", "pdf", "pptx", "rtf", "text", "tsv", "wikipedia", "xlsx", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {
@@ -1225,6 +1397,11 @@ def build(root: Path, font_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--font", type=Path)
+    parser.add_argument(
+        "--refresh-odf",
+        action="store_true",
+        help="refresh only repository-authored ODF fixtures and their manifest records",
+    )
     parser.add_argument("--output-root", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument(
         "--msg-only",
@@ -1243,6 +1420,26 @@ def main() -> None:
     )
     args = parser.parse_args()
     output_root = args.output_root.resolve()
+    if args.refresh_odf:
+        if args.verify:
+            parser.error("--refresh-odf cannot be combined with --verify")
+        manifest_path = output_root / "manifest.json"
+        current = json.loads(manifest_path.read_text(encoding="utf-8"))
+        current["fixtures"] = [
+            fixture
+            for fixture in current["fixtures"]
+            if fixture["format"] not in {"odt", "ods", "odp"}
+        ]
+        current["fixtures"].extend(odf_fixtures(output_root))
+        current["fixtures"].sort(key=lambda item: str(item["id"]))
+        current["available_formats"] = sorted(
+            set(current["available_formats"]) | {"odp", "ods", "odt"}
+        )
+        current["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
     if args.msg_only:
         manifest_path = output_root / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1279,7 +1476,9 @@ def main() -> None:
         )
         return
     if args.font is None:
-        parser.error("--font is required unless --msg-only or --presentation-only is selected")
+        parser.error(
+            "--font is required unless --refresh-odf, --msg-only, or --presentation-only is selected"
+        )
     if not args.verify:
         build(output_root, args.font.resolve())
         return

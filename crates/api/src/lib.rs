@@ -54,6 +54,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
+        .register_converter(Arc::new(into_markdown_converters::OdfConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
         .register_converter(Arc::new(into_markdown_converters::EpubConverter))
@@ -280,6 +281,22 @@ mod tests {
     #[test]
     fn default_engine_builds_with_builtin_converters() {
         assert!(default_engine().is_ok());
+    }
+
+    #[test]
+    fn open_document_fixtures_run_through_detection_preflight_and_renderer() {
+        let cases = [
+            ("small/odt/normal.odt", "## Corpus ODT"),
+            ("small/ods/normal.ods", "## Sheet: Data"),
+            ("small/odp/normal.odp", "## Slide 1: Corpus ODP"),
+        ];
+        for (fixture, expected) in cases {
+            let bytes = std::fs::read(fixture_path(fixture)).unwrap();
+            let request = ConversionRequest::new(InputRef::bytes(bytes, Some(fixture)));
+            let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+            assert!(result.markdown.contains(expected), "{fixture}: {}", result.markdown);
+            assert!(result.has_memory_lease());
+        }
     }
 
     #[test]

@@ -161,6 +161,9 @@ fn format(value: &str) -> InputFormat {
         "ipynb" => InputFormat::Ipynb,
         "json" => InputFormat::Json,
         "markdown" => InputFormat::Markdown,
+        "odp" => InputFormat::Odp,
+        "ods" => InputFormat::Ods,
+        "odt" => InputFormat::Odt,
         "rtf" => InputFormat::Rtf,
         "outlook-msg" => InputFormat::OutlookMsg,
         "pptx" => InputFormat::Pptx,
@@ -183,6 +186,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Ipynb => Box::new(NotebookConverter),
         InputFormat::Docx => Box::new(DocxConverter),
         InputFormat::Epub => Box::new(EpubConverter),
+        InputFormat::Odt | InputFormat::Ods | InputFormat::Odp => Box::new(OdfConverter),
         InputFormat::Feed => Box::new(FeedConverter),
         InputFormat::Rtf => Box::new(RtfConverter),
         InputFormat::OutlookMsg => Box::new(MsgConverter),
@@ -211,6 +215,7 @@ fn options(limit: Option<(&str, u64)>) -> ConversionOptions {
     if let Some((name, value)) = limit {
         match name {
             "max_input_bytes" => options.limits.max_input_bytes = value,
+            "max_memory_bytes" => options.limits.max_memory_bytes = value,
             "max_nesting_depth" => options.limits.max_nesting_depth = u16::try_from(value).unwrap(),
             "max_table_columns" => options.limits.max_table_columns = value,
             "max_table_rows" => options.limits.max_table_rows = value,

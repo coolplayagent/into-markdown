@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、
+运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、ODT/ODS/ODP、
 PPTX/PPTM/PPSX/PPSM/POTX、TXT、Markdown、HTML、CSV、TSV、JSON、XML、
 RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
@@ -40,6 +40,28 @@ CFB reader 在分配和发布前验证 version/sector shift、DIFAT/FAT/miniFAT�
 内容 padding）。循环、额外 sector、重复所有权、交叉重叠、越界、
 截断、扇区数量炸弹、重复大小写名称、危险附件路径、未知 codepage 和 property length 不一致
 均 fail closed。解析不调用网络、系统 Outlook、COM、外部命令或可选 AI 服务。
+
+## OpenDocument（ODT、ODS、ODP）
+
+OpenDocument 转换器完全离线实现 ODF 1.2/1.3 的安全子集，不调用 LibreOffice 或其他办公软件。
+包必须以无 extra/data-descriptor、未压缩、首项且内容/CRC/size 精确匹配的 `mimetype` local header
+开始，并与唯一 central directory 双向绑定；全部 raw 名为严格 UTF-8，非 ASCII 时必须设置 bit 11，
+且禁止 Unicode Path/name-changing extra 与 entry comment。`META-INF/manifest.xml` 的根媒体类型、版本、封闭 core/image/
+empty-directory 图与实际 ZIP 目录必须一致。加密项、ZIP64、DTD/自定义实体、未知元素/属性、路径逃逸、重复部件、
+脚本/宏、签名、嵌入文档、外部图片与活动事件全部 fail closed。HTTP(S)、mailto 和文档内片段
+链接只作为惰性数据保留，转换器不会访问网络。
+
+ODT 提取标题、段落、按 family/origin 解析的继承文本样式、正式 list-level number/bullet/start/continuation、
+隐式嵌套 list identity、无 marker list-header、表格、图片、脚注与严格配对的 ranged/point 批注；ODS 将工作表、严格 typed cache、隔离的 OpenFormula、行列重复、合并跨度和零基坐标
+映射到 `Sheet`/`Table` IR。尾部空重复保持稀疏而不物化，但仍推进并验证逻辑坐标。ODP 按源顺序
+生成 `Slide`，仅 title placeholder 成为标题，subtitle 保留为正文；嵌套 group transform 组合后的
+正文形状、表格、图片、finite affine 边界框、旋转和 speaker notes 保留在 slide 内。图片仅接受 manifest MIME、
+规范扩展与 sniffed bytes 一致、有界且可完整解码的 PNG/JPEG/GIF/WebP，并以内容散列去重。
+
+Converter SPI 在创建 ZIP、XML DOM 或图片 decoder 之前获取与 Engine 预检同上下文认证的全部
+逻辑内存 credit；临时对象析构后，同一不透明 lease 由中央 retained-output estimator 校准并随
+结果转移。工作集按可达 core/assets 和阶段峰值规划，未引用图片只以固定流缓冲审计 CRC，不按 expanded
+bytes 占用内存 permit。取消和 deadline 在 ZIP、XML、repeat、页面及图片有界 codec 边界定期检查。
 
 ## PDF
 
