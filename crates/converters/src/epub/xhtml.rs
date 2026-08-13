@@ -75,8 +75,7 @@ pub(super) fn prepare(
     let initial_base = BasePath::document(path)?;
     let mut stack = Vec::<Frame>::new();
     let mut root_seen = false;
-    let mut declaration_seen = false;
-    let mut doctype_seen = false;
+    let mut document_events = xml::DocumentEvents::default();
     let mut references = BTreeMap::new();
     let mut internal_targets = BTreeSet::new();
     let mut anchors = BTreeSet::new();
@@ -88,19 +87,12 @@ pub(super) fn prepare(
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
+        document_events.validate(&event, root_seen, !stack.is_empty(), xml::DoctypePolicy::Html)?;
         match event {
-            Event::DocType(value)
-                if !root_seen
-                    && stack.is_empty()
-                    && !doctype_seen
-                    && value.as_ref().eq_ignore_ascii_case(b"html") =>
-            {
-                doctype_seen = true;
+            Event::DocType(value) => {
                 writer.write_event(Event::DocType(value.into_owned())).map_err(write_error)?;
             }
-            Event::DocType(_) | Event::PI(_) => {
-                return Err(xml::malformed("active DTD or processing instruction in XHTML"));
-            }
+            Event::PI(_) => unreachable!("rejected above"),
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {
                     return Err(xml::malformed("XHTML has multiple root elements"));
@@ -120,7 +112,7 @@ pub(super) fn prepare(
                     return Err(xml::malformed("HTML base elements are forbidden in EPUB XHTML"));
                 }
                 if let Some(id) = xml::optional(&attributes, None, b"id") {
-                    let target = initial_base.resolve(&format!("#{id}"))?.canonical_target();
+                    let target = initial_base.anchor(id)?.canonical_target();
                     if !anchors.insert(target) {
                         return Err(xml::malformed("duplicate XHTML anchor identity"));
                     }
@@ -136,7 +128,7 @@ pub(super) fn prepare(
                 let footnote = if is_footnote {
                     let id = xml::required(&attributes, None, b"id", "footnote id")?;
                     Some(FootnoteBuilder {
-                        target: initial_base.resolve(&format!("#{id}"))?.canonical_target(),
+                        target: initial_base.anchor(id)?.canonical_target(),
                         text: String::new(),
                     })
                 } else {
@@ -208,13 +200,9 @@ pub(super) fn prepare(
                     writer.write_event(Event::Comment(value.into_owned())).map_err(write_error)?;
                 }
             }
-            Event::Decl(value)
-                if !root_seen && stack.is_empty() && !declaration_seen && !doctype_seen =>
-            {
-                declaration_seen = true;
+            Event::Decl(value) => {
                 writer.write_event(Event::Decl(value.into_owned())).map_err(write_error)?;
             }
-            Event::Decl(_) => return Err(xml::malformed("misplaced or duplicate XML declaration")),
         }
     }
     if !root_seen || !stack.is_empty() {

@@ -90,6 +90,7 @@ pub(super) fn parse(
     let mut ncx_id = None;
     let mut cover_id = None;
     let mut modified = None;
+    let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
         let empty = matches!(&event, Event::Empty(_));
@@ -97,7 +98,12 @@ pub(super) fn parse(
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
-        xml::reject_active(&event)?;
+        document_events.validate(
+            &event,
+            root_seen,
+            !stack.is_empty(),
+            xml::DoctypePolicy::Forbidden,
+        )?;
         match event {
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {

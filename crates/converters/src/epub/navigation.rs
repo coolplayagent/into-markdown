@@ -25,6 +25,7 @@ pub(super) struct Navigation {
     pub(super) entries: Vec<NavEntry>,
 }
 
+#[allow(clippy::struct_excessive_bools)] // Streaming XHTML context is explicit and non-recursive.
 struct Frame {
     name: Name,
     base: BasePath,
@@ -34,6 +35,10 @@ struct Frame {
     group_label: bool,
     text: String,
     suppressed_text: bool,
+    label_sources: u8,
+    nested_lists: u8,
+    list_items: usize,
+    toc_root: bool,
 }
 
 #[allow(clippy::too_many_lines)] // Navigation XML is validated in one streaming state machine.
@@ -49,6 +54,7 @@ pub(super) fn parse_nav(
     let mut root_seen = false;
     let mut toc_seen = false;
     let mut entries = Vec::new();
+    let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
         let empty = matches!(&event, Event::Empty(_));
@@ -56,11 +62,9 @@ pub(super) fn parse_nav(
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
+        document_events.validate(&event, root_seen, !stack.is_empty(), xml::DoctypePolicy::Html)?;
         match event {
-            Event::DocType(value) if value.as_ref().eq_ignore_ascii_case(b"html") => {}
-            Event::DocType(_) | Event::PI(_) => {
-                return Err(xml::malformed("active DTD or processing instruction in navigation"));
-            }
+            Event::PI(_) => unreachable!("rejected above"),
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {
                     return Err(xml::malformed("navigation has multiple root elements"));
@@ -90,11 +94,47 @@ pub(super) fn parse_nav(
                     toc_seen = true;
                 }
                 let in_toc = parent_in_toc || declared_toc;
+                if in_toc && !declared_toc {
+                    let parent = stack
+                        .last_mut()
+                        .ok_or_else(|| xml::malformed("navigation toc has no parent"))?;
+                    let allowed = if parent.name.matches(Some(XHTML_NS), b"nav") {
+                        if name.matches(Some(XHTML_NS), b"ol") {
+                            parent.nested_lists = parent.nested_lists.saturating_add(1);
+                            parent.nested_lists == 1
+                        } else {
+                            false
+                        }
+                    } else if parent.name.matches(Some(XHTML_NS), b"ol") {
+                        if name.matches(Some(XHTML_NS), b"li") {
+                            parent.list_items = parent.list_items.saturating_add(1);
+                            true
+                        } else {
+                            false
+                        }
+                    } else if parent.name.matches(Some(XHTML_NS), b"li") {
+                        if name.matches(Some(XHTML_NS), b"a")
+                            || name.matches(Some(XHTML_NS), b"span")
+                        {
+                            parent.label_sources = parent.label_sources.saturating_add(1);
+                            parent.label_sources == 1
+                        } else if name.matches(Some(XHTML_NS), b"ol") {
+                            parent.nested_lists = parent.nested_lists.saturating_add(1);
+                            parent.label_sources == 1 && parent.nested_lists == 1
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if !allowed {
+                        return Err(xml::malformed(
+                            "EPUB toc must follow nav/ol/li/(a|span) direct-child grammar",
+                        ));
+                    }
+                }
                 let mut list_depth = stack.last().map_or(0, |frame| frame.list_depth);
-                if in_toc
-                    && name.namespace.as_deref() == Some(XHTML_NS)
-                    && matches!(name.local.as_slice(), b"ol" | b"ul")
-                {
+                if in_toc && name.namespace.as_deref() == Some(XHTML_NS) && name.local == b"ol" {
                     list_depth = list_depth.saturating_add(1);
                 }
                 let href = if in_toc && name.matches(Some(XHTML_NS), b"a") {
@@ -120,6 +160,10 @@ pub(super) fn parse_nav(
                     group_label,
                     text: String::new(),
                     suppressed_text,
+                    label_sources: 0,
+                    nested_lists: 0,
+                    list_items: 0,
+                    toc_root: declared_toc,
                 };
                 if empty {
                     finish_nav_frame(frame, &mut entries, budget)?;
@@ -133,21 +177,23 @@ pub(super) fn parse_nav(
                 if xml::end_name(&reader, element.name())? != frame.name {
                     return Err(xml::malformed("navigation end tag namespace mismatch"));
                 }
-                if frame.href.is_none()
-                    && !frame.suppressed_text
-                    && let Some(parent) = stack.last_mut()
-                    && parent.in_toc
-                {
-                    let next = parent.text.len().saturating_add(frame.text.len());
-                    budget.field("navigation label", next)?;
-                    parent.text.push_str(&frame.text);
-                }
                 finish_nav_frame(frame, &mut entries, budget)?;
             }
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
                 let text = xml::decoded_text(&event)?.unwrap_or_default();
                 if let Some(frame) = stack.last_mut() {
                     if frame.in_toc && !frame.suppressed_text {
+                        if frame.name.matches(Some(XHTML_NS), b"nav")
+                            || frame.name.matches(Some(XHTML_NS), b"ol")
+                            || frame.name.matches(Some(XHTML_NS), b"li")
+                        {
+                            if !text.chars().all(char::is_whitespace) {
+                                return Err(xml::malformed(
+                                    "EPUB toc structural elements contain direct text",
+                                ));
+                            }
+                            continue;
+                        }
                         let next = frame.text.len().saturating_add(text.len());
                         budget.field("navigation label", next)?;
                         frame.text.push_str(&text);
@@ -157,7 +203,7 @@ pub(super) fn parse_nav(
                 }
             }
             Event::Eof => break,
-            Event::Comment(_) | Event::Decl(_) => {}
+            Event::DocType(_) | Event::Comment(_) | Event::Decl(_) => {}
         }
     }
     if !root_seen || !toc_seen || !stack.is_empty() || entries.is_empty() {
@@ -172,6 +218,15 @@ fn finish_nav_frame(
     entries: &mut Vec<NavEntry>,
     budget: &EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
+    if frame.toc_root && frame.nested_lists != 1 {
+        return Err(xml::malformed("EPUB toc nav must contain exactly one direct ol"));
+    }
+    if frame.in_toc && frame.name.matches(Some(XHTML_NS), b"ol") && frame.list_items == 0 {
+        return Err(xml::malformed("EPUB toc ol must contain at least one direct li"));
+    }
+    if frame.in_toc && frame.name.matches(Some(XHTML_NS), b"li") && frame.label_sources != 1 {
+        return Err(xml::malformed("EPUB toc li must contain exactly one label source"));
+    }
     if frame.href.is_some() || frame.group_label {
         let label = normalize(&frame.text);
         if label.is_empty() {
@@ -213,6 +268,7 @@ pub(super) fn parse_ncx(
     let mut root_seen = false;
     let mut nav_map_seen = false;
     let mut text_depth = None::<usize>;
+    let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
         let empty = matches!(&event, Event::Empty(_));
@@ -220,7 +276,12 @@ pub(super) fn parse_ncx(
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
-        xml::reject_active(&event)?;
+        document_events.validate(
+            &event,
+            root_seen,
+            !stack.is_empty(),
+            xml::DoctypePolicy::Forbidden,
+        )?;
         match event {
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {

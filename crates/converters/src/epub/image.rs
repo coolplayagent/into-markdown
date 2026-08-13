@@ -7,6 +7,12 @@ use ::image::{
 use into_markdown_core::{ConversionError, ExecutionContext, MAX_DOCUMENT_NODES, ResourceLimits};
 use std::io::Cursor;
 
+struct RasterInfo {
+    dimensions: (u32, u32),
+    frames: u64,
+}
+
+#[allow(clippy::too_many_lines)] // Decode budget and complete payload checks share one transaction.
 pub(super) fn validate(
     bytes: &[u8],
     media_type: &str,
@@ -15,20 +21,24 @@ pub(super) fn validate(
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     let format = format(media_type)?;
-    let dimensions = envelope_dimensions(bytes, format)
+    context.checkpoint()?;
+    let info = envelope_info(bytes, format, context);
+    context.checkpoint()?;
+    let info = info
         .ok_or_else(|| malformed(part, "raster container is truncated or structurally invalid"))?;
+    let dimensions = info.dimensions;
     let decoded_rgba = u64::from(dimensions.0)
         .checked_mul(u64::from(dimensions.1))
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(|| limit("image_pixels", part, "image dimensions overflow"))?;
-    if decoded_rgba > limits.max_decompressed_bytes {
+    let cumulative_rgba = decoded_rgba
+        .checked_mul(info.frames)
+        .ok_or_else(|| limit("max_decompressed_bytes", part, "decoded frame total overflow"))?;
+    if cumulative_rgba > limits.max_decompressed_bytes {
         return Err(limit(
-            "image_pixels",
+            "max_decompressed_bytes",
             part,
-            format!(
-                "{}x{} raster exceeds the decompressed-byte budget",
-                dimensions.0, dimensions.1
-            ),
+            format!("{} raster frame(s) exceed the decompressed-byte budget", info.frames),
         ));
     }
     let maximum_pixel_bytes = decoded_rgba
@@ -58,17 +68,30 @@ pub(super) fn validate(
             return Err(malformed(part, "GIF dimensions disagree with its container"));
         }
         let mut frames = 0_usize;
+        let mut decoded_total = 0_u64;
         for frame in decoder.into_frames() {
             context.checkpoint()?;
-            frame.map_err(|_| malformed(part, "GIF payload is not completely decodable"))?;
+            let frame =
+                frame.map_err(|_| malformed(part, "GIF payload is not completely decodable"))?;
+            decoded_total = decoded_total
+                .checked_add(u64::try_from(frame.buffer().as_raw().len()).unwrap_or(u64::MAX))
+                .ok_or_else(|| limit("max_decompressed_bytes", part, "GIF work overflow"))?;
+            if decoded_total > limits.max_decompressed_bytes {
+                return Err(limit(
+                    "max_decompressed_bytes",
+                    part,
+                    "GIF decoded work exceeds the configured budget",
+                ));
+            }
             frames = frames
                 .checked_add(1)
                 .ok_or_else(|| limit("image_frames", part, "GIF frame count overflow"))?;
             if frames > MAX_DOCUMENT_NODES {
                 return Err(limit("image_frames", part, "GIF frame count exceeds IR limits"));
             }
+            context.checkpoint()?;
         }
-        if frames == 0 {
+        if frames == 0 || u64::try_from(frames).ok() != Some(info.frames) {
             return Err(malformed(part, "GIF has no decodable frames"));
         }
         return context.checkpoint();
@@ -115,37 +138,106 @@ fn format(media_type: &str) -> Result<ImageFormat, ConversionError> {
     }
 }
 
-fn envelope_dimensions(bytes: &[u8], format: ImageFormat) -> Option<(u32, u32)> {
+fn envelope_info(
+    bytes: &[u8],
+    format: ImageFormat,
+    context: &ExecutionContext,
+) -> Option<RasterInfo> {
     match format {
-        ImageFormat::Png => png_dimensions(bytes),
-        ImageFormat::Jpeg => jpeg_dimensions(bytes),
-        ImageFormat::Gif => gif_dimensions(bytes),
-        ImageFormat::WebP => webp_dimensions(bytes),
+        ImageFormat::Png => png_info(bytes, context),
+        ImageFormat::Jpeg => jpeg_info(bytes, context),
+        ImageFormat::Gif => gif_info(bytes, context),
+        ImageFormat::WebP => webp_info(bytes, context),
         _ => None,
     }
 }
 
-fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() < 45
-        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
-        || bytes.get(bytes.len() - 12..) != Some(b"\0\0\0\0IEND\xaeB`\x82")
-    {
+fn png_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return None;
     }
-    nonzero((big_u32(bytes, 16)?, big_u32(bytes, 20)?))
+    let mut offset = 8_usize;
+    let mut dimensions = None;
+    while offset < bytes.len() {
+        if context.checkpoint().is_err() {
+            return None;
+        }
+        let length = usize::try_from(big_u32(bytes, offset)?).ok()?;
+        let kind = bytes.get(offset + 4..offset + 8)?;
+        let end = offset.checked_add(12)?.checked_add(length)?;
+        if end > bytes.len() {
+            return None;
+        }
+        if dimensions.is_none() {
+            if kind != b"IHDR" || length != 13 {
+                return None;
+            }
+            dimensions = nonzero((big_u32(bytes, offset + 8)?, big_u32(bytes, offset + 12)?));
+        }
+        offset = end;
+        if kind == b"IEND" {
+            if length != 0 || offset != bytes.len() {
+                return None;
+            }
+            return Some(RasterInfo { dimensions: dimensions?, frames: 1 });
+        }
+    }
+    None
 }
 
-fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() < 14
-        || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
-        || bytes.last() != Some(&0x3b)
-    {
+fn gif_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+    if bytes.len() < 14 || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
         return None;
     }
-    nonzero((u32::from(little_u16(bytes, 6)?), u32::from(little_u16(bytes, 8)?)))
+    let dimensions = nonzero((u32::from(little_u16(bytes, 6)?), u32::from(little_u16(bytes, 8)?)))?;
+    let packed = *bytes.get(10)?;
+    let mut offset = 13_usize;
+    if packed & 0x80 != 0 {
+        offset = offset.checked_add(3_usize.checked_mul(1 << (usize::from(packed & 7) + 1))?)?;
+    }
+    let mut frames = 0_u64;
+    loop {
+        if context.checkpoint().is_err() {
+            return None;
+        }
+        match *bytes.get(offset)? {
+            0x3b => {
+                return (offset + 1 == bytes.len() && frames > 0)
+                    .then_some(RasterInfo { dimensions, frames });
+            }
+            0x21 => {
+                offset = offset.checked_add(2)?;
+                offset = skip_sub_blocks(bytes, offset)?;
+            }
+            0x2c => {
+                let packed = *bytes.get(offset + 9)?;
+                offset = offset.checked_add(10)?;
+                if packed & 0x80 != 0 {
+                    offset = offset
+                        .checked_add(3_usize.checked_mul(1 << (usize::from(packed & 7) + 1))?)?;
+                }
+                bytes.get(offset)?;
+                offset = skip_sub_blocks(bytes, offset + 1)?;
+                frames = frames.checked_add(1)?;
+            }
+            _ => return None,
+        }
+    }
 }
 
-fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+fn skip_sub_blocks(bytes: &[u8], mut offset: usize) -> Option<usize> {
+    loop {
+        let length = usize::from(*bytes.get(offset)?);
+        offset = offset.checked_add(1)?;
+        if length == 0 {
+            return Some(offset);
+        }
+        offset = offset.checked_add(length)?;
+        bytes.get(offset - 1)?;
+    }
+}
+
+fn webp_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
     if bytes.len() < 20
         || !bytes.starts_with(b"RIFF")
         || bytes.get(8..12) != Some(b"WEBP")
@@ -153,31 +245,62 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     {
         return None;
     }
-    match bytes.get(12..16)? {
-        b"VP8X" if bytes.get(16..20) == Some(&[10, 0, 0, 0]) && bytes.len() >= 30 => nonzero((
-            1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]),
-            1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]),
-        )),
-        b"VP8L" if bytes.len() >= 25 && bytes[20] == 0x2f => {
-            let bits = little_u32(bytes, 21)?;
-            nonzero(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+    let mut offset = 12_usize;
+    let mut dimensions = None;
+    let mut primary = false;
+    while offset < bytes.len() {
+        if context.checkpoint().is_err() {
+            return None;
         }
-        b"VP8 " if bytes.len() >= 30 && bytes.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) => {
-            nonzero((
-                u32::from(little_u16(bytes, 26)? & 0x3fff),
-                u32::from(little_u16(bytes, 28)? & 0x3fff),
-            ))
+        let kind = bytes.get(offset..offset + 4)?;
+        let length = usize::try_from(little_u32(bytes, offset + 4)?).ok()?;
+        let data = offset.checked_add(8)?;
+        let end = data.checked_add(length)?;
+        if end > bytes.len() {
+            return None;
         }
-        _ => None,
+        match kind {
+            b"VP8X" if dimensions.is_none() && length == 10 => {
+                dimensions = nonzero((
+                    1 + u32::from_le_bytes([bytes[data + 4], bytes[data + 5], bytes[data + 6], 0]),
+                    1 + u32::from_le_bytes([bytes[data + 7], bytes[data + 8], bytes[data + 9], 0]),
+                ));
+            }
+            b"VP8L" if !primary && length >= 5 && bytes[data] == 0x2f => {
+                let bits = little_u32(bytes, data + 1)?;
+                dimensions
+                    .get_or_insert(nonzero(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))?);
+                primary = true;
+            }
+            b"VP8 "
+                if !primary
+                    && length >= 10
+                    && bytes.get(data + 3..data + 6) == Some(&[0x9d, 0x01, 0x2a]) =>
+            {
+                dimensions.get_or_insert(nonzero((
+                    u32::from(little_u16(bytes, data + 6)? & 0x3fff),
+                    u32::from(little_u16(bytes, data + 8)? & 0x3fff),
+                ))?);
+                primary = true;
+            }
+            b"VP8L" | b"VP8 " | b"VP8X" => return None,
+            _ => {}
+        }
+        offset = end.checked_add(length & 1)?;
     }
+    (offset == bytes.len() && primary).then_some(RasterInfo { dimensions: dimensions?, frames: 1 })
 }
 
-fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if !bytes.starts_with(&[0xff, 0xd8]) || !bytes.ends_with(&[0xff, 0xd9]) {
+fn jpeg_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
         return None;
     }
     let mut offset = 2_usize;
-    while offset + 4 <= bytes.len() - 2 {
+    let mut dimensions = None;
+    while offset < bytes.len() {
+        if context.checkpoint().is_err() {
+            return None;
+        }
         if bytes[offset] != 0xff {
             return None;
         }
@@ -186,18 +309,9 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         }
         let marker = *bytes.get(offset)?;
         offset += 1;
-        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
-            let length = usize::from(big_u16(bytes, offset)?);
-            if length < 8 || offset.checked_add(length)? > bytes.len() {
-                return None;
-            }
-            return nonzero((
-                u32::from(big_u16(bytes, offset + 5)?),
-                u32::from(big_u16(bytes, offset + 3)?),
-            ));
-        }
-        if marker == 0xda || marker == 0xd9 {
-            return None;
+        if marker == 0xd9 {
+            return (offset == bytes.len())
+                .then_some(RasterInfo { dimensions: dimensions?, frames: 1 });
         }
         if marker == 0x01 || matches!(marker, 0xd0..=0xd7) {
             continue;
@@ -206,7 +320,41 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         if length < 2 {
             return None;
         }
+        let end = offset.checked_add(length)?;
+        if end > bytes.len() {
+            return None;
+        }
+        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+            if length < 8 || dimensions.is_some() {
+                return None;
+            }
+            dimensions = nonzero((
+                u32::from(big_u16(bytes, offset + 5)?),
+                u32::from(big_u16(bytes, offset + 3)?),
+            ));
+        }
         offset = offset.checked_add(length)?;
+        if marker == 0xda {
+            offset = skip_jpeg_scan(bytes, offset)?;
+        }
+    }
+    None
+}
+
+fn skip_jpeg_scan(bytes: &[u8], mut offset: usize) -> Option<usize> {
+    while offset < bytes.len() {
+        if bytes[offset] != 0xff {
+            offset += 1;
+            continue;
+        }
+        let marker_start = offset;
+        while bytes.get(offset) == Some(&0xff) {
+            offset += 1;
+        }
+        match *bytes.get(offset)? {
+            0x00 | 0xd0..=0xd7 => offset += 1,
+            _ => return Some(marker_start),
+        }
     }
     None
 }

@@ -25,6 +25,7 @@ pub(super) fn rootfile(
     let mut stack = Vec::<Frame>::new();
     let mut root_seen = false;
     let mut rootfiles_seen = false;
+    let mut document_events = xml::DocumentEvents::default();
     let mut candidates = Vec::new();
     let mut candidate_paths = BTreeSet::new();
     loop {
@@ -34,7 +35,12 @@ pub(super) fn rootfile(
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
-        xml::reject_active(&event)?;
+        document_events.validate(
+            &event,
+            root_seen,
+            !stack.is_empty(),
+            xml::DoctypePolicy::Forbidden,
+        )?;
         match event {
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {

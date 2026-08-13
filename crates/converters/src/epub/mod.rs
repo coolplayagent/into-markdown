@@ -4,6 +4,8 @@ mod budget;
 mod container;
 mod encryption;
 mod image;
+#[cfg(test)]
+mod image_tests;
 mod merge;
 mod navigation;
 mod package;

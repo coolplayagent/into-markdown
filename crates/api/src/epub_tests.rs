@@ -250,7 +250,7 @@ fn has_nested_list(blocks: &[crate::BlockNode]) -> bool {
     })
 }
 
-fn collect_links(
+pub(super) fn collect_links(
     blocks: &[crate::BlockNode],
     links: &mut Vec<String>,
     footnotes: &mut Vec<String>,

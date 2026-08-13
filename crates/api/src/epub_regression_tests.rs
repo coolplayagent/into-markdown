@@ -101,6 +101,27 @@ fn internal_reference_tokens_cannot_be_forged_by_external_links() {
 }
 
 #[test]
+fn percent_encoded_unicode_fragments_match_normalized_anchor_identity() {
+    let chapter = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p><a href="two.xhtml#caf%C3%A9">Encoded</a><a href="two.xhtml#cafe%CC%81">Decomposed</a></p></body></html>"#;
+    let target = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h2 id="target">Navigation</h2><p id="café">Target</p></body></html>"#;
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter),
+        ("OPS/text/two.xhtml", target.as_bytes()),
+        ("OPS/text/extra.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}"),
+    ]);
+    let result = convert(bytes).unwrap();
+    let mut links = Vec::new();
+    let mut footnotes = Vec::new();
+    super::epub_tests::collect_links(&result.document.blocks, &mut links, &mut footnotes);
+    assert_eq!(links.iter().filter(|target| *target == "OPS/text/two.xhtml#café").count(), 2);
+}
+
+#[test]
 fn retained_rasters_require_complete_payloads_and_bounded_pixels() {
     let truncated = &PNG[..PNG.len() - 4];
     let bytes = epub(&[
@@ -129,4 +150,43 @@ fn retained_rasters_require_complete_payloads_and_bounded_pixels() {
         ("OPS/styles/book.css", b"body{}"),
     ]);
     assert!(matches!(convert(bytes), Err(ConversionError::ResourceLimit { .. })));
+}
+
+#[test]
+fn epub3_toc_requires_direct_children_and_one_label_per_item() {
+    let valid = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><span>Part</span><ol><li><a href="text/one.xhtml">One</a></li></ol></li></ol></nav></body></html>"#;
+    assert!(convert(epub3_book(epub3_package(), Some(valid))).is_ok());
+
+    for invalid in [
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><div><ol><li><a href="text/one.xhtml">One</a></li></ol></div></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><li><a href="text/one.xhtml">One</a></li></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">One</a><span>Duplicate</span></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">One</a></li></ol><ol><li><a href="text/two.xhtml">Two</a></li></ol></nav></body></html>"#.as_slice(),
+    ] {
+        assert_eq!(
+            convert(epub3_book(epub3_package(), Some(invalid))).unwrap_err().code(),
+            ErrorCode::Malformed
+        );
+    }
+}
+
+#[test]
+fn every_epub_xml_document_enforces_prolog_and_character_rules() {
+    for container_xml in [
+        b"<!--\x01--><container xmlns='urn:oasis:names:tc:opendocument:xmlns:container' version='1.0'><rootfiles><rootfile full-path='OPS/content.opf' media-type='application/oebps-package+xml'/></rootfiles></container>".as_slice(),
+        b"<container xmlns='urn:oasis:names:tc:opendocument:xmlns:container' version='1.0'><?xml version='1.0'?><rootfiles><rootfile full-path='OPS/content.opf' media-type='application/oebps-package+xml'/></rootfiles></container>".as_slice(),
+        b"<container xmlns='urn:oasis:names:tc:opendocument:xmlns:container' version='1.0'><!DOCTYPE html><rootfiles><rootfile full-path='OPS/content.opf' media-type='application/oebps-package+xml'/></rootfiles></container>".as_slice(),
+    ] {
+        let bytes = epub(&[
+            ("META-INF/container.xml", container_xml),
+            ("OPS/content.opf", epub3_package()),
+            ("OPS/nav.xhtml", nav3()),
+            ("OPS/text/one.xhtml", chapter_one()),
+            ("OPS/text/two.xhtml", chapter_two()),
+            ("OPS/text/extra.xhtml", chapter_two()),
+            ("OPS/images/cover.png", PNG),
+            ("OPS/styles/book.css", b"body{}"),
+        ]);
+        assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    }
 }

@@ -47,6 +47,20 @@ fn xml_base_dot_segments_preserve_directory_semantics() {
 }
 
 #[test]
+fn fragments_decode_once_normalize_unicode_and_reject_invalid_scalars() {
+    let base = BasePath::document("OPS/text/one.xhtml").unwrap();
+    assert_eq!(
+        base.resolve("#caf%C3%A9").unwrap(),
+        Reference::Internal { path: "OPS/text/one.xhtml".into(), fragment: Some("café".into()) }
+    );
+    assert_eq!(base.resolve("#cafe%CC%81").unwrap(), base.resolve("#caf%C3%A9").unwrap());
+    assert_eq!(base.resolve("#%2525").unwrap().canonical_target(), "OPS/text/one.xhtml#%2525");
+    for invalid in ["#%", "#%GG", "#%C3", "#%00", "#%0A"] {
+        assert!(base.resolve(invalid).is_err(), "accepted {invalid}");
+    }
+}
+
+#[test]
 fn external_links_remain_data_and_active_schemes_are_rejected() {
     let base = BasePath::document("OPS/chapter.xhtml").unwrap();
     assert_eq!(

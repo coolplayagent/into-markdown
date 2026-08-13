@@ -9,6 +9,64 @@ use std::collections::BTreeSet;
 
 pub(super) const XML_NS: &[u8] = b"http://www.w3.org/XML/1998/namespace";
 
+#[derive(Clone, Copy)]
+pub(super) enum DoctypePolicy {
+    Forbidden,
+    Html,
+}
+
+#[derive(Default)]
+pub(super) struct DocumentEvents {
+    event_seen: bool,
+    declaration_seen: bool,
+    doctype_seen: bool,
+}
+
+impl DocumentEvents {
+    pub(super) fn validate(
+        &mut self,
+        event: &Event<'_>,
+        root_seen: bool,
+        inside_root: bool,
+        doctype: DoctypePolicy,
+    ) -> Result<(), ConversionError> {
+        validate_event_chars(event)?;
+        match event {
+            Event::Decl(_) => {
+                if self.event_seen
+                    || self.declaration_seen
+                    || self.doctype_seen
+                    || root_seen
+                    || inside_root
+                {
+                    return Err(malformed("misplaced or duplicate XML declaration"));
+                }
+                self.declaration_seen = true;
+            }
+            Event::DocType(value) => {
+                if root_seen || inside_root || self.doctype_seen {
+                    return Err(malformed("misplaced or duplicate XML doctype"));
+                }
+                if !matches!(doctype, DoctypePolicy::Html)
+                    || !value.as_ref().eq_ignore_ascii_case(b"html")
+                {
+                    return Err(malformed("XML doctype is forbidden or unsupported"));
+                }
+                self.doctype_seen = true;
+            }
+            Event::PI(_) => return Err(malformed("XML processing instructions are forbidden")),
+            Event::Comment(_) if self.declaration_seen && !self.event_seen => {
+                self.event_seen = true;
+            }
+            _ => {}
+        }
+        if !matches!(event, Event::Decl(_) | Event::Eof) {
+            self.event_seen = true;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Name {
     pub(super) namespace: Option<Vec<u8>>,
@@ -200,9 +258,36 @@ fn validate_xml_chars(value: &str, label: &str) -> Result<(), ConversionError> {
     }
 }
 
-pub(super) fn reject_active(event: &Event<'_>) -> Result<(), ConversionError> {
-    if matches!(event, Event::DocType(_) | Event::PI(_)) {
-        return Err(malformed("DTD and processing instructions are forbidden in EPUB metadata"));
+fn validate_event_chars(event: &Event<'_>) -> Result<(), ConversionError> {
+    let (bytes, label) = match event {
+        Event::Start(value) | Event::Empty(value) => {
+            attributes_for_char_validation(value)?;
+            (value.as_ref(), "element")
+        }
+        Event::End(value) => (value.as_ref(), "end tag"),
+        Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
+            decoded_text(event)?;
+            return Ok(());
+        }
+        Event::Comment(value) => (value.as_ref(), "comment"),
+        Event::Decl(value) => (value.as_ref(), "declaration"),
+        Event::DocType(value) => (value.as_ref(), "doctype"),
+        Event::PI(value) => (value.as_ref(), "processing instruction"),
+        Event::Eof => return Ok(()),
+    };
+    let value =
+        std::str::from_utf8(bytes).map_err(|_| malformed(format!("XML {label} is not UTF-8")))?;
+    validate_xml_chars(value, label)
+}
+
+fn attributes_for_char_validation(element: &BytesStart<'_>) -> Result<(), ConversionError> {
+    for attribute in element.attributes() {
+        let attribute =
+            attribute.map_err(|error| malformed(format!("invalid attribute: {error}")))?;
+        let value = attribute
+            .unescape_value()
+            .map_err(|error| malformed(format!("invalid XML attribute value: {error}")))?;
+        validate_xml_chars(&value, "attribute")?;
     }
     Ok(())
 }

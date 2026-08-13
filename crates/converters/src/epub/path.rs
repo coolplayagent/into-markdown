@@ -2,6 +2,7 @@
 
 use crate::zip_converter::archive_api::{SafeArchive, portable_identity};
 use into_markdown_core::ConversionError;
+use unicode_normalization::UnicodeNormalization as _;
 use url::Url;
 
 const SYNTHETIC_ORIGIN: &str = "https://epub.invalid/";
@@ -64,6 +65,16 @@ impl BasePath {
         let fragment = raw.fragment.map(validate_fragment).transpose()?;
         Ok(Reference::Internal { path, fragment })
     }
+
+    pub(super) fn anchor(&self, value: &str) -> Result<Reference, ConversionError> {
+        if self.directory {
+            return Err(malformed("an anchor cannot use a directory base"));
+        }
+        Ok(Reference::Internal {
+            path: self.path.clone(),
+            fragment: Some(validate_fragment_identity(value)?),
+        })
+    }
 }
 
 impl Reference {
@@ -86,7 +97,7 @@ impl Reference {
         match self {
             Self::External(value) => value.clone(),
             Self::Internal { path, fragment } => match fragment {
-                Some(fragment) => format!("{path}#{fragment}"),
+                Some(fragment) => format!("{path}#{}", encode_fragment(fragment)),
                 None => path.clone(),
             },
         }
@@ -232,10 +243,52 @@ fn hex(value: u8) -> Result<u8, ConversionError> {
 }
 
 fn validate_fragment(value: &str) -> Result<String, ConversionError> {
-    if value.is_empty() || value.chars().any(char::is_control) || value.contains('&') {
+    if value.is_empty() {
         return Err(malformed("EPUB fragment is empty or unsafe"));
     }
-    Ok(value.to_owned())
+    let decoded = percent_decode_fragment(value)?;
+    if decoded.chars().any(char::is_control) {
+        return Err(malformed("EPUB fragment is empty or unsafe"));
+    }
+    Ok(decoded.nfc().collect())
+}
+
+fn validate_fragment_identity(value: &str) -> Result<String, ConversionError> {
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(malformed("EPUB anchor identity is empty or unsafe"));
+    }
+    Ok(value.nfc().collect())
+}
+
+fn encode_fragment(value: &str) -> String {
+    value.replace('%', "%25").replace('#', "%23")
+}
+
+fn percent_decode_fragment(value: &str) -> Result<String, ConversionError> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes
+                .get(index + 1)
+                .ok_or_else(|| malformed("truncated fragment percent escape"))?;
+            let low = *bytes
+                .get(index + 2)
+                .ok_or_else(|| malformed("truncated fragment percent escape"))?;
+            output.push(
+                hex(high)?
+                    .checked_mul(16)
+                    .and_then(|value| value.checked_add(hex(low).ok()?))
+                    .ok_or_else(|| malformed("invalid fragment percent escape"))?,
+            );
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(output).map_err(|_| malformed("percent-decoded EPUB fragment is not UTF-8"))
 }
 
 fn malformed(detail: impl Into<String>) -> ConversionError {
