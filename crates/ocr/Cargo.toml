@@ -7,6 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+clipper2-rust.workspace = true
+imageproc.workspace = true
 into-markdown-core = { path = "../core" }
 getrandom.workspace = true
 libc.workspace = true

@@ -10,6 +10,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     compile_data = [
         "//models:manifest.json",
+        "//models:ppocrv6-tiny-detector-authority.json",
         "//third_party/licenses:downloads.json",
         "//third_party/onnxruntime:manifest.json",
     ],
@@ -25,6 +26,7 @@ rust_test(
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
     compile_data = [
         "//models:manifest.json",
+        "//models:ppocrv6-tiny-detector-authority.json",
         "//third_party/licenses:downloads.json",
         "//third_party/onnxruntime:manifest.json",
     ],

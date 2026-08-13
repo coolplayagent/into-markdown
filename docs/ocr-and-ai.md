@@ -16,9 +16,47 @@ runtime files。模型管理命令会将 bundle 显示为 `planned` / `unavailab
 `//models:source_models` 用于获取已固定哈希的上游源归档。未来会增加可复现的
 转换动作，以生成准确的 ONNX 部署产物及其派生哈希。
 
-OCR 实现负责图像解码、方向检测、归一化、DBNet 后处理、阅读顺序、裁剪批处理、
-CTC 解码、置信度计算和 IR 合并。模型执行隐藏在 `TensorRuntime` 之后，初始
-实现使用支持平台上固定版本的 ONNX Runtime CPU 包。
+检测模块只接收调用方已解码且明确描述的 `PixelView`：宽、高、row stride、
+`Gray8`/`RGB8`/`BGR8`/`RGBA8`/`BGRA8`、八种 EXIF 方向和借用的像素字节。
+它不猜测格式、不解码图片、不访问文件或网络；完整 `ImageConverter` 由独立的图片
+转换安全边界提供。透明通道与 PaddleOCR 的 BGR 转换一致地忽略，不做背景合成。
+
+PP-OCRv6 tiny 检测参数的机器可读权威文件是
+`models/ppocrv6-tiny-detector-authority.json`。它固定 PaddleOCR 仓库 commit
+`2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、
+`configs/det/PP-OCRv6/PP-OCRv6_tiny_det.yml` 和 DB 论文
+`https://arxiv.org/abs/1911.08947`。预处理按官方配置进行 BGR、短边 736、长边
+最多 4000、尺寸 round 到 32 的倍数、`1/255`、mean/std 和 NCHW 排列。归一化逐项
+复刻 `NormalizeImage`：先把 uint8 转为 f32，再乘以固定 f32 `1/255`，随后减 f32 mean
+并除以 f32 std；不能以除以 255 替代乘法。输入宽高之和
+小于 64 时，严格按固定 Paddle 实现先向右/下补零到至少 32；缩放尺寸先经 Python
+`int` 截断，超出 4000 时基于截断尺寸二次缩放并再次截断，最后才按 Python ties-even
+round 到 stride。像素插值固定以 OpenCV 4.13 默认 `INTER_LINEAR` 的 uint8 输出为参考，
+参考集每通道误差最多 1 LSB，归一化只发生在 uint8 舍入之后。八种方向在采样前映射，
+输出框再以同一像素中心坐标规则逆变换到原图。
+
+DB 后处理固定 bitmap threshold `0.2`、polygon box score `0.4`、最多 3000 个
+候选和 unclip ratio `1.4`。二值图使用 Suzuki–Abe 边界跟踪；与官方
+`RETR_LIST` 一样，outer 与 hole contour 都进入相同评分流程，而不是静默丢弃 hole。
+每个候选经过 minimum-area rectangle、polygon mean score、closed round polygon
+offset 和第二次 minimum-area rectangle，再按 PaddleOCR 的 top-left、top-right、
+bottom-right、bottom-left 规则规范四点。输出仅包含原图坐标、角度、置信度和供后续
+识别使用的 crop descriptor；recognizer、CTC、透视裁剪执行和 IR 合并不属于检测模块。
+中英文混排区域严格使用固定 Paddle `predict_system.py` 的横排启发式：先按左上点
+`(y,x)` 稳定排序，再仅对左上点 y 差严格小于 10 的相邻框向左插入。该规则不声明
+支持垂排阅读顺序。
+
+概率验证、bitmap 构造和 score 扫描均周期执行请求 checkpoint。score 对所有候选的
+bounding-box pixels 与基于四条最大 8001-step 整数边推导的保守 work 上界做 checked
+累计；嵌套大轮廓超过公开资源上限时在扫描前返回 `ResourceLimit`。round offset 只接收
+已验证的 convex 四点路径；进入 `clipper2-rust` 前按固定 104 点、108 个 path header 和
+104² work 的审计上界检查 caller cap、预留逻辑内存并执行 checkpoint，返回后立即再次
+checkpoint。第三方单次调用不支持中途轮询，其输入与工作上界因此保持为常数。
+
+普通测试使用 fake runtime 与人工概率图，不下载模型。当前 manifest 没有可执行
+detector ONNX 文件，因此产品 resolver 稳定返回 `ModelUnavailable`，不能把 source
+archive 当作模型。矩形、旋转框、hole、空图、噪点、非法概率、极端 stride、方向
+逆变换、取消与逻辑预算均有离线测试。
 
 `OcrPolicy` 可取 `off`、`auto` 或 `always`，默认值为 `auto`。自动模式下，
 只有图片输入、纯图片页面、可能含文字的内嵌图片，或原生文本提取不足的页面才应

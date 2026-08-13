@@ -13,6 +13,26 @@ by `AND` applies; in particular, `unicode-ident` is concluded as
 each package's copyright and license text; the registry source for every
 package is fixed by `Cargo.lock`.
 
+`clipper2-rust 1.1.0` is used for closed-polygon round offsets in OCR text
+detection. It is distributed under BSL-1.0; the complete license text is in
+`third_party/licenses/BSL-1.0.txt`. The reviewed crates.io source checksum is
+`0fd663fe209e7030c956e3be4c051dcc20cdb73da794f31466762cff12ca11bf`, and its
+recorded upstream VCS revision is `09e9505f99a18136505a64485011a292d4375a3a`.
+The reviewed source is a 18,590-line pure-Rust port with `forbid(unsafe_code)`,
+no build script, and only `num-traits` as a runtime dependency. Any upgrade
+requires a new audit.
+
+The request-accounted Suzuki-Abe contour scanner in
+`crates/ocr/src/detection.rs` is adapted from `imageproc 0.25.0`
+`src/contours.rs`, Copyright (c) 2015 PistonDevelopers, under the MIT License.
+The crates.io source checksum is
+`2393fb7808960751a52e8a154f67e7dd3f8a2ef9bd80d1553078a7b4e8ed3f0d`.
+The complete MIT permission and warranty text is in
+`third_party/licenses/imageproc-MIT.txt`.
+The integer line-mask compatibility routine follows the Apache-2.0 OpenCV
+4.13 `LineIterator` algorithm; OpenCV is used only as documented reference
+source and is not linked, downloaded, or shipped by ordinary builds.
+
 ONNX Runtime 1.29.0 archives and the PP-OCRv6 source archives are hash-pinned,
 manual inputs. They are not linked into or copied into normal build outputs.
 Their sources and declared licenses are recorded in their existing manifests.

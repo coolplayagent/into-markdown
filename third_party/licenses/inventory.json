@@ -2,6 +2,26 @@
   "schema_version": 1,
   "components": [
     {
+      "id": "imageproc-contour-adaptation",
+      "kind": "embedded-source",
+      "status": "reviewed",
+      "included_in_release": true,
+      "version": "imageproc 0.25.0",
+      "source": "https://crates.io/crates/imageproc/0.25.0",
+      "license": "MIT",
+      "obligations": "The request-accounted Suzuki-Abe scanner is adapted from imageproc src/contours.rs at crates.io checksum 2393fb7808960751a52e8a154f67e7dd3f8a2ef9bd80d1553078a7b4e8ed3f0d. Preserve Copyright (c) 2015 PistonDevelopers and third_party/licenses/imageproc-MIT.txt in source distributions."
+    },
+    {
+      "id": "clipper2-rust",
+      "kind": "rust-library",
+      "status": "reviewed",
+      "included_in_release": true,
+      "version": "1.1.0",
+      "source": "https://crates.io/crates/clipper2-rust/1.1.0",
+      "license": "BSL-1.0",
+      "obligations": "Preserve the upstream copyright notices and complete Boost Software License 1.0 text in source distributions; Cargo.lock fixes crates.io checksum 0fd663fe209e7030c956e3be4c051dcc20cdb73da794f31466762cff12ca11bf and upstream VCS commit 09e9505f99a18136505a64485011a292d4375a3a. The audited crate is a 18,590-line pure-Rust port, forbids unsafe code, has build=false, and has only num-traits as a runtime dependency. Any upgrade requires a new source, unsafe, build, dependency, and license audit."
+    },
+    {
       "id": "onnx-protobuf-schema",
       "kind": "build-input",
       "status": "reviewed",

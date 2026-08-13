@@ -164,6 +164,55 @@ checkpoint envelope、typed wire、base64 字符串和解码资源的共存峰�
 每个支持平台都运行构建、单元测试和 CLI 冒烟测试。模型与原生运行时不会进入
 常规构建，因此模型推理测试通过手动触发或定时工作流运行。
 
+## PP-OCRv6 检测 reference golden
+
+检测测试中的概率图由测试代码按矩形、非对称旋转四边形、带 hole 的 ring 和多个
+文本岛直接生成，不包含图片、字体、模型输出或第三方数据，因此没有额外 fixture
+许可义务。普通测试只调用 fake `TensorRuntime`，不安装 Python、不下载模型，也不依赖
+OpenCV。
+
+几何期望值在审查时用临时目录中的 `opencv-python-headless 4.13.0.92`、
+`pyclipper 1.4.0` 和 `numpy 2.4.2` 生成，临时目录随后删除。reference 脚本按
+PaddleOCR commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854` 的 DB 路径执行：
+`findContours(RETR_LIST, CHAIN_APPROX_SIMPLE)`、`minAreaRect`、四点 left/right 后各自
+按 y 排序、`fillPoly` polygon mean、`distance = area * 1.4 / perimeter`、
+`PyclipperOffset(JT_ROUND, ET_CLOSEDPOLYGON)` 和第二次 `minAreaRect`。固定 reference 为：
+
+- `96x64` 概率图中的 `[20,20]-[59,39]` 矩形：score
+  `0.8999999761581421`，unclip box `[(11,11),(68,11),(68,48),(11,48)]`；
+- `112x96` 概率图中的 `[(18,35),(34,14),(88,54),(72,75)]` 非对称旋转四边形：
+  fast score `0.8998934356977029`，pyclipper 整数路径的原始 unclip box
+  `[(30.7036,-5.6755),(107.0327,51.2244),(74.8757,94.3619),(-1.4535,37.4620)]`；
+  映射到 source bounds 并按官方 round 后为 `[(30,0),(107,51),(75,94),(0,37)]`；
+- `96x96` ring：`RETR_LIST` 返回 outer 与 inner 两个 contour，inner 经过同一 score
+  流程后低于 box threshold，最终只保留 score `0.7603305583705149` 的 outer box。
+
+Rust 的 request-accounted Suzuki–Abe scanner 一次只保留一个正在跟踪的 contour，
+在线执行 `CHAIN_APPROX_SIMPLE`，并按 OpenCV 4.13 的 reverse-scan `RETR_LIST` 顺序仅保留
+scanner 正向发现序列的最后 3000 个，再整体逆序；这精确对应官方
+`contours[:max_candidates]`，不是对 OpenCV 返回序再取 suffix。3600 个隔离岛 reference
+明确固定返回前 3 个为 `[(178,178),(175,178),(172,178)]`、第 3000 个为 `(1,31)`。
+三个分离岛和带 hole ring 另固定验证顺序与 hole 语义；恶意小岛
+另受 contour event 上限约束。fast score 把四点转为 int32 后复刻 `fillPoly` 的 even-odd
+内部与 OpenCV 8-connected 整数边界线；倾斜 convex/concave mask reference 要求像素集合
+完全相等。closed polygon offset 使用 `clipper2-rust 1.1.0` 的 i64 path，多个输出 path
+与官方一样拒绝。
+
+归一化 golden 对 BGR 三个通道分别覆盖全部 256 个 uint8 输入，把固定 NumPy f32
+`pixel * scale - mean` 再除 std 的结果 bits 按大端连接并比对 SHA-256；同时逐 bit 固定
+pixel 48 的 `0xbfa5e091`、`0xbf990226`、`0xbf77c490`，防止把乘 f32 scale 改写为除法。
+资源回归使用多层嵌套 ring，要求累计 score pixels/work 在后续大框扫描前稳定返回
+`ResourceLimit`；评分循环在实际工作开始后的 checkpoint 确定性覆盖 cancel 与 timeout。
+offset 测试用调用 hook 证明 `max_offset_points=3` 和不足的逻辑内存都会在进入
+`inflate_paths_64` 之前失败。
+
+resize reference 还覆盖 3x2 到 7x5 的所有 BGR 输出样本、确定种子的随机 BGR 图、
+downsample 和 tiny-image padding 边缘，锁定 OpenCV 4.13 默认
+`INTER_LINEAR` 的 uint8 结果，每通道最多允许 1 LSB；不把它表述为跨 OpenCV 版本或
+`INTER_LINEAR_EXACT` 等价。`99x2` 固定验证先 padding 后的两阶段 int 截断结果为
+`4000x64`。score 要求 `1e-5`，整数映射坐标仅允许 minimum-rectangle 浮点 tie 导致的
+1 pixel 差异。
+
 CLI 契约测试还必须覆盖直接输入与保留命令冲突、双语帮助、stdin、目录展开、
 配置合并、联网授权、稳定退出码、JSON Schema、Bundle 路径净化、原子输出、冲突
 改名和批量失败汇总。尚无后端的管理操作应返回 `componentUnavailable`，不得联网或
