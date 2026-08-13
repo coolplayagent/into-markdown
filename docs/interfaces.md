@@ -57,6 +57,10 @@ converter 交给 quick-xml 的只是解码文本，公开 provenance 始终回�
 
 ## Markdown 渲染器
 
+`core::canonical_external_asset_uri` 是 DTO、转换器和渲染器共享的 additive 公共安全
+边界：仅接受经 `url::Url` 解析后字节级 canonical、无 userinfo/query/fragment 的绝对
+HTTP(S) URI，并拒绝非法 percent escape。它只验证并保留审计引用，不授予网络访问。
+
 `MarkdownRenderer` 是统一 IR 到 GFM 的唯一边界。内置 `builtin.gfm` 会校验 IR
 与所有嵌套图片的资源引用，规范化 LF，并按源顺序输出稳定字节。渲染结果是纯文本；
 SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器诊断和引擎按深度优先

@@ -31,6 +31,7 @@ futures = "0.3.31"
 getrandom = "0.4.3"
 globset = "0.4.16"
 libc = "0.2.189"
+pulldown-cmark = "=0.13.4"
 quick-xml = "=0.38.3"
 rustix = { version = "1.1.4", features = ["fs"] }
 serde = { version = "1.0.219", features = ["derive"] }

@@ -59,12 +59,37 @@ mod tests {
             available,
             vec![
                 InputFormat::Text,
+                InputFormat::Markdown,
                 InputFormat::Csv,
                 InputFormat::Tsv,
                 InputFormat::Json,
                 InputFormat::Xml,
             ]
         );
+
+        let markdown = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from(b"Heading\n=======\n\n- [x] done\n".as_slice()),
+            Some("notes.md"),
+        ));
+        let result = block_on(engine.convert(markdown)).unwrap();
+        assert_eq!(result.markdown, "# Heading\n\n- [x] done\n");
+        assert!(result.assets.is_empty());
+        assert_eq!(result.provenance[0].locator.byte_start, Some(0));
+
+        let external_image = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from(b"![diagram](https://cdn.example.com/diagram.png)\n".as_slice()),
+            Some("diagram.md"),
+        ));
+        let image_result = block_on(engine.convert(external_image)).unwrap();
+        assert_eq!(image_result.markdown, "![diagram](<https://cdn.example.com/diagram.png>)\n");
+        assert_eq!(image_result.assets.len(), 1);
+        assert!(image_result.assets[0].bytes.is_empty());
+        assert_eq!(
+            image_result.assets[0].external_uri.as_deref(),
+            Some("https://cdn.example.com/diagram.png")
+        );
+        let json = ResultDto::json_from_result(&image_result, DtoJsonStyle::Compact).unwrap();
+        assert!(json.contains("https://cdn.example.com/diagram.png"));
     }
 
     #[test]

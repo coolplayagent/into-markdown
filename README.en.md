@@ -5,7 +5,8 @@
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
-command-line shell, production TXT/CSV/TSV/JSON/XML and character-set converters, and contract
+command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, and
+contract
 tests. It does not yet contain OCR inference, network clients, or LLM calls.
 
 The project is implemented independently of the neighbouring `anydoc` and
@@ -80,6 +81,13 @@ in document metadata. DTDs and custom or external entities are rejected. Both
 converters report provenance in original-source byte offsets. Complete top-level
 JSON scalars are auto-detected. Every XML attribute exposes independent QName and
 value spans, and UTF-16 provenance reuses the compact run decoder.
+
+Markdown/GFM conversion supports headings, emphasis and strikethrough, links and
+autolinks, nested and task lists, tables, code blocks, and footnotes while retaining
+UTF-8 source byte ranges. A standalone safe HTTP(S) image remains structured as an
+external-only Asset without being downloaded; inline, relative, and unsafe targets
+produce explicit diagnostics and safe fallbacks. Raw HTML and blockquotes use explicit
+non-executable IR fallbacks; see the [format matrix](docs/formats.md) for the full policy.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source

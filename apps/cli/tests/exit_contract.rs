@@ -61,6 +61,39 @@ fn real_cli_converts_txt_files_and_explicit_charset_stdin() {
 }
 
 #[test]
+fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("diagram.md");
+    std::fs::write(&path, "![diagram](https://cdn.example.com/diagram.png)\n").unwrap();
+
+    let output =
+        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "![diagram](<https://cdn.example.com/diagram.png>)\n"
+    );
+
+    let output = Command::new(binary())
+        .args(["--no-config", "--emit", "result-json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["assets"][0]["dataBase64"], "");
+    assert_eq!(result["assets"][0]["externalUri"], "https://cdn.example.com/diagram.png");
+    assert!(!directory.path().join("diagram_assets").exists());
+
+    let bundle = Command::new(binary())
+        .args(["--no-config", "--emit", "bundle", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(bundle.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&bundle.stderr).contains("bundleAssetMissingContent"));
+    assert!(bundle.stdout.is_empty());
+}
+
+#[test]
 fn structured_text_is_never_consumed_by_txt_fallback() {
     let directory = tempfile::tempdir().unwrap();
     let mut large_json = "[".repeat(200);

@@ -3,10 +3,12 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod delimited;
+mod markdown;
 mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
+pub use markdown::MarkdownConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 
@@ -147,7 +149,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Markdown,
         family: "text",
         extensions: &["md", "markdown", "mdown"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Html,
@@ -956,7 +958,10 @@ impl FormatDetector for HintFormatDetector {
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
-                    let confidence = if matches!(format, InputFormat::Csv | InputFormat::Tsv) {
+                    let confidence = if matches!(
+                        format,
+                        InputFormat::Markdown | InputFormat::Csv | InputFormat::Tsv
+                    ) {
                         0.99
                     } else if reasons.len() > 1 {
                         0.68
@@ -1278,6 +1283,13 @@ fn structured_text_candidate(
             InputFormat::Xml,
             0.90,
             "XML declaration or paired markup with invalid structure",
+        )));
+    }
+    if markdown::strong_markdown_evidence(text, context)? {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Markdown,
+            0.91,
+            "multiple unambiguous Markdown/GFM structures",
         )));
     }
     let delimited_bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
