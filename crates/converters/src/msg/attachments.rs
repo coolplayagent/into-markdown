@@ -20,6 +20,7 @@ pub(super) struct ParsedAttachment<'a> {
     pub(super) asset: Option<Asset>,
     pub(super) nested: Option<Storage<'a>>,
     pub(super) content_id: Option<String>,
+    pub(super) safe_image: bool,
     pub(super) filename: String,
     pub(super) source: String,
 }
@@ -77,10 +78,12 @@ pub(super) fn parse_all<'a>(
                     bytes: bytes.to_vec(),
                     external_uri: None,
                 };
+                let safe_image = content_id.is_some() && audit_cid_image(&asset, budget)?;
                 output.push(ParsedAttachment {
                     asset: Some(asset),
                     nested: None,
                     content_id,
+                    safe_image,
                     filename,
                     source,
                 });
@@ -105,6 +108,7 @@ pub(super) fn parse_all<'a>(
                     asset: None,
                     nested: Some(object),
                     content_id: None,
+                    safe_image: false,
                     filename,
                     source,
                 });
@@ -122,6 +126,24 @@ pub(super) fn parse_all<'a>(
     Ok(output)
 }
 
+fn audit_cid_image(asset: &Asset, budget: &MsgBudget<'_>) -> Result<bool, ConversionError> {
+    if !matches!(asset.media_type.as_str(), "image/png" | "image/jpeg") {
+        return Ok(false);
+    }
+    let mut memory = budget.context().reserve_memory(0)?;
+    match crate::rtf::audit_embedded_raster(
+        &asset.bytes,
+        &asset.media_type,
+        budget.options(),
+        budget.context(),
+        &mut memory,
+    ) {
+        Ok(()) => Ok(true),
+        Err(ConversionError::Malformed { .. }) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn validate_filename(value: &str, part: &str) -> Result<(), ConversionError> {
     if value.is_empty()
         || value == "."
@@ -137,7 +159,7 @@ fn validate_filename(value: &str, part: &str) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn canonical_cid(value: &str) -> Result<String, ConversionError> {
+pub(super) fn canonical_cid(value: &str) -> Result<String, ConversionError> {
     let value = value.trim();
     let value = value.strip_prefix('<').and_then(|inner| inner.strip_suffix('>')).unwrap_or(value);
     if value.is_empty()

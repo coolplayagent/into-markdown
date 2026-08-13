@@ -122,6 +122,14 @@ impl<'a> MsgBudget<'a> {
     pub(super) fn checkpoint(&self) -> Result<(), ConversionError> {
         self.context.checkpoint()
     }
+
+    pub(super) const fn options(&self) -> &ConversionOptions {
+        self.options
+    }
+
+    pub(super) const fn context(&self) -> &ExecutionContext {
+        self.context
+    }
 }
 
 pub(super) fn malformed(part: impl Into<String>, detail: impl Into<String>) -> ConversionError {

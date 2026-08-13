@@ -1,4 +1,7 @@
+mod chain;
+
 use super::budget::{MsgBudget, limit, malformed};
+use chain::walk_chain;
 use into_markdown_core::ConversionError;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -199,7 +202,6 @@ impl Header {
             &fat,
             sector_count,
             directory_expected,
-            false,
             "cfb/directory",
         )?;
         if directory_chain.is_empty() {
@@ -223,7 +225,6 @@ impl Header {
                 &fat,
                 sector_count,
                 Some(self.minifat_sectors),
-                false,
                 "cfb/minifat",
             )?
         };
@@ -509,7 +510,6 @@ fn read_mini_stream(
         minifat,
         owners.len(),
         Some(u32::try_from(expected).unwrap_or(u32::MAX)),
-        true,
         part,
     )?;
     let mut output = Vec::with_capacity(expected.saturating_mul(mini_size));
@@ -539,62 +539,7 @@ fn regular_stream_chain(
     part: &str,
 ) -> Result<Vec<u32>, ConversionError> {
     let count = to_usize64(entry.size, part)?.div_ceil(sector_size);
-    walk_chain(
-        entry.start,
-        fat,
-        sector_count,
-        Some(u32::try_from(count).unwrap_or(u32::MAX)),
-        true,
-        part,
-    )
-}
-
-fn walk_chain(
-    start: u32,
-    table: &[u32],
-    addressable: usize,
-    expected: Option<u32>,
-    allow_extra: bool,
-    part: &str,
-) -> Result<Vec<u32>, ConversionError> {
-    let expected_usize = expected.map(to_usize).transpose()?;
-    if expected_usize == Some(0) {
-        if !matches!(start, END | FREE) {
-            return Err(malformed(part, "zero-length chain has a start sector"));
-        }
-        return Ok(Vec::new());
-    }
-    if matches!(start, END | FREE | FAT | DIFAT) {
-        return Err(malformed(part, "non-empty chain has an invalid start sector"));
-    }
-    let mut output = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut current = start;
-    loop {
-        validate_physical(current, addressable, part)?;
-        if !seen.insert(current) {
-            return Err(malformed(part, "sector chain contains a cycle"));
-        }
-        output.push(current);
-        if output.len() > addressable {
-            return Err(malformed(part, "sector chain exceeds addressable sectors"));
-        }
-        current = *table
-            .get(to_usize(current)?)
-            .ok_or_else(|| malformed(part, "sector chain exceeds allocation table"))?;
-        if current == END {
-            break;
-        }
-        if matches!(current, FREE | FAT | DIFAT) {
-            return Err(malformed(part, "sector chain enters a reserved marker"));
-        }
-    }
-    if expected_usize
-        .is_some_and(|count| output.len() < count || (!allow_extra && output.len() != count))
-    {
-        return Err(malformed(part, "sector chain length does not match declared stream size"));
-    }
-    Ok(output)
+    walk_chain(entry.start, fat, sector_count, Some(u32::try_from(count).unwrap_or(u32::MAX)), part)
 }
 
 fn validate_fat_targets(fat: &[u32], sector_count: usize) -> Result<(), ConversionError> {

@@ -305,7 +305,7 @@ def outlook_msg(
         add_mapi_storage(entries, base, [
             mapi_long(0x3705, 1), mapi_unicode(0x3707, "logo.png"),
             mapi_unicode(0x370E, "image/png"), mapi_unicode(0x3712, "logo@example.test"),
-            mapi_binary(0x3701, b"repository-cid-image"),
+            mapi_binary(0x3701, bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082")),
         ], False)
         attachment_index += 1
     if attachment:
@@ -339,7 +339,7 @@ def msg_fixture_definitions() -> list[tuple[str, str, bytes, dict[str, object]]]
     return [
         ("msg-normal", "normal", plain, expected_hash("headers, time, transport headers and plain body", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
         ("msg-html", "html", html, expected_hash("HTML is selected ahead of the plain fallback", "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1")),
-        ("msg-cid", "cid", cid, expected_hash("CID attachment remains an offline extracted asset", "5de8c08dbced6c2ed6ab94bb7cc04e7853933c0eb74b8a97e2716918328ae54d")),
+        ("msg-cid", "cid", cid, expected_hash("canonical CID image is bound at its HTML reference", "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af")),
         ("msg-attachment-nested", "attachment", nested, expected_hash("by-value and embedded MSG attachments retain assets and source chains", "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a")),
         ("msg-rtf", "rtf", rtf, expected_hash("LZFu is decoded and passed to the bounded RTF converter on the same request context", "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367")),
         ("msg-corrupt", "corrupt", plain[:-17], expected("error", "truncated CFB sector", error_code="malformed")),

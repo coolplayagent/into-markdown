@@ -16,6 +16,7 @@ const PR_MESSAGE_DELIVERY_TIME: u16 = 0x0e06;
 pub(super) struct AttachmentOutput {
     pub(super) asset: Option<Asset>,
     pub(super) content_id: Option<String>,
+    pub(super) safe_image: bool,
     pub(super) filename: String,
     pub(super) source: String,
     pub(super) nested: Option<ConverterOutput>,
@@ -90,19 +91,12 @@ pub(super) fn assemble(
         if let Some(asset) = &mut attachment.asset {
             prefix_asset(asset, &attachment_prefix);
         }
-        if attachment.content_id.is_some() {
-            if let Some(asset) = attachment.asset.as_ref() {
-                blocks.push(node(
-                    prefix,
-                    &mut next_id,
-                    Block::Image {
-                        asset: asset.id.clone(),
-                        alt: Some(attachment.filename.clone()),
-                    },
-                    &attachment.source,
-                ));
-            }
-        } else {
+        let referenced_cid = attachment.safe_image
+            && attachment
+                .asset
+                .as_ref()
+                .is_some_and(|asset| references_image_asset(&blocks, &asset.id));
+        if !referenced_cid {
             if !attachment_heading {
                 blocks.push(node(
                     prefix,
@@ -118,9 +112,9 @@ pub(super) fn assemble(
                 Block::Paragraph(text(&attachment.filename)),
                 &attachment.source,
             ));
-            if let Some(asset) =
-                attachment.asset.as_ref().filter(|asset| asset.media_type.starts_with("image/"))
-            {
+            if let Some(asset) = attachment.asset.as_ref().filter(|asset| {
+                attachment.content_id.is_none() && asset.media_type.starts_with("image/")
+            }) {
                 blocks.push(node(
                     prefix,
                     &mut next_id,
@@ -185,6 +179,40 @@ pub(super) fn assemble(
     output.assets = assets;
     output.diagnostics = diagnostics;
     output.account_retained(context)
+}
+
+fn references_image_asset(blocks: &[BlockNode], expected: &into_markdown_core::AssetId) -> bool {
+    for block in blocks {
+        match &block.block {
+            Block::Image { asset, .. } if asset == expected => return true,
+            Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. }
+            | Block::Footnote { blocks, .. }
+                if references_image_asset(blocks, expected) =>
+            {
+                return true;
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    if references_image_asset(&item.blocks, expected) {
+                        return true;
+                    }
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        if references_image_asset(&cell.blocks, expected) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn metadata(

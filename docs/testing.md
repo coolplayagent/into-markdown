@@ -300,8 +300,9 @@ context lease 获取与释放。
 
 MSG 样本由仓库生成器直接写出 CFB directory/FAT/miniFAT 和 MAPI property streams，不依赖
 Outlook 或外部邮件。plain、HTML、同一请求上下文中的 LZFu/RTF 转换、CID、by-value/embedded attachment、
-截断、循环 FAT 和精确输入边界进入同一 manifest；模块内额外用程序生成的变体覆盖 sector
-重叠、String8 codepage、附件来源链以及取消/资源错误不会 panic。
+截断、循环 FAT 和精确输入边界进入同一 manifest；模块内额外用程序生成的变体覆盖 compressed
+LZFu/MELA 不伪造 MSG byte offset、CID 引用/未引用/非图片/重复歧义、mini/regular stream 的
+额外 sector、sector 重叠、String8 codepage、附件来源链以及取消/资源错误不会 panic。
 
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，

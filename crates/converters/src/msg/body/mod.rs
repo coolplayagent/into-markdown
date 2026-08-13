@@ -1,7 +1,9 @@
 mod lzfu;
 
+use super::attachments::ParsedAttachment;
 use super::budget::{MsgBudget, malformed};
 use super::properties::Properties;
+use crate::html::EmbeddedImage;
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput, Diagnostic, Document,
     ExecutionContext, Inline, NodeId, Provenance, ProvenanceKind, SourceLocator,
@@ -28,6 +30,7 @@ pub(super) trait BodyAdapter {
     fn html(
         &self,
         bytes: &[u8],
+        images: &[EmbeddedImage],
         options: &ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<ConverterOutput, ConversionError>;
@@ -46,10 +49,11 @@ impl BodyAdapter for BuiltinBodyAdapter {
     fn html(
         &self,
         bytes: &[u8],
+        images: &[EmbeddedImage],
         options: &ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<ConverterOutput, ConversionError> {
-        crate::html::convert_embedded_html(bytes, options, context)
+        crate::html::convert_embedded_html_with_images(bytes, images, options, context)
     }
 
     fn rtf(
@@ -64,19 +68,21 @@ impl BodyAdapter for BuiltinBodyAdapter {
 
 pub(super) fn select(
     properties: &Properties,
+    attachments: &[ParsedAttachment<'_>],
     adapter: &dyn BodyAdapter,
     options: &ConversionOptions,
     context: &ExecutionContext,
     budget: &mut MsgBudget<'_>,
 ) -> Result<SelectedBody, ConversionError> {
+    let images = cid_images(attachments);
     if let Some(html) = properties.binary(PR_HTML).filter(|value| !value.is_empty()) {
         let source = required_source(properties, PR_HTML)?;
-        let output = adapter.html(html, options, context)?;
+        let output = adapter.html(html, &images, options, context)?;
         return Ok(remap(BodyKind::Html, output, &source));
     }
     if let Some(html) = properties.text(PR_HTML).filter(|value| !value.is_empty()) {
         let source = required_source(properties, PR_HTML)?;
-        let output = adapter.html(html.as_bytes(), options, context)?;
+        let output = adapter.html(html.as_bytes(), &images, options, context)?;
         return Ok(remap(BodyKind::Html, output, &source));
     }
     if let Some(compressed) = properties.binary(PR_RTF_COMPRESSED).filter(|value| !value.is_empty())
@@ -100,11 +106,16 @@ fn remap(kind: BodyKind, mut output: ConverterOutput, source: &str) -> SelectedB
     for block in &mut output.document.blocks {
         remap_block(block, source);
     }
+    for diagnostic in &mut output.diagnostics {
+        if let Some(locator) = &mut diagnostic.locator {
+            remap_locator(locator, source);
+        }
+    }
     SelectedBody { kind, output }
 }
 
 fn remap_block(block: &mut BlockNode, source: &str) {
-    block.provenance.locator.part = Some(source.to_owned());
+    remap_locator(&mut block.provenance.locator, source);
     match &mut block.block {
         Block::Page { blocks, .. }
         | Block::Slide { blocks, .. }
@@ -130,8 +141,47 @@ fn remap_block(block: &mut BlockNode, source: &str) {
                 }
             }
         }
+        Block::Paragraph(content)
+        | Block::Heading { content, .. }
+        | Block::TimedSegment { content, .. } => remap_inlines(content, source),
         _ => {}
     }
+}
+
+fn remap_inlines(inlines: &mut [Inline], source: &str) {
+    for inline in inlines {
+        match inline {
+            Inline::SourceText { provenance, .. } => remap_locator(&mut provenance.locator, source),
+            Inline::Link { content, .. } => remap_inlines(content, source),
+            _ => {}
+        }
+    }
+}
+
+fn remap_locator(locator: &mut SourceLocator, source: &str) {
+    locator.part = Some(source.to_owned());
+    // Nested body offsets address decoded HTML/RTF bytes, not physical MSG bytes. Without a
+    // reversible property-stream map, retaining them would forge source coordinates.
+    locator.byte_start = None;
+    locator.byte_end = None;
+}
+
+fn cid_images(attachments: &[ParsedAttachment<'_>]) -> Vec<EmbeddedImage> {
+    let mut images = attachments
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, attachment)| {
+            let cid = attachment.content_id.as_ref()?.clone();
+            let mut asset = attachment.asset.as_ref()?.id.clone();
+            if !attachment.safe_image {
+                return None;
+            }
+            asset.0 = format!("attachment-{}-{}", ordinal + 1, asset.0);
+            Some(EmbeddedImage { cid, asset })
+        })
+        .collect::<Vec<_>>();
+    images.sort_by(|left, right| left.cid.cmp(&right.cid));
+    images
 }
 
 fn plain_document(text: &str, source: &str) -> ConverterOutput {
@@ -182,6 +232,7 @@ mod tests {
         fn html(
             &self,
             _: &[u8],
+            _: &[EmbeddedImage],
             _: &ConversionOptions,
             _: &ExecutionContext,
         ) -> Result<ConverterOutput, ConversionError> {

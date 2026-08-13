@@ -114,7 +114,6 @@ fn convert_storage(
             "declared MSG recipient count does not match recipient storages",
         ));
     }
-    let selected_body = body::select(&properties, adapter, options, context, budget)?;
     let parsed_attachments = attachments::parse_all(storage, budget)?;
     if properties.attachment_count()
         != Some(u32::try_from(parsed_attachments.len()).unwrap_or(u32::MAX))
@@ -124,9 +123,11 @@ fn convert_storage(
             "declared MSG attachment count does not match attachment storages",
         ));
     }
+    let selected_body =
+        body::select(&properties, &parsed_attachments, adapter, options, context, budget)?;
     let mut completed = Vec::with_capacity(parsed_attachments.len());
     for (index, parsed) in parsed_attachments.into_iter().enumerate() {
-        let ParsedAttachment { asset, nested, content_id, filename, source } = parsed;
+        let ParsedAttachment { asset, nested, content_id, safe_image, filename, source } = parsed;
         let nested_output = nested
             .map(|nested| {
                 let next_depth = depth.checked_add(1).ok_or_else(|| {
@@ -146,6 +147,7 @@ fn convert_storage(
         completed.push(AttachmentOutput {
             asset,
             content_id,
+            safe_image,
             filename,
             source,
             nested: nested_output,

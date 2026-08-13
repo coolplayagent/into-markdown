@@ -30,12 +30,8 @@ fn plain_message_extracts_headers_time_transport_and_provenance() {
 
 #[test]
 fn html_cid_and_by_value_attachment_are_offline_assets() {
-    let attachment = AttachmentFixture::value(
-        "logo.png",
-        "image/png",
-        Some("logo@example.test"),
-        b"repository-png".to_vec(),
-    );
+    let attachment =
+        AttachmentFixture::value("logo.png", "image/png", Some("logo@example.test"), tiny_png());
     let bytes = message(
         vec![attachment],
         vec![],
@@ -46,7 +42,7 @@ fn html_cid_and_by_value_attachment_are_offline_assets() {
     let output = convert(&bytes).unwrap();
     assert_eq!(output.document.metadata.properties["msg.body_kind"], "html");
     assert_eq!(output.assets.len(), 1);
-    assert_eq!(output.assets[0].bytes, b"repository-png");
+    assert_eq!(output.assets[0].bytes, tiny_png());
     assert!(output.assets[0].external_uri.is_none());
     let images = output
         .document
@@ -55,6 +51,69 @@ fn html_cid_and_by_value_attachment_are_offline_assets() {
         .filter(|block| matches!(block.block, into_markdown_core::Block::Image { .. }))
         .count();
     assert_eq!(images, 1);
+    assert!(!paragraph_text(&output).contains("Attachments"));
+}
+
+#[test]
+fn cid_resources_require_an_exact_reference_and_an_audited_image() {
+    let unreferenced = message(
+        vec![AttachmentFixture::value(
+            "logo.png",
+            "image/png",
+            Some("logo@example.test"),
+            tiny_png(),
+        )],
+        vec![],
+        None,
+        Some(b"<main><p>No inline image</p></main>"),
+        None,
+    );
+    let output = convert(&unreferenced).unwrap();
+    assert!(paragraph_text(&output).contains("Attachments"));
+    assert!(
+        !output
+            .document
+            .blocks
+            .iter()
+            .any(|block| matches!(block.block, into_markdown_core::Block::Image { .. }))
+    );
+
+    let non_image = message(
+        vec![AttachmentFixture::value(
+            "notes.txt",
+            "text/plain",
+            Some("notes@example.test"),
+            b"not an image".to_vec(),
+        )],
+        vec![],
+        None,
+        Some(b"<main><img src='cid:notes@example.test' alt='notes'></main>"),
+        None,
+    );
+    let output = convert(&non_image).unwrap();
+    assert!(paragraph_text(&output).contains("notes"));
+    assert!(
+        !output
+            .document
+            .blocks
+            .iter()
+            .any(|block| matches!(block.block, into_markdown_core::Block::Image { .. }))
+    );
+    assert!(output.diagnostics.iter().any(|diagnostic| diagnostic.code == "html.cidImageRejected"));
+}
+
+#[test]
+fn duplicate_content_ids_are_rejected_as_ambiguous() {
+    let attachment =
+        || AttachmentFixture::value("logo.png", "image/png", Some("logo@example.test"), tiny_png());
+    let bytes = message(
+        vec![attachment(), attachment()],
+        vec![],
+        None,
+        Some(b"<main><img src='cid:logo@example.test'></main>"),
+        None,
+    );
+    assert_eq!(convert(&bytes).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -101,6 +160,7 @@ fn rtf_selection_uses_lzfu_then_the_narrow_adapter() {
         fn html(
             &self,
             _: &[u8],
+            _: &[crate::html::EmbeddedImage],
             _: &ConversionOptions,
             _: &ExecutionContext,
         ) -> Result<ConverterOutput, ConversionError> {
@@ -126,30 +186,36 @@ fn rtf_selection_uses_lzfu_then_the_narrow_adapter() {
 }
 
 #[test]
-fn builtin_rtf_body_reuses_the_request_context_and_preserves_source_provenance() {
+fn builtin_rtf_bodies_reuse_context_without_forging_decoded_byte_offsets() {
     let raw = b"{\\rtf1\\ansi Repository RTF body}";
-    let envelope = lzfu_uncompressed(raw);
-    let bytes = message(vec![], vec![], None, None, Some(&envelope));
-    let options = ConversionOptions::default();
-    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    let output = convert_msg(&bytes, &options, &context, &BuiltinBodyAdapter).unwrap();
+    for envelope in [lzfu_compressed_literals(raw), lzfu_uncompressed(raw)] {
+        let bytes = message(vec![], vec![], None, None, Some(&envelope));
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let output = convert_msg(&bytes, &options, &context, &BuiltinBodyAdapter).unwrap();
 
-    assert_eq!(output.document.metadata.properties["msg.body_kind"], "rtf");
-    assert!(paragraph_text(&output).contains("Repository RTF body"));
-    assert!(output.leased_memory_for(&context) > 0);
-    let sources = output
-        .document
-        .blocks
-        .iter()
-        .filter(|block| {
-            block.provenance.locator.part.as_deref().is_some_and(|part| part.ends_with("#10090102"))
-        })
-        .collect::<Vec<_>>();
-    assert!(!sources.is_empty());
-    assert!(sources.iter().all(|block| {
-        let locator = &block.provenance.locator;
-        locator.byte_start.zip(locator.byte_end).is_some_and(|(start, end)| start < end)
-    }));
+        assert_eq!(output.document.metadata.properties["msg.body_kind"], "rtf");
+        assert!(paragraph_text(&output).contains("Repository RTF body"));
+        assert!(output.leased_memory_for(&context) > 0);
+        let sources = output
+            .document
+            .blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .provenance
+                    .locator
+                    .part
+                    .as_deref()
+                    .is_some_and(|part| part.ends_with("#10090102"))
+            })
+            .collect::<Vec<_>>();
+        assert!(!sources.is_empty());
+        assert!(sources.iter().all(|block| {
+            let locator = &block.provenance.locator;
+            locator.byte_start.is_none() && locator.byte_end.is_none()
+        }));
+    }
 }
 
 #[test]
@@ -289,6 +355,13 @@ fn collect_text(blocks: &[into_markdown_core::BlockNode], output: &mut String) {
             _ => {}
         }
     }
+}
+
+fn tiny_png() -> Vec<u8> {
+    let hex = b"89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082";
+    hex.chunks_exact(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect()
 }
 
 #[derive(Clone)]
@@ -686,4 +759,39 @@ fn lzfu_uncompressed(raw: &[u8]) -> Vec<u8> {
     output.extend_from_slice(&0_u32.to_le_bytes());
     output.extend_from_slice(raw);
     output
+}
+
+fn lzfu_compressed_literals(raw: &[u8]) -> Vec<u8> {
+    const PRELOAD_LEN: usize = 207;
+    let mut payload = Vec::new();
+    let mut cursor = 0;
+    while raw.len() - cursor >= 8 {
+        payload.push(0);
+        payload.extend_from_slice(&raw[cursor..cursor + 8]);
+        cursor += 8;
+    }
+    let remaining = raw.len() - cursor;
+    payload.push(1 << remaining);
+    payload.extend_from_slice(&raw[cursor..]);
+    let end = (PRELOAD_LEN + raw.len()) & 0x0fff;
+    payload.push(u8::try_from(end >> 4).unwrap());
+    payload.push(u8::try_from((end & 0x0f) << 4).unwrap());
+    let mut output = Vec::new();
+    output.extend_from_slice(&u32::try_from(payload.len() + 12).unwrap().to_le_bytes());
+    output.extend_from_slice(&u32::try_from(raw.len()).unwrap().to_le_bytes());
+    output.extend_from_slice(&0x7546_5a4c_u32.to_le_bytes());
+    output.extend_from_slice(&crc32(&payload).to_le_bytes());
+    output.extend_from_slice(&payload);
+    output
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0_u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    crc
 }

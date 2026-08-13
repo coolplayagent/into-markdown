@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "6f7b24ae4bf9b4935d8931d2640f5e5acfd33dc2019887d4b1d8957372e1d16e",
+    "sha256": "dbe08944c168e08ab70655410c8e625b335755f255c685e5fb5aee18a6d3d39a",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -841,7 +841,7 @@
       "scenario": "cid",
       "path": "small/msg/cid.msg",
       "bytes": 5632,
-      "sha256": "d4584f31e9bc0717d488dae6054c1ec3e7e445a863a0969c4ecf2cbfef9e1682",
+      "sha256": "bdef7184ee867bb40384b38dd7c05bac212fb89ee68baeac40d42e147668d0f3",
       "media_type": "application/vnd.ms-outlook",
       "license": {
         "spdx": "Apache-2.0",
@@ -859,8 +859,8 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "5de8c08dbced6c2ed6ab94bb7cc04e7853933c0eb74b8a97e2716918328ae54d",
-        "description": "CID attachment remains an offline extracted asset"
+        "semantic_sha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af",
+        "description": "canonical CID image is bound at its HTML reference"
       }
     },
     {
