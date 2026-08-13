@@ -30,6 +30,8 @@ pub enum ErrorCode {
     Cancelled,
     /// The total execution deadline elapsed.
     Timeout,
+    /// Persistent task state is corrupt, incompatible, or unsafe to reuse.
+    Recovery,
     /// An invariant or unavailable internal component prevented conversion.
     Internal,
 }
@@ -51,6 +53,7 @@ impl ErrorCode {
             Self::ComponentUnavailable => "componentUnavailable",
             Self::Cancelled => "cancelled",
             Self::Timeout => "timeout",
+            Self::Recovery => "recovery",
             Self::Internal => "internal",
         }
     }
@@ -133,6 +136,14 @@ pub enum ConversionError {
     /// The total request deadline elapsed.
     #[error("conversion timed out")]
     Timeout,
+    /// Persistent task state cannot safely be read or reused.
+    #[error("task recovery failed ({reason}): {detail}")]
+    Recovery {
+        /// Stable reason such as `incompatible`, `corrupt`, or `io`.
+        reason: &'static str,
+        /// Sanitized failure detail.
+        detail: String,
+    },
     /// An internal invariant or required component was unavailable.
     #[error("internal conversion error: {detail}")]
     Internal {
@@ -158,6 +169,7 @@ impl ConversionError {
             Self::ComponentUnavailable { .. } => ErrorCode::ComponentUnavailable,
             Self::Cancelled => ErrorCode::Cancelled,
             Self::Timeout => ErrorCode::Timeout,
+            Self::Recovery { .. } => ErrorCode::Recovery,
             Self::Internal { .. } => ErrorCode::Internal,
         }
     }
@@ -197,6 +209,7 @@ mod tests {
             ),
             (ConversionError::Cancelled, "cancelled"),
             (ConversionError::Timeout, "timeout"),
+            (ConversionError::Recovery { reason: "corrupt", detail: String::new() }, "recovery"),
             (ConversionError::Internal { detail: String::new() }, "internal"),
         ];
         for (error, expected) in cases {

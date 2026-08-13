@@ -5,7 +5,9 @@ use std::sync::Arc;
 pub use into_markdown_ai::{AiProviderDescriptor, OpenAiCompatibleConfig};
 pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
 pub use into_markdown_core::*;
-pub use into_markdown_engine::{Engine, EngineBuilder, RegistryBuilder};
+pub use into_markdown_engine::{
+    Engine, EngineBuilder, RecoveryStore, RecoveryToken, RegistryBuilder, TaskCheckpoint, TaskPhase,
+};
 pub use into_markdown_ocr::{
     CharacterSet, DataDirectoryEnvironment, ModelArtifact, ModelBundle, ModelFetcher, ModelManager,
     ModelManagerError, ModelManifest, ModelStatus, ProductTarget, RuntimeArtifact,

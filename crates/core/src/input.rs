@@ -1,4 +1,5 @@
 use crate::{ConversionError, ExecutionContext, InputFormat, ResourceReservation};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,7 +31,8 @@ impl InputRef {
 }
 
 /// Caller-provided and source-derived hints used by format detectors.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FormatHint {
     /// Explicit format selection. This takes precedence over inference.
     pub format: Option<InputFormat>,

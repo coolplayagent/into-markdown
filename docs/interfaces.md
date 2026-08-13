@@ -107,6 +107,26 @@ reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported
 
 ## 执行上下文
 
+可恢复转换通过 `RecoveryStore::open`、`RecoveryStore::create_token` 和
+`Engine::convert_recoverable` 显式启用。调用方应持久保存 token；状态端点可用
+`RecoveryStore::inspect` 读取不含 payload 的版本化 `TaskCheckpoint`。恢复 token 是
+32 个小写十六进制字符，解析时在任何文件系统访问前拒绝非规范值。checkpoint 不兼容、
+损坏、版本未知、路径不安全或并发阶段冲突统一返回稳定 `ErrorCode::Recovery`，详细
+`reason` 可区分 `invalidToken`、`incompatible`、`corrupt`、`unsupportedVersion`、
+`unsafePath`、`conflict`、`limit` 与 `io`。
+
+`inspect` 只读取不可变阶段文件末尾的固定 4 KiB 元数据块；payload 摘要在真正恢复时
+验证。Unix 最终 store root 必须由当前 effective user 拥有，且 group/other 无任何
+权限；祖先目录可以公开。`open` 对已有非私有目录返回 `unsafePath`，不会替调用方
+执行 `chmod`。所有状态操作绑定打开时的目录 handle 与 identity，并在操作边界用该
+handle 的 `fstat` 重验 owner/mode；打开后放宽权限会 fail closed。token 级持久锁保证
+并发调用只产生一个持久结果。checkpoint 临时写入使用同一
+`ExecutionContext` 的 temporary budget；完整读取在 owned serde 前先执行 2 GiB 大小、
+JSON depth/width/value 预检并预留内存，depth 边界可容纳公共 IR 的最大合法深度。资源采用
+声明解码长度的规范 padded base64 wire；编码、请求资源上限和共存峰值校验通过后
+才分配解码缓冲。尚无经审计相对目录 primitive 的平台会稳定返回
+`componentUnavailable`。
+
 `ConversionRequest` 与 `DetectionRequest` 都携带 `ExecutionOptions`。引擎为每次调用
 创建一个 `ExecutionContext`，并把同一个上下文显式传给 `SourceResolver`、
 `FormatDetector`、`Converter::probe`、`Converter::convert`、`OcrEngine`、

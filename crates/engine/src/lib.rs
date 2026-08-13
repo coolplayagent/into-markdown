@@ -1,5 +1,9 @@
 //! Deterministic registry and conversion pipeline orchestration.
 
+mod recovery;
+
+pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
+
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionRequest, ConversionResult, Converter,
     DetectionRequest, DetectionResult, ExecutionContext, ExecutionStage, FormatCandidate,
@@ -129,6 +133,26 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Convert with durable, process-restart-safe phase checkpoints.
+    ///
+    /// The current input and conversion configuration are fingerprinted on
+    /// every invocation. A checkpoint is reused only when both match exactly.
+    /// Execution controls are intentionally excluded, allowing a resumed Web
+    /// request to provide a fresh timeout, cancellation token, and listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::Recovery`] for corrupt, unsupported, or
+    /// incompatible task state, in addition to ordinary conversion failures.
+    pub async fn convert_recoverable(
+        &self,
+        request: ConversionRequest,
+        store: &RecoveryStore,
+        token: &RecoveryToken,
+    ) -> Result<ConversionResult, ConversionError> {
+        recovery::convert(self, request, store, token).await
+    }
+
     /// Resolve an input and return ordered format hypotheses without converting.
     ///
     /// # Errors

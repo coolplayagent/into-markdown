@@ -45,6 +45,44 @@ flowchart LR
 立即终止；只有 `NotApplicable` 允许继续。匹配后转换失败同样立即返回，转换所得
 Document 必须先通过公共 IR 验证，之后才允许进入唯一 Markdown renderer。
 
+## 可恢复任务
+
+Web 调用方可为任务创建本地 `RecoveryStore` 与随机 `RecoveryToken`，再调用
+`Engine::convert_recoverable`。任务状态机只有两个可见的已提交状态：`converted`
+表示转换器已经产出并验证统一 Document IR，`succeeded` 表示完整 Markdown、资源、
+诊断与溯源已经提交。不存在仅凭“开始”或进度事件推断出的成功状态。
+
+每个阶段是带 schema version、任务 token、输入 SHA-256、转换配置 SHA-256、有序
+`completedStages`、payload 长度与摘要的不可变文件。固定 4 KiB 元数据尾块使
+`RecoveryStore::inspect` 只做常量大小读取和 seek，不读取、分配或反序列化 payload；
+完整恢复才按摘要认证 payload。阶段先写入同目录私有随机临时文件并 `fsync`，写入的
+每个实际字节同时计入请求 `max_temporary_bytes` 和 2 GiB 硬上限，再以 no-replace
+hard link 原子发布并同步目录。崩溃遗留的临时文件不会参与恢复，较新的损坏或未知版本
+阶段会 fail closed，而不是降级成旧阶段或成功。
+
+Unix store 在打开后持有目录 handle 和 dev/inode identity。最终 root 只接受当前 euid
+所有且 group/other 零权限的目录；已有非私有 root 被拒绝而不会自动改权限，
+祖先目录仍可公开。阶段文件、临时文件与任务锁的 open/link/unlink/sync 全部相对该
+handle 执行，并在操作边界通过 `fstat` 重验 handle owner/mode、从 namespace 核对
+identity；root 权限放宽，或 root/任一祖先被 symlink、rename、mount 替换时均 fail closed。
+没有经过审计的相对目录操作的平台返回稳定 `componentUnavailable`，不退回基于路径的
+不安全实现。
+
+每次恢复仍重新解析当前输入，并在读取 payload 前比较输入与配置指纹；字节、可信来源
+metadata、格式提示或任一 `ConversionOptions` 变化都返回稳定 `recovery` 错误。
+`ExecutionOptions` 不进入配置指纹，因此进程重启后可以使用新的取消令牌、deadline 和
+进度监听器。每个 token 的持久 advisory lock 将检查、转换与发布线性化；相同指纹的
+并发 loser 读取并返回唯一持久 winner，不能返回自己的未提交 payload。`converted`
+恢复只重做渲染；`succeeded` 恢复重新校验 Document、诊断、完整资源清单、嵌套图片引用
+和 reading-order provenance，并使用当前 renderer 重放后逐字节比较 Markdown。
+checkpoint 加载在 typed serde 前执行文件大小、JSON depth、container width 和 value count
+预检；depth 上限从公共 `MAX_DOCUMENT_DEPTH` 推导，因此合法最深 IR 的 wire
+嵌套也可恢复。资源字节使用带声明解码长度的规范 padded base64 wire，解码前先
+校验 alphabet、padding、长度、单资源及总资源请求上限。原始文件、typed wire、base64
+字符串、资源向量与解码字节的共存峰值统一计入请求内存预算；文件另受 2 GiB
+硬上限。
+协议完全离线，不执行任何远程访问。
+
 ## IR 与溯源
 
 IR 可表达段落、标题、富文本、嵌套列表、表格、代码、公式、脚注、图片、页面、
