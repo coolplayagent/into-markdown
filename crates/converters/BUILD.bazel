@@ -12,7 +12,7 @@ rust_library(
     deps = [
         "//crates/core",
         "//crates/pdfium",
-        "//crates/http-transport",
+        "//crates/http-transport:http_transport",
         "@crates//:base64",
         "@crates//:chardetng",
         "@crates//:encoding_rs",
@@ -44,7 +44,7 @@ rust_test(
     deps = [
         "//crates/core",
         "//crates/pdfium",
-        "//crates/http-transport",
+        "//crates/http-transport:http_transport",
         "//crates/render-markdown:render_markdown",
         "@crates//:base64",
         "@crates//:chardetng",
