@@ -23,6 +23,20 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
   实体和合法 numeric character reference；namespace 作用域、重复 expanded attribute、
   closing tag、深度、事件数、属性/文本与扩张预算均在构造 IR 前校验。
+- RSS/Atom 复用同一 XML 解码、XML 1.0 character 与 entity 边界，并要求 RSS 2.0/Atom 1.0
+  root、namespace 和 channel/entry 结构的强证据。`xml:base` 与相对 URL 只做离线数据解析；
+  entry link 不触发请求，nested HTML 统一进入 HTML 安全转换器。Feed 对 entry、事件、深度、
+  累计文本、nested HTML、asset、diagnostic、IR、字符串与输出采用贯穿解析、去重和合并阶段的
+  聚合逻辑内存预算，长循环持续 checkpoint；DTD、外部 entity、namespace 混淆、Atom XHTML
+  foreign element 与 active content 均 fail closed，过滤后的原始 markup 不会作为 fallback 回显。
+  nested HTML 使用固定 html5ever 0.39.0 / tendril 0.5.1 source commit 模型，在 parser 构造前通过无堆扫描
+  保守预付 tokenizer、TreeBuilder、8 轮 adoption-agency、tendril 与 DOM workspace；Feed-owned
+  lease 贯穿 parser、DOM 和最终 Document。预付是协作式逻辑上界，并非 allocator metadata 或
+  进程 RSS。fragment 失败只在局部对象全部析构后回滚完整预算快照，避免失败片段留下幽灵计费。
+  Feed XML 的 element/attribute expanded-name、解码值、`xml:base`/URL、diagnostic 及 Atom XHTML
+  序列化同样使用该 lease：自有 Vec/String 在增长前预留目标 capacity，并在 allocator 返回后按
+  真实 capacity 补差。属性不进入另一个未计费的树/集合；XHTML 逐事件写入预算化 String，CDATA
+  与 attribute escaping 先无堆计算扩张长度再申请，失败对象析构后恢复完整事务快照。
 - Markdown 解析固定离线，不读取相对图片、不获取 HTTP(S) 图片、不解码 data URI。
   external-only 图片 URI 必须是 canonical HTTP(S)，且没有 userinfo、query 或 fragment；
   该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content

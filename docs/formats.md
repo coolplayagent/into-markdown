@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。DOCX/DOCM、TXT、Markdown、HTML、CSV、TSV、JSON、XML、IPYNB 状态为
+运行时的权威列表以 `into-md formats` 输出为准。DOCX/DOCM、TXT、Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB 状态为
 `available`，其余尚未
 实现的条目保持 `planned`。
 
@@ -77,6 +77,48 @@ DOCM 的 VBA 部件只在 ZIP 目录中识别，内容永不解压、加载或�
 解析在分配和解压前执行输入、条目数、解压总量、单项/总资源、XML 深度、IR 节点和行内
 节点预算。加密的 OOXML/OLE 包返回 `encrypted`；损坏 ZIP/XML、重复或越界部件名、重复关系、
 DTD/实体及逃逸包根的内部关系均 fail closed。外部关系只保留为 URI，不发起网络访问。
+
+## RSS 与 Atom
+
+Feed 转换器只接受本地或已经解析到内存的 RSS 2.0 与 Atom 1.0。RSS 根必须是无命名空间的
+`rss version="2.0"`，并且只含一个 `channel`；Atom 根、`entry` 与 text construct 必须使用
+`http://www.w3.org/2005/Atom`。`content:encoded` 仅识别其标准 namespace。Atom 的
+title、subtitle、summary 与 content 均遵守 Text Construct：`type=text` 保持文本，
+`type=html` 复用 HTML 安全转换器，`type=xhtml` 必须只含一个 XHTML namespace 的 `div`
+（空 `div` 合法）。外层 `div` 与内部元素的 `xml:base` 作用域均在交给 HTML 转换器前安全解析。
+RSS `description` 与标准 namespace 的 `content:encoded` 统一经过同一 HTML 安全路径，不依赖
+标签字符串启发式；script、style、template 等 active content 被排除后不会以原始文本回显。
+
+条目按源顺序输出，并通过 `feed.sourceOrder` 诊断声明；时间不会触发重排。Feed 层级的链接与
+更新时间作为文档开头的可见字段保留，避免用不可精确计量节点容量的映射容器暂存。Atom 时间严格接受
+RFC 3339，RSS 时间严格接受一至两位日期、四位年份、两位时分秒和 numeric/GMT/UT zone 的
+RFC 822 形式，统一规范化
+为 UTC；leap second、obsolete alphabetic zone、折行空白、两位年份与非法日期保留原值并产生
+诊断。重复条目按 `guid/id`、canonical alternate link、带字段长度前缀的内容 SHA-256 依次选择
+去重键，保留源序中首次出现的条目并诊断后续重复。
+
+相对 URL 依据受信 source URI、feed 层级 `xml:base` 解析。普通 entry link 可安全保留 HTTP(S)
+query/fragment；HTML 图片仍遵守更严格的 external-only Asset canonical 规则。URL 解析仅生成
+审计数据，不发起请求。解析器共享 XML 的 UTF-8/UTF-16、XML 1.0 character、预定义/numeric
+entity 与 declaration 契约，拒绝 DTD、DOCTYPE、自定义/外部实体、错误 namespace 和混淆 root。
+entry、nesting、事件、文本、nested HTML、asset、diagnostic、IR 与输出字符串共用贯穿 Feed
+生命周期的聚合逻辑内存预算，取消与 deadline 长循环 checkpoint 也有硬边界。合并每段 HTML
+时递归重编号所有 BlockNode 与 Asset 引用，并保留 Feed entry span 和 HTML provider 来源链。
+Feed 的已解码 UTF-8 fragment 不再复制进入 HTML charset decoder。由于固定的 html5ever 0.39.0
+没有 allocator hook，转换器在构造 parser 前以无堆、checked arithmetic 扫描预付协作式逻辑
+工作区：模型固定到 servo/html5ever commit `ce64836c685025a5fef0860fa2e9c80b2683e8d0`
+与 tendril commit `d64dfd4c21cf2451649107ade7eaf042d95fbc5a`，覆盖 markup5ever 16-slot
+`BufferQueue`、tokenizer 的 9 类 tendril/attribute、TreeBuilder 四类 vector、Vec 的 2 倍增长、
+tendril 的 next-power-of-two（小于 2 倍）及 adoption-agency
+全部 8 轮。parser、DOM 与最终 Document 使用同一个 Feed lease；parser/DOM 析构后才释放未转为
+持久输出的预付空间。该边界不代表 allocator metadata 或进程 RSS。任意 fragment 错误会先析构
+parser、DOM 与局部输出，再完整恢复 memory、对象、字符串和输出字节快照；随后产生的最小 Feed
+诊断独立计费。
+Feed XML 本身不再用 start-tag 长度倍率估算持久对象：每个 element/attribute 的 expanded-name、
+解码值、`xml:base` 结果、URL 与 diagnostic 都在构造前从共享 lease 预扣，自有容器按 allocator
+返回的真实 capacity 补差。Atom XHTML 不使用带隐藏增长的通用 writer；逐事件写入预算化 String，
+CDATA 与 attribute escape 先无堆计算精确扩张长度。任何属性、URL、诊断或 XHTML 事件失败都会先
+析构局部值，再恢复该操作的完整预算快照。
 
 ## Markdown 与 GFM
 

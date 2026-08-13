@@ -22,6 +22,7 @@ rust_library(
         "@crates//:quick-xml",
         "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:sha2",
         "@crates//:url",
         "@crates//:winapi-util",
         "@crates//:zip",
@@ -31,7 +32,11 @@ rust_library(
 rust_test(
     name = "converters_test",
     crate = ":converters",
-    compile_data = glob(["tests/fixtures/**"]) + ["//fixtures:corpus"],
+    compile_data = glob(["tests/fixtures/**"]) + [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
+        "//fixtures:corpus",
+    ],
     data = ["//fixtures:corpus"],
     edition = "2024",
     deps = [

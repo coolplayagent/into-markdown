@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic Apache-2.0 test fixture. -->
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example RSS</title>
+    <link>https://example.com/</link>
+    <item>
+      <guid>post-1</guid>
+      <title>First</title>
+      <author>Ada</author>
+      <pubDate>Thu, 29 Feb 2024 23:30:00 +0130</pubDate>
+      <link>posts/1?q=1#top</link>
+      <description><![CDATA[<p>Summary</p>]]></description>
+      <content:encoded><![CDATA[<article><p>Body</p><img src="image.png" alt="image"></article>]]></content:encoded>
+    </item>
+    <item><guid>post-1</guid><title>Duplicate</title></item>
+  </channel>
+</rss>

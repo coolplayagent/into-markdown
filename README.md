@@ -77,6 +77,17 @@ metadata；确定性正文选择会诊断降级并排除导航、广告和隐藏
 SVG/MathML active content 不执行也不穿透资源；`base` 只解析引用。外部图片仅作为 canonical
 HTTP(S) audit Asset 保留，转换全程离线且绝不自动获取。
 
+RSS 2.0 与 Atom 1.0 Feed 转换可用，提取标题、作者、时间、链接、摘要与正文，并保留每个条目的
+原始 byte provenance。HTML、`content:encoded` 与 Atom HTML/XHTML text construct 复用同一
+安全 HTML 转换器，active markup 被过滤后不会经纯文本 fallback 回显；相对 URL 按 source URI
+及嵌套 `xml:base` 离线解析，绝不获取。条目保持源顺序，
+严格解析 RFC 822/RFC 3339 时间并诊断非法值；按 ID、canonical link、长度分隔内容摘要稳定去重。
+DTD、外部实体、错误 namespace、RSS/Atom 混淆与超限输入稳定拒绝。
+Nested HTML 在 parser 构造前预付固定 html5ever 0.39.0 的保守逻辑工作区，并与 Feed 最终输出
+共享同一 lease；失败 fragment 析构后完整回滚。该预算不表示 allocator metadata 或进程 RSS。
+Feed XML 的 expanded-name/attribute、`xml:base`/URL、diagnostic 与 XHTML 逐事件写入也共享该
+lease；自有 Vec/String 按真实 capacity 在分配前计费，CDATA/attribute escaping 在写入前计算扩张。
+
 Markdown/GFM 转换支持标题、强调和删除线、链接与 autolink、嵌套列表和任务列表、
 表格、代码块及脚注，并保存 UTF-8 原始字节范围。独立段落的安全 HTTP(S) 图片以
 external-only Asset 保持结构化且不下载；inline、相对或危险目标明确诊断并安全降级。

@@ -4,6 +4,7 @@
 
 mod delimited;
 mod docx;
+mod feed;
 mod html;
 mod markdown;
 mod notebook;
@@ -15,6 +16,7 @@ mod fixture_corpus_tests;
 
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;
+pub use feed::FeedConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use notebook::NotebookConverter;
@@ -192,9 +194,9 @@ const FORMATS: &[FormatDescriptor] = &[
     },
     FormatDescriptor {
         format: InputFormat::Feed,
-        family: "remote",
+        family: "text",
         extensions: &["rss", "atom"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Ipynb,
@@ -1243,6 +1245,14 @@ fn structured_text_candidate(
         }
     }
 
+    if feed::strong_feed_evidence(bytes, context)? {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Feed,
+            0.99,
+            "namespace-qualified RSS 2.0 or Atom 1.0 root",
+        )));
+    }
+
     if let Some(decoded) = structured::decode_xml_for_detection(bytes, context)? {
         match decoded {
             structured::XmlDetectionText::Decoded(decoded) => {
@@ -1290,15 +1300,6 @@ fn structured_text_candidate(
     let root = xml_root_name(text);
     if root.is_some_and(|root| root.eq_ignore_ascii_case("html")) {
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element")));
-    }
-    if let Some(root) =
-        root.filter(|root| root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed"))
-    {
-        return Ok(Some(FormatCandidate::new(
-            InputFormat::Feed,
-            0.98,
-            format!("XML {root} root element"),
-        )));
     }
     if text.starts_with("<?xml") {
         return Ok(Some(FormatCandidate::new(InputFormat::Xml, 0.92, "XML declaration")));
@@ -3504,7 +3505,10 @@ mod tests {
     fn structured_text_detection_orders_specific_formats_first() {
         let fixtures = [
             (b"<!doctype html><html></html>".as_slice(), InputFormat::Html),
-            (b"<?xml version='1.0'?><rss></rss>".as_slice(), InputFormat::Feed),
+            (
+                b"<?xml version='1.0'?><rss version='2.0'><channel/></rss>".as_slice(),
+                InputFormat::Feed,
+            ),
             (b"<feed xmlns='http://www.w3.org/2005/Atom'></feed>".as_slice(), InputFormat::Feed),
             (b"<document/>".as_slice(), InputFormat::Xml),
             (br#"{"nbformat":4,"metadata":{},"cells":[]}"#.as_slice(), InputFormat::Ipynb),

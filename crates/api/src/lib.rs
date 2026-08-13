@@ -47,6 +47,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
+        .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
         .register_converter(Arc::new(into_markdown_converters::MarkdownConverter))
         .register_converter(Arc::new(into_markdown_converters::DelimitedTextConverter))

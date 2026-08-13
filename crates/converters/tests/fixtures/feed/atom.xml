@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic Apache-2.0 test fixture. -->
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/base/">
+  <title>Example Atom</title>
+  <updated>2024-02-29T23:30:00+01:30</updated>
+  <author><name>Ada</name></author>
+  <entry>
+    <id>urn:example:1</id>
+    <title>Atom entry</title>
+    <updated>2024-02-29T23:30:00+01:30</updated>
+    <link href="post?q=1#part"/>
+    <summary type="html">&lt;p&gt;HTML summary&lt;/p&gt;</summary>
+    <content type="xhtml">
+      <div xmlns="http://www.w3.org/1999/xhtml"><p>XHTML body</p></div>
+    </content>
+  </entry>
+</feed>
