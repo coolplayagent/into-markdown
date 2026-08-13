@@ -17,6 +17,11 @@ pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
     render as render_markdown,
 };
+pub use into_markdown_task_store::{
+    ArtifactKind, ArtifactReference, BusyControl, ConfigurationSnapshot, DiagnosticCode, NewTask,
+    OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus,
+    TaskStore, TaskStoreError, TaskTransition,
+};
 
 /// Create the standard builder with safe local source resolvers, hint
 /// detection, the deterministic GFM renderer, plain-text conversion, and

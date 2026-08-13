@@ -32,6 +32,7 @@ DATA = [
     "//crates/onnxruntime:Cargo.toml",
     "//crates/pdfium:Cargo.toml",
     "//crates/render-markdown:Cargo.toml",
+    "//crates/task-store:Cargo.toml",
     "//tests/contracts:Cargo.toml",
 ]
 

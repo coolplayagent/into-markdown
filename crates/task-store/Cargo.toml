@@ -1,0 +1,26 @@
+[package]
+name = "into-markdown-task-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+into-markdown-engine = { path = "../engine" }
+into-markdown-core = { path = "../core" }
+getrandom.workspace = true
+rusqlite.workspace = true
+rustix = { workspace = true, features = ["process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+into-markdown-converters = { path = "../converters" }
+into-markdown-render-markdown = { path = "../render-markdown" }
+futures.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

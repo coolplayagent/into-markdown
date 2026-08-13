@@ -33,6 +33,12 @@ The integer line-mask compatibility routine follows the Apache-2.0 OpenCV
 4.13 `LineIterator` algorithm; OpenCV is used only as documented reference
 source and is not linked, downloaded, or shipped by ordinary builds.
 
+The local task store pins `rusqlite 0.37.0` and `libsqlite3-sys 0.35.0` under
+MIT and builds the crate's bundled SQLite 3.50.2 amalgamation instead of a
+system library. SQLite's amalgamation is dedicated to the public domain by
+its authors. Conditional upstream build helpers remain lock- and
+license-inventoried even where the bundled build does not execute them.
+
 ONNX Runtime 1.29.0 archives and the PP-OCRv6 source archives are hash-pinned,
 manual inputs. They are not linked into or copied into normal build outputs.
 Their sources and declared licenses are recorded in their existing manifests.

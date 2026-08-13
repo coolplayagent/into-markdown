@@ -1,4 +1,16 @@
 # Exact Cargo.lock approvals. Format: package<TAB>version<TAB>concluded SPDX license.
+cc	1.4.2	MIT
+fallible-iterator	0.3.0	MIT
+fallible-streaming-iterator	0.1.9	MIT
+find-msvc-tools	0.1.10	MIT
+foldhash	0.1.5	Zlib
+hashbrown	0.15.5	MIT
+hashlink	0.10.0	MIT
+libsqlite3-sys	0.35.0	MIT
+pkg-config	0.3.33	MIT
+rusqlite	0.37.0	MIT
+shlex	2.0.1	MIT
+vcpkg	0.2.15	MIT
 addr2line	0.25.1	Apache-2.0
 atomic-waker	1.1.2	MIT
 axum	0.8.4	MIT

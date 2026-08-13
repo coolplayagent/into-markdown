@@ -221,3 +221,20 @@ CLI 契约测试还必须覆盖直接输入与保留命令冲突、双语帮助�
 公共 DTO 契约测试固定精确 JSON golden，并覆盖双向转换、同版本未知字段、未知版本、
 缺失必填字段、非法 base64、重复 ID、不安全 Bundle 路径、非有限数以及 JSON 深度、
 条目数和解码后资源总量预算。Cargo 与 Bazel 必须执行同一组测试。
+
+## SQLite TaskStore
+
+TaskStore 测试使用真实 bundled SQLite 和临时私有目录，不 mock SQL，覆盖 schema 0 升级、
+重复迁移、未知新版本、损坏 database/enum；非法状态/进度回退/stale CAS/terminal 二次更新；
+WAL reader snapshot、双 writer 单胜者、lock deadline 与跨线程运行中取消；子进程分别在 commit
+后与未提交 WAL transaction 中 `abort`，并覆盖 migration transaction 中断回滚；unknown-field
+secret canary 与 db/WAL/SHM 扫描；public
+root、root/db symlink、chmod、root/db identity swap 且验证 mutation 未发生；online backup
+一致性、standalone、`0600`、no-replace、发布前 abort 不出现半成品且保留可审计 orphan；真实
+converted/succeeded RecoveryStore checkpoint 的跨实例晋升、input/options mismatch、token
+重复绑定拒绝、同状态最低进度修复、lost CAS skip、无 checkpoint interrupted，以及瞬态 recovery
+error 不改 task。
+
+四产品目标门禁执行 Rust all-targets cross-check 与 Bazel platform build。bundled SQLite 是 C
+source build；没有对应目标 native runner 时，交叉编译只证明 toolchain/source/link
+compatibility，不能替代 Windows reparse/DACL 或 Linux filesystem runtime 测试。

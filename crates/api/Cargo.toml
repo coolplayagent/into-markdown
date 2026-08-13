@@ -13,6 +13,7 @@ into-markdown-core = { path = "../core" }
 into-markdown-engine = { path = "../engine" }
 into-markdown-ocr = { path = "../ocr" }
 into-markdown-render-markdown = { path = "../render-markdown" }
+into-markdown-task-store = { path = "../task-store" }
 
 [lints]
 workspace = true

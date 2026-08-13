@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "task_store",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_task_store",
+    edition = "2024",
+    deps = [
+        "//crates/engine",
+        "//crates/core",
+        "@crates//:getrandom",
+        "@crates//:rusqlite",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "task_store_test",
+    crate = ":task_store",
+    edition = "2024",
+    deps = [
+        "//crates/engine",
+        "//crates/core",
+        "//crates/converters",
+        "//crates/render-markdown:render_markdown",
+        "@crates//:futures",
+        "@crates//:getrandom",
+        "@crates//:rusqlite",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+    ],
+)
