@@ -168,3 +168,29 @@ stderr 最多保留 64 KiB。创建前后、等待 single-flight、IPC 等待和
 deadline；失败会 kill 并 wait/reap worker，不留下孤儿进程。GraphProto IO 在 prost decode
 前经字段数、长度、count、rank 和递归深度有界的 wire preflight，并与 authority/native
 metadata 三向精确核对。
+
+## TaskStore 数据与路径边界
+
+TaskStore 复用 UI/RecoveryStore 的 Unix 私有目录策略：路径规范为绝对路径，从 `/` 的目录
+句柄逐组件 `openat(O_DIRECTORY|O_NOFOLLOW)`，缺失目录只以 `0700` 创建；已存在 caller 目录
+绝不 chmod。最终 root 必须由 effective uid 拥有且拒绝 group/other access。数据库、WAL、SHM、
+journal、临时和 backup 必须是同一 root 内当前 uid 的私有普通文件。主 DB 与 backup SQLite
+connection 均使用 `SQLITE_OPEN_NOFOLLOW`；连接保存主 DB dev/ino，
+每个公开读写操作前后复核 root namespace、权限、主 DB identity 与 companion file 类型；
+symlink、权限放宽、root/db 替换均 fail closed，并在 mutation 前拒绝。
+
+SQLite 本身仍按 pathname 延迟打开 WAL/SHM；本实现确保它们在 `open` 配置 WAL 时创建并在
+后续调用前复核，但没有自定义 SQLite VFS。因而同 uid 恶意进程在 pathname open 与复核之间的
+极窄竞态，以及 backup pathname open 与 identity 后验之间的 same-uid race，属于当前用户信任
+边界，不能描述为对同 uid attacker 的完整 capability confinement。
+跨 uid/public directory、symlink 和静态 namespace 替换由 retained handle 检查阻断。
+
+Windows build 保留类型/API，但 `TaskStore::open` 明确返回 `PlatformUnavailable`：尚未实现能
+同时证明 DACL 私有性、reparse-point 拒绝和 SQLite companion identity 的 VFS/handle 路径，
+因此不沿用 UI 目录检查后虚报安全。Linux x64/ARM64 与 Windows x64 可静态交叉编译；只有有
+对应 runner 时才声称 native filesystem 行为验证。
+
+secret redaction 使用结构化 allowlist。schema 没有 provider key/token、Authorization、环境
+来源、URL/query 或自由文本 diagnostic 字段；input/artifact location 仅接受固定长度 opaque
+hex reference。`ConfigurationSnapshot` 拒绝未知字段。测试以 canary 尝试加入 `apiKey`，并
+扫描 database 与存在的 WAL/SHM 字节确认未编码。

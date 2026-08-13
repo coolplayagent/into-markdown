@@ -107,3 +107,12 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
 当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
 都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
+
+## Bundled SQLite
+
+任务库固定 `rusqlite 0.37.0`、`libsqlite3-sys 0.35.0` 及 `bundled` feature。该 crate 自带并由
+`cc` build script 编译 SQLite 3.50.2 amalgamation，不选择系统库；`pkg-config`/`vcpkg` 仍是
+上游 build dependency 的条件分支，版本同样由 lock 与许可证清单固定。两个 Rust 包选择 MIT，
+amalgamation 上游声明为 public domain。新引入的 build/iterator/hash helper 已加入
+`rust-lock.tsv`，其中 `foldhash 0.1.5` 为 Zlib。Cargo/Bazel 离线 license/release audit 共同
+检查锁文件漂移。构建未启用 rusqlite load-extension API，运行时也不调用 extension loading。

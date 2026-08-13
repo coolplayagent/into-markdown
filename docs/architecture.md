@@ -193,3 +193,40 @@ IO count 读入标量，名称读入固定 257-byte allocator，rank/dim 读入 
 slice 并分配返回 `Vec`。GraphProto IO 经有界 wire preflight 和 checked-in prost 类型
 解析，与 authority/native metadata 三向核对，initializer graph input 按 IR 规则区分为
 固定值或 overridable input。
+
+## SQLite 任务元数据层
+
+`into-markdown-task-store` 是同步、默认离线的本地元数据边界。它保存 task id、UTC
+毫秒时间、状态/百万分比进度、固定标记、allowlist 配置快照、结构化诊断以及外部产物
+索引；输入正文、产物正文和 RecoveryStore checkpoint payload 不进入数据库。输入记录只
+包含 reference schema、byte count、RecoveryStore 的 canonical input/options fingerprint 与
+规范 recovery token，artifact 只包含规范 opaque storage key、类别、byte count 和 SHA-256，
+因此 SQLite 不承担无界 blob 或路径/URL 的生命周期。
+
+schema 以 `PRAGMA user_version` 版本化，当前迁移图只有 `0 -> 1`。迁移在单一事务中建表、
+索引、外键和 CHECK 约束；重复 open 幂等，遇到大于 1 的版本直接拒绝，不执行 destructive
+downgrade。状态修改以 `BEGIN IMMEDIATE` 和 expected-state CAS 完成，进度只能单调增加，
+terminal state 没有出边。任务列表按 `(updated_at_ms DESC, id DESC)` 稳定分页。
+
+SQLite 固定使用 `rusqlite 0.37.0` 的 `bundled`、`backup` 与 `limits` features，由
+`libsqlite3-sys 0.35.0` 编译 SQLite 3.50.2 amalgamation；不探测或回退到系统 SQLite。
+连接强制并回读验证 WAL、foreign keys、`synchronous=FULL`、`trusted_schema=OFF`、
+`secure_delete=ON`、`temp_store=MEMORY`、4 KiB page 和 256 MiB page ceiling，并设置 SQLite
+allocation limits。每个 `TaskStore` 是可移动但不共享的同步
+connection；async 服务必须通过 blocking executor 调用。
+
+启动 reconciliation 分批检查 pending/running/converted task 的 RecoveryStore metadata：
+checkpoint token 及 input/options fingerprint 必须常量时间精确匹配后，`succeeded` metadata
+确定性提升为 succeeded，`converted` 提升为 converted，无 checkpoint
+标为 interrupted；只有明确损坏/不兼容 checkpoint 标为 failed，I/O、安全路径及平台错误传播
+且不修改 task。这里的 succeeded 仅表示完整 result checkpoint metadata 已持久化，不代表 Web
+artifact 已发布；真正 resume 时 RecoveryStore 才读取并认证完整 payload。该步骤不读取或删除
+checkpoint。checkpoint/task retention 与 GC 留给 #52，
+排队和调度留给 #47。
+
+在线备份使用 SQLite backup API 写入同一私有 root 的随机临时普通文件，执行 checkpoint、
+integrity check、file/directory fsync 后以 hard-link no-replace 发布；不是复制活跃 db/WAL。
+目标 SQLite connection 以 `NOFOLLOW` 打开并在写入前后核对临时文件 identity，失败只通过
+retained directory handle 删除 identity 未变的临时文件。进程 abort 后可能留下私有随机
+临时文件；本层不扫描或自动删除 ownership 无法跨进程证明的 orphan。库不会自动覆盖主库；
+恢复必须由操作者在主库关闭后显式授权。

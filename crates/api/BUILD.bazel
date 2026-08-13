@@ -16,6 +16,7 @@ rust_library(
         "//crates/engine",
         "//crates/ocr",
         "//crates/render-markdown:render_markdown",
+        "//crates/task-store:task_store",
     ],
 )
 
@@ -30,5 +31,6 @@ rust_test(
         "//crates/engine",
         "//crates/ocr",
         "//crates/render-markdown:render_markdown",
+        "//crates/task-store:task_store",
     ],
 )

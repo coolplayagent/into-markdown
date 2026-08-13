@@ -239,3 +239,25 @@ CLI、未来 HTTP/SSE 服务和 Bundle 共用 `into_markdown` 导出的应用 DT
 `SourceResolver::resolve_accounted` 的默认适配器属于受保护的源码兼容面。公共 DTO
 刻意不实现通用 serde trait；调用方必须使用带 schema 和预算的 `to_json`、
 `from_json` 或对应 writer 方法。Cargo 与 Bazel 对这两类边界运行等价的编译契约。
+
+## TaskStore API
+
+公开 façade 重导出 `TaskStore`、`BusyControl`、`TaskId`、`NewTask`、`TaskRecord`、
+`TaskTransition`、`TaskCursor`、`ReconcileSummary` 与 closed enums。所有 DTO 有界：progress
+为 `0..=1_000_000` 整数，diagnostic 最多 64 个，artifact 最多 128 个，page 最多 100 行；
+ID/token/storage key/digest/fingerprint 在文件访问或复杂分配前验证为固定长度小写 hex。
+`InputReference` 的两个 fingerprint 必须与 RecoveryStore checkpoint 精确匹配；输入 bytes、
+checkpoint/result bytes 均不进入 SQLite。`TaskId` 自定义
+deserialize 也执行同一验证，不能绕过 constructor。
+
+配置 JSON 使用 `deny_unknown_fields`，只允许 output format、本地 OCR、layout 三项非秘密
+设置。Provider、Authorization、环境变量、URL 和自由文本 diagnostic 没有持久化字段。
+`create`、`get`、`list`、`transition`、`set_pinned`、`reconcile`、`backup` 都是同步接口；
+Tokio/Axum handler 必须用 `spawn_blocking` 或等价 pool。错误以 `TaskStoreError` 区分 unsafe
+path、unknown schema、corruption、limit、CAS conflict、busy deadline、cancel、I/O 与
+unsupported platform，损坏 enum/JSON 不会降级为默认值。
+
+`Succeeded` 表示 RecoveryStore 的 complete-result checkpoint metadata durable，并不声称外部
+Markdown/asset 已发布；artifact index 可独立为空。Failed、Interrupted、Cancelled terminal
+transition 禁止新增 artifact。进度只允许单调增加；reconcile 对 Converted/Succeeded 分别修复
+最低 `900_000`/`1_000_000`，其他 terminal 状态保留此前进度。
