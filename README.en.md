@@ -121,6 +121,18 @@ styles, templates, and active SVG/MathML are never executed or traversed for res
 `base` only resolves reference data. External images remain canonical HTTP(S) audit assets
 with no bytes: conversion stays offline and never fetches them automatically.
 
+RSS 2.0 and Atom 1.0 feed conversion is available for already-local or resolved
+bytes. It extracts feed and entry titles, authors, timestamps, links, summaries,
+and content with original-byte entry provenance. HTML, `content:encoded`, and Atom
+title, subtitle, summary, and content HTML/XHTML text constructs share the hardened
+HTML converter; filtered active markup is never echoed by a raw-text fallback. Relative URLs are
+resolved offline from the source URI and every nested `xml:base`; they are never fetched. Source
+order is preserved, RFC 822/RFC 3339 timestamps are parsed strictly with diagnostics,
+and duplicates use deterministic ID, canonical-link, then length-framed content-digest
+keys. Parsing, nested extraction, deduplication, recursive IR/asset renumbering, and output share
+one aggregate logical budget. DTDs, external entities, namespace confusion, and bounded-resource
+violations fail closed.
+
 Markdown/GFM conversion supports headings, emphasis and strikethrough, links and
 autolinks, nested and task lists, tables, code blocks, and footnotes while retaining
 UTF-8 source byte ranges. A standalone safe HTTP(S) image remains structured as an

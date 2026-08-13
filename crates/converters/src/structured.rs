@@ -629,7 +629,10 @@ fn xml_scan_checkpoint(
 /// Allocation-free lexical pass used to bound the largest slice quick-xml can
 /// materialize as one event. It deliberately understands quoted tag content
 /// and the distinct comment, CDATA, and PI terminators.
-fn preflight_xml(source: &str, context: &ExecutionContext) -> Result<usize, ConversionError> {
+pub(crate) fn preflight_xml(
+    source: &str,
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
     let bytes = source.as_bytes();
     let mut offset = 0;
     let mut next_checkpoint = 0;
@@ -739,7 +742,7 @@ fn validate_qname(name: &str, part: &str) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn xml_charset(source: &[u8]) -> (&'static str, &'static str) {
+pub(crate) fn xml_charset(source: &[u8]) -> (&'static str, &'static str) {
     if source.starts_with(&[0xff, 0xfe]) || source.starts_with(&[b'<', 0, b'?', 0]) {
         ("utf-16le", "utf-16le")
     } else if source.starts_with(&[0xfe, 0xff]) || source.starts_with(&[0, b'<', 0, b'?']) {
@@ -1047,7 +1050,10 @@ fn convert_xml(
     builder.finish()
 }
 
-fn validate_xml_declaration(declaration: &str, actual: &str) -> Result<(), ConversionError> {
+pub(crate) fn validate_xml_declaration(
+    declaration: &str,
+    actual: &str,
+) -> Result<(), ConversionError> {
     let body = declaration
         .strip_prefix("<?xml")
         .and_then(|value| value.strip_suffix("?>"))
@@ -1453,7 +1459,7 @@ fn validate_namespace_declaration(raw: &str, value: &str) -> Result<(), Conversi
     Ok(())
 }
 
-fn predefined_or_numeric_entity(raw: &str) -> Result<String, ConversionError> {
+pub(crate) fn predefined_or_numeric_entity(raw: &str) -> Result<String, ConversionError> {
     let value = match raw {
         "lt" => '<',
         "gt" => '>',
@@ -1492,7 +1498,7 @@ fn xml_char(value: char) -> bool {
     matches!(value as u32, 0x9 | 0xa | 0xd | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x1_0000..=0x10_ffff)
 }
 
-fn validate_xml_chars(value: &str, part: &str) -> Result<(), ConversionError> {
+pub(crate) fn validate_xml_chars(value: &str, part: &str) -> Result<(), ConversionError> {
     if let Some(character) = value.chars().find(|character| !xml_char(*character)) {
         return Err(malformed(
             InputFormat::Xml,

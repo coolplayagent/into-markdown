@@ -66,6 +66,7 @@ mod tests {
                 InputFormat::Tsv,
                 InputFormat::Json,
                 InputFormat::Xml,
+                InputFormat::Feed,
                 InputFormat::Ipynb,
             ]
         );

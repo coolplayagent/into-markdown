@@ -535,6 +535,26 @@ fn convert_html(
     builder.extract()
 }
 
+/// Parse an already decoded feed HTML fragment through the same security and
+/// semantic extraction path as a standalone HTML document.
+pub(crate) fn convert_feed_html_fragment(
+    fragment: &str,
+    base_uri: Option<&str>,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    let input = ResolvedInput {
+        bytes: std::sync::Arc::from(fragment.as_bytes()),
+        metadata: into_markdown_core::SourceMetadata {
+            media_type: Some("text/html; charset=utf-8".into()),
+            uri: base_uri.map(str::to_owned),
+            size: u64::try_from(fragment.len()).unwrap_or(u64::MAX),
+            ..Default::default()
+        },
+    };
+    convert_html(&input, options, context)
+}
+
 fn html_charset(
     input: &ResolvedInput,
     options: &ConversionOptions,
@@ -1721,7 +1741,7 @@ fn is_boilerplate_token(token: &str) -> bool {
     .iter()
     .any(|candidate| token.eq_ignore_ascii_case(candidate))
 }
-fn valid_http_base(mut url: Url) -> Option<Url> {
+pub(crate) fn valid_http_base(mut url: Url) -> Option<Url> {
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -1758,7 +1778,7 @@ fn denied_base_host(host: &str) -> bool {
         }
     }
 }
-fn canonical_base_url(value: &str) -> Option<Url> {
+pub(crate) fn canonical_base_url(value: &str) -> Option<Url> {
     valid_http_base(Url::parse(value).ok()?)
 }
 fn image_media_type(uri: &str) -> &'static str {
@@ -1777,7 +1797,7 @@ fn image_media_type(uri: &str) -> &'static str {
         "image/jpeg"
     }
 }
-fn safe_link_target(value: &str) -> bool {
+pub(crate) fn safe_link_target(value: &str) -> bool {
     if value.chars().any(char::is_control) || value.contains('&') {
         return false;
     }

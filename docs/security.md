@@ -23,6 +23,12 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
   实体和合法 numeric character reference；namespace 作用域、重复 expanded attribute、
   closing tag、深度、事件数、属性/文本与扩张预算均在构造 IR 前校验。
+- RSS/Atom 复用同一 XML 解码、XML 1.0 character 与 entity 边界，并要求 RSS 2.0/Atom 1.0
+  root、namespace 和 channel/entry 结构的强证据。`xml:base` 与相对 URL 只做离线数据解析；
+  entry link 不触发请求，nested HTML 统一进入 HTML 安全转换器。Feed 对 entry、事件、深度、
+  累计文本、nested HTML、asset、diagnostic、IR、字符串与输出采用贯穿解析、去重和合并阶段的
+  聚合逻辑内存预算，长循环持续 checkpoint；DTD、外部 entity、namespace 混淆、Atom XHTML
+  foreign element 与 active content 均 fail closed，过滤后的原始 markup 不会作为 fallback 回显。
 - Markdown 解析固定离线，不读取相对图片、不获取 HTTP(S) 图片、不解码 data URI。
   external-only 图片 URI 必须是 canonical HTTP(S)，且没有 userinfo、query 或 fragment；
   该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content

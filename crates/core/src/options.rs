@@ -130,6 +130,12 @@ pub struct ResourceLimits {
     pub max_table_cells: u64,
     /// Maximum decoded UTF-8 bytes in one delimited-text field.
     pub max_field_bytes: u64,
+    /// Maximum entries accepted from one RSS or Atom feed.
+    pub max_feed_entries: u32,
+    /// Maximum decoded text bytes retained across one feed.
+    pub max_feed_text_bytes: u64,
+    /// Maximum source bytes passed to nested HTML extraction across one feed.
+    pub max_feed_html_bytes: u64,
 }
 
 impl Default for ResourceLimits {
@@ -148,6 +154,9 @@ impl Default for ResourceLimits {
             max_table_columns: 16_384,
             max_table_cells: 1_000_000,
             max_field_bytes: 16 * 1024 * 1024,
+            max_feed_entries: 10_000,
+            max_feed_text_bytes: 64 * 1024 * 1024,
+            max_feed_html_bytes: 64 * 1024 * 1024,
         }
     }
 }

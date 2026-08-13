@@ -22,6 +22,7 @@ rust_library(
         "@crates//:quick-xml",
         "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:sha2",
         "@crates//:url",
         "@crates//:winapi-util",
         "@crates//:zip",
