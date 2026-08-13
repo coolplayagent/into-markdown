@@ -13,6 +13,7 @@ pub(crate) struct MergedLine {
 
 pub(crate) fn merge_lines(
     candidates: Vec<Candidate>,
+    language_hint: Option<&str>,
     budget: &mut MergeBudget<'_>,
 ) -> Result<Vec<MergedLine>, ConversionError> {
     if candidates.is_empty() {
@@ -92,7 +93,7 @@ pub(crate) fn merge_lines(
         for index in indexes {
             members.push(slots[index].take().ok_or_else(|| super::ocr("lineSlotMissing"))?);
         }
-        lines.push(build_line(members, axis)?);
+        lines.push(build_line(members, axis, language_hint)?);
     }
     lines.sort_by(|left, right| {
         left.bounds
@@ -105,7 +106,11 @@ pub(crate) fn merge_lines(
     Ok(lines)
 }
 
-fn build_line(members: Vec<Candidate>, axis: SourcePoint) -> Result<MergedLine, ConversionError> {
+fn build_line(
+    members: Vec<Candidate>,
+    axis: SourcePoint,
+    language_hint: Option<&str>,
+) -> Result<MergedLine, ConversionError> {
     let mut text = String::new();
     let planned = members.iter().try_fold(0_usize, |total, member| {
         total
@@ -121,7 +126,12 @@ fn build_line(members: Vec<Candidate>, axis: SourcePoint) -> Result<MergedLine, 
     let mut maximum_height = 0.0_f32;
     for member in &members {
         let (start, end) = member.geometry.projection(axis);
-        if previous_end
+        if should_insert_space(
+            language_hint,
+            text.chars().next_back(),
+            member.text.chars().next(),
+            member.geometry.angle_degrees,
+        ) && previous_end
             .is_some_and(|previous| start - previous > 0.15 * member.geometry.thickness.max(1.0))
             && !text.chars().next_back().is_some_and(char::is_whitespace)
         {
@@ -143,6 +153,38 @@ fn build_line(members: Vec<Candidate>, axis: SourcePoint) -> Result<MergedLine, 
             .rem_euclid(180.0),
         line_height: maximum_height,
     })
+}
+
+fn should_insert_space(
+    language_hint: Option<&str>,
+    left: Option<char>,
+    right: Option<char>,
+    angle: f32,
+) -> bool {
+    if (angle - 90.0).abs() <= 15.0 {
+        return false;
+    }
+    let Some((left, right)) = left.zip(right) else { return false };
+    if left.is_ascii_alphanumeric() && right.is_ascii_alphanumeric() {
+        return true;
+    }
+    if is_cjk(left) || is_cjk(right) {
+        return false;
+    }
+    language_hint == Some("en")
+}
+
+fn is_cjk(value: char) -> bool {
+    matches!(
+        value,
+        '\u{2e80}'..='\u{2eff}'
+            | '\u{3000}'..='\u{303f}'
+            | '\u{31c0}'..='\u{31ef}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{20000}'..='\u{2fa1f}'
+    )
 }
 
 fn projection_center(geometry: RegionGeometry, axis: SourcePoint) -> f32 {

@@ -31,8 +31,8 @@ fn stable_source_indexes_form_structured_page_ir_and_chain() {
         evidence.chain.iter().map(|step| step.stage).collect::<Vec<_>>(),
         [OcrEvidenceStage::Detection, OcrEvidenceStage::Recognition, OcrEvidenceStage::Merge]
     );
-    assert_eq!(evidence.chain[0].model.as_deref(), Some("detector-model-sha256"));
-    assert_eq!(evidence.chain[1].model.as_deref(), Some("recognizer-model-sha256"));
+    assert_eq!(evidence.chain[0].model.as_deref(), Some(crate::batch::DETECTOR_MODEL_ID));
+    assert_eq!(evidence.chain[1].model.as_deref(), Some(crate::batch::RECOGNIZER_MODEL_ID));
     assert_eq!(provenance.locator.page, Some(1));
     assert!(provenance.locator.bounds.is_some());
     output.document.validate().unwrap();
@@ -80,10 +80,9 @@ fn policy_off_is_a_true_no_op_and_auto_respects_native_text() {
     .unwrap();
     assert_eq!(ignored.document, document);
 
-    let malformed = OcrPageInput { page: 0, ..input(&detected, &recognized) };
     let off = merge_document(
         document.clone(),
-        &[malformed],
+        &[],
         &MergeConfig { policy: OcrPolicy::Off, ..MergeConfig::default() },
         &context(),
     )
@@ -105,7 +104,7 @@ fn auto_does_not_use_native_text_from_a_different_page() {
     let document = page_document(native);
     let detection = detection(&[(polygon(20.0, 20.0, 80.0, 16.0), 0.99)]);
     let recognition = recognition(&[(0, "page two", 0.99)]);
-    let page_two = OcrPageInput { page: 2, ..input(&detection, &recognition) };
+    let page_two = input_for_page(2, &detection, &recognition);
     let output =
         merge_document(document, &[page_two], &MergeConfig::default(), &context()).unwrap();
     assert_eq!(merged_text(&output.document), "page two");
@@ -116,6 +115,62 @@ fn auto_does_not_use_native_text_from_a_different_page() {
             .iter()
             .any(|node| matches!(&node.block, Block::Page { number: 2, .. }))
     );
+}
+
+#[test]
+fn flat_ir_auto_uses_only_explicit_matching_page_locators() {
+    let matching = |page| Inline::SourceText {
+        value: "n".into(),
+        marks: vec![],
+        provenance: Box::new(Provenance {
+            locator: SourceLocator {
+                page,
+                bounds: Some(Rect { x: 20.0, y: 20.0, width: 10.0, height: 10.0 }),
+                page_width: Some(600.0),
+                page_height: Some(800.0),
+                ..SourceLocator::default()
+            },
+            ..native_provenance(None)
+        }),
+    };
+    let flat_node = |values| BlockNode {
+        id: NodeId("mixed-page-wrapper".into()),
+        block: Block::Paragraph(values),
+        provenance: Provenance {
+            locator: SourceLocator {
+                page: None,
+                bounds: Some(Rect { x: 20.0, y: 20.0, width: 10.0, height: 10.0 }),
+                page_width: Some(600.0),
+                page_height: Some(800.0),
+                ..SourceLocator::default()
+            },
+            ..native_provenance(None)
+        },
+    };
+    let mut unrelated = vec![matching(None); 8];
+    unrelated.extend(vec![matching(Some(2)); 8]);
+    let flat = Document { blocks: vec![flat_node(unrelated)], ..Document::default() };
+    let detection = detection(&[(polygon(20.0, 20.0, 80.0, 16.0), 0.99)]);
+    let recognition = recognition(&[(0, "page one", 0.99)]);
+    let output = merge_document(
+        flat,
+        &[input(&detection, &recognition)],
+        &MergeConfig::default(),
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(merged_text(&output.document), "page one");
+
+    let matching_page =
+        Document { blocks: vec![flat_node(vec![matching(Some(1)); 8])], ..Document::default() };
+    let suppressed = merge_document(
+        matching_page.clone(),
+        &[input(&detection, &recognition)],
+        &MergeConfig::default(),
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(suppressed.document, matching_page);
 }
 
 #[test]
@@ -188,4 +243,124 @@ fn generated_page_id_does_not_collide_with_existing_document_nodes() {
     .unwrap();
     assert_eq!(output.document.blocks[1].id.0, "ocr-page-1-1");
     output.document.validate().unwrap();
+}
+
+#[test]
+fn batch_identity_rejects_page_region_and_model_mismatches() {
+    let detection = detection(&[(polygon(20.0, 20.0, 80.0, 16.0), 0.98)]);
+    let recognition = recognition(&[(0, "bound", 0.98)]);
+    let valid = input(&detection, &recognition);
+    assert_eq!(valid.page(), 1);
+
+    let mut wrong_page = recognition.clone();
+    let page_two = PageDetection::from_result(
+        2,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    let page_one = PageDetection::from_result(
+        1,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    wrong_page.batch_identity = Some(page_two.identity.clone());
+    wrong_page.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    assert!(OcrPageInput::new(page_one, wrong_page).is_err());
+
+    let mut wrong_model = recognition.clone();
+    let detected = PageDetection::from_result(
+        1,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    wrong_model.batch_identity = Some(detected.identity.clone());
+    wrong_model.recognizer_model = Some("wrong-model");
+    assert!(OcrPageInput::new(detected, wrong_model).is_err());
+
+    let mut mutated = detection.clone();
+    let bound = PageDetection::from_result(
+        1,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    mutated.regions[0].crop.width += 1;
+    let tampered = PageDetection { result: mutated, identity: bound.identity };
+    let mut recognized = recognition;
+    recognized.batch_identity = Some(tampered.identity.clone());
+    recognized.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    assert!(OcrPageInput::new(tampered, recognized).is_err());
+
+    let mut changed_provider = detection.clone();
+    let bound = PageDetection::from_result(
+        1,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        changed_provider.clone(),
+    )
+    .unwrap();
+    changed_provider.provider = "substituted.detector".into();
+    let tampered = PageDetection { result: changed_provider, identity: bound.identity };
+    assert!(tampered.identity.validate(&tampered.result).is_err());
+}
+
+#[test]
+fn native_and_ocr_blocks_share_stable_page_reading_order() {
+    fn native(id: &str, y: Option<f32>) -> BlockNode {
+        BlockNode {
+            id: NodeId(id.into()),
+            block: Block::Paragraph(vec![Inline::Text { value: id.into(), marks: vec![] }]),
+            provenance: native_provenance(y.map(|y| Rect {
+                x: 20.0,
+                y,
+                width: 80.0,
+                height: 16.0,
+            })),
+        }
+    }
+    let document = Document {
+        blocks: vec![BlockNode {
+            id: NodeId("page-1".into()),
+            block: Block::Page {
+                number: 1,
+                blocks: vec![
+                    native("middle", Some(100.0)),
+                    native("end", Some(300.0)),
+                    native("unknown", None),
+                ],
+            },
+            provenance: native_provenance(None),
+        }],
+        ..Document::default()
+    };
+    let detection = detection(&[
+        (polygon(20.0, 20.0, 80.0, 16.0), 0.98),
+        (polygon(20.0, 200.0, 80.0, 16.0), 0.98),
+    ]);
+    let recognition = recognition(&[(0, "top", 0.98), (1, "lower", 0.98)]);
+    let output = merge_document(
+        document,
+        &[input(&detection, &recognition)],
+        &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+        &context(),
+    )
+    .unwrap();
+    let Block::Page { blocks, .. } = &output.document.blocks[0].block else { panic!("page") };
+    let ids = blocks.iter().map(|block| block.id.0.as_str()).collect::<Vec<_>>();
+    assert!(ids[0].starts_with("ocr-page-1-paragraph"));
+    assert_eq!(ids[1], "middle");
+    assert!(ids[2].starts_with("ocr-page-1-paragraph"));
+    assert_eq!(ids[3..], ["end", "unknown"]);
 }

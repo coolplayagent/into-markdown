@@ -22,6 +22,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+mod batch;
 mod detection;
 mod merge;
 mod model_acquisition;
@@ -33,7 +34,7 @@ mod runtime;
 
 pub use detection::{
     CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
-    PixelFormat, PixelView, PpOcrTextDetector,
+    PageDetection, PixelFormat, PixelView, PpOcrTextDetector,
 };
 
 pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};

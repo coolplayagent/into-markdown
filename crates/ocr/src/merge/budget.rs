@@ -15,7 +15,7 @@ pub(crate) struct MergeBudget<'a> {
 impl<'a> MergeBudget<'a> {
     pub(crate) fn preflight(
         document: &Document,
-        pages: &[OcrPageInput<'_>],
+        pages: &[OcrPageInput],
         config: &MergeConfig,
         context: &'a ExecutionContext,
     ) -> Result<Self, ConversionError> {
@@ -31,21 +31,25 @@ impl<'a> MergeBudget<'a> {
         if pages.len() > config.limits.max_pages {
             return Err(limit("ocrMergePages", pages.len(), config.limits.max_pages));
         }
-        let inventory = document_inventory(document)?;
+        let inventory = document_inventory(document, context)?;
         let mut regions = 0_usize;
         let mut text_bytes = 0_usize;
         let mut identity_bytes = 0_usize;
         for page in pages {
+            let page_blocks = super::existing_page_blocks(document, page.page())?;
             if config.policy == into_markdown_core::OcrPolicy::Auto
                 && super::policy::has_sufficient_native_text(
-                    super::existing_page_blocks(document, page.page)?,
+                    page_blocks.blocks,
+                    page.page(),
+                    page_blocks.explicitly_scoped,
                     config.auto_min_native_characters,
+                    context,
                 )?
             {
                 continue;
             }
             regions = regions
-                .checked_add(page.detection.regions.len())
+                .checked_add(page.detected().regions.len())
                 .ok_or_else(|| limit("ocrMergeRegions", usize::MAX, config.limits.max_regions))?;
             text_bytes =
                 page.recognition.regions.iter().try_fold(text_bytes, |total, region| {
@@ -54,10 +58,10 @@ impl<'a> MergeBudget<'a> {
                     })
                 })?;
             identity_bytes = [
-                page.detection.provider.len(),
+                page.detected().provider.len(),
                 page.recognition.provider.len(),
-                page.detector_model.len(),
-                page.recognizer_model.len(),
+                page.detection.identity.detector_model.len(),
+                page.recognition.recognizer_model.unwrap_or("").len(),
             ]
             .into_iter()
             .try_fold(identity_bytes, |total, bytes| {
@@ -205,6 +209,10 @@ impl<'a> MergeBudget<'a> {
         self.context.checkpoint()
     }
 
+    pub(crate) const fn context(&self) -> &ExecutionContext {
+        self.context
+    }
+
     pub(crate) fn finish(mut self) -> Result<ResourceReservation, ConversionError> {
         self.context.checkpoint()?;
         self.reservation.take().ok_or_else(|| ocr("mergeReservationMissing"))
@@ -219,14 +227,20 @@ struct Inventory {
     node_id_bytes: usize,
 }
 
-fn document_inventory(document: &Document) -> Result<Inventory, ConversionError> {
+fn document_inventory(
+    document: &Document,
+    context: &ExecutionContext,
+) -> Result<Inventory, ConversionError> {
     let mut inventory = Inventory::default();
     let mut block_stack = Vec::new();
     block_stack.try_reserve_exact(1).map_err(|_| super::memory())?;
     block_stack.push(document.blocks.as_slice());
     let mut inline_stack = Vec::new();
+    let mut visited = 0_usize;
     while let Some(values) = block_stack.pop() {
         for node in values {
+            visited += 1;
+            super::traversal_checkpoint(context, visited)?;
             inventory.nodes = inventory.nodes.checked_add(1).ok_or_else(|| {
                 limit("documentNodes", usize::MAX, into_markdown_core::MAX_DOCUMENT_NODES)
             })?;
@@ -287,6 +301,8 @@ fn document_inventory(document: &Document) -> Result<Inventory, ConversionError>
     }
     while let Some(values) = inline_stack.pop() {
         for value in values {
+            visited += 1;
+            super::traversal_checkpoint(context, visited)?;
             inventory.inlines = inventory.inlines.checked_add(1).ok_or_else(|| {
                 limit("documentInlines", usize::MAX, into_markdown_core::MAX_DOCUMENT_INLINES)
             })?;

@@ -1668,7 +1668,7 @@ mod tests {
     use super::*;
     use into_markdown_core::{
         AssetId, CellRef, DocumentMetadata, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
-        OcrSourceRegion, Provenance, ProvenanceKind, SourceLocator, SourcePoint, TimeRange,
+        OcrSourceRegion, Provenance, ProvenanceKind, Rect, SourceLocator, SourcePoint, TimeRange,
     };
     use pulldown_cmark::{Event, Options, Parser, Tag};
 
@@ -1690,7 +1690,13 @@ mod tests {
         let provenance = Provenance {
             kind: ProvenanceKind::LocalOcr,
             provider: "recognizer".into(),
-            locator: SourceLocator { page: Some(1), ..SourceLocator::default() },
+            locator: SourceLocator {
+                page: Some(1),
+                bounds: Some(Rect { x: 0.0, y: 0.0, width: 10.0, height: 2.0 }),
+                page_width: Some(100.0),
+                page_height: Some(100.0),
+                ..SourceLocator::default()
+            },
             confidence: Some(0.9),
         };
         let inline = Inline::OcrText {

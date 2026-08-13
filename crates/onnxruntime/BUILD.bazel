@@ -185,6 +185,7 @@ rust_test(
         ":onnxruntime_worker",
         "//fixtures:corpus",
         "//models:ocr-merge-quality-authority.json",
+        "//models:ppocrv6-tiny-recognizer-authority.json",
         "//models:ppocrv6_tiny_dict.txt",
         "//third_party/onnxruntime:cpu_runtime",
         "@ppocrv6_tiny_recognizer_onnx_model_archive//file",

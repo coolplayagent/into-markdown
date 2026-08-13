@@ -6,7 +6,7 @@ mod resources;
 mod wire;
 
 use super::*;
-use crate::{CropDescriptor, DetectedTextRegion, RecognizedText};
+use crate::{CropDescriptor, DetectedTextRegion, DetectionResult, PageDetection, RecognizedText};
 use into_markdown_core::{
     Block, BlockNode, Document, ExecutionContext, ExecutionOptions, NodeId, Provenance,
     ProvenanceKind, Rect, ResourceLimits, SourceLocator,
@@ -51,22 +51,32 @@ fn recognition(regions: &[(usize, &str, f32)]) -> RecognitionResult {
         provider: Arc::from("test.recognizer"),
         language_hint: None,
         _memory_lease: None,
+        batch_identity: None,
+        recognizer_model: None,
     }
 }
 
-fn input<'a>(
-    detection: &'a DetectionResult,
-    recognition: &'a RecognitionResult,
-) -> OcrPageInput<'a> {
-    OcrPageInput {
-        page: 1,
-        page_width: 600.0,
-        page_height: 800.0,
-        detection,
-        recognition,
-        detector_model: "detector-model-sha256",
-        recognizer_model: "recognizer-model-sha256",
-    }
+fn input(detection: &DetectionResult, recognition: &RecognitionResult) -> OcrPageInput {
+    input_for_page(1, detection, recognition)
+}
+
+fn input_for_page(
+    page: u32,
+    detection: &DetectionResult,
+    recognition: &RecognitionResult,
+) -> OcrPageInput {
+    let detection = PageDetection::from_result(
+        page,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    let mut recognition = recognition.clone();
+    recognition.batch_identity = Some(detection.identity.clone());
+    recognition.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    OcrPageInput::new(detection, recognition).unwrap()
 }
 
 fn page_document(inlines: Vec<into_markdown_core::Inline>) -> Document {

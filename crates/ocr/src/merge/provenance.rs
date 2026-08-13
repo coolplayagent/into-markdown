@@ -11,7 +11,7 @@ pub(crate) const MERGE_PROVIDER: &str = "builtin.ocr.ir-merge";
 
 pub(crate) fn materialize_paragraphs(
     paragraphs: Vec<MergedParagraph>,
-    page: &OcrPageInput<'_>,
+    page: &OcrPageInput,
     identifiers: &mut BTreeSet<String>,
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let mut nodes = Vec::new();
@@ -45,11 +45,11 @@ pub(crate) fn materialize_paragraphs(
                 kind: ProvenanceKind::LocalOcr,
                 provider: clone_string(&page.recognition.provider)?,
                 locator: SourceLocator {
-                    page: Some(page.page),
+                    page: Some(page.page()),
                     bounds: Some(line.bounds),
                     rotation_degrees: Some(line.angle_degrees.rem_euclid(360.0)),
-                    page_width: Some(page.page_width),
-                    page_height: Some(page.page_height),
+                    page_width: Some(page.page_width()),
+                    page_height: Some(page.page_height()),
                     ..SourceLocator::default()
                 },
                 confidence: Some(line_confidence),
@@ -59,23 +59,23 @@ pub(crate) fn materialize_paragraphs(
                 marks: Vec::new(),
                 provenance: Box::new(provenance),
                 evidence: Box::new(OcrEvidence {
-                    page: page.page,
+                    page: page.page(),
                     regions,
                     chain: evidence_chain(page)?,
                 }),
             });
         }
         nodes.push(BlockNode {
-            id: unique_node_id(page.page, paragraph_index, identifiers)?,
+            id: unique_node_id(page.page(), paragraph_index, identifiers)?,
             block: Block::Paragraph(content),
             provenance: Provenance {
                 kind: ProvenanceKind::Postprocessor,
                 provider: clone_string(MERGE_PROVIDER)?,
                 locator: SourceLocator {
-                    page: Some(page.page),
+                    page: Some(page.page()),
                     bounds: Some(paragraph.bounds),
-                    page_width: Some(page.page_width),
-                    page_height: Some(page.page_height),
+                    page_width: Some(page.page_width()),
+                    page_height: Some(page.page_height()),
                     ..SourceLocator::default()
                 },
                 confidence: Some(paragraph_confidence),
@@ -85,32 +85,32 @@ pub(crate) fn materialize_paragraphs(
     Ok(nodes)
 }
 
-pub(crate) fn page_provenance(page: &OcrPageInput<'_>) -> Result<Provenance, ConversionError> {
+pub(crate) fn page_provenance(page: &OcrPageInput) -> Result<Provenance, ConversionError> {
     Ok(Provenance {
         kind: ProvenanceKind::Postprocessor,
         provider: clone_string(MERGE_PROVIDER)?,
         locator: SourceLocator {
-            page: Some(page.page),
-            page_width: Some(page.page_width),
-            page_height: Some(page.page_height),
+            page: Some(page.page()),
+            page_width: Some(page.page_width()),
+            page_height: Some(page.page_height()),
             ..SourceLocator::default()
         },
         confidence: None,
     })
 }
 
-fn evidence_chain(page: &OcrPageInput<'_>) -> Result<Vec<OcrEvidenceStep>, ConversionError> {
+fn evidence_chain(page: &OcrPageInput) -> Result<Vec<OcrEvidenceStep>, ConversionError> {
     let mut chain = Vec::new();
     chain.try_reserve_exact(3).map_err(|_| super::memory())?;
     chain.push(OcrEvidenceStep {
         stage: OcrEvidenceStage::Detection,
-        provider: clone_string(&page.detection.provider)?,
-        model: Some(clone_string(page.detector_model)?),
+        provider: clone_string(&page.detected().provider)?,
+        model: Some(clone_string(page.detection.identity.detector_model)?),
     });
     chain.push(OcrEvidenceStep {
         stage: OcrEvidenceStage::Recognition,
         provider: clone_string(&page.recognition.provider)?,
-        model: Some(clone_string(page.recognizer_model)?),
+        model: Some(clone_string(page.recognition.recognizer_model.unwrap_or(""))?),
     });
     chain.push(OcrEvidenceStep {
         stage: OcrEvidenceStage::Merge,

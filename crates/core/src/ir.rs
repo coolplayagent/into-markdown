@@ -303,9 +303,8 @@ pub enum InlineMark {
 }
 
 /// Inline content.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-#[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum Inline {
     /// Plain or styled text.
     Text {
@@ -349,6 +348,145 @@ pub enum Inline {
     FootnoteReference(String),
     /// Explicit source line break.
     LineBreak,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+enum InlineSerialize<'a> {
+    Text { value: &'a String, marks: &'a Vec<InlineMark> },
+    SourceText { value: &'a String, marks: &'a Vec<InlineMark>, provenance: &'a Provenance },
+    Code(&'a String),
+    Link { target: &'a String, content: &'a Vec<Inline> },
+    Formula(&'a String),
+    FootnoteReference(&'a String),
+    LineBreak,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatibleOcrText<'a> {
+    value: &'a String,
+    marks: &'a Vec<InlineMark>,
+    provenance: &'a Provenance,
+    ocr_evidence: &'a OcrEvidence,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+enum LegacyInline {
+    Text {
+        value: String,
+        marks: Vec<InlineMark>,
+    },
+    SourceText {
+        value: String,
+        marks: Vec<InlineMark>,
+        provenance: Box<Provenance>,
+    },
+    OcrText {
+        value: String,
+        marks: Vec<InlineMark>,
+        provenance: Box<Provenance>,
+        evidence: Box<OcrEvidence>,
+    },
+    Code(String),
+    Link {
+        target: String,
+        content: Vec<Inline>,
+    },
+    Formula(String),
+    FootnoteReference(String),
+    LineBreak,
+}
+
+impl Serialize for Inline {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Text { value, marks } => {
+                InlineSerialize::Text { value, marks }.serialize(serializer)
+            }
+            Self::SourceText { value, marks, provenance } => {
+                InlineSerialize::SourceText { value, marks, provenance }.serialize(serializer)
+            }
+            Self::OcrText { value, marks, provenance, evidence } => {
+                use serde::ser::SerializeStruct as _;
+                let mut wrapper = serializer.serialize_struct("Inline", 2)?;
+                wrapper.serialize_field("type", "text")?;
+                wrapper.serialize_field(
+                    "data",
+                    &CompatibleOcrText { value, marks, provenance, ocr_evidence: evidence },
+                )?;
+                wrapper.end()
+            }
+            Self::Code(value) => InlineSerialize::Code(value).serialize(serializer),
+            Self::Link { target, content } => {
+                InlineSerialize::Link { target, content }.serialize(serializer)
+            }
+            Self::Formula(value) => InlineSerialize::Formula(value).serialize(serializer),
+            Self::FootnoteReference(value) => {
+                InlineSerialize::FootnoteReference(value).serialize(serializer)
+            }
+            Self::LineBreak => InlineSerialize::LineBreak.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Inline {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("inline must be an object"))?;
+        let kind = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| serde::de::Error::custom("inline type must be a string"))?;
+        if kind == "text" {
+            let data = object
+                .get_mut("data")
+                .and_then(serde_json::Value::as_object_mut)
+                .ok_or_else(|| serde::de::Error::custom("text data must be an object"))?;
+            if let Some(evidence) = data.remove("ocrEvidence") {
+                let value = data
+                    .remove("value")
+                    .ok_or_else(|| serde::de::Error::custom("OCR text value is required"))?;
+                let marks = data.remove("marks").unwrap_or_else(|| serde_json::json!([]));
+                let provenance = data
+                    .remove("provenance")
+                    .ok_or_else(|| serde::de::Error::custom("OCR provenance is required"))?;
+                return Ok(Self::OcrText {
+                    value: serde_json::from_value(value).map_err(serde::de::Error::custom)?,
+                    marks: serde_json::from_value(marks).map_err(serde::de::Error::custom)?,
+                    provenance: Box::new(
+                        serde_json::from_value(provenance).map_err(serde::de::Error::custom)?,
+                    ),
+                    evidence: Box::new(
+                        serde_json::from_value(evidence).map_err(serde::de::Error::custom)?,
+                    ),
+                });
+            }
+        }
+        Ok(match LegacyInline::deserialize(value).map_err(serde::de::Error::custom)? {
+            LegacyInline::Text { value, marks } => Self::Text { value, marks },
+            LegacyInline::SourceText { value, marks, provenance } => {
+                Self::SourceText { value, marks, provenance }
+            }
+            LegacyInline::OcrText { value, marks, provenance, evidence } => {
+                Self::OcrText { value, marks, provenance, evidence }
+            }
+            LegacyInline::Code(value) => Self::Code(value),
+            LegacyInline::Link { target, content } => Self::Link { target, content },
+            LegacyInline::Formula(value) => Self::Formula(value),
+            LegacyInline::FootnoteReference(value) => Self::FootnoteReference(value),
+            LegacyInline::LineBreak => Self::LineBreak,
+        })
+    }
 }
 
 /// List marker family.
@@ -808,11 +946,17 @@ fn preflight_document_value(
                         "content",
                         &format!("{path}.data.content"),
                     );
-                } else if kind == "ocrText" {
+                } else if kind == "ocrText"
+                    || kind == "text"
+                        && object
+                            .get("data")
+                            .and_then(serde_json::Value::as_object)
+                            .is_some_and(|data| data.contains_key("ocrEvidence"))
+                {
                     let evidence = object
                         .get("data")
                         .and_then(serde_json::Value::as_object)
-                        .and_then(|data| data.get("evidence"))
+                        .and_then(|data| data.get("evidence").or_else(|| data.get("ocrEvidence")))
                         .and_then(serde_json::Value::as_object);
                     for property in ["regions", "chain"] {
                         let additional = evidence
@@ -1503,6 +1647,19 @@ fn validate_ocr_evidence(
     if evidence.regions.is_empty() {
         return invalid_node(format!("{path}.regions"), "OCR evidence requires source regions");
     }
+    let locator = &provenance.locator;
+    let (Some(page_width), Some(page_height), Some(summary_bounds), Some(summary_confidence)) =
+        (locator.page_width, locator.page_height, locator.bounds, provenance.confidence)
+    else {
+        return invalid_node(
+            path,
+            "OCR provenance requires page dimensions, bounds, and confidence",
+        );
+    };
+    let recognition_provider = evidence.chain.get(1).map(|step| step.provider.as_str());
+    if recognition_provider != Some(provenance.provider.as_str()) {
+        return invalid_node(path, "OCR provenance provider must match recognition evidence");
+    }
     state.inline_count = state
         .inline_count
         .saturating_add(evidence.regions.len())
@@ -1510,6 +1667,17 @@ fn validate_ocr_evidence(
     if state.inline_count > state.limits.max_inlines {
         return resource_limit(path, "documentInlines", state.limits.max_inlines);
     }
+    validate_ocr_regions(evidence, page_width, page_height, path)?;
+    validate_ocr_summary(evidence, summary_bounds, summary_confidence, path)?;
+    validate_ocr_chain(evidence, path)
+}
+
+fn validate_ocr_regions(
+    evidence: &OcrEvidence,
+    page_width: f32,
+    page_height: f32,
+    path: &str,
+) -> Result<(), IrError> {
     let mut indexes = BTreeSet::new();
     for (index, region) in evidence.regions.iter().enumerate() {
         let region_path = format!("{path}.regions[{index}]");
@@ -1531,7 +1699,75 @@ fn validate_ocr_evidence(
             }
         }
         validate_source_polygon(&region.polygon, &format!("{region_path}.polygon"))?;
+        if region.polygon.iter().any(|point| {
+            point.x < 0.0 || point.y < 0.0 || point.x > page_width || point.y > page_height
+        }) {
+            return invalid_node(
+                format!("{region_path}.polygon"),
+                "OCR polygon must remain inside declared page dimensions",
+            );
+        }
     }
+    Ok(())
+}
+
+fn validate_ocr_summary(
+    evidence: &OcrEvidence,
+    summary_bounds: Rect,
+    summary_confidence: f32,
+    path: &str,
+) -> Result<(), IrError> {
+    let minimum_confidence = evidence.regions.iter().fold(1.0_f32, |minimum, region| {
+        minimum.min(region.detection_confidence).min(region.recognition_confidence)
+    });
+    if summary_confidence.to_bits() != minimum_confidence.to_bits() {
+        return invalid_node(path, "OCR provenance confidence must summarize every source region");
+    }
+    let minimum_x = evidence
+        .regions
+        .iter()
+        .flat_map(|region| region.polygon.iter())
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let minimum_y = evidence
+        .regions
+        .iter()
+        .flat_map(|region| region.polygon.iter())
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    let maximum_x = evidence
+        .regions
+        .iter()
+        .flat_map(|region| region.polygon.iter())
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let maximum_y = evidence
+        .regions
+        .iter()
+        .flat_map(|region| region.polygon.iter())
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let expected_bounds = Rect {
+        x: minimum_x,
+        y: minimum_y,
+        width: maximum_x - minimum_x,
+        height: maximum_y - minimum_y,
+    };
+    if [
+        (summary_bounds.x, expected_bounds.x),
+        (summary_bounds.y, expected_bounds.y),
+        (summary_bounds.width, expected_bounds.width),
+        (summary_bounds.height, expected_bounds.height),
+    ]
+    .into_iter()
+    .any(|(actual, expected)| actual.to_bits() != expected.to_bits())
+    {
+        return invalid_node(path, "OCR provenance bounds must summarize every source polygon");
+    }
+    Ok(())
+}
+
+fn validate_ocr_chain(evidence: &OcrEvidence, path: &str) -> Result<(), IrError> {
     let stages =
         [OcrEvidenceStage::Detection, OcrEvidenceStage::Recognition, OcrEvidenceStage::Merge];
     if evidence.chain.len() != stages.len() {
@@ -1689,6 +1925,8 @@ mod tests {
                 locator: SourceLocator {
                     page: Some(1),
                     bounds: Some(Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 }),
+                    page_width: Some(100.0),
+                    page_height: Some(100.0),
                     ..SourceLocator::default()
                 },
                 confidence: Some(0.9),
@@ -1887,12 +2125,12 @@ mod tests {
             "rule",
             "text",
             "sourceText",
-            "ocrText",
             "link",
             "footnoteReference",
         ] {
             assert!(json.contains(&format!("\"type\":\"{kind}\"")), "missing {kind}");
         }
+        assert!(json.contains("\"ocrEvidence\":"));
         assert_eq!(Document::from_json(&json).unwrap(), document);
     }
 
@@ -1946,7 +2184,8 @@ mod tests {
             ..Document::default()
         };
         let json = document.to_json().unwrap();
-        assert!(json.contains("\"type\":\"ocrText\""));
+        assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains("\"ocrEvidence\":"));
         assert!(json.contains("\"sourceIndex\":0"));
         assert_eq!(Document::from_json(&json).unwrap(), document);
 
@@ -1956,6 +2195,54 @@ mod tests {
         evidence.regions[0].polygon.swap(1, 2);
         assert_eq!(invalid.validate().unwrap_err().code, IrErrorCode::InvalidNode);
 
+        for (label, mutate) in [
+            (
+                "page dimensions",
+                Box::new(|inline: &mut Inline| {
+                    let Inline::OcrText { provenance, .. } = inline else { panic!("fixture") };
+                    provenance.locator.page_width = Some(2.0);
+                }) as Box<dyn Fn(&mut Inline)>,
+            ),
+            (
+                "page",
+                Box::new(|inline: &mut Inline| {
+                    let Inline::OcrText { evidence, .. } = inline else { panic!("fixture") };
+                    evidence.page = 2;
+                }),
+            ),
+            (
+                "provider",
+                Box::new(|inline: &mut Inline| {
+                    let Inline::OcrText { provenance, .. } = inline else { panic!("fixture") };
+                    provenance.provider = "wrong.recognizer".into();
+                }),
+            ),
+            (
+                "confidence",
+                Box::new(|inline: &mut Inline| {
+                    let Inline::OcrText { provenance, .. } = inline else { panic!("fixture") };
+                    provenance.confidence = Some(0.95);
+                }),
+            ),
+            (
+                "bounds",
+                Box::new(|inline: &mut Inline| {
+                    let Inline::OcrText { provenance, .. } = inline else { panic!("fixture") };
+                    provenance.locator.bounds =
+                        Some(Rect { x: 1.0, y: 2.0, width: 4.0, height: 4.0 });
+                }),
+            ),
+        ] {
+            let mut invalid = document.clone();
+            let Block::Paragraph(values) = &mut invalid.blocks[0].block else { panic!("fixture") };
+            mutate(&mut values[0]);
+            assert_eq!(
+                invalid.validate().unwrap_err().code,
+                IrErrorCode::InvalidNode,
+                "{label} mismatch must fail"
+            );
+        }
+
         let exact = ValidationLimits { max_inlines: 5, ..ValidationLimits::default() };
         assert_eq!(Document::from_json_with_limits(&json, &exact).unwrap(), document);
         let too_small = ValidationLimits { max_inlines: 4, ..ValidationLimits::default() };
@@ -1963,6 +2250,28 @@ mod tests {
             Document::from_json_with_limits(&json, &too_small).unwrap_err().code,
             IrErrorCode::ResourceLimit
         );
+    }
+
+    #[test]
+    fn frozen_schema_one_text_decoder_ignores_new_ocr_sidecar() {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "data", rename_all = "camelCase")]
+        enum FrozenInline {
+            Text { value: String, marks: Vec<InlineMark> },
+        }
+        let document = Document {
+            blocks: vec![node("ocr", Block::Paragraph(vec![ocr_inline()]))],
+            ..Document::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&document.to_json().unwrap()).unwrap();
+        let inline = value["blocks"][0]["block"]["data"][0].clone();
+        let decoded: FrozenInline = serde_json::from_value(inline).unwrap();
+        match decoded {
+            FrozenInline::Text { value, marks } => {
+                assert_eq!(value, "scan");
+                assert!(marks.is_empty());
+            }
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use super::budget::MergeBudget;
 use super::geometry::{rect_overlap_ratio, union_rect};
+use super::page_scope::PageScope;
 use super::{Candidate, diagnostic};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, Diagnostic, Inline, Rect, SourceLocator,
@@ -18,26 +19,41 @@ struct CanonicalText {
 
 pub(crate) fn collect_native_spans(
     blocks: &[BlockNode],
+    page: u32,
+    explicitly_scoped: bool,
+    budget: &MergeBudget<'_>,
 ) -> Result<Vec<NativeSpan>, ConversionError> {
     fn inline_parts<'a>(
         values: &'a [Inline],
         bounds: &mut Option<Rect>,
+        page: u32,
+        scope: PageScope,
+        budget: &MergeBudget<'_>,
+        visited: &mut usize,
     ) -> Result<Vec<&'a str>, ConversionError> {
         let mut stack = Vec::new();
         stack.try_reserve_exact(values.len()).map_err(|_| super::memory())?;
         stack.extend(values.iter().rev());
         let mut parts = Vec::<&str>::new();
         while let Some(value) = stack.pop() {
+            *visited = visited.checked_add(1).ok_or_else(super::memory)?;
+            super::traversal_checkpoint(budget.context(), *visited)?;
             match value {
                 Inline::SourceText { value, provenance, .. }
-                | Inline::OcrText { value, provenance, .. } => {
+                | Inline::OcrText { value, provenance, .. }
+                    if scope.includes_plain_text()
+                        || (scope == PageScope::InlineFallback
+                            && provenance.locator.page == Some(page)) =>
+                {
                     parts.try_reserve(1).map_err(|_| super::memory())?;
                     parts.push(value.as_str());
                     if let Some(value) = provenance.locator.bounds {
                         *bounds = Some(bounds.map_or(value, |current| union_rect(current, value)));
                     }
                 }
-                Inline::Text { value, .. } | Inline::Code(value) | Inline::Formula(value) => {
+                Inline::Text { value, .. } | Inline::Code(value) | Inline::Formula(value)
+                    if scope.includes_plain_text() =>
+                {
                     parts.try_reserve(1).map_err(|_| super::memory())?;
                     parts.push(value.as_str());
                 }
@@ -53,17 +69,30 @@ pub(crate) fn collect_native_spans(
     let mut spans = Vec::new();
     let mut stack = Vec::new();
     stack.try_reserve_exact(1).map_err(|_| super::memory())?;
-    stack.push(blocks);
-    while let Some(values) = stack.pop() {
+    stack.push((blocks, PageScope::root(explicitly_scoped)));
+    let mut visited = 0_usize;
+    while let Some((values, parent_scope)) = stack.pop() {
         for node in values {
+            visited += 1;
+            super::traversal_checkpoint(budget.context(), visited)?;
+            let scope = parent_scope.for_node(&node.provenance, page);
+            if scope == PageScope::Excluded {
+                continue;
+            }
             match &node.block {
                 Block::Paragraph(values)
                 | Block::Heading { content: values, .. }
                 | Block::TimedSegment { content: values, .. } => {
                     let mut bounds = None;
-                    let parts = inline_parts(values, &mut bounds)?;
+                    let parts =
+                        inline_parts(values, &mut bounds, page, scope, budget, &mut visited)?;
                     if !parts.is_empty()
-                        && let Some(bounds) = bounds.or(node.provenance.locator.bounds)
+                        && let Some(bounds) = bounds.or_else(|| {
+                            scope
+                                .includes_plain_text()
+                                .then_some(node.provenance.locator.bounds)
+                                .flatten()
+                        })
                     {
                         spans.try_reserve(1).map_err(|_| super::memory())?;
                         spans.push(NativeSpan { canonical: canonical_parts(&parts)?, bounds });
@@ -72,13 +101,13 @@ pub(crate) fn collect_native_spans(
                 Block::List { items, .. } => {
                     for item in items {
                         stack.try_reserve(1).map_err(|_| super::memory())?;
-                        stack.push(item.blocks.as_slice());
+                        stack.push((item.blocks.as_slice(), scope));
                     }
                 }
                 Block::Table { rows, .. } => {
                     for cell in rows.iter().flat_map(|row| &row.cells) {
                         stack.try_reserve(1).map_err(|_| super::memory())?;
-                        stack.push(cell.blocks.as_slice());
+                        stack.push((cell.blocks.as_slice(), scope));
                     }
                 }
                 Block::Footnote { blocks, .. }
@@ -86,7 +115,7 @@ pub(crate) fn collect_native_spans(
                 | Block::Slide { blocks, .. }
                 | Block::Sheet { blocks, .. } => {
                     stack.try_reserve(1).map_err(|_| super::memory())?;
-                    stack.push(blocks.as_slice());
+                    stack.push((blocks.as_slice(), scope));
                 }
                 _ => {}
             }

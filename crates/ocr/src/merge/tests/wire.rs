@@ -36,7 +36,8 @@ fn merged_document_round_trips_through_schema_one_json() {
     .unwrap();
     let json = output.document.to_json().unwrap();
     assert!(json.contains("\"schemaVersion\":1"));
-    assert!(json.contains("\"type\":\"ocrText\""));
+    assert!(json.contains("\"type\":\"text\""));
+    assert!(json.contains("\"ocrEvidence\":"));
     assert!(json.contains("\"polygon\":"));
     assert!(json.contains("\"stage\":\"detection\""));
     assert_eq!(Document::from_json(&json).unwrap(), output.document);

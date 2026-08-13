@@ -24,6 +24,7 @@ mod quality {
     };
     use into_markdown_onnxruntime::{OrtSessionFactory, RuntimeLibrary};
     use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -70,6 +71,16 @@ mod quality {
             authority["fixture_manifest_sha256"].as_str().unwrap()
         );
         let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+        let recognizer_authority_bytes =
+            fs::read(runfiles.join("_main/models/ppocrv6-tiny-recognizer-authority.json")).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&recognizer_authority_bytes)),
+            authority["recognizer_authority_sha256"].as_str().unwrap()
+        );
+        let recognizer_authority: serde_json::Value =
+            serde_json::from_slice(&recognizer_authority_bytes).unwrap();
+        assert_eq!(recognizer_authority["quality_corpus"], "fixtures/manifest.json#ocr_quality");
+        let quality_groups = recognizer_authority["quality_groups"].as_array().unwrap();
         let repository = env!("OCR_QUALITY_MODEL_REPOSITORY");
         assert_ne!(repository, "unsupported", "quality target requires an audited platform");
         let archive = read_model_archive(&runfiles, repository).unwrap();
@@ -123,6 +134,7 @@ mod quality {
 
         let mut edits = 0_usize;
         let mut characters = 0_usize;
+        let mut group_totals = BTreeMap::<String, (usize, usize)>::new();
         for golden in manifest["ocr_quality"]["goldens"].as_array().unwrap() {
             let id = golden["fixture_id"].as_str().unwrap();
             let bytes =
@@ -137,16 +149,6 @@ mod quality {
             let degraded = degrade(image.as_raw(), &authority);
             let width = image.width() as usize;
             let height = image.height() as usize;
-            let crop = into_markdown_ocr::CropDescriptor {
-                polygon: [
-                    (0.0, 0.0),
-                    ((width - 1) as f32, 0.0),
-                    ((width - 1) as f32, (height - 1) as f32),
-                    (0.0, (height - 1) as f32),
-                ],
-                width: (width - 1) as u32,
-                height: (height - 1) as u32,
-            };
             let view = into_markdown_ocr::PixelView {
                 width,
                 height,
@@ -155,38 +157,16 @@ mod quality {
                 orientation: into_markdown_ocr::ImageOrientation::Normal,
                 bytes: &degraded,
             };
-            let recognized = futures::executor::block_on(recognizer.recognize(
-                view,
-                std::slice::from_ref(&crop),
-                None,
-                &context,
-            ))
+            let detection =
+                into_markdown_ocr::PageDetection::authoritative_full_image_region(1, width, height)
+                    .unwrap();
+            let recognized = futures::executor::block_on(
+                recognizer.recognize_page(view, &detection, None, &context),
+            )
             .unwrap();
-            let detection = into_markdown_ocr::DetectionResult {
-                regions: vec![into_markdown_ocr::DetectedTextRegion {
-                    polygon: [
-                        (0.0, 0.0),
-                        ((width - 1) as f32, 0.0),
-                        ((width - 1) as f32, (height - 1) as f32),
-                        (0.0, (height - 1) as f32),
-                    ],
-                    angle_degrees: 0.0,
-                    confidence: 1.0,
-                    crop,
-                }],
-                provider: "quality.authoritative-full-image-region".into(),
-            };
             let output = merge_document(
                 into_markdown_core::Document::default(),
-                &[OcrPageInput {
-                    page: 1,
-                    page_width: width as f32,
-                    page_height: height as f32,
-                    detection: &detection,
-                    recognition: &recognized,
-                    detector_model: "authority-full-image-polygon",
-                    recognizer_model: "pp-ocrv6-tiny-recognizer-onnx",
-                }],
+                &[OcrPageInput::new(detection, recognized).unwrap()],
                 &MergeConfig {
                     policy: OcrPolicy::Always,
                     minimum_confidence: 0.0,
@@ -197,7 +177,17 @@ mod quality {
             .unwrap();
             let actual = canonical(&document_text(&output.document));
             let expected = canonical(golden["ground_truth_nfc"].as_str().unwrap());
-            edits += edit_distance(&expected, &actual);
+            let golden_edits = edit_distance(&expected, &actual);
+            let group = golden["group"].as_str().unwrap();
+            let group_authority = quality_groups
+                .iter()
+                .find(|value| value["group"] == group)
+                .expect("manifest group must be recognizer-authorized");
+            assert_eq!(golden["maximum_cer"], group_authority["maximum_cer"]);
+            let total = group_totals.entry(group.into()).or_default();
+            total.0 += golden_edits;
+            total.1 += expected.len();
+            edits += golden_edits;
             characters += expected.len();
         }
         assert_eq!(
@@ -209,6 +199,21 @@ mod quality {
             cer <= authority["maximum_aggregate_cer"].as_f64().unwrap(),
             "degraded merge CER {cer:.6}"
         );
+        assert_eq!(group_totals.len(), quality_groups.len());
+        for group in quality_groups {
+            let name = group["group"].as_str().unwrap();
+            let (group_edits, group_characters) = group_totals[name];
+            assert_eq!(
+                group_characters,
+                group["evaluated_characters"].as_u64().unwrap() as usize,
+                "evaluated character authority drift for {name}"
+            );
+            let group_cer = group_edits as f64 / group_characters as f64;
+            assert!(
+                group_cer <= group["maximum_cer"].as_f64().unwrap(),
+                "degraded merge group {name} CER {group_cer:.6}"
+            );
+        }
     }
 
     fn degrade(bytes: &[u8], authority: &serde_json::Value) -> Vec<u8> {

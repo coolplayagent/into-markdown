@@ -1,5 +1,14 @@
 use super::*;
 use into_markdown_core::{CancellationToken, ErrorCode, ListItem, ListKind, NodeId, OcrPolicy};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+struct ResetTraversalHook;
+
+impl Drop for ResetTraversalHook {
+    fn drop(&mut self) {
+        set_traversal_test_hook(None);
+    }
+}
 
 #[test]
 fn region_text_and_work_limits_fail_before_publication() {
@@ -102,4 +111,38 @@ fn maximum_merge_depth_native_ir_uses_bounded_explicit_walk_stacks() {
     )
     .unwrap();
     output.document.validate().unwrap();
+}
+
+#[test]
+fn large_native_traversal_observes_in_flight_cancel_and_releases_merge_lease() {
+    let document = Document {
+        blocks: (0..20_000)
+            .map(|index| BlockNode {
+                id: NodeId(format!("large-{index}")),
+                block: Block::Paragraph(vec![into_markdown_core::Inline::Text {
+                    value: "native".into(),
+                    marks: vec![],
+                }]),
+                provenance: native_provenance(None),
+            })
+            .collect(),
+        ..Document::default()
+    };
+    let cancellation = CancellationToken::new();
+    let reached = Arc::new(AtomicUsize::new(0));
+    let hook_reached = Arc::clone(&reached);
+    let hook_cancellation = cancellation.clone();
+    set_traversal_test_hook(Some(Box::new(move |visited| {
+        hook_reached.store(visited, Ordering::SeqCst);
+        hook_cancellation.cancel();
+    })));
+    let _reset = ResetTraversalHook;
+    let context = ExecutionContext::new(
+        ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+        ResourceLimits::default(),
+    );
+    let error = merge_document(document, &[], &MergeConfig::default(), &context).unwrap_err();
+    assert_eq!(reached.load(Ordering::SeqCst), 256);
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }

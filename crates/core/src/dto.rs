@@ -2496,7 +2496,13 @@ mod tests {
         let provenance = Provenance {
             kind: ProvenanceKind::LocalOcr,
             provider: "recognizer".into(),
-            locator: SourceLocator { page: Some(2), ..SourceLocator::default() },
+            locator: SourceLocator {
+                page: Some(2),
+                bounds: Some(Rect { x: 1.0, y: 1.0, width: 4.0, height: 2.0 }),
+                page_width: Some(100.0),
+                page_height: Some(100.0),
+                ..SourceLocator::default()
+            },
             confidence: Some(0.91),
         };
         let ocr = Inline::OcrText {
@@ -2551,7 +2557,8 @@ mod tests {
         );
         let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
         assert!(json.contains("\"schemaVersion\":1"));
-        assert!(json.contains("\"type\":\"ocrText\""));
+        assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains("\"ocrEvidence\":"));
         let decoded = ConversionResult::try_from(ResultDto::from_json(&json).unwrap()).unwrap();
         assert_eq!(decoded.document, result.document);
     }
