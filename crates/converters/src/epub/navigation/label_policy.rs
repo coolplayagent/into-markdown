@@ -10,6 +10,130 @@ const MATHML_NS: &[u8] = b"http://www.w3.org/1998/Math/MathML";
 const SVG_NS: &[u8] = b"http://www.w3.org/2000/svg";
 const XLINK_NS: &[u8] = b"http://www.w3.org/1999/xlink";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UriSyntax {
+    Single,
+    WhitespaceList,
+    Srcset,
+    RdfaPrefix,
+    RdfaTerms,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UriAttributeRule {
+    element_namespace: Option<&'static [u8]>,
+    elements: &'static [&'static [u8]],
+    attribute_namespace: Option<&'static [u8]>,
+    attributes: &'static [&'static [u8]],
+    syntax: UriSyntax,
+}
+
+// Empty `elements` means that the rule is common to every allowed label element. Keeping the
+// element-specific URI surface here makes additions reviewable instead of relying on name
+// heuristics to discover standard attributes one at a time.
+const URI_ATTRIBUTE_MATRIX: &[UriAttributeRule] = &[
+    UriAttributeRule {
+        element_namespace: None,
+        elements: &[],
+        attribute_namespace: None,
+        attributes: &[b"about", b"itemid", b"resource", b"vocab"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: None,
+        elements: &[],
+        attribute_namespace: None,
+        attributes: &[b"itemtype"],
+        syntax: UriSyntax::WhitespaceList,
+    },
+    UriAttributeRule {
+        element_namespace: None,
+        elements: &[],
+        attribute_namespace: None,
+        attributes: &[b"prefix"],
+        syntax: UriSyntax::RdfaPrefix,
+    },
+    UriAttributeRule {
+        element_namespace: None,
+        elements: &[],
+        attribute_namespace: None,
+        attributes: &[b"datatype", b"itemprop", b"property", b"rel", b"rev", b"role", b"typeof"],
+        syntax: UriSyntax::RdfaTerms,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"a", b"area", b"link"],
+        attribute_namespace: None,
+        attributes: &[b"href"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"a", b"area"],
+        attribute_namespace: None,
+        attributes: &[b"ping"],
+        syntax: UriSyntax::WhitespaceList,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"audio", b"img", b"source", b"track", b"video"],
+        attribute_namespace: None,
+        attributes: &[b"src"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"video"],
+        attribute_namespace: None,
+        attributes: &[b"poster"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"img", b"source"],
+        attribute_namespace: None,
+        attributes: &[b"srcset"],
+        syntax: UriSyntax::Srcset,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"link"],
+        attribute_namespace: None,
+        attributes: &[b"imagesrcset"],
+        syntax: UriSyntax::Srcset,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"img"],
+        attribute_namespace: None,
+        attributes: &[b"longdesc", b"lowsrc", b"usemap"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: Some(XHTML_NS),
+        elements: &[b"del", b"ins", b"q"],
+        attribute_namespace: None,
+        attributes: &[b"cite"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: Some(MATHML_NS),
+        elements: &[b"math"],
+        attribute_namespace: None,
+        attributes: &[b"altimg", b"cdgroup"],
+        syntax: UriSyntax::Single,
+    },
+    UriAttributeRule {
+        element_namespace: None,
+        elements: &[],
+        attribute_namespace: Some(XLINK_NS),
+        attributes: &[b"arcrole", b"href", b"role"],
+        syntax: UriSyntax::Single,
+    },
+];
+
+const INERT_XLINK_ATTRIBUTES: &[&[u8]] = &[b"actuate", b"show", b"title", b"type"];
+
 pub(super) fn is_known_namespace(namespace: Option<&[u8]>) -> bool {
     matches!(namespace, None | Some(XHTML_NS | MATHML_NS | SVG_NS))
 }
@@ -76,7 +200,7 @@ pub(super) fn validate_element(
     if name.namespace.as_deref() == Some(XHTML_NS) {
         validate_html_conditions(name, attributes)?;
     }
-    validate_url_attributes(attributes, base, budget)
+    validate_url_attributes(name, attributes, base, budget)
 }
 
 pub(super) fn validate_child_count(name: &Name, count: usize) -> Result<(), ConversionError> {
@@ -291,6 +415,7 @@ fn has_any(attributes: &[Attribute], names: &[&[u8]]) -> bool {
 }
 
 fn validate_url_attributes(
+    name: &Name,
     attributes: &[Attribute],
     base: &BasePath,
     budget: &mut EpubBudget<'_>,
@@ -300,53 +425,56 @@ fn validate_url_attributes(
         if contains_ascii_case_insensitive(attribute.value.as_bytes(), b"url(") {
             return Err(xml::malformed("CSS-style URLs are forbidden in EPUB navigation labels"));
         }
-        if attribute.namespace.as_deref() == Some(XLINK_NS) {
-            match attribute.local.as_slice() {
-                b"arcrole" | b"href" | b"role" => {
-                    validate_internal(base, &attribute.value, budget)?;
-                }
-                b"actuate" | b"show" | b"title" | b"type" => {}
-                _ => {
-                    return Err(xml::malformed(
-                        "unknown XLink attribute is forbidden in EPUB navigation labels",
-                    ));
-                }
-            }
-        } else if attribute.namespace.as_deref() == Some(xml::XML_NS) && attribute.local == b"base"
-        {
+        if attribute.namespace.as_deref() == Some(xml::XML_NS) && attribute.local == b"base" {
             // The caller already applied and confined xml:base before label validation.
-        } else if attribute.namespace.is_none() {
-            match attribute.local.as_slice() {
-                b"imagesrcset" | b"srcset" => validate_srcset(base, &attribute.value, budget)?,
-                b"itemtype" | b"ping" => {
+        } else if let Some(syntax) = uri_syntax(name, attribute) {
+            match syntax {
+                UriSyntax::Single => validate_internal(base, &attribute.value, budget)?,
+                UriSyntax::WhitespaceList => {
                     for value in attribute.value.split_whitespace() {
                         validate_internal(base, value, budget)?;
                     }
                 }
-                b"prefix" => validate_rdfa_prefix(base, &attribute.value, budget)?,
-                b"datatype" | b"itemprop" | b"property" | b"rel" | b"rev" | b"role" | b"typeof" => {
-                    validate_rdfa_terms(base, &attribute.value, budget)?;
-                }
-                b"about" | b"action" | b"altimg" | b"archive" | b"background" | b"cite"
-                | b"classid" | b"codebase" | b"data" | b"dynsrc" | b"formaction" | b"href"
-                | b"itemid" | b"longdesc" | b"lowsrc" | b"manifest" | b"poster" | b"profile"
-                | b"resource" | b"src" | b"usemap" | b"vocab" => {
-                    validate_internal(base, &attribute.value, budget)?;
-                }
-                _ if potentially_url_bearing_name(&attribute.local) => {
-                    return Err(xml::malformed(
-                        "unknown URL-like attribute is forbidden in EPUB navigation labels",
-                    ));
-                }
-                _ => {}
+                UriSyntax::Srcset => validate_srcset(base, &attribute.value, budget)?,
+                UriSyntax::RdfaPrefix => validate_rdfa_prefix(base, &attribute.value, budget)?,
+                UriSyntax::RdfaTerms => validate_rdfa_terms(base, &attribute.value, budget)?,
             }
-        } else if potentially_url_bearing_name(&attribute.local) {
+        } else if attribute.namespace.as_deref() == Some(XLINK_NS) {
+            if !INERT_XLINK_ATTRIBUTES.contains(&attribute.local.as_slice()) {
+                return Err(xml::malformed(
+                    "unknown XLink attribute is forbidden in EPUB navigation labels",
+                ));
+            }
+        } else if is_declared_uri_attribute(attribute)
+            || potentially_url_bearing_name(&attribute.local)
+        {
             return Err(xml::malformed(
-                "unknown namespaced URL-like attribute is forbidden in EPUB navigation labels",
+                "unknown URL-like attribute is forbidden in EPUB navigation labels",
             ));
         }
     }
     Ok(())
+}
+
+fn uri_syntax(name: &Name, attribute: &Attribute) -> Option<UriSyntax> {
+    URI_ATTRIBUTE_MATRIX.iter().find_map(|rule| {
+        let element_matches =
+            rule.element_namespace.is_none() || rule.element_namespace == name.namespace.as_deref();
+        let local_matches =
+            rule.elements.is_empty() || rule.elements.contains(&name.local.as_slice());
+        (element_matches
+            && local_matches
+            && rule.attribute_namespace == attribute.namespace.as_deref()
+            && rule.attributes.contains(&attribute.local.as_slice()))
+        .then_some(rule.syntax)
+    })
+}
+
+fn is_declared_uri_attribute(attribute: &Attribute) -> bool {
+    URI_ATTRIBUTE_MATRIX.iter().any(|rule| {
+        rule.attribute_namespace == attribute.namespace.as_deref()
+            && rule.attributes.contains(&attribute.local.as_slice())
+    })
 }
 
 fn validate_srcset(

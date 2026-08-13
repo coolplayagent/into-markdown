@@ -22,6 +22,10 @@ fn attribute(local: &[u8], value: impl Into<String>) -> Attribute {
     Attribute { namespace: None, local: local.to_vec(), value: value.into() }
 }
 
+fn namespaced_attribute(namespace: &[u8], local: &[u8], value: impl Into<String>) -> Attribute {
+    Attribute { namespace: Some(namespace.to_vec()), local: local.to_vec(), value: value.into() }
+}
+
 fn base() -> BasePath {
     BasePath::document("OPS/nav.xhtml").unwrap()
 }
@@ -58,21 +62,26 @@ fn rdfa_iri_attributes_are_confined_and_unknown_url_names_fail_closed() {
 }
 
 #[test]
-fn mathml_altimg_is_a_container_confined_iri() {
+fn mathml_uri_attributes_are_container_confined_and_release_leases() {
     let math = Name { namespace: Some(MATHML_NS.to_vec()), local: b"math".to_vec() };
-    for value in ["https://example.invalid/math.png", "javascript:bad"] {
+    for (name, value) in [
+        (b"altimg".as_slice(), "https://example.invalid/math.png"),
+        (b"altimg".as_slice(), "javascript:bad"),
+        (b"cdgroup".as_slice(), "https://example.invalid/dictionary.xml"),
+        (b"cdgroup".as_slice(), "javascript:bad"),
+    ] {
         let options = ConversionOptions::default();
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
         let mut budget = EpubBudget::new(&options, &context);
         assert!(
             validate_element(
                 &math,
-                &[attribute(b"alt", "equation"), attribute(b"altimg", value)],
+                &[attribute(b"alt", "equation"), attribute(name, value)],
                 &base(),
                 &mut budget,
             )
             .is_err(),
-            "accepted {value:?}"
+            "accepted {name:?}={value:?}"
         );
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
@@ -82,11 +91,51 @@ fn mathml_altimg_is_a_container_confined_iri() {
     let mut budget = EpubBudget::new(&options, &context);
     validate_element(
         &math,
-        &[attribute(b"alt", "equation"), attribute(b"altimg", "images/equation.png")],
+        &[
+            attribute(b"alt", "equation"),
+            attribute(b"altimg", "images/equation.png"),
+            attribute(b"cdgroup", "dictionaries/math.xml#group"),
+        ],
         &base(),
         &mut budget,
     )
     .unwrap();
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn uri_attribute_matrix_covers_foreign_and_common_iri_contracts() {
+    let math = Name { namespace: Some(MATHML_NS.to_vec()), local: b"math".to_vec() };
+    for local in [b"altimg".as_slice(), b"cdgroup"] {
+        assert_eq!(uri_syntax(&math, &attribute(local, "local")), Some(UriSyntax::Single));
+    }
+
+    for local in [b"about".as_slice(), b"resource", b"vocab"] {
+        assert_eq!(uri_syntax(&anchor(), &attribute(local, "local")), Some(UriSyntax::Single));
+    }
+    assert_eq!(
+        uri_syntax(&anchor(), &attribute(b"prefix", "term: local")),
+        Some(UriSyntax::RdfaPrefix)
+    );
+    for local in [b"arcrole".as_slice(), b"href", b"role"] {
+        assert_eq!(
+            uri_syntax(&math, &namespaced_attribute(XLINK_NS, local, "local"),),
+            Some(UriSyntax::Single)
+        );
+    }
+
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut budget = EpubBudget::new(&options, &context);
+    assert!(
+        validate_element(
+            &math,
+            &[attribute(b"futureiri", "https://example.invalid/future")],
+            &base(),
+            &mut budget,
+        )
+        .is_err()
+    );
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
