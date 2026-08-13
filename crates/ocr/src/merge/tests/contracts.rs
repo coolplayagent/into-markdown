@@ -1,5 +1,7 @@
 use super::*;
-use into_markdown_core::{Inline, NodeId, OcrEvidenceStage, OcrPolicy};
+use into_markdown_core::{
+    Cell, Inline, ListItem, ListKind, NodeId, OcrEvidenceStage, OcrPolicy, TableRow,
+};
 
 #[test]
 fn stable_source_indexes_form_structured_page_ir_and_chain() {
@@ -427,15 +429,29 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
 #[test]
 fn native_and_ocr_blocks_share_stable_page_reading_order() {
     fn native(id: &str, y: Option<f32>) -> BlockNode {
+        let inlines = y.map_or_else(
+            || vec![Inline::Text { value: id.into(), marks: vec![] }],
+            |y| {
+                id.chars()
+                    .map(|character| Inline::SourceText {
+                        value: character.to_string(),
+                        marks: vec![],
+                        provenance: Box::new(native_provenance(Some(Rect {
+                            x: 20.0,
+                            y,
+                            width: 80.0,
+                            height: 16.0,
+                        }))),
+                    })
+                    .collect()
+            },
+        );
         BlockNode {
             id: NodeId(id.into()),
-            block: Block::Paragraph(vec![Inline::Text { value: id.into(), marks: vec![] }]),
-            provenance: native_provenance(y.map(|y| Rect {
-                x: 20.0,
-                y,
-                width: 80.0,
-                height: 16.0,
-            })),
+            block: Block::Paragraph(inlines),
+            // PDF-style paragraph wrappers may have no bounds while their
+            // character-level source inlines carry exact geometry.
+            provenance: native_provenance(None),
         }
     }
     let document = Document {
@@ -471,4 +487,75 @@ fn native_and_ocr_blocks_share_stable_page_reading_order() {
     assert_eq!(ids[1], "middle");
     assert!(ids[2].starts_with("ocr-page-1-paragraph"));
     assert_eq!(ids[3..], ["end", "unknown"]);
+}
+
+#[test]
+fn nested_list_and_table_source_geometry_drive_flat_reading_order() {
+    let sourced = |id: &str, y: f32| BlockNode {
+        id: NodeId(id.into()),
+        block: Block::Paragraph(vec![Inline::Link {
+            target: "https://example.com/source".into(),
+            content: id
+                .chars()
+                .map(|character| Inline::SourceText {
+                    value: character.to_string(),
+                    marks: vec![],
+                    provenance: Box::new(native_provenance(Some(Rect {
+                        x: 20.0,
+                        y,
+                        width: 80.0,
+                        height: 16.0,
+                    }))),
+                })
+                .collect(),
+        }]),
+        provenance: native_provenance(None),
+    };
+    let list = BlockNode {
+        id: NodeId("nested-list".into()),
+        block: Block::List {
+            kind: ListKind::Bullet,
+            start: 1,
+            items: vec![ListItem {
+                checked: None,
+                marker_label: None,
+                blocks: vec![sourced("list-text", 100.0)],
+            }],
+        },
+        provenance: native_provenance(None),
+    };
+    let table = BlockNode {
+        id: NodeId("nested-table".into()),
+        block: Block::Table {
+            rows: vec![TableRow {
+                cells: vec![Cell {
+                    row_span: 1,
+                    column_span: 1,
+                    header: false,
+                    blocks: vec![sourced("table-text", 300.0)],
+                }],
+            }],
+            alignments: Vec::new(),
+        },
+        provenance: native_provenance(None),
+    };
+    let missing = BlockNode {
+        id: NodeId("missing".into()),
+        block: Block::Paragraph(vec![Inline::Text { value: "missing".into(), marks: vec![] }]),
+        provenance: native_provenance(None),
+    };
+    let document = Document { blocks: vec![missing, table, list], ..Document::default() };
+    let detection = detection(&[(polygon(20.0, 200.0, 80.0, 16.0), 0.98)]);
+    let recognition = recognition(&[(0, "ocr", 0.98)]);
+    let output = merge_document(
+        document,
+        &[input(&detection, &recognition)],
+        &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(
+        output.document.blocks.iter().map(|node| node.id.0.as_str()).collect::<Vec<_>>(),
+        ["nested-list", "ocr-page-1-paragraph-1", "nested-table", "missing"]
+    );
 }

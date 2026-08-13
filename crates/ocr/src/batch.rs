@@ -4,6 +4,16 @@ use sha2::{Digest, Sha256};
 
 pub(crate) const DETECTOR_MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
 pub(crate) const RECOGNIZER_MODEL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
+const FINGERPRINT_CHECKPOINT_BYTES: usize = 4 * 1024;
+
+#[cfg(test)]
+type FingerprintTestHook = Option<Box<dyn FnMut(usize)>>;
+
+#[cfg(test)]
+std::thread_local! {
+    static FINGERPRINT_TEST_HOOK: std::cell::RefCell<FingerprintTestHook> =
+        std::cell::RefCell::new(None);
+}
 
 /// Recognizer-produced output bound to one immutable detector batch.
 #[derive(Debug, Clone)]
@@ -160,47 +170,86 @@ fn recognition_fingerprint(
     context: &ExecutionContext,
 ) -> Result<[u8; 32], ConversionError> {
     let mut digest = Sha256::new();
-    digest.update(b"into-markdown/ocr-recognition/v1\0");
-    hash_bytes(&mut digest, result.provider.as_bytes(), context)?;
+    let mut meter = HashMeter { context, pending: 0, total: 0 };
+    hash_update(&mut digest, b"into-markdown/ocr-recognition/v1\0", &mut meter)?;
+    hash_bytes(&mut digest, result.provider.as_bytes(), &mut meter)?;
     match &result.language_hint {
         Some(value) => {
-            digest.update([1]);
-            hash_bytes(&mut digest, value.as_bytes(), context)?;
+            hash_update(&mut digest, &[1], &mut meter)?;
+            hash_bytes(&mut digest, value.as_bytes(), &mut meter)?;
         }
-        None => digest.update([0]),
+        None => hash_update(&mut digest, &[0], &mut meter)?,
     }
-    digest.update(
-        u64::try_from(result.regions.len())
+    hash_update(
+        &mut digest,
+        &u64::try_from(result.regions.len())
             .map_err(|_| batch("recognitionCountOverflow"))?
             .to_le_bytes(),
-    );
+        &mut meter,
+    )?;
     for region in result.regions.iter() {
-        digest.update(
-            u64::try_from(region.source_index)
+        hash_update(
+            &mut digest,
+            &u64::try_from(region.source_index)
                 .map_err(|_| batch("recognitionIndexOverflow"))?
                 .to_le_bytes(),
-        );
-        digest.update(region.confidence.to_bits().to_le_bytes());
-        hash_bytes(&mut digest, region.text.as_bytes(), context)?;
+            &mut meter,
+        )?;
+        hash_update(&mut digest, &region.confidence.to_bits().to_le_bytes(), &mut meter)?;
+        hash_bytes(&mut digest, region.text.as_bytes(), &mut meter)?;
     }
     Ok(digest.finalize().into())
+}
+
+struct HashMeter<'a> {
+    context: &'a ExecutionContext,
+    pending: usize,
+    total: usize,
 }
 
 fn hash_bytes(
     digest: &mut Sha256,
     bytes: &[u8],
-    context: &ExecutionContext,
+    meter: &mut HashMeter<'_>,
 ) -> Result<(), ConversionError> {
-    digest.update(
-        u64::try_from(bytes.len()).map_err(|_| batch("recognitionBytesOverflow"))?.to_le_bytes(),
-    );
-    for chunk in bytes.chunks(4 * 1024) {
+    hash_update(
+        digest,
+        &u64::try_from(bytes.len()).map_err(|_| batch("recognitionBytesOverflow"))?.to_le_bytes(),
+        meter,
+    )?;
+    hash_update(digest, bytes, meter)
+}
+
+fn hash_update(
+    digest: &mut Sha256,
+    mut bytes: &[u8],
+    meter: &mut HashMeter<'_>,
+) -> Result<(), ConversionError> {
+    while !bytes.is_empty() {
+        let until_checkpoint = FINGERPRINT_CHECKPOINT_BYTES - meter.pending;
+        let take = bytes.len().min(until_checkpoint);
+        let (chunk, remaining) = bytes.split_at(take);
         digest.update(chunk);
-        if chunk.len() == 4 * 1024 {
-            context.checkpoint()?;
+        meter.pending += take;
+        meter.total = meter.total.checked_add(take).ok_or_else(|| batch("hashBytesOverflow"))?;
+        bytes = remaining;
+        if meter.pending == FINGERPRINT_CHECKPOINT_BYTES {
+            meter.pending = 0;
+            #[cfg(test)]
+            FINGERPRINT_TEST_HOOK.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().as_mut() {
+                    hook(meter.total);
+                }
+            });
+            meter.context.checkpoint()?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn set_fingerprint_test_hook(hook: FingerprintTestHook) {
+    FINGERPRINT_TEST_HOOK.with(|slot| *slot.borrow_mut() = hook);
 }
 
 fn batch(detail: &str) -> ConversionError {

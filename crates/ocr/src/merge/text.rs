@@ -1,5 +1,4 @@
-use super::budget::MergeBudget;
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ExecutionContext};
 
 const CHECKPOINT_BYTES: usize = 4 * 1024;
 
@@ -19,20 +18,38 @@ std::thread_local! {
     static TEXT_TEST_HOOK: std::cell::RefCell<TextTestHook> = std::cell::RefCell::new(None);
 }
 
-pub(crate) struct TextMeter<'a, 'context> {
-    budget: &'a MergeBudget<'context>,
+pub(crate) struct TextMeters {
+    pub(crate) associate: TextMeter,
+    pub(crate) normalize_plan: TextMeter,
+    pub(crate) normalize_copy: TextMeter,
+    pub(crate) line_materialize: TextMeter,
+}
+
+impl TextMeters {
+    pub(crate) fn new(context: &ExecutionContext) -> Self {
+        Self {
+            associate: TextMeter::new(context, TextStage::Associate),
+            normalize_plan: TextMeter::new(context, TextStage::NormalizePlan),
+            normalize_copy: TextMeter::new(context, TextStage::NormalizeCopy),
+            line_materialize: TextMeter::new(context, TextStage::LineMaterialize),
+        }
+    }
+}
+
+pub(crate) struct TextMeter {
+    context: ExecutionContext,
     #[cfg(test)]
     stage: TextStage,
     pending: usize,
     total: usize,
 }
 
-impl<'a, 'context> TextMeter<'a, 'context> {
-    pub(crate) const fn new(budget: &'a MergeBudget<'context>, stage: TextStage) -> Self {
+impl TextMeter {
+    fn new(context: &ExecutionContext, stage: TextStage) -> Self {
         #[cfg(not(test))]
         let _ = stage;
         Self {
-            budget,
+            context: context.clone(),
             #[cfg(test)]
             stage,
             pending: 0,
@@ -51,7 +68,7 @@ impl<'a, 'context> TextMeter<'a, 'context> {
                     hook(self.stage, self.total);
                 }
             });
-            self.budget.checkpoint()?;
+            self.context.checkpoint()?;
         }
         Ok(())
     }
@@ -59,12 +76,11 @@ impl<'a, 'context> TextMeter<'a, 'context> {
 
 pub(crate) fn validated_copy(
     value: &str,
-    budget: &MergeBudget<'_>,
+    meter: &mut TextMeter,
 ) -> Result<Option<String>, ConversionError> {
     let mut output = String::new();
     output.try_reserve_exact(value.len()).map_err(|_| super::memory())?;
     let mut has_visible = false;
-    let mut meter = TextMeter::new(budget, TextStage::Associate);
     for character in value.chars() {
         if character.is_control() && !character.is_whitespace() {
             return Err(super::ocr("invalidRecognitionText"));
@@ -79,7 +95,7 @@ pub(crate) fn validated_copy(
 pub(crate) fn append(
     output: &mut String,
     value: &str,
-    meter: &mut TextMeter<'_, '_>,
+    meter: &mut TextMeter,
 ) -> Result<(), ConversionError> {
     for character in value.chars() {
         output.push(character);

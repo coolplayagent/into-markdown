@@ -15,6 +15,7 @@ pub(crate) fn merge_lines(
     candidates: Vec<Candidate>,
     language_hint: Option<&str>,
     budget: &mut MergeBudget<'_>,
+    materialize_meter: &mut super::text::TextMeter,
 ) -> Result<Vec<MergedLine>, ConversionError> {
     if candidates.is_empty() {
         return Ok(Vec::new());
@@ -93,7 +94,7 @@ pub(crate) fn merge_lines(
         for index in indexes {
             members.push(slots[index].take().ok_or_else(|| super::ocr("lineSlotMissing"))?);
         }
-        lines.push(build_line(members, axis, language_hint, budget)?);
+        lines.push(build_line(members, axis, language_hint, materialize_meter)?);
     }
     lines.sort_by(|left, right| {
         left.bounds
@@ -110,7 +111,7 @@ fn build_line(
     members: Vec<Candidate>,
     axis: SourcePoint,
     language_hint: Option<&str>,
-    budget: &MergeBudget<'_>,
+    materialize_meter: &mut super::text::TextMeter,
 ) -> Result<MergedLine, ConversionError> {
     let mut text = String::new();
     let planned = members.iter().try_fold(0_usize, |total, member| {
@@ -125,8 +126,6 @@ fn build_line(
     let mut doubled_angle_cosine = 0.0_f32;
     let mut doubled_angle_sine = 0.0_f32;
     let mut maximum_height = 0.0_f32;
-    let mut materialize_meter =
-        super::text::TextMeter::new(budget, super::text::TextStage::LineMaterialize);
     for member in &members {
         let (start, end) = member.geometry.projection(axis);
         if should_insert_space(
@@ -139,8 +138,9 @@ fn build_line(
             && !text.chars().next_back().is_some_and(char::is_whitespace)
         {
             text.push(' ');
+            materialize_meter.consume(1)?;
         }
-        super::text::append(&mut text, &member.text, &mut materialize_meter)?;
+        super::text::append(&mut text, &member.text, materialize_meter)?;
         previous_end = Some(end.max(previous_end.unwrap_or(end)));
         bounds = union_rect(bounds, member.geometry.bounds);
         let doubled_angle = member.geometry.angle_degrees.to_radians() * 2.0;

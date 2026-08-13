@@ -129,18 +129,29 @@ impl<'a> MergeBudget<'a> {
             .ok()
             .and_then(|regions| regions.checked_mul(u64::try_from(inventory.nodes).ok()?))
             .ok_or_else(|| limit("ocrMergeWork", usize::MAX, maximum_work))?;
-        let work = pairs
+        let comparison_work = pairs
             .checked_mul(2)
             .and_then(|value| value.checked_add(native_work))
             .and_then(|value| value.checked_add(u64::try_from(regions).ok()?))
             .ok_or_else(|| limit("ocrMergeWork", usize::MAX, maximum_work))?;
-        if work > config.limits.max_comparisons {
+        if comparison_work > config.limits.max_comparisons {
             return Err(limit(
                 "ocrMergeWork",
-                usize::try_from(work).unwrap_or(usize::MAX),
+                usize::try_from(comparison_work).unwrap_or(usize::MAX),
                 usize::try_from(config.limits.max_comparisons).unwrap_or(usize::MAX),
             ));
         }
+        // Reading-key derivation visits every eligible structural/inline item
+        // at most twice: once for page evidence and once for geometry. Flat
+        // documents are sorted once after all page batches have merged.
+        let reading_work = u64::try_from(nodes_after)
+            .ok()
+            .and_then(|nodes| nodes.checked_add(u64::try_from(inlines_after).ok()?))
+            .and_then(|items| items.checked_mul(2))
+            .ok_or_else(|| limit("ocrMergeReadingWork", usize::MAX, usize::MAX))?;
+        let work = comparison_work
+            .checked_add(reading_work)
+            .ok_or_else(|| limit("ocrMergeReadingWork", usize::MAX, usize::MAX))?;
 
         let retained = estimate_retained_output(document, &empty_assets, &empty_diagnostics)?;
         let region_bytes = u64::try_from(regions)

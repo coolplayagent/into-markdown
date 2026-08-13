@@ -3,7 +3,7 @@
 use crate::{BoundRecognition, PageDetection};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConverterOutput, Diagnostic, DiagnosticSeverity, Document,
-    ExecutionContext, Inline, OcrOptions, OcrPolicy, SourceLocator,
+    ExecutionContext, OcrOptions, OcrPolicy, SourceLocator,
 };
 use std::collections::BTreeSet;
 
@@ -24,6 +24,7 @@ mod page_scope;
 mod paragraphs;
 mod policy;
 mod provenance;
+mod reading_order;
 mod text;
 
 #[cfg(test)]
@@ -193,9 +194,10 @@ pub fn merge_document(
                 return Err(ocr(format!("duplicatePage:{}", adjacent[0].page())));
             }
         }
+        let mut sort_flat_document = false;
         for page in ordered {
             budget.checkpoint()?;
-            merge_page(
+            sort_flat_document |= merge_page(
                 &mut document,
                 page,
                 config,
@@ -203,6 +205,9 @@ pub fn merge_document(
                 &mut diagnostics,
                 &mut budget,
             )?;
+        }
+        if sort_flat_document {
+            reading_order::sort_blocks(&mut document.blocks, None, &mut budget)?;
         }
     }
     drop(identifiers);
@@ -226,7 +231,7 @@ fn merge_page(
     identifiers: &mut BTreeSet<String>,
     diagnostics: &mut Vec<Diagnostic>,
     budget: &mut MergeBudget<'_>,
-) -> Result<(), ConversionError> {
+) -> Result<bool, ConversionError> {
     let page_blocks = existing_page_blocks(document, page.page())?;
     if config.policy == OcrPolicy::Auto
         && policy::has_sufficient_native_text(
@@ -237,31 +242,41 @@ fn merge_page(
             budget.context(),
         )?
     {
-        return Ok(());
+        return Ok(false);
     }
     validate_page(page, budget.context())?;
-    let mut candidates = associate_candidates(page, config, diagnostics, budget)?;
+    let mut text_meters = text::TextMeters::new(budget.context());
+    let mut candidates =
+        associate_candidates(page, config, diagnostics, budget, &mut text_meters.associate)?;
     let native = dedup::collect_native_spans(
         page_blocks.blocks,
         page.page(),
         page_blocks.explicitly_scoped,
         budget,
+        &mut text_meters,
     )?;
     candidates = dedup::suppress_duplicates(
         candidates,
         &native,
-        page.page(),
-        page.page_width(),
-        page.page_height(),
+        dedup::PageFrame {
+            page: page.page(),
+            width: page.page_width(),
+            height: page.page_height(),
+        },
         budget,
         diagnostics,
+        &mut text_meters,
     )?;
     drop(native);
     if candidates.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
-    let lines =
-        lines::merge_lines(candidates, page.recognition.result().language_hint.as_deref(), budget)?;
+    let lines = lines::merge_lines(
+        candidates,
+        page.recognition.result().language_hint.as_deref(),
+        budget,
+        &mut text_meters.line_materialize,
+    )?;
     let paragraphs = paragraphs::merge_paragraphs(lines)?;
     let nodes = provenance::materialize_paragraphs(paragraphs, page, identifiers)?;
     insert_page_nodes(document, page, nodes, identifiers, budget)
@@ -300,6 +315,7 @@ fn associate_candidates(
     config: &MergeConfig,
     diagnostics: &mut Vec<Diagnostic>,
     budget: &mut MergeBudget<'_>,
+    associate_meter: &mut text::TextMeter,
 ) -> Result<Vec<Candidate>, ConversionError> {
     let mut recognized = Vec::new();
     recognized.try_reserve_exact(page.detected().regions.len()).map_err(|_| memory())?;
@@ -338,7 +354,7 @@ fn associate_candidates(
             page_height: Some(page.page_height()),
             ..SourceLocator::default()
         };
-        let Some(value) = text::validated_copy(&text.text, budget)? else {
+        let Some(value) = text::validated_copy(&text.text, associate_meter)? else {
             diagnostics.push(diagnostic("ocr.emptyText", "OCR region produced no text", locator));
             continue;
         };
@@ -389,10 +405,10 @@ fn existing_page_blocks(document: &Document, page: u32) -> Result<PageBlocks<'_>
 fn insert_page_nodes(
     document: &mut Document,
     page: &OcrPageInput,
-    nodes: Vec<BlockNode>,
+    mut nodes: Vec<BlockNode>,
     identifiers: &mut BTreeSet<String>,
-    budget: &MergeBudget<'_>,
-) -> Result<(), ConversionError> {
+    budget: &mut MergeBudget<'_>,
+) -> Result<bool, ConversionError> {
     let has_page_containers =
         document.blocks.iter().any(|node| matches!(node.block, Block::Page { .. }));
     if let Some(blocks) = document.blocks.iter_mut().find_map(|node| match &mut node.block {
@@ -401,95 +417,22 @@ fn insert_page_nodes(
     }) {
         blocks.try_reserve_exact(nodes.len()).map_err(|_| memory())?;
         blocks.extend(nodes);
-        sort_page_reading_order(blocks);
-        return Ok(());
+        reading_order::sort_blocks(blocks, Some(page.page()), budget)?;
+        return Ok(false);
     }
     if !has_page_containers {
         document.blocks.try_reserve_exact(nodes.len()).map_err(|_| memory())?;
         document.blocks.extend(nodes);
-        sort_flat_reading_order(&mut document.blocks, budget)?;
-        return Ok(());
+        return Ok(true);
     }
+    reading_order::sort_blocks(&mut nodes, Some(page.page()), budget)?;
     document.blocks.try_reserve_exact(1).map_err(|_| memory())?;
     document.blocks.push(BlockNode {
         id: provenance::unique_page_id(page.page(), identifiers)?,
         block: Block::Page { number: page.page(), blocks: nodes },
         provenance: provenance::page_provenance(page)?,
     });
-    Ok(())
-}
-
-fn sort_flat_reading_order(
-    blocks: &mut Vec<BlockNode>,
-    budget: &MergeBudget<'_>,
-) -> Result<(), ConversionError> {
-    let mut keyed = Vec::new();
-    keyed.try_reserve_exact(blocks.len()).map_err(|_| memory())?;
-    let mut visited = 0_usize;
-    for node in blocks.drain(..) {
-        keyed.push((effective_node_page(&node, budget, &mut visited)?, node));
-    }
-    keyed.sort_by(|(left_page, left), (right_page, right)| match (left_page, right_page) {
-        (Some(left_page), Some(right_page)) => {
-            left_page.cmp(right_page).then_with(|| compare_reading_bounds(left, right))
-        }
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-    blocks.extend(keyed.into_iter().map(|(_, node)| node));
-    Ok(())
-}
-
-fn effective_node_page(
-    node: &BlockNode,
-    budget: &MergeBudget<'_>,
-    visited: &mut usize,
-) -> Result<Option<u32>, ConversionError> {
-    let values = match &node.block {
-        Block::Paragraph(values)
-        | Block::Heading { content: values, .. }
-        | Block::TimedSegment { content: values, .. } => values.as_slice(),
-        _ => return Ok(node.provenance.locator.page),
-    };
-    let mut explicit = None;
-    for inline in values.iter().flat_map(|inline| match inline {
-        Inline::Link { content, .. } => content.as_slice(),
-        _ => std::slice::from_ref(inline),
-    }) {
-        *visited = visited.checked_add(1).ok_or_else(memory)?;
-        traversal_checkpoint(budget.context(), *visited)?;
-        match inline {
-            Inline::SourceText { provenance, .. } | Inline::OcrText { provenance, .. } => {
-                if let Some(page) = provenance.locator.page {
-                    if explicit.is_some_and(|current| current != page) {
-                        return Ok(node.provenance.locator.page);
-                    }
-                    explicit = Some(page);
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(explicit.or(node.provenance.locator.page))
-}
-
-fn compare_reading_bounds(left: &BlockNode, right: &BlockNode) -> std::cmp::Ordering {
-    match (left.provenance.locator.bounds, right.provenance.locator.bounds) {
-        (Some(left), Some(right)) => left
-            .y
-            .total_cmp(&right.y)
-            .then_with(|| left.x.total_cmp(&right.x))
-            .then_with(|| left.height.total_cmp(&right.height))
-            .then_with(|| left.width.total_cmp(&right.width)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-}
-
-fn sort_page_reading_order(blocks: &mut [BlockNode]) {
-    blocks.sort_by(compare_reading_bounds);
+    Ok(false)
 }
 
 fn collect_node_ids(

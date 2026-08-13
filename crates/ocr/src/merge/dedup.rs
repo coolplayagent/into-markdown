@@ -1,7 +1,7 @@
 use super::budget::MergeBudget;
 use super::geometry::{rect_overlap_ratio, union_rect};
 use super::page_scope::PageScope;
-use super::text::{TextMeter, TextStage};
+use super::text::{TextMeter, TextMeters};
 use super::{Candidate, diagnostic};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, Diagnostic, Inline, Rect, SourceLocator,
@@ -11,6 +11,13 @@ use unicode_normalization::UnicodeNormalization as _;
 pub(crate) struct NativeSpan {
     canonical: CanonicalText,
     bounds: Rect,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PageFrame {
+    pub(crate) page: u32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
 }
 
 struct CanonicalText {
@@ -23,6 +30,7 @@ pub(crate) fn collect_native_spans(
     page: u32,
     explicitly_scoped: bool,
     budget: &MergeBudget<'_>,
+    meters: &mut TextMeters,
 ) -> Result<Vec<NativeSpan>, ConversionError> {
     fn inline_parts<'a>(
         values: &'a [Inline],
@@ -95,7 +103,11 @@ pub(crate) fn collect_native_spans(
                     {
                         spans.try_reserve(1).map_err(|_| super::memory())?;
                         spans.push(NativeSpan {
-                            canonical: canonical_parts(&parts, budget)?,
+                            canonical: canonical_parts(
+                                &parts,
+                                &mut meters.normalize_plan,
+                                &mut meters.normalize_copy,
+                            )?,
                             bounds,
                         });
                     }
@@ -129,16 +141,19 @@ pub(crate) fn collect_native_spans(
 pub(crate) fn suppress_duplicates(
     mut candidates: Vec<Candidate>,
     native: &[NativeSpan],
-    page: u32,
-    page_width: f32,
-    page_height: f32,
+    frame: PageFrame,
     budget: &mut MergeBudget<'_>,
     diagnostics: &mut Vec<Diagnostic>,
+    meters: &mut TextMeters,
 ) -> Result<Vec<Candidate>, ConversionError> {
     let mut canonical = Vec::new();
     canonical.try_reserve_exact(candidates.len()).map_err(|_| super::memory())?;
     for candidate in &candidates {
-        canonical.push(canonical_text(&candidate.text, budget)?);
+        canonical.push(canonical_text(
+            &candidate.text,
+            &mut meters.normalize_plan,
+            &mut meters.normalize_copy,
+        )?);
     }
 
     let mut suppressed = Vec::new();
@@ -182,7 +197,7 @@ pub(crate) fn suppress_duplicates(
             diagnostics.push(diagnostic(
                 "ocr.duplicateSuppressed",
                 "overlapping OCR region was suppressed as a duplicate",
-                locator(page, page_width, page_height, candidate.geometry.bounds),
+                locator(frame.page, frame.width, frame.height, candidate.geometry.bounds),
             ));
             continue;
         }
@@ -196,7 +211,7 @@ pub(crate) fn suppress_duplicates(
                 diagnostics.push(diagnostic(
                     "ocr.nativeDuplicateSuppressed",
                     "OCR text overlapping equivalent native text was suppressed",
-                    locator(page, page_width, page_height, candidate.geometry.bounds),
+                    locator(frame.page, frame.width, frame.height, candidate.geometry.bounds),
                 ));
                 break;
             }
@@ -213,9 +228,12 @@ pub(crate) fn suppress_duplicates(
     Ok(retained)
 }
 
-fn canonical_text(value: &str, budget: &MergeBudget<'_>) -> Result<CanonicalText, ConversionError> {
+fn canonical_text(
+    value: &str,
+    plan_meter: &mut TextMeter,
+    copy_meter: &mut TextMeter,
+) -> Result<CanonicalText, ConversionError> {
     let mut capacity = 0_usize;
-    let mut plan_meter = TextMeter::new(budget, TextStage::NormalizePlan);
     for character in value.nfc() {
         plan_meter.consume(character.len_utf8())?;
         if !character.is_whitespace() {
@@ -225,7 +243,6 @@ fn canonical_text(value: &str, budget: &MergeBudget<'_>) -> Result<CanonicalText
     let mut output = String::new();
     output.try_reserve_exact(capacity).map_err(|_| super::memory())?;
     let mut scalar_count = 0_usize;
-    let mut copy_meter = TextMeter::new(budget, TextStage::NormalizeCopy);
     for character in value.nfc() {
         copy_meter.consume(character.len_utf8())?;
         if !character.is_whitespace() {
@@ -238,10 +255,10 @@ fn canonical_text(value: &str, budget: &MergeBudget<'_>) -> Result<CanonicalText
 
 fn canonical_parts(
     parts: &[&str],
-    budget: &MergeBudget<'_>,
+    plan_meter: &mut TextMeter,
+    copy_meter: &mut TextMeter,
 ) -> Result<CanonicalText, ConversionError> {
     let mut capacity = 0_usize;
-    let mut plan_meter = TextMeter::new(budget, TextStage::NormalizePlan);
     for character in parts.iter().flat_map(|part| part.chars()).nfc() {
         plan_meter.consume(character.len_utf8())?;
         if !character.is_whitespace() {
@@ -251,7 +268,6 @@ fn canonical_parts(
     let mut output = String::new();
     output.try_reserve_exact(capacity).map_err(|_| super::memory())?;
     let mut scalar_count = 0_usize;
-    let mut copy_meter = TextMeter::new(budget, TextStage::NormalizeCopy);
     for character in parts.iter().flat_map(|part| part.chars()).nfc() {
         copy_meter.consume(character.len_utf8())?;
         if !character.is_whitespace() {
