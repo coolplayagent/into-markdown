@@ -7,6 +7,7 @@ mod error;
 mod i18n;
 mod output;
 mod transaction;
+mod ui;
 
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};

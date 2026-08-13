@@ -15,6 +15,7 @@ into-md [选项] <输入...>
 管理命令为：
 
 ```text
+into-md ui
 into-md formats
 into-md models
 into-md providers
@@ -25,14 +26,27 @@ into-md completions
 into-md version
 ```
 
-若文件名与管理命令同名，应在输入前使用 `--`：
+若文件名与管理命令同名，应在输入前使用 `--`；例如名为 `ui` 的输入仍可转换：
 
 ```shell
 into-md -- formats
+into-md -- ui
 ```
 
 无参数且 stdin 连接管道时自动读取 stdin；无参数且 stdin 为终端时显示帮助。
 `into-md -` 始终显式表示 stdin。stdin 不能与其他输入组合。
+
+### 本地 Web 服务
+
+```text
+into-md ui [--port <0..65535>] [--no-open] [--data-dir <目录>]
+```
+
+`ui` 固定绑定 `127.0.0.1`；默认 `--port 0` 由操作系统分配空闲端口，不存在 host、
+外部监听地址或外部会话令牌选项。`--no-open` 禁止启动浏览器。`--data-dir` 指定私有
+本地状态根；Unix 上逐级通过不跟随符号链接的目录句柄创建或打开，并要求最终目录
+仅当前用户可访问；Windows 上拒绝 reparse point。完整安全与生命周期契约见
+[本地 Web 服务](ui.md)。
 
 帮助和人工诊断默认使用英文；`--language zh-CN` 切换中文。JSON 字段、状态和错误码
 始终使用稳定英文标识，不随界面语言变化。

@@ -80,7 +80,7 @@ pub fn localized_help(arguments: &[OsString], language: Language) -> Option<&'st
     let command = arguments.iter().filter_map(|value| value.to_str()).find(|value| {
         matches!(
             *value,
-            "formats"
+            "ui" | "formats"
                 | "models"
                 | "providers"
                 | "plugins"
@@ -91,6 +91,7 @@ pub fn localized_help(arguments: &[OsString], language: Language) -> Option<&'st
         )
     });
     Some(match command {
+        Some("ui") => ZH_UI_HELP,
         Some("formats") => ZH_FORMATS_HELP,
         Some("models") => ZH_MODELS_HELP,
         Some("providers") => ZH_PROVIDERS_HELP,
@@ -110,6 +111,7 @@ const ZH_ROOT_HELP: &str = "\
       into-md <命令> [选项]
 
 命令：
+  ui           启动仅限本机的 Web 服务入口
   formats      查看格式与执行格式检测
   models       查看和管理本地 OCR 模型
   providers    配置和检查 AI 提供者
@@ -132,6 +134,7 @@ const ZH_ROOT_HELP: &str = "\
 ";
 
 const ZH_FORMATS_HELP: &str = "查看格式能力\n\n用法：into-md formats [--family <类别>] [--status <状态>] [--json]\n      into-md formats show <格式> [--json]\n      into-md formats detect <输入> [提示选项] [--json]\n";
+const ZH_UI_HELP: &str = "启动仅限本机的安全 Web 服务入口\n\n用法：into-md ui [--port <端口>] [--no-open] [--data-dir <目录>]\n";
 const ZH_MODELS_HELP: &str = "查看和管理 OCR 模型\n\n用法：into-md models [--json]\n      into-md models <show|install|verify|remove|path> ...\n";
 const ZH_PROVIDERS_HELP: &str = "配置和检查 AI 提供者\n\n用法：into-md providers [--json]\n      into-md providers <show|add|remove|set-default|capabilities|test> ...\n";
 const ZH_PLUGINS_HELP: &str = "查看和管理进程外或 WASI 插件\n\n用法：into-md plugins [--json]\n      into-md plugins <show|install|verify|enable|disable|remove> ...\n";

@@ -41,6 +41,7 @@ bazel run //apps/cli:into-md -- formats
 bazel run //apps/cli:into-md -- models
 bazel run //apps/cli:into-md -- models show pp-ocrv6-tiny-zh-en --json
 bazel run //apps/cli:into-md -- doctor
+bazel run //apps/cli:into-md -- ui
 ```
 
 The CLI accepts conversion inputs directly and has no `convert` subcommand. It
@@ -48,6 +49,14 @@ defines batch files and directories, stdin, URIs, OCR/AI routing, structured
 JSON, portable bundles, layered configuration, providers, models, and plugins.
 Network and AI access are disabled by default; remote sources and providers
 require an explicit `--allow-network` on every invocation.
+
+`into-md ui` starts a local Web security entry point fixed to `127.0.0.1`, using
+an operating-system-assigned port by default and opening the browser. A fresh
+high-entropy session value is handed to the embedded page in the URL fragment;
+the API also requires the exact Host, Origin, and session header. The page
+truthfully reports that the document console is unavailable and does not include
+job, database, or full frontend functionality. See the Chinese authoritative
+[local Web service contract](docs/ui.md).
 
 Conversion results and batch reports use public DTO schema 1 shared by the CLI
 and future HTTP service.

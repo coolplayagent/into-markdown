@@ -4,7 +4,7 @@ use crate::args::{
     AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
     ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
     ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
-    RaggedRowsArg, TableHeaderArg,
+    RaggedRowsArg, TableHeaderArg, UiArgs,
 };
 use crate::config::{self, LoadedConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -90,6 +90,7 @@ fn run_command(
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     match command {
+        Command::Ui(arguments) => run_ui(arguments, context),
         Command::Formats(arguments) => match arguments.command {
             None => list_formats(
                 arguments.family.as_deref(),
@@ -130,6 +131,12 @@ fn run_command(
         )?;
     }
     Ok(())
+}
+
+fn run_ui(arguments: UiArgs, context: &mut RunContext<'_>) -> Result<(), CliError> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| CliError::component(format!("initialize local Web runtime: {error}")))?;
+    runtime.block_on(crate::ui::run_cli(arguments, context.stdout, context.stderr))
 }
 
 #[derive(Serialize)]
