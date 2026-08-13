@@ -39,6 +39,8 @@ struct Frame {
     nested_lists: u8,
     list_items: usize,
     toc_root: bool,
+    headings: u8,
+    span_label: bool,
 }
 
 #[allow(clippy::too_many_lines)] // Navigation XML is validated in one streaming state machine.
@@ -102,6 +104,9 @@ pub(super) fn parse_nav(
                         if name.matches(Some(XHTML_NS), b"ol") {
                             parent.nested_lists = parent.nested_lists.saturating_add(1);
                             parent.nested_lists == 1
+                        } else if is_heading(&name) {
+                            parent.headings = parent.headings.saturating_add(1);
+                            parent.headings == 1 && parent.nested_lists == 0
                         } else {
                             false
                         }
@@ -117,6 +122,7 @@ pub(super) fn parse_nav(
                             || name.matches(Some(XHTML_NS), b"span")
                         {
                             parent.label_sources = parent.label_sources.saturating_add(1);
+                            parent.span_label = name.matches(Some(XHTML_NS), b"span");
                             parent.label_sources == 1
                         } else if name.matches(Some(XHTML_NS), b"ol") {
                             parent.nested_lists = parent.nested_lists.saturating_add(1);
@@ -124,6 +130,11 @@ pub(super) fn parse_nav(
                         } else {
                             false
                         }
+                    } else if is_label_container(&parent.name)
+                        || is_heading(&parent.name)
+                        || is_phrasing(&parent.name)
+                    {
+                        is_phrasing(&name)
                     } else {
                         false
                     };
@@ -164,8 +175,17 @@ pub(super) fn parse_nav(
                     nested_lists: 0,
                     list_items: 0,
                     toc_root: declared_toc,
+                    headings: 0,
+                    span_label: false,
                 };
                 if empty {
+                    if in_toc
+                        && matches!(frame.name.local.as_slice(), b"br" | b"wbr")
+                        && let Some(parent) = stack.last_mut()
+                        && (is_label_container(&parent.name) || is_phrasing(&parent.name))
+                    {
+                        append_label_text(parent, " ", budget)?;
+                    }
                     finish_nav_frame(frame, &mut entries, budget)?;
                 } else {
                     stack.push(frame);
@@ -176,6 +196,17 @@ pub(super) fn parse_nav(
                     stack.pop().ok_or_else(|| xml::malformed("orphan navigation end tag"))?;
                 if xml::end_name(&reader, element.name())? != frame.name {
                     return Err(xml::malformed("navigation end tag namespace mismatch"));
+                }
+                if frame.in_toc
+                    && is_phrasing(&frame.name)
+                    && frame.href.is_none()
+                    && !frame.group_label
+                    && let Some(parent) = stack.last_mut()
+                    && (is_label_container(&parent.name)
+                        || is_heading(&parent.name)
+                        || is_phrasing(&parent.name))
+                {
+                    append_label_text(parent, &frame.text, budget)?;
                 }
                 finish_nav_frame(frame, &mut entries, budget)?;
             }
@@ -227,6 +258,13 @@ fn finish_nav_frame(
     if frame.in_toc && frame.name.matches(Some(XHTML_NS), b"li") && frame.label_sources != 1 {
         return Err(xml::malformed("EPUB toc li must contain exactly one label source"));
     }
+    if frame.in_toc
+        && frame.name.matches(Some(XHTML_NS), b"li")
+        && frame.span_label
+        && frame.nested_lists != 1
+    {
+        return Err(xml::malformed("EPUB toc span labels must introduce a nested ol"));
+    }
     if frame.href.is_some() || frame.group_label {
         let label = normalize(&frame.text);
         if label.is_empty() {
@@ -237,6 +275,60 @@ fn finish_nav_frame(
         entries.push(NavEntry { label, target, depth: frame.list_depth.saturating_sub(1) });
     }
     Ok(())
+}
+
+fn append_label_text(
+    frame: &mut Frame,
+    text: &str,
+    budget: &EpubBudget<'_>,
+) -> Result<(), ConversionError> {
+    let next = frame.text.len().saturating_add(text.len());
+    budget.field("navigation label", next)?;
+    frame.text.push_str(text);
+    Ok(())
+}
+
+fn is_label_container(name: &Name) -> bool {
+    name.namespace.as_deref() == Some(XHTML_NS) && matches!(name.local.as_slice(), b"a" | b"span")
+}
+
+fn is_heading(name: &Name) -> bool {
+    name.namespace.as_deref() == Some(XHTML_NS)
+        && matches!(name.local.as_slice(), b"h1" | b"h2" | b"h3" | b"h4" | b"h5" | b"h6")
+}
+
+fn is_phrasing(name: &Name) -> bool {
+    name.namespace.as_deref() == Some(XHTML_NS)
+        && matches!(
+            name.local.as_slice(),
+            b"abbr"
+                | b"b"
+                | b"bdi"
+                | b"bdo"
+                | b"br"
+                | b"cite"
+                | b"code"
+                | b"data"
+                | b"dfn"
+                | b"em"
+                | b"i"
+                | b"kbd"
+                | b"mark"
+                | b"q"
+                | b"ruby"
+                | b"rp"
+                | b"rt"
+                | b"s"
+                | b"samp"
+                | b"small"
+                | b"span"
+                | b"strong"
+                | b"sub"
+                | b"sup"
+                | b"time"
+                | b"var"
+                | b"wbr"
+        )
 }
 
 struct NcxFrame {

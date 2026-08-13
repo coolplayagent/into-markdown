@@ -22,10 +22,7 @@ pub(super) fn validate(
 ) -> Result<(), ConversionError> {
     let format = format(media_type)?;
     context.checkpoint()?;
-    let info = envelope_info(bytes, format, context);
-    context.checkpoint()?;
-    let info = info
-        .ok_or_else(|| malformed(part, "raster container is truncated or structurally invalid"))?;
+    let info = envelope_info(bytes, format, part, context)?;
     let dimensions = info.dimensions;
     let decoded_rgba = u64::from(dimensions.0)
         .checked_mul(u64::from(dimensions.1))
@@ -141,123 +138,165 @@ fn format(media_type: &str) -> Result<ImageFormat, ConversionError> {
 fn envelope_info(
     bytes: &[u8],
     format: ImageFormat,
+    part: &str,
     context: &ExecutionContext,
-) -> Option<RasterInfo> {
+) -> Result<RasterInfo, ConversionError> {
     match format {
-        ImageFormat::Png => png_info(bytes, context),
-        ImageFormat::Jpeg => jpeg_info(bytes, context),
-        ImageFormat::Gif => gif_info(bytes, context),
-        ImageFormat::WebP => webp_info(bytes, context),
-        _ => None,
+        ImageFormat::Png => png_info(bytes, part, context),
+        ImageFormat::Jpeg => jpeg_info(bytes, part, context),
+        ImageFormat::Gif => gif_info(bytes, part, context),
+        ImageFormat::WebP => webp_info(bytes, part, context),
+        _ => Err(invalid_envelope(part)),
     }
 }
 
-fn png_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+fn png_info(
+    bytes: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<RasterInfo, ConversionError> {
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return None;
+        return Err(invalid_envelope(part));
     }
     let mut offset = 8_usize;
     let mut dimensions = None;
     while offset < bytes.len() {
-        if context.checkpoint().is_err() {
-            return None;
-        }
-        let length = usize::try_from(big_u32(bytes, offset)?).ok()?;
-        let kind = bytes.get(offset + 4..offset + 8)?;
-        let end = offset.checked_add(12)?.checked_add(length)?;
+        context.checkpoint()?;
+        let length = usize::try_from(required(big_u32(bytes, offset), part)?)
+            .map_err(|_| invalid_envelope(part))?;
+        let kind = required(bytes.get(offset + 4..offset + 8), part)?;
+        let end = offset
+            .checked_add(12)
+            .and_then(|value| value.checked_add(length))
+            .ok_or_else(|| invalid_envelope(part))?;
         if end > bytes.len() {
-            return None;
+            return Err(invalid_envelope(part));
         }
         if dimensions.is_none() {
             if kind != b"IHDR" || length != 13 {
-                return None;
+                return Err(invalid_envelope(part));
             }
-            dimensions = nonzero((big_u32(bytes, offset + 8)?, big_u32(bytes, offset + 12)?));
+            dimensions = nonzero((
+                required(big_u32(bytes, offset + 8), part)?,
+                required(big_u32(bytes, offset + 12), part)?,
+            ));
         }
         offset = end;
         if kind == b"IEND" {
             if length != 0 || offset != bytes.len() {
-                return None;
+                return Err(invalid_envelope(part));
             }
-            return Some(RasterInfo { dimensions: dimensions?, frames: 1 });
+            return Ok(RasterInfo { dimensions: required(dimensions, part)?, frames: 1 });
         }
     }
-    None
+    Err(invalid_envelope(part))
 }
 
-fn gif_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+fn gif_info(
+    bytes: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<RasterInfo, ConversionError> {
     if bytes.len() < 14 || !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
-        return None;
+        return Err(invalid_envelope(part));
     }
-    let dimensions = nonzero((u32::from(little_u16(bytes, 6)?), u32::from(little_u16(bytes, 8)?)))?;
-    let packed = *bytes.get(10)?;
+    let dimensions = required(
+        nonzero((
+            u32::from(required(little_u16(bytes, 6), part)?),
+            u32::from(required(little_u16(bytes, 8), part)?),
+        )),
+        part,
+    )?;
+    let packed = *required(bytes.get(10), part)?;
     let mut offset = 13_usize;
     if packed & 0x80 != 0 {
-        offset = offset.checked_add(3_usize.checked_mul(1 << (usize::from(packed & 7) + 1))?)?;
+        offset = offset
+            .checked_add(
+                3_usize
+                    .checked_mul(1 << (usize::from(packed & 7) + 1))
+                    .ok_or_else(|| invalid_envelope(part))?,
+            )
+            .ok_or_else(|| invalid_envelope(part))?;
     }
     let mut frames = 0_u64;
     loop {
-        if context.checkpoint().is_err() {
-            return None;
-        }
-        match *bytes.get(offset)? {
+        context.checkpoint()?;
+        match *required(bytes.get(offset), part)? {
             0x3b => {
-                return (offset + 1 == bytes.len() && frames > 0)
-                    .then_some(RasterInfo { dimensions, frames });
+                if offset + 1 != bytes.len() || frames == 0 {
+                    return Err(invalid_envelope(part));
+                }
+                return Ok(RasterInfo { dimensions, frames });
             }
             0x21 => {
-                offset = offset.checked_add(2)?;
-                offset = skip_sub_blocks(bytes, offset)?;
+                offset = offset.checked_add(2).ok_or_else(|| invalid_envelope(part))?;
+                offset = skip_sub_blocks(bytes, offset, part, context)?;
             }
             0x2c => {
-                let packed = *bytes.get(offset + 9)?;
-                offset = offset.checked_add(10)?;
+                let packed = *required(bytes.get(offset + 9), part)?;
+                offset = offset.checked_add(10).ok_or_else(|| invalid_envelope(part))?;
                 if packed & 0x80 != 0 {
                     offset = offset
-                        .checked_add(3_usize.checked_mul(1 << (usize::from(packed & 7) + 1))?)?;
+                        .checked_add(
+                            3_usize
+                                .checked_mul(1 << (usize::from(packed & 7) + 1))
+                                .ok_or_else(|| invalid_envelope(part))?,
+                        )
+                        .ok_or_else(|| invalid_envelope(part))?;
                 }
-                bytes.get(offset)?;
-                offset = skip_sub_blocks(bytes, offset + 1)?;
-                frames = frames.checked_add(1)?;
+                required(bytes.get(offset), part)?;
+                offset = skip_sub_blocks(bytes, offset + 1, part, context)?;
+                frames = frames.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
             }
-            _ => return None,
+            _ => return Err(invalid_envelope(part)),
         }
     }
 }
 
-fn skip_sub_blocks(bytes: &[u8], mut offset: usize) -> Option<usize> {
+fn skip_sub_blocks(
+    bytes: &[u8],
+    mut offset: usize,
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
     loop {
-        let length = usize::from(*bytes.get(offset)?);
-        offset = offset.checked_add(1)?;
+        context.checkpoint()?;
+        let length = usize::from(*required(bytes.get(offset), part)?);
+        offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
         if length == 0 {
-            return Some(offset);
+            return Ok(offset);
         }
-        offset = offset.checked_add(length)?;
-        bytes.get(offset - 1)?;
+        offset = offset.checked_add(length).ok_or_else(|| invalid_envelope(part))?;
+        required(bytes.get(offset - 1), part)?;
     }
 }
 
-fn webp_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+fn webp_info(
+    bytes: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<RasterInfo, ConversionError> {
     if bytes.len() < 20
         || !bytes.starts_with(b"RIFF")
         || bytes.get(8..12) != Some(b"WEBP")
-        || usize::try_from(little_u32(bytes, 4)?).ok()? != bytes.len() - 8
+        || usize::try_from(required(little_u32(bytes, 4), part)?)
+            .map_err(|_| invalid_envelope(part))?
+            != bytes.len() - 8
     {
-        return None;
+        return Err(invalid_envelope(part));
     }
     let mut offset = 12_usize;
     let mut dimensions = None;
     let mut primary = false;
     while offset < bytes.len() {
-        if context.checkpoint().is_err() {
-            return None;
-        }
-        let kind = bytes.get(offset..offset + 4)?;
-        let length = usize::try_from(little_u32(bytes, offset + 4)?).ok()?;
-        let data = offset.checked_add(8)?;
-        let end = data.checked_add(length)?;
+        context.checkpoint()?;
+        let kind = required(bytes.get(offset..offset + 4), part)?;
+        let length = usize::try_from(required(little_u32(bytes, offset + 4), part)?)
+            .map_err(|_| invalid_envelope(part))?;
+        let data = offset.checked_add(8).ok_or_else(|| invalid_envelope(part))?;
+        let end = data.checked_add(length).ok_or_else(|| invalid_envelope(part))?;
         if end > bytes.len() {
-            return None;
+            return Err(invalid_envelope(part));
         }
         match kind {
             b"VP8X" if dimensions.is_none() && length == 10 => {
@@ -267,9 +306,10 @@ fn webp_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
                 ));
             }
             b"VP8L" if !primary && length >= 5 && bytes[data] == 0x2f => {
-                let bits = little_u32(bytes, data + 1)?;
-                dimensions
-                    .get_or_insert(nonzero(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))?);
+                let bits = required(little_u32(bytes, data + 1), part)?;
+                let parsed =
+                    required(nonzero(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)), part)?;
+                dimensions.get_or_insert(parsed);
                 primary = true;
             }
             b"VP8 "
@@ -277,86 +317,127 @@ fn webp_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
                     && length >= 10
                     && bytes.get(data + 3..data + 6) == Some(&[0x9d, 0x01, 0x2a]) =>
             {
-                dimensions.get_or_insert(nonzero((
-                    u32::from(little_u16(bytes, data + 6)? & 0x3fff),
-                    u32::from(little_u16(bytes, data + 8)? & 0x3fff),
-                ))?);
+                let parsed = required(
+                    nonzero((
+                        u32::from(required(little_u16(bytes, data + 6), part)? & 0x3fff),
+                        u32::from(required(little_u16(bytes, data + 8), part)? & 0x3fff),
+                    )),
+                    part,
+                )?;
+                dimensions.get_or_insert(parsed);
                 primary = true;
             }
-            b"VP8L" | b"VP8 " | b"VP8X" => return None,
+            b"VP8L" | b"VP8 " | b"VP8X" => return Err(invalid_envelope(part)),
             _ => {}
         }
-        offset = end.checked_add(length & 1)?;
+        offset = end.checked_add(length & 1).ok_or_else(|| invalid_envelope(part))?;
     }
-    (offset == bytes.len() && primary).then_some(RasterInfo { dimensions: dimensions?, frames: 1 })
+    if offset != bytes.len() || !primary {
+        return Err(invalid_envelope(part));
+    }
+    Ok(RasterInfo { dimensions: required(dimensions, part)?, frames: 1 })
 }
 
-fn jpeg_info(bytes: &[u8], context: &ExecutionContext) -> Option<RasterInfo> {
+fn jpeg_info(
+    bytes: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<RasterInfo, ConversionError> {
     if !bytes.starts_with(&[0xff, 0xd8]) {
-        return None;
+        return Err(invalid_envelope(part));
     }
     let mut offset = 2_usize;
     let mut dimensions = None;
     while offset < bytes.len() {
-        if context.checkpoint().is_err() {
-            return None;
-        }
+        context.checkpoint()?;
         if bytes[offset] != 0xff {
-            return None;
+            return Err(invalid_envelope(part));
         }
         while bytes.get(offset) == Some(&0xff) {
-            offset += 1;
+            offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
         }
-        let marker = *bytes.get(offset)?;
-        offset += 1;
+        let marker = *required(bytes.get(offset), part)?;
+        offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
         if marker == 0xd9 {
-            return (offset == bytes.len())
-                .then_some(RasterInfo { dimensions: dimensions?, frames: 1 });
+            if offset != bytes.len() {
+                return Err(invalid_envelope(part));
+            }
+            return Ok(RasterInfo { dimensions: required(dimensions, part)?, frames: 1 });
         }
         if marker == 0x01 || matches!(marker, 0xd0..=0xd7) {
             continue;
         }
-        let length = usize::from(big_u16(bytes, offset)?);
+        let length = usize::from(required(big_u16(bytes, offset), part)?);
         if length < 2 {
-            return None;
+            return Err(invalid_envelope(part));
         }
-        let end = offset.checked_add(length)?;
+        let end = offset.checked_add(length).ok_or_else(|| invalid_envelope(part))?;
         if end > bytes.len() {
-            return None;
+            return Err(invalid_envelope(part));
         }
         if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
             if length < 8 || dimensions.is_some() {
-                return None;
+                return Err(invalid_envelope(part));
             }
             dimensions = nonzero((
-                u32::from(big_u16(bytes, offset + 5)?),
-                u32::from(big_u16(bytes, offset + 3)?),
+                u32::from(required(big_u16(bytes, offset + 5), part)?),
+                u32::from(required(big_u16(bytes, offset + 3), part)?),
             ));
+            if dimensions.is_none() {
+                return Err(invalid_envelope(part));
+            }
         }
-        offset = offset.checked_add(length)?;
+        offset = end;
         if marker == 0xda {
-            offset = skip_jpeg_scan(bytes, offset)?;
+            offset = skip_jpeg_scan(bytes, offset, part, context)?;
         }
     }
-    None
+    Err(invalid_envelope(part))
 }
 
-fn skip_jpeg_scan(bytes: &[u8], mut offset: usize) -> Option<usize> {
+pub(super) fn skip_jpeg_scan(
+    bytes: &[u8],
+    mut offset: usize,
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
+    let mut scanned = 0_usize;
     while offset < bytes.len() {
+        if scanned >= 4_096 {
+            context.checkpoint()?;
+            scanned = 0;
+        }
         if bytes[offset] != 0xff {
-            offset += 1;
+            offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
+            scanned += 1;
             continue;
         }
         let marker_start = offset;
         while bytes.get(offset) == Some(&0xff) {
-            offset += 1;
+            offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
+            scanned += 1;
+            if scanned >= 4_096 {
+                context.checkpoint()?;
+                scanned = 0;
+            }
         }
-        match *bytes.get(offset)? {
-            0x00 | 0xd0..=0xd7 => offset += 1,
-            _ => return Some(marker_start),
+        match *required(bytes.get(offset), part)? {
+            0x00 | 0xd0..=0xd7 => {
+                offset = offset.checked_add(1).ok_or_else(|| invalid_envelope(part))?;
+                scanned += 1;
+            }
+            _ => return Ok(marker_start),
         }
     }
-    None
+    Err(invalid_envelope(part))
+}
+
+fn required<T>(value: Option<T>, part: &str) -> Result<T, ConversionError> {
+    value.ok_or_else(|| invalid_envelope(part))
+}
+
+fn invalid_envelope(part: &str) -> ConversionError {
+    malformed(part, "raster container is truncated or structurally invalid")
 }
 
 fn nonzero(dimensions: (u32, u32)) -> Option<(u32, u32)> {

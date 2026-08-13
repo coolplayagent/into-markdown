@@ -1,7 +1,10 @@
 use super::image;
 use ::image::{DynamicImage, Frame, ImageFormat, RgbaImage, codecs::gif::GifEncoder};
-use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
+use into_markdown_core::{
+    CancellationToken, ErrorCode, ExecutionContext, ExecutionOptions, ResourceLimits,
+};
 use std::io::Cursor;
+use std::time::Duration;
 
 fn context(limits: &ResourceLimits) -> ExecutionContext {
     ExecutionContext::new(ExecutionOptions::default(), limits.clone())
@@ -73,4 +76,41 @@ fn gif_uses_the_cumulative_decoded_budget() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn jpeg_scan_propagates_cooperative_errors_without_leaking_memory() {
+    let scan = vec![0x11; 4_097];
+    let limits = ResourceLimits::default();
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let cancelled = ExecutionContext::new(
+        ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+        limits.clone(),
+    );
+    let error = image::skip_jpeg_scan(&scan, 0, "fixture", &cancelled).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(cancelled.reserved_memory_bytes(), 0);
+
+    let timed_out = ExecutionContext::new(
+        ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
+        limits,
+    );
+    let error = image::skip_jpeg_scan(&scan, 0, "fixture", &timed_out).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(timed_out.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn decoder_failure_releases_its_memory_lease() {
+    let mut bytes = encoded(ImageFormat::Png);
+    let idat = bytes.windows(4).position(|window| window == b"IDAT").unwrap();
+    bytes[idat + 4] ^= 0xff;
+
+    let limits = ResourceLimits::default();
+    let context = context(&limits);
+    let error = image::validate(&bytes, "image/png", "fixture", &limits, &context).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Malformed);
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }

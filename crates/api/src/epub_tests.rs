@@ -237,7 +237,7 @@ fn epub2_ncx_xml_base_and_manifest_fallback_are_supported() {
     assert!(has_nested_list(&result.document.blocks));
 }
 
-fn has_nested_list(blocks: &[crate::BlockNode]) -> bool {
+pub(super) fn has_nested_list(blocks: &[crate::BlockNode]) -> bool {
     blocks.iter().any(|node| {
         if let Block::List { items, .. } = &node.block {
             items.iter().any(|item| {
