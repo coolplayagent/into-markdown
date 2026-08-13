@@ -986,6 +986,7 @@ dependencies = [
  "base64",
  "flate2",
  "into-markdown-core",
+ "into-markdown-http-transport",
  "rustls",
  "serde",
  "serde_json",
@@ -1041,6 +1042,7 @@ dependencies = [
  "image",
  "into-markdown-core",
  "into-markdown-pdfium",
+ "into-markdown-http-transport",
  "into-markdown-render-markdown",
  "libc",
  "pulldown-cmark",
@@ -1091,6 +1093,19 @@ dependencies = [
  "tempfile",
  "thiserror",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "into-markdown-http-transport"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "into-markdown-core",
+ "rustls",
+ "socket2",
+ "unicode-normalization",
+ "url",
+ "webpki-roots",
 ]
 
 [[package]]

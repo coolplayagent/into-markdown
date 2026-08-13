@@ -6,18 +6,21 @@
 use base64::Engine as _;
 use flate2::read::GzDecoder;
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
-use rustls::pki_types::ServerName;
+use into_markdown_http_transport::{
+    Connection, HttpClient, NetworkPolicy as TransportNetworkPolicy, TransportError,
+    TransportErrorKind,
+};
+#[cfg(test)]
+use into_markdown_http_transport::{DnsResolver, is_public_ip};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, Cursor, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError};
-use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use url::{Host, Url};
+use url::Url;
 use zeroize::Zeroize;
 
 const MAX_SECRET_BYTES: usize = 16 * 1024;
@@ -38,9 +41,6 @@ const MAX_MODEL_ID_BYTES: usize = 512;
 const IO_POLL: Duration = Duration::from_millis(10);
 const MAX_RETRIES: u8 = 2;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(2);
-const MAX_DNS_ADDRESSES: usize = 64;
-const DNS_WORKERS: usize = 4;
-const DNS_QUEUE_PER_WORKER: usize = 2;
 const MAX_CHUNKS: usize = 4_096;
 static RETRY_JITTER_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
@@ -369,70 +369,6 @@ impl Drop for SecretCandidate {
     }
 }
 
-trait Resolver: Send + Sync {
-    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
-}
-
-struct SystemResolver;
-
-impl Resolver for SystemResolver {
-    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-        (host, port)
-            .to_socket_addrs()
-            .map(|addresses| addresses.take(MAX_DNS_ADDRESSES + 1).collect())
-    }
-}
-
-struct DnsJob {
-    resolver: Arc<dyn Resolver>,
-    host: String,
-    port: u16,
-    result: SyncSender<io::Result<Vec<SocketAddr>>>,
-}
-
-struct DnsPool {
-    workers: Vec<SyncSender<DnsJob>>,
-    next: AtomicUsize,
-}
-
-impl DnsPool {
-    fn start() -> Option<Self> {
-        let mut workers = Vec::with_capacity(DNS_WORKERS);
-        for index in 0..DNS_WORKERS {
-            let (sender, receiver) = std::sync::mpsc::sync_channel::<DnsJob>(DNS_QUEUE_PER_WORKER);
-            if std::thread::Builder::new()
-                .name(format!("into-md-provider-dns-{index}"))
-                .spawn(move || {
-                    while let Ok(job) = receiver.recv() {
-                        let result = job.resolver.resolve(&job.host, job.port);
-                        let _ = job.result.send(result);
-                    }
-                })
-                .is_ok()
-            {
-                workers.push(sender);
-            }
-        }
-        (!workers.is_empty()).then(|| Self { workers, next: AtomicUsize::new(0) })
-    }
-
-    fn submit(&self, mut job: DnsJob) -> Result<(), ProviderError> {
-        let start = self.next.fetch_add(1, Ordering::Relaxed);
-        for offset in 0..self.workers.len() {
-            let index = (start + offset) % self.workers.len();
-            match self.workers[index].try_send(job) {
-                Ok(()) => return Ok(()),
-                Err(TrySendError::Full(returned) | TrySendError::Disconnected(returned)) => {
-                    job = returned;
-                }
-            }
-        }
-        Err(ProviderError::new(ProviderErrorCode::Dns))
-    }
-}
-
-static DNS_POOL: OnceLock<Option<DnsPool>> = OnceLock::new();
-
 /// Successful minimal connectivity/capability result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -501,7 +437,7 @@ pub struct GenerationResult {
 pub struct OpenAiCompatibleClient {
     config: ProviderConfig,
     policy: ProviderNetworkPolicy,
-    resolver: Arc<dyn Resolver>,
+    transport: Arc<HttpClient>,
     retry_jitter: RetryJitter,
 }
 
@@ -523,7 +459,7 @@ impl OpenAiCompatibleClient {
         Self {
             config,
             policy,
-            resolver: Arc::new(SystemResolver),
+            transport: Arc::new(HttpClient::default()),
             retry_jitter: process_retry_jitter,
         }
     }
@@ -543,32 +479,14 @@ impl OpenAiCompatibleClient {
             return Err(ProviderError::new(ProviderErrorCode::NetworkDenied));
         }
         let endpoint = models_endpoint(&self.config.base_url);
-        let host = canonical_host(&endpoint)?;
-        self.check_host(&host)?;
-        let port = endpoint
-            .port_or_known_default()
-            .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-        let addresses = resolve_with_memory(
-            self.resolver.clone(),
-            host.clone(),
-            port,
-            context,
-            deadline,
-            &mut memory,
-        )?;
-        if addresses.is_empty() {
-            return Err(ProviderError::new(ProviderErrorCode::Dns));
-        }
-        for address in &addresses {
-            self.check_address(address.ip())?;
-        }
+        let (host, addresses) = self.resolve_endpoint(&endpoint, context, deadline, &mut memory)?;
         // Secret lookup is deliberately after URL, host, DNS, and address authorization.
         let secret =
             Secret::from_environment(&self.config.api_key_environment_variable, &mut memory)?;
         let mut retry = 0_u8;
         loop {
             check_operation(context, deadline)?;
-            let response = Self::request_models(
+            let response = self.request_models(
                 &endpoint,
                 &host,
                 &addresses,
@@ -622,25 +540,7 @@ impl OpenAiCompatibleClient {
         }
         let mut endpoint = self.config.base_url.clone();
         endpoint.set_path(&format!("{}{}", endpoint.path().trim_end_matches('/'), path));
-        let host = canonical_host(&endpoint)?;
-        self.check_host(&host)?;
-        let port = endpoint
-            .port_or_known_default()
-            .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-        let addresses = resolve_with_memory(
-            self.resolver.clone(),
-            host.clone(),
-            port,
-            context,
-            deadline,
-            &mut memory,
-        )?;
-        if addresses.is_empty() {
-            return Err(ProviderError::new(ProviderErrorCode::Dns));
-        }
-        for address in &addresses {
-            self.check_address(address.ip())?;
-        }
+        let (host, addresses) = self.resolve_endpoint(&endpoint, context, deadline, &mut memory)?;
         let secret =
             Secret::from_environment(&self.config.api_key_environment_variable, &mut memory)?;
         let spec = RequestSpec {
@@ -650,7 +550,7 @@ impl OpenAiCompatibleClient {
         };
         let mut retry = 0_u8;
         loop {
-            let response = Self::request(
+            let response = self.request(
                 &endpoint,
                 &host,
                 &addresses,
@@ -695,6 +595,7 @@ impl OpenAiCompatibleClient {
     }
 
     fn request_models(
+        &self,
         endpoint: &Url,
         host: &str,
         addresses: &[SocketAddr],
@@ -703,7 +604,7 @@ impl OpenAiCompatibleClient {
         deadline: Instant,
         memory: &mut MemoryBudget,
     ) -> Result<HttpResponse, ProviderError> {
-        Self::request(
+        self.request(
             endpoint,
             host,
             addresses,
@@ -717,6 +618,7 @@ impl OpenAiCompatibleClient {
 
     #[allow(clippy::too_many_arguments)]
     fn request(
+        &self,
         endpoint: &Url,
         host: &str,
         addresses: &[SocketAddr],
@@ -736,7 +638,7 @@ impl OpenAiCompatibleClient {
                 .unwrap_or(deadline)
                 .min(deadline);
             let attempt_checkpoint = memory.checkpoint();
-            let attempt = Self::request_one(
+            let attempt = self.request_one(
                 endpoint,
                 host,
                 *address,
@@ -768,6 +670,7 @@ impl OpenAiCompatibleClient {
 
     #[allow(clippy::too_many_arguments)]
     fn request_one(
+        &self,
         endpoint: &Url,
         host: &str,
         address: SocketAddr,
@@ -778,16 +681,11 @@ impl OpenAiCompatibleClient {
         spec: RequestSpec<'_>,
         memory: &mut MemoryBudget,
     ) -> Result<HttpResponse, AttemptFailure> {
-        let stream = connect_checked(address, context, address_deadline)
+        let stream = self
+            .transport
+            .connect_address(endpoint, host, address, context, address_deadline)
+            .map_err(map_transport_error)
             .map_err(AttemptFailure::before_request)?;
-        let stream: Box<dyn ReadWrite> = if endpoint.scheme() == "https" {
-            Box::new(
-                tls_handshake(stream, host, context, address_deadline)
-                    .map_err(AttemptFailure::before_request)?,
-            )
-        } else {
-            Box::new(stream)
-        };
         let mut stream = TrackedIo::new(stream);
         let host_header = host_header(endpoint, host)?;
         let target = request_target(endpoint)?;
@@ -860,109 +758,40 @@ impl OpenAiCompatibleClient {
         })
     }
 
-    fn check_host(&self, host: &str) -> Result<(), ProviderError> {
-        if !self.policy.allowed_hosts.is_empty()
-            && !self.policy.allowed_hosts.iter().any(|allowed| allowed == host)
-        {
-            return Err(ProviderError::new(ProviderErrorCode::HostDenied));
-        }
-        Ok(())
-    }
-
-    fn check_address(&self, address: IpAddr) -> Result<(), ProviderError> {
-        if !is_public_ip(address) && !self.policy.allow_private_network {
-            return Err(ProviderError::new(ProviderErrorCode::PrivateNetworkDenied));
-        }
-        if self.config.base_url.scheme() == "http" && is_public_ip(address) {
-            return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration));
-        }
-        Ok(())
-    }
-}
-
-fn resolve_checked(
-    resolver: Arc<dyn Resolver>,
-    host: String,
-    port: u16,
-    context: &ExecutionContext,
-    deadline: Instant,
-) -> Result<Vec<SocketAddr>, ProviderError> {
-    let pool = DNS_POOL
-        .get_or_init(DnsPool::start)
-        .as_ref()
-        .ok_or_else(|| ProviderError::new(ProviderErrorCode::Dns))?;
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    pool.submit(DnsJob { resolver, host, port, result: sender })?;
-    loop {
-        check_operation(context, deadline)?;
-        match receiver.recv_timeout(blocking_slice(context, deadline)?) {
-            Ok(Ok(addresses)) => return validate_dns_addresses(addresses, port),
-            Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(ProviderError::new(ProviderErrorCode::Dns));
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-        }
+    fn resolve_endpoint(
+        &self,
+        endpoint: &Url,
+        context: &ExecutionContext,
+        deadline: Instant,
+        memory: &mut MemoryBudget,
+    ) -> Result<(String, Vec<SocketAddr>), ProviderError> {
+        let policy = TransportNetworkPolicy {
+            allow_network: self.policy.allow_network,
+            allow_private_network: self.policy.allow_private_network,
+            allowed_hosts: self.policy.allowed_hosts.clone(),
+            max_redirects: 0,
+        };
+        let (host, addresses) = self
+            .transport
+            .authorized_addresses(endpoint, &policy, context, deadline)
+            .map_err(map_transport_error)?;
+        let bytes = addresses
+            .capacity()
+            .checked_mul(std::mem::size_of::<SocketAddr>())
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+        memory.grow(bytes)?;
+        Ok((host, addresses))
     }
 }
-
-fn resolve_with_memory(
-    resolver: Arc<dyn Resolver>,
-    host: String,
-    port: u16,
-    context: &ExecutionContext,
-    deadline: Instant,
-    memory: &mut MemoryBudget,
-) -> Result<Vec<SocketAddr>, ProviderError> {
-    let reserved = MAX_DNS_ADDRESSES
-        .checked_mul(std::mem::size_of::<SocketAddr>())
-        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
-    memory.grow(reserved)?;
-    let addresses = match resolve_checked(resolver, host, port, context, deadline) {
-        Ok(addresses) => addresses,
-        Err(error) => {
-            memory.shrink(reserved)?;
-            return Err(error);
-        }
-    };
-    let actual = addresses
-        .capacity()
-        .checked_mul(std::mem::size_of::<SocketAddr>())
-        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
-    memory.shrink(reserved.saturating_sub(actual))?;
-    Ok(addresses)
-}
-
-fn validate_dns_addresses(
-    mut addresses: Vec<SocketAddr>,
-    port: u16,
-) -> Result<Vec<SocketAddr>, ProviderError> {
-    if addresses.is_empty()
-        || addresses.len() > MAX_DNS_ADDRESSES
-        || addresses.capacity() > MAX_DNS_ADDRESSES
-        || addresses.iter().any(|address| address.port() != port)
-    {
-        return Err(ProviderError::new(ProviderErrorCode::Dns));
-    }
-    addresses.sort_unstable();
-    addresses.dedup();
-    if addresses.is_empty() {
-        Err(ProviderError::new(ProviderErrorCode::Dns))
-    } else {
-        Ok(addresses)
-    }
-}
-
-trait ReadWrite: Read + Write {}
-impl<T: Read + Write> ReadWrite for T {}
 
 struct TrackedIo {
-    inner: Box<dyn ReadWrite>,
+    inner: Box<dyn Connection>,
     written: usize,
     read: usize,
 }
 
 impl TrackedIo {
-    fn new(inner: Box<dyn ReadWrite>) -> Self {
+    fn new(inner: Box<dyn Connection>) -> Self {
         Self { inner, written: 0, read: 0 }
     }
 }
@@ -1014,79 +843,6 @@ struct RequestSpec<'a> {
     method: &'static str,
     body: Option<&'a [u8]>,
     idempotency_key: Option<&'a str>,
-}
-
-fn connect_checked(
-    address: SocketAddr,
-    context: &ExecutionContext,
-    deadline: Instant,
-) -> Result<TcpStream, ProviderError> {
-    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))
-        .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
-    socket.set_nonblocking(true).map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
-    match socket.connect(&SockAddr::from(address)) {
-        Ok(()) => {}
-        Err(error) if connect_is_pending(&error) => loop {
-            check_operation(context, deadline)?;
-            if socket
-                .take_error()
-                .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?
-                .is_some()
-            {
-                return Err(ProviderError::new(ProviderErrorCode::Connect));
-            }
-            if socket.peer_addr().is_ok() {
-                break;
-            }
-            std::thread::sleep(blocking_slice(context, deadline)?);
-        },
-        Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
-    }
-    check_operation(context, deadline)?;
-    let stream = TcpStream::from(socket);
-    stream.set_nodelay(true).map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
-    Ok(stream)
-}
-
-fn connect_is_pending(error: &io::Error) -> bool {
-    matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted)
-        || matches!(error.raw_os_error(), Some(36 | 115 | 10035))
-}
-
-fn tls_config() -> Arc<rustls::ClientConfig> {
-    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let roots =
-                webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect::<rustls::RootCertStore>();
-            Arc::new(
-                rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth(),
-            )
-        })
-        .clone()
-}
-
-fn tls_handshake(
-    mut stream: TcpStream,
-    host: &str,
-    context: &ExecutionContext,
-    deadline: Instant,
-) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>, ProviderError> {
-    let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-    let mut connection = rustls::ClientConnection::new(tls_config(), server_name)
-        .map_err(|_| ProviderError::new(ProviderErrorCode::Tls))?;
-    while connection.is_handshaking() {
-        check_operation(context, deadline)?;
-        match connection.complete_io(&mut stream) {
-            Ok(_) => {}
-            Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock) => {
-                std::thread::sleep(blocking_slice(context, deadline)?);
-            }
-            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Tls)),
-        }
-    }
-    Ok(rustls::StreamOwned::new(connection, stream))
 }
 
 fn validate_generation_request(
@@ -1264,16 +1020,6 @@ fn models_endpoint(base: &Url) -> Url {
     endpoint
 }
 
-fn canonical_host(url: &Url) -> Result<String, ProviderError> {
-    let host =
-        url.host().ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-    Ok(match host {
-        Host::Domain(value) => value.trim_end_matches('.').to_ascii_lowercase(),
-        Host::Ipv4(value) => value.to_string(),
-        Host::Ipv6(value) => value.to_string(),
-    })
-}
-
 fn host_header(url: &Url, host: &str) -> Result<String, ProviderError> {
     let display = if host.contains(':') { format!("[{host}]") } else { host.to_owned() };
     let default = match url.scheme() {
@@ -1294,43 +1040,6 @@ fn request_target(url: &Url) -> Result<String, ProviderError> {
     Ok(if url.path().is_empty() { "/".into() } else { url.path().into() })
 }
 
-fn is_public_ip(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !(a == 0
-                || a == 10
-                || a == 127
-                || a >= 224
-                || (a == 100 && (64..=127).contains(&b))
-                || (a == 169 && b == 254)
-                || (a == 172 && (16..=31).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || (a == 192 && b == 0 && c == 2)
-                || (a == 192 && b == 88 && c == 99)
-                || (a == 192 && b == 168)
-                || (a == 198 && (b == 18 || b == 19))
-                || (a == 198 && b == 51 && c == 100)
-                || (a == 203 && b == 0 && c == 113))
-        }
-        IpAddr::V6(ip) => {
-            if ip.to_ipv4_mapped().is_some() {
-                return false;
-            }
-            let segments = ip.segments();
-            (segments[0] & 0xe000) == 0x2000
-                // IANA special-purpose aggregate (Teredo, ORCHID, benchmarking,
-                // documentation, and protocol assignments).
-                && !(segments[0] == 0x2001 && segments[1] <= 0x01ff)
-                && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
-                // 6to4 embeds an IPv4 address and is not accepted as global-only.
-                && segments[0] != 0x2002
-                // Documentation and segment-routing special-purpose blocks.
-                && !(segments[0] == 0x3fff && (segments[1] & 0xfff0) == 0)
-        }
-    }
-}
-
 #[derive(Debug)]
 struct HttpResponse {
     status: u16,
@@ -1339,7 +1048,7 @@ struct HttpResponse {
 }
 
 fn write_all_checked(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     bytes: &[u8],
     context: &ExecutionContext,
     deadline: Instant,
@@ -1363,7 +1072,7 @@ fn write_all_checked(
 
 #[allow(clippy::too_many_lines)]
 fn read_response(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     context: &ExecutionContext,
     deadline: Instant,
     memory: &mut MemoryBudget,
@@ -1590,7 +1299,7 @@ fn process_retry_jitter(base: Duration, attempt: u8) -> Duration {
 }
 
 fn read_until(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     delimiter: &[u8],
     limit: usize,
     context: &ExecutionContext,
@@ -1609,7 +1318,7 @@ fn read_until(
 }
 
 fn read_one(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     context: &ExecutionContext,
     deadline: Instant,
 ) -> Result<u8, ProviderError> {
@@ -1631,7 +1340,7 @@ fn read_one(
 }
 
 fn read_exact_bounded(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     length: usize,
     context: &ExecutionContext,
     deadline: Instant,
@@ -1663,7 +1372,7 @@ fn read_exact_bounded(
 }
 
 fn read_to_eof_bounded(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     context: &ExecutionContext,
     deadline: Instant,
     memory: &mut MemoryBudget,
@@ -1689,7 +1398,7 @@ fn read_to_eof_bounded(
 }
 
 fn read_chunked(
-    stream: &mut dyn ReadWrite,
+    stream: &mut dyn Connection,
     context: &ExecutionContext,
     deadline: Instant,
     memory: &mut MemoryBudget,
@@ -2553,6 +2262,25 @@ fn map_context_error(error: ConversionError) -> ProviderError {
     }
 }
 
+fn map_transport_error(error: TransportError) -> ProviderError {
+    ProviderError::new(match error.kind() {
+        TransportErrorKind::NetworkDenied => ProviderErrorCode::NetworkDenied,
+        TransportErrorKind::HostDenied => ProviderErrorCode::HostDenied,
+        TransportErrorKind::PrivateNetworkDenied => ProviderErrorCode::PrivateNetworkDenied,
+        TransportErrorKind::Dns => ProviderErrorCode::Dns,
+        TransportErrorKind::Connect => ProviderErrorCode::Connect,
+        TransportErrorKind::Tls => ProviderErrorCode::Tls,
+        TransportErrorKind::Timeout => ProviderErrorCode::Timeout,
+        TransportErrorKind::Cancelled => ProviderErrorCode::Cancelled,
+        TransportErrorKind::ResourceLimit => ProviderErrorCode::ResourceLimit,
+        TransportErrorKind::Http | TransportErrorKind::InvalidMessage => {
+            ProviderErrorCode::InvalidResponse
+        }
+        TransportErrorKind::Unavailable => ProviderErrorCode::Connect,
+        _ => ProviderErrorCode::InvalidResponse,
+    })
+}
+
 fn map_stream_error(error: &io::Error) -> ProviderError {
     if error.kind() == io::ErrorKind::InvalidData {
         ProviderError::new(ProviderErrorCode::Tls)
@@ -2567,7 +2295,6 @@ mod tests {
     use super::*;
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::net::TcpListener;
-    use std::sync::{Barrier, Condvar, Mutex};
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
@@ -2664,7 +2391,6 @@ mod tests {
             "fc00::1",
             "fe80::1",
             "2001:db8::1",
-            "::ffff:8.8.8.8",
             "64:ff9b::808:808",
             "2001::1",
             "2001:20::1",
@@ -2675,6 +2401,7 @@ mod tests {
             assert!(!is_public_ip(address.parse().unwrap()), "{address}");
         }
         assert!(is_public_ip("8.8.8.8".parse().unwrap()));
+        assert!(is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 
@@ -3119,83 +2846,10 @@ mod tests {
 
     struct FixedResolver(Vec<SocketAddr>);
 
-    impl Resolver for FixedResolver {
+    impl DnsResolver for FixedResolver {
         fn resolve(&self, _: &str, _: u16) -> io::Result<Vec<SocketAddr>> {
             Ok(self.0.clone())
         }
-    }
-
-    #[test]
-    fn dns_results_are_bounded_deduplicated_and_port_exact() {
-        assert_eq!(
-            validate_dns_addresses(Vec::new(), 443).unwrap_err().code(),
-            ProviderErrorCode::Dns
-        );
-        let mut overallocated = Vec::with_capacity(MAX_DNS_ADDRESSES + 1);
-        overallocated.push("8.8.8.8:443".parse().unwrap());
-        assert_eq!(
-            validate_dns_addresses(overallocated, 443).unwrap_err().code(),
-            ProviderErrorCode::Dns
-        );
-        assert_eq!(
-            validate_dns_addresses(vec!["8.8.8.8:80".parse().unwrap()], 443).unwrap_err().code(),
-            ProviderErrorCode::Dns
-        );
-        let result = validate_dns_addresses(
-            vec!["8.8.8.8:443".parse().unwrap(), "8.8.8.8:443".parse().unwrap()],
-            443,
-        )
-        .unwrap();
-        assert_eq!(result, ["8.8.8.8:443".parse::<SocketAddr>().unwrap()]);
-    }
-
-    struct BlockingResolver {
-        entered: Arc<Barrier>,
-        release: Arc<(Mutex<bool>, Condvar)>,
-    }
-
-    impl Resolver for BlockingResolver {
-        fn resolve(&self, _: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-            self.entered.wait();
-            let (lock, changed) = &*self.release;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = changed.wait(released).unwrap();
-            }
-            Ok(vec![SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port)])
-        }
-    }
-
-    #[test]
-    fn dns_pool_has_fixed_workers_and_bounded_queue_when_resolvers_hang() {
-        let pool = DnsPool::start().unwrap();
-        assert_eq!(pool.workers.len(), DNS_WORKERS);
-        let entered = Arc::new(Barrier::new(DNS_WORKERS + 1));
-        let release = Arc::new((Mutex::new(false), Condvar::new()));
-        let resolver: Arc<dyn Resolver> = Arc::new(BlockingResolver {
-            entered: Arc::clone(&entered),
-            release: Arc::clone(&release),
-        });
-        let job = || {
-            let (result, _) = std::sync::mpsc::sync_channel(1);
-            DnsJob {
-                resolver: Arc::clone(&resolver),
-                host: "blocked.test".into(),
-                port: 443,
-                result,
-            }
-        };
-        for _ in 0..DNS_WORKERS {
-            pool.submit(job()).unwrap();
-        }
-        entered.wait();
-        for _ in 0..DNS_WORKERS * DNS_QUEUE_PER_WORKER {
-            pool.submit(job()).unwrap();
-        }
-        assert_eq!(pool.submit(job()).unwrap_err().code(), ProviderErrorCode::Dns);
-        let (lock, changed) = &*release;
-        *lock.lock().unwrap() = true;
-        changed.notify_all();
     }
 
     #[test]
@@ -3216,11 +2870,11 @@ mod tests {
                 allowed_hosts: vec!["provider.example".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![
+        client.transport = Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![
             "8.8.8.8:443".parse().unwrap(),
             "127.0.0.1:443".parse().unwrap(),
             "8.8.8.8:443".parse().unwrap(),
-        ]));
+        ]))));
         assert_eq!(
             client.test(&context()).unwrap_err().code(),
             ProviderErrorCode::PrivateNetworkDenied
@@ -3307,10 +2961,10 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![
+        client.transport = Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![
             SocketAddr::from(([127, 0, 0, 1], port)),
             SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
-        ]));
+        ]))));
         let request = GenerationRequest {
             endpoint: GenerationEndpoint::Responses,
             capability: "image-description",
@@ -3370,10 +3024,10 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![
+        client.transport = Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![
             SocketAddr::from(([127, 0, 0, 1], port)),
             SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
-        ]));
+        ]))));
         let request = GenerationRequest {
             endpoint: GenerationEndpoint::Responses,
             capability: "image-description",
@@ -3422,10 +3076,10 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![
+        client.transport = Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![
             SocketAddr::from(([127, 0, 0, 1], port)),
             SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
-        ]));
+        ]))));
         assert!(matches!(
             client.test(&context()).unwrap_err().code(),
             ProviderErrorCode::Connect | ProviderErrorCode::InvalidResponse
@@ -3460,10 +3114,10 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![
+        client.transport = Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![
             SocketAddr::from(([127, 0, 0, 1], port)),
             SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
-        ]));
+        ]))));
         assert_eq!(client.test(&context()).unwrap_err().code(), ProviderErrorCode::Tls);
         first_worker.join().unwrap();
         second.set_nonblocking(true).unwrap();
@@ -3494,7 +3148,8 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![address]));
+        client.transport =
+            Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![address]))));
         assert_eq!(client.test(&context()).unwrap_err().code(), ProviderErrorCode::Tls);
         worker.join().unwrap();
     }
@@ -3523,7 +3178,8 @@ mod tests {
                 allowed_hosts: vec!["provider.test".into()],
             },
         );
-        client.resolver = Arc::new(FixedResolver(vec![address]));
+        client.transport =
+            Arc::new(HttpClient::with_resolver(Arc::new(FixedResolver(vec![address]))));
         let context = ExecutionContext::new(
             ExecutionOptions {
                 timeout: Some(Duration::from_millis(30)),

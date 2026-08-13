@@ -1,5 +1,5 @@
 [package]
-name = "into-markdown-ai"
+name = "into-markdown-http-transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,17 +7,13 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-base64.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
-into-markdown-http-transport = { path = "../http-transport" }
 rustls.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 socket2.workspace = true
+unicode-normalization.workspace = true
 url.workspace = true
 webpki-roots.workspace = true
-zeroize.workspace = true
 
 [lints]
 workspace = true

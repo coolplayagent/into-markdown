@@ -57,6 +57,19 @@ pub struct SourceMetadata {
     pub uri: Option<String>,
     /// Byte length after resolution.
     pub size: u64,
+    /// Redacted, canonical HTTP redirect provenance in request order.
+    pub redirects: Vec<SourceRedirect>,
+}
+
+/// One HTTP redirect recorded without credentials, query, or fragment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRedirect {
+    /// Redacted canonical source URL.
+    pub from: String,
+    /// Redacted canonical destination URL.
+    pub to: String,
+    /// Redirect response status.
+    pub status: u16,
 }
 
 /// Seek-independent bytes passed from source resolution into detection and

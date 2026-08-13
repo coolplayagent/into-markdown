@@ -9,6 +9,7 @@ mod html;
 mod markdown;
 mod notebook;
 mod pdf;
+mod remote;
 mod structured;
 mod text;
 
@@ -22,6 +23,7 @@ pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use notebook::NotebookConverter;
 pub use pdf::PdfConverter;
+pub use remote::HttpSourceResolver;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 
@@ -882,40 +884,8 @@ fn securely_open_local_file(_: &Path) -> Result<(File, Metadata), ConversionErro
     })
 }
 
-/// Deliberately non-networking URI resolver placeholder.
-#[derive(Debug, Default)]
-pub struct UriSourceResolver;
-
-impl SourceResolver for UriSourceResolver {
-    fn id(&self) -> &'static str {
-        "builtin.source.uri-placeholder"
-    }
-
-    fn supports(&self, input: &InputRef) -> bool {
-        matches!(input, InputRef::Uri(_))
-    }
-
-    fn resolve<'a>(
-        &'a self,
-        _: &'a InputRef,
-        options: &'a ConversionOptions,
-        context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
-        Box::pin(async move {
-            context.checkpoint()?;
-            if options.network.enabled {
-                Err(ConversionError::ComponentUnavailable {
-                    component: "builtin.source.uri".into(),
-                    detail: "HTTP(S) resolution is not implemented".into(),
-                })
-            } else {
-                Err(ConversionError::Network {
-                    detail: "network resolution is disabled by default".into(),
-                })
-            }
-        })
-    }
-}
+/// Backward-compatible name for the audited HTTP(S) resolver.
+pub type UriSourceResolver = HttpSourceResolver;
 
 fn enforce_input_limit(size: u64, limit: u64) -> Result<(), ConversionError> {
     if size > limit {

@@ -28,7 +28,9 @@ pub use execution::{
     PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation, TemporaryFile,
 };
 pub use format::{FormatCandidate, InputFormat};
-pub use input::{FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata};
+pub use input::{
+    FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata, SourceRedirect,
+};
 pub use ir::{
     Asset, AssetId, Block, BlockNode, Cell, CellRef, DOCUMENT_SCHEMA_VERSION, Diagnostic,
     DiagnosticSeverity, Document, DocumentMetadata, Inline, InlineMark, IrError, IrErrorCode,
