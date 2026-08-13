@@ -134,7 +134,11 @@ library 的零 `Duration` 表示立即 deadline；CLI 和配置拒绝零值。�
 终态后的事件。固定容量 mailbox 会合并同阶段更新，并在饱和时保留最新边界与最终完成
 事件，因此慢监听器不会阻塞转换，监听器 panic 也不会穿透执行边界。回调期间
 不持有进度状态锁，监听器可以安全地请求取消。接口不依赖特定异步运行时，也不创建
-无界事件队列。
+无界事件队列。mailbox 的关闭谓词与队列共用同一把锁；`Completed` 成功入队会同时关闭
+发布端，worker 在退出前 drain 所有已接受事件。未发布终态就释放上下文时也会关闭并
+drain 已入队事件。上下文释放只通知关闭，不等待慢回调；worker handle 由有界的进程级
+回收器异步 join，回收器不可用或已满时安全 detach。永久不返回的回调必然继续占用它的
+专属 worker 和 listener，无法由安全 Rust 强制终止，但不会阻塞转换或上下文释放路径。
 
 `ResourceLimits` 除格式专用限制外，还提供 `max_memory_bytes` 与
 `max_temporary_bytes`。`ExecutionContext::reserve_memory` 使用 checked arithmetic 和

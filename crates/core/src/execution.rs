@@ -8,8 +8,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Ordered stages shared by library, CLI, and service-provider integrations.
@@ -76,6 +80,9 @@ pub struct ProgressEvent {
 }
 
 /// Synchronous callback invoked on an isolated dispatcher thread.
+///
+/// A callback which never returns necessarily retains that dispatcher thread
+/// and this listener; it cannot block the conversion or context-drop path.
 pub trait ProgressListener: Send + Sync + 'static {
     /// Observe a progress event. Implementations should return promptly.
     fn on_progress(&self, event: ProgressEvent);
@@ -204,7 +211,7 @@ impl ExecutionContext {
     pub fn new(options: ExecutionOptions, limits: ResourceLimits) -> Self {
         let now = Instant::now();
         let deadline = options.timeout.and_then(|duration| now.checked_add(duration));
-        let dispatcher = options.progress_listener.map(ProgressDispatcher::new);
+        let dispatcher = options.progress_listener.and_then(ProgressDispatcher::new);
         let timer_stop = Arc::new(TimerStop::default());
         let shared = Arc::new(ExecutionShared {
             cancellation: options.cancellation,
@@ -731,12 +738,12 @@ impl Drop for TemporaryFile {
 
 struct ProgressDispatcher {
     mailbox: Arc<ProgressMailbox>,
+    worker: Option<JoinHandle<()>>,
 }
 
 struct ProgressMailbox {
     inner: Mutex<ProgressMailboxInner>,
     ready: Condvar,
-    closed: AtomicBool,
 }
 
 struct ProgressEnvelope {
@@ -746,45 +753,52 @@ struct ProgressEnvelope {
 struct ProgressMailboxInner {
     queue: VecDeque<ProgressEnvelope>,
     newest_sequence: u64,
-    terminal: bool,
+    closed: bool,
 }
 
 impl ProgressDispatcher {
-    fn new(listener: Arc<dyn ProgressListener>) -> Self {
+    fn new(listener: Arc<dyn ProgressListener>) -> Option<Self> {
+        Self::new_with_hooks(listener, ProgressWorkerHooks::default())
+    }
+
+    fn new_with_hooks(
+        listener: Arc<dyn ProgressListener>,
+        hooks: ProgressWorkerHooks,
+    ) -> Option<Self> {
+        Self::new_with_spawner(listener, hooks, std::thread::Builder::spawn)
+    }
+
+    fn new_with_spawner<F>(
+        listener: Arc<dyn ProgressListener>,
+        hooks: ProgressWorkerHooks,
+        spawn: F,
+    ) -> Option<Self>
+    where
+        F: FnOnce(
+            std::thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<JoinHandle<()>>,
+    {
         let mailbox = Arc::new(ProgressMailbox {
             inner: Mutex::new(ProgressMailboxInner {
                 queue: VecDeque::with_capacity(8),
                 newest_sequence: 0,
-                terminal: false,
+                closed: false,
             }),
             ready: Condvar::new(),
-            closed: AtomicBool::new(false),
         });
         let worker_mailbox = Arc::clone(&mailbox);
-        std::thread::spawn(move || {
-            loop {
-                let event = {
-                    let mut inner = lock_unpoisoned(&worker_mailbox.inner);
-                    while inner.queue.is_empty() && !worker_mailbox.closed.load(Ordering::Acquire) {
-                        inner = wait_unpoisoned(&worker_mailbox.ready, inner);
-                    }
-                    inner.queue.pop_front()
-                };
-                let Some(envelope) = event else { break };
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    listener.on_progress(envelope.event);
-                }));
-            }
+        let task = Box::new(move || {
+            ProgressWorker { mailbox: worker_mailbox, listener, hooks }.run();
         });
-        Self { mailbox }
+        let worker =
+            spawn(std::thread::Builder::new().name("into-markdown-progress".into()), task).ok()?;
+        Some(Self { mailbox, worker: Some(worker) })
     }
 
     fn publish(&self, sequence: u64, event: ProgressEvent) {
-        if self.mailbox.closed.load(Ordering::Acquire) {
-            return;
-        }
         let mut inner = lock_unpoisoned(&self.mailbox.inner);
-        if inner.terminal || sequence <= inner.newest_sequence {
+        if inner.closed || sequence <= inner.newest_sequence {
             return;
         }
         inner.newest_sequence = sequence;
@@ -802,7 +816,7 @@ impl ProgressDispatcher {
             inner.queue.pop_back();
             inner.queue.push_back(envelope);
         }
-        inner.terminal = terminal;
+        inner.closed = terminal;
         drop(inner);
         self.mailbox.ready.notify_one();
     }
@@ -810,9 +824,118 @@ impl ProgressDispatcher {
 
 impl Drop for ProgressDispatcher {
     fn drop(&mut self) {
-        self.mailbox.closed.store(true, Ordering::Release);
+        lock_unpoisoned(&self.mailbox.inner).closed = true;
         self.mailbox.ready.notify_all();
+        if let Some(worker) = self.worker.take() {
+            retire_progress_worker(worker);
+        }
     }
+}
+
+#[derive(Default)]
+struct ProgressWorkerHooks {
+    #[cfg(test)]
+    start_gate: Option<Arc<std::sync::Barrier>>,
+    #[cfg(test)]
+    before_wait: Option<Sender<()>>,
+}
+
+struct ProgressWorker {
+    mailbox: Arc<ProgressMailbox>,
+    listener: Arc<dyn ProgressListener>,
+    hooks: ProgressWorkerHooks,
+}
+
+impl ProgressWorker {
+    fn run(self) {
+        let Self { mailbox, listener, hooks } = self;
+        #[cfg(test)]
+        let ProgressWorkerHooks { start_gate, before_wait } = hooks;
+        #[cfg(test)]
+        if let Some(start_gate) = start_gate {
+            start_gate.wait();
+        }
+        #[cfg(not(test))]
+        let _ = hooks;
+        #[cfg(test)]
+        let mut before_wait = before_wait;
+        loop {
+            let event = {
+                let mut inner = lock_unpoisoned(&mailbox.inner);
+                while inner.queue.is_empty() && !inner.closed {
+                    #[cfg(test)]
+                    if let Some(sender) = before_wait.take() {
+                        let _ = sender.send(());
+                    }
+                    inner = wait_unpoisoned(&mailbox.ready, inner);
+                }
+                inner.queue.pop_front()
+            };
+            let Some(envelope) = event else { break };
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                listener.on_progress(envelope.event);
+            }));
+        }
+    }
+}
+
+fn retire_progress_worker(worker: JoinHandle<()>) {
+    let Some(joiner) = progress_joiner() else { return };
+    try_retire_progress_worker(joiner, worker);
+}
+
+fn try_retire_progress_worker(joiner: &SyncSender<JoinHandle<()>>, worker: JoinHandle<()>) {
+    match joiner.try_send(worker) {
+        Ok(()) => {}
+        Err(TrySendError::Full(worker) | TrySendError::Disconnected(worker)) => {
+            // Dropping the handle detaches the already-closing worker.
+            drop(worker);
+        }
+    }
+}
+
+fn progress_joiner() -> Option<&'static SyncSender<JoinHandle<()>>> {
+    static JOINER: std::sync::OnceLock<Option<SyncSender<JoinHandle<()>>>> =
+        std::sync::OnceLock::new();
+    JOINER.get_or_init(|| start_progress_joiner(std::thread::Builder::spawn)).as_ref()
+}
+
+fn start_progress_joiner<F>(spawn: F) -> Option<SyncSender<JoinHandle<()>>>
+where
+    F: FnOnce(
+        std::thread::Builder,
+        Box<dyn FnOnce() + Send + 'static>,
+    ) -> io::Result<JoinHandle<()>>,
+{
+    const MAX_PENDING_JOINS: usize = 64;
+    let (sender, receiver) = mpsc::sync_channel::<JoinHandle<()>>(MAX_PENDING_JOINS);
+    let task = Box::new(move || {
+        let mut workers = Vec::<JoinHandle<()>>::new();
+        loop {
+            match if workers.is_empty() {
+                receiver.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+            } else {
+                receiver.recv_timeout(Duration::from_millis(10))
+            } {
+                Ok(worker) if workers.len() < MAX_PENDING_JOINS => workers.push(worker),
+                Ok(worker) => drop(worker),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            let mut index = 0;
+            while index < workers.len() {
+                if workers[index].is_finished() {
+                    let worker = workers.swap_remove(index);
+                    let _ = worker.join();
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    });
+    spawn(std::thread::Builder::new().name("into-markdown-progress-joiner".into()), task)
+        .ok()
+        .map(|_| sender)
 }
 
 fn checked_charge(
@@ -982,6 +1105,185 @@ mod tests {
         }
     }
 
+    fn wait_until_released<T: ?Sized>(weak: &std::sync::Weak<T>) {
+        let limit = Instant::now() + Duration::from_secs(2);
+        while weak.strong_count() != 0 && Instant::now() < limit {
+            std::thread::yield_now();
+        }
+        assert_eq!(weak.strong_count(), 0, "listener was not released before the deadline");
+    }
+
+    struct EmptyListener;
+
+    impl ProgressListener for EmptyListener {
+        fn on_progress(&self, _: ProgressEvent) {}
+    }
+
+    #[test]
+    fn close_before_worker_waits_drains_the_queue_and_releases_listener() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = Arc::new(RecordingListener {
+            events: Arc::clone(&events),
+            delay: Duration::ZERO,
+            panic_once: AtomicBool::new(false),
+        });
+        let weak = Arc::downgrade(&listener);
+        let start_gate = Arc::new(std::sync::Barrier::new(2));
+        let dispatcher = ProgressDispatcher::new_with_hooks(
+            listener,
+            ProgressWorkerHooks { start_gate: Some(Arc::clone(&start_gate)), before_wait: None },
+        )
+        .unwrap();
+        dispatcher.publish(
+            1,
+            ProgressEvent {
+                stage: ExecutionStage::Resolving,
+                basis_points: 0,
+                completed_units: None,
+                total_units: None,
+                message: None,
+            },
+        );
+        drop(dispatcher);
+        start_gate.wait();
+        wait_until_released(&weak);
+        assert_eq!(lock_unpoisoned(&events).len(), 1);
+    }
+
+    #[test]
+    fn close_after_worker_begins_waiting_releases_listener() {
+        let listener = Arc::new(EmptyListener);
+        let weak = Arc::downgrade(&listener);
+        let (before_wait, waiting) = mpsc::channel();
+        let dispatcher = ProgressDispatcher::new_with_hooks(
+            listener,
+            ProgressWorkerHooks { start_gate: None, before_wait: Some(before_wait) },
+        )
+        .unwrap();
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(dispatcher);
+        wait_until_released(&weak);
+    }
+
+    #[test]
+    fn dropping_context_does_not_wait_for_a_slow_listener() {
+        struct BlockingListener {
+            entered: Sender<()>,
+            release: Arc<(Mutex<bool>, Condvar)>,
+        }
+
+        impl ProgressListener for BlockingListener {
+            fn on_progress(&self, _: ProgressEvent) {
+                let _ = self.entered.send(());
+                let (released, changed) = &*self.release;
+                let mut released = lock_unpoisoned(released);
+                while !*released {
+                    released = wait_unpoisoned(changed, released);
+                }
+            }
+        }
+
+        let (entered, callback_entered) = mpsc::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let listener = Arc::new(BlockingListener { entered, release: Arc::clone(&release) });
+        let weak = Arc::downgrade(&listener);
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                progress_listener: Some(listener.clone()),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        context.report(ExecutionStage::Resolving, None, None, None::<String>).unwrap();
+        callback_entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(listener);
+        let start = Instant::now();
+        drop(context);
+        assert!(start.elapsed() < Duration::from_millis(250));
+        let (released, changed) = &*release;
+        *lock_unpoisoned(released) = true;
+        changed.notify_all();
+        wait_until_released(&weak);
+    }
+
+    #[test]
+    fn listener_can_drop_the_last_context_without_self_joining() {
+        struct ContextDroppingListener {
+            context: Arc<Mutex<Option<ExecutionContext>>>,
+            dropped: Sender<()>,
+        }
+
+        impl ProgressListener for ContextDroppingListener {
+            fn on_progress(&self, _: ProgressEvent) {
+                drop(lock_unpoisoned(&self.context).take());
+                let _ = self.dropped.send(());
+            }
+        }
+
+        let held_context = Arc::new(Mutex::new(None));
+        let (dropped, callback_dropped) = mpsc::channel();
+        let listener =
+            Arc::new(ContextDroppingListener { context: Arc::clone(&held_context), dropped });
+        let weak = Arc::downgrade(&listener);
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                progress_listener: Some(listener.clone()),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        *lock_unpoisoned(&held_context) = Some(context.clone());
+        context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>).unwrap();
+        drop(context);
+        drop(listener);
+        callback_dropped.recv_timeout(Duration::from_secs(2)).unwrap();
+        wait_until_released(&weak);
+    }
+
+    #[test]
+    fn dispatcher_thread_spawn_failure_disables_and_releases_listener() {
+        let listener = Arc::new(EmptyListener);
+        let weak = Arc::downgrade(&listener);
+        let dispatcher = ProgressDispatcher::new_with_spawner(
+            listener,
+            ProgressWorkerHooks::default(),
+            |_, _| Err(io::Error::other("injected progress worker spawn failure")),
+        );
+        assert!(dispatcher.is_none());
+        wait_until_released(&weak);
+    }
+
+    #[test]
+    fn joiner_thread_spawn_failure_is_a_stable_detach_fallback() {
+        let joiner = start_progress_joiner(|_, _| {
+            Err(io::Error::other("injected progress joiner spawn failure"))
+        });
+        assert!(joiner.is_none());
+    }
+
+    #[test]
+    fn saturated_join_queue_detaches_without_blocking_worker_cleanup() {
+        let (joiner, pending) = mpsc::sync_channel(1);
+        let queued_worker = std::thread::spawn(|| {});
+        joiner.try_send(queued_worker).unwrap();
+
+        let captured = Arc::new(());
+        let weak = Arc::downgrade(&captured);
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let worker_release = Arc::clone(&release);
+        let detached_worker = std::thread::spawn(move || {
+            worker_release.wait();
+            drop(captured);
+        });
+        let start = Instant::now();
+        try_retire_progress_worker(&joiner, detached_worker);
+        assert!(start.elapsed() < Duration::from_millis(250));
+        release.wait();
+        wait_until_released(&weak);
+
+        pending.recv_timeout(Duration::from_secs(2)).unwrap().join().unwrap();
+    }
+
     #[test]
     fn slow_and_panicking_listener_cannot_block_or_break_progress() {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1061,10 +1363,15 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let listener = Arc::new(RecordingListener {
             events: Arc::clone(&events),
-            delay: Duration::from_millis(20),
+            delay: Duration::ZERO,
             panic_once: AtomicBool::new(false),
         });
-        let dispatcher = ProgressDispatcher::new(listener);
+        let start_gate = Arc::new(std::sync::Barrier::new(2));
+        let dispatcher = ProgressDispatcher::new_with_hooks(
+            listener,
+            ProgressWorkerHooks { start_gate: Some(Arc::clone(&start_gate)), before_wait: None },
+        )
+        .unwrap();
         let stages = [
             ExecutionStage::Resolving,
             ExecutionStage::Detecting,
@@ -1086,6 +1393,7 @@ mod tests {
                 },
             );
         }
+        assert_eq!(lock_unpoisoned(&dispatcher.mailbox.inner).queue.len(), 8);
         dispatcher.publish(
             33,
             ProgressEvent {
@@ -1096,6 +1404,27 @@ mod tests {
                 message: None,
             },
         );
+        dispatcher.publish(
+            34,
+            ProgressEvent {
+                stage: ExecutionStage::Resolving,
+                basis_points: 10_000,
+                completed_units: None,
+                total_units: None,
+                message: Some("must be rejected after Completed".into()),
+            },
+        );
+        {
+            let inner = lock_unpoisoned(&dispatcher.mailbox.inner);
+            assert_eq!(inner.queue.len(), 8);
+            assert!(inner.closed);
+            assert_eq!(inner.newest_sequence, 33);
+            assert_eq!(
+                inner.queue.back().map(|item| item.event.stage),
+                Some(ExecutionStage::Completed)
+            );
+        }
+        start_gate.wait();
         let limit = Instant::now() + Duration::from_secs(2);
         while lock_unpoisoned(&events).last().map(|event| event.stage)
             != Some(ExecutionStage::Completed)
@@ -1117,7 +1446,7 @@ mod tests {
             delay: Duration::ZERO,
             panic_once: AtomicBool::new(false),
         });
-        let dispatcher = Arc::new(ProgressDispatcher::new(listener));
+        let dispatcher = Arc::new(ProgressDispatcher::new(listener).unwrap());
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let stale_dispatcher = Arc::clone(&dispatcher);
         let stale_barrier = Arc::clone(&barrier);
