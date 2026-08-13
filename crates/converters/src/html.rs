@@ -876,6 +876,16 @@ impl Converter for HtmlConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -2090,7 +2100,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 ConversionError::Malformed { part: Some("html".into()), detail }
             }
         })?;
-        Ok(ConverterOutput { document, assets: self.assets, diagnostics: self.diagnostics })
+        Ok(ConverterOutput::new(document, self.assets, self.diagnostics))
     }
 
     fn read_metadata(&mut self) {

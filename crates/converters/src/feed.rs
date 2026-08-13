@@ -184,6 +184,17 @@ impl Converter for FeedConverter {
             })
         })
     }
+
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -2237,7 +2248,7 @@ fn build_output(
     })?;
     drop(parsed.budget);
     drop(parsed.decoded);
-    Ok(ConverterOutput { document, assets, diagnostics: parsed.diagnostics })
+    Ok(ConverterOutput::new(document, assets, parsed.diagnostics))
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -19,10 +19,12 @@ in-place writes and path replacement cannot change the verified bytes. Format, a
 fail closed.
 
 All native calls are serialized. Document bytes remain alive until `FPDF_CloseDocument`; Rust
-borrows force text/page/image handles to close before their parent. Input, password, page, text,
-image, dimension, pixel, bitmap-byte, and allocation sizes are hard-checked before native traversal
-or allocation. `Image::bitmap()` returns a bounded owned copy with explicit dimensions, stride, and
-pixel format; it never exposes PDFium-owned memory.
+borrows force text/page/image handles to close before their parent. Input, password, page, character,
+font-name, object, annotation/web-link, URI, image, dimension, pixel, bitmap-byte, and allocation
+sizes are hard-checked before native traversal or allocation. Character geometry, style clues,
+page size/rotation, links, and image-object bounds are copied into owned Rust values; no PDFium
+pointer escapes a handle lifetime. `Image::bitmap()` returns a bounded owned copy with explicit
+dimensions, stride, and pixel format; it never exposes PDFium-owned memory.
 PDFium still parses untrusted native input in-process, so applications with hostile PDFs should add
 an OS sandbox/process boundary; this crate does not claim memory isolation.
 

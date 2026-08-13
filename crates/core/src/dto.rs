@@ -941,6 +941,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
                 .into_iter()
                 .map(Provenance::try_from)
                 .collect::<Result<_, _>>()?,
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         })
     }
 }
@@ -2392,7 +2393,7 @@ fn limit<T>(path: &str, name: &str, maximum: usize) -> Result<T, DtoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AssetId, ConversionResult, Rect};
+    use crate::{AssetId, Block, BlockNode, ConversionResult, Inline, NodeId, Rect};
 
     fn result_dto() -> ResultDto {
         let result = ConversionResult {
@@ -2417,6 +2418,7 @@ mod tests {
                 locator: SourceLocator::default(),
                 confidence: Some(1.0),
             }],
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ResultDto::from_json(&ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap())
             .unwrap()
@@ -2442,6 +2444,48 @@ mod tests {
             ResultDto::json_from_result(&internal, DtoJsonStyle::Pretty).unwrap(),
             dto.to_pretty_json().unwrap()
         );
+    }
+
+    #[test]
+    fn source_text_round_trips_through_result_dto() {
+        let source = Inline::SourceText {
+            value: "文".into(),
+            marks: vec![],
+            provenance: Box::new(Provenance {
+                kind: ProvenanceKind::NativeParser,
+                provider: "pdfium".into(),
+                locator: SourceLocator {
+                    page: Some(1),
+                    character_index: Some(7),
+                    ..SourceLocator::default()
+                },
+                confidence: None,
+            }),
+        };
+        let result = ConversionResult {
+            document: Document {
+                blocks: vec![BlockNode {
+                    id: NodeId("source".into()),
+                    block: Block::Paragraph(vec![source]),
+                    provenance: Provenance {
+                        kind: ProvenanceKind::NativeParser,
+                        provider: "pdfium".into(),
+                        locator: SourceLocator { page: Some(1), ..SourceLocator::default() },
+                        confidence: None,
+                    },
+                }],
+                ..Document::default()
+            },
+            markdown: String::new(),
+            assets: Vec::new(),
+            diagnostics: Vec::new(),
+            provenance: Vec::new(),
+            memory_lease: crate::spi::OutputMemoryLease::default(),
+        };
+        let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
+        assert!(json.contains("\"type\":\"sourceText\""));
+        let decoded = ConversionResult::try_from(ResultDto::from_json(&json).unwrap()).unwrap();
+        assert_eq!(decoded.document, result.document);
     }
 
     #[test]
@@ -2503,6 +2547,7 @@ mod tests {
             assets,
             diagnostics: vec![],
             provenance: vec![],
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         let mut destination = Vec::new();
@@ -2527,6 +2572,7 @@ mod tests {
             }],
             diagnostics: vec![],
             provenance: vec![],
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         assert_eq!(
@@ -2598,6 +2644,7 @@ mod tests {
             assets,
             diagnostics: vec![],
             provenance,
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let limits = DtoLimits::default();
         let compact = account_internal_result_wire(&result, DtoJsonStyle::Compact).unwrap();
@@ -2662,6 +2709,7 @@ mod tests {
             }],
             diagnostics: vec![],
             provenance: vec![],
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         let mut destination = FailAfter { written: 0, maximum: 1024 };
@@ -2693,6 +2741,7 @@ mod tests {
                 locator: None,
             }],
             provenance: vec![],
+            memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         for style in [DtoJsonStyle::Compact, DtoJsonStyle::Pretty] {
             ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2837,6 +2886,7 @@ mod tests {
                 }],
                 diagnostics: vec![],
                 provenance: vec![],
+                memory_lease: crate::spi::OutputMemoryLease::default(),
             },
             DtoJsonStyle::Compact,
         )

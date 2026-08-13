@@ -77,6 +77,16 @@ impl Converter for DocxConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -697,11 +707,7 @@ fn convert_docx(
             error.detail
         ),
     })?;
-    Ok(ConverterOutput {
-        document: state.document,
-        assets: state.assets,
-        diagnostics: state.diagnostics,
-    })
+    Ok(ConverterOutput::new(state.document, state.assets, state.diagnostics))
 }
 
 fn relationship_target(

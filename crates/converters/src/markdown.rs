@@ -62,6 +62,16 @@ impl Converter for MarkdownConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -163,7 +173,7 @@ pub(crate) fn convert_markdown(
     let mut builder = Builder::new(&decoded, options, context, diagnostics)?;
     builder.parse()?;
     let (document, diagnostics, assets) = builder.finish()?;
-    Ok(ConverterOutput { document, diagnostics, assets })
+    Ok(ConverterOutput::new(document, assets, diagnostics))
 }
 
 #[derive(Debug)]

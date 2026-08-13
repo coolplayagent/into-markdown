@@ -65,6 +65,16 @@ impl Converter for StructuredDataConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -83,7 +93,7 @@ impl Converter for StructuredDataConverter {
                     });
                 }
             };
-            Ok(ConverterOutput { document, assets: Vec::new(), diagnostics: Vec::new() })
+            Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
         })
     }
 }

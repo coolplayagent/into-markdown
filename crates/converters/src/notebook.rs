@@ -58,6 +58,16 @@ impl Converter for NotebookConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -972,11 +982,7 @@ impl<'a> NotebookBuilder<'a> {
                 }
             }
         })?;
-        Ok(ConverterOutput {
-            document: self.document,
-            diagnostics: self.diagnostics,
-            assets: self.assets,
-        })
+        Ok(ConverterOutput::new(self.document, self.assets, self.diagnostics))
     }
 }
 

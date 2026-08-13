@@ -65,6 +65,16 @@ impl Converter for TextConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -804,7 +814,7 @@ fn convert_text(
         context,
         &mut lines.memory,
     )?;
-    Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
+    Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
 }
 
 fn decode_mapped(

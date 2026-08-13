@@ -2619,13 +2619,13 @@ mod tests {
             Some(asset_uri_prefix_for_file(&output, &directory, root.path()).unwrap());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
         let href = markdown_image_href(&markdown);
-        let result = into_markdown::ConversionResult {
-            document: document.clone(),
+        let result = into_markdown::ConversionResult::new(
+            document.clone(),
             markdown,
-            assets: vec![asset.clone()],
-            diagnostics: vec![],
-            provenance: vec![],
-        };
+            vec![asset.clone()],
+            vec![],
+            vec![],
+        );
         output::write_assets(&result, &directory, AssetModeArg::Extract, ConflictPolicy::Error)
             .unwrap();
         let base_url = url::Url::from_directory_path(output.parent().unwrap()).unwrap();
@@ -2685,13 +2685,8 @@ mod tests {
         let mut options = ConversionOptions::default();
         options.output.asset_uri_prefix = Some(prefix.into());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
-        let result = into_markdown::ConversionResult {
-            document,
-            markdown,
-            assets: vec![asset],
-            diagnostics: vec![],
-            provenance: vec![],
-        };
+        let result =
+            into_markdown::ConversionResult::new(document, markdown, vec![asset], vec![], vec![]);
         let bundle = output::encode_result(&result, EmitKind::Bundle).unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bundle)).unwrap();
         let markdown = {
@@ -2832,7 +2827,8 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.exit_code(), 3);
+        assert_eq!(error.exit_code(), 9);
+        assert_eq!(error.code(), "componentUnavailable");
         fs::remove_dir_all(root).unwrap();
     }
 

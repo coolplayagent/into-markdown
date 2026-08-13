@@ -25,7 +25,7 @@ pub use dto::{
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{
     CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions, ExecutionStage,
-    ProgressEvent, ProgressListener, ResourceReservation, TemporaryFile,
+    PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation, TemporaryFile,
 };
 pub use format::{FormatCandidate, InputFormat};
 pub use input::{FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata};
@@ -47,4 +47,8 @@ pub use spi::{
     FormatDetector, MarkdownRenderer, OcrEngine, OcrRegion, OcrRequest, OcrResult, PatchOperation,
     ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
     TranscriptionRequest, TranscriptionResult,
+};
+#[doc(hidden)]
+pub use spi::{
+    estimate_retained_output, estimate_retained_result, estimate_validation_working_set,
 };

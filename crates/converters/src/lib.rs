@@ -8,6 +8,7 @@ mod feed;
 mod html;
 mod markdown;
 mod notebook;
+mod pdf;
 mod structured;
 mod text;
 
@@ -20,6 +21,7 @@ pub use feed::FeedConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use notebook::NotebookConverter;
+pub use pdf::PdfConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 
@@ -82,7 +84,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Pdf,
         family: "document",
         extensions: &["pdf"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Doc,

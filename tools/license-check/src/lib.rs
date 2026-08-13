@@ -1350,7 +1350,7 @@ fn validate_fixture_corpus(
     validate_fixture_generator(root, &corpus.generator, errors);
 
     let required_formats = BTreeSet::from([
-        "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "text", "tsv", "xml",
+        "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "text", "tsv", "xml",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
@@ -1388,6 +1388,14 @@ fn validate_fixture_corpus(
         validate_fixture_file(root, fixture, &relative, errors);
     }
     for format in required_formats {
+        // PDF fixtures are constructed byte-for-byte in the converter's
+        // opt-in native test module so ordinary license and corpus audits do
+        // not require loading an in-process native runtime. Their source is
+        // Apache-2.0 repository code and `tools/pdfium-audit.sh` executes the
+        // generated normal/corrupt/limit and extended matrix.
+        if format == "pdf" {
+            continue;
+        }
         let present = scenarios.get(format).cloned().unwrap_or_default();
         for required in ["normal", "corrupt", "limit"] {
             if !present.contains(required) {
@@ -1954,7 +1962,7 @@ fn pdfium_expected_targets() -> BTreeMap<&'static str, ExpectedPdfiumTarget> {
     ])
 }
 
-const PDFIUM_REQUIRED_EXPORTS: [&str; 24] = [
+const PDFIUM_REQUIRED_EXPORTS: [&str; 47] = [
     "FPDF_InitLibraryWithConfig",
     "FPDF_DestroyLibrary",
     "FPDF_LoadMemDocument64",
@@ -1966,9 +1974,31 @@ const PDFIUM_REQUIRED_EXPORTS: [&str; 24] = [
     "FPDFText_ClosePage",
     "FPDFText_CountChars",
     "FPDFText_GetText",
+    "FPDFText_GetUnicode",
+    "FPDFText_GetCharBox",
+    "FPDFText_GetFontSize",
+    "FPDFText_GetFontInfo",
+    "FPDFText_GetCharAngle",
+    "FPDF_GetPageWidthF",
+    "FPDF_GetPageHeightF",
+    "FPDFPage_GetRotation",
     "FPDFPage_CountObjects",
     "FPDFPage_GetObject",
     "FPDFPageObj_GetType",
+    "FPDFPageObj_GetBounds",
+    "FPDFLink_Enumerate",
+    "FPDFLink_GetAnnotRect",
+    "FPDFLink_GetAction",
+    "FPDFAction_GetType",
+    "FPDFAction_GetURIPath",
+    "FPDFLink_GetDest",
+    "FPDFDest_GetDestPageIndex",
+    "FPDFLink_LoadWebLinks",
+    "FPDFLink_CountWebLinks",
+    "FPDFLink_GetURL",
+    "FPDFLink_CountRects",
+    "FPDFLink_GetRect",
+    "FPDFLink_CloseWebLinks",
     "FPDFBitmap_CreateEx",
     "FPDFBitmap_Destroy",
     "FPDFBitmap_GetBuffer",
@@ -1977,6 +2007,7 @@ const PDFIUM_REQUIRED_EXPORTS: [&str; 24] = [
     "FPDFBitmap_GetStride",
     "FPDFBitmap_GetWidth",
     "FPDFImageObj_GetBitmap",
+    "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",
 ];

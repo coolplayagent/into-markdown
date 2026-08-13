@@ -431,29 +431,23 @@ mod tests {
     use std::io::Read as _;
 
     fn empty_result() -> ConversionResult {
-        ConversionResult {
-            document: Document::default(),
-            markdown: "# Example\n".into(),
-            assets: vec![Asset {
+        ConversionResult::new(
+            Document::default(),
+            "# Example\n".into(),
+            vec![Asset {
                 id: AssetId("image".into()),
                 filename: Some("../unsafe image.png".into()),
                 media_type: "image/png".into(),
                 bytes: vec![1, 2, 3],
                 external_uri: None,
             }],
-            diagnostics: vec![],
-            provenance: vec![],
-        }
+            vec![],
+            vec![],
+        )
     }
 
     fn result_with_assets(document: Document, assets: Vec<Asset>) -> ConversionResult {
-        ConversionResult {
-            document,
-            markdown: String::new(),
-            assets,
-            diagnostics: vec![],
-            provenance: vec![],
-        }
+        ConversionResult::new(document, String::new(), assets, vec![], vec![])
     }
 
     fn output_context() -> ExecutionContext {
@@ -505,13 +499,7 @@ mod tests {
         let mut options = ConversionOptions::default();
         options.output.asset_uri_prefix = Some(prefix.into());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
-        ConversionResult {
-            document,
-            markdown,
-            assets: vec![asset],
-            diagnostics: vec![],
-            provenance: vec![],
-        }
+        ConversionResult::new(document, markdown, vec![asset], vec![], vec![])
     }
 
     #[test]

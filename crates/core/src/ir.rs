@@ -108,6 +108,11 @@ pub struct NodeId(pub String);
 pub struct AssetId(pub String);
 
 /// Rectangle in source coordinates.
+///
+/// PDF converters use PDF points (1/72 inch), a top-left origin, positive X to
+/// the right, and positive Y downward after applying the page's declared
+/// clockwise rotation. This is deliberately different from `PDFium`'s native
+/// bottom-left coordinate system; converters must normalize before emitting IR.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     /// Left edge.
@@ -160,6 +165,25 @@ pub struct SourceLocator {
     pub cell: Option<CellRef>,
     /// Bounding rectangle.
     pub bounds: Option<Rect>,
+    /// Zero-based source character index, when this node represents one PDF
+    /// character or another independently addressable text unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_index: Option<u32>,
+    /// Best-effort source font name. This is a clue, not a trusted identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
+    /// Source font size in source coordinate units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f32>,
+    /// Clockwise source rotation in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_degrees: Option<f32>,
+    /// Page width in source coordinate units, when the locator addresses a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_width: Option<f32>,
+    /// Page height in source coordinate units, when the locator addresses a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_height: Option<f32>,
     /// Media time range.
     pub time: Option<TimeRange>,
     /// Safe container-relative part name, using `/` separators.
@@ -225,6 +249,15 @@ pub enum Inline {
         value: String,
         /// Active formatting marks.
         marks: Vec<InlineMark>,
+    },
+    /// One source-addressable text unit with character-level provenance.
+    SourceText {
+        /// Source-derived text, normally one Unicode scalar.
+        value: String,
+        /// Active formatting marks.
+        marks: Vec<InlineMark>,
+        /// Character-level source provenance.
+        provenance: Box<Provenance>,
     },
     /// Inline code.
     Code(String),
@@ -756,7 +789,7 @@ fn valid_block_wire_shape(kind: &str, data: Option<&serde_json::Value>) -> bool 
 
 fn valid_inline_wire_shape(kind: &str, data: Option<&serde_json::Value>) -> bool {
     match kind {
-        "text" | "link" => data.is_some_and(serde_json::Value::is_object),
+        "text" | "sourceText" | "link" => data.is_some_and(serde_json::Value::is_object),
         "code" | "formula" | "footnoteReference" => data.is_some_and(serde_json::Value::is_string),
         "lineBreak" => true,
         _ => false,
@@ -986,6 +1019,7 @@ fn validate_provenance(provenance: &Provenance, path: &str) -> Result<(), IrErro
     validate_locator(&provenance.locator, &format!("{path}.locator"))
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> {
     if locator.byte_start.is_some() != locator.byte_end.is_some()
         || locator.byte_start.zip(locator.byte_end).is_some_and(|(start, end)| start > end)
@@ -1036,6 +1070,48 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> 
             IrErrorCode::InvalidLocator,
             format!("{path}.bounds"),
             "bounds must be finite with non-negative dimensions",
+        ));
+    }
+    for (field, value) in [
+        ("fontSize", locator.font_size),
+        ("rotationDegrees", locator.rotation_degrees),
+        ("pageWidth", locator.page_width),
+        ("pageHeight", locator.page_height),
+    ] {
+        if value.is_some_and(|value| !value.is_finite()) {
+            return Err(IrError::new(
+                IrErrorCode::InvalidLocator,
+                format!("{path}.{field}"),
+                "source geometry must be finite",
+            ));
+        }
+    }
+    if locator.font_size.is_some_and(|value| value < 0.0)
+        || locator.page_width.is_some_and(|value| value <= 0.0)
+        || locator.page_height.is_some_and(|value| value <= 0.0)
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            path,
+            "font size must be non-negative and page dimensions must be positive",
+        ));
+    }
+    if locator.rotation_degrees.is_some_and(|value| !(0.0..360.0).contains(&value)) {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.rotationDegrees"),
+            "rotation must be in the half-open range 0..360 degrees",
+        ));
+    }
+    if locator
+        .font_name
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty() || value.chars().any(char::is_control))
+    {
+        return Err(IrError::new(
+            IrErrorCode::InvalidLocator,
+            format!("{path}.fontName"),
+            "font name must be non-empty and contain no control characters",
         ));
     }
     if let Some(range) = locator.time
@@ -1275,21 +1351,17 @@ fn validate_inlines(
         }
         match inline {
             Inline::Text { marks, .. } => {
-                let unique = marks.iter().copied().collect::<BTreeSet<_>>();
-                if unique.len() != marks.len() {
+                validate_inline_marks(marks, &inline_path)?;
+            }
+            Inline::SourceText { value, marks, provenance } => {
+                if value.chars().count() != 1 {
                     return invalid_node(
-                        format!("{inline_path}.data.marks"),
-                        "text marks must be unique",
+                        format!("{inline_path}.data.value"),
+                        "source text must contain exactly one Unicode scalar",
                     );
                 }
-                if unique.contains(&InlineMark::Superscript)
-                    && unique.contains(&InlineMark::Subscript)
-                {
-                    return invalid_node(
-                        format!("{inline_path}.data.marks"),
-                        "text cannot be both superscript and subscript",
-                    );
-                }
+                validate_inline_marks(marks, &inline_path)?;
+                validate_provenance(provenance, &format!("{inline_path}.data.provenance"))?;
             }
             Inline::Code(_) | Inline::LineBreak => {}
             Inline::Link { target, content } => {
@@ -1305,6 +1377,20 @@ fn validate_inlines(
                 state.footnote_references.insert(label.clone());
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_inline_marks(marks: &[InlineMark], inline_path: &str) -> Result<(), IrError> {
+    let unique = marks.iter().copied().collect::<BTreeSet<_>>();
+    if unique.len() != marks.len() {
+        return invalid_node(format!("{inline_path}.data.marks"), "text marks must be unique");
+    }
+    if unique.contains(&InlineMark::Superscript) && unique.contains(&InlineMark::Subscript) {
+        return invalid_node(
+            format!("{inline_path}.data.marks"),
+            "text cannot be both superscript and subscript",
+        );
     }
     Ok(())
 }
@@ -1360,6 +1446,7 @@ mod tests {
                 bounds: Some(Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 }),
                 time: Some(TimeRange { start_ms: 1, end_ms: 2 }),
                 part: Some("content.xml".into()),
+                ..SourceLocator::default()
             },
             confidence: Some(0.9),
         }
@@ -1383,6 +1470,11 @@ mod tests {
                 ],
             },
             Inline::Text { value: "subscript".into(), marks: vec![InlineMark::Subscript] },
+            Inline::SourceText {
+                value: "文".into(),
+                marks: vec![],
+                provenance: Box::new(provenance()),
+            },
             Inline::Code("code".into()),
             Inline::Link {
                 target: "https://example.invalid".into(),
@@ -1528,6 +1620,49 @@ mod tests {
             assert!(json.contains(&format!("\"type\":\"{kind}\"")), "missing {kind}");
         }
         assert_eq!(Document::from_json(&json).unwrap(), document);
+    }
+
+    #[test]
+    fn source_text_wire_is_preflighted_and_semantically_single_scalar() {
+        let document = all_nodes_document();
+        let json = document.to_json().unwrap();
+        assert_eq!(Document::from_json(&json).unwrap(), document);
+
+        let mut invalid = document.clone();
+        let Block::Paragraph(inlines) = &mut invalid.blocks[0].block else { panic!("fixture") };
+        let source =
+            inlines.iter_mut().find(|inline| matches!(inline, Inline::SourceText { .. })).unwrap();
+        if let Inline::SourceText { value, provenance, .. } = source {
+            *value = "ab".into();
+            provenance.locator.rotation_degrees = Some(360.0);
+        }
+        assert_eq!(invalid.validate().unwrap_err().code, IrErrorCode::InvalidNode);
+
+        let malformed = json.replace("\"sourceText\"", "\"unknownSourceText\"");
+        assert_eq!(Document::from_json(&malformed).unwrap_err().code, IrErrorCode::InvalidJson);
+
+        let single = Document {
+            blocks: vec![node(
+                "source",
+                Block::Paragraph(vec![Inline::SourceText {
+                    value: "x".into(),
+                    marks: vec![],
+                    provenance: Box::new(provenance()),
+                }]),
+            )],
+            ..Document::default()
+        };
+        let json = single.to_json().unwrap();
+        let exact = ValidationLimits { max_inlines: 1, ..ValidationLimits::default() };
+        assert_eq!(Document::from_json_with_limits(&json, &exact).unwrap(), single);
+        let mut doubled = single.clone();
+        let Block::Paragraph(inlines) = &mut doubled.blocks[0].block else { panic!("fixture") };
+        inlines.push(inlines[0].clone());
+        let doubled_json = serde_json::to_string(&doubled).unwrap();
+        assert_eq!(
+            Document::from_json_with_limits(&doubled_json, &exact).unwrap_err().code,
+            IrErrorCode::ResourceLimit
+        );
     }
 
     #[test]

@@ -60,6 +60,15 @@ impl MarkdownRenderer for FailingRenderer {
         "task-store-failing-renderer"
     }
 
+    fn planned_markdown_bytes(
+        &self,
+        _: &Document,
+        _: &[Asset],
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
     fn render<'a>(
         &'a self,
         _document: &'a Document,

@@ -8,6 +8,19 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 pub use native::{Artifact, Platform};
+
+/// Fallibly allocate an exact-layout zeroed byte buffer without allocator
+/// capacity slack. This is shared with the PDF converter's asset encoder.
+#[doc(hidden)]
+pub fn fixed_zeroed_bytes(length: usize) -> Result<Vec<u8>, Error> {
+    native::zeroed_boxed_bytes(length, "fixed_bytes").map(<[u8]>::into_vec)
+}
+
+/// Fallibly clone a UTF-8 string into exact-layout backing storage.
+#[doc(hidden)]
+pub fn fixed_string(value: &str) -> Result<String, Error> {
+    native::fixed_string(value, "fixed_string")
+}
 pub fn pdfium_version() -> Result<String, Error> {
     native::version()
 }
@@ -47,6 +60,9 @@ pub struct Limits {
     pub max_page_objects: u32,
     pub max_password_bytes: u32,
     pub max_bitmap_bytes: u64,
+    pub max_links_per_page: u32,
+    pub max_link_bytes: u32,
+    pub max_font_name_bytes: u32,
 }
 
 impl Default for Limits {
@@ -61,6 +77,9 @@ impl Default for Limits {
             max_page_objects: 1_000_000,
             max_password_bytes: 1024,
             max_bitmap_bytes: 400_000_000,
+            max_links_per_page: 100_000,
+            max_link_bytes: 64 * 1024,
+            max_font_name_bytes: 4 * 1024,
         }
     }
 }
@@ -81,6 +100,9 @@ impl Limits {
             ("max_page_objects", u64::from(self.max_page_objects), 10_000_000),
             ("max_password_bytes", u64::from(self.max_password_bytes), 64 * 1024),
             ("max_bitmap_bytes", self.max_bitmap_bytes, 1_600_000_000),
+            ("max_links_per_page", u64::from(self.max_links_per_page), 1_000_000),
+            ("max_link_bytes", u64::from(self.max_link_bytes), 1024 * 1024),
+            ("max_font_name_bytes", u64::from(self.max_font_name_bytes), 64 * 1024),
         ] {
             if actual > maximum {
                 return Err(Error::ResourceLimit { limit: name, actual, maximum });
@@ -99,14 +121,56 @@ trait Backend: Send + Sync {
     fn load_text_page(&self, page: usize) -> Result<usize, Error>;
     fn close_text_page(&self, text: usize);
     fn text(&self, text: usize, max_units: u32) -> Result<String, Error>;
+    fn character_count(&self, text: usize) -> Result<u32, Error>;
+    fn characters(
+        &self,
+        text: usize,
+        limits: Limits,
+        plan: CharacterAllocationPlan,
+    ) -> Result<Vec<Character>, Error>;
+    fn character_allocation_bytes(
+        &self,
+        text: usize,
+        limits: Limits,
+    ) -> Result<CharacterAllocationPlan, Error>;
+    fn page_info(&self, page: usize) -> Result<PageInfo, Error>;
+    fn page_object_count(&self, page: usize) -> Result<u32, Error>;
+    fn links(
+        &self,
+        document: usize,
+        page: usize,
+        text: usize,
+        limits: Limits,
+        plan: LinkAllocationPlan,
+    ) -> Result<Vec<Link>, Error>;
+    fn link_allocation_bytes(
+        &self,
+        document: usize,
+        page: usize,
+        text: usize,
+        limits: Limits,
+    ) -> Result<LinkAllocationPlan, Error>;
     fn image_objects(
         &self,
         page: usize,
         max_objects: u32,
         max_images: u32,
-    ) -> Result<Vec<usize>, Error>;
+        plan: ImageAllocationPlan,
+    ) -> Result<Vec<ImageObject>, Error>;
+    fn image_object_allocation_bytes(
+        &self,
+        page: usize,
+        max_objects: u32,
+        max_images: u32,
+    ) -> Result<ImageAllocationPlan, Error>;
     fn render(&self, page: usize, width: u32, height: u32) -> Result<Vec<u8>, Error>;
-    fn image_bitmap(&self, image: usize, limits: Limits) -> Result<ImageBitmap, Error>;
+    fn image_bitmap(
+        &self,
+        image: usize,
+        limits: Limits,
+        planned_bytes: u64,
+    ) -> Result<ImageBitmap, Error>;
+    fn image_bitmap_allocation_bytes(&self, image: usize, limits: Limits) -> Result<u64, Error>;
 }
 
 struct Inner {
@@ -139,7 +203,32 @@ impl Pdfium {
         bytes: Arc<[u8]>,
         password: Option<&str>,
     ) -> Result<Document<'runtime>, Error> {
+        self.plan_open(bytes, password)?.materialize()
+    }
+
+    /// Validate a document-open request without allocating its password copy.
+    ///
+    /// Callers with an `ExecutionContext` can reserve
+    /// [`PlannedDocument::allocation_bytes`] before consuming the plan. The
+    /// bound covers the exact Rust-owned NUL-terminated password buffer; the
+    /// input is retained by `Arc` and is not copied. `PDFium`'s own in-process
+    /// parser allocations remain native residual risk and require an OS memory
+    /// limit for hostile deployments.
+    pub fn plan_open<'runtime, 'password>(
+        &'runtime self,
+        bytes: Arc<[u8]>,
+        password: Option<&'password str>,
+    ) -> Result<PlannedDocument<'runtime, 'password>, Error> {
         limit("max_document_bytes", bytes.len(), self.0.limits.max_document_bytes)?;
+        let password_bytes = password_allocation_bytes(password, self.0.limits.max_password_bytes)?;
+        Ok(PlannedDocument { runtime: self, bytes, password, password_bytes })
+    }
+
+    fn materialize_document<'runtime>(
+        &'runtime self,
+        bytes: Arc<[u8]>,
+        password: Option<&str>,
+    ) -> Result<Document<'runtime>, Error> {
         let password = bounded_password(password, self.0.limits.max_password_bytes)?;
         let _guard = self.0.lock()?;
         let raw = self.0.backend.load_document(&bytes, password.as_deref())?;
@@ -159,6 +248,28 @@ impl Pdfium {
             }
         };
         Ok(Document { runtime: self, raw, bytes, page_count: count })
+    }
+}
+
+/// Validated, allocation-free description of a PDF document open operation.
+#[must_use = "reserve allocation_bytes before materializing the document"]
+pub struct PlannedDocument<'runtime, 'password> {
+    runtime: &'runtime Pdfium,
+    bytes: Arc<[u8]>,
+    password: Option<&'password str>,
+    password_bytes: u64,
+}
+
+impl<'runtime> PlannedDocument<'runtime, '_> {
+    /// Exact Rust allocation required for the temporary password buffer.
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.password_bytes
+    }
+
+    /// Consume the validated plan and open the document.
+    pub fn materialize(self) -> Result<Document<'runtime>, Error> {
+        self.runtime.materialize_document(self.bytes, self.password)
     }
 }
 
@@ -198,30 +309,69 @@ pub struct Page<'document> {
     raw: usize,
 }
 impl Page<'_> {
+    pub fn info(&self) -> Result<PageInfo, Error> {
+        let _guard = self.document.runtime.0.lock()?;
+        self.document.runtime.0.backend.page_info(self.raw)
+    }
+
+    pub fn object_count(&self) -> Result<u32, Error> {
+        let _guard = self.document.runtime.0.lock()?;
+        self.document.runtime.0.backend.page_object_count(self.raw)
+    }
+
     pub fn text_page(&self) -> Result<TextPage<'_>, Error> {
         let _guard = self.document.runtime.0.lock()?;
         Ok(TextPage { page: self, raw: self.document.runtime.0.backend.load_text_page(self.raw)? })
     }
     pub fn images(&self) -> Result<Vec<Image<'_>>, Error> {
+        self.plan_images()?.materialize()
+    }
+
+    pub fn plan_images(&self) -> Result<PlannedImages<'_, '_>, Error> {
+        let limits = self.document.runtime.0.limits;
+        let _guard = self.document.runtime.0.lock()?;
+        let plan = self.document.runtime.0.backend.image_object_allocation_bytes(
+            self.raw,
+            limits.max_page_objects,
+            limits.max_images_per_page,
+        )?;
+        Ok(PlannedImages { page: self, plan })
+    }
+
+    fn materialize_images(&self, plan: ImageAllocationPlan) -> Result<Vec<Image<'_>>, Error> {
         let limits = self.document.runtime.0.limits;
         let _guard = self.document.runtime.0.lock()?;
         let objects = self.document.runtime.0.backend.image_objects(
             self.raw,
             limits.max_page_objects,
             limits.max_images_per_page,
+            plan,
         )?;
-        let mut images = Vec::new();
-        images.try_reserve_exact(objects.len()).map_err(|_| Error::Allocation {
-            operation: "image_handles",
-            bytes: u64::try_from(objects.len()).unwrap_or(u64::MAX)
-                * u64::try_from(std::mem::size_of::<Image<'_>>()).unwrap_or(u64::MAX),
-        })?;
-        images.extend(objects.into_iter().enumerate().map(|(index, raw)| Image {
-            raw,
-            index: u32::try_from(index).unwrap_or(u32::MAX),
-            page: self,
-        }));
-        Ok(images)
+        if objects.len() != usize::try_from(plan.count).unwrap_or(usize::MAX) {
+            return Err(Error::InvalidResult {
+                operation: "image_handles",
+                detail: "materialized count changed after preflight".into(),
+            });
+        }
+        let mut slots = try_uninit_boxed_slice::<Image<'_>>(objects.len(), "image_handles")?;
+        for (index, (slot, object)) in slots.iter_mut().zip(objects).enumerate() {
+            slot.write(Image {
+                raw: object.raw,
+                bounds: object.bounds,
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                page: self,
+            });
+        }
+        let raw = Box::into_raw(slots);
+        // SAFETY: the exact number of slots was initialized in the loop above.
+        let images = unsafe { Box::from_raw(raw as *mut [Image<'_>]) };
+        Ok(images.into_vec())
+    }
+
+    /// Tight Rust allocation bound for [`Self::images`], computed without
+    /// constructing the image metadata vectors.
+    pub fn image_allocation_bytes(&self) -> Result<u64, Error> {
+        self.plan_images().map(|plan| plan.allocation_bytes())
     }
     pub fn render_bgra(&self, width: u32, height: u32) -> Result<Bitmap, Error> {
         let limits = self.document.runtime.0.limits;
@@ -273,6 +423,10 @@ pub struct TextPage<'page> {
     raw: usize,
 }
 impl TextPage<'_> {
+    pub fn character_count(&self) -> Result<u32, Error> {
+        let _guard = self.page.document.runtime.0.lock()?;
+        self.page.document.runtime.0.backend.character_count(self.raw)
+    }
     pub fn text(&self) -> Result<String, Error> {
         let _guard = self.page.document.runtime.0.lock()?;
         self.page
@@ -281,6 +435,92 @@ impl TextPage<'_> {
             .0
             .backend
             .text(self.raw, self.page.document.runtime.0.limits.max_text_units_per_page)
+    }
+
+    pub fn characters(&self) -> Result<Vec<Character>, Error> {
+        self.plan_characters()?.materialize()
+    }
+
+    pub fn plan_characters(&self) -> Result<PlannedCharacters<'_, '_>, Error> {
+        let _guard = self.page.document.runtime.0.lock()?;
+        let plan = self
+            .page
+            .document
+            .runtime
+            .0
+            .backend
+            .character_allocation_bytes(self.raw, self.page.document.runtime.0.limits)?;
+        Ok(PlannedCharacters { text: self, plan })
+    }
+
+    fn materialize_characters(
+        &self,
+        plan: CharacterAllocationPlan,
+    ) -> Result<Vec<Character>, Error> {
+        let _guard = self.page.document.runtime.0.lock()?;
+        self.page.document.runtime.0.backend.characters(
+            self.raw,
+            self.page.document.runtime.0.limits,
+            plan,
+        )
+    }
+
+    pub fn links(&self) -> Result<Vec<Link>, Error> {
+        self.plan_links()?.materialize()
+    }
+
+    pub fn plan_links(&self) -> Result<PlannedLinks<'_, '_>, Error> {
+        let _guard = self.page.document.runtime.0.lock()?;
+        let plan = self.page.document.runtime.0.backend.link_allocation_bytes(
+            self.page.document.raw,
+            self.page.raw,
+            self.raw,
+            self.page.document.runtime.0.limits,
+        )?;
+        Ok(PlannedLinks { text: self, plan })
+    }
+
+    fn materialize_links(&self, plan: LinkAllocationPlan) -> Result<Vec<Link>, Error> {
+        let _guard = self.page.document.runtime.0.lock()?;
+        self.page.document.runtime.0.backend.links(
+            self.page.document.raw,
+            self.page.raw,
+            self.raw,
+            self.page.document.runtime.0.limits,
+            plan,
+        )
+    }
+
+    /// Tight allocation bound for [`Self::links`], computed before URI strings
+    /// or link vectors are materialized.
+    pub fn link_allocation_bytes(&self) -> Result<u64, Error> {
+        self.plan_links().map(|plan| plan.allocation_bytes())
+    }
+}
+
+pub struct PlannedCharacters<'plan, 'page> {
+    text: &'plan TextPage<'page>,
+    plan: CharacterAllocationPlan,
+}
+impl PlannedCharacters<'_, '_> {
+    /// Peak needed to materialize the native character vector and its owned
+    /// font-name strings.
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.plan.bytes
+    }
+    /// Additional retained font-name capacity needed while a caller builds
+    /// one independently-owned provenance copy per character.
+    #[must_use]
+    pub const fn retained_font_bytes(&self) -> u64 {
+        self.plan.retained_font_bytes
+    }
+    #[must_use]
+    pub const fn count(&self) -> u32 {
+        self.plan.count
+    }
+    pub fn materialize(self) -> Result<Vec<Character>, Error> {
+        self.text.materialize_characters(self.plan)
     }
 }
 impl Drop for TextPage<'_> {
@@ -295,6 +535,7 @@ impl Drop for TextPage<'_> {
 pub struct Image<'page> {
     raw: usize,
     index: u32,
+    bounds: PdfRect,
     page: &'page Page<'page>,
 }
 impl std::fmt::Debug for Image<'_> {
@@ -308,14 +549,85 @@ impl Image<'_> {
         self.index
     }
 
+    #[must_use]
+    pub const fn bounds(self) -> PdfRect {
+        self.bounds
+    }
+
     pub fn bitmap(&self) -> Result<ImageBitmap, Error> {
+        self.plan_bitmap()?.materialize()
+    }
+
+    pub fn plan_bitmap(&self) -> Result<PlannedBitmap<'_, '_>, Error> {
         let _guard = self.page.document.runtime.0.lock()?;
-        self.page
+        let allocation_bytes = self
+            .page
             .document
             .runtime
             .0
             .backend
-            .image_bitmap(self.raw, self.page.document.runtime.0.limits)
+            .image_bitmap_allocation_bytes(self.raw, self.page.document.runtime.0.limits)?;
+        Ok(PlannedBitmap { image: self, allocation_bytes })
+    }
+
+    /// Tight decoded bitmap allocation bound obtained without decoding or
+    /// copying image pixels.
+    pub fn bitmap_allocation_bytes(&self) -> Result<u64, Error> {
+        self.plan_bitmap().map(|plan| plan.allocation_bytes())
+    }
+}
+
+pub struct PlannedLinks<'plan, 'page> {
+    text: &'plan TextPage<'page>,
+    plan: LinkAllocationPlan,
+}
+impl PlannedLinks<'_, '_> {
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.plan.bytes
+    }
+    pub fn materialize(self) -> Result<Vec<Link>, Error> {
+        self.text.materialize_links(self.plan)
+    }
+}
+
+pub struct PlannedImages<'plan, 'document> {
+    page: &'plan Page<'document>,
+    plan: ImageAllocationPlan,
+}
+impl<'plan> PlannedImages<'plan, '_> {
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.plan.bytes
+    }
+    pub fn materialize(self) -> Result<Vec<Image<'plan>>, Error> {
+        self.page.materialize_images(self.plan)
+    }
+}
+
+pub struct PlannedBitmap<'plan, 'page> {
+    image: &'plan Image<'page>,
+    allocation_bytes: u64,
+}
+impl PlannedBitmap<'_, '_> {
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.allocation_bytes
+    }
+    pub fn materialize(self) -> Result<ImageBitmap, Error> {
+        let _guard = self.image.page.document.runtime.0.lock()?;
+        let bitmap = self.image.page.document.runtime.0.backend.image_bitmap(
+            self.image.raw,
+            self.image.page.document.runtime.0.limits,
+            self.allocation_bytes,
+        )?;
+        if u64::try_from(bitmap.bytes.capacity()).unwrap_or(u64::MAX) > self.allocation_bytes {
+            return Err(Error::InvalidResult {
+                operation: "image_bitmap",
+                detail: "materialized bitmap exceeded preflight plan".into(),
+            });
+        }
+        Ok(bitmap)
     }
 }
 
@@ -344,6 +656,99 @@ pub struct Bitmap {
     pub bytes: Vec<u8>,
 }
 
+/// PDF-native rectangle in points, with a bottom-left origin.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PdfRect {
+    pub left: f32,
+    pub bottom: f32,
+    pub right: f32,
+    pub top: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageInfo {
+    /// Displayed page width in PDF points; `PDFium` has already applied page rotation.
+    pub width_points: f32,
+    /// Displayed page height in PDF points; `PDFium` has already applied page rotation.
+    pub height_points: f32,
+    /// Clockwise rotation in degrees, one of 0, 90, 180, or 270.
+    pub rotation_degrees: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Character {
+    pub index: u32,
+    pub value: char,
+    pub bounds: PdfRect,
+    pub font_name: Option<String>,
+    pub font_size: f32,
+    pub angle_degrees: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Link {
+    pub bounds: PdfRect,
+    pub target: LinkTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    ExternalUri(String),
+    InternalPage { page_index: u32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ImageObject {
+    raw: usize,
+    bounds: PdfRect,
+}
+
+#[derive(Clone, Copy)]
+struct LinkAllocationPlan {
+    bytes: u64,
+    count: u32,
+    target_bytes: u64,
+    maximum_temporary_bytes: u64,
+    vector_capacity: u64,
+}
+
+#[derive(Clone, Copy)]
+struct CharacterAllocationPlan {
+    bytes: u64,
+    count: u32,
+    font_bytes: u64,
+    maximum_font_bytes: u64,
+    retained_font_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ImageAllocationPlan {
+    bytes: u64,
+    count: u32,
+}
+
+fn try_uninit_boxed_slice<T>(
+    length: usize,
+    operation: &'static str,
+) -> Result<Box<[std::mem::MaybeUninit<T>]>, Error> {
+    if length == 0 {
+        return Ok(Box::new([]));
+    }
+    let layout = std::alloc::Layout::array::<std::mem::MaybeUninit<T>>(length)
+        .map_err(|_| Error::Allocation { operation, bytes: u64::MAX })?;
+    // SAFETY: the valid non-zero layout is transferred into the returned Box.
+    let raw = unsafe { std::alloc::alloc(layout) }.cast::<std::mem::MaybeUninit<T>>();
+    if raw.is_null() {
+        return Err(Error::Allocation {
+            operation,
+            bytes: u64::try_from(layout.size()).unwrap_or(u64::MAX),
+        });
+    }
+    let slice = std::ptr::slice_from_raw_parts_mut(raw, length);
+    // SAFETY: `slice` names exactly the allocation obtained above.
+    Ok(unsafe { Box::from_raw(slice) })
+}
+
 fn limit(name: &'static str, actual: usize, maximum: u64) -> Result<(), Error> {
     let actual = u64::try_from(actual).unwrap_or(u64::MAX);
     if actual > maximum {
@@ -354,7 +759,23 @@ fn limit(name: &'static str, actual: usize, maximum: u64) -> Result<(), Error> {
 }
 
 fn bounded_password(value: Option<&str>, maximum: u32) -> Result<Option<CString>, Error> {
+    let capacity = usize::try_from(password_allocation_bytes(value, maximum)?)
+        .map_err(|_| Error::Allocation { operation: "password", bytes: u64::MAX })?;
     let Some(value) = value else { return Ok(None) };
+    let mut bytes = try_uninit_boxed_slice::<u8>(capacity, "password")?;
+    for (slot, byte) in bytes.iter_mut().zip(value.bytes().chain(std::iter::once(0))) {
+        slot.write(byte);
+    }
+    // SAFETY: the zip writes exactly `value.len() + 1 == capacity` bytes.
+    let bytes = unsafe { bytes.assume_init() }.into_vec();
+    CString::from_vec_with_nul(bytes).map(Some).map_err(|error| Error::InvalidResult {
+        operation: "load_document",
+        detail: format!("invalid password: {error}"),
+    })
+}
+
+fn password_allocation_bytes(value: Option<&str>, maximum: u32) -> Result<u64, Error> {
+    let Some(value) = value else { return Ok(0) };
     let actual = u64::try_from(value.len()).unwrap_or(u64::MAX);
     if actual > u64::from(maximum) {
         return Err(Error::ResourceLimit {
@@ -369,21 +790,7 @@ fn bounded_password(value: Option<&str>, maximum: u32) -> Result<Option<CString>
             detail: "password contains NUL".into(),
         });
     }
-    let capacity = value
-        .len()
-        .checked_add(1)
-        .ok_or(Error::Allocation { operation: "password", bytes: actual })?;
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(capacity).map_err(|_| Error::Allocation {
-        operation: "password",
-        bytes: u64::try_from(capacity).unwrap_or(u64::MAX),
-    })?;
-    bytes.extend_from_slice(value.as_bytes());
-    bytes.push(0);
-    CString::from_vec_with_nul(bytes).map(Some).map_err(|error| Error::InvalidResult {
-        operation: "load_document",
-        detail: format!("invalid password: {error}"),
-    })
+    actual.checked_add(1).ok_or(Error::Allocation { operation: "password", bytes: actual })
 }
 
 #[cfg(test)]
@@ -393,9 +800,19 @@ mod tests {
 
     #[derive(Default)]
     struct Mock {
+        document_opens: AtomicUsize,
         closes: AtomicUsize,
         active: AtomicUsize,
         max_active: AtomicUsize,
+        image_plan_count: AtomicUsize,
+        image_allocations: AtomicUsize,
+        character_plan_count: AtomicUsize,
+        character_materialized_count: AtomicUsize,
+        character_plan_font_bytes: AtomicUsize,
+        character_materialized_font_bytes: AtomicUsize,
+        character_allocations: AtomicUsize,
+        bitmap_plan_bytes: AtomicUsize,
+        bitmap_copies: AtomicUsize,
     }
     impl Mock {
         fn enter(&self) {
@@ -407,6 +824,7 @@ mod tests {
     }
     impl Backend for Arc<Mock> {
         fn load_document(&self, _: &[u8], _: Option<&CStr>) -> Result<usize, Error> {
+            self.document_opens.fetch_add(1, Ordering::SeqCst);
             self.enter();
             Ok(1)
         }
@@ -435,16 +853,149 @@ mod tests {
             self.enter();
             Ok("ok".into())
         }
-        fn image_objects(&self, _: usize, _: u32, _: u32) -> Result<Vec<usize>, Error> {
+        fn character_count(&self, _: usize) -> Result<u32, Error> {
+            Ok(1)
+        }
+        fn characters(
+            &self,
+            _: usize,
+            _: Limits,
+            plan: CharacterAllocationPlan,
+        ) -> Result<Vec<Character>, Error> {
+            let configured = self.character_materialized_count.load(Ordering::SeqCst);
+            let actual = if configured == 0 { 1 } else { u32::try_from(configured).unwrap() };
+            if plan.count != actual {
+                return Err(Error::InvalidResult {
+                    operation: "characters",
+                    detail: "materialized count exceeded preflight plan".into(),
+                });
+            }
+            let actual_font =
+                u64::try_from(self.character_materialized_font_bytes.load(Ordering::SeqCst))
+                    .unwrap();
+            if actual_font > plan.font_bytes || actual_font > plan.maximum_font_bytes {
+                return Err(Error::InvalidResult {
+                    operation: "characters",
+                    detail: "materialized font exceeded preflight plan".into(),
+                });
+            }
+            self.character_allocations.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![Character {
+                index: 0,
+                value: 'o',
+                bounds: PdfRect { left: 1.0, bottom: 2.0, right: 3.0, top: 4.0 },
+                font_name: Some("Mock".into()),
+                font_size: 12.0,
+                angle_degrees: 0.0,
+            }])
+        }
+        fn character_allocation_bytes(
+            &self,
+            _: usize,
+            _: Limits,
+        ) -> Result<CharacterAllocationPlan, Error> {
+            let configured = self.character_plan_count.load(Ordering::SeqCst);
+            let count = if configured == 0 { 1 } else { u32::try_from(configured).unwrap() };
+            let font_bytes =
+                u64::try_from(self.character_plan_font_bytes.load(Ordering::SeqCst)).unwrap();
+            let character_capacity = u64::from(count);
+            Ok(CharacterAllocationPlan {
+                bytes: character_capacity
+                    * u64::try_from(std::mem::size_of::<Character>()).unwrap()
+                    + font_bytes,
+                count,
+                font_bytes,
+                maximum_font_bytes: font_bytes,
+                retained_font_bytes: font_bytes,
+            })
+        }
+        fn page_info(&self, _: usize) -> Result<PageInfo, Error> {
+            Ok(PageInfo { width_points: 100.0, height_points: 100.0, rotation_degrees: 0 })
+        }
+        fn page_object_count(&self, _: usize) -> Result<u32, Error> {
+            Ok(2)
+        }
+        fn links(
+            &self,
+            _: usize,
+            _: usize,
+            _: usize,
+            _: Limits,
+            _: LinkAllocationPlan,
+        ) -> Result<Vec<Link>, Error> {
+            Ok(Vec::new())
+        }
+        fn link_allocation_bytes(
+            &self,
+            _: usize,
+            _: usize,
+            _: usize,
+            _: Limits,
+        ) -> Result<LinkAllocationPlan, Error> {
+            Ok(LinkAllocationPlan {
+                bytes: 0,
+                count: 0,
+                target_bytes: 0,
+                maximum_temporary_bytes: 0,
+                vector_capacity: 0,
+            })
+        }
+        fn image_objects(
+            &self,
+            _: usize,
+            _: u32,
+            _: u32,
+            plan: ImageAllocationPlan,
+        ) -> Result<Vec<ImageObject>, Error> {
             self.enter();
-            Ok(vec![5, 6])
+            if plan.count != 2 {
+                return Err(Error::InvalidResult {
+                    operation: "image_objects",
+                    detail: "materialized count exceeded preflight plan".into(),
+                });
+            }
+            self.image_allocations.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![
+                ImageObject { raw: 5, bounds: PdfRect::default() },
+                ImageObject { raw: 6, bounds: PdfRect::default() },
+            ])
+        }
+        fn image_object_allocation_bytes(
+            &self,
+            _: usize,
+            _: u32,
+            _: u32,
+        ) -> Result<ImageAllocationPlan, Error> {
+            let configured = self.image_plan_count.load(Ordering::SeqCst);
+            let count = if configured == 0 { 2 } else { u32::try_from(configured).unwrap() };
+            let vector_capacity = u64::from(count);
+            Ok(ImageAllocationPlan {
+                bytes: vector_capacity
+                    * u64::try_from(
+                        std::mem::size_of::<ImageObject>() + std::mem::size_of::<Image<'_>>(),
+                    )
+                    .unwrap(),
+                count,
+            })
         }
         fn render(&self, _: usize, width: u32, height: u32) -> Result<Vec<u8>, Error> {
             self.enter();
             Ok(vec![0; usize::try_from(width * height * 4).unwrap()])
         }
-        fn image_bitmap(&self, _: usize, _: Limits) -> Result<ImageBitmap, Error> {
+        fn image_bitmap(
+            &self,
+            _: usize,
+            _: Limits,
+            planned_bytes: u64,
+        ) -> Result<ImageBitmap, Error> {
             self.enter();
+            if planned_bytes < 3 {
+                return Err(Error::InvalidResult {
+                    operation: "image_bitmap",
+                    detail: "materialized bitmap exceeded preflight plan".into(),
+                });
+            }
+            self.bitmap_copies.fetch_add(1, Ordering::SeqCst);
             Ok(ImageBitmap {
                 width: 1,
                 height: 1,
@@ -452,6 +1003,10 @@ mod tests {
                 format: PixelFormat::Bgr,
                 bytes: vec![0, 0, 255],
             })
+        }
+        fn image_bitmap_allocation_bytes(&self, _: usize, _: Limits) -> Result<u64, Error> {
+            let configured = self.bitmap_plan_bytes.load(Ordering::SeqCst);
+            Ok(if configured == 0 { 3 } else { u64::try_from(configured).unwrap() })
         }
     }
     fn runtime(mock: Arc<Mock>, limits: Limits) -> Pdfium {
@@ -515,14 +1070,81 @@ mod tests {
             Limits { max_render_dimension: u32::MAX, ..Limits::default() }.validate(),
             Err(Error::ResourceLimit { limit: "max_render_dimension", .. })
         ));
-        let runtime = runtime(
+        let password_limited_runtime = runtime(
             Arc::new(Mock::default()),
             Limits { max_password_bytes: 1, ..Limits::default() },
         );
         assert!(matches!(
-            runtime.open(Arc::from(b"ok".as_slice()), Some("xx")),
+            password_limited_runtime.open(Arc::from(b"ok".as_slice()), Some("xx")),
             Err(Error::ResourceLimit { limit: "max_password_bytes", .. })
         ));
+        let password = bounded_password(Some("secret"), 6).unwrap().unwrap().into_bytes_with_nul();
+        assert_eq!(password, b"secret\0");
+        assert_eq!(password.capacity(), password.len());
+        assert!(bounded_password(Some("nul\0inside"), 32).is_err());
+
+        let mock = Arc::new(Mock::default());
+        let planned_runtime = runtime(Arc::clone(&mock), Limits::default());
+        let plan = planned_runtime.plan_open(Arc::from(b"ok".as_slice()), Some("secret")).unwrap();
+        assert_eq!(plan.allocation_bytes(), 7);
+        assert_eq!(mock.document_opens.load(Ordering::SeqCst), 0);
+        drop(plan.materialize().unwrap());
+        assert_eq!(mock.document_opens.load(Ordering::SeqCst), 1);
+        let no_password = planned_runtime.plan_open(Arc::from(b"ok".as_slice()), None).unwrap();
+        assert_eq!(no_password.allocation_bytes(), 0);
+    }
+
+    #[test]
+    fn opaque_plans_reject_changed_counts_and_sizes_before_backend_copy() {
+        let mock = Arc::new(Mock::default());
+        mock.image_plan_count.store(1, Ordering::SeqCst);
+        let runtime = runtime(Arc::clone(&mock), Limits::default());
+        let document = runtime.open(Arc::from(b"ok".as_slice()), None).unwrap();
+        let page = document.page(0).unwrap();
+        let plan = page.plan_images().unwrap();
+        assert!(matches!(
+            plan.materialize(),
+            Err(Error::InvalidResult { operation: "image_objects", .. })
+        ));
+        assert_eq!(mock.image_allocations.load(Ordering::SeqCst), 0);
+
+        mock.image_plan_count.store(2, Ordering::SeqCst);
+        let images = page.plan_images().unwrap().materialize().unwrap();
+        mock.bitmap_plan_bytes.store(2, Ordering::SeqCst);
+        let plan = images[0].plan_bitmap().unwrap();
+        assert!(matches!(
+            plan.materialize(),
+            Err(Error::InvalidResult { operation: "image_bitmap", .. })
+        ));
+        assert_eq!(mock.bitmap_copies.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn character_plan_rejects_count_growth_before_backend_allocation() {
+        let mock = Arc::new(Mock::default());
+        mock.character_plan_count.store(1, Ordering::SeqCst);
+        let runtime = runtime(Arc::clone(&mock), Limits::default());
+        let document = runtime.open(Arc::from(b"ok".as_slice()), None).unwrap();
+        let page = document.page(0).unwrap();
+        let text = page.text_page().unwrap();
+        let plan = text.plan_characters().unwrap();
+        mock.character_materialized_count.store(2, Ordering::SeqCst);
+        assert!(matches!(
+            plan.materialize(),
+            Err(Error::InvalidResult { operation: "characters", .. })
+        ));
+        assert_eq!(mock.character_allocations.load(Ordering::SeqCst), 0);
+
+        mock.character_materialized_count.store(1, Ordering::SeqCst);
+        mock.character_plan_font_bytes.store(1, Ordering::SeqCst);
+        let plan = text.plan_characters().unwrap();
+        assert_eq!(plan.retained_font_bytes(), 1);
+        mock.character_materialized_font_bytes.store(2, Ordering::SeqCst);
+        assert!(matches!(
+            plan.materialize(),
+            Err(Error::InvalidResult { operation: "characters", .. })
+        ));
+        assert_eq!(mock.character_allocations.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -543,6 +1165,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+    #[allow(clippy::too_many_lines)]
     fn native_smoke() {
         let path = std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY is required");
         {
@@ -558,12 +1181,37 @@ mod tests {
             let document = runtime.open(Arc::from(minimal_pdf()), None).unwrap();
             assert_eq!(document.page_count(), 1);
             let page = document.page(0).unwrap();
+            assert_eq!(
+                page.info().unwrap(),
+                PageInfo { width_points: 100.0, height_points: 100.0, rotation_degrees: 0 }
+            );
             let text = page.text_page().unwrap();
-            assert_eq!(text.text().unwrap(), "Hello PDFium");
+            assert_eq!(text.text().unwrap(), "Hello PDFium https://example.test/");
+            let characters = text.characters().unwrap();
+            assert_eq!(characters[0].value, 'H');
+            assert_eq!(characters[0].index, 0);
+            assert!(characters[0].bounds.right > characters[0].bounds.left);
+            assert!(characters[0].font_size > 0.0);
+            assert!(characters[0].font_name.as_ref().is_some_and(|name| !name.is_empty()));
+            let link_plan = text.link_allocation_bytes().unwrap();
+            let links = text.links().unwrap();
+            assert!(link_plan >= u64::try_from(links.len() * std::mem::size_of::<Link>()).unwrap());
+            assert!(links.iter().any(|link| matches!(&link.target, LinkTarget::ExternalUri(uri) if uri.contains("example.test"))));
             drop(text);
+            let image_plan = page.image_allocation_bytes().unwrap();
             let images = page.images().unwrap();
             assert_eq!(images.len(), 1);
+            assert!(
+                image_plan
+                    >= u64::try_from(
+                        std::mem::size_of::<ImageObject>() + std::mem::size_of::<Image<'_>>()
+                    )
+                    .unwrap()
+            );
+            assert!(images[0].bounds().right > images[0].bounds().left);
+            let bitmap_plan = images[0].bitmap_allocation_bytes().unwrap();
             let image = images[0].bitmap().unwrap();
+            assert!(bitmap_plan >= u64::try_from(image.bytes.capacity()).unwrap());
             assert_eq!((image.width, image.height), (1, 1));
             assert!(matches!(
                 image.format,
@@ -571,6 +1219,42 @@ mod tests {
             ));
             assert!(image.bytes.windows(3).any(|pixel| pixel == [0, 0, 255]));
             assert_eq!(page.render_bgra(8, 8).unwrap().bytes.len(), 256);
+
+            drop(page);
+            drop(document);
+            let rotated = runtime.open(Arc::from(rotated_pdf()), None).unwrap();
+            assert_eq!(rotated.page_count(), 4);
+            for (index, (rotation, width, height)) in
+                [(0, 100.0, 200.0), (90, 200.0, 100.0), (180, 100.0, 200.0), (270, 200.0, 100.0)]
+                    .into_iter()
+                    .enumerate()
+            {
+                let page = rotated.page(u32::try_from(index).unwrap()).unwrap();
+                assert_eq!(
+                    page.info().unwrap(),
+                    PageInfo {
+                        width_points: width,
+                        height_points: height,
+                        rotation_degrees: rotation,
+                    }
+                );
+                let text = page.text_page().unwrap();
+                let character = &text.characters().unwrap()[0];
+                assert!(character.bounds.right > character.bounds.left);
+                assert!((0.0..360.0).contains(&character.angle_degrees));
+                let links = text.links().unwrap();
+                assert!(links.iter().any(|link| {
+                    link.bounds == PdfRect { left: 10.0, bottom: 150.0, right: 40.0, top: 170.0 }
+                        && matches!(&link.target, LinkTarget::ExternalUri(uri) if uri == "https://example.test/rotated")
+                }));
+                assert!(links.iter().any(|link| {
+                    link.bounds == PdfRect { left: 50.0, bottom: 100.0, right: 90.0, top: 120.0 }
+                        && matches!(link.target, LinkTarget::InternalPage { page_index: 1 })
+                }));
+                drop(text);
+                let image = &page.images().unwrap()[0];
+                assert!(image.bounds().right > image.bounds().left);
+            }
         }
 
         let limits =
@@ -589,16 +1273,61 @@ mod tests {
     }
 
     fn minimal_pdf() -> Vec<u8> {
-        let content =
-            b"BT /F1 12 Tf 10 60 Td (Hello PDFium) Tj ET\nq 10 0 0 10 10 10 cm /Im1 Do Q\n";
+        let content = b"BT /F1 12 Tf 10 60 Td (Hello PDFium https://example.test/) Tj ET\nq 10 0 0 10 10 10 cm /Im1 Do Q\n";
         let objects = [
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R /Annots [7 0 R] >>".to_vec(),
             stream_object("", content),
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
             stream_object("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[255, 0, 0]),
+            b"<< /Type /Annot /Subtype /Link /Rect [10 50 80 70] /A << /S /URI /URI (https://example.test/) >> >>".to_vec(),
         ];
+        let mut pdf = b"%PDF-1.4\n%\x80\x80\x80\x80\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    fn rotated_pdf() -> Vec<u8> {
+        let content = b"BT /F1 12 Tf 10 160 Td (R) Tj ET\nq 20 0 0 30 10 20 cm /Im1 Do Q\n";
+        let mut objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>".to_vec(),
+        ];
+        for rotation in [0, 90, 180, 270] {
+            objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 200] /Rotate {rotation} /Resources << /Font << /F1 8 0 R >> /XObject << /Im1 9 0 R >> >> /Contents 7 0 R /Annots [10 0 R 11 0 R] >>").into_bytes());
+        }
+        objects.extend([
+            stream_object("", content),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            stream_object("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[255, 0, 0]),
+            b"<< /Type /Annot /Subtype /Link /Rect [10 150 40 170] /A << /S /URI /URI (https://example.test/rotated) >> >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [50 100 90 120] /Dest [4 0 R /Fit] >>".to_vec(),
+        ]);
+        assemble_pdf(&objects)
+    }
+
+    fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
         let mut pdf = b"%PDF-1.4\n%\x80\x80\x80\x80\n".to_vec();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {

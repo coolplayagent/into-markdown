@@ -1,13 +1,17 @@
 //! Deterministic registry and conversion pipeline orchestration.
 
+mod fixed_alloc;
 mod recovery;
 
 pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
+use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
-    Block, BlockNode, ConversionError, ConversionRequest, ConversionResult, Converter,
-    DetectionRequest, DetectionResult, ExecutionContext, ExecutionStage, FormatCandidate,
-    FormatDetector, InputFormat, MarkdownRenderer, ProbeOutcome, Services, SourceResolver,
+    Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
+    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
+    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, InputFormat,
+    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
+    SourceLocator, SourceResolver, estimate_retained_result, estimate_validation_working_set,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -245,24 +249,16 @@ impl Engine {
         // A successful probe makes conversion authoritative. Conversion errors
         // are returned immediately rather than being hidden by another parser.
         context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
-        let output = context
-            .run(attempt.converter.convert(
-                source.input(),
-                &attempt.candidate,
-                &request.options,
-                &self.services,
-                &context,
-            ))
-            .await??;
-        output.document.validate().map_err(|error| ConversionError::Internal {
-            detail: format!(
-                "converter {} returned invalid document IR ({} at {}): {}",
-                attempt.converter.id(),
-                error.code.as_str(),
-                error.path,
-                error.detail
-            ),
-        })?;
+        let output = invoke_converter_preflighted(
+            attempt.converter.as_ref(),
+            source.input(),
+            &attempt.candidate,
+            &request.options,
+            &self.services,
+            &context,
+            |_| Ok(()),
+        )
+        .await?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
@@ -292,26 +288,42 @@ impl Engine {
                 detail: format!("{asset_bytes} > {}", request.options.limits.max_total_asset_bytes),
             });
         }
-        let _asset_memory = context.reserve_memory(asset_bytes)?;
         context.report(ExecutionStage::Rendering, None, None, Some(renderer.id()))?;
-        let markdown = context
-            .run(renderer.render(&output.document, &output.assets, &request.options, &context))
-            .await??;
+        let (markdown, markdown_memory) = invoke_renderer_preflighted(
+            renderer.as_ref(),
+            &output.document,
+            &output.assets,
+            &request.options,
+            &context,
+        )
+        .await?;
         let markdown_bytes =
-            u64::try_from(markdown.len()).map_err(|_| ConversionError::ResourceLimit {
+            u64::try_from(markdown.capacity()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
-                detail: "rendered Markdown size cannot be represented as u64".into(),
+                detail: "rendered Markdown capacity cannot be represented as u64".into(),
             })?;
-        let _markdown_memory = context.reserve_memory(markdown_bytes)?;
-        let mut provenance = Vec::new();
-        collect_provenance(&output.document.blocks, &mut provenance);
-        let result = ConversionResult {
-            document: output.document,
+        let (provenance, provenance_memory) =
+            collect_provenance_preflighted(&output.document.blocks, &context)?;
+        let final_required = estimate_retained_result(
+            &output.document,
+            &markdown,
+            &output.assets,
+            &output.diagnostics,
+            &provenance,
+        )?;
+        let final_memory = context.reserve_memory(
+            final_required.saturating_sub(
+                output
+                    .leased_memory_for(&context)
+                    .saturating_add(markdown_bytes)
+                    .saturating_add(provenance_inventory_bytes(&provenance)?),
+            ),
+        )?;
+        let result = output.into_conversion_result(
             markdown,
-            assets: output.assets,
-            diagnostics: output.diagnostics,
             provenance,
-        };
+            [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
+        )?;
         context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
         // Keep the resolver's source-memory lease through conversion,
         // rendering, result assembly, and the terminal event.
@@ -380,6 +392,83 @@ impl Engine {
     }
 }
 
+async fn invoke_converter_preflighted<F>(
+    converter: &dyn Converter,
+    input: &ResolvedInput,
+    candidate: &FormatCandidate,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+    validate: F,
+) -> Result<ConverterOutput, ConversionError>
+where
+    F: FnOnce(&ConverterOutput) -> Result<(), ConversionError>,
+{
+    let plan = converter.planned_output_bytes(input, candidate, options, context)?;
+    let mut memory = context.reserve_memory(plan)?;
+    let credited_context =
+        (plan != 0).then(|| context.with_memory_credit(&mut memory)).transpose()?;
+    let converter_context = credited_context.as_deref().unwrap_or(context);
+    let output = context
+        .run(converter.convert(input, candidate, options, services, converter_context))
+        .await??;
+    let validation_bytes =
+        estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?;
+    let retained_bytes = into_markdown_core::estimate_retained_output(
+        &output.document,
+        &output.assets,
+        &output.diagnostics,
+    )?;
+    let retained_memory = converter_context.reserve_memory(
+        retained_bytes.saturating_sub(output.leased_memory_for(converter_context)),
+    )?;
+    let validation_memory = converter_context.reserve_memory(validation_bytes)?;
+    output.document.validate().map_err(|error| ConversionError::Internal {
+        detail: format!(
+            "converter {} returned invalid document IR ({} at {}): {}",
+            converter.id(),
+            error.code.as_str(),
+            error.path,
+            error.detail
+        ),
+    })?;
+    validate(&output)?;
+    drop(validation_memory);
+    drop(retained_memory);
+    drop(credited_context);
+    output.certify_preflight_reservation(context, memory)
+}
+
+async fn invoke_renderer_preflighted(
+    renderer: &dyn MarkdownRenderer,
+    document: &Document,
+    assets: &[Asset],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<(String, ResourceReservation), ConversionError> {
+    let plan = renderer.planned_markdown_bytes(document, assets, options, context)?;
+    let mut memory = context.reserve_memory(plan)?;
+    let credited_context = context.with_memory_credit(&mut memory)?;
+    let markdown =
+        context.run(renderer.render(document, assets, options, &credited_context)).await??;
+    drop(credited_context);
+    let actual =
+        u64::try_from(markdown.capacity()).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "rendered Markdown capacity cannot be represented as u64".into(),
+        })?;
+    if actual > plan {
+        return Err(ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: format!(
+                "renderer returned {actual} bytes beyond its {plan}-byte preflight plan"
+            ),
+        });
+    }
+    memory.shrink(plan.saturating_sub(actual))?;
+    Ok((markdown, memory))
+}
+
 fn measured_input_bytes(
     input: &into_markdown_core::ResolvedInput,
     options: &into_markdown_core::ConversionOptions,
@@ -409,29 +498,160 @@ fn normalize_confidence(confidence: f32) -> f32 {
     if confidence.is_finite() { confidence.clamp(0.0, 1.0) } else { 0.0 }
 }
 
-fn collect_provenance(nodes: &[BlockNode], output: &mut Vec<into_markdown_core::Provenance>) {
-    for node in nodes {
-        output.push(node.provenance.clone());
-        match &node.block {
-            Block::List { items, .. } => {
-                for item in items {
-                    collect_provenance(&item.blocks, output);
-                }
+fn provenance_inventory_plan(nodes: &[BlockNode]) -> Result<(usize, u64), ConversionError> {
+    fn visit(nodes: &[BlockNode], count: &mut usize, strings: &mut usize) -> Option<()> {
+        for node in nodes {
+            *count = count.checked_add(1)?;
+            for value in [
+                Some(&node.provenance.provider),
+                node.provenance.locator.sheet.as_ref(),
+                node.provenance.locator.font_name.as_ref(),
+                node.provenance.locator.part.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                *strings = strings.checked_add(value.len())?;
             }
-            Block::Table { rows, .. } => {
-                for row in rows {
-                    for cell in &row.cells {
-                        collect_provenance(&cell.blocks, output);
+            match &node.block {
+                Block::List { items, .. } => {
+                    for item in items {
+                        visit(&item.blocks, count, strings)?;
                     }
                 }
+                Block::Table { rows, .. } => {
+                    for cell in rows.iter().flat_map(|row| &row.cells) {
+                        visit(&cell.blocks, count, strings)?;
+                    }
+                }
+                Block::Footnote { blocks, .. }
+                | Block::Page { blocks, .. }
+                | Block::Slide { blocks, .. }
+                | Block::Sheet { blocks, .. } => visit(blocks, count, strings)?,
+                _ => {}
             }
-            Block::Footnote { blocks, .. }
-            | Block::Page { blocks, .. }
-            | Block::Slide { blocks, .. }
-            | Block::Sheet { blocks, .. } => collect_provenance(blocks, output),
-            _ => {}
         }
+        Some(())
     }
+    let (mut count, mut strings) = (0_usize, 0_usize);
+    visit(nodes, &mut count, &mut strings).ok_or_else(|| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "provenance inventory plan overflowed".into(),
+    })?;
+    let bytes = count
+        .checked_mul(std::mem::size_of::<Provenance>())
+        .and_then(|value| value.checked_add(strings))
+        .and_then(|value| value.checked_add(4_096))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "provenance inventory plan overflowed".into(),
+        })?;
+    Ok((count, bytes))
+}
+
+fn provenance_inventory_bytes(values: &Vec<Provenance>) -> Result<u64, ConversionError> {
+    let string_bytes = values.iter().try_fold(0_usize, |total, value| {
+        [
+            Some(&value.provider),
+            value.locator.sheet.as_ref(),
+            value.locator.font_name.as_ref(),
+            value.locator.part.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .try_fold(total, |total, value| total.checked_add(value.capacity()))
+    });
+    values
+        .capacity()
+        .checked_mul(std::mem::size_of::<Provenance>())
+        .and_then(|value| value.checked_add(string_bytes?))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "provenance inventory size overflowed".into(),
+        })
+}
+
+fn fixed_provenance(value: &Provenance) -> Result<Provenance, ConversionError> {
+    Ok(Provenance {
+        kind: value.kind,
+        provider: try_clone_string(&value.provider, "provenance provider allocation failed")?,
+        locator: SourceLocator {
+            byte_start: value.locator.byte_start,
+            byte_end: value.locator.byte_end,
+            page: value.locator.page,
+            slide: value.locator.slide,
+            sheet: value
+                .locator
+                .sheet
+                .as_deref()
+                .map(|value| try_clone_string(value, "provenance sheet allocation failed"))
+                .transpose()?,
+            cell: value.locator.cell.clone(),
+            bounds: value.locator.bounds,
+            character_index: value.locator.character_index,
+            font_name: value
+                .locator
+                .font_name
+                .as_deref()
+                .map(|value| try_clone_string(value, "provenance font allocation failed"))
+                .transpose()?,
+            font_size: value.locator.font_size,
+            rotation_degrees: value.locator.rotation_degrees,
+            page_width: value.locator.page_width,
+            page_height: value.locator.page_height,
+            time: value.locator.time,
+            part: value
+                .locator
+                .part
+                .as_deref()
+                .map(|value| try_clone_string(value, "provenance part allocation failed"))
+                .transpose()?,
+        },
+        confidence: value.confidence,
+    })
+}
+
+fn collect_provenance_preflighted(
+    nodes: &[BlockNode],
+    context: &ExecutionContext,
+) -> Result<(Vec<Provenance>, ResourceReservation), ConversionError> {
+    fn append(
+        nodes: &[BlockNode],
+        output: &mut FixedSlots<Provenance>,
+    ) -> Result<(), ConversionError> {
+        for node in nodes {
+            let value = fixed_provenance(&node.provenance)?;
+            output.push(value)?;
+            match &node.block {
+                Block::List { items, .. } => {
+                    for item in items {
+                        append(&item.blocks, output)?;
+                    }
+                }
+                Block::Table { rows, .. } => {
+                    for cell in rows.iter().flat_map(|row| &row.cells) {
+                        append(&cell.blocks, output)?;
+                    }
+                }
+                Block::Footnote { blocks, .. }
+                | Block::Page { blocks, .. }
+                | Block::Slide { blocks, .. }
+                | Block::Sheet { blocks, .. } => append(blocks, output)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    let (count, bytes) = provenance_inventory_plan(nodes)?;
+    let mut memory = context.reserve_memory(bytes)?;
+    let mut output = FixedSlots::new(count, "provenance inventory allocation failed")?;
+    append(nodes, &mut output)?;
+    let values = output.into_vec()?;
+    let retained = provenance_inventory_bytes(&values)?;
+    memory.shrink(bytes.saturating_sub(retained))?;
+    Ok((values, memory))
 }
 
 #[cfg(test)]
@@ -614,6 +834,15 @@ mod tests {
         ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -629,7 +858,187 @@ mod tests {
                 if id == "invalid.converter" {
                     document.schema_version += 1;
                 }
-                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
+            })
+        }
+    }
+
+    struct CapacityConverter {
+        title_capacity: usize,
+        asset_capacity: usize,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct DeepConverter;
+    impl Converter for DeepConverter {
+        fn id(&self) -> &'static str {
+            "test.deep"
+        }
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            &[InputFormat::Text]
+        }
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+        }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(2 * 1024 * 1024)
+        }
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            Box::pin(async {
+                let provenance = Provenance {
+                    kind: into_markdown_core::ProvenanceKind::NativeParser,
+                    provider: "test.deep".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                };
+                let mut node = BlockNode {
+                    id: into_markdown_core::NodeId("depth-0".into()),
+                    block: Block::Rule,
+                    provenance: provenance.clone(),
+                };
+                for depth in 1..=256 {
+                    node = BlockNode {
+                        id: into_markdown_core::NodeId(format!("depth-{depth}")),
+                        block: Block::Page {
+                            number: u32::try_from(depth).unwrap(),
+                            blocks: vec![node],
+                        },
+                        provenance: provenance.clone(),
+                    };
+                }
+                Ok(ConverterOutput::new(
+                    Document { blocks: vec![node], ..Document::default() },
+                    Vec::new(),
+                    Vec::new(),
+                ))
+            })
+        }
+    }
+
+    struct CreditConverter;
+    impl Converter for CreditConverter {
+        fn id(&self) -> &'static str {
+            "test.credit"
+        }
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            &[InputFormat::Text]
+        }
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+        }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(190_000)
+        }
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            Box::pin(async move {
+                let work = context.reserve_memory(110_000)?;
+                let mut title = String::new();
+                title.try_reserve_exact(100_000).map_err(|_| ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "credit fixture allocation failed".into(),
+                })?;
+                title.push('x');
+                drop(work);
+                let mut document = Document::default();
+                document.metadata.title = Some(title);
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
+            })
+        }
+    }
+    impl Converter for CapacityConverter {
+        fn id(&self) -> &'static str {
+            "test.capacity"
+        }
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            &[InputFormat::Text]
+        }
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+        }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(u64::try_from(
+                self.title_capacity.saturating_add(self.asset_capacity).saturating_add(4096),
+            )
+            .unwrap_or(u64::MAX))
+        }
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            let title_capacity = self.title_capacity;
+            let asset_capacity = self.asset_capacity;
+            let calls = Arc::clone(&self.calls);
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut title = String::with_capacity(title_capacity);
+                title.push('x');
+                let mut document = Document::default();
+                document.metadata.title = Some(title);
+                let assets = if asset_capacity == 0 {
+                    Vec::new()
+                } else {
+                    let mut bytes = Vec::with_capacity(asset_capacity);
+                    bytes.push(1);
+                    vec![Asset {
+                        id: into_markdown_core::AssetId("capacity".into()),
+                        filename: None,
+                        media_type: "application/octet-stream".into(),
+                        bytes,
+                        external_uri: None,
+                    }]
+                };
+                Ok(ConverterOutput::new(document, assets, Vec::new()))
             })
         }
     }
@@ -659,6 +1068,15 @@ mod tests {
         ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
             Box::pin(async move { Ok(ProbeOutcome::Match { confidence: self.probe_confidence }) })
         }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -671,7 +1089,7 @@ mod tests {
             Box::pin(async move {
                 let mut document = Document::default();
                 document.metadata.title = Some(id.into());
-                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
             })
         }
     }
@@ -681,6 +1099,15 @@ mod tests {
         fn id(&self) -> &'static str {
             "test.renderer"
         }
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn render<'a>(
             &'a self,
             _: &'a Document,
@@ -689,6 +1116,38 @@ mod tests {
             _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<String, ConversionError>> {
             Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    struct CapacityRenderer(usize, Arc<std::sync::atomic::AtomicUsize>);
+    impl MarkdownRenderer for CapacityRenderer {
+        fn id(&self) -> &'static str {
+            "test.capacity-renderer"
+        }
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(u64::try_from(self.0).unwrap_or(u64::MAX))
+        }
+        fn render<'a>(
+            &'a self,
+            _: &'a Document,
+            _: &'a [Asset],
+            _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<String, ConversionError>> {
+            let capacity = self.0;
+            let calls = Arc::clone(&self.1);
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut markdown = String::with_capacity(capacity);
+                markdown.push('x');
+                Ok(markdown)
+            })
         }
     }
 
@@ -756,6 +1215,121 @@ mod tests {
         let error = block_on(engine.convert(request)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
         assert!(error.to_string().contains("unsupportedSchemaVersion"));
+    }
+
+    #[test]
+    fn overdeep_converter_ir_is_bounded_before_retained_estimation() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(DeepConverter));
+        let engine = builder.build().unwrap();
+        let mut request =
+            ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        request.options.limits.max_memory_bytes = 4 * 1024 * 1024;
+        let error = block_on(engine.convert(request)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+        assert!(error.to_string().contains("documentDepth"));
+    }
+
+    #[test]
+    fn provenance_inventory_has_exact_preallocation_boundary_and_drop_release() {
+        let long = "p".repeat(32 * 1024);
+        let nodes = vec![BlockNode {
+            id: into_markdown_core::NodeId("node".into()),
+            block: Block::Rule,
+            provenance: Provenance {
+                kind: into_markdown_core::ProvenanceKind::NativeParser,
+                provider: long.clone(),
+                locator: SourceLocator { font_name: Some(long), ..SourceLocator::default() },
+                confidence: None,
+            },
+        }];
+        let (_, required) = provenance_inventory_plan(&nodes).unwrap();
+        let low = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: required - 1,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            collect_provenance_preflighted(&nodes, &low),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert_eq!(low.reserved_memory_bytes(), 0);
+
+        let exact = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_memory_bytes: required, ..Default::default() },
+        );
+        let (inventory, memory) = collect_provenance_preflighted(&nodes, &exact).unwrap();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory.capacity(), 1);
+        assert_eq!(exact.reserved_memory_bytes(), provenance_inventory_bytes(&inventory).unwrap());
+        drop(inventory);
+        drop(memory);
+        assert_eq!(exact.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn converter_credit_allows_more_than_half_plan_without_double_charge() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(CreditConverter));
+        let engine = builder.build().unwrap();
+        let mut request = ConversionRequest::new(InputRef::bytes(b"x".as_slice(), Some("x.txt")));
+        request.options.limits.max_memory_bytes = 190_001;
+        let result = block_on(engine.convert(request)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("x"));
+        assert!(result.has_memory_lease());
+    }
+
+    #[test]
+    fn engine_accounts_large_ir_capacity_with_and_without_assets() {
+        for (title_capacity, asset_capacity) in [(80_000, 0), (40_000, 40_000)] {
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+            builder
+                .registry_mut()
+                .register_source_resolver(Arc::new(BytesResolver))
+                .register_format_detector(Arc::new(TextDetector))
+                .register_converter(Arc::new(CapacityConverter {
+                    title_capacity,
+                    asset_capacity,
+                    calls: Arc::clone(&calls),
+                }));
+            let engine = builder.build().unwrap();
+            let mut request =
+                ConversionRequest::new(InputRef::bytes(b"x".as_slice(), Some("x.txt")));
+            request.options.limits.max_memory_bytes = 70_000;
+            let error = block_on(engine.convert(request)).unwrap_err();
+            assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn engine_accounts_renderer_spare_capacity_without_assets() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut builder =
+            EngineBuilder::new().renderer(Arc::new(CapacityRenderer(80_000, Arc::clone(&calls))));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(MatchingConverter("capacity.renderer")));
+        let engine = builder.build().unwrap();
+        let mut request = ConversionRequest::new(InputRef::bytes(b"x".as_slice(), Some("x.txt")));
+        request.options.limits.max_memory_bytes = 70_000;
+        let error = block_on(engine.convert(request)).unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -988,6 +1562,15 @@ mod tests {
             }
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -1006,6 +1589,15 @@ mod tests {
     impl MarkdownRenderer for CancellingPipeline {
         fn id(&self) -> &'static str {
             "test.cancelling.renderer"
+        }
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(0)
         }
         fn render<'a>(
             &'a self,
