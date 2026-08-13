@@ -1280,7 +1280,7 @@ fn recover_parent_transactions(parents: &[SafeDir]) -> Result<(), CliError> {
 }
 
 /// Recover every exact manager transaction directory directly under `root`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn recover_pending(root: &Path) -> Result<(), CliError> {
     let root = root.canonicalize()?;
     #[cfg(unix)]
@@ -2768,7 +2768,7 @@ fn recovery_failed(operation: &str, error: &CliError) -> CliError {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use into_markdown::{ExecutionOptions, ResourceLimits};

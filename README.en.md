@@ -5,7 +5,7 @@
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
-command-line shell, production TXT/CSV/TSV and character-set converters, and contract
+command-line shell, production TXT/CSV/TSV/JSON/XML and character-set converters, and contract
 tests. It does not yet contain OCR inference, network clients, or LLM calls.
 
 The project is implemented independently of the neighbouring `anydoc` and
@@ -72,6 +72,15 @@ Use `--table-header auto|always|never` and `--ragged-rows strict|pad`; conservat
 header detection and strict rectangular rows are the defaults. Values remain
 literal text, with pipe and line-ending escaping handled by the central renderer.
 
+JSON and XML conversion is available. JSON strictly validates RFC 8259, rejects
+duplicate keys, and preserves source object order and number lexemes. XML accepts
+UTF-8 and UTF-16LE/BE, retains QName/namespace information, source-ordered
+attributes, mixed text, CDATA, and processing instructions, and records comments
+in document metadata. DTDs and custom or external entities are rejected. Both
+converters report provenance in original-source byte offsets. Complete top-level
+JSON scalars are auto-detected. Every XML attribute exposes independent QName and
+value spans, and UTF-16 provenance reuses the compact run decoder.
+
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source
 archives but no reviewed final ONNX/character-table runtime files, so
@@ -80,7 +89,7 @@ that source archives are installed models. Verify, path, and remove return the
 same error for this source-only entry and ignore forged install-state directories.
 Windows model installation remains fail-closed until durable, reparse-safe
 directory-handle flushing is implemented; path resolution and offline metadata remain available.
-Other format conversion, OCR inference,
+Other unavailable format conversion, OCR inference,
 provider requests, and plugin execution remain unavailable.
 
 The detailed design documents are maintained in Chinese. See the

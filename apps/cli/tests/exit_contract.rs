@@ -73,12 +73,12 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     std::fs::write(&json_path, &large_json).unwrap();
     let output =
         Command::new(binary()).args(["--no-config", json_path.to_str().unwrap()]).output().unwrap();
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("noConverter"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
 
     let output = run_with_stdin(&["--no-config", "-"], large_json.as_bytes());
-    assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("json"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
 
     let csv_path = directory.path().join("table.txt");
     std::fs::write(&csv_path, b"name,age\nAlice,42\nBob,30\n").unwrap();
@@ -107,7 +107,31 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     boundary_junk.push_str(suffix);
     boundary_junk.push_str(" trailing prose");
     let output = run_with_stdin(&["--no-config", "-"], boundary_junk.as_bytes());
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+}
+
+#[test]
+fn json_depth_4096_never_uses_the_process_stack() {
+    let mut deepest_allowed = "[".repeat(4096);
+    deepest_allowed.push('0');
+    deepest_allowed.push_str(&"]".repeat(4096));
+    let output = run_with_stdin(
+        &["--no-config", "--format", "json", "--max-depth", "4096", "-"],
+        deepest_allowed.as_bytes(),
+    );
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
+
+    let mut excessive = "[".repeat(4097);
+    excessive.push('0');
+    excessive.push_str(&"]".repeat(4097));
+    let output = run_with_stdin(
+        &["--no-config", "--format", "json", "--max-depth", "4096", "-"],
+        excessive.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
 }
 
 #[test]

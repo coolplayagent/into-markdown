@@ -4,7 +4,7 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、TXT/CSV/TSV 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
+GFM 渲染器、TXT/CSV/TSV/JSON/XML 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
 网络客户端或 LLM 调用。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
@@ -58,10 +58,16 @@ BOM，并复用 TXT 的安全字符集解码。`--table-header auto|always|never
 `--ragged-rows strict|pad` 控制不等宽记录；默认保守识别表头并严格拒绝不等宽记录。
 所有值作为文本进入 IR，中央 GFM 渲染器负责 pipe 与换行转义。
 
+JSON 与 XML 转换可用。JSON 严格校验 RFC 8259、拒绝重复键、保留对象源顺序与数字
+lexeme；XML 支持 UTF-8 和 UTF-16LE/BE，保留 QName、namespace、属性源顺序、mixed text、
+CDATA 与 PI，并把注释记录在文档 metadata。XML 的 DTD、自定义/外部实体稳定拒绝，
+两种格式的 provenance 都使用原始输入字节范围。完整 JSON 顶层标量也会自动识别；XML 每个
+属性的 QName/value 具有独立原始 byte span，UTF-16 映射复用 compact run decoder。
+
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
 `componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
-不会读取伪造安装状态或伪装成功。其他格式转换、OCR 推理、Provider 请求和插件
+不会读取伪造安装状态或伪装成功。其他尚未可用的格式转换、OCR 推理、Provider 请求和插件
 执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 同样 fail closed；目录解析和离线元数据查询不受影响。
 

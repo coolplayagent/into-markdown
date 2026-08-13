@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT、CSV、TSV 状态为 `available`，其余尚未
+运行时的权威列表以 `into-md formats` 输出为准。TXT、CSV、TSV、JSON、XML 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -55,6 +55,32 @@ CSV 使用逗号，TSV 使用 Tab；分隔符不从内容猜测后互换。解�
 `always` 与 `never` 可覆盖。每个单元格内容节点的 provenance 使用原始编码的半开 byte
 range，范围包含外围引号和 doubled quote 原始字节；`locator.cell` 保存零基行列。
 Table 节点覆盖全部原始记录。转换输出始终为矩形 Table IR，GFM 转义只由中央渲染器完成。
+
+## JSON 与 XML
+
+JSON 转换器实现 RFC 8259 的对象、数组与标量。对象属性保持源顺序；重复键会稳定拒绝，
+避免不同消费者采用 first-wins 或 last-wins 造成歧义。数字以原始 lexeme 进入 Inline Code，
+不经浮点转换，因此任意长度整数和指数形式不会丢失精度。对象与数组容器按直接 member 名或
+数组索引生成层级标题，标量按源序形成段落或代码块；所有内容仍先进入统一 IR。字符串严格校验 escape、
+控制字符与 UTF-16 surrogate pair。JSON 接受无 BOM 或 UTF-8 BOM 的 UTF-8，BOM 不进入内容，
+provenance 均映射到原始输入半开 byte range。无格式提示时，忽略 RFC 空白后完整匹配 RFC 8259
+的对象、数组、`true`、`false`、`null`、数字或字符串均确定为 JSON；例如 `true`、`123` 与
+`"x"` 不再作为 TXT。扩展名、MIME 或显式格式提示仍优先选择 JSON converter。
+
+XML 转换器接受 UTF-8、UTF-8 BOM、UTF-16LE/BE BOM，以及带 XML magic 的无 BOM UTF-16
+声明输入。声明必须与实际编码一致；其他编码稳定拒绝。元素按文档序生成层级标题，属性按
+源顺序各自写入 `xml-attribute-name` 与 `xml-attribute-value` IR code block；前者记录 QName、
+local name、prefix 与 namespace URI，二者的 provenance 分别覆盖原始 QName 与引号内 value。
+mixed text 与 CDATA 保持事件顺序；注释保存在 `xml.comment.NNNNNN` 文档 metadata，
+processing instruction 以明确的 `xml-processing-instruction` IR code block 保留。
+
+XML 使用 namespace-aware streaming parser，校验作用域、未绑定 prefix、重复 expanded
+attribute 与 closing tag。DOCTYPE、DTD 和自定义实体全部拒绝，也不会创建 external resolver；
+仅五个预定义实体与 numeric character reference 可解码，并受累计文本预算约束。UTF-16
+解码维护 decoded UTF-8 boundary 到原始字节的紧凑映射，因此元素、文本、CDATA、实体与 PI
+的 provenance 仍指向原始编码字节。两种格式都执行输入、nesting、node、string/text、内存、
+取消与 deadline 预算。JSON token、显式容器栈和 IR，以及 XML 解码、紧凑映射、事件栈、
+属性扫描和 IR 均在分配前计入同一请求的逻辑内存；明确的结构化前缀即使损坏也不会回退为 TXT。
 
 默认严格拒绝非法或截断序列；传统字符集使用增量 decoder 报告的 malformed 长度和
 已消费范围定位原始字节，不以 lead-byte 宽度猜测。replacement 模式为 decoder 实际
