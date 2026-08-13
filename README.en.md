@@ -71,6 +71,11 @@ Portable bundle manifests use `schemaVersion: 2`; `sourceAssetIds` maps multiple
 document asset IDs to one physical entry.
 [DTO contract](docs/dto.md) defines compatibility and untrusted JSON budgets.
 
+DOCX and DOCM conversion is available for styled headings, rich text,
+numbering, tables, links, images, footnotes, headers and footers, comments,
+fields, and formulas. Macro parts are never read or executed; encrypted,
+malformed, and over-budget ZIP/XML inputs fail closed with stable errors.
+
 TXT conversion is available for UTF-8, BOM-marked UTF-16, and a bounded set of
 detectable legacy encodings. Explicit `--charset` also accepts `windows-1252`,
 `gb18030`, `big5`, and `shift_jis`. Invalid sequences fail strictly by default;

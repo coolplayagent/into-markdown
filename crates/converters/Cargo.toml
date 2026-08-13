@@ -12,6 +12,7 @@ chardetng.workspace = true
 encoding_rs.workspace = true
 html5ever.workspace = true
 image.workspace = true
+flate2.workspace = true
 into-markdown-core = { path = "../core" }
 pulldown-cmark.workspace = true
 quick-xml.workspace = true

@@ -82,6 +82,9 @@ external-only Asset 保持结构化且不下载；inline、相对或危险目标
 raw HTML 与 blockquote 在现有 IR 中保存为不可执行代码容器并产生诊断。
 详细检测、编码、资源与降级规则见[格式矩阵](docs/formats.md)。
 
+DOCX 与 DOCM 转换可用，覆盖标题样式、富文本、编号、表格、链接、图片、脚注、页眉页脚、
+批注、字段和公式。宏部件永不读取或执行；加密、损坏及超出 ZIP/XML/资源预算的输入稳定拒绝。
+
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
 `componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，

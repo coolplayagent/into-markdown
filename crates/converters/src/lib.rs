@@ -3,6 +3,7 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod delimited;
+mod docx;
 mod html;
 mod markdown;
 mod notebook;
@@ -10,6 +11,7 @@ mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
+pub use docx::DocxConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use notebook::NotebookConverter;
@@ -87,7 +89,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Docx,
         family: "document",
         extensions: &["docx", "docm"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Ppt,
