@@ -1,4 +1,5 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(default_visibility = ["//crates:__subpackages__"])
 
@@ -9,5 +10,14 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "into_markdown_ai",
     edition = "2024",
-    deps = ["//crates/core"],
+    deps = ["//crates/core"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "ai_test",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/lib.rs",
+    crate_name = "into_markdown_ai_test",
+    edition = "2024",
+    deps = ["//crates/core"] + all_crate_deps(normal = True),
 )

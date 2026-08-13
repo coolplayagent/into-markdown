@@ -1,4 +1,12 @@
-//! AI provider contracts and non-networking placeholder implementations.
+//! AI provider contracts, bounded direct transport, and placeholder implementations.
+
+mod openai;
+
+pub use openai::{
+    GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
+    OpenAiCompatibleClient, ProviderConfig, ProviderError, ProviderErrorCode,
+    ProviderNetworkPolicy, ProviderTestResult,
+};
 
 use into_markdown_core::{
     AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, ExecutionContext,
@@ -34,7 +42,7 @@ pub struct AiProviderDescriptor {
 #[must_use]
 pub fn planned_providers() -> &'static [AiProviderDescriptor] {
     &[
-        AiProviderDescriptor { id: "openai-compatible", status: "planned" },
+        AiProviderDescriptor { id: "openai-compatible", status: "available" },
         AiProviderDescriptor { id: "process-plugin-v1", status: "planned" },
         AiProviderDescriptor { id: "wasi-plugin-v1", status: "planned" },
     ]

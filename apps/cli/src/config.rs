@@ -643,6 +643,11 @@ fn validate_provider_url(name: &str, value: &str) -> Result<(), CliError> {
             "provider '{name}' URL must not include user information"
         )));
     }
+    if url.query().is_some() || url.fragment().is_some() || url.as_str() != value {
+        return Err(CliError::config(format!(
+            "provider '{name}' URL must be canonical and must not include a query or fragment"
+        )));
+    }
     Ok(())
 }
 
@@ -848,6 +853,7 @@ pub fn add_provider(
 }
 
 pub fn remove_provider(scope: Scope, cwd: &Path, name: &str) -> Result<PathBuf, CliError> {
+    validate_id("provider", name)?;
     mutate_scope(scope, cwd, |root| remove_nested(root, &format!("providers.{name}")))
 }
 
@@ -975,15 +981,41 @@ fn parse_toml_value(input: &str) -> toml::Value {
 fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), CliError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
-    if path.exists() && !replace {
-        return Err(CliError::config(format!("path already exists: {}", path.display())));
-    }
+    let existing_permissions = match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Err(CliError::config(format!(
+                    "configuration path is not a regular file: {}",
+                    path.display()
+                )));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.uid() != rustix::process::geteuid().as_raw() {
+                    return Err(CliError::config(format!(
+                        "configuration file is not owned by the current user: {}",
+                        path.display()
+                    )));
+                }
+            }
+            if !replace {
+                return Err(CliError::config(format!("path already exists: {}", path.display())));
+            }
+            Some(metadata.permissions())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("config");
     let mut temporary = tempfile::Builder::new()
         .prefix(&format!(".{filename}.into-md-"))
         .suffix(".tmp")
         .tempfile_in(parent)?;
     temporary.write_all(bytes)?;
+    if let Some(permissions) = existing_permissions {
+        temporary.as_file().set_permissions(permissions)?;
+    }
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| CliError::from(error.error))?;
     Ok(())
@@ -1495,14 +1527,14 @@ enabled = true
     }
 
     #[test]
-    fn resolved_display_includes_redacted_value_sources() {
+    fn resolved_display_includes_canonical_provider_value_sources() {
         let root = temporary_directory("resolved-sources");
         fs::write(
             root.join("config.toml"),
             r#"schema_version = 1
 [providers.remote]
 type = "openai-compatible"
-base_url = "https://example.com/v1?signature=secret"
+base_url = "https://example.com/v1"
 model = "vision"
 api_key_env = "VISION_API_KEY"
 "#,
@@ -1512,7 +1544,7 @@ api_key_env = "VISION_API_KEY"
         let display = loaded.display_value(true).unwrap();
         let text = display.to_string();
         assert!(display.get("_sources").is_some());
-        assert!(!text.contains("signature=secret"));
+        assert!(!text.contains("Authorization"));
         assert!(text.contains("config.toml"));
         fs::remove_dir_all(root).unwrap();
     }

@@ -270,3 +270,12 @@ wasm-bindgen-shared	0.2.127	Apache-2.0
 wide	0.7.33	Apache-2.0
 zerocopy	0.8.56	Apache-2.0
 zerocopy-derive	0.8.56	Apache-2.0
+ring	0.17.14	Apache-2.0 AND ISC
+rustls	0.23.32	MIT
+rustls-pki-types	1.15.1	MIT
+rustls-webpki	0.103.14	ISC
+subtle	2.6.1	BSD-3-Clause
+untrusted	0.9.0	ISC
+webpki-roots	1.0.3	CDLA-Permissive-2.0
+zeroize	1.8.2	MIT
+windows-sys	0.52.0	MIT

@@ -280,6 +280,10 @@ CLI 只接受 API Key 的环境变量名，不提供明文 `--api-key`。`provid
 发送最小能力探测请求，不发送文档内容。远程输入、转换选定的 AI Provider 与
 `providers test` 共用相同的 URL 策略：仅允许无用户信息的 HTTP(S) URL，并执行配置
 与当前调用的主机交集及私网双重授权检查，之后才能进入具体后端。
+Provider base URL 还必须是字节级 canonical 且不含 query/fragment。公网目标仅接受 HTTPS；
+HTTP 只用于本次命令同时传入 `--allow-network --allow-private-network` 的非公网目标。
+探测返回固定 `schemaVersion`、配置模型是否可见、模型数量和配置 capability；不会跟随
+重定向或把 Authorization 转发到其它 origin。
 
 ### 插件
 

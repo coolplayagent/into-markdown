@@ -14,7 +14,9 @@ use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
     AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, FormatHint,
-    InputFormat, InputRef, OcrPolicy, RaggedRowsMode, TableHeaderMode, TextDecodingMode,
+    InputFormat, InputRef, OcrPolicy, OpenAiCompatibleClient,
+    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, RaggedRowsMode,
+    TableHeaderMode, TextDecodingMode,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -454,11 +456,12 @@ struct ProviderView<'a> {
     default: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_providers(
     command: Option<ProvidersCommand>,
     json: bool,
     loaded: &LoadedConfig,
-    catalog: Catalog,
+    _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     match command {
@@ -532,11 +535,41 @@ fn run_providers(
                 &arguments.allow_host,
             )?;
             validate_network_url(&provider.base_url, &options, "provider")?;
-            Err(CliError::component(format!(
-                "providers test {}: {}",
-                arguments.name,
-                catalog.unavailable()
-            )))
+            let timeout = std::time::Duration::from_millis(
+                provider.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
+            );
+            let provider_config = TransportProviderConfig::parse(
+                &provider.base_url,
+                &provider.model,
+                &provider.api_key_env,
+                timeout,
+                provider.capabilities.clone(),
+            )?;
+            let client = OpenAiCompatibleClient::new(
+                provider_config,
+                ProviderNetworkPolicy {
+                    allow_network: options.network.enabled,
+                    allow_private_network: !options.network.deny_private_networks,
+                    allowed_hosts: options.network.allowed_hosts.clone(),
+                },
+            );
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions {
+                    timeout: Some(timeout),
+                    ..into_markdown::ExecutionOptions::default()
+                },
+                options.limits,
+            );
+            let result = client.test(&execution)?;
+            if json {
+                write_json(context.stdout, &result)
+            } else {
+                writeln!(context.stdout, "provider: {}", arguments.name)?;
+                writeln!(context.stdout, "model available: {}", result.configured_model_available)?;
+                writeln!(context.stdout, "models observed: {}", result.model_count)?;
+                writeln!(context.stdout, "capabilities: {}", result.capabilities.join(", "))?;
+                Ok(())
+            }
         }
     }
 }

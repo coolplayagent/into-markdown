@@ -8,8 +8,8 @@ provider interfaces, registry and pipeline, a deterministic GFM renderer,
 command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, and
 a pinned ONNX Runtime CPU safety layer, and contract tests. The model authority does not yet
 contain executable ONNX artifacts, so OCR reports model unavailability instead
-of treating Paddle source archives as models. Network clients and LLM calls are
-not implemented yet.
+of treating Paddle source archives as models. The OpenAI-compatible transport is available only
+under explicit per-invocation network authorization; AI-to-IR routing remains a separate concern.
 
 The project is implemented independently of the neighbouring `anydoc` and
 `markitdown` projects. Documents from every source, including PDF, OCR, and
@@ -163,3 +163,11 @@ The authoritative CLI and configuration specifications are maintained in
 Chinese: [command-line design](docs/cli.md) and
 [configuration](docs/configuration.md). License policy, third-party sources,
 and release auditing are covered by [license governance](docs/licensing.md).
+## OpenAI-compatible provider security
+
+Provider configuration stores only an API-key environment-variable name. Every provider operation
+requires `--allow-network` on that invocation; loopback, link-local, and private addresses also
+require `--allow-private-network`. The direct Rustls transport ignores proxy environment variables,
+rejects redirects, validates every resolved address, and enforces bounded HTTP, decompression, JSON,
+retry, cancellation, and deadline policies. `providers test` sends only a fixed model-list request
+and never sends document content.

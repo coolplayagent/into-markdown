@@ -1,7 +1,7 @@
 //! Stable CLI error and exit-code mapping.
 
 use crate::args::Language;
-use into_markdown::{ConversionError, ErrorCode};
+use into_markdown::{ConversionError, ErrorCode, ProviderError, ProviderErrorCode};
 
 /// Stable shell-level failure classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +161,25 @@ impl From<ConversionError> for CliError {
             _ => ExitClass::Internal,
         };
         Self::new(class, error.code().as_str(), error.to_string())
+    }
+}
+
+impl From<ProviderError> for CliError {
+    fn from(error: ProviderError) -> Self {
+        let class = match error.code() {
+            ProviderErrorCode::NetworkDenied
+            | ProviderErrorCode::HostDenied
+            | ProviderErrorCode::PrivateNetworkDenied
+            | ProviderErrorCode::InvalidConfiguration
+            | ProviderErrorCode::ResourceLimit => ExitClass::Policy,
+            ProviderErrorCode::Dns
+            | ProviderErrorCode::Connect
+            | ProviderErrorCode::Tls
+            | ProviderErrorCode::Timeout => ExitClass::Network,
+            ProviderErrorCode::Cancelled => ExitClass::Cancelled,
+            _ => ExitClass::Ai,
+        };
+        Self::new(class, error.code_str(), error.code_str())
     }
 }
 

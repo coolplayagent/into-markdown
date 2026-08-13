@@ -222,3 +222,24 @@ HTML/XML/notebook 活动内容只验证解析与惰性展示边界。
 allowlist、不可变 SHA-256、大小且固定拒绝 redirect；普通测试、license check 和 release
 audit 都不得触发下载。release audit 进一步要求这些 `fixture-input` inventory 项保持
 `included_in_release=false`，避免测试生成工具或模型意外进入产品归档。
+
+## OpenAI-compatible Provider 传输
+
+Provider 配置只保存环境变量名。命令完成 URL、host allowlist、DNS 结果和每一个地址的
+公网/私网分类后才读取环境变量；空值、非 Unicode、控制字节和超限值均拒绝。密钥由不可
+Clone、不可 Debug/Display 的请求局部对象持有，Authorization 请求缓冲和密钥在释放时清零，
+错误、JSON 输出、日志和配置没有响应自由文本或密钥字段。
+
+传输固定使用 Rustls 0.23.32、ring 和 webpki-roots 1.0.3 的 Mozilla 根集合，四个目标平台
+使用同一根策略；不读取平台证书库、HTTP(S)_PROXY、PATH 或代理环境变量。DNS 在有界工作
+线程解析；空结果或同时包含公网与未授权私网地址均 fail closed。连接只使用已检查的具体
+SocketAddr，Host 与 TLS SNI 使用同一个 canonical hostname。HTTP 只允许已显式双重授权的
+非公网地址；公网 Provider 必须使用 HTTPS。重定向和 protocol upgrade 均拒绝，因此
+Authorization 不会跨 origin 转发。
+
+HTTP/1.1 parser 对 header、header 数量、Content-Length、chunk、压缩体、解压体和 JSON
+结构设硬限，拒绝 obs-fold、重复长度、CL/TE 冲突、未知 transfer/content encoding、trailer、
+非法 charset 和 gzip bomb。socket 轮询、DNS、connect、TLS、retry wait、header/body 读取均
+检查 ExecutionContext 取消与总 deadline。GET 能力探测以及携带显式 idempotency key 的 POST
+才允许对 429/5xx 有限重试；Retry-After 只接受有界 delta-seconds。`providers test` 固定只发
+`GET /models`，不包含用户文档或 prompt；服务端字段不能扩大本地配置的 capability allowlist。
