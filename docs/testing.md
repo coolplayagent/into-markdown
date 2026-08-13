@@ -298,6 +298,11 @@ transcriber，RTF 成功和失败路径均不得调用这些服务。crate 单�
 重复定义的确定性覆盖、4096 项硬边界、低内存分配前失败，以及受控 bytes helper 的同一
 context lease 获取与释放。
 
+MSG 样本由仓库生成器直接写出 CFB directory/FAT/miniFAT 和 MAPI property streams，不依赖
+Outlook 或外部邮件。plain、HTML、LZFu/RTF adapter、CID、by-value/embedded attachment、
+截断、循环 FAT 和精确输入边界进入同一 manifest；模块内额外用程序生成的变体覆盖 sector
+重叠、String8 codepage、附件来源链以及取消/资源错误不会 panic。
+
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，
 两者均不进入普通测试或发布物。该质量目标通过产品 `ModelManager` 安装原始官方 TAR，

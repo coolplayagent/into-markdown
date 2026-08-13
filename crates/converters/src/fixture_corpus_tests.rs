@@ -162,6 +162,7 @@ fn format(value: &str) -> InputFormat {
         "json" => InputFormat::Json,
         "markdown" => InputFormat::Markdown,
         "rtf" => InputFormat::Rtf,
+        "outlook-msg" => InputFormat::OutlookMsg,
         "text" => InputFormat::Text,
         "tsv" => InputFormat::Tsv,
         "xml" => InputFormat::Xml,
@@ -181,6 +182,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Epub => Box::new(EpubConverter),
         InputFormat::Feed => Box::new(FeedConverter),
         InputFormat::Rtf => Box::new(RtfConverter),
+        InputFormat::OutlookMsg => Box::new(MsgConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }

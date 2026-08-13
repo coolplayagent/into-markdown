@@ -1412,6 +1412,24 @@ fn convert_html(
     )
 }
 
+/// Convert an already isolated HTML body through the standalone HTML security boundary.
+/// Container converters use this narrow seam instead of duplicating HTML parsing.
+pub(crate) fn convert_embedded_html(
+    bytes: &[u8],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    let input = ResolvedInput {
+        bytes: std::sync::Arc::from(bytes),
+        metadata: into_markdown_core::SourceMetadata {
+            media_type: Some("text/html".into()),
+            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            ..into_markdown_core::SourceMetadata::default()
+        },
+    };
+    convert_html(&input, options, context)
+}
+
 fn parse_html_dom(sink: Dom, text: &str) -> Dom {
     let parse_options = ParseOpts {
         tree_builder: html5ever::tree_builder::TreeBuilderOpts {

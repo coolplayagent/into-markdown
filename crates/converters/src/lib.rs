@@ -8,6 +8,7 @@ mod epub;
 mod feed;
 mod html;
 mod markdown;
+mod msg;
 mod notebook;
 mod pdf;
 mod remote;
@@ -26,6 +27,7 @@ pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
+pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use pdf::PdfConverter;
 pub use remote::HttpSourceResolver;
@@ -243,7 +245,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::OutlookMsg,
         family: "message",
         extensions: &["msg"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::YouTube,

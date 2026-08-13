@@ -25,6 +25,13 @@ module and executed only by the explicit pinned-PDFium smoke. Keeping those byte
 ordinary manifest lets the default Cargo/Bazel corpus remain offline and runtime-independent while
 the registry still declares PDF available.
 
+Outlook MSG fixtures are produced entirely by `fixtures/generate.py --msg-only`. The deterministic
+writer creates CFB directory, FAT, miniFAT and MAPI property streams from repository-authored names,
+addresses, bodies and attachment bytes; it does not use Outlook, copy mail, or download a template.
+The corpus covers plain, HTML, LZFu/RTF adapter routing, CID, embedded attachment provenance,
+truncation, a cyclic FAT and the exact input-byte boundary. Every generated MSG remains Apache-2.0
+repository content and carries the same generator/hash/license authority as the other small fixtures.
+
 ## Storage and network boundary
 
 Small fixtures are Apache-2.0 repository-generated files checked into `small/`; ordinary Cargo and

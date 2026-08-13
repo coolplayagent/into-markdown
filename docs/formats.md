@@ -1,7 +1,7 @@
 # 规划格式矩阵
 
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、TXT、Markdown、HTML、
-CSV、TSV、JSON、XML、RSS/Atom、IPYNB、RTF 状态为 `available`，其余尚未
+CSV、TSV、JSON、XML、RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -13,6 +13,27 @@ CSV、TSV、JSON、XML、RSS/Atom、IPYNB、RTF 状态为 `available`，其余�
 | 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
 | 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+
+## Outlook MSG
+
+MSG 转换器默认离线读取 CFB/OLE 与 MAPI property streams，提取发件人、To/CC/BCC、主题、
+提交或送达时间、传输头和正文。正文选择顺序固定为 HTML、压缩 RTF、纯文本；HTML 复用同一
+HTML5 安全转换边界，纯文本直接进入统一 IR。压缩 RTF 先完整验证 MS-OXRTFCP header、CRC、
+dictionary 与 back-reference，再把原始 RTF bytes 交给窄 RTF 转换接口；没有可用的有界 RTF
+组件时返回 `componentUnavailable`，不会回退到低语义正文或内置另一套 RTF parser。
+
+String8 只接受显式受支持 MAPI codepage 并无替换解码；Unicode property stream 必须是对齐、
+有效且不含 NUL 的 UTF-16LE，property entry 的声明大小另外计入规范终止符。附件只接受离线
+by-value 和 embedded-message 方法，名称、MIME、
+Content-ID、单项与总字节数均先校验。CID 资源作为本地 Asset 返回，不解析或获取远程目标；
+嵌套 MSG 在同一 CFB directory graph 内递归，受共享深度、条目、展开字节、资源和工作预算约束。
+每个正文、header、附件说明和嵌套节点的 provenance `part` 保留从 `msg` 根到 property stream
+及 attachment storage 的完整链；附件 Asset ID 与同一链也写入 namespaced metadata。
+
+CFB reader 在分配和发布前验证 version/sector shift、DIFAT/FAT/miniFAT、directory sibling/child
+图、stream 声明长度及全部 sector/mini-sector 所有权。循环、重复所有权、交叉重叠、越界、
+截断、扇区数量炸弹、重复大小写名称、危险附件路径、未知 codepage 和 property length 不一致
+均 fail closed。解析不调用网络、系统 Outlook、COM、外部命令或可选 AI 服务。
 
 ## PDF
 

@@ -18,6 +18,11 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   保留资源数，并限制实现显式计费的内存与请求临时文件字节数。所有累加使用 checked
   arithmetic，临时文件由执行上下文负责 RAII 清理。
 - 归档路径必须规范化，拒绝路径穿越和绝对路径，解压时不得跟随符号链接。
+- Outlook MSG 的 CFB/OLE reader 对 DIFAT、FAT、miniFAT、directory sibling/child 图和每条
+  stream chain 分别检测循环、越界、重复 sector 所有权与交叉重叠；directory slot、MAPI
+  property、附件、嵌套深度、展开字节和工作量共享聚合预算。String8 仅按受支持 codepage
+  无替换解码，Unicode、property length、recipient/attachment count 与路径名不一致均 fail
+  closed。CID 和 HTML 外链不触发网络；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
 - 本地输入打开在 handle 层拒绝 Unix symlink 或 Windows reparse point，并只接受 regular
   file，不能把 CLI 规划时的路径检查当作最终安全边界。
 - XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
