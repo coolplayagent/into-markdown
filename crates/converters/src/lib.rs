@@ -5,12 +5,14 @@
 mod delimited;
 mod html;
 mod markdown;
+mod notebook;
 mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
+pub use notebook::NotebookConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 
@@ -193,7 +195,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Ipynb,
         family: "text",
         extensions: &["ipynb"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Image,

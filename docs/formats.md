@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、HTML、CSV、TSV、JSON、XML 状态为
+运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、HTML、CSV、TSV、JSON、XML、IPYNB 状态为
 `available`，其余尚未
 实现的条目保持 `planned`。
 
@@ -38,6 +38,36 @@ external-only audit Asset 返回；转换器不会 fetch，未来获取仍必须
 `script`、`style`、`template`、`noscript` 及表单/UI 内容整体忽略；SVG/MathML 整体降级为
 不可执行代码文本并诊断，其内部链接和图片不进入资源。解析、正文选择和资源处理不执行代码、
 不解释 CSS、不会调用网络服务。
+
+## Jupyter Notebook
+
+IPYNB 转换器严格解析 nbformat 4 JSON，不执行 cell 代码、JavaScript、HTML，也不读取
+附件路径或获取远程资源。Markdown、code、raw cell、执行计数、cell/notebook/output metadata、
+stream、error、display data、execute result 与 update display 按源顺序进入统一 IR；代码语言
+来自 `metadata.language_info.name`。Markdown 内容复用内置 Markdown 转换器，最终仍只由中央
+GFM renderer 输出。nbformat 4.5 起 cell ID 必填、唯一并遵循官方 1–64 个安全字符约束；
+较早 minor 中出现的 ID 也按同一规则校验。execute-result count 与 transient display ID 作为
+稳定 namespaced metadata 保留，重复 update-display 仍保持源序，不执行回写。
+
+MIME bundle 使用固定优先级：PNG、JPEG、GIF、WebP，随后是 Markdown、plain text、HTML。
+图片同时校验 MIME、严格 base64、data URI 前缀、解码预算和文件签名；附件名禁止路径分隔符、
+点路径与控制字符。Markdown attachment 只在 parser 识别出的 exact image URI target 上绑定，
+不会改写 prose 或 code；missing reference 和当前 IR 无法表达的 attachment link 稳定拒绝，
+inline attachment image 因统一 IR 仅支持 block image 也稳定拒绝，且成功结果不会保留内部
+placeholder URI 或孤立 attachment asset；未引用附件不解码。raw cell attachments 则按源序保留为相邻 asset 节点。HTML 只保存为
+`html` fenced code 并产生诊断，不依赖 HTML 转换器。
+ANSI escape 会删除，TAB/LF/CR 之外的控制字符会替换并诊断。无法安全表示的 MIME bundle
+输出明确占位与诊断；不支持的附件稳定拒绝，绝不伪造成可访问资源。
+
+Notebook 使用单次 strict seeded JSON parse，在分配 DOM 时直接拒绝重复 key、过深、过宽或
+超大字段；不会先构造并丢弃通用 JSON IR。DOM、字符串、decoded assets 与最终 IR 的共同存活期
+由一笔保守请求 reservation 覆盖，string-array 按聚合 decoded UTF-8 长度检查并 fallible reserve。
+嵌套 Markdown 合并前递归累计 block/list/table/inline，metadata、diagnostic 与 assets 同样受全局
+计数或内存预算约束。组合字段与控制字符清洗后的最终 UTF-8 也重新执行 checked/fallible 字段
+预算。PNG chunk/CRC/IEND、GIF block/LZW/trailer、WebP RIFF/chunk/codec 与 JPEG marker/scan
+结构均有界验证，并要求必要顺序/唯一性及容器与 bitstream 尺寸一致；随后在预留完整 decode
+working set、设置 decoder width/height/allocation limits 后实际解码全部像素并复核尺寸。损坏 codec
+payload、截断图片与尺寸炸弹都不会成为 Asset。
 
 ## Markdown 与 GFM
 

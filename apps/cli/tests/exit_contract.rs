@@ -61,6 +61,65 @@ fn real_cli_converts_txt_files_and_explicit_charset_stdin() {
 }
 
 #[test]
+fn real_cli_converts_notebook_without_executing_active_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("safe.ipynb");
+    std::fs::write(
+        &path,
+        br#"{"nbformat":4,"nbformat_minor":5,"metadata":{"language_info":{"name":"python"}},"cells":[{"id":"code","cell_type":"code","metadata":{},"execution_count":1,"source":"NEVER_EXECUTE()","outputs":[{"output_type":"display_data","metadata":{},"data":{"text/html":"<script>NEVER_EXECUTE</script>"}}]}]}"#,
+    )
+    .unwrap();
+
+    let output =
+        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let markdown = String::from_utf8(output.stdout).unwrap();
+    assert!(markdown.contains("```python\nNEVER_EXECUTE()\n```"));
+    assert!(markdown.contains("```html\n<script>NEVER_EXECUTE</script>\n```"));
+}
+
+#[test]
+fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
+    let missing_id = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"cell_type":"raw","metadata":{},"source":"x"}]}"#;
+    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], missing_id);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+
+    let aggregate = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"raw","cell_type":"raw","metadata":{},"source":["0123456789","0123456789"]}]}"#;
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("bounded.toml");
+    std::fs::write(&config, "schema_version = 1\n[conversion.limits]\nmax_field_bytes = 16\n")
+        .unwrap();
+    let output = run_with_stdin(
+        &["--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
+        aggregate,
+    );
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
+
+    let inline_attachment = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"markdown","cell_type":"markdown","metadata":{},"source":"prefix ![x](attachment:a)","attachments":{"a":{"image/png":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}}]}"#;
+    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], inline_attachment);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+
+    std::fs::write(&config, "schema_version = 1\n[conversion.limits]\nmax_field_bytes = 20\n")
+        .unwrap();
+    let combined_error = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"error","cell_type":"code","metadata":{},"execution_count":null,"source":"x","outputs":[{"output_type":"error","ename":"Error","evalue":"value","traceback":"12345678"}]}]}"#;
+    let output = run_with_stdin(
+        &["--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
+        combined_error,
+    );
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
+
+    // This PNG has valid chunk lengths and CRCs, but its IDAT zlib header is corrupted.
+    let corrupt_codec = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"image","cell_type":"raw","metadata":{},"source":"x","attachments":{"bad.png":{"image/png":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVQA2mNk+A8AAQUBAWP5UNAAAAAASUVORK5CYII="}}}]}"#;
+    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], corrupt_codec);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+}
+
+#[test]
 fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result_json() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagram.md");

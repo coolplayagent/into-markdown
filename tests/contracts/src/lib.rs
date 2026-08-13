@@ -65,8 +65,17 @@ mod tests {
                 InputFormat::Tsv,
                 InputFormat::Json,
                 InputFormat::Xml,
+                InputFormat::Ipynb,
             ]
         );
+
+        let notebook = ConversionRequest::new(InputRef::bytes(
+            br#"{"nbformat":4,"nbformat_minor":5,"metadata":{"language_info":{"name":"python"}},"cells":[{"id":"code","cell_type":"code","metadata":{},"execution_count":1,"source":"NEVER_EXECUTE()","outputs":[]}]}"#
+                .as_slice(),
+            Some("safe.ipynb"),
+        ));
+        let notebook_result = block_on(engine.convert(notebook)).unwrap();
+        assert!(notebook_result.markdown.contains("```python\nNEVER_EXECUTE()\n```"));
 
         let markdown = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from(b"Heading\n=======\n\n- [x] done\n".as_slice()),
