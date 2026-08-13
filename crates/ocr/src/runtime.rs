@@ -1,6 +1,8 @@
 //! Safe ONNX Runtime policy, model validation, and bounded session caching.
 
-use into_markdown_core::{BoxFuture, ConversionError, ExecutionContext, Tensor, TensorRuntime};
+use into_markdown_core::{
+    BoxFuture, ConversionError, ExecutionContext, ResourceReservation, Tensor, TensorRuntime,
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -105,6 +107,8 @@ pub struct ResolvedModel {
     pub contract: ModelContract,
     /// Hash-verified bytes read from the retained no-follow model handle.
     pub bytes: Arc<[u8]>,
+    /// Request accounting retained while the model bytes are live.
+    pub memory_reservation: Option<Arc<ResourceReservation>>,
 }
 
 /// Resolves only installed, hash-verified runtime ONNX models.
@@ -115,85 +119,6 @@ pub trait ModelResolver: Send + Sync {
         model_id: &str,
         context: &ExecutionContext,
     ) -> Result<ResolvedModel, ConversionError>;
-}
-
-/// Product resolver backed by the embedded model authority.
-///
-/// Source archives are deliberately not interpreted as ONNX model files.
-pub struct ManifestModelResolver {
-    manager: Arc<super::ModelManager>,
-}
-
-impl ManifestModelResolver {
-    #[must_use]
-    pub fn new(manager: Arc<super::ModelManager>) -> Self {
-        Self { manager }
-    }
-}
-
-impl ModelResolver for ManifestModelResolver {
-    fn resolve(
-        &self,
-        model_id: &str,
-        context: &ExecutionContext,
-    ) -> Result<ResolvedModel, ConversionError> {
-        context.checkpoint()?;
-        if model_id != "pp-ocrv6-tiny-recognizer-onnx" {
-            return Err(ConversionError::ComponentUnavailable {
-                component: "onnx-model".into(),
-                detail: "UnknownModel".into(),
-            });
-        }
-        let artifact = self
-            .manager
-            .verified_runtime_artifact(model_id, "recognizer", context)
-            .map_err(|_| ConversionError::ComponentUnavailable {
-                component: "onnx-model".into(),
-                detail: "ModelUnavailable".into(),
-            })?;
-        let bytes_len =
-            u64::try_from(artifact.bytes.len()).map_err(|_| resource_error("modelBytes"))?;
-        Ok(ResolvedModel {
-            identity: ModelIdentity {
-                canonical_path: artifact.path,
-                sha256: artifact.sha256,
-                bytes: bytes_len,
-                file_identity: artifact.file_identity,
-            },
-            contract: ppocrv6_recognizer_contract(),
-            bytes: artifact.bytes,
-        })
-    }
-}
-
-#[must_use]
-pub fn ppocrv6_recognizer_contract() -> ModelContract {
-    ModelContract {
-        ir_version: 6,
-        opsets: BTreeMap::from([(String::new(), 11)]),
-        inputs: vec![TensorSpec {
-            name: "x".into(),
-            element_type: TensorElementType::Float32,
-            dimensions: vec![
-                Dimension::Dynamic { min: 1, max: 8 },
-                Dimension::Exact(3),
-                Dimension::Exact(48),
-                Dimension::Dynamic { min: 1, max: 3200 },
-            ],
-        }],
-        overridable_inputs: Vec::new(),
-        outputs: vec![TensorSpec {
-            name: "fetch_name_0".into(),
-            element_type: TensorElementType::Float32,
-            dimensions: vec![
-                Dimension::Dynamic { min: 1, max: 8 },
-                Dimension::Dynamic { min: 1, max: 1024 },
-                Dimension::Exact(6906),
-            ],
-        }],
-        session_memory_bytes: 256 * 1024 * 1024,
-        run_memory_bytes: 128 * 1024 * 1024,
-    }
 }
 
 /// CPU session controls that participate in the cache key.
@@ -1587,6 +1512,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ManifestModelResolver;
     use futures::executor::block_on;
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1690,6 +1616,7 @@ mod tests {
             },
             contract: contract(),
             bytes,
+            memory_reservation: None,
         }
     }
 

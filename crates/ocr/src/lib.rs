@@ -12,7 +12,7 @@
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ExecutionStage, OcrEngine, OcrRequest, OcrResult,
-    Tensor, TensorRuntime,
+    ResourceReservation, Tensor, TensorRuntime,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,6 +25,7 @@ use std::sync::Arc;
 mod detection;
 mod onnx_proto;
 mod recognition;
+mod recognizer_model;
 mod runtime;
 
 pub use detection::{
@@ -34,11 +35,12 @@ pub use detection::{
 
 pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
 
+pub use recognizer_model::{ManifestModelResolver, ppocrv6_recognizer_contract};
+
 pub use runtime::{
-    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,
-    ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime,
-    ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory, SessionOptions,
-    TensorElementType, TensorSpec, ppocrv6_recognizer_contract,
+    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS, ModelContract,
+    ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime, ResolvedModel, RuntimeConfig,
+    SessionAdapter, SessionFactory, SessionOptions, TensorElementType, TensorSpec,
 };
 
 const SUPPORTED_TARGETS: [&str; 4] = [
@@ -817,6 +819,7 @@ pub(crate) struct VerifiedRuntimeArtifact {
     pub sha256: String,
     pub bytes: Arc<[u8]>,
     pub file_identity: String,
+    pub memory_reservation: Arc<ResourceReservation>,
 }
 
 impl ModelManager {
@@ -997,13 +1000,20 @@ impl ModelManager {
         };
         #[cfg(not(unix))]
         let file_identity = format!("verified:{}:{}", artifact.sha256, artifact.size);
+        let actual_bytes = bytes.capacity();
+        if actual_bytes > capacity {
+            return Err(ModelManagerError::Corrupt(format!(
+                "{} allocation exceeded its authority",
+                artifact.file_name
+            )));
+        }
         let bytes: Arc<[u8]> = Arc::from(bytes);
-        drop(reservation);
         Ok(VerifiedRuntimeArtifact {
             path: directory.join(&artifact.file_name),
             sha256: artifact.sha256.clone(),
             bytes,
             file_identity,
+            memory_reservation: Arc::new(reservation),
         })
     }
 

@@ -1,0 +1,135 @@
+//! Fixed upstream model and character-table authority.
+
+use super::{BLANK, CLASSES, MAX_WIDTH, MODEL_ID, SCALE, limit, ocr};
+use into_markdown_core::ConversionError;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Authority {
+    pub schema_version: u32,
+    pub model_id: String,
+    pub upstream_repository: String,
+    pub upstream_commit: String,
+    pub preprocess_reference: String,
+    pub postprocess_reference: String,
+    pub runtime_archive_url: String,
+    pub runtime_archive_size: u64,
+    pub runtime_archive_sha256: String,
+    pub runtime_model_member: String,
+    pub runtime_model_size: u64,
+    pub runtime_model_sha256: String,
+    pub runtime_config_member: String,
+    pub runtime_config_size: u64,
+    pub runtime_config_sha256: String,
+    pub character_table_url: String,
+    pub character_table_size: u64,
+    pub character_table_sha256: String,
+    pub character_table_entries: usize,
+    pub classes: usize,
+    pub blank_index: usize,
+    pub append_space: bool,
+    pub license: String,
+    pub ir_version: u64,
+    pub opset_domain: String,
+    pub opset_version: u64,
+    pub input_name: String,
+    pub input_dtype: String,
+    pub input_shape: [String; 4],
+    pub output_name: String,
+    pub output_dtype: String,
+    pub output_shape: [String; 3],
+    pub input_color: String,
+    pub resize_interpolation: String,
+    pub normalization_scale: f64,
+    pub normalization_mean: f32,
+    pub normalization_standard_deviation: f32,
+    pub maximum_width: usize,
+}
+
+pub(super) fn authority() -> Result<Authority, ConversionError> {
+    let value: Authority = serde_json::from_str(include_str!(
+        "../../../../models/ppocrv6-tiny-recognizer-authority.json"
+    ))
+    .map_err(|_| ocr("invalidRecognizerAuthority"))?;
+    if value.schema_version != 1
+        || value.model_id != MODEL_ID
+        || value.upstream_repository != "https://github.com/PaddlePaddle/PaddleOCR"
+        || value.upstream_commit != "2661c7c0ef5c613e8f93c6e93b2e052399f0f854"
+        || value.preprocess_reference != "tools/infer/predict_rec.py"
+        || value.postprocess_reference != "ppocr/postprocess/rec_postprocess.py"
+        || value.runtime_archive_url
+            != "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+        || value.runtime_archive_size != 4_526_080
+        || value.runtime_archive_sha256
+            != "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
+        || value.runtime_model_member != "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+        || value.runtime_model_size != 4_462_639
+        || value.runtime_model_sha256
+            != "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6"
+        || value.runtime_config_member != "PP-OCRv6_tiny_rec_onnx_infer/inference.yml"
+        || value.runtime_config_size != 55_571
+        || value.runtime_config_sha256
+            != "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"
+        || value.character_table_url
+            != "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt"
+        || value.character_table_size != 27_156
+        || value.character_table_sha256
+            != "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd"
+        || value.character_table_entries != 6904
+        || value.classes != CLASSES
+        || value.blank_index != BLANK
+        || !value.append_space
+        || value.license != "Apache-2.0"
+        || value.ir_version != 6
+        || !value.opset_domain.is_empty()
+        || value.opset_version != 11
+        || value.input_name != "x"
+        || value.input_dtype != "float32"
+        || value.input_shape != ["N", "3", "48", "W"]
+        || value.output_name != "fetch_name_0"
+        || value.output_dtype != "float32"
+        || value.output_shape != ["N", "T", "6906"]
+        || value.input_color != "BGR"
+        || value.resize_interpolation != "OpenCV-INTER_LINEAR"
+        || (value.normalization_scale as f32).to_bits() != SCALE.to_bits()
+        || value.normalization_mean.to_bits() != 0.5_f32.to_bits()
+        || value.normalization_standard_deviation.to_bits() != 0.5_f32.to_bits()
+        || value.maximum_width != MAX_WIDTH
+    {
+        return Err(ocr("recognizerAuthorityDrift"));
+    }
+    Ok(value)
+}
+
+pub(super) fn validate_authority() -> Result<(), ConversionError> {
+    authority().map(drop)
+}
+
+pub(super) fn load_characters(bytes: &[u8]) -> Result<Vec<String>, ConversionError> {
+    let expected = authority()?;
+    if bytes.len() as u64 != expected.character_table_size
+        || format!("{:x}", Sha256::digest(bytes)) != expected.character_table_sha256
+    {
+        return Err(ocr("characterTableHashMismatch"));
+    }
+    let source = std::str::from_utf8(bytes).map_err(|_| ocr("invalidCharacterTable"))?;
+    if source.contains('\r') || !source.ends_with('\n') {
+        return Err(ocr("invalidCharacterTable"));
+    }
+    let mut result = Vec::new();
+    result.try_reserve_exact(CLASSES - 1).map_err(|_| limit("recognitionMemory"))?;
+    let mut unique = std::collections::BTreeSet::new();
+    for line in source.lines() {
+        if line.is_empty() || !unique.insert(line) {
+            return Err(ocr("invalidCharacterTable"));
+        }
+        result.push(line.to_owned());
+    }
+    if result.len() != expected.character_table_entries || !unique.insert(" ") {
+        return Err(ocr("invalidCharacterTable"));
+    }
+    result.push(" ".into());
+    Ok(result)
+}

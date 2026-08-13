@@ -1202,6 +1202,7 @@ mod tests {
                 run_memory_bytes: 1024 * 1024,
             },
             bytes,
+            memory_reservation: None,
         }
     }
 
@@ -1260,6 +1261,7 @@ mod tests {
                 run_memory_bytes: 1024 * 1024,
             },
             bytes,
+            memory_reservation: None,
         }
     }
 
@@ -1502,6 +1504,7 @@ mod tests {
             },
             contract: into_markdown_ocr::ppocrv6_recognizer_contract(),
             bytes: Arc::from(model_bytes),
+            memory_reservation: None,
         };
         let library = option_env!("OCR_QUALITY_ORT_LIBRARY").unwrap();
         let worker = option_env!("OCR_QUALITY_WORKER").unwrap();
