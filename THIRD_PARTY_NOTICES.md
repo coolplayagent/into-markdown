@@ -79,7 +79,8 @@ text rendered into checked-in OCR PNG fixtures is distributed under Apache-2.0.
 The PP-OCRv6 tiny recognizer ONNX archive is separately hash-pinned under
 Apache-2.0 for an explicit OCR quality target and is likewise absent from ordinary
 build and release outputs. Their exact source, size, hash, and boundary are audited
-across `fixtures/manifest.json`, the inventory, and the download authority.
+across `fixtures/manifest.json`, the inventory, and the dedicated
+`fixtures/downloads.json` authority.
 
 ## Release obligation
 

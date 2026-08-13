@@ -2,6 +2,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "README.md",
+    "downloads.json",
     "generate.py",
     "manifest.json",
 ])
@@ -10,6 +11,7 @@ filegroup(
     name = "corpus",
     srcs = [
         "README.md",
+        "downloads.json",
         "generate.py",
         "manifest.json",
     ] + glob(["small/**"]),

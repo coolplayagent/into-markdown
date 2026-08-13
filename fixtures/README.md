@@ -16,7 +16,7 @@ and the passing Markdown hash.
 
 Small fixtures are Apache-2.0 repository-generated files checked into `small/`; ordinary Cargo and
 Bazel tests are offline. Large generator/runtime inputs are in `large_artifacts`, the third-party
-inventory, and `third_party/licenses/downloads.json`. Their Bazel targets are tagged `manual`, are
+inventory, and the dedicated `fixtures/downloads.json`. Their Bazel targets are tagged `manual`, are
 not dependencies of the normal graph, and are excluded from release payloads.
 
 ## OCR goldens

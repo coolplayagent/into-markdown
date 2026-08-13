@@ -332,10 +332,15 @@ struct DownloadManifest {
     schema_version: u64,
     model_files: Vec<ModelDownload>,
     model_runtime_files: Vec<ModelRuntimeDownload>,
-    #[serde(default)]
-    fixture_files: Vec<FixtureDownload>,
     native_archives: Vec<NativeDownload>,
     pdfium_archives: Vec<NativeDownload>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FixtureDownloadManifest {
+    schema_version: u64,
+    artifacts: Vec<FixtureDownload>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -1272,6 +1277,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
     let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
     let fixture_corpus_text = read(&root.join("fixtures/manifest.json"), errors);
+    let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let downloads: Option<DownloadManifest> =
@@ -1282,6 +1288,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
         parse_json("FFmpeg fixture policy", &ffmpeg_fixtures_text, errors);
     let fixture_corpus: Option<FixtureCorpus> =
         parse_json("fixture corpus manifest", &fixture_corpus_text, errors);
+    let fixture_downloads: Option<FixtureDownloadManifest> =
+        parse_json("fixture download manifest", &fixture_downloads_text, errors);
     if let Some(ffmpeg) = &ffmpeg {
         validate_ffmpeg_source(inventory, ffmpeg, errors);
     }
@@ -1304,7 +1312,10 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     if let (Some(pdfium), Some(downloads)) = (&pdfium, &downloads) {
         validate_pdfium_manifest(inventory, pdfium, downloads, errors);
     }
-    if let (Some(corpus), Some(downloads)) = (&fixture_corpus, &downloads) {
+    if let Some(downloads) = &fixture_downloads {
+        validate_fixture_download_fields(downloads, errors);
+    }
+    if let (Some(corpus), Some(downloads)) = (&fixture_corpus, &fixture_downloads) {
         validate_fixture_corpus(root, inventory, corpus, downloads, errors);
     }
 }
@@ -1313,7 +1324,7 @@ fn validate_fixture_corpus(
     root: &Path,
     inventory: &Inventory,
     corpus: &FixtureCorpus,
-    downloads: &DownloadManifest,
+    downloads: &FixtureDownloadManifest,
     errors: &mut Vec<String>,
 ) {
     if corpus.schema_version != 1 {
@@ -1526,7 +1537,7 @@ fn collect_fixture_files(root: &Path, errors: &mut Vec<String>) -> BTreeSet<Path
 fn validate_fixture_artifacts(
     inventory: &Inventory,
     artifacts: &[CorpusArtifact],
-    downloads: &DownloadManifest,
+    downloads: &FixtureDownloadManifest,
     errors: &mut Vec<String>,
 ) {
     let mut by_id = BTreeMap::new();
@@ -1571,7 +1582,7 @@ fn validate_fixture_artifacts(
         }
     }
     let download_by_id: BTreeMap<_, _> = downloads
-        .fixture_files
+        .artifacts
         .iter()
         .map(|download| (download.artifact_id.as_str(), download))
         .collect();
@@ -1681,10 +1692,6 @@ fn is_safe_fixture_path(value: &str) -> bool {
         && is_safe_relative_path(value)
         && value.nfc().eq(value.chars())
         && !value.contains(['\\', ':', '\0'])
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn validate_pdfium_manifest(
@@ -2051,8 +2058,16 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             errors.push(format!("duplicate runtime download artifact {}", item.artifact_id));
         }
     }
+    validate_native_download_fields(downloads, errors);
+}
+
+fn validate_fixture_download_fields(downloads: &FixtureDownloadManifest, errors: &mut Vec<String>) {
+    if downloads.schema_version != 1 {
+        errors.push("unsupported fixture download manifest schema_version".to_owned());
+    }
+    let mut repositories = BTreeSet::new();
     let mut fixture_ids = BTreeSet::new();
-    for item in &downloads.fixture_files {
+    for item in &downloads.artifacts {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
         }
@@ -2070,6 +2085,15 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             errors.push(format!("fixture download {} has incomplete fields", item.repository));
         }
     }
+}
+
+fn validate_native_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
+    let mut repositories: BTreeSet<&str> = downloads
+        .model_files
+        .iter()
+        .map(|item| item.repository.as_str())
+        .chain(downloads.model_runtime_files.iter().map(|item| item.repository.as_str()))
+        .collect();
     for item in &downloads.native_archives {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
@@ -2682,7 +2706,6 @@ mod tests {
             schema_version: 1,
             model_files: vec![],
             model_runtime_files: vec![],
-            fixture_files: vec![],
             native_archives: vec![],
             pdfium_archives: vec![],
         }
@@ -2743,7 +2766,6 @@ mod tests {
                 },
             ],
             model_runtime_files: vec![],
-            fixture_files: vec![],
             native_archives: vec![],
             pdfium_archives: vec![],
         };
@@ -2890,7 +2912,6 @@ mod tests {
                 schema_version: 1,
                 model_files: vec![],
                 model_runtime_files: vec![],
-                fixture_files: vec![],
                 native_archives,
                 pdfium_archives: vec![],
             },
@@ -2944,7 +2965,6 @@ mod tests {
                 schema_version: 1,
                 model_files: vec![],
                 model_runtime_files: vec![],
-                fixture_files: vec![],
                 native_archives: vec![],
                 pdfium_archives,
             },
@@ -3494,6 +3514,7 @@ filegroup(
         let mut errors = Vec::new();
         validate_npm_spdx(&root, &released, &drifted, &manifest, &mut errors);
         assert!(errors.iter().any(|error| error.contains("exact production app asset")));
+    }
 
     #[test]
     fn fixture_schema_rejects_unknown_expected_fields() {

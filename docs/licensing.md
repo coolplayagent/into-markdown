@@ -154,5 +154,5 @@ PNG 的仓库原创文字与图像按 Apache-2.0 管理。
 PP-OCRv6 tiny recognizer ONNX 官方归档固定 SHA-256
 `1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29`，许可为
 Apache-2.0，仅作为后续 OCR 质量目标的 manual 下载 authority，不进入语料或当前发布物。
-两个大输入都必须在 manifest、inventory 与 downloads 三者双向一致；host、大小、hash、
+两个大输入都必须在 manifest、inventory 与 `fixtures/downloads.json` 三者双向一致；host、大小、hash、
 redirect 上限、许可与发布边界任一漂移都会失败。
