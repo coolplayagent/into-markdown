@@ -169,6 +169,53 @@ snapshot；75,000-byte request memory 复现稳定返回 `resourceLimit`。Atom 
 去重键和 asset rewrite lookup 使用按真实 capacity 计费的线性 Vec，不依赖 allocator 节点容量不透明
 的树形或哈希容器。
 
+## Cargo target 检查与 Bazel 平台配置
+
+Cargo 和 Bazel 回答不同的问题，二者不能互相替代。Rust 1.97.1 的以下命令只做
+workspace 在目标 triple 下的 Rust 类型检查、`cfg` 分支和依赖选择检查；`cargo check`
+仍会运行 bundled SQLite 等依赖的 C build script，必须在 matching native runner 上执行。
+成功不证明 Bazel 工具链解析、Bazel action 或最终产品二进制：
+
+```shell
+cargo check --workspace --all-targets --target aarch64-apple-darwin
+cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu
+cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
+cargo check --workspace --all-targets --target x86_64-pc-windows-msvc
+```
+
+四个公开 Bazel config 是严格的 **native host/exec → 同平台 target** 合约，不是任意
+交叉编译入口。每个 config 注册 rules_rust 1.97.1 的对应 target std，并要求 native
+C++ toolchain；CI 在匹配 runner 上实际构建 toolchain probe、`//crates/core:core` 和
+平台无关的 `//tests/contracts:public_api_consumer`，再运行 core 测试和真实的
+Rust-library-from-C++ 链接/执行测试。Rust 1.97 的 allocator symbol 由 rules_rust 在内部
+生成 empty `rust_static_library` bridge；`//toolchains:allocator_bridge_test` 的业务依赖是
+普通 `rust_library`，在 Rust 侧真实分配并释放 `Vec`，防止为了 foreign-config 分析而把
+C++ embedding 静默退化为空 allocator。关闭 mangled-symbol bridge 时同一链接会因缺失
+版本化 allocator symbol 而失败：
+
+```shell
+bazel build --config=macos_arm64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
+bazel build --config=linux_x86_64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
+bazel build --config=linux_arm64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
+bazel build --config=windows_x86_64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
+bazel test --config=<matching-config> --lockfile_mode=error //crates/core:core_test //toolchains:allocator_bridge_test
+```
+
+必须在与 config 匹配的原生 runner 上执行这些命令。比如 Apple Silicon macOS 请求
+`--config=linux_x86_64` 会在分析入口稳定失败为
+`unsupported Bazel host/target combination`；这比借用宿主 clang 或注册一个能完成分析、
+却不能产出目标二进制的伪 C++ provider 更诚实。该拒绝路径也由 CI 断言不得退化为
+`No matching toolchains`。为保证 mandatory C++ consumer 和 test target 也能得到同样稳定的
+边界错误，仓库为十二种 `exec != target` 组合注册拒绝型 C++ 与 test execution toolchain。
+它们不会转发宿主 C++ provider 或伪造 test runner，
+而是在被选择时直接终止分析，因此即使调用方使用裸 `--platforms` 或显式清空 config aspect，
+也不能让宿主 clang 伪装成 foreign compiler、生成 action 或得到分析成功；它也不会匹配四种
+native `exec == target` 组合。CI 在四个 native runner 上对其余三个 foreign config × core、
+core test、public consumer、probe、C++ embedding test 和普通聚合目标逐项检查 config 入口，
+覆盖全部十二种 host→foreign 组合；还单独绕过 aspect 验证 mandatory C++ 与 test consumer
+仍被 toolchain 自身拒绝。这些普通目标不引用 manual ONNX Runtime、PDFium、FFmpeg 或
+模型下载目标，因此四平台门禁不会获取其大型制品。
+
 仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
 逐类覆盖全部 IR 节点，并覆盖恶意链接、HTML/Markdown 字符、动态围栏、表格换行、

@@ -4,6 +4,7 @@ module(
 )
 
 bazel_dep(name = "rules_rust", version = "0.73.0")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "aspect_rules_js", version = "3.3.1")
 bazel_dep(name = "aspect_rules_ts", version = "3.9.2")
@@ -57,11 +58,22 @@ use_repo(rules_ts, "npm_typescript")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
+    # Every public Bazel platform has a matching rust_std component.  The
+    # compiler itself still executes natively; platform_contract.bzl rejects
+    # host -> target combinations for which this repository has no C++ linker.
+    allocator_library = "@rules_rust//rust/private/cc:empty",
     edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+    ],
     versions = ["1.97.1"],
 )
 use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
+register_toolchains("//toolchains:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.from_cargo(
