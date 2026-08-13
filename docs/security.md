@@ -242,7 +242,8 @@ HTTP/1.1 parser 对 header、header 数量、Content-Length、chunk、压缩体�
 结构设硬限，拒绝 obs-fold、重复长度、CL/TE 冲突、未知 transfer/content encoding、trailer、
 非法 charset 和 gzip bomb。socket 轮询、DNS、connect、TLS、retry wait、header/body 读取均
 检查 ExecutionContext 取消与总 deadline。GET 能力探测以及携带显式 idempotency key 的 POST
-才允许对 429/5xx 有限重试；Retry-After 只接受有界 delta-seconds。`providers test` 固定只发
+才允许对 429/5xx 有限重试；Retry-After 只接受有界 delta-seconds，缺省退避使用有界
+指数延迟和可注入测试的进程内 jitter。`providers test` 固定只发
 `GET /models`，不包含用户文档或 prompt；服务端字段不能扩大本地配置的 capability allowlist。
 `/models` 只能证明模型存在，不能证明图像或修复能力，因此不会仅凭配置声明这些能力；声明
 存在后续页的列表返回稳定 incomplete 错误。Chat Completions 与 Responses 使用相互独立的

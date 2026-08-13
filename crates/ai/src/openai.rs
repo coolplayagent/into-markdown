@@ -42,6 +42,9 @@ const MAX_DNS_ADDRESSES: usize = 64;
 const DNS_WORKERS: usize = 4;
 const DNS_QUEUE_PER_WORKER: usize = 2;
 const MAX_CHUNKS: usize = 4_096;
+static RETRY_JITTER_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+type RetryJitter = fn(Duration, u8) -> Duration;
 
 /// Stable provider transport failure category. Free-form server text is never retained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -469,6 +472,7 @@ pub struct OpenAiCompatibleClient {
     config: ProviderConfig,
     policy: ProviderNetworkPolicy,
     resolver: Arc<dyn Resolver>,
+    retry_jitter: RetryJitter,
 }
 
 impl std::fmt::Debug for OpenAiCompatibleClient {
@@ -486,7 +490,12 @@ impl OpenAiCompatibleClient {
     /// Construct a client without reading DNS or secrets.
     #[must_use]
     pub fn new(config: ProviderConfig, policy: ProviderNetworkPolicy) -> Self {
-        Self { config, policy, resolver: Arc::new(SystemResolver) }
+        Self {
+            config,
+            policy,
+            resolver: Arc::new(SystemResolver),
+            retry_jitter: process_retry_jitter,
+        }
     }
 
     /// Execute a minimal `GET /models` test. It sends no document or user content.
@@ -540,9 +549,7 @@ impl OpenAiCompatibleClient {
             )?;
             if retry < MAX_RETRIES && matches!(response.status, 429 | 500..=599) {
                 retry += 1;
-                let delay = response.retry_after.unwrap_or_else(|| {
-                    Duration::from_millis(100_u64.saturating_mul(1_u64 << retry))
-                });
+                let delay = retry_delay(response.retry_after, retry, self.retry_jitter);
                 memory.shrink(response.body.capacity())?;
                 checked_sleep(delay.min(MAX_RETRY_AFTER), context, deadline)?;
                 continue;
@@ -630,9 +637,7 @@ impl OpenAiCompatibleClient {
                 retry += 1;
                 memory.shrink(response.body.capacity())?;
                 checked_sleep(
-                    response
-                        .retry_after
-                        .unwrap_or(Duration::from_millis(100_u64.saturating_mul(1_u64 << retry))),
+                    retry_delay(response.retry_after, retry, self.retry_jitter),
                     context,
                     deadline,
                 )?;
@@ -715,7 +720,9 @@ impl OpenAiCompatibleClient {
             match attempt {
                 Ok(response) => return Ok(response),
                 Err(failure)
-                    if (!failure.progressed() || spec.retry_safe())
+                    if ((!failure.progressed()
+                        && failure.error.code() == ProviderErrorCode::Connect)
+                        || (failure.progressed() && spec.idempotency_key.is_some()))
                         && index + 1 < addresses.len() =>
                 {
                     memory.restore(attempt_checkpoint)?;
@@ -978,12 +985,6 @@ struct RequestSpec<'a> {
     method: &'static str,
     body: Option<&'a [u8]>,
     idempotency_key: Option<&'a str>,
-}
-
-impl RequestSpec<'_> {
-    fn retry_safe(self) -> bool {
-        self.method == "GET" || self.idempotency_key.is_some()
-    }
 }
 
 fn connect_checked(
@@ -1524,6 +1525,29 @@ fn parse_retry_after(value: &str) -> Result<Duration, ProviderError> {
         .filter(|delay| *delay <= MAX_RETRY_AFTER)
         .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
     Ok(delay)
+}
+
+fn retry_delay(retry_after: Option<Duration>, attempt: u8, jitter: RetryJitter) -> Duration {
+    retry_after.unwrap_or_else(|| {
+        let exponential = Duration::from_millis(
+            100_u64.saturating_mul(1_u64.checked_shl(u32::from(attempt)).unwrap_or(u64::MAX)),
+        );
+        jitter(exponential, attempt).min(MAX_RETRY_AFTER)
+    })
+}
+
+fn process_retry_jitter(base: Duration, attempt: u8) -> Duration {
+    let ceiling = u64::try_from(base.as_millis() / 4).unwrap_or(u64::MAX);
+    if ceiling == 0 {
+        return base;
+    }
+    let sequence =
+        u64::try_from(RETRY_JITTER_SEQUENCE.fetch_add(1, Ordering::Relaxed)).unwrap_or(u64::MAX);
+    let mixed = sequence
+        .wrapping_add(u64::from(std::process::id()))
+        .wrapping_add(u64::from(attempt))
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    base.saturating_add(Duration::from_millis(mixed % ceiling.saturating_add(1)))
 }
 
 fn read_until(
@@ -2430,6 +2454,20 @@ mod tests {
     }
 
     #[test]
+    fn retry_backoff_has_bounded_injectable_jitter_and_exact_retry_after() {
+        fn fixed_jitter(base: Duration, attempt: u8) -> Duration {
+            base + Duration::from_millis(u64::from(attempt) * 7)
+        }
+
+        assert_eq!(retry_delay(None, 1, fixed_jitter), Duration::from_millis(207));
+        assert_eq!(
+            retry_delay(Some(Duration::from_millis(11)), 2, fixed_jitter),
+            Duration::from_millis(11)
+        );
+        assert!(process_retry_jitter(Duration::from_millis(200), 1) <= Duration::from_millis(250));
+    }
+
+    #[test]
     fn provider_status_codes_have_stable_categories() {
         for (status, expected) in [
             (401, ProviderErrorCode::Unauthorized),
@@ -2771,6 +2809,80 @@ mod tests {
             client.generate(request, &context()).unwrap_err().code(),
             ProviderErrorCode::Connect | ProviderErrorCode::InvalidResponse
         ));
+        first_worker.join().unwrap();
+        second.set_nonblocking(true).unwrap();
+        assert!(matches!(second.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn get_is_not_replayed_on_another_ip_after_write_progress() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).unwrap();
+        let first_worker = std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            let mut byte = [0_u8];
+            stream.read_exact(&mut byte).unwrap();
+        });
+        let config = ProviderConfig::parse(
+            &format!("http://provider.test:{port}/v1"),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            [],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+        ]));
+        assert!(matches!(
+            client.test(&context()).unwrap_err().code(),
+            ProviderErrorCode::Connect | ProviderErrorCode::InvalidResponse
+        ));
+        first_worker.join().unwrap();
+        second.set_nonblocking(true).unwrap();
+        assert!(matches!(second.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn pre_request_tls_failure_is_not_treated_as_connect_fallback() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).unwrap();
+        let first_worker = std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            stream.write_all(b"not tls").unwrap();
+        });
+        let config = ProviderConfig::parse(
+            &format!("https://provider.test:{port}/v1"),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            [],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+        ]));
+        assert_eq!(client.test(&context()).unwrap_err().code(), ProviderErrorCode::Tls);
         first_worker.join().unwrap();
         second.set_nonblocking(true).unwrap();
         assert!(matches!(second.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
