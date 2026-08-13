@@ -320,3 +320,70 @@ REST DTO；Responses 图像输入使用字符串 `image_url`，输出只读取
 配置变更通过已认证父目录句柄执行 no-follow 临时文件创建、文件/目录 fsync、目标与临时文件
 identity 复核及 fd-relative rename。父目录、目标、临时文件或符号链接竞态均 fail closed；
 替换已有配置时保留其权限，并要求文件属于当前用户。
+## Web 上传、队列与产物状态机
+
+浏览器文件名仅是最多 255 bytes 的 display metadata；分隔符、控制字符、`.` 和 `..` 均
+拒绝，永不解释为自由路径或 URL。请求 body 逐 chunk 消费，每次实际写入前检查单文件
+512 MiB 与 managed root 8 GiB ceiling；断连会 drop guard 并清理未绑定任务的 incoming
+capability。数据库不保存输入正文或 Provider secret。
+
+durable 状态机是 `pending -> running -> converted -> succeeded`。RecoveryStore 的
+converted/succeeded checkpoint 只证明 conversion payload，最多把 TaskStore 恢复为
+converted，不能独自证明外部产物已提交。Markdown、完整 Document IR、结构化 diagnostics、
+assets 和 bundle 在同一 task 私有 stage 内逐文件 fsync；bounded manifest 同步后，以
+no-replace rename 和父目录 fsync 一次发布。只有每个 opaque key 的 size/SHA-256 与实际
+普通单链接文件一致，TaskStore 才事务性索引并进入 succeeded。重启对 running/converted
+重放 publication；若 durable succeeded 的 published set 缺失、额外、重复或摘要不符，
+服务 fail closed。下载先在同一配额内复制并同步验证 TaskStore byte count 与 SHA-256，随后
+unlink 临时名称，只从 retained 匿名只读 fd 流式响应；原 published inode 的后续覆盖或 rename
+不会越过校验，响应断连/Drop 会释放匿名 inode 的精确 quota charge。
+
+通用 TaskStore 的 `succeeded` 继续表示 RecoveryStore checkpoint 已 durable，不把旧 schema
+记录重解释为 Web publication。schema v1/v2 中缺少 AssetId/filename/media-type 的 legacy asset
+会无损迁移并保留 `None`；新 v3 写入必须带完整 canonical metadata。Web 后端另在成功、重启、
+查询与下载边界要求恰好一份 Markdown/Document IR/diagnostics/bundle、最多 124 assets、唯一
+storage key/AssetId；通用 TaskStore 累计最多 2 GiB，Web profile publication 累计最多
+512 MiB，且 manifest 与 TaskStore 逐字段相同。损坏的非成功
+published set 只在 descriptor-bound 验证所有成员为私有普通单链接文件后 quarantine 删除，任务
+稳定为 failed；持久化本身不可用时停止 dequeue，worker 不 panic，也不伪造成功。
+
+队列以接收/恢复顺序 FIFO dequeue，最多四 worker 并行；每项有独立 cancellation token、
+30 分钟 deadline 和 Engine ResourceLimits。单项 error/panic 隔离为 failed。最后一个 backend
+handle drop 会取消在途任务、唤醒并 join 全部 worker。启动前只清理 canonical incoming/stage
+残留；遇到额外成员、symlink、special file 或外部 hardlink 会拒绝而非递归删除。
+
+Web profile 把 request memory 与 temporary 上限约束为 256 MiB、总 assets 为 128 MiB；每个
+执行任务在首次 TaskStore 状态 mutation 前保守预留 1 GiB payload 加 4 MiB metadata headroom：
+两个可同时存在的 checkpoint 各由 256 MiB temporary ceiling 约束，Web publication 另限
+512 MiB，TaskStore/WAL/manifest bookkeeping 另留 4 MiB。lease 覆盖转换、RecoveryStore
+提交、stage、rename 与最终 TaskStore transition；每个 lease 释放时，即使仍有其他任务在途，
+也在 quota mutex 内重新 descriptor-bound 测量 managed tree；若并发 publication 使全树测量
+暂时不可用，则把该 lease 的完整计划计入 `used`。这样未计入
+`used` 的在途写始终由 `reserved` 覆盖，持续满载 worker 也不能复用已落盘 reservation，
+同一全局 8 GiB 空间，同时四个小任务可并行取得运行资源。quota wait 使用有界 timed wait，
+计入 30 分钟总 deadline，并在 cancel/owner shutdown 时唤醒；真实清理会通知等待者，清理失败
+不虚减 quota。
+
+8 GiB managed ceiling 中永久保留 4 MiB 给 TaskStore/SQLite WAL；每次没有 execution lease 的
+create 或 terminal/recovery mutation 在 quota mutex 内串行预留 1 MiB；没有 execution lease 的
+exact-set success reconciliation 预留完整 4 MiB。每次写入前都以 retained root 重测物理占用与
+所有活跃 reservation，写后再次重测且验证实际增长不超过 reservation。
+admission failure 的批量收敛遇到首个 reservation 或持久化错误就停止 backend 和后续 mutation，
+不会吞错后继续消耗应急空间。
+upload、snapshot 和 conversion lease 只能消费其余 data ceiling。这样 dequeue 前取消、quota
+等待取消/超时、恢复缺对象，以及 admission failure 的 Failed/Cancelled/Interrupted transition
+在 data ceiling 已满时仍有物理写入空间。每次这类 transition 后立即在 quota mutex 内重测
+managed tree，把实际数据库增长转入 `used`；重测失败则保守计入完整 metadata headroom，令后续
+data reservation 只能使用扣除该最坏增长后的余额，不能重复消费应急空间。
+
+HTTP upload 具有 30 秒 idle 与 30 分钟 total deadline，并监听 server shutdown；artifact response
+具有相同 total deadline和 shutdown cancellation。每个 response 另有独立 timer 持有可撤销的
+snapshot slot；即使慢 reader 填满 socket 后 runtime 不再 poll Body，timer 仍会在绝对 deadline
+或 shutdown 时关闭 snapshot capability 并归还 quota，后续 Body poll 得到 timeout。graceful
+shutdown 最多等待 5 秒，随后 drop server future 与慢连接，使 Upload guard、匿名 artifact
+snapshot、quota charge 和 backend worker ownership 都能有界释放。
+
+TaskStore/RecoveryStore 继续继承其组件文档化的 same-uid pathname 打开窄竞态：Web backend
+在打开前后用已持有 root capability 复核 namespace identity，发现替换便拒绝采用该 store；这
+保证 backend 不会跨两个 namespace 继续运行，但不宣称 pathname-based store open 在攻击窗口
+内绝无短暂文件系统副作用。完整消除该窗口仍需 store 自身提供 descriptor-relative open API。

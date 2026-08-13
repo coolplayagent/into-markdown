@@ -22,9 +22,9 @@ pub use into_markdown_render_markdown::{
     render as render_markdown,
 };
 pub use into_markdown_task_store::{
-    ArtifactKind, ArtifactReference, BusyControl, ConfigurationSnapshot, DiagnosticCode, NewTask,
-    OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus,
-    TaskStore, TaskStoreError, TaskTransition,
+    ArtifactKind, ArtifactReference, BusyControl, ConfigurationSnapshot, DiagnosticCode,
+    InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
+    TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
 
 /// Create the standard builder with safe local source resolvers, hint

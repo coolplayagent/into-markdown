@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[cfg(unix)]
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
 #[cfg(unix)]
 const DATABASE_FILE: &str = "tasks.sqlite3";
 #[cfg(unix)]
@@ -35,6 +35,7 @@ const PAGE_SIZE: i64 = 4096;
 const MAX_ROWS: u32 = 100;
 const MAX_DIAGNOSTICS: usize = 64;
 const MAX_ARTIFACTS: usize = 128;
+const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_JSON_BYTES: usize = 16 * 1024;
 #[cfg(unix)]
 const MAX_JSON_BYTES_I32: i32 = 16 * 1024;
@@ -412,22 +413,34 @@ pub struct TaskDiagnostic {
 pub enum ArtifactKind {
     /// Rendered Markdown output.
     Markdown,
+    /// Complete validated Document IR JSON.
+    DocumentIr,
+    /// Complete structured diagnostics JSON.
+    Diagnostics,
     /// Extracted binary asset.
     Asset,
+    /// Portable ZIP bundle containing the complete result set.
+    Bundle,
 }
 
 impl ArtifactKind {
     fn as_db(self) -> &'static str {
         match self {
             Self::Markdown => "markdown",
+            Self::DocumentIr => "documentIr",
+            Self::Diagnostics => "diagnostics",
             Self::Asset => "asset",
+            Self::Bundle => "bundle",
         }
     }
 
     fn parse(value: &str) -> Result<Self, TaskStoreError> {
         match value {
             "markdown" => Ok(Self::Markdown),
+            "documentIr" => Ok(Self::DocumentIr),
+            "diagnostics" => Ok(Self::Diagnostics),
             "asset" => Ok(Self::Asset),
+            "bundle" => Ok(Self::Bundle),
             _ => Err(TaskStoreError::Corrupt("task contains an unknown artifact kind".into())),
         }
     }
@@ -445,6 +458,15 @@ pub struct ArtifactReference {
     pub byte_len: u64,
     /// SHA-256 of the external object.
     pub sha256: String,
+    /// Source IR asset ID, present only for asset artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    /// Safe display filename for an asset artifact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// Canonical media type for an asset artifact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
 }
 
 /// Complete bounded task record.
@@ -511,7 +533,7 @@ pub struct TaskCursor {
 pub struct ReconcileSummary {
     /// Tasks promoted from a valid converted checkpoint.
     pub converted: u32,
-    /// Tasks promoted from a valid succeeded checkpoint.
+    /// Reserved compatibility counter. Recovery alone never proves artifact publication.
     pub succeeded: u32,
     /// Tasks marked interrupted because no checkpoint existed.
     pub interrupted: u32,
@@ -522,7 +544,6 @@ pub struct ReconcileSummary {
 #[derive(Clone, Copy)]
 enum ReconcileOutcome {
     Converted,
-    Succeeded,
     Interrupted,
     Failed,
 }
@@ -858,6 +879,7 @@ impl TaskStore {
         {
             return Err(TaskStoreError::Limit("task child row count exceeded".into()));
         }
+        validate_artifact_budget(&transaction, id, &transition.artifacts)?;
         let updated = now.max(updated.saturating_add(1));
         let changed = transaction
             .execute(
@@ -880,8 +902,8 @@ impl TaskStore {
             validate_artifact(&artifact)?;
             transaction
                 .execute(
-                    "INSERT INTO artifacts(task_id, storage_key, kind, byte_len, sha256) VALUES(?1, ?2, ?3, ?4, ?5)",
-                    params![id.as_str(), artifact.storage_key, artifact.kind.as_db(), artifact.byte_len, artifact.sha256],
+                    "INSERT INTO artifacts(task_id, storage_key, kind, byte_len, sha256, asset_id, filename, media_type) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![id.as_str(), artifact.storage_key, artifact.kind.as_db(), artifact.byte_len, artifact.sha256, artifact.asset_id, artifact.filename, artifact.media_type],
                 )
                 .map_err(map_sqlite_generic)?;
         }
@@ -965,8 +987,11 @@ impl TaskStore {
                             ReconcileOutcome::Failed,
                         )
                     }
+                    // A complete RecoveryStore result can replay artifact
+                    // publication, but cannot prove that publication already
+                    // committed. Never infer Web success from this checkpoint.
                     Ok(Some(checkpoint)) if checkpoint.phase == TaskPhase::Succeeded => {
-                        (TaskStatus::Succeeded, 1_000_000, None, ReconcileOutcome::Succeeded)
+                        (TaskStatus::Converted, 900_000, None, ReconcileOutcome::Converted)
                     }
                     Ok(Some(checkpoint)) if checkpoint.phase == TaskPhase::Converted => {
                         (TaskStatus::Converted, 900_000, None, ReconcileOutcome::Converted)
@@ -998,7 +1023,6 @@ impl TaskStore {
                 if self.reconcile_transition(&id, status, next, progress, diagnostic)? {
                     match outcome {
                         ReconcileOutcome::Converted => summary.converted += 1,
-                        ReconcileOutcome::Succeeded => summary.succeeded += 1,
                         ReconcileOutcome::Interrupted => summary.interrupted += 1,
                         ReconcileOutcome::Failed => summary.failed += 1,
                     }
@@ -1224,7 +1248,7 @@ impl TaskStore {
     fn load_artifacts(&self, id: &TaskId) -> Result<Vec<ArtifactReference>, TaskStoreError> {
         let mut statement = self
             .connection
-            .prepare("SELECT storage_key, kind, byte_len, sha256 FROM artifacts WHERE task_id=?1 ORDER BY storage_key LIMIT 129")
+            .prepare("SELECT storage_key, kind, byte_len, sha256, asset_id, filename, media_type FROM artifacts WHERE task_id=?1 ORDER BY storage_key LIMIT 129")
             .map_err(|error| self.map_sqlite(error))?;
         let rows = statement
             .query_map([id.as_str()], |row| {
@@ -1233,6 +1257,9 @@ impl TaskStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(|error| self.map_sqlite(error))?;
@@ -1240,8 +1267,9 @@ impl TaskStore {
         values
             .try_reserve(MAX_ARTIFACTS.min(129))
             .map_err(|_| TaskStoreError::Limit("artifact allocation failed".into()))?;
+        let mut total_bytes = 0_u64;
         for row in rows {
-            let (storage_key, kind, byte_len, sha256) =
+            let (storage_key, kind, byte_len, sha256, asset_id, filename, media_type) =
                 row.map_err(|error| self.map_sqlite(error))?;
             if byte_len < 0 {
                 return Err(TaskStoreError::Corrupt("artifact byte length is invalid".into()));
@@ -1253,8 +1281,17 @@ impl TaskStore {
                     TaskStoreError::Corrupt("artifact byte length is invalid".into())
                 })?,
                 sha256,
+                asset_id,
+                filename,
+                media_type,
             };
-            validate_artifact(&artifact)?;
+            validate_loaded_artifact(&artifact)?;
+            total_bytes = total_bytes
+                .checked_add(artifact.byte_len)
+                .ok_or_else(|| TaskStoreError::Corrupt("artifact byte total overflowed".into()))?;
+            if total_bytes > MAX_ARTIFACT_BYTES {
+                return Err(TaskStoreError::Corrupt("task artifact bytes exceed 2 GiB".into()));
+            }
             values.push(artifact);
         }
         if values.len() > MAX_ARTIFACTS {
@@ -1399,6 +1436,7 @@ fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_lines)]
 fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -1439,19 +1477,68 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                  CREATE TABLE artifacts(\
                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\
                    storage_key TEXT NOT NULL CHECK(length(storage_key)=32 AND storage_key NOT GLOB '*[^0-9a-f]*'),\
-                   kind TEXT NOT NULL CHECK(kind IN ('markdown','asset')),\
+                   kind TEXT NOT NULL CHECK(kind IN ('markdown','documentIr','diagnostics','asset','bundle')),\
                    byte_len INTEGER NOT NULL CHECK(byte_len>=0),\
                    sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),\
+                   asset_id TEXT, filename TEXT, media_type TEXT,\
                    PRIMARY KEY(task_id, storage_key)\
                  ) STRICT;\
                  CREATE TRIGGER artifacts_limit BEFORE INSERT ON artifacts WHEN (SELECT count(*) FROM artifacts WHERE task_id=NEW.task_id)>=128 BEGIN SELECT RAISE(ABORT, 'artifact limit'); END;\
                  CREATE TRIGGER artifacts_terminal BEFORE INSERT ON artifacts WHEN (SELECT status FROM tasks WHERE id=NEW.task_id) IN ('failed','interrupted','cancelled') BEGIN SELECT RAISE(ABORT, 'terminal artifact'); END;\
-                 PRAGMA user_version=1;",
+                 PRAGMA user_version=3;",
             )
             .map_err(map_sqlite_generic)?;
         #[cfg(test)]
         if std::env::var_os("INTO_MD_TASK_STORE_MIGRATION_ABORT_CHILD").is_some() {
             std::process::abort();
+        }
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    if version == 1 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        transaction
+            .execute_batch(
+                "ALTER TABLE artifacts RENAME TO artifacts_v1;\
+                 CREATE TABLE artifacts(\
+                   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\
+                   storage_key TEXT NOT NULL CHECK(length(storage_key)=32 AND storage_key NOT GLOB '*[^0-9a-f]*'),\
+                   kind TEXT NOT NULL CHECK(kind IN ('markdown','documentIr','diagnostics','asset','bundle')),\
+                   byte_len INTEGER NOT NULL CHECK(byte_len>=0),\
+                   sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256 NOT GLOB '*[^0-9a-f]*'),\
+                   asset_id TEXT, filename TEXT, media_type TEXT,\
+                   PRIMARY KEY(task_id, storage_key)\
+                 ) STRICT;\
+                 INSERT INTO artifacts(task_id,storage_key,kind,byte_len,sha256) SELECT task_id,storage_key,kind,byte_len,sha256 FROM artifacts_v1;\
+                 DROP TABLE artifacts_v1;\
+                 CREATE TRIGGER artifacts_limit BEFORE INSERT ON artifacts WHEN (SELECT count(*) FROM artifacts WHERE task_id=NEW.task_id)>=128 BEGIN SELECT RAISE(ABORT, 'artifact limit'); END;\
+                 CREATE TRIGGER artifacts_terminal BEFORE INSERT ON artifacts WHEN (SELECT status FROM tasks WHERE id=NEW.task_id) IN ('failed','interrupted','cancelled') BEGIN SELECT RAISE(ABORT, 'terminal artifact'); END;\
+                 PRAGMA user_version=3;",
+            )
+            .map_err(map_sqlite_generic)?;
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    if version == 2 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        for (phase, statement) in [
+            "ALTER TABLE artifacts ADD COLUMN asset_id TEXT",
+            "ALTER TABLE artifacts ADD COLUMN filename TEXT",
+            "ALTER TABLE artifacts ADD COLUMN media_type TEXT",
+            "PRAGMA user_version=3",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            #[cfg(not(test))]
+            let _ = phase;
+            transaction.execute_batch(statement).map_err(map_sqlite_generic)?;
+            #[cfg(test)]
+            if std::env::var("INTO_MD_TASK_STORE_V2_MIGRATION_ABORT_PHASE")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                == Some(phase + 1)
+            {
+                std::process::abort();
+            }
         }
         transaction.commit().map_err(map_sqlite_generic)?;
     }
@@ -1523,7 +1610,94 @@ fn validate_artifact(artifact: &ArtifactReference) -> Result<(), TaskStoreError>
             "artifact byte length exceeds SQLite integer range".into(),
         ));
     }
-    require_hex(&artifact.sha256, 32, "artifact SHA-256")
+    require_hex(&artifact.sha256, 32, "artifact SHA-256")?;
+    match artifact.kind {
+        ArtifactKind::Asset => {
+            let fields = [
+                artifact.asset_id.as_deref(),
+                artifact.filename.as_deref(),
+                artifact.media_type.as_deref(),
+            ];
+            if fields.iter().any(Option::is_none)
+                || fields.into_iter().flatten().any(|value| {
+                    value.is_empty() || value.len() > 255 || value.chars().any(char::is_control)
+                })
+            {
+                return Err(TaskStoreError::Limit(
+                    "asset metadata must be complete and bounded".into(),
+                ));
+            }
+            let filename = artifact.filename.as_deref().unwrap_or_default();
+            let media_type = artifact.media_type.as_deref().unwrap_or_default();
+            if filename == "."
+                || filename == ".."
+                || filename.contains('/')
+                || filename.contains('\\')
+                || !media_type.is_ascii()
+                || !media_type.contains('/')
+                || media_type
+                    .bytes()
+                    .any(|byte| byte.is_ascii_uppercase() || byte.is_ascii_whitespace())
+            {
+                return Err(TaskStoreError::Limit(
+                    "asset filename or media type is not canonical".into(),
+                ));
+            }
+        }
+        _ if artifact.asset_id.is_some()
+            || artifact.filename.is_some()
+            || artifact.media_type.is_some() =>
+        {
+            return Err(TaskStoreError::Conflict(
+                "non-asset artifact cannot contain asset metadata".into(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_loaded_artifact(artifact: &ArtifactReference) -> Result<(), TaskStoreError> {
+    if artifact.kind == ArtifactKind::Asset
+        && artifact.asset_id.is_none()
+        && artifact.filename.is_none()
+        && artifact.media_type.is_none()
+    {
+        require_hex(&artifact.storage_key, 16, "artifact storage key")?;
+        if i64::try_from(artifact.byte_len).is_err() {
+            return Err(TaskStoreError::Corrupt(
+                "legacy artifact byte length exceeds SQLite integer range".into(),
+            ));
+        }
+        require_hex(&artifact.sha256, 32, "artifact SHA-256")?;
+        return Ok(());
+    }
+    validate_artifact(artifact)
+}
+
+fn validate_artifact_budget(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &TaskId,
+    additions: &[ArtifactReference],
+) -> Result<(), TaskStoreError> {
+    let existing: i64 = transaction
+        .query_row(
+            "SELECT coalesce(sum(byte_len), 0) FROM artifacts WHERE task_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(map_sqlite_generic)?;
+    let existing = u64::try_from(existing)
+        .map_err(|_| TaskStoreError::Corrupt("negative artifact byte total".into()))?;
+    let added = additions.iter().try_fold(0_u64, |total, artifact| {
+        total
+            .checked_add(artifact.byte_len)
+            .ok_or_else(|| TaskStoreError::Limit("artifact byte length total overflowed".into()))
+    })?;
+    if existing.checked_add(added).is_none_or(|total| total > MAX_ARTIFACT_BYTES) {
+        return Err(TaskStoreError::Limit("task artifact bytes exceed 2 GiB".into()));
+    }
+    Ok(())
 }
 
 fn validate_transition(transition: &TaskTransition) -> Result<(), TaskStoreError> {

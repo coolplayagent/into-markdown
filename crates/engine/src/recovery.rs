@@ -828,7 +828,10 @@ fn provenance_matches(nodes: &[BlockNode], inventory: &[Provenance]) -> bool {
     visit(nodes, inventory, &mut index) && index == inventory.len()
 }
 
-fn fingerprint_input(bytes: &[u8], metadata: &SourceMetadata) -> Result<String, ConversionError> {
+pub(crate) fn fingerprint_input(
+    bytes: &[u8],
+    metadata: &SourceMetadata,
+) -> Result<String, ConversionError> {
     let metadata = serde_json::to_vec(&(
         metadata.name.as_deref(),
         metadata.media_type.as_deref(),
@@ -839,7 +842,7 @@ fn fingerprint_input(bytes: &[u8], metadata: &SourceMetadata) -> Result<String, 
     Ok(hash_parts(&[b"into-markdown-input-v1", bytes, &metadata]))
 }
 
-fn fingerprint_json<T: Serialize>(value: &T) -> Result<String, ConversionError> {
+pub(crate) fn fingerprint_json<T: Serialize>(value: &T) -> Result<String, ConversionError> {
     let bytes = serde_json::to_vec(value).map_err(|error| {
         recovery_error("internal", format!("encode recovery configuration: {error}"))
     })?;
