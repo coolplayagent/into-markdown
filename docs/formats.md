@@ -48,9 +48,11 @@ IR 只有 block image 而明确诊断并降级为链接；相对/fragment 图片
 内容自动检测只在多项明确结构、完整 fence 或 GFM table separator 构成强证据时产生
 Markdown 候选；普通散文和单个偶然 marker 仍由 TXT 处理。扩展名、`text/markdown` MIME
 与显式格式提示继续走统一 hint 优先级。解析使用 offset event iterator，定期执行 execution
-checkpoint，并在构造 IR 前限制输入、事件深度、块数、行内数和请求内存。parser 内部可能
-物化的 Cow 工作集在构造 parser 前按源长度预留；转换器控制的 Vec/String 均按 capacity
-delta 在分配前向同一 ExecutionContext 计费，所有权转移不重复计费。
+checkpoint，并在构造 IR 前限制输入、事件深度、块数、行内数和请求内存。转换器在构造
+parser 前按固定开销、输入字节、受输入与 IR 上限共同约束的事件工作单元及配置深度，预留
+一笔确定性的 parser 逻辑工作预算。这是 `ExecutionContext` 的协作式逻辑计费，不代表
+第三方 parser 的 allocator capacity、元数据或进程 RSS。第三方 Cow 在进入本项目拥有的
+IR 时按其逻辑内容计费一次；转换器主动增长的 Vec/String 按请求的 capacity delta 计费。
 
 ## TXT 与字符集
 

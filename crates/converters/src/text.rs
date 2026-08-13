@@ -22,26 +22,7 @@ const SAFETY_DECODE_INPUT_CHUNK: usize = 4096;
 #[cfg(test)]
 thread_local! {
     static SAMPLE_DECODE_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static LOGICAL_ALLOCATION_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
-#[cfg(test)]
-pub(crate) fn reset_logical_allocation_attempts() {
-    LOGICAL_ALLOCATION_ATTEMPTS.with(|value| value.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn logical_allocation_attempts() -> usize {
-    LOGICAL_ALLOCATION_ATTEMPTS.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-fn record_logical_allocation_attempt() {
-    LOGICAL_ALLOCATION_ATTEMPTS.with(|value| value.set(value.get().saturating_add(1)));
-}
-
-#[cfg(not(test))]
-fn record_logical_allocation_attempt() {}
 
 /// Plain-text converter with bounded character-set decoding and source-byte provenance.
 #[derive(Debug, Default)]
@@ -680,7 +661,6 @@ impl LogicalMemory {
                 detail: "logical vector byte capacity overflowed".into(),
             }
         })?)?;
-        record_logical_allocation_attempt();
         vector.try_reserve_exact(target - vector.len()).map_err(|error| {
             ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
@@ -704,7 +684,6 @@ impl LogicalMemory {
         }
         let target = required.max(string.capacity().saturating_mul(2)).max(64);
         self.charge(target - string.capacity())?;
-        record_logical_allocation_attempt();
         string.try_reserve_exact(target - string.len()).map_err(|error| {
             ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",

@@ -8,7 +8,10 @@ use into_markdown_core::{
     MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput, Services,
     SourceLocator, TableAlignment, TableRow, canonical_external_asset_uri,
 };
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
+use std::fmt::Write as _;
 use std::ops::Range;
 
 const FORMATS: &[InputFormat] = &[InputFormat::Markdown];
@@ -17,6 +20,14 @@ const RAW_HTML_CODE: &str = "markdown.rawHtmlPreservedAsCode";
 const BLOCKQUOTE_CODE: &str = "markdown.blockquotePreservedAsCode";
 const EXTERNAL_IMAGE_CODE: &str = "markdown.externalImagePreservedAsLink";
 const DUPLICATE_DEFINITION_CODE: &str = "markdown.duplicateDefinitionIgnored";
+// Cooperative logical work weights for the pinned Markdown parser. These are deliberately not
+// estimates of pulldown-cmark's allocator capacity or process RSS. Event work is bounded by an
+// explicit converter limit derived from input bytes and the IR node/inline ceilings.
+const PARSER_FIXED_LOGICAL_WORK_BYTES: usize = 32 * 1024;
+const PARSER_EVENT_LOGICAL_WORK_BYTES: usize = 1;
+const PARSER_DEPTH_LOGICAL_WORK_BYTES: usize = std::mem::size_of::<usize>();
+const LOGICAL_SET_ENTRY_BYTES: usize =
+    std::mem::size_of::<String>() + 3 * std::mem::size_of::<usize>();
 
 /// `CommonMark` and GitHub-Flavored Markdown converter.
 #[derive(Debug, Default)]
@@ -235,6 +246,7 @@ struct Builder<'a> {
     diagnostics: Vec<Diagnostic>,
     node_count: usize,
     inline_count: usize,
+    parser_event_limit: usize,
     sequence: u64,
     parser_memory: text::LogicalMemory,
     assets: Vec<Asset>,
@@ -249,9 +261,11 @@ impl<'a> Builder<'a> {
         diagnostics: Vec<Diagnostic>,
     ) -> Result<Self, ConversionError> {
         let mut parser_memory = text::LogicalMemory::new(context)?;
-        // pulldown-cmark may materialize borrowed event text. Reserve its bounded
-        // source-sized working set before constructing the parser.
-        parser_memory.charge(source.text.len())?;
+        let parser_event_limit = max_parser_events(source.text.len())?;
+        parser_memory.charge(parser_logical_work_bytes(
+            source.text.len(),
+            options.limits.max_nesting_depth,
+        )?)?;
         let mut frames = Vec::new();
         parser_memory.reserve_vec(&mut frames, 8)?;
         frames.push(Frame::new(FrameKind::Root, 0..source.text.len()));
@@ -263,6 +277,7 @@ impl<'a> Builder<'a> {
             diagnostics,
             node_count: 0,
             inline_count: 0,
+            parser_event_limit,
             sequence: 0,
             parser_memory,
             assets: Vec::new(),
@@ -273,6 +288,15 @@ impl<'a> Builder<'a> {
     fn parse(&mut self) -> Result<(), ConversionError> {
         let parser = Parser::new_ext(&self.source.text, parser_options()).into_offset_iter();
         for (index, (event, span)) in parser.enumerate() {
+            if index >= self.parser_event_limit {
+                return Err(ConversionError::ResourceLimit {
+                    limit: "markdownEvents",
+                    detail: format!(
+                        "Markdown parser event count exceeded {}",
+                        self.parser_event_limit
+                    ),
+                });
+            }
             if index.is_multiple_of(128) {
                 self.context.checkpoint()?;
             }
@@ -280,12 +304,17 @@ impl<'a> Builder<'a> {
                 Event::Start(tag) => self.start(tag, span)?,
                 Event::End(end) => self.end(end, span)?,
                 Event::Text(value) => self.text(&value)?,
-                Event::Code(value) => self.push_inline(Inline::Code(value.into_string()))?,
+                Event::Code(value) => {
+                    let value = self.own_parser_text(value)?;
+                    self.push_inline(Inline::Code(value))?;
+                }
                 Event::InlineMath(value) => {
-                    self.push_inline(Inline::Formula(value.into_string()))?;
+                    let value = self.own_parser_text(value)?;
+                    self.push_inline(Inline::Formula(value))?;
                 }
                 Event::DisplayMath(value) => {
-                    let node = self.node(Block::Formula(value.into_string()), span)?;
+                    let value = self.own_parser_text(value)?;
+                    let node = self.node(Block::Formula(value), span)?;
                     self.push_block(node)?;
                 }
                 Event::Html(value) => {
@@ -294,12 +323,12 @@ impl<'a> Builder<'a> {
                         "raw HTML was preserved as non-executable code",
                         &span,
                     )?;
-                    self.push_inline(Inline::Code(value.into_string()))?;
+                    let value = self.own_parser_text(value)?;
+                    self.push_inline(Inline::Code(value))?;
                 }
                 Event::InlineHtml(value) => self.inline_html(&value, span)?,
                 Event::FootnoteReference(label) => {
-                    self.parser_memory.charge(label.len())?;
-                    let label = normalize_footnote_label(&label);
+                    let label = normalize_footnote_label(&label, &mut self.parser_memory)?;
                     self.push_inline(Inline::FootnoteReference(label))?;
                 }
                 Event::SoftBreak => self.text("\n")?,
@@ -340,12 +369,7 @@ impl<'a> Builder<'a> {
                 CodeBlockKind::Indented => None,
                 CodeBlockKind::Fenced(info) => {
                     let language = info.split_whitespace().next().unwrap_or_default().trim();
-                    if language.is_empty() {
-                        None
-                    } else {
-                        self.parser_memory.charge(language.len())?;
-                        Some(language.to_owned())
-                    }
+                    if language.is_empty() { None } else { Some(self.owned_text(language)?) }
                 }
             }),
             Tag::HtmlBlock | Tag::MetadataBlock(_) => FrameKind::HtmlBlock,
@@ -354,8 +378,7 @@ impl<'a> Builder<'a> {
             }
             Tag::Item => FrameKind::Item,
             Tag::FootnoteDefinition(label) => {
-                self.parser_memory.charge(label.len())?;
-                let label = normalize_footnote_label(&label);
+                let label = normalize_footnote_label(&label, &mut self.parser_memory)?;
                 FrameKind::Footnote(label)
             }
             Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
@@ -387,8 +410,8 @@ impl<'a> Builder<'a> {
             Tag::Strikethrough => FrameKind::Strikethrough,
             Tag::Superscript => FrameKind::Superscript,
             Tag::Subscript => FrameKind::Subscript,
-            Tag::Link { dest_url, .. } => FrameKind::Link(dest_url.into_string()),
-            Tag::Image { dest_url, .. } => FrameKind::Image(dest_url.into_string()),
+            Tag::Link { dest_url, .. } => FrameKind::Link(self.own_parser_text(dest_url)?),
+            Tag::Image { dest_url, .. } => FrameKind::Image(self.own_parser_text(dest_url)?),
         };
         let depth = self.frames.len();
         if depth > usize::from(self.options.limits.max_nesting_depth) {
@@ -473,17 +496,18 @@ impl<'a> Builder<'a> {
                         "absolute HTTP(S) image was referenced without fetching its bytes",
                         &image.span,
                     )?;
-                    if image.target.to_ascii_lowercase().ends_with(".svg") {
+                    if image_target_has_extension(&image.target, "svg") {
                         self.diagnostic(
                             "markdown.externalSvgMayContainActiveContent",
                             "external SVG was preserved only as a URI reference and may contain active content when opened by a consumer",
                             &image.span,
                         )?;
                     }
-                    let asset_id = format!("markdown-external-image-{}", self.assets.len() + 1);
-                    self.charge_text(&asset_id, "Markdown asset ID")?;
+                    let asset_id = self.asset_id()?;
                     self.charge_text(&image.target, "Markdown external URI")?;
                     self.charge_text(&image.alt, "Markdown image alt")?;
+                    self.parser_memory.charge(asset_id.len())?;
+                    self.parser_memory.charge(image_media_type(&image.target).len())?;
                     self.parser_memory.reserve_vec(&mut self.assets, 1)?;
                     self.assets.push(Asset {
                         id: AssetId(asset_id.clone()),
@@ -568,8 +592,9 @@ impl<'a> Builder<'a> {
                 Ok(())
             }
             FrameKind::Footnote(label) => {
-                self.parser_memory
-                    .charge(label.len().saturating_add(std::mem::size_of::<String>()))?;
+                self.parser_memory.charge(
+                    label.len().checked_add(LOGICAL_SET_ENTRY_BYTES).ok_or_else(memory_overflow)?,
+                )?;
                 if !self.footnotes.insert(label.clone()) {
                     self.diagnostic(
                         DUPLICATE_DEFINITION_CODE,
@@ -653,8 +678,8 @@ impl<'a> Builder<'a> {
                     "blockquote was preserved as a non-executable Markdown code container",
                     &frame.span,
                 )?;
-                let raw = self.source.text.get(frame.span.clone()).unwrap_or_default().to_owned();
-                self.charge_text(&raw, "Markdown blockquote fallback")?;
+                let raw =
+                    self.owned_text(self.source.text.get(frame.span.clone()).unwrap_or_default())?;
                 self.parser_memory.charge("markdown-blockquote".len())?;
                 let node = self.node(
                     Block::Code { language: Some("markdown-blockquote".into()), text: raw },
@@ -668,8 +693,8 @@ impl<'a> Builder<'a> {
                     "raw HTML was preserved as non-executable code",
                     &frame.span,
                 )?;
-                let raw = self.source.text.get(frame.span.clone()).unwrap_or_default().to_owned();
-                self.charge_text(&raw, "Markdown HTML fallback")?;
+                let raw =
+                    self.owned_text(self.source.text.get(frame.span.clone()).unwrap_or_default())?;
                 self.parser_memory.charge("html".len())?;
                 let node = self
                     .node(Block::Code { language: Some("html".into()), text: raw }, frame.span)?;
@@ -726,12 +751,19 @@ impl<'a> Builder<'a> {
                         "unsafe image target was preserved as literal text",
                         &frame.span,
                     )?;
-                    self.parser_memory
-                        .charge(alt.len().saturating_add(target.len()).saturating_add(3))?;
-                    self.push_inline(Inline::Text {
-                        value: format!("{alt} ({target})"),
-                        marks: Vec::new(),
-                    })
+                    let required = alt
+                        .len()
+                        .checked_add(target.len())
+                        .and_then(|value| value.checked_add(3))
+                        .ok_or_else(memory_overflow)?;
+                    let mut value = String::new();
+                    self.parser_memory.reserve_string(&mut value, required)?;
+                    write!(&mut value, "{alt} ({target})").map_err(|_| {
+                        ConversionError::Internal {
+                            detail: "write to Markdown fallback String failed".into(),
+                        }
+                    })?;
+                    self.push_inline(Inline::Text { value, marks: Vec::new() })
                 }
             }
             FrameKind::Root => {
@@ -750,8 +782,8 @@ impl<'a> Builder<'a> {
             frame.literal.push_str(value);
             Ok(())
         } else {
-            self.parser_memory.charge(value.len())?;
-            self.push_inline(Inline::Text { value: value.to_owned(), marks: Vec::new() })
+            let value = self.owned_text(value)?;
+            self.push_inline(Inline::Text { value, marks: Vec::new() })
         }
     }
 
@@ -789,15 +821,15 @@ impl<'a> Builder<'a> {
 
     fn inline_html(&mut self, value: &str, span: Range<usize>) -> Result<(), ConversionError> {
         if let Some((inner, mark)) = safe_self_contained_html_mark(value) {
-            self.parser_memory.charge(inner.len())?;
+            let inner = self.owned_text(inner)?;
             let mut marks = Vec::new();
             self.parser_memory.reserve_vec(&mut marks, 1)?;
             marks.push(mark);
-            self.push_inline(Inline::Text { value: inner.to_owned(), marks })?;
+            self.push_inline(Inline::Text { value: inner, marks })?;
             return Ok(());
         }
-        let normalized = value.trim().to_ascii_lowercase();
-        if let Some((tag, mark)) = html_mark_open(&normalized) {
+        let normalized = value.trim();
+        if let Some((tag, mark)) = html_mark_open(normalized) {
             self.inline_count = self.inline_count.saturating_add(1);
             if self.inline_count > MAX_DOCUMENT_INLINES {
                 return Err(ConversionError::ResourceLimit {
@@ -810,14 +842,16 @@ impl<'a> Builder<'a> {
                 detail: "Markdown event stack is empty".into(),
             })?;
             memory.reserve_vec(&mut frame.inlines, 1)?;
-            memory.charge(value.len())?;
+            let mut owned = String::new();
+            memory.reserve_string(&mut owned, value.len())?;
+            owned.push_str(value);
             let inline_index = frame.inlines.len();
-            frame.inlines.push(Inline::Code(value.to_owned()));
+            frame.inlines.push(Inline::Code(owned));
             memory.reserve_vec(&mut frame.html_marks, 1)?;
             frame.html_marks.push(PendingHtmlMark { tag, mark, inline_index, span });
             return Ok(());
         }
-        if let Some(tag) = html_mark_close(&normalized) {
+        if let Some(tag) = html_mark_close(normalized) {
             let frame = self.frames.last_mut().ok_or_else(|| ConversionError::Internal {
                 detail: "Markdown event stack is empty".into(),
             })?;
@@ -850,8 +884,8 @@ impl<'a> Builder<'a> {
             "raw inline HTML was preserved as non-executable code",
             &span,
         )?;
-        self.parser_memory.charge(value.len())?;
-        self.push_inline(Inline::Code(value.to_owned()))
+        let value = self.owned_text(value)?;
+        self.push_inline(Inline::Code(value))
     }
 
     fn finish_mark(
@@ -927,10 +961,8 @@ impl<'a> Builder<'a> {
                 detail: "Markdown node sequence overflowed".into(),
             })?;
         let (start, end) = self.source.source_range(span.start, span.end);
-        let digits = usize::try_from(self.sequence.ilog10()).unwrap_or(19).saturating_add(1);
-        self.parser_memory
-            .charge(9_usize.saturating_add(digits).saturating_add(PROVIDER_ID.len()))?;
-        let id = format!("markdown-{}", self.sequence);
+        let id = self.node_id()?;
+        self.parser_memory.charge(PROVIDER_ID.len())?;
         Ok(BlockNode {
             id: NodeId(id),
             block,
@@ -977,6 +1009,45 @@ impl<'a> Builder<'a> {
         self.parser_memory.charge(value.len())
     }
 
+    fn owned_text(&mut self, value: &str) -> Result<String, ConversionError> {
+        let mut owned = String::new();
+        self.parser_memory.reserve_string(&mut owned, value.len())?;
+        owned.push_str(value);
+        Ok(owned)
+    }
+
+    fn own_parser_text(&mut self, value: CowStr<'_>) -> Result<String, ConversionError> {
+        // Cow ownership inside pulldown-cmark belongs to the parser. Account the logical content
+        // once when it crosses into the project-owned IR, regardless of whether this is a move or
+        // a copy at the allocator level.
+        self.parser_memory.charge(value.len())?;
+        Ok(value.into_string())
+    }
+
+    fn node_id(&mut self) -> Result<String, ConversionError> {
+        let digits = usize::try_from(self.sequence.ilog10()).unwrap_or(19).saturating_add(1);
+        let capacity = "markdown-".len().checked_add(digits).ok_or_else(memory_overflow)?;
+        let mut id = String::new();
+        self.parser_memory.reserve_string(&mut id, capacity)?;
+        write!(&mut id, "markdown-{}", self.sequence).map_err(|_| ConversionError::Internal {
+            detail: "write to Markdown node ID failed".into(),
+        })?;
+        Ok(id)
+    }
+
+    fn asset_id(&mut self) -> Result<String, ConversionError> {
+        let sequence = self.assets.len().checked_add(1).ok_or_else(memory_overflow)?;
+        let digits = sequence.checked_ilog10().unwrap_or(0) as usize + 1;
+        let capacity =
+            "markdown-external-image-".len().checked_add(digits).ok_or_else(memory_overflow)?;
+        let mut id = String::new();
+        self.parser_memory.reserve_string(&mut id, capacity)?;
+        write!(&mut id, "markdown-external-image-{sequence}").map_err(|_| {
+            ConversionError::Internal { detail: "write to Markdown asset ID failed".into() }
+        })?;
+        Ok(id)
+    }
+
     fn finish(mut self) -> Result<(Document, Vec<Diagnostic>, Vec<Asset>), ConversionError> {
         let root = self.frames.pop().ok_or_else(|| ConversionError::Internal {
             detail: "Markdown root frame disappeared".into(),
@@ -991,24 +1062,71 @@ impl<'a> Builder<'a> {
 }
 
 fn html_mark_open(value: &str) -> Option<(&'static str, InlineMark)> {
-    match value {
-        "<strong>" => Some(("strong", InlineMark::Bold)),
-        "<em>" => Some(("em", InlineMark::Italic)),
-        "<del>" => Some(("del", InlineMark::Strikethrough)),
-        "<sup>" => Some(("sup", InlineMark::Superscript)),
-        "<sub>" => Some(("sub", InlineMark::Subscript)),
-        _ => None,
+    if value.eq_ignore_ascii_case("<strong>") {
+        Some(("strong", InlineMark::Bold))
+    } else if value.eq_ignore_ascii_case("<em>") {
+        Some(("em", InlineMark::Italic))
+    } else if value.eq_ignore_ascii_case("<del>") {
+        Some(("del", InlineMark::Strikethrough))
+    } else if value.eq_ignore_ascii_case("<sup>") {
+        Some(("sup", InlineMark::Superscript))
+    } else if value.eq_ignore_ascii_case("<sub>") {
+        Some(("sub", InlineMark::Subscript))
+    } else {
+        None
     }
 }
 
 fn html_mark_close(value: &str) -> Option<&'static str> {
-    match value {
-        "</strong>" => Some("strong"),
-        "</em>" => Some("em"),
-        "</del>" => Some("del"),
-        "</sup>" => Some("sup"),
-        "</sub>" => Some("sub"),
-        _ => None,
+    if value.eq_ignore_ascii_case("</strong>") {
+        Some("strong")
+    } else if value.eq_ignore_ascii_case("</em>") {
+        Some("em")
+    } else if value.eq_ignore_ascii_case("</del>") {
+        Some("del")
+    } else if value.eq_ignore_ascii_case("</sup>") {
+        Some("sup")
+    } else if value.eq_ignore_ascii_case("</sub>") {
+        Some("sub")
+    } else {
+        None
+    }
+}
+
+fn parser_logical_work_bytes(
+    input_bytes: usize,
+    max_nesting_depth: u16,
+) -> Result<usize, ConversionError> {
+    let event_units = max_parser_events(input_bytes)?;
+    let event_work =
+        event_units.checked_mul(PARSER_EVENT_LOGICAL_WORK_BYTES).ok_or_else(memory_overflow)?;
+    let depth_units = usize::from(max_nesting_depth).checked_add(1).ok_or_else(memory_overflow)?;
+    let depth_work =
+        depth_units.checked_mul(PARSER_DEPTH_LOGICAL_WORK_BYTES).ok_or_else(memory_overflow)?;
+    PARSER_FIXED_LOGICAL_WORK_BYTES
+        .checked_add(input_bytes)
+        .and_then(|value| value.checked_add(event_work))
+        .and_then(|value| value.checked_add(depth_work))
+        .ok_or_else(memory_overflow)
+}
+
+fn max_parser_events(input_bytes: usize) -> Result<usize, ConversionError> {
+    let structural_ceiling = MAX_DOCUMENT_NODES
+        .checked_add(MAX_DOCUMENT_INLINES)
+        .and_then(|value| value.checked_mul(2))
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(memory_overflow)?;
+    let source_ceiling = input_bytes
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(memory_overflow)?;
+    Ok(source_ceiling.min(structural_ceiling))
+}
+
+fn memory_overflow() -> ConversionError {
+    ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "Markdown logical work budget overflowed".into(),
     }
 }
 
@@ -1050,19 +1168,41 @@ fn heading_level(level: HeadingLevel) -> u8 {
     }
 }
 
-fn normalize_footnote_label(label: &str) -> String {
-    let Some(hex) = label.strip_prefix("fn-") else { return label.to_owned() };
+fn normalize_footnote_label(
+    label: &str,
+    memory: &mut text::LogicalMemory,
+) -> Result<String, ConversionError> {
+    let Some(hex) = label.strip_prefix("fn-") else {
+        let mut owned = String::new();
+        memory.reserve_string(&mut owned, label.len())?;
+        owned.push_str(label);
+        return Ok(owned);
+    };
     if hex.is_empty() || !hex.len().is_multiple_of(2) {
-        return label.to_owned();
+        let mut owned = String::new();
+        memory.reserve_string(&mut owned, label.len())?;
+        owned.push_str(label);
+        return Ok(owned);
     }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let mut bytes = Vec::new();
+    memory.reserve_vec(&mut bytes, hex.len() / 2)?;
     for pair in hex.as_bytes().chunks_exact(2) {
         let (Some(high), Some(low)) = (hex_value(pair[0]), hex_value(pair[1])) else {
-            return label.to_owned();
+            let mut owned = String::new();
+            memory.reserve_string(&mut owned, label.len())?;
+            owned.push_str(label);
+            return Ok(owned);
         };
         bytes.push((high << 4) | low);
     }
-    String::from_utf8(bytes).unwrap_or_else(|_| label.to_owned())
+    if let Ok(value) = String::from_utf8(bytes) {
+        Ok(value)
+    } else {
+        let mut owned = String::new();
+        memory.reserve_string(&mut owned, label.len())?;
+        owned.push_str(label);
+        Ok(owned)
+    }
 }
 
 fn hex_value(value: u8) -> Option<u8> {
@@ -1167,7 +1307,9 @@ fn safe_link_target(value: &str) -> bool {
     {
         return true;
     }
-    !matches!(scheme.to_ascii_lowercase().as_str(), "javascript" | "vbscript" | "data" | "file")
+    !["javascript", "vbscript", "data", "file"]
+        .iter()
+        .any(|blocked| scheme.eq_ignore_ascii_case(blocked))
         && !value[colon + 1..]
             .strip_prefix("//")
             .and_then(|rest| rest.split('/').next())
@@ -1183,15 +1325,31 @@ fn image_media_type(target: &str) -> &'static str {
         .rsplit('/')
         .next()
         .and_then(|name| name.rsplit_once('.').map(|(_, extension)| extension));
-    match extension.map(str::to_ascii_lowercase).as_deref() {
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("svg") => "image/svg+xml",
-        Some("avif") => "image/avif",
-        _ => "application/octet-stream",
+    if extension.is_some_and(|value| value.eq_ignore_ascii_case("png")) {
+        "image/png"
+    } else if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("jpg") || value.eq_ignore_ascii_case("jpeg")
+    }) {
+        "image/jpeg"
+    } else if extension.is_some_and(|value| value.eq_ignore_ascii_case("gif")) {
+        "image/gif"
+    } else if extension.is_some_and(|value| value.eq_ignore_ascii_case("webp")) {
+        "image/webp"
+    } else if extension.is_some_and(|value| value.eq_ignore_ascii_case("svg")) {
+        "image/svg+xml"
+    } else if extension.is_some_and(|value| value.eq_ignore_ascii_case("avif")) {
+        "image/avif"
+    } else {
+        "application/octet-stream"
     }
+}
+
+fn image_target_has_extension(target: &str, expected: &str) -> bool {
+    target
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit_once('.').map(|(_, extension)| extension))
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
 }
 
 fn scan_duplicate_definitions(
@@ -1228,8 +1386,15 @@ fn scan_duplicate_definitions(
             && line.len() - trimmed.len() < 4
             && let Some(close) = trimmed.strip_prefix('[').and_then(|tail| tail.find("]:"))
         {
-            let label = trimmed[1..=close].trim().to_ascii_lowercase();
-            if !label.is_empty() && !label.starts_with('^') && !seen.insert(label.clone()) {
+            let source_label = trimmed[1..=close].trim();
+            decoded.memory.charge(
+                source_label
+                    .len()
+                    .checked_add(LOGICAL_SET_ENTRY_BYTES)
+                    .ok_or_else(memory_overflow)?,
+            )?;
+            let label = logical_ascii_lowercase(source_label, &mut decoded.memory)?;
+            if !label.is_empty() && !label.starts_with('^') && seen.contains(&label) {
                 let leading = line.len() - trimmed.len();
                 let start = offset + leading;
                 let end = offset + line.trim_end_matches(['\r', '\n']).len();
@@ -1246,6 +1411,8 @@ fn scan_duplicate_definitions(
                     ),
                     locator: Some(byte_locator(source_start, source_end)),
                 });
+            } else if !label.is_empty() && !label.starts_with('^') {
+                seen.insert(label);
             }
         }
         offset = offset.saturating_add(line.len());
@@ -1259,6 +1426,16 @@ fn byte_locator(start: usize, end: usize) -> SourceLocator {
         byte_end: u64::try_from(end).ok(),
         ..SourceLocator::default()
     }
+}
+
+fn logical_ascii_lowercase(
+    value: &str,
+    memory: &mut text::LogicalMemory,
+) -> Result<String, ConversionError> {
+    let mut normalized = String::new();
+    memory.reserve_string(&mut normalized, value.len())?;
+    normalized.extend(value.chars().map(|character| character.to_ascii_lowercase()));
+    Ok(normalized)
 }
 
 #[cfg(test)]
@@ -1538,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_allocations_obey_the_execution_memory_budget() {
+    fn markdown_logical_work_obeys_the_execution_memory_budget() {
         let limits = ResourceLimits { max_memory_bytes: 32, ..ResourceLimits::default() };
         let limited = ExecutionContext::new(ExecutionOptions::default(), limits);
         let error = convert_markdown(
@@ -1551,29 +1728,64 @@ mod tests {
     }
 
     #[test]
-    fn logical_allocation_is_charged_before_the_allocator_and_at_the_exact_boundary() {
-        let success_limits = ResourceLimits {
-            max_memory_bytes: 4 * std::mem::size_of::<u64>() as u64,
+    fn parser_logical_work_budget_is_checked_before_parser_construction() {
+        let options = ConversionOptions::default();
+        let work = parser_logical_work_bytes(0, options.limits.max_nesting_depth).unwrap();
+        let limits = ResourceLimits {
+            max_memory_bytes: u64::try_from(work - 1).unwrap(),
             ..ResourceLimits::default()
         };
-        let success_context =
-            ExecutionContext::new(ExecutionOptions::default(), success_limits.clone());
-        let mut success_memory = text::LogicalMemory::new(&success_context).unwrap();
-        let mut values = Vec::<u64>::new();
-        text::reset_logical_allocation_attempts();
-        success_memory.reserve_vec(&mut values, 1).unwrap();
-        assert_eq!(text::logical_allocation_attempts(), 1);
-
-        let mut failure_limits = success_limits;
-        failure_limits.max_memory_bytes -= 1;
-        let failure_context = ExecutionContext::new(ExecutionOptions::default(), failure_limits);
-        let mut failure_memory = text::LogicalMemory::new(&failure_context).unwrap();
-        let mut rejected = Vec::<u64>::new();
-        text::reset_logical_allocation_attempts();
-        let error = failure_memory.reserve_vec(&mut rejected, 1).unwrap_err();
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let decoded = text::decode_source(
+            b"",
+            Some("utf-8"),
+            options.text.decoding_mode,
+            &ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default()),
+        )
+        .unwrap()
+        .0;
+        let Err(error) = Builder::new(&decoded, &options, &context, Vec::new()) else {
+            panic!("parser logical work unexpectedly fit below its boundary");
+        };
         assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
-        assert_eq!(text::logical_allocation_attempts(), 0);
-        assert_eq!(rejected.capacity(), 0);
+
+        assert!(matches!(
+            parser_logical_work_bytes(usize::MAX, options.limits.max_nesting_depth),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+    }
+
+    #[test]
+    fn markdown_node_and_inline_limits_are_controlled_errors() {
+        let options = ConversionOptions::default();
+        let context = context();
+        let decoded = text::decode_source(b"", Some("utf-8"), options.text.decoding_mode, &context)
+            .unwrap()
+            .0;
+        let mut builder = Builder::new(&decoded, &options, &context, Vec::new()).unwrap();
+        builder.node_count = MAX_DOCUMENT_NODES;
+        assert!(matches!(
+            builder.consume_structural_container(),
+            Err(ConversionError::ResourceLimit { limit: "documentNodes", .. })
+        ));
+
+        builder.inline_count = MAX_DOCUMENT_INLINES;
+        assert!(matches!(
+            builder.push_inline(Inline::LineBreak),
+            Err(ConversionError::ResourceLimit { limit: "documentInlines", .. })
+        ));
+
+        let event_decoded =
+            text::decode_source(b"text\n", Some("utf-8"), options.text.decoding_mode, &context)
+                .unwrap()
+                .0;
+        let mut event_builder =
+            Builder::new(&event_decoded, &options, &context, Vec::new()).unwrap();
+        event_builder.parser_event_limit = 0;
+        assert!(matches!(
+            event_builder.parse(),
+            Err(ConversionError::ResourceLimit { limit: "markdownEvents", .. })
+        ));
     }
 
     #[test]
