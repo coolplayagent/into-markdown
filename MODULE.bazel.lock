@@ -253,7 +253,7 @@
   "moduleExtensions": {
     "//third_party/licenses:downloads.bzl%downloads": {
       "general": {
-        "bzlTransitiveDigest": "VVvsp8EMFczH5AFA4cfnnDtJGsr6qahXXn5K4k9r0A8=",
+        "bzlTransitiveDigest": "Vs3uLAi73d5tjzuvMcCyXTDSUPnHCHNA3iJfhAVxiD0=",
         "usagesDigest": "YItk5McM/nU5ZVdSduh0zAeBNSl8iILaQ3P/JbSrpag=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
@@ -277,6 +277,46 @@
               "sha256": "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604",
               "urls": [
                 "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar"
+              ]
+            }
+          },
+          "ppocrv6_tiny_recognizer_onnx_source": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
+              "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+              "urls": [
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+              ]
+            }
+          },
+          "ppocrv6_tiny_recognizer_onnx_model": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+              "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+              "urls": [
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+              ]
+            }
+          },
+          "ppocrv6_tiny_recognizer_onnx_model_archive": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "downloaded_file_path": "runtime-model.tar",
+              "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+              "urls": [
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+              ]
+            }
+          },
+          "ppocrv6_tiny_recognizer_character_table": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "downloaded_file_path": "ppocrv6_tiny_dict.txt",
+              "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+              "urls": [
+                "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt"
               ]
             }
           },

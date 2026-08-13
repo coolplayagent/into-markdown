@@ -53,7 +53,7 @@ mod quality {
         let runfiles = PathBuf::from(std::env::var_os("TEST_SRCDIR").expect("Bazel runfiles"));
         let repository = env!("OCR_QUALITY_MODEL_REPOSITORY");
         assert_ne!(repository, "unsupported", "quality target requires an audited platform");
-        let archive = fs::read(runfiles.join(repository).join("runtime-model.tar")).unwrap();
+        let archive = read_model_archive(&runfiles, repository).unwrap();
         assert_eq!(archive.len(), 4_526_080);
         assert_eq!(
             format!("{:x}", Sha256::digest(&archive)),
@@ -170,6 +170,21 @@ mod quality {
             let cer = edits as f64 / characters as f64;
             assert!(cer <= maximum, "{group} CER {cer:.6} exceeds {maximum:.6}");
         }
+    }
+
+    fn read_model_archive(runfiles: &Path, repository: &str) -> Result<Vec<u8>, String> {
+        let relative = Path::new(repository).join("file/runtime-model.tar");
+        fs::read(runfiles.join(&relative)).map_err(|error| {
+            format!("missing pinned model runfile {}: {error}", relative.display())
+        })
+    }
+
+    #[test]
+    fn missing_model_error_contains_only_the_safe_runfile_relative_path() {
+        let runfiles = tempfile::tempdir().unwrap();
+        let error = read_model_archive(runfiles.path(), "+downloads+test_model").unwrap_err();
+        assert!(error.contains("+downloads+test_model/file/runtime-model.tar"));
+        assert!(!error.contains(runfiles.path().to_str().unwrap()));
     }
 
     fn cer_chars(value: &str) -> Vec<char> {

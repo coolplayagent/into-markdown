@@ -167,6 +167,9 @@ rust_test(
         ":onnxruntime",
         "//crates/core",
         "//crates/ocr",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
     ] + all_crate_deps(normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
 )
