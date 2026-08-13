@@ -348,6 +348,65 @@ struct ModelArtifact {
     license: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecognizerAuthority {
+    schema_version: u64,
+    model_id: String,
+    upstream_repository: String,
+    upstream_commit: String,
+    preprocess_reference: String,
+    postprocess_reference: String,
+    runtime_archive_url: String,
+    runtime_archive_size: u64,
+    runtime_archive_sha256: String,
+    runtime_model_member: String,
+    runtime_model_size: u64,
+    runtime_model_sha256: String,
+    runtime_config_member: String,
+    runtime_config_size: u64,
+    runtime_config_sha256: String,
+    character_table_url: String,
+    character_table_size: u64,
+    character_table_sha256: String,
+    character_table_entries: usize,
+    classes: usize,
+    blank_index: usize,
+    append_space: bool,
+    license: String,
+    ir_version: u64,
+    opset_domain: String,
+    opset_version: u64,
+    input_name: String,
+    input_dtype: String,
+    input_shape: [String; 4],
+    output_name: String,
+    output_dtype: String,
+    output_shape: [String; 3],
+    input_color: String,
+    crop_reference: String,
+    perspective_interpolation: String,
+    perspective_border: String,
+    vertical_rotation: String,
+    vertical_ratio_threshold: f64,
+    resize_interpolation: String,
+    normalization_scale: f64,
+    normalization_mean: f64,
+    normalization_standard_deviation: f64,
+    maximum_width: usize,
+    quality_corpus: String,
+    quality_groups: Vec<RecognizerQualityGroup>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct RecognizerQualityGroup {
+    group: String,
+    evaluated_characters: usize,
+    observed_errors: usize,
+    maximum_cer: f64,
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct DownloadManifest {
@@ -1311,6 +1370,7 @@ fn validate_inventory(
 fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut Vec<String>) {
     let ort_text = read(&root.join("third_party/onnxruntime/manifest.json"), errors);
     let models_text = read(&root.join("models/manifest.json"), errors);
+    let recognizer_text = read(&root.join("models/ppocrv6-tiny-recognizer-authority.json"), errors);
     let downloads_text = read(&root.join("third_party/licenses/downloads.json"), errors);
     let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
     let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
@@ -1319,6 +1379,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
+    let recognizer: Option<RecognizerAuthority> =
+        parse_json("recognizer authority", &recognizer_text, errors);
     let downloads: Option<DownloadManifest> =
         parse_json("download manifest", &downloads_text, errors);
     let pdfium: Option<PdfiumManifest> = parse_json("PDFium manifest", &pdfium_text, errors);
@@ -1341,7 +1403,11 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     }
     if let (Some(models), Some(downloads)) = (&models, &downloads) {
         validate_model_manifest(inventory, models, downloads, errors);
+        if let Some(recognizer) = &recognizer {
+            validate_recognizer_authority(inventory, models, downloads, recognizer, errors);
+        }
     }
+    validate_schema2_kind_presence(&models_text, errors);
     if let Some(downloads) = &downloads {
         if downloads.schema_version != 1 {
             errors.push("unsupported download manifest schema_version".to_owned());
@@ -2508,6 +2574,199 @@ fn validate_model_manifest(
     }
 }
 
+fn validate_schema2_kind_presence(models: &str, errors: &mut Vec<String>) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(models) else { return };
+    if value.get("schema_version").and_then(serde_json::Value::as_u64) == Some(2)
+        && value
+            .get("bundles")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|bundles| bundles.iter().any(|bundle| bundle.get("kind").is_none()))
+    {
+        errors.push("model manifest schema 2 bundles require explicit kind".to_owned());
+    }
+}
+
+fn validate_recognizer_authority(
+    inventory: &Inventory,
+    manifest: &ModelManifest,
+    downloads: &DownloadManifest,
+    authority: &RecognizerAuthority,
+    errors: &mut Vec<String>,
+) {
+    if !recognizer_authority_is_exact(authority) {
+        errors.push("official PP-OCRv6 recognizer authority has drifted".to_owned());
+        return;
+    }
+    if !recognizer_model_binding_is_exact(manifest, authority) {
+        errors.push("model manifest disagrees with official recognizer authority".to_owned());
+    }
+    if !recognizer_download_binding_is_exact(downloads, authority) {
+        errors.push("download manifest disagrees with official recognizer authority".to_owned());
+    }
+    if !recognizer_inventory_binding_is_exact(inventory, authority) {
+        errors.push("inventory disagrees with official recognizer authority".to_owned());
+    }
+}
+
+fn recognizer_authority_is_exact(authority: &RecognizerAuthority) -> bool {
+    let groups: [(&str, usize, usize, f64); 4] = [
+        ("simplified", 65, 0, 0.05),
+        ("traditional", 65, 6, 0.10),
+        ("english", 185, 1, 0.05),
+        ("mixed", 116, 1, 0.08),
+    ];
+    let exact_groups = authority.quality_groups.len() == groups.len()
+        && authority.quality_groups.iter().zip(groups).all(|(actual, expected)| {
+            actual.group == expected.0
+                && actual.evaluated_characters == expected.1
+                && actual.observed_errors == expected.2
+                && actual.maximum_cer.to_bits() == expected.3.to_bits()
+        });
+    authority.schema_version == 1
+        && authority.model_id == "pp-ocrv6-tiny-recognizer-onnx"
+        && authority.upstream_repository == "https://github.com/PaddlePaddle/PaddleOCR"
+        && authority.upstream_commit == "2661c7c0ef5c613e8f93c6e93b2e052399f0f854"
+        && authority.preprocess_reference == "tools/infer/predict_rec.py"
+        && authority.postprocess_reference == "ppocr/postprocess/rec_postprocess.py"
+        && authority.runtime_archive_url
+            == "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+        && authority.runtime_archive_size == 4_526_080
+        && authority.runtime_archive_sha256
+            == "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
+        && authority.runtime_model_member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+        && authority.runtime_model_size == 4_462_639
+        && authority.runtime_model_sha256
+            == "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6"
+        && authority.runtime_config_member == "PP-OCRv6_tiny_rec_onnx_infer/inference.yml"
+        && authority.runtime_config_size == 55_571
+        && authority.runtime_config_sha256
+            == "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"
+        && authority.character_table_url
+            == "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt"
+        && authority.character_table_size == 27_156
+        && authority.character_table_sha256
+            == "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd"
+        && authority.character_table_entries == 6904
+        && authority.classes == 6906
+        && authority.blank_index == 0
+        && authority.append_space
+        && authority.license == "Apache-2.0"
+        && authority.ir_version == 6
+        && authority.opset_domain.is_empty()
+        && authority.opset_version == 11
+        && authority.input_name == "x"
+        && authority.input_dtype == "float32"
+        && authority.input_shape == ["N", "3", "48", "W"]
+        && authority.output_name == "fetch_name_0"
+        && authority.output_dtype == "float32"
+        && authority.output_shape == ["N", "T", "6906"]
+        && authority.input_color == "BGR"
+        && authority.crop_reference == "tools/infer/utility.py"
+        && authority.perspective_interpolation == "OpenCV-INTER_CUBIC"
+        && authority.perspective_border == "OpenCV-BORDER_REPLICATE"
+        && authority.vertical_rotation == "numpy-rot90-counterclockwise"
+        && authority.vertical_ratio_threshold.to_bits() == 1.5_f64.to_bits()
+        && authority.resize_interpolation == "OpenCV-INTER_LINEAR"
+        && authority.normalization_scale.to_bits() == (1.0_f64 / 255.0).to_bits()
+        && authority.normalization_mean.to_bits() == 0.5_f64.to_bits()
+        && authority.normalization_standard_deviation.to_bits() == 0.5_f64.to_bits()
+        && authority.maximum_width == 3200
+        && authority.quality_corpus == "fixtures/manifest.json#ocr_quality"
+        && exact_groups
+}
+
+fn recognizer_model_binding_is_exact(
+    manifest: &ModelManifest,
+    authority: &RecognizerAuthority,
+) -> bool {
+    let Some(bundle) = manifest.bundles.iter().find(|bundle| bundle.id == authority.model_id)
+    else {
+        return false;
+    };
+    let source = bundle
+        .source_artifacts
+        .iter()
+        .find(|artifact| artifact.id == "ppocrv6-tiny-recognizer-onnx-source");
+    let model = bundle.runtime_artifacts.iter().find(|artifact| artifact.role == "recognizer");
+    let dictionary =
+        bundle.runtime_artifacts.iter().find(|artifact| artifact.role == "character-table");
+    !source.is_none_or(|artifact| {
+        artifact.url != authority.runtime_archive_url
+            || artifact.sha256 != authority.runtime_archive_sha256
+            || artifact.license != authority.license
+    }) && !model.is_none_or(|artifact| {
+        artifact.url != authority.runtime_archive_url
+            || artifact.archive_sha256.as_deref() != Some(authority.runtime_archive_sha256.as_str())
+            || artifact.archive_size != Some(authority.runtime_archive_size)
+            || artifact.archive_member.as_deref() != Some(authority.runtime_model_member.as_str())
+            || artifact.sha256 != authority.runtime_model_sha256
+            || artifact.size != authority.runtime_model_size
+            || artifact.archive_members.as_deref().is_none_or(|members| {
+                members.get(2).is_none_or(|member| {
+                    member.path != authority.runtime_config_member
+                        || member.size != authority.runtime_config_size
+                        || member.sha256.as_deref()
+                            != Some(authority.runtime_config_sha256.as_str())
+                })
+            })
+    }) && !dictionary.is_none_or(|artifact| {
+        artifact.url != authority.character_table_url
+            || artifact.sha256 != authority.character_table_sha256
+            || artifact.size != authority.character_table_size
+    })
+}
+
+fn recognizer_download_binding_is_exact(
+    downloads: &DownloadManifest,
+    authority: &RecognizerAuthority,
+) -> bool {
+    let source_download = downloads
+        .model_files
+        .iter()
+        .find(|item| item.artifact_id == "ppocrv6-tiny-recognizer-onnx-source");
+    let model_download = downloads
+        .model_runtime_files
+        .iter()
+        .find(|item| item.artifact_id == "ppocrv6-tiny-recognizer-onnx-model");
+    let dictionary_download = downloads
+        .model_runtime_files
+        .iter()
+        .find(|item| item.artifact_id == "ppocrv6-tiny-recognizer-character-table");
+    !source_download.is_none_or(|item| {
+        item.url != authority.runtime_archive_url || item.sha256 != authority.runtime_archive_sha256
+    }) && !model_download.is_none_or(|item| {
+        item.url != authority.runtime_archive_url
+            || item.archive_sha256.as_deref() != Some(authority.runtime_archive_sha256.as_str())
+            || item.archive_size != Some(authority.runtime_archive_size)
+            || item.archive_member.as_deref() != Some(authority.runtime_model_member.as_str())
+            || item.sha256 != authority.runtime_model_sha256
+            || item.size != authority.runtime_model_size
+    }) && !dictionary_download.is_none_or(|item| {
+        item.url != authority.character_table_url
+            || item.sha256 != authority.character_table_sha256
+            || item.size != authority.character_table_size
+    })
+}
+
+fn recognizer_inventory_binding_is_exact(
+    inventory: &Inventory,
+    authority: &RecognizerAuthority,
+) -> bool {
+    let source_inventory = inventory
+        .components
+        .iter()
+        .find(|component| component.id == "ppocrv6-tiny-recognizer-onnx-source");
+    !source_inventory.is_none_or(|component| {
+        component.kind != "model-source"
+            || component.status != "reviewed"
+            || component.included_in_release
+            || component.source.as_deref() != Some(authority.runtime_archive_url.as_str())
+            || component.license.as_deref() != Some(authority.license.as_str())
+            || component.version.as_deref()
+                != Some(format!("PP-OCRv6 tiny / PaddleOCR {}", authority.upstream_commit).as_str())
+    })
+}
+
 type ModelArtifacts<'a> = BTreeMap<&'a str, (&'a ModelArtifact, &'a str, &'a str)>;
 
 fn collect_model_artifacts<'a>(
@@ -2893,6 +3152,19 @@ mod tests {
             serde_json::from_str(&parse("fixtures/manifest.json")).expect("fixture corpus"),
             serde_json::from_str(&parse("fixtures/downloads.json")).expect("fixture downloads"),
             serde_json::from_str(&parse("third_party/licenses/inventory.json")).expect("inventory"),
+        )
+    }
+
+    fn product_model_authorities()
+    -> (ModelManifest, DownloadManifest, Inventory, RecognizerAuthority) {
+        let root = repository_root().expect("repository root");
+        let parse = |path: &str| fs::read_to_string(root.join(path)).expect(path);
+        (
+            serde_json::from_str(&parse("models/manifest.json")).expect("model manifest"),
+            serde_json::from_str(&parse("third_party/licenses/downloads.json")).expect("downloads"),
+            serde_json::from_str(&parse("third_party/licenses/inventory.json")).expect("inventory"),
+            serde_json::from_str(&parse("models/ppocrv6-tiny-recognizer-authority.json"))
+                .expect("recognizer authority"),
         )
     }
 
@@ -3578,6 +3850,66 @@ version = "9.9.9"
         assert!(errors.iter().any(|error| {
             error.contains("detector-source URL/hash disagrees with authoritative download")
         }));
+    }
+
+    #[test]
+    fn official_recognizer_authority_rejects_synchronized_manifest_and_inventory_drift() {
+        let (mut manifest, mut downloads, mut inventory, authority) = product_model_authorities();
+        let mut baseline = Vec::new();
+        validate_recognizer_authority(&inventory, &manifest, &downloads, &authority, &mut baseline);
+        assert!(baseline.is_empty(), "baseline authority: {baseline:?}");
+
+        let replacement = "a".repeat(64);
+        manifest
+            .bundles
+            .iter_mut()
+            .find(|bundle| bundle.id == authority.model_id)
+            .unwrap()
+            .runtime_artifacts
+            .iter_mut()
+            .find(|artifact| artifact.role == "recognizer")
+            .unwrap()
+            .sha256 = replacement.clone();
+        downloads
+            .model_runtime_files
+            .iter_mut()
+            .find(|item| item.artifact_id == "ppocrv6-tiny-recognizer-onnx-model")
+            .unwrap()
+            .sha256 = replacement;
+        let mut errors = Vec::new();
+        validate_recognizer_authority(&inventory, &manifest, &downloads, &authority, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("official recognizer authority")));
+
+        inventory
+            .components
+            .iter_mut()
+            .find(|component| component.id == "ppocrv6-tiny-recognizer-onnx-source")
+            .unwrap()
+            .source = Some("https://example.invalid/drift.tar".into());
+        let mut inventory_errors = Vec::new();
+        validate_recognizer_authority(
+            &inventory,
+            &product_model_authorities().0,
+            &product_model_authorities().1,
+            &authority,
+            &mut inventory_errors,
+        );
+        assert!(inventory_errors.iter().any(|error| error.contains("inventory disagrees")));
+    }
+
+    #[test]
+    fn schema_two_kind_presence_matches_runtime_rejection() {
+        let root = repository_root().unwrap();
+        let manifest = fs::read_to_string(root.join("models/manifest.json")).unwrap();
+        let missing = manifest.replacen("      \"kind\": \"ocr-pipeline\",\n", "", 1);
+        let mut errors = Vec::new();
+        validate_schema2_kind_presence(&missing, &mut errors);
+        assert_eq!(errors, ["model manifest schema 2 bundles require explicit kind"]);
+
+        let legacy = missing.replacen("\"schema_version\": 2", "\"schema_version\": 1", 1);
+        let mut legacy_errors = Vec::new();
+        validate_schema2_kind_presence(&legacy, &mut legacy_errors);
+        assert!(legacy_errors.is_empty());
     }
 
     #[test]

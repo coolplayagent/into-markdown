@@ -3,12 +3,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
 use crate::{CropDescriptor, ModelManager, PixelView};
-use into_markdown_core::{BoxFuture, ConversionError, ExecutionContext, TensorRuntime};
+use into_markdown_core::{
+    BoxFuture, ConversionError, ExecutionContext, ResourceReservation, TensorRuntime,
+};
 use std::sync::Arc;
 
-mod authority;
+pub(crate) mod authority;
 mod budget;
 mod ctc;
+pub(crate) mod model_authority;
 mod pixels;
 mod preprocess;
 #[cfg(test)]
@@ -67,17 +70,27 @@ pub struct RecognizedText {
 }
 
 /// Structured recognizer-only output. Document IR integration belongs to the OCR pipeline owner.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct RecognitionResult {
-    pub regions: Vec<RecognizedText>,
-    pub provider: String,
-    pub language_hint: Option<String>,
+    pub regions: Arc<[RecognizedText]>,
+    pub provider: Arc<str>,
+    pub language_hint: Option<Arc<str>>,
+    _memory_lease: Option<Arc<ResourceReservation>>,
+}
+
+impl PartialEq for RecognitionResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.regions == other.regions
+            && self.provider == other.provider
+            && self.language_hint == other.language_hint
+    }
 }
 
 /// Offline recognizer over the audited tensor-runtime seam.
 pub struct PpOcrTextRecognizer {
     runtime: Arc<dyn TensorRuntime>,
     characters: Arc<[String]>,
+    _character_lease: Arc<ResourceReservation>,
     config: RecognitionConfig,
 }
 
@@ -91,17 +104,18 @@ impl PpOcrTextRecognizer {
         let artifact = manager
             .verified_runtime_artifact(MODEL_ID, "character-table", context)
             .map_err(crate::recognizer_model::map_manager_error)?;
-        Self::new(runtime, &artifact.bytes, config)
+        Self::new(runtime, &artifact.bytes, config, context)
     }
     pub fn new(
         runtime: Arc<dyn TensorRuntime>,
         dictionary: &[u8],
         config: RecognitionConfig,
+        context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
         validate_authority()?;
         validate_config(&config)?;
-        let characters = load_characters(dictionary)?;
-        Ok(Self { runtime, characters: Arc::from(characters), config })
+        let (characters, character_lease) = load_characters(dictionary, context)?;
+        Ok(Self { runtime, characters, _character_lease: character_lease, config })
     }
 
     #[must_use]
@@ -169,7 +183,7 @@ impl PpOcrTextRecognizer {
                     &mut result_reservation,
                     &mut total_decoded_bytes,
                 )?;
-                for item in decoded {
+                for item in decoded.items {
                     let index = item.source_index;
                     if slots.get(index).is_none() || slots[index].is_some() {
                         return Err(ocr("recognitionOrderMismatch"));
@@ -177,21 +191,47 @@ impl PpOcrTextRecognizer {
                     slots[index] = Some(item);
                 }
             }
+            let requested_region_bytes = crops
+                .len()
+                .checked_mul(std::mem::size_of::<RecognizedText>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            result_reservation.grow(to_u64(requested_region_bytes)?)?;
             let mut regions = Vec::new();
             regions.try_reserve_exact(crops.len()).map_err(|_| limit("recognitionMemory"))?;
-            result_reservation.grow(to_u64(
-                regions
-                    .capacity()
-                    .checked_mul(std::mem::size_of::<RecognizedText>())
-                    .ok_or_else(|| limit("recognitionMemory"))?,
-            )?)?;
+            let actual_region_bytes = regions
+                .capacity()
+                .checked_mul(std::mem::size_of::<RecognizedText>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            if actual_region_bytes > requested_region_bytes {
+                result_reservation.grow(to_u64(actual_region_bytes - requested_region_bytes)?)?;
+            }
             for slot in slots {
                 regions.push(slot.ok_or_else(|| ocr("recognitionOrderMismatch"))?);
             }
+            result_reservation.shrink(to_u64(actual_slots_bytes)?)?;
+            let region_vec_bytes = regions
+                .capacity()
+                .checked_mul(std::mem::size_of::<RecognizedText>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            let region_slice_bytes = regions
+                .len()
+                .checked_mul(std::mem::size_of::<RecognizedText>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            result_reservation.grow(to_u64(region_slice_bytes)?)?;
+            let regions = Arc::<[RecognizedText]>::from(regions);
+            result_reservation.shrink(to_u64(region_vec_bytes)?)?;
+
+            result_reservation.grow(to_u64(PROVIDER.len())?)?;
+            let provider = Arc::<str>::from(PROVIDER);
+            if let Some(hint) = language_hint {
+                result_reservation.grow(to_u64(hint.len())?)?;
+            }
+            let language_hint = language_hint.map(Arc::<str>::from);
             Ok(RecognitionResult {
                 regions,
-                provider: PROVIDER.into(),
-                language_hint: language_hint.map(str::to_owned),
+                provider,
+                language_hint,
+                _memory_lease: Some(Arc::new(result_reservation)),
             })
         })
     }

@@ -1,13 +1,13 @@
 //! Fixed upstream model and character-table authority.
 
 use super::{BLANK, CLASSES, MAX_WIDTH, MODEL_ID, SCALE, limit, ocr};
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Authority {
+pub(crate) struct Authority {
     pub schema_version: u32,
     pub model_id: String,
     pub upstream_repository: String,
@@ -57,14 +57,14 @@ pub(super) struct Authority {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct QualityGroup {
+pub(crate) struct QualityGroup {
     pub group: String,
     pub evaluated_characters: usize,
     pub observed_errors: usize,
     pub maximum_cer: f64,
 }
 
-pub(super) fn authority() -> Result<Authority, ConversionError> {
+pub(crate) fn authority() -> Result<Authority, ConversionError> {
     let value: Authority = serde_json::from_str(include_str!(
         "../../../../models/ppocrv6-tiny-recognizer-authority.json"
     ))
@@ -156,7 +156,10 @@ pub(super) fn validate_authority() -> Result<(), ConversionError> {
     authority().map(drop)
 }
 
-pub(super) fn load_characters(bytes: &[u8]) -> Result<Vec<String>, ConversionError> {
+pub(super) fn load_characters(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<(std::sync::Arc<[String]>, std::sync::Arc<ResourceReservation>), ConversionError> {
     let expected = authority()?;
     if bytes.len() as u64 != expected.character_table_size
         || format!("{:x}", Sha256::digest(bytes)) != expected.character_table_sha256
@@ -167,18 +170,77 @@ pub(super) fn load_characters(bytes: &[u8]) -> Result<Vec<String>, ConversionErr
     if source.contains('\r') || !source.ends_with('\n') {
         return Err(ocr("invalidCharacterTable"));
     }
+    let requested_vec_bytes = (CLASSES - 1)
+        .checked_mul(std::mem::size_of::<String>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    let mut reservation = context.reserve_memory(super::budget::to_u64(requested_vec_bytes)?)?;
     let mut result = Vec::new();
     result.try_reserve_exact(CLASSES - 1).map_err(|_| limit("recognitionMemory"))?;
-    let mut unique = std::collections::BTreeSet::new();
+    let actual_vec_bytes = result
+        .capacity()
+        .checked_mul(std::mem::size_of::<String>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    if actual_vec_bytes > requested_vec_bytes {
+        reservation.grow(super::budget::to_u64(actual_vec_bytes - requested_vec_bytes)?)?;
+    }
+    let requested_entry_bytes = expected
+        .character_table_entries
+        .checked_mul(std::mem::size_of::<&str>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    let mut entry_reservation =
+        context.reserve_memory(super::budget::to_u64(requested_entry_bytes)?)?;
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(expected.character_table_entries)
+        .map_err(|_| limit("recognitionMemory"))?;
+    let actual_entry_bytes = entries
+        .capacity()
+        .checked_mul(std::mem::size_of::<&str>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    if actual_entry_bytes > requested_entry_bytes {
+        entry_reservation
+            .grow(super::budget::to_u64(actual_entry_bytes - requested_entry_bytes)?)?;
+    }
     for line in source.lines() {
-        if line.is_empty() || !unique.insert(line) {
+        if line.is_empty() {
             return Err(ocr("invalidCharacterTable"));
         }
-        result.push(line.to_owned());
+        entries.push(line);
+        reservation.grow(super::budget::to_u64(line.len())?)?;
+        let mut character = String::new();
+        character.try_reserve_exact(line.len()).map_err(|_| limit("recognitionMemory"))?;
+        if character.capacity() > line.len() {
+            reservation.grow(super::budget::to_u64(character.capacity() - line.len())?)?;
+        }
+        character.push_str(line);
+        result.push(character);
     }
-    if result.len() != expected.character_table_entries || !unique.insert(" ") {
+    if result.len() != expected.character_table_entries {
         return Err(ocr("invalidCharacterTable"));
     }
-    result.push(" ".into());
-    Ok(result)
+    entries.sort_unstable();
+    if entries.windows(2).any(|pair| pair[0] == pair[1]) || entries.binary_search(&" ").is_ok() {
+        return Err(ocr("invalidCharacterTable"));
+    }
+    reservation.grow(1)?;
+    let mut space = String::new();
+    space.try_reserve_exact(1).map_err(|_| limit("recognitionMemory"))?;
+    if space.capacity() > 1 {
+        reservation.grow(super::budget::to_u64(space.capacity() - 1)?)?;
+    }
+    space.push(' ');
+    result.push(space);
+
+    let vec_bytes = result
+        .capacity()
+        .checked_mul(std::mem::size_of::<String>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    let slice_bytes = result
+        .len()
+        .checked_mul(std::mem::size_of::<String>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    reservation.grow(super::budget::to_u64(slice_bytes)?)?;
+    let result = std::sync::Arc::<[String]>::from(result);
+    reservation.shrink(super::budget::to_u64(vec_bytes)?)?;
+    Ok((result, std::sync::Arc::new(reservation)))
 }

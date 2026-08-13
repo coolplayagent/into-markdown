@@ -162,7 +162,8 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   同时要求条目顺序、路径、类型、header checksum、padding、两个结束块和 trailer 精确。
   traversal、symlink/hardlink、重复/未知条目、截断与 size bomb 在 staging 发布前拒绝。
 - 模型写入使用同文件系统 staging、逐文件大小/哈希校验、`fsync`、版本化持久 journal
-  与锁内原子切换；每次磁盘操作前恢复中断事务，损坏或歧义 journal 一律 fail closed；
+  与锁内原子切换；install/remove 或显式恢复会在锁内恢复中断事务，查询与校验只读并在
+  发现未完成事务时 fail closed，损坏或歧义 journal 一律 fail closed；
   journal 先完整写入并同步根身份绑定的临时文件，再以 no-replace rename 发布；Windows
   目录 handle 持久同步尚未审计，因此 Windows 安装稳定拒绝而不伪报成功；
   校验和删除拒绝符号链接及非普通对象，随包只读模型不能删除。取消、超时、临时空间

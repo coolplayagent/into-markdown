@@ -61,7 +61,9 @@ checkpoint。第三方单次调用不支持中途轮询，其输入与工作上�
 顺序。输出只能是唯一 `fetch_name_0` float32 `[N,T,6906]`；shape、finite、元素、内存、
 取消和 deadline 都在访问 tensor 前有界。CTC 对相同分数选择较小 class index，先折叠
 相邻重复再删除 blank 0，字符置信度取保留 timestep 的算术平均。language hint 只接受
-受控值并原样记录，不改变字典或暗中切换模型。
+受控值并原样记录，不改变字典或暗中切换模型。解析后的字符表租约随 recognizer 存活，
+region/text/provider/hint 的实际 capacity 租约随共享 RecognitionResult 存活；clone 共享数据与
+租约，最后一个 owner 释放后才归还同一 ExecutionContext 的预算。
 
 真实 12 图语料的机器权威位于 `models/ppocrv6-tiny-recognizer-authority.json` 和
 `fixtures/manifest.json#ocr_quality`：简体 0/65（上限 5%）、繁体 6/65（上限 10%）、

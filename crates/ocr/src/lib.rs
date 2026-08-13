@@ -295,6 +295,9 @@ impl ModelManifest {
         let onnxruntime: OrtManifest = serde_json::from_str(onnxruntime)
             .map_err(|error| invalid_manifest(format!("invalid ONNX Runtime JSON: {error}")))?;
         manifest.validate_against(&downloads, &onnxruntime)?;
+        if manifest.schema_version == 2 {
+            recognition::model_authority::validate_manifest_authority(&manifest)?;
+        }
         Ok(manifest)
     }
 
@@ -908,8 +911,7 @@ impl ModelManager {
         if !is_installable(bundle) {
             return Ok(unavailable_status(bundle));
         }
-        ensure_durable_transactions_supported()?;
-        self.recover_if_present(bundle, context)?;
+        self.reject_pending_transaction(bundle)?;
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
             if safe_existing_directory(&path)? {
@@ -972,6 +974,28 @@ impl ModelManager {
         let path = status.path.as_ref().ok_or(ModelManagerError::NotInstalled)?;
         verify_directory_with_context(self.bundle(id)?, path, context)?;
         Ok(status)
+    }
+
+    /// Recovers an interrupted install transaction under the durable model lock.
+    ///
+    /// Status, list, show, verify, and path remain read-only on every supported
+    /// product target. Callers must opt in to this mutation before retrying a
+    /// failed install or remove operation.
+    pub fn recover_with_context(
+        &self,
+        id: &str,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        ensure_durable_transactions_supported()?;
+        context.checkpoint()?;
+        if !safe_existing_directory(&self.writable_root)? {
+            return Ok(());
+        }
+        let lock = self.acquire_lock()?;
+        let result = self.recover_locked(bundle, context);
+        drop(lock);
+        result
     }
 
     /// Returns the path only for a complete installed bundle.
@@ -1264,18 +1288,31 @@ impl ModelManager {
         Ok(file)
     }
 
-    fn recover_if_present(
-        &self,
-        bundle: &ModelBundle,
-        context: &ExecutionContext,
-    ) -> Result<(), ModelManagerError> {
+    fn reject_pending_transaction(&self, bundle: &ModelBundle) -> Result<(), ModelManagerError> {
         if !safe_existing_directory(&self.writable_root)? {
             return Ok(());
         }
-        let lock = self.acquire_lock()?;
-        let result = self.recover_locked(bundle, context);
-        drop(lock);
-        result
+        let journal = journal_path(&self.writable_root, &bundle.id);
+        match fs::symlink_metadata(&journal) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(ModelManagerError::UnsafePath);
+            }
+            Ok(_) => {
+                return Err(ModelManagerError::Corrupt(
+                    "interrupted model transaction requires explicit recovery".into(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ModelManagerError::Io(error)),
+        }
+        if !transaction_residues(&self.writable_root, &bundle.id)?.is_empty()
+            || journal_temporary_present(&self.writable_root, &bundle.id)?
+        {
+            return Err(ModelManagerError::Corrupt(
+                "interrupted model transaction requires explicit recovery".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn recover_locked(
@@ -1807,6 +1844,18 @@ fn transaction_residues(root: &Path, id: &str) -> Result<Vec<String>, ModelManag
     Ok(result)
 }
 
+fn journal_temporary_present(root: &Path, id: &str) -> Result<bool, ModelManagerError> {
+    let prefix = format!(".{id}.install-journal.tmp-");
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
+        if name.starts_with(&prefix) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn required_file_if_present(path: &Path) -> Result<Option<File>, ModelManagerError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -2034,6 +2083,46 @@ mod tests {
         }
         let unsupported = onnxruntime.replacen("aarch64-apple-darwin", "x86_64-linux-android", 1);
         assert!(ModelManifest::from_all_authorities(models, downloads, &unsupported).is_err());
+    }
+
+    #[test]
+    fn synchronized_model_and_download_drift_cannot_replace_official_recognizer_authority() {
+        let models = include_str!("../../../models/manifest.json");
+        let downloads = include_str!("../../../third_party/licenses/downloads.json");
+        let onnxruntime = include_str!("../../../third_party/onnxruntime/manifest.json");
+        for (original, replacement) in [
+            (
+                "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            (
+                "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            (
+                "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ),
+        ] {
+            let changed_models = models.replace(original, replacement);
+            let changed_downloads = downloads.replace(original, replacement);
+            assert!(
+                ModelManifest::from_all_authorities(
+                    &changed_models,
+                    &changed_downloads,
+                    onnxruntime,
+                )
+                .is_err(),
+                "synchronized mutation {original}"
+            );
+        }
+        let changed_config = models.replace(
+            "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        );
+        assert!(
+            ModelManifest::from_all_authorities(&changed_config, downloads, onnxruntime).is_err()
+        );
     }
 
     #[test]
@@ -2306,6 +2395,7 @@ mod tests {
             ));
 
             let restarted = installable_manager(temp.path());
+            restarted.recover_with_context(id, &execution(5)).unwrap();
             assert_eq!(restarted.status(id).unwrap().state, "installed");
             assert_eq!(fs::read(restarted.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
             assert!(!journal_path(temp.path(), id).exists());
@@ -2328,6 +2418,7 @@ mod tests {
             write_complete_test_bundle(&staging, id);
             write_private_file(&temp_path, &bytes[..cut]).unwrap();
             let restarted = installable_manager(temp.path());
+            restarted.recover_with_context(id, &execution(5)).unwrap();
             assert_eq!(restarted.status(id).unwrap().state, "installed", "cut {cut}");
             assert!(!temp_path.exists(), "cut {cut}");
             assert!(!staging.exists(), "cut {cut}");
@@ -2380,7 +2471,10 @@ mod tests {
         destination_manager.install(id, &fetcher, &execution(5)).unwrap();
         fs::copy(journal_path(source.path(), id), journal_path(destination.path(), id)).unwrap();
         let before = fs::read(destination.path().join(id).join("model.onnx")).unwrap();
-        assert!(matches!(destination_manager.status(id), Err(ModelManagerError::Corrupt(_))));
+        assert!(matches!(
+            destination_manager.recover_with_context(id, &execution(5)),
+            Err(ModelManagerError::Corrupt(_))
+        ));
         assert_eq!(fs::read(destination.path().join(id).join("model.onnx")).unwrap(), before);
         assert!(journal_path(destination.path(), id).exists());
     }
@@ -2394,6 +2488,16 @@ mod tests {
             ensure_durable_transactions_supported(),
             Err(ModelManagerError::ComponentUnavailable)
         ));
+    }
+
+    #[test]
+    fn installable_component_status_is_a_read_only_cross_platform_operation() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let status = manager.status("pp-ocrv6-tiny-zh-en").unwrap();
+        assert_eq!(status.state, "not-installed");
+        assert!(!temp.path().join(".models-root.json").exists());
+        assert!(!temp.path().join(".models.lock").exists());
     }
 
     #[test]

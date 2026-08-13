@@ -38,6 +38,11 @@ impl ModelResolver for ManifestModelResolver {
             .verified_runtime_artifact(model_id, "recognizer", context)
             .map_err(map_manager_error)?;
         let bytes_len = u64::try_from(artifact.bytes.len()).map_err(|_| resource("modelBytes"))?;
+        crate::recognition::model_authority::validate_runtime_model_identity(
+            model_id,
+            &artifact.sha256,
+            bytes_len,
+        )?;
         Ok(ResolvedModel {
             identity: ModelIdentity {
                 canonical_path: artifact.path,

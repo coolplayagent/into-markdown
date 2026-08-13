@@ -4,6 +4,11 @@ use super::preprocess::CropPlan;
 use super::{BLANK, CLASSES, RecognitionConfig, RecognizedText, limit, ocr};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, Tensor};
 
+pub(super) struct DecodedBatch {
+    pub items: Vec<RecognizedText>,
+    _reservation: ResourceReservation,
+}
+
 pub(super) fn decode_output(
     outputs: &[Tensor],
     batch: &[(usize, CropPlan)],
@@ -12,7 +17,7 @@ pub(super) fn decode_output(
     context: &ExecutionContext,
     reservation: &mut ResourceReservation,
     total_bytes: &mut usize,
-) -> Result<Vec<RecognizedText>, ConversionError> {
+) -> Result<DecodedBatch, ConversionError> {
     if outputs.len() != 1 {
         return Err(ocr("recognitionOutputCountMismatch"));
     }
@@ -36,14 +41,24 @@ pub(super) fn decode_output(
     if output.values.iter().any(|value| !(0.0..=1.0).contains(value)) {
         return Err(ocr("invalidRecognitionProbability"));
     }
+    let requested_decoded_bytes = batch
+        .len()
+        .checked_mul(std::mem::size_of::<RecognizedText>())
+        .ok_or_else(|| limit("recognitionMemory"))?;
+    let mut decoded_reservation =
+        context.reserve_memory(super::budget::to_u64(requested_decoded_bytes)?)?;
     let mut decoded = Vec::new();
     decoded.try_reserve_exact(batch.len()).map_err(|_| limit("recognitionMemory"))?;
-    reservation.grow(super::budget::to_u64(
+    let decoded_bytes = super::budget::to_u64(
         decoded
             .capacity()
             .checked_mul(std::mem::size_of::<RecognizedText>())
             .ok_or_else(|| limit("recognitionMemory"))?,
-    )?)?;
+    )?;
+    if decoded_bytes > super::budget::to_u64(requested_decoded_bytes)? {
+        decoded_reservation
+            .grow(decoded_bytes - super::budget::to_u64(requested_decoded_bytes)?)?;
+    }
     for (batch_index, &(source_index, _)) in batch.iter().enumerate() {
         context.checkpoint()?;
         let mut text = String::new();
@@ -72,8 +87,17 @@ pub(super) fn decode_output(
                     return Err(limit("recognitionDecodedBytes"));
                 }
                 let before = text.capacity();
+                let required = text
+                    .len()
+                    .checked_add(character.len())
+                    .ok_or_else(|| limit("recognitionMemory"))?;
+                let requested_growth = required.saturating_sub(before);
+                reservation.grow(super::budget::to_u64(requested_growth)?)?;
                 text.try_reserve_exact(character.len()).map_err(|_| limit("recognitionMemory"))?;
-                reservation.grow(super::budget::to_u64(text.capacity() - before)?)?;
+                let actual_growth = text.capacity() - before;
+                if actual_growth > requested_growth {
+                    reservation.grow(super::budget::to_u64(actual_growth - requested_growth)?)?;
+                }
                 text.push_str(character);
                 probability_sum += f64::from(scores[best]);
                 kept += 1;
@@ -83,5 +107,5 @@ pub(super) fn decode_output(
         let confidence = if kept == 0 { 0.0 } else { (probability_sum / kept as f64) as f32 };
         decoded.push(RecognizedText { source_index, text, confidence });
     }
-    Ok(decoded)
+    Ok(DecodedBatch { items: decoded, _reservation: decoded_reservation })
 }

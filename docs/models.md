@@ -58,8 +58,9 @@ ExecutionContext 的取消、总超时、内存与临时空间预算。每个文
 随机临时文件，`write_all` 并 `fsync` 后才以 no-replace rename 发布最终 journal，随后
 `fsync` 父目录。最终 journal 携带内容校验和，并绑定 canonical 根路径、Unix dev/inode、
 权限受限的持久根 token、bundle ID、nonce 和精确目录名；跨数据根复制会被拒绝。
-进程重启或每次管理操作访问磁盘前，
-管理器根据 journal 与目录拓扑完成发布或恢复旧目录。journal 损坏、路径不匹配或存在
+进程重启后，显式 `recover_with_context` 以及下一次 install/remove 会在持有事务锁时，
+根据 journal 与目录拓扑完成发布或恢复旧目录；list/show/status/verify/path 始终只读，
+发现未完成事务时稳定要求显式恢复，不会为查询创建根身份、锁文件或修改目录。journal 损坏、路径不匹配或存在
 多个残留时 fail closed，不触碰任何候选目录。错误、哈希不符、截断、预算不足、磁盘
 满或取消只会留下可由 journal 恢复的旧完整状态、新完整状态或无安装状态。管理器只
 清理由有效 journal 精确证明所有权的 staging/backup，不扫描或删除所有权不明的目录。
