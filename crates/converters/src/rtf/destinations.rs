@@ -246,8 +246,8 @@ pub(super) fn child_destination(
     name: &str,
     ignorable: bool,
     parent: Destination,
-) -> Option<Destination> {
-    match parent {
+) -> Result<Option<Destination>, ConversionError> {
+    let selected = match parent {
         Destination::Skip => None,
         Destination::Body => match name {
             // These metadata destinations are valid only as children of `info`.
@@ -276,15 +276,16 @@ pub(super) fn child_destination(
         | Destination::ListText
         | Destination::MetaTitle
         | Destination::MetaAuthor => destination(name, ignorable).map(|_| Destination::Skip),
-        Destination::FieldInstruction | Destination::FieldResult => match name {
-            // Structural field controls inside instruction/result destinations are
-            // invalid, not ignorable descendants. Dispatch them so field-state checks fail closed.
-            "field" => Some(Destination::FieldContainer),
-            "fldinst" => Some(Destination::FieldInstruction),
-            "fldrslt" => Some(Destination::FieldResult),
-            _ => destination(name, ignorable).map(|_| Destination::Skip),
-        },
-    }
+        Destination::FieldInstruction | Destination::FieldResult
+            if matches!(name, "field" | "fldinst" | "fldrslt") =>
+        {
+            return Err(malformed("field structure cannot be nested inside fldinst or fldrslt"));
+        }
+        Destination::FieldInstruction | Destination::FieldResult => {
+            destination(name, ignorable).map(|_| Destination::Skip)
+        }
+    };
+    Ok(selected)
 }
 
 pub(super) fn is_known_non_destination_control(name: &str) -> bool {

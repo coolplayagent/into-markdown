@@ -84,9 +84,11 @@ impl Parser<'_> {
     ) -> Result<(), ConversionError> {
         let at_start = self.state().at_group_start;
         let inherited_destination = self.state().destination;
-        let selected_destination = at_start
-            .then(|| child_destination(name, self.state().ignorable, inherited_destination))
-            .flatten();
+        let selected_destination = if at_start {
+            child_destination(name, self.state().ignorable, inherited_destination)?
+        } else {
+            None
+        };
         let entered_destination = selected_destination.is_some();
         if let Some(destination) = selected_destination {
             self.enter_destination(destination, start)?;

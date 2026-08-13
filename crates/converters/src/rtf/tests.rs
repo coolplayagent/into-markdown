@@ -1,3 +1,4 @@
+use super::parser::Destination;
 use super::{RtfConverter, convert_rtf_bytes, strict_header};
 use into_markdown_core::*;
 use std::fmt::Write as _;
@@ -430,8 +431,36 @@ fn field_state_is_scoped_to_one_complete_container() {
             .as_slice(),
         br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://outer.invalid/path"}{\fldrslt outer{\field{\*\fldinst HYPERLINK "https://inner.invalid/path"}{\fldrslt inner}}}}}"#
             .as_slice(),
+        // Every field-structure destination is forbidden beneath both capture destinations.
+        br"{\rtf1\ansi{\field{\*\fldinst outer{\field}}{\fldrslt result}}}".as_slice(),
+        br"{\rtf1\ansi{\field{\*\fldinst outer{\fldinst inner}}{\fldrslt result}}}"
+            .as_slice(),
+        br"{\rtf1\ansi{\field{\*\fldinst outer{\fldrslt inner}}{\fldrslt result}}}"
+            .as_slice(),
+        br"{\rtf1\ansi{\field{\*\fldinst outer}{\fldrslt result{\field}}}}".as_slice(),
+        br"{\rtf1\ansi{\field{\*\fldinst outer}{\fldrslt result{\fldinst inner}}}}"
+            .as_slice(),
+        br"{\rtf1\ansi{\field{\*\fldinst outer}{\fldrslt result{\fldrslt inner}}}}"
+            .as_slice(),
     ] {
         assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
+
+    // Static 3x3 parent/control policy: a field container selects its legal child
+    // groups, while instruction and result captures reject all field structures.
+    for (name, expected) in [
+        ("field", Destination::FieldContainer),
+        ("fldinst", Destination::FieldInstruction),
+        ("fldrslt", Destination::FieldResult),
+    ] {
+        assert_eq!(
+            super::destinations::child_destination(name, false, Destination::FieldContainer)
+                .unwrap(),
+            Some(expected)
+        );
+        for parent in [Destination::FieldInstruction, Destination::FieldResult] {
+            assert!(super::destinations::child_destination(name, false, parent).is_err());
+        }
     }
 }
 
