@@ -1455,6 +1455,7 @@ fn validate_fixture_corpus(
         "xlsx",
         "xml",
         "zip",
+        "pptx",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
@@ -1515,6 +1516,7 @@ fn validate_fixture_corpus(
             }
         }
     }
+    validate_presentation_fixture_matrix(root, &fixtures_by_id, errors);
     let actual_files = collect_fixture_files(root, errors);
     for orphan in actual_files.difference(&declared_files) {
         errors.push(format!("orphan fixture file {}", orphan.display()));
@@ -1525,6 +1527,99 @@ fn validate_fixture_corpus(
 
     validate_fixture_artifacts(inventory, &corpus.large_artifacts, downloads, errors);
     validate_ocr_quality(corpus, &fixtures_by_id, errors);
+}
+
+fn validate_presentation_fixture_matrix(
+    root: &Path,
+    fixtures: &BTreeMap<&str, &CorpusFixture>,
+    errors: &mut Vec<String>,
+) {
+    let required = [
+        (
+            "pptx-normal",
+            "small/pptx/normal.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+            false,
+        ),
+        (
+            "pptm-malicious",
+            "small/pptx/macro.pptm",
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml",
+            true,
+        ),
+        (
+            "ppsx-normal",
+            "small/pptx/slideshow.ppsx",
+            "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml",
+            false,
+        ),
+        (
+            "ppsm-malicious",
+            "small/pptx/macro-slideshow.ppsm",
+            "application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml",
+            true,
+        ),
+        (
+            "potx-normal",
+            "small/pptx/template.potx",
+            "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml",
+            false,
+        ),
+    ];
+    let canonical_semantic =
+        fixtures.get("pptx-normal").map(|fixture| fixture.expected.semantic_sha256.as_str());
+    for (id, path, main_type, macro_enabled) in required {
+        let Some(fixture) = fixtures.get(id) else {
+            errors.push(format!("PresentationML fixture matrix lacks {id}"));
+            continue;
+        };
+        if fixture.format != "pptx"
+            || fixture.path != path
+            || fixture.expected.outcome != "success"
+            || fixture.expected.semantic_sha256.as_str() != canonical_semantic.unwrap_or_default()
+        {
+            errors.push(format!("PresentationML fixture {id} has an incomplete semantic contract"));
+        }
+        let Ok(bytes) = fs::read(root.join("fixtures").join(path)) else {
+            continue;
+        };
+        let contains =
+            |needle: &str| bytes.windows(needle.len()).any(|window| window == needle.as_bytes());
+        if !contains(main_type) {
+            errors.push(format!("PresentationML fixture {id} lacks its actual main content type"));
+        }
+        if macro_enabled
+            && (!contains("application/vnd.ms-office.vbaProject")
+                || !contains(
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject",
+                )
+                || !contains("MUST NEVER BE OPENED OR EXECUTED"))
+        {
+            errors
+                .push(format!("PresentationML macro fixture {id} lacks inert isolation evidence"));
+        }
+    }
+    for id in ["pptx-normal", "pptx-limit"] {
+        let Some(fixture) = fixtures.get(id) else { continue };
+        let Ok(bytes) = fs::read(root.join("fixtures").join(&fixture.path)) else { continue };
+        let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+        if !contains(b"slideLayout1.xml")
+            || !contains(b"slideLayout2.xml")
+            || !contains(b"notesSlide1.xml")
+            || !contains("Corpus 你好 – Привет".as_bytes())
+            || !contains("Nota 日本語".as_bytes())
+        {
+            errors
+                .push(format!("PresentationML fixture {id} lacks layout/language/notes evidence"));
+        }
+    }
+    if fixtures.get("pptx-corrupt").is_none_or(|fixture| {
+        fixture.path != "small/pptx/corrupt.pptx"
+            || fixture.scenario != "corrupt"
+            || fixture.expected.error_code != "malformed"
+    }) {
+        errors.push("PresentationML corpus lacks the damaged-relationship contract".to_owned());
+    }
 }
 
 fn validate_fixture_generator(root: &Path, generator: &FixtureGenerator, errors: &mut Vec<String>) {

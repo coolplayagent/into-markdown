@@ -96,6 +96,13 @@ IR 可表达段落、标题、富文本、嵌套列表、表格、代码、公�
 locator。MediaWiki 将所有递归 block 标为稳定 MediaWiki provider、清空不可证明 locator，并在
 Document metadata 保存唯一 namespaced source record；Engine 的 reading-order provenance inventory
 保留相同 provider，从而在不扩展 schema 1 `SourceLocator` 的前提下形成明确关联。
+PresentationML 实现位于 converters 层，按 OPC 关系图从 presentation 到 slide，再到可选
+layout/master/theme/notes/chart/image 分层解析；它不把 ZIP 视为可任意枚举解压的目录。
+converter 只构建 Slide/Heading/Paragraph/List/Table/Image IR，Markdown 必须继续经过中央
+renderer。几何继承和 group transform 在 converter 内确定性合成，最终显示 bounds 与 slide
+编号写入每个 material node 的 SourceLocator。转换期间的 package/parser/geometry/codec 峰值
+在物化前由 request context 预留；返回时同一 reservation 经中央 retained estimator 认证并
+收缩为 opaque output lease，typed IR 校验也在独立 working-set preflight 后执行。
 
 AI 提供者不能返回无法追踪的整篇重写文档。它只能返回带 AI 溯源信息的新节点，
 或带版本的 `DocumentPatch`；引擎验证补丁后才能应用。原始来源节点始终可审计。

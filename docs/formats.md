@@ -1,12 +1,13 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、TXT、Markdown、HTML、
-CSV、TSV、JSON、XML、RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
+运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、
+PPTX/PPTM/PPSX/PPSM/POTX、TXT、Markdown、HTML、CSV、TSV、JSON、XML、
+RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
 | --- | --- |
-| 文档 | PDF；DOC/DOCX/DOCM；PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM；XLS/XLSX/XLSM/XLSB；ODT/ODS/ODP；RTF；EPUB |
+| 文档 | PDF；DOC/DOCX/DOCM；PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX；XLS/XLSX/XLSM/XLSB；ODT/ODS/ODP；RTF；EPUB |
 | 文本与数据 | TXT；Markdown；HTML；CSV/TSV；JSON；XML；RSS/Atom；IPYNB |
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
 | 音频 | WAV；MP3；M4A；FLAC；OGG |
@@ -81,6 +82,37 @@ EMF/WMF 只产生安全降级诊断。object、objdata、filetbl、datastore、f
 保留结构化链接，危险 target 降级为纯文本并诊断。组深度、控制数、数字位数、Unicode
 膨胀、段落/inline/table/cell、图片、诊断与所有主动 Vec/String/Map capacity 均有硬上限，
 长循环执行 request checkpoint。
+
+## PresentationML
+
+PPTX、PPTM、PPSX、PPSM 与 POTX 共用严格的离线 OPC/PresentationML 转换器。幻灯片标题、
+文本框、富文本、列表、表格、PNG/JPEG、图表缓存文字与 speaker notes 进入统一 Document IR；
+每张幻灯片使用 `Slide` 边界，内容节点 provenance 保存原始 part、幻灯片号以及合成
+layout/master/group 变换后的最终显示 bounds。任意角度旋转按 shape 中心计算轴对齐显示区域；
+互不重叠的区域按最终几何恢复阅读顺序；AABB 只作候选筛选，凸四边形 SAT 确认真实面积
+相交后才形成重叠连通分量，零面积的点或线不建立绘制顺序耦合；分量内部严格保留
+`spTree` 绘制顺序，原始
+z-order 还以 `presentation.zOrder.<node-id>` namespaced metadata 可追溯。富文本语言以
+`presentation.languages.<node-id>` metadata 保留。
+Slide→Layout 按 placeholder `idx`（缺省为 0）唯一绑定；Layout→Master 不沿用 `idx`，而是按
+规范化 placeholder class/type 投影：`title`/`ctrTitle`→title，正文与内容类→body，
+`dt`/`ftr`/`sldNum` 各保持同类。合成时 layout 优先于 master；重复 layout `idx`、
+重复投影类或其他歧义均 fail closed。
+off/ext/rot/flip 按 slide→layout→master 逐属性继承后才组合 group transform；rich style 保留
+absent/true/false 三态，并按 run→paragraph→slide→layout→master 合成，master `txStyles` 的
+title/body/other 1–9 级会参与列表与样式继承；`txStyles` 及其三种 section 重复时稳定拒绝。theme 关系和 XML 会严格
+验证，theme 名称保存在 namespaced metadata，但当前 IR 不表达 theme 字体或颜色，因而不声称
+恢复这些视觉属性。三者都不作为正文单独输出；隐藏幻灯片确定性省略并诊断，隐藏 shape 及
+隐藏 group 的全部子 shape 确定性省略。当前表格实现不推测损坏或歧义的合并结构，列表用源
+level marker、bullet 字符或编号 scheme 保留层级与标记；图表只读取内嵌 cache 的文字/数值，
+不计算公式或读取外部 workbook；没有受支持 chart/table payload 的其他 graphicFrame 稳定拒绝。
+
+转换器先检查 ZIP 目录和 `[Content_Types].xml`，之后只沿 root officeDocument、slide order 与
+实际授权关系按需解压 main/slide/layout/master/theme/notes/chart/image；未引用 payload 不解压。
+PPTM/PPSM 的 VBA、ActiveX、OLE 与嵌入包按 content type 和关系 type 在目标解压前隔离，绝不
+读取或执行。外部关系在本转换器中统一 fail closed（包括 hyperlink、media 与 embedded object），
+因此不会发起网络或输出不可验证的外部对象。加密 OLE 包、Strict OOXML namespace、DTD/实体、
+损坏/重复关系、错误 content type、路径逃逸以及超出 ZIP/XML/IR/图片/内存预算的输入均稳定拒绝。
 
 ## HTML
 

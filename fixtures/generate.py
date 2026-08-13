@@ -349,6 +349,155 @@ def msg_fixture_definitions() -> list[tuple[str, str, bytes, dict[str, object]]]
     ]
 
 
+def presentationml(
+    main_type: str = "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+    *,
+    macro: bool = False,
+    corrupt_relationship: bool = False,
+) -> bytes:
+    """Return a deterministic multi-layout, multilingual PresentationML package."""
+    macro_override = (
+        '<Override PartName="/ppt/vbaProject.bin" '
+        'ContentType="application/vnd.ms-office.vbaProject"/>'
+        if macro
+        else ""
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        f'<Override PartName="/ppt/presentation.xml" ContentType="{main_type}"/>'
+        '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        '<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
+        '<Override PartName="/ppt/slideLayouts/slideLayout2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
+        '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
+        '<Override PartName="/ppt/notesSlides/notesSlide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>'
+        f'{macro_override}'
+        '</Types>'
+    ).encode("utf-8")
+    package_relationships = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>'
+        b'</Relationships>'
+    )
+    presentation = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        b'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        b'<p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/></p:sldIdLst>'
+        b'</p:presentation>'
+    )
+    slide2_relationship = "" if corrupt_relationship else (
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+        'Target="slides/slide2.xml"/>'
+    )
+    macro_relationship = (
+        '<Relationship Id="macro" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject" '
+        'Target="vbaProject.bin"/>'
+        if macro
+        else ""
+    )
+    presentation_relationships = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>'
+        f'{slide2_relationship}{macro_relationship}</Relationships>'
+    ).encode("utf-8")
+
+    def slide(title: str, body: str, title_lang: str, body_lang: str) -> bytes:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<p:cSld><p:spTree>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/>'
+            '<p:nvPr><p:ph type="title" idx="0"/></p:nvPr></p:nvSpPr><p:spPr/>'
+            f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="{title_lang}"/>'
+            f'<a:t>{title}</a:t></a:r></a:p></p:txBody></p:sp>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="3" name="Body"/><p:cNvSpPr/>'
+            '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/>'
+            f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="{body_lang}"/>'
+            f'<a:t>{body}</a:t></a:r></a:p></p:txBody></p:sp>'
+            '</p:spTree></p:cSld></p:sld>'
+        ).encode("utf-8")
+
+    def layout(title_x: int, body_x: int) -> bytes:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Layout title"/><p:cNvSpPr/>'
+            '<p:nvPr><p:ph type="title" idx="0"/></p:nvPr></p:nvSpPr>'
+            f'<p:spPr><a:xfrm><a:off x="{title_x}" y="0"/><a:ext cx="3657600" cy="914400"/></a:xfrm></p:spPr>'
+            '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="3" name="Layout body"/><p:cNvSpPr/>'
+            '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>'
+            f'<p:spPr><a:xfrm><a:off x="{body_x}" y="1828800"/><a:ext cx="3657600" cy="1828800"/></a:xfrm></p:spPr>'
+            '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
+            '</p:spTree></p:cSld></p:sldLayout>'
+        ).encode("utf-8")
+
+    layout_relationships = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="master" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>'
+        b'</Relationships>'
+    )
+    master = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        b'<p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Master title"/><p:cNvSpPr/><p:nvPr><p:ph type="title" idx="91"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p/></p:txBody></p:sp>'
+        b'<p:sp><p:nvSpPr><p:cNvPr id="3" name="Master body"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="92"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p/></p:txBody></p:sp></p:spTree></p:cSld>'
+        b'<p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr b="true"/></a:lvl1pPr></p:titleStyle><p:bodyStyle><a:lvl1pPr><a:defRPr i="true"/></a:lvl1pPr></p:bodyStyle><p:otherStyle/></p:txStyles>'
+        b'</p:sldMaster>'
+    )
+    slide1_relationships = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="layout" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>'
+        b'<Relationship Id="notes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/>'
+        b'</Relationships>'
+    )
+    slide2_relationships = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="layout" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout2.xml"/>'
+        b'</Relationships>'
+    )
+    notes = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>'
+        '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ja-JP"/>'
+        '<a:t>Nota 日本語</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>'
+    ).encode("utf-8")
+    entries = [
+            ("[Content_Types].xml", content_types),
+            ("_rels/.rels", package_relationships),
+            ("ppt/presentation.xml", presentation),
+            ("ppt/_rels/presentation.xml.rels", presentation_relationships),
+            ("ppt/slides/slide1.xml", slide("Corpus 你好 – Привет", "English français", "zh-CN", "fr-FR")),
+            ("ppt/slides/slide2.xml", slide("Second layout", "مرحبا", "en-US", "ar-SA")),
+            ("ppt/slides/_rels/slide1.xml.rels", slide1_relationships),
+            ("ppt/slides/_rels/slide2.xml.rels", slide2_relationships),
+            ("ppt/slideLayouts/slideLayout1.xml", layout(0, 0)),
+            ("ppt/slideLayouts/slideLayout2.xml", layout(914400, 1828800)),
+            ("ppt/slideLayouts/_rels/slideLayout1.xml.rels", layout_relationships),
+            ("ppt/slideLayouts/_rels/slideLayout2.xml.rels", layout_relationships),
+            ("ppt/slideMasters/slideMaster1.xml", master),
+            ("ppt/notesSlides/notesSlide1.xml", notes),
+    ]
+    if macro:
+        entries.append(("ppt/vbaProject.bin", b"MUST NEVER BE OPENED OR EXECUTED"))
+    return zip_bytes(entries)
+
+
 def expected(
     outcome: str,
     description: str,
@@ -447,6 +596,127 @@ def write_msg_fixtures(root: Path) -> list[dict[str, object]]:
         )
         for fixture_id, scenario, data, result in msg_fixture_definitions()
     ]
+
+
+def presentation_fixtures(root: Path) -> list[dict[str, object]]:
+    normal = presentationml()
+    corrupt = presentationml(corrupt_relationship=True)
+    media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    semantic = (
+        "## Slide 1: Corpus 你好 – Привет\n\n"
+        "<em>English français</em>\n\n"
+        "### Speaker notes\n\n"
+        "Nota 日本語\n\n"
+        "## Slide 2: Second layout\n\n"
+        "<em>مرحبا</em>\n"
+    )
+    variants = [
+        (
+            "pptm-malicious",
+            "malicious",
+            "small/pptx/macro.pptm",
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml",
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+            True,
+            "macro-enabled presentation with a relationship-isolated VBA part",
+        ),
+        (
+            "ppsx-normal",
+            "normal",
+            "small/pptx/slideshow.ppsx",
+            "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
+            False,
+            "slideshow main content type with the canonical semantic deck",
+        ),
+        (
+            "ppsm-malicious",
+            "malicious",
+            "small/pptx/macro-slideshow.ppsm",
+            "application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml",
+            "application/vnd.ms-powerpoint.slideshow.macroEnabled.12",
+            True,
+            "macro-enabled slideshow with a relationship-isolated VBA part",
+        ),
+        (
+            "potx-normal",
+            "normal",
+            "small/pptx/template.potx",
+            "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.template",
+            False,
+            "template main content type with the canonical semantic deck",
+        ),
+    ]
+    fixtures = [
+        generated_fixture(
+            root,
+            fixture_id,
+            "pptx",
+            scenario,
+            relative,
+            presentationml(main_type, macro=macro),
+            variant_media_type,
+            expected("success", description, semantic),
+        )
+        for (
+            fixture_id,
+            scenario,
+            relative,
+            main_type,
+            variant_media_type,
+            macro,
+            description,
+        ) in variants
+    ]
+    fixtures.extend([
+        generated_fixture(
+            root,
+            "pptx-normal",
+            "pptx",
+            "normal",
+            "small/pptx/normal.pptx",
+            normal,
+            media_type,
+            expected(
+                "success",
+                "two layouts, multilingual rich text, master styles, and speaker notes",
+                semantic,
+            ),
+        ),
+        generated_fixture(
+            root,
+            "pptx-corrupt",
+            "pptx",
+            "corrupt",
+            "small/pptx/corrupt.pptx",
+            corrupt,
+            media_type,
+            expected(
+                "error",
+                "slide order references a missing relationship ID",
+                error_code="malformed",
+            ),
+        ),
+        generated_fixture(
+            root,
+            "pptx-limit",
+            "pptx",
+            "limit",
+            "small/pptx/limit.pptx",
+            normal,
+            media_type,
+            limit_expected(
+                "PresentationML package exceeds the adjacent input byte boundary",
+                "max_input_bytes",
+                len(normal) - 1,
+                len(normal),
+                "max_input_bytes",
+                semantic,
+            ),
+        ),
+    ])
+    return fixtures
 
 
 def patch_encrypted_flag(archive: bytes) -> bytes:
@@ -851,6 +1121,7 @@ def build(root: Path, font_path: Path) -> None:
     add("epub-normal", "epub", "normal", "small/epub/normal.epub", epub_normal, "application/epub+zip", expected("success", "EPUB 3 package with navigation and one XHTML spine item", "# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n"))
 
     fixtures.extend(workbook_fixtures(root))
+    fixtures.extend(presentation_fixtures(root))
     ocr_fixtures, ocr_goldens = render_ocr(root, font_path)
     fixtures.extend(ocr_fixtures)
     fixtures.sort(key=lambda item: str(item["id"]))
@@ -869,7 +1140,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "wikipedia", "xlsx", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "pptx", "rtf", "text", "tsv", "wikipedia", "xlsx", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {
@@ -961,6 +1232,11 @@ def main() -> None:
         help="regenerate repository-authored MSG fixtures and update their manifest records",
     )
     parser.add_argument(
+        "--presentation-only",
+        action="store_true",
+        help="regenerate only the self-contained PresentationML subset and update its manifest records",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="regenerate in a temporary directory and require byte equality with checked-in authority",
@@ -984,8 +1260,26 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         return
+    if args.presentation_only:
+        if args.verify:
+            parser.error("--presentation-only cannot be combined with --verify")
+        manifest_path = output_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        fixtures = [
+            fixture for fixture in manifest["fixtures"] if fixture["format"] != "pptx"
+        ]
+        fixtures.extend(presentation_fixtures(output_root))
+        manifest["fixtures"] = sorted(fixtures, key=lambda item: str(item["id"]))
+        manifest["available_formats"] = sorted(
+            set(manifest["available_formats"]) | {"pptx"}
+        )
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
     if args.font is None:
-        parser.error("--font is required unless --msg-only is selected")
+        parser.error("--font is required unless --msg-only or --presentation-only is selected")
     if not args.verify:
         build(output_root, args.font.resolve())
         return

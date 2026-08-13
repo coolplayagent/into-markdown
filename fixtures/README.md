@@ -79,5 +79,16 @@ The command validates the font hash, generates into a temporary directory, and c
 with the checked-in corpus. It does not modify the repository in verification mode. Regeneration is
 the same command without `--verify`; review the resulting manifest and all binary changes.
 
+The PresentationML subset is pure OPC/XML and has no font or third-party generator dependency. Its
+checked-in matrix includes two distinct layouts, multilingual text, master text styles, speaker
+notes, a broken slide relationship, the adjacent input-size boundary, and real PPTX/PPTM/PPSX/
+PPSM/POTX main content types. Macro-enabled fixtures contain repository-authored inert VBA bytes;
+the expected conversion proves those parts are isolated through OPC metadata and never opened. It
+can be regenerated independently while preserving the authoritative OCR records:
+
+```sh
+python3 fixtures/generate.py --presentation-only
+```
+
 The PP-OCRv6 tiny recognizer archive is only a fixed, manual dependency authority for the OCR
 quality consumer. This corpus neither embeds the model nor implements recognition or CER execution.

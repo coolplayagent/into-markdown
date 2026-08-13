@@ -163,6 +163,7 @@ fn format(value: &str) -> InputFormat {
         "markdown" => InputFormat::Markdown,
         "rtf" => InputFormat::Rtf,
         "outlook-msg" => InputFormat::OutlookMsg,
+        "pptx" => InputFormat::Pptx,
         "text" => InputFormat::Text,
         "tsv" => InputFormat::Tsv,
         "wikipedia" => InputFormat::Wikipedia,
@@ -187,6 +188,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::OutlookMsg => Box::new(MsgConverter),
         InputFormat::Wikipedia => Box::new(MediaWikiConverter),
         InputFormat::Xlsx => Box::new(WorkbookConverter),
+        InputFormat::Pptx => Box::new(PresentationConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }

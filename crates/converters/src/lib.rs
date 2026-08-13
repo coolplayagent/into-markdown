@@ -11,6 +11,7 @@ mod markdown;
 mod msg;
 mod notebook;
 mod pdf;
+mod presentation;
 mod remote;
 mod rtf;
 mod structured;
@@ -31,6 +32,7 @@ pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use pdf::PdfConverter;
+pub use presentation::PresentationConverter;
 pub use remote::{
     HttpSourceResolver, MediaWikiConverter, MediaWikiFormatDetector, MediaWikiSourceResolver,
 };
@@ -122,8 +124,8 @@ const FORMATS: &[FormatDescriptor] = &[
     FormatDescriptor {
         format: InputFormat::Pptx,
         family: "document",
-        extensions: &["pptx", "pptm", "ppsx", "ppsm"],
-        status: PLANNED,
+        extensions: &["pptx", "pptm", "ppsx", "ppsm", "potx"],
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Xls,
@@ -2977,7 +2979,12 @@ fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
         | "application/vnd.ms-word.document.macroenabled.12" => InputFormat::Docx,
         "application/vnd.ms-powerpoint" => InputFormat::Ppt,
         "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        | "application/vnd.ms-powerpoint.presentation.macroenabled.12" => InputFormat::Pptx,
+        | "application/vnd.ms-powerpoint.presentation.macroenabled.12"
+        | "application/vnd.openxmlformats-officedocument.presentationml.slideshow"
+        | "application/vnd.ms-powerpoint.slideshow.macroenabled.12"
+        | "application/vnd.openxmlformats-officedocument.presentationml.template" => {
+            InputFormat::Pptx
+        }
         "application/vnd.ms-excel" => InputFormat::Xls,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         | "application/vnd.ms-excel.sheet.macroenabled.12"
