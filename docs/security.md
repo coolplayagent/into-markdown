@@ -54,6 +54,21 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
 - 网络访问默认关闭。未来 HTTP 解析器必须解析并验证每次重定向，拒绝回环、
   私有、链路本地、组播和云元数据地址，在配置时执行白名单，并限制响应字节数。
 - AI 响应是不可信的结构化输入，必须验证补丁或 Schema、溯源、节点引用和资源。
+- 可恢复任务 checkpoint 只使用规范随机 token 定位本地普通文件；Unix store 持有根
+  目录 handle 与 dev/inode identity，所有阶段 open/link/unlink 均为相对 no-follow 操作，
+  root/祖先替换不能重定向 I/O。最终 root 还须通过已打开 handle 的 `fstat` 确认由
+  当前 euid 拥有且 group/other 零权限；已有 0750/0777 root 直接拒绝而不静默
+  `chmod`，公开祖先不受此限制。每次公开 store 操作前后重验 handle owner/mode，因此
+  打开后的权限放宽也会 fail closed。恢复前重新计算输入与完整转换配置指纹；token 持久锁
+  保证并发调用只有一个 winner，其他调用返回该持久结果。未知 schema、截断 JSON、阶段
+  与 payload 不一致、伪造成功历史均返回稳定 `recovery` 错误。阶段通过同目录私有临时
+  文件、文件 `fsync` 和 no-replace hard link 发布；临时残留永远不代表成功，写入同时
+  受请求 temporary budget 与 2 GiB 上限约束。固定 4 KiB 状态尾块允许 payload-free
+  inspect；完整读取在 typed serde 前做 size/depth/width/value 预检并预留原始、字符串和
+  结构内存。资源字节使用声明解码长度的规范 padded base64，在分配前验证编码、
+  单资源与总资源上限，typed wire/base64/解码字节的共存峰值也受同一内存预算。
+  恢复 succeeded 还会重验资源 ID/MIME/外部 URI、嵌套引用、diagnostics、
+  provenance，并重渲染逐字节比较 Markdown。整个协议不访问网络。
 - 模型通过 HTTPS 下载并固定 SHA-256，同时携带许可证元数据。
 - ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
   cwd、`PATH`、`LD_LIBRARY_PATH`、`DYLD_*` 或其它隐式环境。路径逐段拒绝 symlink/

@@ -143,6 +143,12 @@ clone 一致错误、取消优先级、多 waiter 即时失败与 listener/timer
 abandon 后释放，以及 worker panic 的稳定失败。测试不得依赖某个异步运行时才能触发取消
 或 timeout。
 
+可恢复任务回归必须跨越 store 和 engine 实例，覆盖 converted 后渲染失败、重启只
+重做渲染，以及 succeeded 重启直接返回逐字段一致结果。fixture 至少包含超过历史
+1.1 MiB JSON array width 边界的资源和恰好 `MAX_DOCUMENT_DEPTH` 的 Document；相邻负例
+覆盖资源上限加一、非规范/损坏 base64 与公共深度加一。加载测试还必须证明
+checkpoint envelope、typed wire、base64 字符串和解码资源的共存峰值受请求内存预算约束。
+
 后续实现应增加四层测试：
 
 1. 为每个解析器、渲染器、OCR 前后处理模块和安全边界编写小型、确定性的单元

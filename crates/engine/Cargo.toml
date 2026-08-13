@@ -8,6 +8,15 @@ license.workspace = true
 
 [dependencies]
 into-markdown-core = { path = "../core" }
+base64.workspace = true
+getrandom.workspace = true
+rustix = { workspace = true, features = ["process"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["unbounded_depth"] }
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
