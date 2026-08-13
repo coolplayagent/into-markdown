@@ -147,6 +147,15 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   上界预留；调用内部不可轮询，但该常量上界限制单次延迟。算法阈值、候选数和
   unclip ratio 只来自内嵌 authority，公开配置只能收紧资源上限。尺寸被限制在不会溢出
   `imageproc` i32 orientation arithmetic 的范围；实现不使用 panic 捕获冒充内存安全。
+- OCR IR merge 把 detection/recognition 数量、唯一 `source_index`、页码、provider/model
+  identity、有限凸四边形与两类 confidence 当作不可信输入。page/region/text/identity、
+  Document node/inline、canonical NFC string、native span index 和 comparison work 都在
+  建立候选索引前 checked 计数；Document validation working set 也在 validator 分配前由
+  同一 `ExecutionContext` 保留。候选按 X interval 剪枝，配置的 comparison 上限同时覆盖
+  OCR 重叠去重、native span 比较和 line clustering 的保守上界。循环周期 checkpoint；
+  算法不写临时文件，失败时局部 Document、索引、诊断和 reservation 一并释放，调用方
+  不可能观察 partial publish。原始 polygon 与 ordered evidence chain 只进入结构化 IR/DTO，
+  Markdown renderer 不输出 model identity。
 - ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
   cwd、`PATH`、`LD_LIBRARY_PATH`、`DYLD_*` 或其它隐式环境。路径逐段拒绝 symlink/
   reparse point，源文件以 no-follow handle 打开并核对文件身份，再按 authority 中的

@@ -89,6 +89,13 @@ RSS 声明，模型 session/run 和请求预算仍独立检查。Identity/Expand
 `//crates/onnxruntime:ppocrv6_recognizer_quality` 执行；完整 detector pipeline 仍因缺少
 detector runtime artifact 而不可用。
 
+OCR-to-IR merge 另有显式
+`//crates/onnxruntime:ppocrv6_merge_quality`：它先核对 #55 manifest、12 图和 merge quality
+authority 的 hash，在内存施加固定 contrast/speckle 退化，执行官方 recognizer，再把
+source-index 0 与 authority 整图 polygon 送入真实 policy/geometry/dedup/IR merge，按
+NFC+去 Unicode whitespace 计算 431 字符 aggregate CER 并要求不高于 15%。该目标明确不
+声称运行 detector 模型；缺少 detector runtime artifact 时也不会用 fake tensor 冒充。
+
 PDF 普通 Cargo/Bazel 测试使用纯 Rust mock、生成式小型数据和缺 runtime 的稳定错误，不下载
 或加载 native 库。单元测试覆盖 UTF-16 surrogate、负 count、极端 limit、损坏 bitmap 长度、
 坐标旋转、危险 URI、句柄析构和并发串行化。显式 macOS ARM64 smoke 的 PDF fixture 由测试
@@ -302,3 +309,11 @@ runtime 单元测试不能满足质量门禁。OCR golden 的 NFC、有效字符
 始终是权威，不宣称任意平台渲染器都能产生相同字节。详细操作见 `fixtures/README.md`。
 大输入只能通过显式 `//fixtures:download_fixture` 工具取得；该工具拒绝所有 redirect，按
 authority 的单一 host、精确大小与流式上限读取，并在落盘前核对 SHA-256。
+
+OCR merge 退化质量目标使用相同模型/ORT 下载 authority，普通测试图不依赖它：
+
+```shell
+bazel test --config=macos_arm64 //crates/onnxruntime:ppocrv6_merge_quality
+```
+
+其它受支持产品配置使用对应 platform config 显式执行。

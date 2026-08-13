@@ -22,7 +22,9 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+mod batch;
 mod detection;
+mod merge;
 mod model_acquisition;
 mod model_archive;
 mod onnx_proto;
@@ -30,12 +32,16 @@ mod recognition;
 mod recognizer_model;
 mod runtime;
 
+pub use batch::BoundRecognition;
+
 pub use detection::{
     CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
-    PixelFormat, PixelView, PpOcrTextDetector,
+    PageDetection, PixelFormat, PixelView, PpOcrTextDetector,
 };
 
 pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};
+
+pub use merge::{MergeConfig, MergeLimits, OcrPageInput, merge_document};
 
 pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
 

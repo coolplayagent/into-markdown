@@ -1124,6 +1124,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
  "url",
 ]
 
@@ -1145,6 +1146,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
  "windows-sys 0.61.2",
 ]
 

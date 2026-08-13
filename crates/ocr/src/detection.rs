@@ -113,6 +113,101 @@ pub struct DetectionResult {
     pub provider: String,
 }
 
+/// Page-scoped detector output whose ordered regions are cryptographically bound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageDetection {
+    pub(crate) result: DetectionResult,
+    pub(crate) identity: crate::batch::BatchIdentity,
+}
+
+impl PageDetection {
+    #[must_use]
+    pub fn result(&self) -> &DetectionResult {
+        &self.result
+    }
+
+    #[must_use]
+    pub fn page(&self) -> u32 {
+        self.identity.page
+    }
+
+    #[must_use]
+    pub fn page_width(&self) -> f32 {
+        f32::from_bits(self.identity.page_width_bits)
+    }
+
+    #[must_use]
+    pub fn page_height(&self) -> f32 {
+        f32::from_bits(self.identity.page_height_bits)
+    }
+
+    pub(crate) fn from_result(
+        page: u32,
+        page_width: f32,
+        page_height: f32,
+        detector_model: &'static str,
+        result: DetectionResult,
+    ) -> Result<Self, ConversionError> {
+        let identity = crate::batch::BatchIdentity::new(
+            page,
+            page_width,
+            page_height,
+            detector_model,
+            &result,
+        )?;
+        Ok(Self { result, identity })
+    }
+
+    /// Construct the single full-image region used by the hash-bound manual
+    /// recognizer-to-merge quality target. This is not detector output: its
+    /// provider and model identity explicitly identify fixture authority.
+    #[doc(hidden)]
+    pub fn authoritative_full_image_region(
+        page: u32,
+        image_width: usize,
+        image_height: usize,
+    ) -> Result<Self, ConversionError> {
+        let last_x = image_width.checked_sub(1).ok_or_else(|| ConversionError::Ocr {
+            provider: "quality.authoritative-full-image-region".into(),
+            detail: "emptyQualityImage".into(),
+        })?;
+        let last_y = image_height.checked_sub(1).ok_or_else(|| ConversionError::Ocr {
+            provider: "quality.authoritative-full-image-region".into(),
+            detail: "emptyQualityImage".into(),
+        })?;
+        let last_x = u32::try_from(last_x).map_err(|_| ConversionError::Ocr {
+            provider: "quality.authoritative-full-image-region".into(),
+            detail: "qualityImageTooWide".into(),
+        })?;
+        let last_y = u32::try_from(last_y).map_err(|_| ConversionError::Ocr {
+            provider: "quality.authoritative-full-image-region".into(),
+            detail: "qualityImageTooTall".into(),
+        })?;
+        let polygon = [
+            (0.0, 0.0),
+            (last_x as f32, 0.0),
+            (last_x as f32, last_y as f32),
+            (0.0, last_y as f32),
+        ];
+        let result = DetectionResult {
+            regions: vec![DetectedTextRegion {
+                polygon,
+                angle_degrees: 0.0,
+                confidence: 1.0,
+                crop: CropDescriptor { polygon, width: last_x, height: last_y },
+            }],
+            provider: "quality.authoritative-full-image-region".into(),
+        };
+        Self::from_result(
+            page,
+            image_width as f32,
+            image_height as f32,
+            "authority-full-image-polygon",
+            result,
+        )
+    }
+}
+
 /// Local safety bounds. Detection algorithm parameters come only from the
 /// embedded, commit-pinned authority and cannot be changed by callers.
 #[derive(Debug, Clone)]
@@ -169,6 +264,22 @@ impl PpOcrTextDetector {
             let outputs = self.runtime.run(MODEL_ID, &[tensor], context).await?;
             context.checkpoint()?;
             postprocess(&outputs, image, transform, &self.config, context)
+        })
+    }
+
+    /// Detect and bind one source page to the exact detector model and ordered regions.
+    #[must_use]
+    pub fn detect_page<'a>(
+        &'a self,
+        page: u32,
+        image: PixelView<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<PageDetection, ConversionError>> {
+        Box::pin(async move {
+            let width = image.width as f32;
+            let height = image.height as f32;
+            let result = self.detect(image, context).await?;
+            PageDetection::from_result(page, width, height, crate::batch::DETECTOR_MODEL_ID, result)
         })
     }
 }

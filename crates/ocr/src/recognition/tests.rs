@@ -410,13 +410,16 @@ fn all_exif_orientations_flow_from_detection_to_raw_source_recognition() {
             orientation,
             bytes: &bytes,
         };
-        let detected = block_on(detector.detect(image, &context())).unwrap();
-        assert_eq!(detected.regions.len(), 1, "orientation={orientation:?}");
-        let crops = detected.regions.iter().map(|region| region.crop.clone()).collect::<Vec<_>>();
-        let result = block_on(recognizer.recognize(image, &crops, None, &context())).unwrap();
-        assert_eq!(result.regions.len(), 1);
+        let detected = block_on(detector.detect_page(7, image, &context())).unwrap();
+        assert_eq!(detected.result().regions.len(), 1, "orientation={orientation:?}");
+        assert_eq!(detected.page(), 7);
+        let result =
+            block_on(recognizer.recognize_page(image, &detected, None, &context())).unwrap();
+        assert_eq!(result.result().regions.len(), 1);
+        result.validate_identity(&detected.identity).unwrap();
+        assert_eq!(result.recognizer_model(), crate::batch::RECOGNIZER_MODEL_ID);
         let character_context = context();
         let (characters, _lease) = characters(&character_context);
-        assert_eq!(result.regions[0].text, characters[0]);
+        assert_eq!(result.result().regions[0].text, characters[0]);
     }
 }

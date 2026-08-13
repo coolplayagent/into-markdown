@@ -29,6 +29,7 @@ windows-sys.workspace = true
 [dev-dependencies]
 futures.workspace = true
 image.workspace = true
+unicode-normalization.workspace = true
 
 [lints.rust]
 unsafe_code = "allow"

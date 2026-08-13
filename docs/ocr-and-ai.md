@@ -72,6 +72,34 @@ region/text/provider/hint 的实际 capacity 租约随共享 RecognitionResult �
 取消、稳定 batch 顺序，并以八种 EXIF 方向的 detection→recognition 回归防止重复变换；
 detector ONNX 尚未进入可安装 pipeline，因此检测产品 resolver 仍返回 `ModelUnavailable`。
 
+OCR 结果进入统一 IR 时由 `ocr::merge` 单向编排 policy、geometry、line、paragraph、dedup、
+provenance 与 budget 模块。调用方必须同时传入同页 `DetectionResult`、`RecognitionResult`
+和精确 detector/recognizer model identity；识别结果的 `source_index` 必须无重复、无缺失地
+指向 detector region，否则整次合并稳定失败。`off` 不检查也不读取 OCR 结果，`auto` 仅在
+该页可打印原生文本不足时考虑 OCR，`always` 始终考虑 OCR；后两者仍应用最低 detector 与
+recognizer confidence，并为被过滤区域产生 `ocr.lowConfidence` 页定位诊断。
+
+合并只使用 source quadrilateral 的主轴、法轴投影、夹角、间距与重叠关系，不读取或猜测
+文本语言。因此水平、垂直和旋转文本遵循同一几何规则；可见框间隙保留为空格，不以脚本
+类别暗中改写。OCR 与 OCR、OCR 与原生文本的去重先做 NFC 并删除 Unicode whitespace，
+再要求等价文本与足够几何覆盖同时成立。不同文本即使框相交也保留。候选按 X 区间索引，
+comparison 上限在创建索引和 canonical string 前统一预检，不执行无界全 pair 扫描。
+
+`Inline::OcrText` 是 Document schema 1 的 additive tagged variant，携带原始四点 polygon、
+页码、detection/recognition confidence，以及 detection→recognition→merge 的 provider/model
+有序 evidence chain。节点的标准 `Provenance` 仍用于通用消费者；公开 `SourceLocator` 未加
+字段，所以已有 exact struct literal 保持源码兼容，旧文档 JSON 字节不变。IR validator、
+DTO envelope 与 Markdown renderer 均覆盖该变体；renderer 只输出文本，不把模型身份写入
+Markdown。
+
+`models/ocr-merge-quality-authority.json` 把 #55 的 Apache-2.0、自主生成 12 图 manifest hash、
+recognizer authority hash、固定内存退化算法和 seed、NFC+去 whitespace 规范化、431 个评价
+字符及 aggregate CER `≤ 0.15` 锁成机器权威。显式 manual target
+`//crates/onnxruntime:ppocrv6_merge_quality` 执行官方 recognizer 与真实 merge/IR pipeline；
+其 detector 输入是 authority 明示的整图 polygon，并不伪称 detector 模型推理。当前没有
+可安装 detector ONNX，因此完整 detector quality 仍不能被这个目标冒充。普通 Cargo/Bazel
+构建不会请求模型或 ORT 下载。
+
 `OcrPolicy` 可取 `off`、`auto` 或 `always`，默认值为 `auto`。自动模式下，
 只有图片输入、纯图片页面、可能含文字的内嵌图片，或原生文本提取不足的页面才应
 触发 OCR。

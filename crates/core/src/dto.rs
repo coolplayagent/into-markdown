@@ -2393,7 +2393,10 @@ fn limit<T>(path: &str, name: &str, maximum: usize) -> Result<T, DtoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AssetId, Block, BlockNode, ConversionResult, Inline, NodeId, Rect};
+    use crate::{
+        AssetId, Block, BlockNode, ConversionResult, Inline, NodeId, OcrEvidence, OcrEvidenceStage,
+        OcrEvidenceStep, OcrSourceRegion, Rect, SourcePoint,
+    };
 
     fn result_dto() -> ResultDto {
         let result = ConversionResult {
@@ -2484,6 +2487,78 @@ mod tests {
         };
         let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
         assert!(json.contains("\"type\":\"sourceText\""));
+        let decoded = ConversionResult::try_from(ResultDto::from_json(&json).unwrap()).unwrap();
+        assert_eq!(decoded.document, result.document);
+    }
+
+    #[test]
+    fn ocr_evidence_round_trips_without_changing_the_envelope_schema() {
+        let provenance = Provenance {
+            kind: ProvenanceKind::LocalOcr,
+            provider: "recognizer".into(),
+            locator: SourceLocator {
+                page: Some(2),
+                bounds: Some(Rect { x: 1.0, y: 1.0, width: 4.0, height: 2.0 }),
+                page_width: Some(100.0),
+                page_height: Some(100.0),
+                ..SourceLocator::default()
+            },
+            confidence: Some(0.91),
+        };
+        let ocr = Inline::OcrText {
+            value: "scan".into(),
+            marks: vec![],
+            provenance: Box::new(provenance.clone()),
+            evidence: Box::new(OcrEvidence {
+                page: 2,
+                regions: vec![OcrSourceRegion {
+                    source_index: 4,
+                    polygon: [
+                        SourcePoint { x: 1.0, y: 1.0 },
+                        SourcePoint { x: 5.0, y: 1.0 },
+                        SourcePoint { x: 5.0, y: 3.0 },
+                        SourcePoint { x: 1.0, y: 3.0 },
+                    ],
+                    detection_confidence: 0.95,
+                    recognition_confidence: 0.91,
+                }],
+                chain: vec![
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Detection,
+                        provider: "detector".into(),
+                        model: Some("det".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Recognition,
+                        provider: "recognizer".into(),
+                        model: Some("rec".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Merge,
+                        provider: "merge".into(),
+                        model: None,
+                    },
+                ],
+            }),
+        };
+        let result = ConversionResult::new(
+            Document {
+                blocks: vec![BlockNode {
+                    id: NodeId("ocr".into()),
+                    block: Block::Paragraph(vec![ocr]),
+                    provenance,
+                }],
+                ..Document::default()
+            },
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
+        assert!(json.contains("\"schemaVersion\":1"));
+        assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains("\"ocrEvidence\":"));
         let decoded = ConversionResult::try_from(ResultDto::from_json(&json).unwrap()).unwrap();
         assert_eq!(decoded.document, result.document);
     }

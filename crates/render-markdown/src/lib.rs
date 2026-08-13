@@ -613,6 +613,7 @@ fn planned_render_peak(
             let rendered = match value {
                 Inline::Text { value, .. }
                 | Inline::SourceText { value, .. }
+                | Inline::OcrText { value, .. }
                 | Inline::Code(value)
                 | Inline::Formula(value)
                 | Inline::FootnoteReference(value) => plan.text(value, block_depth)?,
@@ -1210,7 +1211,9 @@ fn render_inlines(inlines: &[Inline], context: InlineContext) -> Result<String, 
     let mut output = String::new();
     for inline in inlines {
         match inline {
-            Inline::Text { value, marks } | Inline::SourceText { value, marks, .. } => {
+            Inline::Text { value, marks }
+            | Inline::SourceText { value, marks, .. }
+            | Inline::OcrText { value, marks, .. } => {
                 output.push_str(&render_marked_text(value, marks, context));
             }
             Inline::Code(value) => output.push_str(&render_code_span(value, context)),
@@ -1664,8 +1667,8 @@ fn validate_planned_references<'a>(
 mod tests {
     use super::*;
     use into_markdown_core::{
-        AssetId, CellRef, DocumentMetadata, NodeId, Provenance, ProvenanceKind, SourceLocator,
-        TimeRange,
+        AssetId, CellRef, DocumentMetadata, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
+        OcrSourceRegion, Provenance, ProvenanceKind, Rect, SourceLocator, SourcePoint, TimeRange,
     };
     use pulldown_cmark::{Event, Options, Parser, Tag};
 
@@ -1680,6 +1683,69 @@ mod tests {
 
     fn node(id: impl Into<String>, block: Block) -> BlockNode {
         BlockNode { id: NodeId(id.into()), block, provenance: provenance() }
+    }
+
+    #[test]
+    fn structured_ocr_text_renders_as_text_without_leaking_evidence() {
+        let provenance = Provenance {
+            kind: ProvenanceKind::LocalOcr,
+            provider: "recognizer".into(),
+            locator: SourceLocator {
+                page: Some(1),
+                bounds: Some(Rect { x: 0.0, y: 0.0, width: 10.0, height: 2.0 }),
+                page_width: Some(100.0),
+                page_height: Some(100.0),
+                ..SourceLocator::default()
+            },
+            confidence: Some(0.9),
+        };
+        let inline = Inline::OcrText {
+            value: "scanned **text**".into(),
+            marks: vec![],
+            provenance: Box::new(provenance.clone()),
+            evidence: Box::new(OcrEvidence {
+                page: 1,
+                regions: vec![OcrSourceRegion {
+                    source_index: 0,
+                    polygon: [
+                        SourcePoint { x: 0.0, y: 0.0 },
+                        SourcePoint { x: 10.0, y: 0.0 },
+                        SourcePoint { x: 10.0, y: 2.0 },
+                        SourcePoint { x: 0.0, y: 2.0 },
+                    ],
+                    detection_confidence: 0.9,
+                    recognition_confidence: 0.9,
+                }],
+                chain: vec![
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Detection,
+                        provider: "detector".into(),
+                        model: Some("det".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Recognition,
+                        provider: "recognizer".into(),
+                        model: Some("rec".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Merge,
+                        provider: "merge".into(),
+                        model: None,
+                    },
+                ],
+            }),
+        };
+        let document = Document {
+            blocks: vec![BlockNode {
+                id: NodeId("ocr".into()),
+                block: Block::Paragraph(vec![inline]),
+                provenance,
+            }],
+            ..Document::default()
+        };
+        let markdown = render(&document, &[], &ConversionOptions::default()).unwrap();
+        assert_eq!(markdown, "scanned \\*\\*text\\*\\*\n");
+        assert!(!markdown.contains("detector"));
     }
 
     fn paragraph(id: &str, value: &str) -> BlockNode {

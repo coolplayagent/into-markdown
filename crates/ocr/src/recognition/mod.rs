@@ -2,7 +2,7 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
-use crate::{CropDescriptor, ModelManager, PixelView};
+use crate::{BoundRecognition, CropDescriptor, ModelManager, PageDetection, PixelView};
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ResourceReservation, TensorRuntime,
 };
@@ -75,7 +75,7 @@ pub struct RecognitionResult {
     pub regions: Arc<[RecognizedText]>,
     pub provider: Arc<str>,
     pub language_hint: Option<Arc<str>>,
-    _memory_lease: Option<Arc<ResourceReservation>>,
+    pub(crate) _memory_lease: Option<Arc<ResourceReservation>>,
 }
 
 impl PartialEq for RecognitionResult {
@@ -233,6 +233,47 @@ impl PpOcrTextRecognizer {
                 language_hint,
                 _memory_lease: Some(Arc::new(result_reservation)),
             })
+        })
+    }
+
+    /// Recognize regions from a detector-produced, page-scoped batch binding.
+    #[must_use]
+    pub fn recognize_page<'a>(
+        &'a self,
+        image: PixelView<'a>,
+        detection: &'a PageDetection,
+        language_hint: Option<&'a str>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<BoundRecognition, ConversionError>> {
+        Box::pin(async move {
+            detection.identity.validate(&detection.result)?;
+            if (image.width as f32).to_bits() != detection.page_width().to_bits()
+                || (image.height as f32).to_bits() != detection.page_height().to_bits()
+            {
+                return Err(ocr("recognitionPageGeometryMismatch"));
+            }
+            let mut crop_reservation =
+                reserve_vec::<CropDescriptor>(detection.result.regions.len(), context)?;
+            let mut crops = Vec::new();
+            crops
+                .try_reserve_exact(detection.result.regions.len())
+                .map_err(|_| limit("recognitionMemory"))?;
+            let requested = detection
+                .result
+                .regions
+                .len()
+                .checked_mul(std::mem::size_of::<CropDescriptor>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            let actual = crops
+                .capacity()
+                .checked_mul(std::mem::size_of::<CropDescriptor>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            if actual > requested {
+                crop_reservation.grow(to_u64(actual - requested)?)?;
+            }
+            crops.extend(detection.result.regions.iter().map(|region| region.crop.clone()));
+            let output = self.recognize(image, &crops, language_hint, context).await?;
+            BoundRecognition::new(output, detection.identity.clone(), context)
         })
     }
 }
