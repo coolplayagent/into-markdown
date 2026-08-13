@@ -27,9 +27,11 @@ rust_test(
     crate = ":ocr",
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
     compile_data = [
+        "//fixtures:manifest.json",
         "//models:manifest.json",
         "//models:ppocrv6-tiny-detector-authority.json",
         "//models:ppocrv6-tiny-recognizer-authority.json",
+        "//models:ocr-merge-quality-authority.json",
         "//models:ppocrv6_tiny_dict.txt",
         "//third_party/licenses:downloads.json",
         "//third_party/onnxruntime:manifest.json",

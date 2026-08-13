@@ -2,6 +2,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "manifest.json",
+    "ocr-merge-quality-authority.json",
     "ppocrv6-tiny-detector-authority.json",
     "ppocrv6-tiny-recognizer-authority.json",
     "ppocrv6_tiny_dict.txt",

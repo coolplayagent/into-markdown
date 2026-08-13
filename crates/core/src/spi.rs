@@ -651,6 +651,17 @@ pub fn estimate_validation_working_set(
                 crate::Inline::SourceText { provenance, .. } => {
                     add(total, strings_in_provenance(provenance)?)?;
                 }
+                crate::Inline::OcrText { provenance, evidence, .. } => {
+                    add(total, strings_in_provenance(provenance)?)?;
+                    add(total, evidence.regions.len().saturating_mul(512))?;
+                    add(total, evidence.chain.len().saturating_mul(512))?;
+                    for step in &evidence.chain {
+                        add(total, step.provider.len())?;
+                        if let Some(model) = &step.model {
+                            add(total, model.len())?;
+                        }
+                    }
+                }
                 crate::Inline::Link { content, .. } => {
                     visit_inlines(content, depth + 1, total, inline_count)?;
                 }
@@ -966,6 +977,19 @@ fn retained_inlines(
                 total.vec::<crate::InlineMark>(marks.capacity())?;
                 total.add(size_of::<Provenance>())?;
                 retained_provenance(provenance, total)?;
+            }
+            Inline::OcrText { value, marks, provenance, evidence } => {
+                total.string(value)?;
+                total.vec::<crate::InlineMark>(marks.capacity())?;
+                total.add(size_of::<Provenance>())?;
+                retained_provenance(provenance, total)?;
+                total.add(size_of::<crate::OcrEvidence>())?;
+                total.vec::<crate::OcrSourceRegion>(evidence.regions.capacity())?;
+                total.vec::<crate::OcrEvidenceStep>(evidence.chain.capacity())?;
+                for step in &evidence.chain {
+                    total.string(&step.provider)?;
+                    total.string_opt(step.model.as_ref())?;
+                }
             }
             Inline::Code(value) | Inline::Formula(value) | Inline::FootnoteReference(value) => {
                 total.string(value)?;

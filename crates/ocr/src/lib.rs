@@ -23,6 +23,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 mod detection;
+mod merge;
 mod model_acquisition;
 mod model_archive;
 mod onnx_proto;
@@ -36,6 +37,8 @@ pub use detection::{
 };
 
 pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};
+
+pub use merge::{MergeConfig, MergeLimits, OcrPageInput, merge_document};
 
 pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
 

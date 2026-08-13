@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_manifest_sha256": "607ddd6ea28b55715fd0fd38e8e896f7cb8a82b3fbea4650ea59e013b83b1a42",
+  "recognizer_authority_sha256": "bda342ad69b5add1846b5a7a5252d0479145284ad27eabf70f14f09d5df2b5c5",
+  "fixture_license": "Apache-2.0",
+  "fixture_provenance": "repository-generated",
+  "degradation": {
+    "algorithm": "contrast-compress-and-sparse-background-speckle",
+    "seed": 20260813,
+    "black_level": 24,
+    "white_level": 238,
+    "speckle_modulus": 997,
+    "speckle_remainder": 0,
+    "speckle_source_minimum": 224,
+    "speckle_level": 176
+  },
+  "association": "one-authoritative-full-image-polygon-to-recognizer-source-index-zero",
+  "normalization": "unicode-nfc-remove-unicode-whitespace",
+  "maximum_aggregate_cer": 0.15,
+  "expected_evaluated_characters": 431,
+  "pipeline": [
+    "official-ppocrv6-recognizer",
+    "ocr-ir-policy-geometry-dedup",
+    "document-ir-ocr-evidence"
+  ]
+}

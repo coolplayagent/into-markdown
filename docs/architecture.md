@@ -200,6 +200,14 @@ slice 并分配返回 `Vec`。GraphProto IO 经有界 wire preflight 和 checked
 识别输出是按 source region 顺序恢复的 `RecognitionResult`，不直接构造 Document IR；OCR
 pipeline 在集成边界把结构化结果合入统一 IR，避免模型运行层依赖渲染或文档结构。
 
+该集成边界继续拆为 `merge::{policy,geometry,lines,paragraphs,dedup,provenance,budget}`。
+门面消费 Document，在局部完成 source-index 关联、策略、过滤、几何聚类、原生文本去重、
+结构化 evidence 与 IR validation 后才一次返回 `ConverterOutput`；任一错误都不会把半成品
+写回调用方。公共 IR 以 non-exhaustive `Inline::OcrText` 承载 additive OCR sidecar，避免
+扩展 `SourceLocator` 公开 struct 破坏 exact literal consumer。core 的 validation preflight、
+retained output estimator、DTO 与 renderer 共同认识该变体，OCR crate 不依赖 engine、DTO
+或 renderer 的实现。
+
 ## SQLite 任务元数据层
 
 `into-markdown-task-store` 是同步、默认离线的本地元数据边界。它保存 task id、UTC

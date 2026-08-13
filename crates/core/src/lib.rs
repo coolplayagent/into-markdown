@@ -37,8 +37,9 @@ pub use ir::{
     Asset, AssetId, Block, BlockNode, Cell, CellRef, DOCUMENT_SCHEMA_VERSION, Diagnostic,
     DiagnosticSeverity, Document, DocumentMetadata, Inline, InlineMark, IrError, IrErrorCode,
     ListItem, ListKind, MAX_DOCUMENT_DEPTH, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_JSON_BYTES,
-    MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, Provenance, ProvenanceKind, Rect, SourceLocator,
-    TableAlignment, TableRow, TimeRange, ValidationLimits,
+    MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
+    OcrSourceRegion, Provenance, ProvenanceKind, Rect, SourceLocator, SourcePoint, TableAlignment,
+    TableRow, TimeRange, ValidationLimits,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use options::{

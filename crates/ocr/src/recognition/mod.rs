@@ -75,7 +75,7 @@ pub struct RecognitionResult {
     pub regions: Arc<[RecognizedText]>,
     pub provider: Arc<str>,
     pub language_hint: Option<Arc<str>>,
-    _memory_lease: Option<Arc<ResourceReservation>>,
+    pub(crate) _memory_lease: Option<Arc<ResourceReservation>>,
 }
 
 impl PartialEq for RecognitionResult {
