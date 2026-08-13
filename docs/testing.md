@@ -107,7 +107,10 @@ schema 1 读取迁移与 schema 2 aliases/path/ZIP 双向一致均为契约测�
 future 的取消和 deadline 唤醒、多 waiter 竞争、checked 预算累加，以及失败后临时
 产物清理。dispatcher 生命周期使用 barrier 确定性覆盖 worker wait 前后关闭、回调中
 释放最后一个 context、饱和 mailbox 接受 `Completed` 后 drain、线程创建失败降级和
-listener 最终释放。阻塞来源还要覆盖有界工作者过载、deadline 先于系统调用返回、增长
+listener 最终释放。deadline timer 使用作用域内 spawner 注入确定性覆盖线程创建失败、
+clone 一致错误、取消优先级、多 waiter 即时失败与 listener/timer 状态释放，不依赖耗尽
+系统线程额度；零 deadline 与不可表示的超长 deadline 不需要 timer 线程。阻塞来源还要
+覆盖有界工作者过载、deadline 先于系统调用返回、增长
 文件只读预算加一字节、Unix symlink 拒绝、Windows 设备 namespace/保留设备拒绝、磁盘
 句柄类型与权威句柄替换稳定性、source 分配前预留、scratch 退款后恰好双 payload 的 Vec
 到 Arc 峰值、跨 context handoff、旧 `ResolvedInput` literal 与默认 resolver 方法兼容、

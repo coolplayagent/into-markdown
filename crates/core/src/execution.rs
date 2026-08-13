@@ -169,6 +169,7 @@ pub struct ExecutionContext {
 struct ExecutionShared {
     cancellation: CancellationToken,
     deadline: Option<Instant>,
+    deadline_timer_available: AtomicBool,
     timed_out: AtomicBool,
     timer_stop: Arc<TimerStop>,
     progress: Mutex<ProgressState>,
@@ -209,13 +210,29 @@ impl ExecutionContext {
     /// Construct a context from request controls and conversion limits.
     #[must_use]
     pub fn new(options: ExecutionOptions, limits: ResourceLimits) -> Self {
+        Self::new_with_timer_spawner(options, limits, std::thread::Builder::spawn)
+    }
+
+    fn new_with_timer_spawner<F>(
+        options: ExecutionOptions,
+        limits: ResourceLimits,
+        spawn: F,
+    ) -> Self
+    where
+        F: FnOnce(
+            std::thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<JoinHandle<()>>,
+    {
         let now = Instant::now();
         let deadline = options.timeout.and_then(|duration| now.checked_add(duration));
         let dispatcher = options.progress_listener.and_then(ProgressDispatcher::new);
         let timer_stop = Arc::new(TimerStop::default());
+        let timer_deadline = deadline.filter(|deadline| *deadline > now);
         let shared = Arc::new(ExecutionShared {
             cancellation: options.cancellation,
             deadline,
+            deadline_timer_available: AtomicBool::new(timer_deadline.is_none()),
             timed_out: AtomicBool::new(false),
             timer_stop: Arc::clone(&timer_stop),
             progress: Mutex::new(ProgressState::default()),
@@ -224,9 +241,9 @@ impl ExecutionContext {
             memory_bytes: AtomicU64::new(0),
             temporary_bytes: AtomicU64::new(0),
         });
-        if let Some(deadline) = deadline {
+        if let Some(deadline) = timer_deadline {
             let weak = Arc::downgrade(&shared);
-            std::thread::spawn(move || {
+            let task = Box::new(move || {
                 let now = Instant::now();
                 if deadline > now {
                     let wait = deadline.duration_since(now);
@@ -245,6 +262,11 @@ impl ExecutionContext {
                     shared.cancellation.wake_waiters();
                 }
             });
+            if spawn(std::thread::Builder::new().name("into-markdown-deadline".into()), task)
+                .is_ok()
+            {
+                shared.deadline_timer_available.store(true, Ordering::Release);
+            }
         }
         Self { shared }
     }
@@ -253,8 +275,16 @@ impl ExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`ConversionError::Cancelled`] or [`ConversionError::Timeout`].
+    /// Returns [`ConversionError::Cancelled`], [`ConversionError::Timeout`], or a
+    /// stable [`ConversionError::ComponentUnavailable`] when the process could
+    /// not start the deadline timer.
     pub fn checkpoint(&self) -> Result<(), ConversionError> {
+        if !self.shared.deadline_timer_available.load(Ordering::Acquire) {
+            return Err(ConversionError::ComponentUnavailable {
+                component: "deadline-timer".into(),
+                detail: "deadline timer could not be started".into(),
+            });
+        }
         if self.shared.cancellation.is_cancelled() {
             return Err(ConversionError::Cancelled);
         }
@@ -1048,6 +1078,83 @@ mod tests {
             poll_once(future.as_mut(), &wake),
             Poll::Ready(Err(ConversionError::Timeout))
         ));
+    }
+
+    #[test]
+    fn deadline_timer_spawn_failure_is_stable_for_clones_and_waiters() {
+        let cancellation = CancellationToken::new();
+        let context = ExecutionContext::new_with_timer_spawner(
+            ExecutionOptions {
+                cancellation: cancellation.clone(),
+                timeout: Some(Duration::from_hours(1)),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+            |_, _| Err(io::Error::other("injected deadline timer spawn failure")),
+        );
+        let clone = context.clone();
+        cancellation.cancel();
+
+        for candidate in [&context, &clone] {
+            let error = candidate.checkpoint().unwrap_err();
+            assert_eq!(error.code(), crate::ErrorCode::ComponentUnavailable);
+            match error {
+                ConversionError::ComponentUnavailable { component, detail } => {
+                    assert_eq!(component, "deadline-timer");
+                    assert_eq!(detail, "deadline timer could not be started");
+                }
+                other => panic!("unexpected timer startup error: {other:?}"),
+            }
+
+            let wake = Arc::new(CountingWake::default());
+            let mut future = Box::pin(candidate.run(Never));
+            assert!(matches!(
+                poll_once(future.as_mut(), &wake),
+                Poll::Ready(Err(ConversionError::ComponentUnavailable { ref component, .. }))
+                    if component == "deadline-timer"
+            ));
+        }
+        assert!(lock_unpoisoned(&context.shared.cancellation.state.waiters).is_empty());
+        assert_eq!(Arc::strong_count(&context.shared.timer_stop), 1);
+    }
+
+    #[test]
+    fn immediate_and_unrepresentable_deadlines_do_not_need_a_timer_thread() {
+        for timeout in [Duration::ZERO, Duration::MAX] {
+            let spawn_calls = AtomicUsize::new(0);
+            let context = ExecutionContext::new_with_timer_spawner(
+                ExecutionOptions { timeout: Some(timeout), ..ExecutionOptions::default() },
+                ResourceLimits::default(),
+                |_, _| {
+                    spawn_calls.fetch_add(1, Ordering::AcqRel);
+                    Err(io::Error::other("timer must not be spawned"))
+                },
+            );
+            assert_eq!(spawn_calls.load(Ordering::Acquire), 0);
+            if timeout.is_zero() {
+                assert!(matches!(context.checkpoint(), Err(ConversionError::Timeout)));
+            } else {
+                assert!(context.checkpoint().is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn timer_spawn_failure_releases_listener_when_context_is_dropped() {
+        let listener = Arc::new(EmptyListener);
+        let weak = Arc::downgrade(&listener);
+        let context = ExecutionContext::new_with_timer_spawner(
+            ExecutionOptions {
+                timeout: Some(Duration::from_hours(1)),
+                progress_listener: Some(listener.clone()),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+            |_, _| Err(io::Error::other("injected deadline timer spawn failure")),
+        );
+        drop(listener);
+        drop(context);
+        wait_until_released(&weak);
     }
 
     #[test]
