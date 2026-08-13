@@ -15,6 +15,7 @@ use std::sync::Arc;
 const PROVIDER: &str = "builtin.ocr.ppocrv6-detector";
 const MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
 const STRIDE: usize = 32;
+const SCALE: f32 = 1.0 / 255.0;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
 const MIN_SIDE_LEN: usize = 736;
@@ -23,6 +24,20 @@ const BITMAP_THRESHOLD: f32 = 0.2;
 const BOX_THRESHOLD: f32 = 0.4;
 const UNCLIP_RATIO: f64 = 1.4;
 const MAX_CANDIDATES: usize = 3000;
+// A rotated minimum rectangle over a 4000x4000 map can extend outside the map;
+// twice the maximum side is a conservative bound for each integer edge span.
+const SCORE_MAX_EDGE_STEPS: usize = MAX_SIDE_LEN * 2 + 1;
+const SCORE_WORK_PER_PIXEL_UPPER_BOUND: usize = 1 + 4 * SCORE_MAX_EDGE_STEPS + 4;
+// clipper2-rust 1.1.0 uses ARC_CONST=0.002 when arc_tolerance is zero.
+// Its maximum circle step count is <50, so each of four round joins emits at
+// most ceil(25)+1 points. The finishing union cannot add vertices to the one
+// convex input path. Keep the bound deliberately rounded up to 104.
+const OFFSET_MAX_GENERATED_POINTS: usize = 104;
+const OFFSET_MAX_PATH_HEADERS: usize = OFFSET_MAX_GENERATED_POINTS + 4;
+const OFFSET_MAX_WORK_UNITS: usize = 11_000;
+const OFFSET_BYTES_PER_POINT: usize = 1024;
+const OFFSET_BYTES_PER_HEADER: usize = 256;
+const OFFSET_BYTES_PER_WORK_UNIT: usize = 256;
 
 /// Byte layout supplied by a future audited image decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +116,8 @@ pub struct DetectionConfig {
     pub max_model_pixels: usize,
     pub max_contour_events: usize,
     pub max_contour_points: usize,
+    pub max_score_pixels: usize,
+    pub max_score_work: usize,
     pub max_offset_points: usize,
 }
 
@@ -111,6 +128,8 @@ impl Default for DetectionConfig {
             max_model_pixels: 16_000_000,
             max_contour_events: 16_000_000,
             max_contour_points: 16_000_000,
+            max_score_pixels: 32_000_000,
+            max_score_work: 32_000_000 * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
             max_offset_points: 4096,
         }
     }
@@ -198,7 +217,7 @@ fn validate_authority() -> Result<(), ConversionError> {
         || value.resize_interpolation != "INTER_LINEAR-to-uint8"
         || value.minimum_side != 736
         || value.maximum_side != 4000
-        || (value.scale - 1.0 / 255.0).abs() > f64::EPSILON
+        || (value.scale as f32).to_bits() != SCALE.to_bits()
         || value.mean.map(f32::to_bits) != MEAN.map(f32::to_bits)
         || value.standard_deviation.map(f32::to_bits) != STD.map(f32::to_bits)
         || value.bitmap_threshold.to_bits() != 0.2_f32.to_bits()
@@ -236,6 +255,8 @@ fn validate_config(c: &DetectionConfig) -> Result<(), ConversionError> {
         || c.max_model_pixels == 0
         || c.max_contour_events == 0
         || c.max_contour_points == 0
+        || c.max_score_pixels == 0
+        || c.max_score_work == 0
         || c.max_offset_points < 3
     {
         return Err(ocr("invalidDetectionConfig"));
@@ -343,8 +364,7 @@ fn preprocess(
                 .clamp(0.0, (padded_w - 1) as f64);
             let bgr = bilinear_u8(image, ow, oh, padded_w, padded_h, sx, sy)?;
             for channel in 0..3 {
-                output[channel * count + y * mw + x] =
-                    (f32::from(bgr[channel]) / 255.0 - MEAN[channel]) / STD[channel];
+                output[channel * count + y * mw + x] = normalize(bgr[channel], channel);
             }
         }
     }
@@ -353,6 +373,12 @@ fn preprocess(
         transform: Transform { oriented_w: ow, oriented_h: oh, model_w: mw, model_h: mh },
         _reservation: reservation,
     })
+}
+
+fn normalize(pixel: u8, channel: usize) -> f32 {
+    // Pinned Paddle NormalizeImage evaluates the parsed scale as float32 and
+    // multiplies the float32 image before subtracting mean and dividing by std.
+    (f32::from(pixel) * SCALE - MEAN[channel]) / STD[channel]
 }
 
 fn source_xy(image: PixelView<'_>, x: usize, y: usize) -> (usize, usize) {
@@ -634,28 +660,25 @@ fn postprocess(
     if output.values.len() != pixels {
         return Err(ocr("detectionOutputElementCountMismatch"));
     }
-    if output.values.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
-        return Err(ocr("invalidDetectionProbability"));
-    }
     // Reserve all fixed scanner/output structures before allocation. Individual
     // contour capacities grow this guard before their Vec grows.
     let logical = pixels
         .checked_mul(1 + std::mem::size_of::<i32>())
         .and_then(|bytes| bytes.checked_add(MAX_CANDIDATES.checked_mul(256)?))
-        .and_then(|bytes| {
-            bytes.checked_add(
-                config
-                    .max_offset_points
-                    .checked_mul(std::mem::size_of::<Point64>())?
-                    .checked_mul(4)?,
-            )
-        })
         .ok_or_else(|| limit("contourMemory"))?;
     let mut geometry =
         context.reserve_memory(u64::try_from(logical).map_err(|_| limit("contourMemory"))?)?;
     let mut bitmap = Vec::new();
     bitmap.try_reserve_exact(pixels).map_err(|_| limit("contourMemory"))?;
-    bitmap.extend(output.values.iter().map(|value| u8::from(*value > BITMAP_THRESHOLD)));
+    for (index, value) in output.values.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            context.checkpoint()?;
+        }
+        if !value.is_finite() || !(0.0..=1.0).contains(value) {
+            return Err(ocr("invalidDetectionProbability"));
+        }
+        bitmap.push(u8::from(*value > BITMAP_THRESHOLD));
+    }
     context.checkpoint()?;
     let contours = scan_contours(
         &bitmap,
@@ -668,6 +691,12 @@ fn postprocess(
     let mut regions = Vec::new();
     regions.try_reserve(MAX_CANDIDATES.min(contours.len())).map_err(|_| limit("contourMemory"))?;
     let mut geometry_events = 0_usize;
+    let mut score_budget = ScoreBudget {
+        pixels: 0,
+        max_pixels: config.max_score_pixels,
+        work: 0,
+        max_work: config.max_score_work,
+    };
     for (index, contour) in contours.iter().enumerate() {
         if index % 32 == 0 {
             context.checkpoint()?;
@@ -689,14 +718,20 @@ fn postprocess(
         if short < 3.0 {
             continue;
         }
-        let confidence =
-            polygon_score(&output.values, transform.model_w, transform.model_h, first_quad)?;
+        let confidence = polygon_score(
+            &output.values,
+            transform.model_w,
+            transform.model_h,
+            first_quad,
+            context,
+            &mut score_budget,
+        )?;
         if confidence < BOX_THRESHOLD {
             continue;
         }
-        let expanded = unclip(first_quad, UNCLIP_RATIO, config.max_offset_points)?;
+        let expanded = unclip(first_quad, UNCLIP_RATIO, config.max_offset_points, context)?;
         let Some(expanded) = expanded else { continue };
-        let final_quad = minimum_rect_f64(&expanded)?;
+        let final_quad = minimum_rect_f64(&expanded.points)?;
         let (short, _) = quad_sides(final_quad);
         if short < 5.0 {
             continue;
@@ -723,12 +758,35 @@ fn postprocess(
     Ok(DetectionResult { regions, provider: format!("{PROVIDER}/{MODEL_ID}") })
 }
 
+struct ScoreBudget {
+    pixels: usize,
+    max_pixels: usize,
+    work: usize,
+    max_work: usize,
+}
+
 fn polygon_score(
     values: &[f32],
     width: usize,
     height: usize,
     polygon: [[f64; 2]; 4],
+    context: &ExecutionContext,
+    budget: &mut ScoreBudget,
 ) -> Result<f32, ConversionError> {
+    polygon_score_with_checkpoint(values, width, height, polygon, budget, || context.checkpoint())
+}
+
+fn polygon_score_with_checkpoint<F>(
+    values: &[f32],
+    width: usize,
+    height: usize,
+    polygon: [[f64; 2]; 4],
+    budget: &mut ScoreBudget,
+    mut checkpoint: F,
+) -> Result<f32, ConversionError>
+where
+    F: FnMut() -> Result<(), ConversionError>,
+{
     let min_x = polygon
         .iter()
         .map(|p| p[0])
@@ -753,15 +811,40 @@ fn polygon_score(
         .fold(f64::NEG_INFINITY, f64::max)
         .ceil()
         .clamp(0.0, (height - 1) as f64) as usize;
+    let scan_pixels = max_x
+        .checked_sub(min_x)
+        .and_then(|span| span.checked_add(1))
+        .and_then(|columns| {
+            max_y
+                .checked_sub(min_y)
+                .and_then(|span| span.checked_add(1))
+                .and_then(|rows| columns.checked_mul(rows))
+        })
+        .ok_or_else(|| limit("scorePixels"))?;
+    budget.pixels = budget.pixels.checked_add(scan_pixels).ok_or_else(|| limit("scorePixels"))?;
+    if budget.pixels > budget.max_pixels {
+        return Err(limit("scorePixels"));
+    }
+    let conservative_work = scan_pixels
+        .checked_mul(SCORE_WORK_PER_PIXEL_UPPER_BOUND)
+        .ok_or_else(|| limit("scoreWork"))?;
+    budget.work = budget.work.checked_add(conservative_work).ok_or_else(|| limit("scoreWork"))?;
+    if budget.work > budget.max_work {
+        return Err(limit("scoreWork"));
+    }
+    checkpoint()?;
     let mut sum = 0.0_f64;
     let mut count = 0_u64;
+    let mut scan_steps = 0_usize;
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             if opencv_fill_poly_contains(
                 i32::try_from(x).map_err(|_| limit("modelPixels"))?,
                 i32::try_from(y).map_err(|_| limit("modelPixels"))?,
                 &polygon,
-            ) {
+                &mut scan_steps,
+                &mut checkpoint,
+            )? {
                 let value = *values
                     .get(
                         y.checked_mul(width)
@@ -780,20 +863,58 @@ fn polygon_score(
     Ok((sum / count as f64) as f32)
 }
 
-fn opencv_fill_poly_contains(x: i32, y: i32, polygon: &[[f64; 2]; 4]) -> bool {
+fn opencv_fill_poly_contains<F>(
+    x: i32,
+    y: i32,
+    polygon: &[[f64; 2]; 4],
+    scan_steps: &mut usize,
+    checkpoint: &mut F,
+) -> Result<bool, ConversionError>
+where
+    F: FnMut() -> Result<(), ConversionError>,
+{
+    score_scan_step(scan_steps, checkpoint)?;
     let integer = polygon.map(|point| Point::new(point[0] as i32, point[1] as i32));
-    if integer.iter().enumerate().any(|(index, end)| {
-        opencv_line_contains(integer[(index + integer.len() - 1) % integer.len()], *end, x, y)
-    }) {
-        return true;
+    for (index, end) in integer.iter().enumerate() {
+        if opencv_line_contains(
+            integer[(index + integer.len() - 1) % integer.len()],
+            *end,
+            x,
+            y,
+            scan_steps,
+            checkpoint,
+        )? {
+            return Ok(true);
+        }
     }
     let converted = integer.map(|point| [f64::from(point.x), f64::from(point.y)]);
-    point_in_polygon([f64::from(x), f64::from(y)], &converted)
+    Ok(point_in_polygon([f64::from(x), f64::from(y)], &converted))
+}
+
+fn score_scan_step<F>(scan_steps: &mut usize, checkpoint: &mut F) -> Result<(), ConversionError>
+where
+    F: FnMut() -> Result<(), ConversionError>,
+{
+    *scan_steps = scan_steps.checked_add(1).ok_or_else(|| limit("scoreWork"))?;
+    if (*scan_steps).is_multiple_of(4096) {
+        checkpoint()?;
+    }
+    Ok(())
 }
 
 // OpenCV 4.13 LineIterator connectivity=8, leftToRight=true. fillPoly draws
 // these integer outlines before its even-odd scan conversion.
-fn opencv_line_contains(mut start: Point<i32>, mut end: Point<i32>, x: i32, y: i32) -> bool {
+fn opencv_line_contains<F>(
+    mut start: Point<i32>,
+    mut end: Point<i32>,
+    x: i32,
+    y: i32,
+    scan_steps: &mut usize,
+    checkpoint: &mut F,
+) -> Result<bool, ConversionError>
+where
+    F: FnMut() -> Result<(), ConversionError>,
+{
     let mut delta_x = 1;
     let mut delta_y = 1;
     let mut dx = end.x - start.x;
@@ -825,15 +946,16 @@ fn opencv_line_contains(mut start: Point<i32>, mut end: Point<i32>, x: i32, y: i
     }
     let mut point = start;
     for _ in 0..=dx {
+        score_scan_step(scan_steps, checkpoint)?;
         if point.x == x && point.y == y {
-            return true;
+            return Ok(true);
         }
         let mask = if error < 0 { -1 } else { 0 };
         error += minus_delta + (plus_delta & mask);
         point.x += minus_shift + (plus_shift & mask);
         point.y += minus_step + (plus_step & mask);
     }
-    false
+    Ok(false)
 }
 
 fn point_in_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
@@ -872,11 +994,32 @@ fn polygon_area_perimeter(polygon: &[[f64; 2]]) -> (f64, f64) {
     (area.abs() * 0.5, perimeter)
 }
 
+struct OffsetPath {
+    points: Vec<[f64; 2]>,
+    _reservation: ResourceReservation,
+}
+
 fn unclip(
     polygon: [[f64; 2]; 4],
     ratio: f64,
     max_offset_points: usize,
-) -> Result<Option<Vec<[f64; 2]>>, ConversionError> {
+    context: &ExecutionContext,
+) -> Result<Option<OffsetPath>, ConversionError> {
+    unclip_with_inflater(polygon, ratio, max_offset_points, context, |paths, distance| {
+        inflate_paths_64(paths, distance, JoinType::Round, EndType::Polygon, 2.0, 0.0)
+    })
+}
+
+fn unclip_with_inflater<F>(
+    polygon: [[f64; 2]; 4],
+    ratio: f64,
+    max_offset_points: usize,
+    context: &ExecutionContext,
+    inflater: F,
+) -> Result<Option<OffsetPath>, ConversionError>
+where
+    F: FnOnce(&Vec<Vec<Point64>>, f64) -> Vec<Vec<Point64>>,
+{
     let (area, perimeter) = polygon_area_perimeter(&polygon);
     if area <= 0.0 || perimeter <= 0.0 {
         return Ok(None);
@@ -885,34 +1028,74 @@ fn unclip(
     if !distance.is_finite() {
         return Err(ocr("invalidDetectionGeometry"));
     }
+    // clipper2-rust 1.1.0's zero-tolerance round join has a pinned maximum of
+    // 104 generated vertices for the one convex four-point input. Its finishing
+    // union has at most one input edge per generated point, so the audited
+    // sweep bound is quadratic and the path-header bound is linear. Check the
+    // caller cap and reserve a deliberately conservative logical heap envelope
+    // before constructing Clipper-owned Vecs or entering its non-polling call.
+    let reserved_bytes = offset_reservation_bytes(max_offset_points)?;
+    let reservation = context.reserve_memory(reserved_bytes)?;
+    context.checkpoint()?;
     // pyclipper's Path conversion consumes integer coordinates. Python/NumPy
     // values reaching this point are integral for the quad path; reject rather
     // than silently accepting geometry outside the audited i64 range.
-    let path = polygon
-        .iter()
-        .map(|point| {
-            if !point[0].is_finite()
-                || !point[1].is_finite()
-                || point[0] < i64::MIN as f64
-                || point[0] > i64::MAX as f64
-                || point[1] < i64::MIN as f64
-                || point[1] > i64::MAX as f64
-            {
-                return Err(ocr("invalidDetectionGeometry"));
-            }
-            Ok(Point64::new(point[0] as i64, point[1] as i64))
-        })
-        .collect::<Result<Vec<_>, ConversionError>>()?;
-    let paths =
-        inflate_paths_64(&vec![path], distance, JoinType::Round, EndType::Polygon, 2.0, 0.0);
+    let mut path = Vec::new();
+    path.try_reserve_exact(polygon.len()).map_err(|_| limit("offsetMemory"))?;
+    for point in polygon {
+        if !point[0].is_finite()
+            || !point[1].is_finite()
+            || point[0] < i64::MIN as f64
+            || point[0] > i64::MAX as f64
+            || point[1] < i64::MIN as f64
+            || point[1] > i64::MAX as f64
+        {
+            return Err(ocr("invalidDetectionGeometry"));
+        }
+        path.push(Point64::new(point[0] as i64, point[1] as i64));
+    }
+    let mut input = Vec::new();
+    input.try_reserve_exact(1).map_err(|_| limit("offsetMemory"))?;
+    input.push(path);
+    let paths = inflater(&input, distance);
+    context.checkpoint()?;
     if paths.len() != 1 || paths[0].len() < 3 {
         return Ok(None);
     }
-    if paths[0].len() > max_offset_points {
+    if paths[0].len() > OFFSET_MAX_GENERATED_POINTS {
+        return Err(ocr("offsetDependencyBoundDrift"));
+    }
+    let mut result = Vec::new();
+    result.try_reserve_exact(paths[0].len()).map_err(|_| limit("offsetMemory"))?;
+    result.extend(paths[0].iter().map(|point| [point.x as f64, point.y as f64]));
+    drop(paths);
+    drop(input);
+    Ok(Some(OffsetPath { points: result, _reservation: reservation }))
+}
+
+fn offset_reservation_bytes(max_offset_points: usize) -> Result<u64, ConversionError> {
+    let work = OFFSET_MAX_GENERATED_POINTS
+        .checked_mul(OFFSET_MAX_GENERATED_POINTS)
+        .ok_or_else(|| limit("offsetWork"))?;
+    if work > OFFSET_MAX_WORK_UNITS {
+        return Err(limit("offsetWork"));
+    }
+    if OFFSET_MAX_GENERATED_POINTS > max_offset_points {
         return Err(limit("offsetPoints"));
     }
-    let result = paths[0].iter().map(|point| [point.x as f64, point.y as f64]).collect::<Vec<_>>();
-    Ok(Some(result))
+    let reserved_bytes = OFFSET_MAX_GENERATED_POINTS
+        .checked_mul(OFFSET_BYTES_PER_POINT)
+        .and_then(|bytes| {
+            OFFSET_MAX_PATH_HEADERS
+                .checked_mul(OFFSET_BYTES_PER_HEADER)
+                .and_then(|headers| bytes.checked_add(headers))
+        })
+        .and_then(|bytes| {
+            work.checked_mul(OFFSET_BYTES_PER_WORK_UNIT)
+                .and_then(|scratch| bytes.checked_add(scratch))
+        })
+        .ok_or_else(|| limit("offsetMemory"))?;
+    u64::try_from(reserved_bytes).map_err(|_| limit("offsetMemory"))
 }
 
 fn minimum_rect_contour(
@@ -1136,7 +1319,10 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
+    use sha2::{Digest, Sha256};
+    use std::cell::Cell;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
@@ -1148,6 +1334,8 @@ mod tests {
             max_model_pixels: 736 * 736,
             max_contour_events: 4096,
             max_contour_points: 4096,
+            max_score_pixels: 16_384,
+            max_score_work: 16_384 * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
             max_offset_points: 512,
         }
     }
@@ -1183,6 +1371,28 @@ mod tests {
         assert_eq!(round_stride(81).unwrap(), 96);
         assert_eq!(official_resize_dimensions(99, 32).unwrap(), (2272, 736));
         assert_eq!(official_resize_dimensions(99, 2).unwrap(), (4000, 64));
+    }
+
+    #[test]
+    fn normalize_matches_pinned_paddle_float32_bits_for_every_u8_channel() {
+        // SHA-256 over the big-endian f32 bits for pixels 0..=255. These
+        // references were generated by the pinned operators.py expression with
+        // np.float32 scale/mean/std, independently of this Rust implementation.
+        let expected = [
+            "6a6724773d325a67638dc6c69d66c5f0cb9af3b6d01721d99b93d35cf3f7d8e8",
+            "35a14e12fe826b55cdf4f6615b43350123788600351c2cfbc88ed7d3a89ec394",
+            "93a92e5c298e2f3ea78ef9a308d478da376e5c6055e33cc790f724d34b1c1d3f",
+        ];
+        for (channel, expected) in expected.into_iter().enumerate() {
+            let mut digest = Sha256::new();
+            for pixel in u8::MIN..=u8::MAX {
+                digest.update(normalize(pixel, channel).to_bits().to_be_bytes());
+            }
+            assert_eq!(format!("{:x}", digest.finalize()), expected, "channel={channel}");
+        }
+        assert_eq!(normalize(48, 0).to_bits(), 0xbfa5_e091);
+        assert_eq!(normalize(48, 1).to_bits(), 0xbf99_0226);
+        assert_eq!(normalize(48, 2).to_bits(), 0xbf77_c490);
     }
 
     #[test]
@@ -1321,8 +1531,19 @@ mod tests {
             ),
         ];
         for (polygon, reference) in fixtures {
+            let mut scan_steps = 0;
+            let mut no_checkpoint = || Ok(());
             let actual = (0..144)
-                .filter(|index| opencv_fill_poly_contains(index % 12, index / 12, &polygon))
+                .filter(|index| {
+                    opencv_fill_poly_contains(
+                        index % 12,
+                        index / 12,
+                        &polygon,
+                        &mut scan_steps,
+                        &mut no_checkpoint,
+                    )
+                    .unwrap()
+                })
                 .collect::<Vec<_>>();
             assert_eq!(actual, reference);
         }
@@ -1351,6 +1572,8 @@ mod tests {
                 max_model_pixels: width * height,
                 max_contour_events: 16,
                 max_contour_points: width * height,
+                max_score_pixels: width * height,
+                max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
                 max_offset_points: 64,
             },
             &context,
@@ -1387,6 +1610,8 @@ mod tests {
                 max_model_pixels: width * height,
                 max_contour_events: 16,
                 max_contour_points: width * height,
+                max_score_pixels: width * height,
+                max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
                 max_offset_points: 64,
             },
             &context,
@@ -1430,6 +1655,8 @@ mod tests {
                 max_model_pixels: width * height,
                 max_contour_events: discovered.len() + 1,
                 max_contour_points: discovered.len() + 1,
+                max_score_pixels: width * height,
+                max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
                 max_offset_points: 64,
             },
             &context,
@@ -1753,6 +1980,162 @@ mod tests {
     }
 
     #[test]
+    fn score_scan_observes_cancellation_and_timeout_after_work_begins() {
+        let width = 128;
+        let values = vec![0.9; width * width];
+        let polygon = [[1.0, 1.0], [126.0, 1.0], [126.0, 126.0], [1.0, 126.0]];
+
+        let cancellation = CancellationToken::new();
+        let cancelled_context = ExecutionContext::new(
+            ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        let mut callbacks = 0;
+        let mut budget = ScoreBudget {
+            pixels: 0,
+            max_pixels: width * width,
+            work: 0,
+            max_work: width * width * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
+        };
+        let cancelled =
+            polygon_score_with_checkpoint(&values, width, width, polygon, &mut budget, || {
+                callbacks += 1;
+                if callbacks == 2 {
+                    cancellation.cancel();
+                }
+                cancelled_context.checkpoint()
+            });
+        assert!(matches!(cancelled, Err(ConversionError::Cancelled)));
+        assert_eq!(callbacks, 2, "cancellation must occur at an in-scan checkpoint");
+
+        let timed_context = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(Duration::from_millis(5)),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        let mut callbacks = 0;
+        let mut budget = ScoreBudget {
+            pixels: 0,
+            max_pixels: width * width,
+            work: 0,
+            max_work: width * width * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
+        };
+        let timed_out =
+            polygon_score_with_checkpoint(&values, width, width, polygon, &mut budget, || {
+                callbacks += 1;
+                if callbacks == 2 {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                timed_context.checkpoint()
+            });
+        assert!(matches!(timed_out, Err(ConversionError::Timeout)));
+        assert_eq!(callbacks, 2, "timeout must occur at an in-scan checkpoint");
+    }
+
+    #[test]
+    fn nested_rings_hit_aggregate_score_limit_before_unbounded_scans() {
+        let (width, height) = (128, 128);
+        let mut values = vec![0.0; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let edge = x.min(y).min(width - 1 - x).min(height - 1 - y);
+                if (8..56).contains(&edge) && ((edge - 8) / 4).is_multiple_of(2) {
+                    values[y * width + x] = 0.9;
+                }
+            }
+        }
+        let bytes = vec![0; width * height];
+        let result = postprocess(
+            &[Tensor { shape: vec![1, 1, height, width], values }],
+            view(&bytes, width, height),
+            Transform { oriented_w: width, oriented_h: height, model_w: width, model_h: height },
+            &DetectionConfig {
+                max_source_pixels: width * height,
+                max_model_pixels: width * height,
+                max_contour_events: width * height,
+                max_contour_points: width * height,
+                max_score_pixels: width * height,
+                max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
+                max_offset_points: 512,
+            },
+            &context(),
+        );
+        assert!(matches!(result, Err(ConversionError::ResourceLimit { limit: "scorePixels", .. })));
+    }
+
+    #[test]
+    fn score_work_bound_is_checked_before_scan_entry() {
+        let width = 64;
+        let values = vec![0.9; width * width];
+        let polygon = [[1.0, 1.0], [62.0, 1.0], [62.0, 62.0], [1.0, 62.0]];
+        let mut budget = ScoreBudget {
+            pixels: 0,
+            max_pixels: width * width,
+            work: 0,
+            max_work: SCORE_WORK_PER_PIXEL_UPPER_BOUND - 1,
+        };
+        let checkpoints = Cell::new(0);
+        let result =
+            polygon_score_with_checkpoint(&values, width, width, polygon, &mut budget, || {
+                checkpoints.set(checkpoints.get() + 1);
+                Ok(())
+            });
+        assert!(matches!(result, Err(ConversionError::ResourceLimit { limit: "scoreWork", .. })));
+        assert_eq!(checkpoints.get(), 0, "score scan began before work preflight");
+    }
+
+    #[test]
+    fn offset_cap_and_memory_are_checked_before_third_party_entry() {
+        let polygon = [[10.0, 10.0], [50.0, 10.0], [50.0, 30.0], [10.0, 30.0]];
+        let called = Cell::new(false);
+        let capped = unclip_with_inflater(polygon, UNCLIP_RATIO, 3, &context(), |_, _| {
+            called.set(true);
+            Vec::new()
+        });
+        assert!(matches!(
+            capped,
+            Err(ConversionError::ResourceLimit { limit: "offsetPoints", .. })
+        ));
+        assert!(!called.get(), "inflater ran before caller-cap rejection");
+
+        let limited = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 64, ..ResourceLimits::default() },
+        );
+        let called = Cell::new(false);
+        let unreserved = unclip_with_inflater(
+            polygon,
+            UNCLIP_RATIO,
+            OFFSET_MAX_GENERATED_POINTS,
+            &limited,
+            |_, _| {
+                called.set(true);
+                Vec::new()
+            },
+        );
+        assert!(matches!(unreserved, Err(ConversionError::ResourceLimit { .. })));
+        assert!(!called.get(), "inflater ran before logical-memory reservation");
+
+        let reserved_bytes = offset_reservation_bytes(OFFSET_MAX_GENERATED_POINTS).unwrap();
+        let exact = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: reserved_bytes, ..ResourceLimits::default() },
+        );
+        let first =
+            unclip(polygon, UNCLIP_RATIO, OFFSET_MAX_GENERATED_POINTS, &exact).unwrap().unwrap();
+        assert!(matches!(
+            unclip(polygon, UNCLIP_RATIO, OFFSET_MAX_GENERATED_POINTS, &exact),
+            Err(ConversionError::ResourceLimit { .. })
+        ));
+        drop(first);
+        assert!(
+            unclip(polygon, UNCLIP_RATIO, OFFSET_MAX_GENERATED_POINTS, &exact).unwrap().is_some()
+        );
+    }
+
+    #[test]
     fn empty_and_single_pixel_noise_maps_have_no_regions() {
         let bytes = [0_u8; 32 * 32];
         for hot in [None, Some(0)] {
@@ -1786,6 +2169,8 @@ mod tests {
                 max_model_pixels: width * height,
                 max_contour_events: 128,
                 max_contour_points: width * height,
+                max_score_pixels: width * height,
+                max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
                 max_offset_points: 128,
             },
             &context(),
@@ -1811,6 +2196,8 @@ mod tests {
             max_model_pixels: width * height,
             max_contour_events: 1,
             max_contour_points: width * height,
+            max_score_pixels: width * height,
+            max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
             max_offset_points: 64,
         };
         assert!(

@@ -198,6 +198,14 @@ scanner 正向发现序列的最后 3000 个，再整体逆序；这精确对应
 完全相等。closed polygon offset 使用 `clipper2-rust 1.1.0` 的 i64 path，多个输出 path
 与官方一样拒绝。
 
+归一化 golden 对 BGR 三个通道分别覆盖全部 256 个 uint8 输入，把固定 NumPy f32
+`pixel * scale - mean` 再除 std 的结果 bits 按大端连接并比对 SHA-256；同时逐 bit 固定
+pixel 48 的 `0xbfa5e091`、`0xbf990226`、`0xbf77c490`，防止把乘 f32 scale 改写为除法。
+资源回归使用多层嵌套 ring，要求累计 score pixels/work 在后续大框扫描前稳定返回
+`ResourceLimit`；评分循环在实际工作开始后的 checkpoint 确定性覆盖 cancel 与 timeout。
+offset 测试用调用 hook 证明 `max_offset_points=3` 和不足的逻辑内存都会在进入
+`inflate_paths_64` 之前失败。
+
 resize reference 还覆盖 3x2 到 7x5 的所有 BGR 输出样本、确定种子的随机 BGR 图、
 downsample 和 tiny-image padding 边缘，锁定 OpenCV 4.13 默认
 `INTER_LINEAR` 的 uint8 结果，每通道最多允许 1 LSB；不把它表述为跨 OpenCV 版本或

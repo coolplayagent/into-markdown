@@ -72,13 +72,16 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
 - 模型通过 HTTPS 下载并固定 SHA-256，同时携带许可证元数据。
 - OCR 检测不接收编码图片，只接收带 checked width/height/row stride/格式/方向的借用
   像素视图；像素数、stride 乘加、tensor shape/元素数、概率范围、contour 总点数、
-  candidate 数和 polygon offset 点数都在使用前后有界，NaN/Infinity 和 `[0,1]` 外概率
-  稳定拒绝。长预处理与候选循环执行协作式 checkpoint。调用 `imageproc`/`clipper2-rust`
+  candidate 数、累计 score pixels/work 和 polygon offset 点数都在使用前后有界，
+  NaN/Infinity 和 `[0,1]` 外概率稳定拒绝。概率验证、bitmap 构造、score 扫描、长预处理
+  与候选循环执行协作式 checkpoint。调用 `imageproc`/`clipper2-rust`
   前按 model pixels 和最大几何结构保留请求逻辑内存，并把 tensor reservation 保持到
   runtime 与后处理结束；这只表示请求 heap capacity 的保守逻辑计费，不是 allocator
   metadata、RSS 或防止系统 OOM 的声明。边界扫描一次只构造一个 contour，每次扩容
   前增长 reservation，释放对应 Vec 后才退款；扫描行、边界跟踪和 minimum rectangle
-  工作都执行 checkpoint，恶意小岛受 contour event 硬上限约束。算法阈值、候选数和
+  工作都执行 checkpoint，恶意小岛受 contour event 硬上限约束。round offset 在第三方
+  调用前后 checkpoint，并以固定四点输入、104 点输出、108 个 header 和 104² work
+  上界预留；调用内部不可轮询，但该常量上界限制单次延迟。算法阈值、候选数和
   unclip ratio 只来自内嵌 authority，公开配置只能收紧资源上限。尺寸被限制在不会溢出
   `imageproc` i32 orientation arithmetic 的范围；实现不使用 panic 捕获冒充内存安全。
 - ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
