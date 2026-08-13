@@ -2,6 +2,7 @@
 
 mod allocation;
 mod archive;
+pub(crate) mod archive_api;
 mod budget;
 mod entry_policy;
 mod merge;

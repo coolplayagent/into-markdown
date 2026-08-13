@@ -4,6 +4,7 @@
 
 mod delimited;
 mod docx;
+mod epub;
 mod feed;
 mod html;
 mod markdown;
@@ -21,6 +22,7 @@ mod fixture_corpus_tests;
 
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;
+pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
@@ -157,7 +159,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Epub,
         family: "document",
         extensions: &["epub"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Text,

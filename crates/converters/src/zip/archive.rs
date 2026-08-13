@@ -20,11 +20,20 @@ pub(super) struct EntryMeta {
     pub(super) compressed_size: u64,
     pub(super) expanded_size: u64,
     pub(super) deflated: bool,
+    pub(super) physical_start: usize,
+    pub(super) central_extra_len: usize,
+    pub(super) local_extra_len: usize,
 }
 
 pub(super) struct EntryData {
     pub(super) bytes: Vec<u8>,
-    pub(super) _memory: ResourceReservation,
+    memory: ResourceReservation,
+}
+
+impl EntryData {
+    pub(super) fn into_parts(self) -> (Vec<u8>, ResourceReservation) {
+        (self.bytes, self.memory)
+    }
 }
 
 pub(super) struct Archive<'a> {
@@ -111,7 +120,7 @@ impl<'a> Archive<'a> {
                 meta.name
             )));
         }
-        Ok(EntryData { bytes, _memory: memory })
+        Ok(EntryData { bytes, memory })
     }
 }
 
