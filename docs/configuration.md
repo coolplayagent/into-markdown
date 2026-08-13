@@ -135,7 +135,10 @@ into-md report.pdf --profile quality --allow-network --allow-private-network
 (`fe80::/10`) 均视为私网。Provider 传输只把保守判定为 global-only 的地址视为公网；
 IPv4-mapped/translated IPv6、6to4、ORCHID、benchmark、文档和其它 IANA special-purpose
 范围都需要额外私网授权。Provider URL 与远程输入采用同一套规则，且 URL 不得包含用户名
-或密码。
+或密码。远程输入允许 query 以支持 signed URL，但 source metadata、redirect provenance、
+日志和诊断都会移除 userinfo、query 与 fragment。每个 redirect 的目标必须继续落在有效
+host allowlist 内，并重新通过 DNS/IP 与私网授权；配置不能放宽这些检查。公网 HTTP 明文
+稳定拒绝，HTTP 仅用于当前调用明确双授权的非全局目标。
 
 ## 配置操作
 

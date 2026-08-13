@@ -8,6 +8,7 @@ members = [
     "crates/core",
     "crates/engine",
     "crates/ffmpeg",
+    "crates/http-transport",
     "crates/ocr",
     "crates/onnxruntime",
     "crates/pdfium",

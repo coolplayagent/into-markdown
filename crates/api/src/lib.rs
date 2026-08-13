@@ -45,7 +45,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_source_resolver(Arc::new(into_markdown_converters::MemorySourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::LocalFileSourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::StdinSourceResolver))
-        .register_source_resolver(Arc::new(into_markdown_converters::UriSourceResolver))
+        .register_source_resolver(Arc::new(into_markdown_converters::HttpSourceResolver::default()))
         .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
@@ -258,6 +258,38 @@ mod tests {
     #[test]
     fn default_engine_builds_with_builtin_converters() {
         assert!(default_engine().is_ok());
+    }
+
+    #[test]
+    fn authorized_loopback_uri_runs_resolver_detector_converter_and_renderer() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).unwrap();
+            let request = std::str::from_utf8(&request[..read]).unwrap();
+            assert!(request.starts_with("GET /input.txt?signed=canary HTTP/1.1\r\n"));
+            assert!(request.contains(&format!("\r\nHost: {address}\r\n")));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=input.txt\r\nContent-Length: 6\r\nConnection: close\r\n\r\nhello\n")
+                .unwrap();
+        });
+
+        let mut request = ConversionRequest::new(InputRef::Uri(format!(
+            "http://{address}/input.txt?signed=canary"
+        )));
+        request.options.network.enabled = true;
+        request.options.network.deny_private_networks = false;
+        request.options.network.allowed_hosts = vec!["127.0.0.1".into()];
+        request.hint.format = Some(InputFormat::Text);
+        request.execution.timeout = Some(std::time::Duration::from_secs(2));
+        let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+        server.join().unwrap();
+        assert_eq!(result.markdown, "hello\n");
     }
 
     #[test]

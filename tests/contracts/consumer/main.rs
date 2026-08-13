@@ -28,7 +28,9 @@ impl SourceResolver for LegacyResolver {
             context.checkpoint()?;
             Ok(ResolvedInput {
                 bytes: Arc::from(b"consumer".as_slice()),
-                metadata: SourceMetadata::default(),
+                // Exact legacy literal: adding any required public field to
+                // SourceMetadata must fail this independently compiled consumer.
+                metadata: SourceMetadata { name: None, media_type: None, uri: None, size: 8 },
             })
         })
     }

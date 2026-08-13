@@ -205,6 +205,12 @@ AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allo
   `Duration` 按无 deadline 处理，不会意外变成立即超时。内存限制统计执行上下文中
   显式预留的内存，临时空间限制统计请求临时文件实际写入的字节。
 - 网络实现必须在 DNS 解析及每次重定向后重新执行地址与主机策略。
+- HTTP(S) source 只执行 GET，不读取 proxy 环境，不缓存响应；`gzip` 会流式解压并同时受
+  wire 与最终输入上限约束，其他 Content-Encoding 稳定拒绝。URL query 可以用于 signed
+  source 请求，但不会进入日志、诊断、最终 URL metadata 或 redirect provenance。
+- HTTP 明文目标必须同时获得网络与私网授权，并且 DNS 的全部结果均为非全局地址；公网
+  source 必须使用固定 roots 的 HTTPS。服务器返回的 MIME 与文件名只是检测提示，不能
+  覆盖内容 magic。
 
 ### 通用界面
 
