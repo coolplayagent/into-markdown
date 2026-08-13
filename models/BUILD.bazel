@@ -21,6 +21,7 @@ filegroup(
     name = "recognizer_runtime_files",
     srcs = [
         "@ppocrv6_tiny_recognizer_onnx_model//:PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+        "@ppocrv6_tiny_recognizer_onnx_model_archive//file",
         "@ppocrv6_tiny_recognizer_character_table//file",
     ],
     tags = ["manual"],

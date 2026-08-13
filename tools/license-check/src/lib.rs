@@ -321,10 +321,20 @@ struct ModelRuntimeArtifact {
     archive_sha256: Option<String>,
     archive_size: Option<u64>,
     archive_member: Option<String>,
+    archive_members: Option<Vec<ModelArchiveMember>>,
     sha256: String,
     size: u64,
     platforms: Vec<String>,
     license: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelArchiveMember {
+    path: String,
+    kind: String,
+    size: u64,
+    sha256: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1686,7 +1696,11 @@ fn validate_ocr_quality(
         let evaluated =
             golden.ground_truth_nfc.chars().filter(|character| !character.is_whitespace()).count();
         let nfc: String = golden.ground_truth_nfc.nfc().collect();
-        let expected_threshold = if golden.group == "mixed" { 0.08 } else { 0.05 };
+        let expected_threshold = match golden.group.as_str() {
+            "mixed" => 0.08,
+            "traditional" => 0.10,
+            _ => 0.05,
+        };
         if !golden_ids.insert(golden.fixture_id.as_str())
             || fixture.is_none()
             || !matches!(golden.group.as_str(), "simplified" | "traditional" | "english" | "mixed")
@@ -2438,6 +2452,16 @@ fn validate_model_manifest(
     if !matches!(manifest.schema_version, 1 | 2) {
         errors.push("unsupported model manifest schema_version".to_owned());
     }
+    if manifest.schema_version == 1
+        && manifest
+            .bundles
+            .iter()
+            .any(|bundle| bundle.availability != "planned" || !bundle.runtime_artifacts.is_empty())
+    {
+        errors.push(
+            "model manifest schema 1 is accepted only for planned source-only bundles".to_owned(),
+        );
+    }
     let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
     validate_default_model_bundle(manifest, &bundles, errors);
 
@@ -2608,26 +2632,7 @@ fn validate_runtime_bundle<'a>(
                 bundle.id, artifact.role
             ));
         }
-        if !is_safe_model_id(&artifact.id)
-            || !is_safe_model_file_name(&artifact.file_name)
-            || !is_canonical_https(&artifact.url)
-            || !is_sha256(&artifact.sha256)
-            || artifact.size == 0
-            || artifact.role.is_empty()
-            || platforms.is_empty()
-            || platforms.len() != artifact.platforms.len()
-            || !platforms.iter().all(|target| SUPPORTED_MODEL_TARGETS.contains(target))
-            || artifact.license.is_empty()
-            || match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
-                (None, None, None) => false,
-                (Some(hash), Some(size), Some(member)) => {
-                    !is_sha256(hash)
-                        || size <= artifact.size
-                        || member != "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
-                }
-                _ => true,
-            }
-        {
+        if runtime_artifact_is_incomplete(artifact, &platforms) {
             errors.push(format!("runtime model artifact {} is incomplete", artifact.id));
         }
         match runtime_downloads.get(artifact.id.as_str()) {
@@ -2656,6 +2661,65 @@ fn validate_runtime_bundle<'a>(
             bundle.id
         ));
     }
+}
+
+fn runtime_artifact_is_incomplete(
+    artifact: &ModelRuntimeArtifact,
+    platforms: &BTreeSet<&str>,
+) -> bool {
+    !is_safe_model_id(&artifact.id)
+        || !is_safe_model_file_name(&artifact.file_name)
+        || !is_canonical_https(&artifact.url)
+        || !is_sha256(&artifact.sha256)
+        || artifact.size == 0
+        || artifact.role.is_empty()
+        || platforms.is_empty()
+        || platforms.len() != artifact.platforms.len()
+        || !platforms.iter().all(|target| SUPPORTED_MODEL_TARGETS.contains(target))
+        || artifact.license.is_empty()
+        || match (
+            &artifact.archive_sha256,
+            artifact.archive_size,
+            &artifact.archive_member,
+            &artifact.archive_members,
+        ) {
+            (None, None, None, None) => false,
+            (Some(hash), Some(size), Some(member), Some(members)) => {
+                !is_sha256(hash)
+                    || size <= artifact.size
+                    || member != "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                    || !valid_model_archive_members(artifact, members)
+            }
+            _ => true,
+        }
+}
+
+fn valid_model_archive_members(
+    artifact: &ModelRuntimeArtifact,
+    members: &[ModelArchiveMember],
+) -> bool {
+    let expected = [
+        ("PP-OCRv6_tiny_rec_onnx_infer/", "directory", 0, None),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+            "file",
+            artifact.size,
+            Some(artifact.sha256.as_str()),
+        ),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
+            "file",
+            55_571,
+            Some("66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"),
+        ),
+    ];
+    members.len() == expected.len()
+        && members.iter().zip(expected).all(|(actual, expected)| {
+            actual.path == expected.0
+                && actual.kind == expected.1
+                && actual.size == expected.2
+                && actual.sha256.as_deref() == expected.3
+        })
 }
 
 fn validate_default_model_bundle(
@@ -2985,6 +3049,7 @@ mod tests {
             archive_sha256: None,
             archive_size: None,
             archive_member: None,
+            archive_members: None,
             sha256: "a".repeat(64),
             size: 5,
             platforms: vec!["aarch64-apple-darwin".to_owned()],

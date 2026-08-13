@@ -26,6 +26,12 @@ def _downloads_impl(module_ctx):
                 sha256 = item["archive_sha256"],
                 urls = [item["url"]],
             )
+            http_file(
+                name = item["repository"] + "_archive",
+                downloaded_file_path = "runtime-model.tar",
+                sha256 = item["archive_sha256"],
+                urls = [item["url"]],
+            )
         else:
             http_file(
                 name = item["repository"],

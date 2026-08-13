@@ -157,13 +157,22 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   `into-markdown-onnxruntime` crate，并启用
   `deny(unsafe_op_in_unsafe_fn)` 与逐块 SAFETY invariant。
 - 模型 source archives 与最终 runtime files 分开建模，缺少最终文件、字符表、大小、
-  平台或许可证审核时禁止安装。运行时清单必须与权威下载清单逐项一致。
+  平台或许可证审核时禁止安装。运行时清单必须与权威下载清单逐项一致。归档 transport
+  必须交付原始 TAR 并声明 acquisition identity；管理器流式双验归档与成员大小/SHA-256，
+  同时要求条目顺序、路径、类型、header checksum、padding、两个结束块和 trailer 精确。
+  traversal、symlink/hardlink、重复/未知条目、截断与 size bomb 在 staging 发布前拒绝。
 - 模型写入使用同文件系统 staging、逐文件大小/哈希校验、`fsync`、版本化持久 journal
   与锁内原子切换；每次磁盘操作前恢复中断事务，损坏或歧义 journal 一律 fail closed；
   journal 先完整写入并同步根身份绑定的临时文件，再以 no-replace rename 发布；Windows
   目录 handle 持久同步尚未审计，因此 Windows 安装稳定拒绝而不伪报成功；
   校验和删除拒绝符号链接及非普通对象，随包只读模型不能删除。取消、超时、临时空间
   预算和内存预算由统一 ExecutionContext 执行。
+- OCR 识别只消费检测器给出的 raw-source `CropDescriptor`，不会再次应用 EXIF orientation。
+  四点轴、面积、单 crop pixels 和宽高比先校验；官方 cubic/replicate 透视中间图、resize
+  tensor、排序槽位、runtime 输出和 CTC String/Vec 均在分配前以 checked arithmetic 预留。
+  batch width 上限 3200，输出只接受 finite float32 `[N,T,6906]`，class/timestep/decoded bytes
+  具有独立硬上限。所有长循环、batch 和 runtime 前后执行 cancellation/deadline checkpoint；
+  任一失败不写缓存、不返回部分识别结果。
 - 日志和诊断不得包含文档原始字节、凭据、签名 URL 或不受限制的提供者载荷。
 
 资源限制错误是权威错误，绝不能作为可恢复的解析器错误被吞掉。

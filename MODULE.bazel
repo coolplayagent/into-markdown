@@ -90,5 +90,6 @@ use_repo(
     "ppocrv6_tiny_detector_source",
     "ppocrv6_tiny_recognizer_source",
     "ppocrv6_tiny_recognizer_onnx_model",
+    "ppocrv6_tiny_recognizer_onnx_model_archive",
     "ppocrv6_tiny_recognizer_character_table",
 )

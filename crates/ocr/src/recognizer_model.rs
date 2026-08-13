@@ -52,7 +52,7 @@ impl ModelResolver for ManifestModelResolver {
     }
 }
 
-fn map_manager_error(error: ModelManagerError) -> ConversionError {
+pub(crate) fn map_manager_error(error: ModelManagerError) -> ConversionError {
     match error {
         ModelManagerError::Execution(error) => error,
         ModelManagerError::UnknownBundle

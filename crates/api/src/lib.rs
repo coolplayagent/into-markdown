@@ -13,9 +13,9 @@ pub use into_markdown_engine::{
     Engine, EngineBuilder, RecoveryStore, RecoveryToken, RegistryBuilder, TaskCheckpoint, TaskPhase,
 };
 pub use into_markdown_ocr::{
-    AcquiredModelArtifact, CharacterSet, DataDirectoryEnvironment, ModelAcquisition, ModelArtifact,
-    ModelBundle, ModelFetcher, ModelManager, ModelManagerError, ModelManifest, ModelStatus,
-    ProductTarget, RuntimeArtifact, model_data_directory,
+    AcquiredModelArtifact, ArchiveMember, CharacterSet, DataDirectoryEnvironment, ModelAcquisition,
+    ModelArtifact, ModelBundle, ModelFetcher, ModelManager, ModelManagerError, ModelManifest,
+    ModelStatus, ProductTarget, RuntimeArtifact, model_data_directory,
 };
 pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,

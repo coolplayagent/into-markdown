@@ -4,9 +4,9 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、TXT/Markdown/CSV/TSV/JSON/XML 与字符集转换器、固定的 ONNX Runtime CPU 安全运行层、命令行程序
-及契约测试；当前模型清单尚无可执行 ONNX 产物，因此 OCR 请求会稳定报告模型不可用，
-不会把 Paddle source archive 当作模型。网络客户端与 LLM 调用尚未实现。
+GFM 渲染器、TXT/Markdown/CSV/TSV/JSON/XML 与字符集转换器、固定的 ONNX Runtime CPU 安全运行层、
+PP-OCRv6 tiny 识别组件、命令行程序及契约测试。完整检测加识别 bundle 仍不可安装；识别组件则可由
+受控 library transport 安装固定官方 ONNX TAR 与字符表。网络客户端与 LLM 调用尚未实现。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
 和 AI 生成内容在内的所有输入，都必须先进入带溯源信息的统一中间表示（IR），
@@ -97,11 +97,12 @@ raw HTML 与 blockquote 在现有 IR 中保存为不可执行代码容器并产�
 DOCX 与 DOCM 转换可用，覆盖标题样式、富文本、编号、表格、链接、图片、脚注、页眉页脚、
 批注、字段和公式。宏部件永不读取或执行；加密、损坏及超出 ZIP/XML/资源预算的输入稳定拒绝。
 
-模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
-archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定
-`componentUnavailable`；校验、路径和清理对该 source-only 条目返回同一错误，
-不会读取伪造安装状态或伪装成功。其他尚未可用的格式转换、OCR 推理、Provider 请求和插件
-执行后端尚未实现。Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
+模型查询、离线校验、路径和安全清理后端已实现。完整 OCR pipeline 保持
+`planned` / `unavailable`；独立 `pp-ocrv6-tiny-recognizer-onnx` 组件具有审核后的官方
+ONNX、字符表、归档结构与安装事务，可供 library transport 安装和产品 resolver 使用。
+CLI 尚未配置模型网络 transport，因此 `models install` 仍明确返回 `componentUnavailable`，
+不会读取伪造安装状态或伪装成功。其他尚未可用的格式转换、Provider 请求和插件执行后端尚未实现。
+Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 同样 fail closed；目录解析和离线元数据查询不受影响。
 
 抽取资源按完整内容 SHA-256 去重并使用 MIME 权威扩展名；主 Markdown 与全部资源

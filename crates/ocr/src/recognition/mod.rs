@@ -7,14 +7,18 @@ use into_markdown_core::{BoxFuture, ConversionError, ExecutionContext, TensorRun
 use std::sync::Arc;
 
 mod authority;
+mod budget;
 mod ctc;
+mod pixels;
 mod preprocess;
 #[cfg(test)]
 mod tests;
 
 use authority::{load_characters, validate_authority};
+use budget::{reserve_tensors, reserve_vec, to_u64, validate_config, validate_language_hint};
 use ctc::decode_output;
-use preprocess::{prepare_batch, validate_pixels, validated_crop};
+use pixels::validate_pixels;
+use preprocess::{prepare_batch, validated_crop};
 
 const PROVIDER: &str = "builtin.ocr.ppocrv6-recognizer";
 const MODEL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
@@ -24,6 +28,11 @@ const MAX_WIDTH: usize = 3200;
 const CLASSES: usize = 6906;
 const BLANK: usize = 0;
 const SCALE: f32 = 1.0 / 255.0;
+const MAX_REGIONS: usize = 3000;
+const MAX_CROP_PIXELS: usize = 32_000_000;
+const MAX_TENSOR_ELEMENTS: usize = 32_000_000;
+const MAX_OUTPUT_TIMESTEPS: usize = 1024;
+const MAX_DECODED_BYTES: usize = 16 * 1024 * 1024;
 
 /// Recognition resource and batching bounds.
 #[derive(Debug, Clone)]
@@ -39,12 +48,12 @@ pub struct RecognitionConfig {
 impl Default for RecognitionConfig {
     fn default() -> Self {
         Self {
-            max_regions: 3000,
+            max_regions: MAX_REGIONS,
             max_batch_size: 8,
-            max_crop_pixels: 32_000_000,
-            max_tensor_elements: 32_000_000,
-            max_output_timesteps: 1024,
-            max_decoded_bytes: 16 * 1024 * 1024,
+            max_crop_pixels: MAX_CROP_PIXELS,
+            max_tensor_elements: MAX_TENSOR_ELEMENTS,
+            max_output_timesteps: MAX_OUTPUT_TIMESTEPS,
+            max_decoded_bytes: MAX_DECODED_BYTES,
         }
     }
 }
@@ -81,10 +90,7 @@ impl PpOcrTextRecognizer {
     ) -> Result<Self, ConversionError> {
         let artifact = manager
             .verified_runtime_artifact(MODEL_ID, "character-table", context)
-            .map_err(|_| ConversionError::ComponentUnavailable {
-                component: "ocr-recognizer".into(),
-                detail: "ModelUnavailable".into(),
-            })?;
+            .map_err(crate::recognizer_model::map_manager_error)?;
         Self::new(runtime, &artifact.bytes, config)
     }
     pub fn new(
@@ -113,8 +119,17 @@ impl PpOcrTextRecognizer {
                 return Err(limit("recognitionRegions"));
             }
             context.checkpoint()?;
+            let mut order_reservation =
+                reserve_vec::<(usize, preprocess::CropPlan)>(crops.len(), context)?;
             let mut order = Vec::new();
             order.try_reserve_exact(crops.len()).map_err(|_| limit("recognitionMemory"))?;
+            if order.capacity() > crops.len() {
+                order_reservation.grow(to_u64(
+                    (order.capacity() - crops.len())
+                        .checked_mul(std::mem::size_of::<(usize, preprocess::CropPlan)>())
+                        .ok_or_else(|| limit("recognitionMemory"))?,
+                )?)?;
+            }
             for (source_index, crop) in crops.iter().enumerate() {
                 order.push((source_index, validated_crop(crop, image, &self.config)?));
             }
@@ -129,12 +144,21 @@ impl PpOcrTextRecognizer {
             let mut result_reservation = context.reserve_memory(to_u64(result_slots_bytes)?)?;
             let mut slots = Vec::new();
             slots.try_reserve_exact(crops.len()).map_err(|_| limit("recognitionMemory"))?;
+            let actual_slots_bytes = slots
+                .capacity()
+                .checked_mul(std::mem::size_of::<Option<RecognizedText>>())
+                .ok_or_else(|| limit("recognitionMemory"))?;
+            if actual_slots_bytes > result_slots_bytes {
+                result_reservation.grow(to_u64(actual_slots_bytes - result_slots_bytes)?)?;
+            }
             slots.resize_with(crops.len(), || None);
+            let mut total_decoded_bytes = 0_usize;
 
             for batch in order.chunks(self.config.max_batch_size) {
                 context.checkpoint()?;
                 let prepared = prepare_batch(image, batch, &self.config, context)?;
                 let outputs = self.runtime.run(MODEL_ID, &[prepared.tensor], context).await?;
+                let _output_reservation = reserve_tensors(&outputs, context)?;
                 context.checkpoint()?;
                 let decoded = decode_output(
                     &outputs,
@@ -143,6 +167,7 @@ impl PpOcrTextRecognizer {
                     &self.config,
                     context,
                     &mut result_reservation,
+                    &mut total_decoded_bytes,
                 )?;
                 for item in decoded {
                     let index = item.source_index;
@@ -152,10 +177,17 @@ impl PpOcrTextRecognizer {
                     slots[index] = Some(item);
                 }
             }
-            let regions = slots
-                .into_iter()
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| ocr("recognitionOrderMismatch"))?;
+            let mut regions = Vec::new();
+            regions.try_reserve_exact(crops.len()).map_err(|_| limit("recognitionMemory"))?;
+            result_reservation.grow(to_u64(
+                regions
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<RecognizedText>())
+                    .ok_or_else(|| limit("recognitionMemory"))?,
+            )?)?;
+            for slot in slots {
+                regions.push(slot.ok_or_else(|| ocr("recognitionOrderMismatch"))?);
+            }
             Ok(RecognitionResult {
                 regions,
                 provider: PROVIDER.into(),
@@ -163,33 +195,6 @@ impl PpOcrTextRecognizer {
             })
         })
     }
-}
-
-fn validate_config(config: &RecognitionConfig) -> Result<(), ConversionError> {
-    if config.max_regions == 0
-        || config.max_batch_size == 0
-        || config.max_batch_size > 8
-        || config.max_crop_pixels == 0
-        || config.max_tensor_elements == 0
-        || config.max_output_timesteps == 0
-        || config.max_output_timesteps > 1024
-        || config.max_decoded_bytes == 0
-    {
-        return Err(ocr("invalidRecognitionConfig"));
-    }
-    Ok(())
-}
-
-fn validate_language_hint(hint: Option<&str>) -> Result<Option<&str>, ConversionError> {
-    match hint {
-        None => Ok(None),
-        Some("zh" | "zh-Hans" | "zh-Hant" | "en") => Ok(hint),
-        Some(_) => Err(ocr("unsupportedRecognitionLanguage")),
-    }
-}
-
-fn to_u64(value: usize) -> Result<u64, ConversionError> {
-    u64::try_from(value).map_err(|_| limit("recognitionMemory"))
 }
 
 fn ocr(detail: &str) -> ConversionError {

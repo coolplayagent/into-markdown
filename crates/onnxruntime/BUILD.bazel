@@ -117,7 +117,7 @@ rust_test(
 # archive and ONNX Runtime only when this exact manual target is requested.
 rust_test(
     name = "ppocrv6_recognizer_quality",
-    crate = ":onnxruntime",
+    srcs = ["tests/ppocrv6_quality.rs"],
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
     compile_data = ["//third_party/onnxruntime:manifest.json"],
     data = [
@@ -125,30 +125,32 @@ rust_test(
         "//fixtures:corpus",
         "//models:ppocrv6_tiny_dict.txt",
         "//third_party/onnxruntime:cpu_runtime",
-        "@ppocrv6_tiny_recognizer_onnx_model//:PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+        "@ppocrv6_tiny_recognizer_onnx_model_archive//file",
     ],
     edition = "2024",
+    crate_name = "ppocrv6_recognizer_quality",
+    rustc_flags = ["--cfg=ppocrv6_quality"],
     rustc_env = select({
         "//third_party/onnxruntime:is_linux_arm64": {
-            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model",
+            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
             "OCR_QUALITY_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
             "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_linux_arm64",
             "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_linux_x86_64": {
-            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model",
+            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
             "OCR_QUALITY_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
             "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_linux_x86_64",
             "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_macos_arm64": {
-            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model",
+            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
             "OCR_QUALITY_ORT_LIBRARY": "lib/libonnxruntime.dylib",
             "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_macos_arm64",
             "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_windows_x86_64": {
-            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model",
+            "OCR_QUALITY_MODEL_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
             "OCR_QUALITY_ORT_LIBRARY": "lib/onnxruntime.dll",
             "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
             "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
@@ -162,6 +164,7 @@ rust_test(
     }),
     tags = ["manual"],
     deps = [
+        ":onnxruntime",
         "//crates/core",
         "//crates/ocr",
     ] + all_crate_deps(normal_dev = True),

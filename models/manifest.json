@@ -69,6 +69,26 @@
           "archive_sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
           "archive_size": 4526080,
           "archive_member": "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+          "archive_members": [
+            {
+              "path": "PP-OCRv6_tiny_rec_onnx_infer/",
+              "kind": "directory",
+              "size": 0,
+              "sha256": null
+            },
+            {
+              "path": "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+              "kind": "file",
+              "size": 4462639,
+              "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6"
+            },
+            {
+              "path": "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
+              "kind": "file",
+              "size": 55571,
+              "sha256": "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"
+            }
+          ],
           "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
           "size": 4462639,
           "platforms": [

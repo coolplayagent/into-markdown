@@ -23,6 +23,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 mod detection;
+mod model_acquisition;
+mod model_archive;
 mod onnx_proto;
 mod recognition;
 mod recognizer_model;
@@ -32,6 +34,8 @@ pub use detection::{
     CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
     PixelFormat, PixelView, PpOcrTextDetector,
 };
+
+pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};
 
 pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
 
@@ -81,10 +85,21 @@ pub struct RuntimeArtifact {
     pub archive_sha256: Option<String>,
     pub archive_size: Option<u64>,
     pub archive_member: Option<String>,
+    pub archive_members: Option<Vec<ArchiveMember>>,
     pub sha256: String,
     pub size: u64,
     pub platforms: Vec<String>,
     pub license: String,
+}
+
+/// One exact entry permitted in an upstream runtime archive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveMember {
+    pub path: String,
+    pub kind: String,
+    pub size: u64,
+    pub sha256: Option<String>,
 }
 
 /// OCR model bundle and its supply-chain contract.
@@ -613,12 +628,18 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
     if artifact.size == 0 || artifact.role.is_empty() || artifact.license.is_empty() {
         return Err(invalid_manifest(format!("runtime artifact {} is incomplete", artifact.id)));
     }
-    match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
-        (None, None, None) => {}
-        (Some(hash), Some(size), Some(member))
+    match (
+        &artifact.archive_sha256,
+        artifact.archive_size,
+        &artifact.archive_member,
+        &artifact.archive_members,
+    ) {
+        (None, None, None, None) => {}
+        (Some(hash), Some(size), Some(member), Some(members))
             if size > artifact.size
                 && validate_hash(hash).is_ok()
-                && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx" => {}
+                && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                && validate_archive_members(artifact, members).is_ok() => {}
         _ => {
             return Err(invalid_manifest(format!(
                 "runtime artifact {} has invalid archive acquisition",
@@ -633,6 +654,41 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
     {
         return Err(invalid_manifest(format!(
             "runtime artifact {} has invalid platforms",
+            artifact.id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_archive_members(
+    artifact: &RuntimeArtifact,
+    members: &[ArchiveMember],
+) -> Result<(), ConversionError> {
+    let expected = [
+        ("PP-OCRv6_tiny_rec_onnx_infer/", "directory", 0, None),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+            "file",
+            artifact.size,
+            Some(artifact.sha256.as_str()),
+        ),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
+            "file",
+            55_571,
+            Some("66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"),
+        ),
+    ];
+    if members.len() != expected.len()
+        || members.iter().zip(expected).any(|(actual, expected)| {
+            actual.path != expected.0
+                || actual.kind != expected.1
+                || actual.size != expected.2
+                || actual.sha256.as_deref() != expected.3
+        })
+    {
+        return Err(invalid_manifest(format!(
+            "runtime artifact {} has invalid archive structure",
             artifact.id
         )));
     }
@@ -775,19 +831,12 @@ pub enum ModelManagerError {
 /// Network implementations must enforce HTTPS, redirect, DNS/address, host,
 /// and response-size policy before returning a stream. The manager still
 /// enforces the manifest size and hash while reading.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelAcquisition {
-    Direct,
-    ArchiveMember { archive_sha256: String, archive_size: u64, member: String },
-}
-
-pub struct AcquiredModelArtifact {
-    pub acquisition: ModelAcquisition,
-    pub bytes: Box<dyn Read>,
-}
-
 pub trait ModelFetcher {
-    /// Opens the exact runtime artifact requested by the manager.
+    /// Opens the authority-identified stream requested by the manager.
+    ///
+    /// Direct acquisitions contain the final runtime file. Archive-member
+    /// acquisitions contain the complete raw archive, never a pre-extracted
+    /// member; the manager verifies both archive and member authorities.
     fn open(
         &self,
         artifact: &RuntimeArtifact,
@@ -969,7 +1018,7 @@ impl ModelManager {
         if metadata.len() != artifact.size {
             return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
         }
-        let reservation = context.reserve_memory(artifact.size)?;
+        let mut reservation = context.reserve_memory(artifact.size)?;
         let capacity = usize::try_from(artifact.size)
             .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
         let mut bytes = Vec::new();
@@ -1007,7 +1056,12 @@ impl ModelManager {
                 artifact.file_name
             )));
         }
+        // `Arc<[u8]>::from(Vec<u8>)` may allocate a ref-counted backing and
+        // copy while the Vec is still live, so account the conversion peak.
+        reservation.grow(artifact.size)?;
+        context.checkpoint()?;
         let bytes: Arc<[u8]> = Arc::from(bytes);
+        reservation.shrink(artifact.size)?;
         Ok(VerifiedRuntimeArtifact {
             path: directory.join(&artifact.file_name),
             sha256: artifact.sha256.clone(),
@@ -1097,7 +1151,7 @@ impl ModelManager {
         context.checkpoint()?;
         let total_size = bundle.runtime_artifacts.iter().try_fold(0_u64, |total, artifact| {
             total
-                .checked_add(artifact.size)
+                .checked_add(artifact.archive_size.unwrap_or(artifact.size).max(artifact.size))
                 .ok_or_else(|| ModelManagerError::Corrupt("runtime artifact sizes overflow".into()))
         })?;
         let _temporary = context.reserve_temporary(total_size)?;
@@ -1126,56 +1180,14 @@ impl ModelManager {
         for artifact in &bundle.runtime_artifacts {
             context.checkpoint()?;
             let acquired = fetcher.open(artifact, context)?;
-            let expected_acquisition =
-                match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
-                    (None, None, None) => ModelAcquisition::Direct,
-                    (Some(archive_sha256), Some(archive_size), Some(member)) => {
-                        ModelAcquisition::ArchiveMember {
-                            archive_sha256: archive_sha256.clone(),
-                            archive_size,
-                            member: member.clone(),
-                        }
-                    }
-                    _ => return Err(ModelManagerError::Corrupt(artifact.id.clone())),
-                };
-            if acquired.acquisition != expected_acquisition {
-                return Err(ModelManagerError::Corrupt(format!(
-                    "{} acquisition authority mismatch",
-                    artifact.id
-                )));
-            }
-            let mut source = acquired.bytes;
             let path = staging.path().join(&artifact.file_name);
             let mut destination = OpenOptions::new().write(true).create_new(true).open(&path)?;
-            let mut digest = Sha256::new();
-            let mut received = 0_u64;
-            let mut buffer = [0_u8; 64 * 1024];
-            loop {
-                context.checkpoint()?;
-                let count = source.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                let count_u64 = u64::try_from(count)
-                    .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
-                received = received
-                    .checked_add(count_u64)
-                    .ok_or_else(|| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
-                if received > artifact.size {
-                    return Err(ModelManagerError::Corrupt(format!(
-                        "{} exceeds declared size",
-                        artifact.file_name
-                    )));
-                }
-                destination.write_all(&buffer[..count])?;
-                digest.update(&buffer[..count]);
-            }
-            if received != artifact.size || format!("{:x}", digest.finalize()) != artifact.sha256 {
-                return Err(ModelManagerError::Corrupt(format!(
-                    "{} has a size or SHA-256 mismatch",
-                    artifact.file_name
-                )));
-            }
+            model_acquisition::write_verified_artifact(
+                artifact,
+                acquired,
+                &mut destination,
+                context,
+            )?;
             destination.sync_all()?;
         }
         let state = serde_json::to_vec(&serde_json::json!({
@@ -2040,6 +2052,7 @@ mod tests {
             archive_sha256: None,
             archive_size: None,
             archive_member: None,
+            archive_members: None,
             sha256: "a".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -2054,6 +2067,7 @@ mod tests {
             archive_sha256: None,
             archive_size: None,
             archive_member: None,
+            archive_members: None,
             sha256: "b".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -2184,6 +2198,7 @@ mod tests {
             archive_sha256: None,
             archive_size: None,
             archive_member: None,
+            archive_members: None,
             sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
             size: 5,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -2196,6 +2211,13 @@ mod tests {
         ExecutionContext::new(
             into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits { max_temporary_bytes, ..Default::default() },
+        )
+    }
+
+    fn memory_execution(max_memory_bytes: u64) -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_memory_bytes, ..Default::default() },
         )
     }
 
@@ -2239,6 +2261,32 @@ mod tests {
         assert_eq!(fs::read(manager.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
         manager.install(id, &fetcher, &execution(5)).unwrap();
         assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn verified_artifact_accounts_vec_to_arc_peak_and_retained_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let id = "pp-ocrv6-tiny-zh-en";
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+
+        let insufficient = memory_execution(9);
+        assert!(matches!(
+            manager.verified_runtime_artifact(id, "detector", &insufficient),
+            Err(ModelManagerError::Execution(ConversionError::ResourceLimit { .. }))
+        ));
+        assert_eq!(insufficient.reserved_memory_bytes(), 0);
+
+        let exact = memory_execution(10);
+        let artifact = manager.verified_runtime_artifact(id, "detector", &exact).unwrap();
+        assert_eq!(&*artifact.bytes, b"hello");
+        assert_eq!(exact.reserved_memory_bytes(), 5);
+        drop(artifact);
+        assert_eq!(exact.reserved_memory_bytes(), 0);
     }
 
     #[test]

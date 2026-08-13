@@ -1,7 +1,7 @@
 //! Strict PP-OCR CTC output validation and deterministic decoding.
 
 use super::preprocess::CropPlan;
-use super::{BLANK, CLASSES, RecognitionConfig, RecognizedText, limit, ocr, to_u64};
+use super::{BLANK, CLASSES, RecognitionConfig, RecognizedText, limit, ocr};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, Tensor};
 
 pub(super) fn decode_output(
@@ -11,6 +11,7 @@ pub(super) fn decode_output(
     config: &RecognitionConfig,
     context: &ExecutionContext,
     reservation: &mut ResourceReservation,
+    total_bytes: &mut usize,
 ) -> Result<Vec<RecognizedText>, ConversionError> {
     if outputs.len() != 1 {
         return Err(ocr("recognitionOutputCountMismatch"));
@@ -35,16 +36,14 @@ pub(super) fn decode_output(
     if output.values.iter().any(|value| !(0.0..=1.0).contains(value)) {
         return Err(ocr("invalidRecognitionProbability"));
     }
-    let decoded_peak = batch
-        .len()
-        .checked_mul(output.shape[1])
-        .and_then(|value| value.checked_mul(4))
-        .ok_or_else(|| limit("recognitionDecodedBytes"))?
-        .min(config.max_decoded_bytes);
-    reservation.grow(to_u64(decoded_peak)?)?;
     let mut decoded = Vec::new();
     decoded.try_reserve_exact(batch.len()).map_err(|_| limit("recognitionMemory"))?;
-    let mut total_bytes = 0_usize;
+    reservation.grow(super::budget::to_u64(
+        decoded
+            .capacity()
+            .checked_mul(std::mem::size_of::<RecognizedText>())
+            .ok_or_else(|| limit("recognitionMemory"))?,
+    )?)?;
     for (batch_index, &(source_index, _)) in batch.iter().enumerate() {
         context.checkpoint()?;
         let mut text = String::new();
@@ -66,13 +65,15 @@ pub(super) fn decode_output(
             if best != previous && best != BLANK {
                 let character =
                     characters.get(best - 1).ok_or_else(|| ocr("invalidCharacterIndex"))?;
-                total_bytes = total_bytes
+                *total_bytes = total_bytes
                     .checked_add(character.len())
                     .ok_or_else(|| limit("recognitionDecodedBytes"))?;
-                if total_bytes > config.max_decoded_bytes {
+                if *total_bytes > config.max_decoded_bytes {
                     return Err(limit("recognitionDecodedBytes"));
                 }
+                let before = text.capacity();
                 text.try_reserve_exact(character.len()).map_err(|_| limit("recognitionMemory"))?;
+                reservation.grow(super::budget::to_u64(text.capacity() - before)?)?;
                 text.push_str(character);
                 probability_sum += f64::from(scores[best]);
                 kept += 1;

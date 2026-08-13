@@ -108,10 +108,11 @@ runtime dependency 是 `num-traits`。任何版本升级都必须重新审计源
 发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
 发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。
 
-模型清单的每个 bundle 都是 OCR bundle，bundle ID 必须唯一，并且必须各自包含唯一
-`detector` 与 `recognizer-and-dictionary` 角色。`default_bundle` 必须非空、存在，且
-默认 bundle 自身必须包含受管的 detector 与 recognizer/dictionary 源产物；其他
-bundle 不能替它补齐。
+模型清单 schema 2 区分完整 `ocr-pipeline` 与 `recognizer-component`，bundle ID 必须唯一。
+默认 pipeline 自身必须包含唯一 detector 与 recognizer/dictionary 源角色；独立 recognizer
+组件必须包含唯一 recognizer/dictionary source 角色及唯一 recognizer、character-table
+runtime 角色。schema 1 只兼容 planned source-only bundle；available/runtime 语义会由产品
+validator 与 release audit 双向拒绝。
 
 PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输入且不进入
 普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
@@ -153,7 +154,8 @@ PNG 的仓库原创文字与图像按 Apache-2.0 管理。
 
 PP-OCRv6 tiny recognizer ONNX 官方归档固定 SHA-256
 `1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29`，许可为
-Apache-2.0，仅作为后续 OCR 质量目标的 manual 下载 authority，不进入语料或当前发布物。
+Apache-2.0，既是可由显式 library transport 安装的 recognition component authority，也是
+真实 OCR 质量目标的 manual 下载 authority；模型字节不进入语料、普通测试或当前发布物。
 两个大输入都必须在 manifest、inventory 与 `fixtures/downloads.json` 三者双向一致；host、大小、hash、
 redirect 上限（固定为零）、许可、manual/release 标志、repository 与 portable 下载文件名任一漂移都会失败。
 显式 `//fixtures:download_fixture` 工具拒绝重定向，按流式大小上限读取并在原子落盘前校验精确

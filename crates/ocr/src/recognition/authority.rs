@@ -41,11 +41,27 @@ pub(super) struct Authority {
     pub output_dtype: String,
     pub output_shape: [String; 3],
     pub input_color: String,
+    pub crop_reference: String,
+    pub perspective_interpolation: String,
+    pub perspective_border: String,
+    pub vertical_rotation: String,
+    pub vertical_ratio_threshold: f64,
     pub resize_interpolation: String,
     pub normalization_scale: f64,
     pub normalization_mean: f32,
     pub normalization_standard_deviation: f32,
     pub maximum_width: usize,
+    pub quality_corpus: String,
+    pub quality_groups: Vec<QualityGroup>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct QualityGroup {
+    pub group: String,
+    pub evaluated_characters: usize,
+    pub observed_errors: usize,
+    pub maximum_cer: f64,
 }
 
 pub(super) fn authority() -> Result<Authority, ConversionError> {
@@ -92,11 +108,44 @@ pub(super) fn authority() -> Result<Authority, ConversionError> {
         || value.output_dtype != "float32"
         || value.output_shape != ["N", "T", "6906"]
         || value.input_color != "BGR"
+        || value.crop_reference != "tools/infer/utility.py"
+        || value.perspective_interpolation != "OpenCV-INTER_CUBIC"
+        || value.perspective_border != "OpenCV-BORDER_REPLICATE"
+        || value.vertical_rotation != "numpy-rot90-counterclockwise"
+        || value.vertical_ratio_threshold.to_bits() != 1.5_f64.to_bits()
         || value.resize_interpolation != "OpenCV-INTER_LINEAR"
         || (value.normalization_scale as f32).to_bits() != SCALE.to_bits()
         || value.normalization_mean.to_bits() != 0.5_f32.to_bits()
         || value.normalization_standard_deviation.to_bits() != 0.5_f32.to_bits()
         || value.maximum_width != MAX_WIDTH
+        || value.quality_corpus != "fixtures/manifest.json#ocr_quality"
+        || value.quality_groups
+            != [
+                QualityGroup {
+                    group: "simplified".into(),
+                    evaluated_characters: 65,
+                    observed_errors: 0,
+                    maximum_cer: 0.05,
+                },
+                QualityGroup {
+                    group: "traditional".into(),
+                    evaluated_characters: 65,
+                    observed_errors: 6,
+                    maximum_cer: 0.10,
+                },
+                QualityGroup {
+                    group: "english".into(),
+                    evaluated_characters: 185,
+                    observed_errors: 1,
+                    maximum_cer: 0.05,
+                },
+                QualityGroup {
+                    group: "mixed".into(),
+                    evaluated_characters: 116,
+                    observed_errors: 1,
+                    maximum_cer: 0.08,
+                },
+            ]
     {
         return Err(ocr("recognizerAuthorityDrift"));
     }

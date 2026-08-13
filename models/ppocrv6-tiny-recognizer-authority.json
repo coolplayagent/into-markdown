@@ -32,9 +32,41 @@
   "output_dtype": "float32",
   "output_shape": ["N", "T", "6906"],
   "input_color": "BGR",
+  "crop_reference": "tools/infer/utility.py",
+  "perspective_interpolation": "OpenCV-INTER_CUBIC",
+  "perspective_border": "OpenCV-BORDER_REPLICATE",
+  "vertical_rotation": "numpy-rot90-counterclockwise",
+  "vertical_ratio_threshold": 1.5,
   "resize_interpolation": "OpenCV-INTER_LINEAR",
   "normalization_scale": 0.00392156862745098,
   "normalization_mean": 0.5,
   "normalization_standard_deviation": 0.5,
-  "maximum_width": 3200
+  "maximum_width": 3200,
+  "quality_corpus": "fixtures/manifest.json#ocr_quality",
+  "quality_groups": [
+    {
+      "group": "simplified",
+      "evaluated_characters": 65,
+      "observed_errors": 0,
+      "maximum_cer": 0.05
+    },
+    {
+      "group": "traditional",
+      "evaluated_characters": 65,
+      "observed_errors": 6,
+      "maximum_cer": 0.1
+    },
+    {
+      "group": "english",
+      "evaluated_characters": 185,
+      "observed_errors": 1,
+      "maximum_cer": 0.05
+    },
+    {
+      "group": "mixed",
+      "evaluated_characters": 116,
+      "observed_errors": 1,
+      "maximum_cer": 0.08
+    }
+  ]
 }
