@@ -36,6 +36,8 @@ impl<'a> MergeBudget<'a> {
         let mut text_bytes = 0_usize;
         let mut identity_bytes = 0_usize;
         for page in pages {
+            page.recognition.validate_identity(&page.detection.identity)?;
+            page.recognition.validate_payload(context)?;
             let page_blocks = super::existing_page_blocks(document, page.page())?;
             if config.policy == into_markdown_core::OcrPolicy::Auto
                 && super::policy::has_sufficient_native_text(
@@ -51,17 +53,19 @@ impl<'a> MergeBudget<'a> {
             regions = regions
                 .checked_add(page.detected().regions.len())
                 .ok_or_else(|| limit("ocrMergeRegions", usize::MAX, config.limits.max_regions))?;
-            text_bytes =
-                page.recognition.regions.iter().try_fold(text_bytes, |total, region| {
+            text_bytes = page.recognition.result().regions.iter().try_fold(
+                text_bytes,
+                |total, region| {
                     total.checked_add(region.text.len()).ok_or_else(|| {
                         limit("ocrMergeTextBytes", usize::MAX, config.limits.max_text_bytes)
                     })
-                })?;
+                },
+            )?;
             identity_bytes = [
                 page.detected().provider.len(),
-                page.recognition.provider.len(),
+                page.recognition.result().provider.len(),
                 page.detection.identity.detector_model.len(),
-                page.recognition.recognizer_model.unwrap_or("").len(),
+                page.recognition.recognizer_model().len(),
             ]
             .into_iter()
             .try_fold(identity_bytes, |total, bytes| {

@@ -1,7 +1,8 @@
 use into_markdown_core::{Inline, Provenance};
 
 /// Whether text is already proven to belong to the requested page or still
-/// needs an inline-level source locator. Page containers are authoritative.
+/// needs an inline-level source locator. An inline's explicit page always
+/// overrides its containing node; an absent inline page inherits the node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PageScope {
     Container,
@@ -31,15 +32,12 @@ impl PageScope {
     }
 
     pub(crate) fn includes_sourced_inline(self, inline: &Inline, page: u32) -> bool {
-        if self.includes_plain_text() {
-            return true;
-        }
-        if self != Self::InlineFallback {
-            return false;
-        }
         match inline {
             Inline::SourceText { provenance, .. } | Inline::OcrText { provenance, .. } => {
-                provenance.locator.page == Some(page)
+                provenance
+                    .locator
+                    .page
+                    .map_or_else(|| self.includes_plain_text(), |value| value == page)
             }
             _ => false,
         }

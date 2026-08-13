@@ -35,9 +35,6 @@ pub(crate) fn has_sufficient_native_text(
             visited += 1;
             super::traversal_checkpoint(context, visited)?;
             let scope = parent_scope.for_node(&node.provenance, page);
-            if scope == PageScope::Excluded {
-                continue;
-            }
             match &node.block {
                 Block::Paragraph(values)
                 | Block::Heading { content: values, .. }

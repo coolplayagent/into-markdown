@@ -1,9 +1,9 @@
 //! Deterministic OCR geometry, policy, deduplication, and Document IR merge.
 
-use crate::{PageDetection, RecognitionResult};
+use crate::{BoundRecognition, PageDetection};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConverterOutput, Diagnostic, DiagnosticSeverity, Document,
-    ExecutionContext, OcrOptions, OcrPolicy, SourceLocator,
+    ExecutionContext, Inline, OcrOptions, OcrPolicy, SourceLocator,
 };
 use std::collections::BTreeSet;
 
@@ -24,6 +24,7 @@ mod page_scope;
 mod paragraphs;
 mod policy;
 mod provenance;
+mod text;
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -99,21 +100,17 @@ pub struct OcrPageInput {
     /// Detector-produced, page-scoped batch in stable source-region order.
     detection: PageDetection,
     /// Recognition output whose `source_index` values address detector regions.
-    recognition: RecognitionResult,
+    recognition: BoundRecognition,
 }
 
 impl OcrPageInput {
     /// Create a merge input from detector- and recognizer-produced bound results.
     pub fn new(
         detection: PageDetection,
-        recognition: RecognitionResult,
+        recognition: BoundRecognition,
     ) -> Result<Self, ConversionError> {
         detection.identity.validate(&detection.result)?;
-        if recognition.batch_identity.as_ref() != Some(&detection.identity)
-            || recognition.recognizer_model != Some(crate::batch::RECOGNIZER_MODEL_ID)
-        {
-            return Err(ocr("batchIdentityMismatch"));
-        }
+        recognition.validate_identity(&detection.identity)?;
         Ok(Self { detection, recognition })
     }
 
@@ -242,7 +239,7 @@ fn merge_page(
     {
         return Ok(());
     }
-    validate_page(page)?;
+    validate_page(page, budget.context())?;
     let mut candidates = associate_candidates(page, config, diagnostics, budget)?;
     let native = dedup::collect_native_spans(
         page_blocks.blocks,
@@ -263,13 +260,14 @@ fn merge_page(
     if candidates.is_empty() {
         return Ok(());
     }
-    let lines = lines::merge_lines(candidates, page.recognition.language_hint.as_deref(), budget)?;
+    let lines =
+        lines::merge_lines(candidates, page.recognition.result().language_hint.as_deref(), budget)?;
     let paragraphs = paragraphs::merge_paragraphs(lines)?;
     let nodes = provenance::materialize_paragraphs(paragraphs, page, identifiers)?;
-    insert_page_nodes(document, page, nodes, identifiers)
+    insert_page_nodes(document, page, nodes, identifiers, budget)
 }
 
-fn validate_page(page: &OcrPageInput) -> Result<(), ConversionError> {
+fn validate_page(page: &OcrPageInput, context: &ExecutionContext) -> Result<(), ConversionError> {
     if page.page() == 0
         || !page.page_width().is_finite()
         || !page.page_height().is_finite()
@@ -279,22 +277,19 @@ fn validate_page(page: &OcrPageInput) -> Result<(), ConversionError> {
         return Err(ocr("invalidPageGeometry"));
     }
     page.detection.identity.validate(page.detected())?;
-    if page.recognition.batch_identity.as_ref() != Some(&page.detection.identity)
-        || page.recognition.recognizer_model != Some(crate::batch::RECOGNIZER_MODEL_ID)
-    {
-        return Err(ocr("batchIdentityMismatch"));
-    }
+    page.recognition.validate_identity(&page.detection.identity)?;
+    page.recognition.validate_payload(context)?;
     for identity in [
         page.detected().provider.as_str(),
-        page.recognition.provider.as_ref(),
+        page.recognition.result().provider.as_ref(),
         page.detection.identity.detector_model,
-        page.recognition.recognizer_model.unwrap_or(""),
+        page.recognition.recognizer_model(),
     ] {
         if identity.trim().is_empty() || identity.chars().any(char::is_control) {
             return Err(ocr("invalidProviderOrModelIdentity"));
         }
     }
-    if page.detected().regions.len() != page.recognition.regions.len() {
+    if page.detected().regions.len() != page.recognition.result().regions.len() {
         return Err(ocr("detectionRecognitionCountMismatch"));
     }
     Ok(())
@@ -309,7 +304,7 @@ fn associate_candidates(
     let mut recognized = Vec::new();
     recognized.try_reserve_exact(page.detected().regions.len()).map_err(|_| memory())?;
     recognized.resize(page.detected().regions.len(), None);
-    for item in page.recognition.regions.iter() {
+    for item in page.recognition.result().regions.iter() {
         if item.source_index >= recognized.len() || recognized[item.source_index].is_some() {
             return Err(ocr("invalidRecognitionSourceIndex"));
         }
@@ -343,13 +338,10 @@ fn associate_candidates(
             page_height: Some(page.page_height()),
             ..SourceLocator::default()
         };
-        if text.text.trim().is_empty() {
+        let Some(value) = text::validated_copy(&text.text, budget)? else {
             diagnostics.push(diagnostic("ocr.emptyText", "OCR region produced no text", locator));
             continue;
-        }
-        if text.text.chars().any(|character| character.is_control() && !character.is_whitespace()) {
-            return Err(ocr("invalidRecognitionText"));
-        }
+        };
         if region.confidence < config.minimum_confidence
             || text.confidence < config.minimum_confidence
         {
@@ -360,9 +352,6 @@ fn associate_candidates(
             ));
             continue;
         }
-        let mut value = String::new();
-        value.try_reserve_exact(text.text.len()).map_err(|_| memory())?;
-        value.push_str(&text.text);
         candidates.push(Candidate {
             source_index,
             text: value,
@@ -402,7 +391,10 @@ fn insert_page_nodes(
     page: &OcrPageInput,
     nodes: Vec<BlockNode>,
     identifiers: &mut BTreeSet<String>,
+    budget: &MergeBudget<'_>,
 ) -> Result<(), ConversionError> {
+    let has_page_containers =
+        document.blocks.iter().any(|node| matches!(node.block, Block::Page { .. }));
     if let Some(blocks) = document.blocks.iter_mut().find_map(|node| match &mut node.block {
         Block::Page { number, blocks } if *number == page.page() => Some(blocks),
         _ => None,
@@ -410,6 +402,12 @@ fn insert_page_nodes(
         blocks.try_reserve_exact(nodes.len()).map_err(|_| memory())?;
         blocks.extend(nodes);
         sort_page_reading_order(blocks);
+        return Ok(());
+    }
+    if !has_page_containers {
+        document.blocks.try_reserve_exact(nodes.len()).map_err(|_| memory())?;
+        document.blocks.extend(nodes);
+        sort_flat_reading_order(&mut document.blocks, budget)?;
         return Ok(());
     }
     document.blocks.try_reserve_exact(1).map_err(|_| memory())?;
@@ -421,20 +419,77 @@ fn insert_page_nodes(
     Ok(())
 }
 
-fn sort_page_reading_order(blocks: &mut [BlockNode]) {
-    blocks.sort_by(|left, right| {
-        match (left.provenance.locator.bounds, right.provenance.locator.bounds) {
-            (Some(left), Some(right)) => left
-                .y
-                .total_cmp(&right.y)
-                .then_with(|| left.x.total_cmp(&right.x))
-                .then_with(|| left.height.total_cmp(&right.height))
-                .then_with(|| left.width.total_cmp(&right.width)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
+fn sort_flat_reading_order(
+    blocks: &mut Vec<BlockNode>,
+    budget: &MergeBudget<'_>,
+) -> Result<(), ConversionError> {
+    let mut keyed = Vec::new();
+    keyed.try_reserve_exact(blocks.len()).map_err(|_| memory())?;
+    let mut visited = 0_usize;
+    for node in blocks.drain(..) {
+        keyed.push((effective_node_page(&node, budget, &mut visited)?, node));
+    }
+    keyed.sort_by(|(left_page, left), (right_page, right)| match (left_page, right_page) {
+        (Some(left_page), Some(right_page)) => {
+            left_page.cmp(right_page).then_with(|| compare_reading_bounds(left, right))
         }
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     });
+    blocks.extend(keyed.into_iter().map(|(_, node)| node));
+    Ok(())
+}
+
+fn effective_node_page(
+    node: &BlockNode,
+    budget: &MergeBudget<'_>,
+    visited: &mut usize,
+) -> Result<Option<u32>, ConversionError> {
+    let values = match &node.block {
+        Block::Paragraph(values)
+        | Block::Heading { content: values, .. }
+        | Block::TimedSegment { content: values, .. } => values.as_slice(),
+        _ => return Ok(node.provenance.locator.page),
+    };
+    let mut explicit = None;
+    for inline in values.iter().flat_map(|inline| match inline {
+        Inline::Link { content, .. } => content.as_slice(),
+        _ => std::slice::from_ref(inline),
+    }) {
+        *visited = visited.checked_add(1).ok_or_else(memory)?;
+        traversal_checkpoint(budget.context(), *visited)?;
+        match inline {
+            Inline::SourceText { provenance, .. } | Inline::OcrText { provenance, .. } => {
+                if let Some(page) = provenance.locator.page {
+                    if explicit.is_some_and(|current| current != page) {
+                        return Ok(node.provenance.locator.page);
+                    }
+                    explicit = Some(page);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(explicit.or(node.provenance.locator.page))
+}
+
+fn compare_reading_bounds(left: &BlockNode, right: &BlockNode) -> std::cmp::Ordering {
+    match (left.provenance.locator.bounds, right.provenance.locator.bounds) {
+        (Some(left), Some(right)) => left
+            .y
+            .total_cmp(&right.y)
+            .then_with(|| left.x.total_cmp(&right.x))
+            .then_with(|| left.height.total_cmp(&right.height))
+            .then_with(|| left.width.total_cmp(&right.width)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn sort_page_reading_order(blocks: &mut [BlockNode]) {
+    blocks.sort_by(compare_reading_bounds);
 }
 
 fn collect_node_ids(

@@ -43,7 +43,7 @@ pub(crate) fn materialize_paragraphs(
             paragraph_confidence = paragraph_confidence.min(line_confidence);
             let provenance = Provenance {
                 kind: ProvenanceKind::LocalOcr,
-                provider: clone_string(&page.recognition.provider)?,
+                provider: clone_string(&page.recognition.result().provider)?,
                 locator: SourceLocator {
                     page: Some(page.page()),
                     bounds: Some(line.bounds),
@@ -109,8 +109,8 @@ fn evidence_chain(page: &OcrPageInput) -> Result<Vec<OcrEvidenceStep>, Conversio
     });
     chain.push(OcrEvidenceStep {
         stage: OcrEvidenceStage::Recognition,
-        provider: clone_string(&page.recognition.provider)?,
-        model: Some(clone_string(page.recognition.recognizer_model.unwrap_or(""))?),
+        provider: clone_string(&page.recognition.result().provider)?,
+        model: Some(clone_string(page.recognition.recognizer_model())?),
     });
     chain.push(OcrEvidenceStep {
         stage: OcrEvidenceStage::Merge,

@@ -67,3 +67,44 @@ fn overlapping_distinct_text_is_preserved() {
     assert_eq!(merged_text(&output.document), "leftright");
     assert!(output.diagnostics.is_empty());
 }
+
+#[test]
+fn explicit_inline_page_overrides_node_page_for_native_dedup() {
+    let bounds = Rect { x: 20.0, y: 20.0, width: 100.0, height: 16.0 };
+    let inlines = "same"
+        .chars()
+        .map(|character| Inline::SourceText {
+            value: character.to_string(),
+            marks: vec![],
+            provenance: Box::new(Provenance {
+                locator: SourceLocator {
+                    page: Some(2),
+                    bounds: Some(bounds),
+                    page_width: Some(600.0),
+                    page_height: Some(800.0),
+                    ..SourceLocator::default()
+                },
+                ..native_provenance(None)
+            }),
+        })
+        .collect();
+    let document = Document {
+        blocks: vec![BlockNode {
+            id: NodeId("page-conflict".into()),
+            block: Block::Paragraph(inlines),
+            provenance: native_provenance(Some(bounds)),
+        }],
+        ..Document::default()
+    };
+    let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
+    let recognized = recognition(&[(0, "same", 0.99)]);
+    let output = merge_document(
+        document,
+        &[input(&detected, &recognized)],
+        &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(merged_text(&output.document), "same");
+    assert!(output.diagnostics.is_empty());
+}

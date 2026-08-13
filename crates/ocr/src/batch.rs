@@ -1,9 +1,74 @@
-use crate::{CropDescriptor, DetectionResult};
-use into_markdown_core::ConversionError;
+use crate::{CropDescriptor, DetectionResult, RecognitionResult};
+use into_markdown_core::{ConversionError, ExecutionContext};
 use sha2::{Digest, Sha256};
 
 pub(crate) const DETECTOR_MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
 pub(crate) const RECOGNIZER_MODEL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
+
+/// Recognizer-produced output bound to one immutable detector batch.
+#[derive(Debug, Clone)]
+pub struct BoundRecognition {
+    result: RecognitionResult,
+    batch_identity: BatchIdentity,
+    recognizer_model: &'static str,
+    recognition_fingerprint: [u8; 32],
+}
+
+impl BoundRecognition {
+    pub(crate) fn new(
+        result: RecognitionResult,
+        batch_identity: BatchIdentity,
+        context: &ExecutionContext,
+    ) -> Result<Self, ConversionError> {
+        let recognition_fingerprint = recognition_fingerprint(&result, context)?;
+        Ok(Self {
+            result,
+            batch_identity,
+            recognizer_model: RECOGNIZER_MODEL_ID,
+            recognition_fingerprint,
+        })
+    }
+
+    /// Read the immutable raw recognizer result carried by this binding.
+    #[must_use]
+    pub fn result(&self) -> &RecognitionResult {
+        &self.result
+    }
+
+    pub(crate) const fn recognizer_model(&self) -> &'static str {
+        self.recognizer_model
+    }
+
+    pub(crate) fn validate_identity(
+        &self,
+        detection: &BatchIdentity,
+    ) -> Result<(), ConversionError> {
+        if &self.batch_identity != detection || self.recognizer_model != RECOGNIZER_MODEL_ID {
+            return Err(batch("batchIdentityMismatch"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_payload(
+        &self,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        if self.recognition_fingerprint != recognition_fingerprint(&self.result, context)? {
+            return Err(batch("batchIdentityMismatch"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tamper_result(&mut self, mutate: impl FnOnce(&mut RecognitionResult)) {
+        mutate(&mut self.result);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tamper_model(&mut self, model: &'static str) {
+        self.recognizer_model = model;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BatchIdentity {
@@ -88,6 +153,54 @@ fn fingerprint_crop(digest: &mut Sha256, crop: &CropDescriptor) {
     }
     digest.update(crop.width.to_le_bytes());
     digest.update(crop.height.to_le_bytes());
+}
+
+fn recognition_fingerprint(
+    result: &RecognitionResult,
+    context: &ExecutionContext,
+) -> Result<[u8; 32], ConversionError> {
+    let mut digest = Sha256::new();
+    digest.update(b"into-markdown/ocr-recognition/v1\0");
+    hash_bytes(&mut digest, result.provider.as_bytes(), context)?;
+    match &result.language_hint {
+        Some(value) => {
+            digest.update([1]);
+            hash_bytes(&mut digest, value.as_bytes(), context)?;
+        }
+        None => digest.update([0]),
+    }
+    digest.update(
+        u64::try_from(result.regions.len())
+            .map_err(|_| batch("recognitionCountOverflow"))?
+            .to_le_bytes(),
+    );
+    for region in result.regions.iter() {
+        digest.update(
+            u64::try_from(region.source_index)
+                .map_err(|_| batch("recognitionIndexOverflow"))?
+                .to_le_bytes(),
+        );
+        digest.update(region.confidence.to_bits().to_le_bytes());
+        hash_bytes(&mut digest, region.text.as_bytes(), context)?;
+    }
+    Ok(digest.finalize().into())
+}
+
+fn hash_bytes(
+    digest: &mut Sha256,
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    digest.update(
+        u64::try_from(bytes.len()).map_err(|_| batch("recognitionBytesOverflow"))?.to_le_bytes(),
+    );
+    for chunk in bytes.chunks(4 * 1024) {
+        digest.update(chunk);
+        if chunk.len() == 4 * 1024 {
+            context.checkpoint()?;
+        }
+    }
+    Ok(())
 }
 
 fn batch(detail: &str) -> ConversionError {

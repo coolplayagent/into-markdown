@@ -32,6 +32,8 @@ mod recognition;
 mod recognizer_model;
 mod runtime;
 
+pub use batch::BoundRecognition;
+
 pub use detection::{
     CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
     PageDetection, PixelFormat, PixelView, PpOcrTextDetector,

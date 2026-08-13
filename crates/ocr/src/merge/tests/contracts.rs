@@ -171,6 +171,61 @@ fn flat_ir_auto_uses_only_explicit_matching_page_locators() {
     )
     .unwrap();
     assert_eq!(suppressed.document, matching_page);
+
+    let mut conflicting_node = flat_node(vec![matching(Some(2)); 8]);
+    conflicting_node.provenance.locator.page = Some(1);
+    let conflicting = Document { blocks: vec![conflicting_node], ..Document::default() };
+    let retained = merge_document(
+        conflicting,
+        &[input(&detection, &recognition)],
+        &MergeConfig::default(),
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(merged_text(&retained.document), "page one");
+}
+
+#[test]
+fn flat_legacy_ir_merges_native_and_ocr_in_page_geometry_order() {
+    let native = |id: &str, y: Option<f32>| BlockNode {
+        id: NodeId(id.into()),
+        block: Block::Paragraph(vec![Inline::Text { value: id.into(), marks: vec![] }]),
+        provenance: Provenance {
+            locator: SourceLocator {
+                page: Some(1),
+                bounds: y.map(|y| Rect { x: 20.0, y, width: 80.0, height: 16.0 }),
+                page_width: Some(600.0),
+                page_height: Some(800.0),
+                ..SourceLocator::default()
+            },
+            ..native_provenance(None)
+        },
+    };
+    let document = Document {
+        blocks: vec![
+            native("middle", Some(100.0)),
+            native("end", Some(300.0)),
+            native("unknown", None),
+        ],
+        ..Document::default()
+    };
+    let detection = detection(&[
+        (polygon(20.0, 20.0, 80.0, 16.0), 0.98),
+        (polygon(20.0, 200.0, 80.0, 16.0), 0.98),
+    ]);
+    let recognition = recognition(&[(0, "top", 0.98), (1, "lower", 0.98)]);
+    let output = merge_document(
+        document,
+        &[input(&detection, &recognition)],
+        &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+        &context(),
+    )
+    .unwrap();
+    assert!(!output.document.blocks.iter().any(|node| matches!(node.block, Block::Page { .. })));
+    assert_eq!(
+        output.document.blocks.iter().map(|node| node.id.0.as_str()).collect::<Vec<_>>(),
+        ["ocr-page-1-paragraph-1", "middle", "ocr-page-1-paragraph-2", "end", "unknown",]
+    );
 }
 
 #[test]
@@ -227,7 +282,7 @@ fn generated_page_id_does_not_collide_with_existing_document_nodes() {
     let document = Document {
         blocks: vec![BlockNode {
             id: NodeId("ocr-page-1".into()),
-            block: Block::Paragraph(Vec::new()),
+            block: Block::Page { number: 2, blocks: Vec::new() },
             provenance: native_provenance(None),
         }],
         ..Document::default()
@@ -252,7 +307,6 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
     let valid = input(&detection, &recognition);
     assert_eq!(valid.page(), 1);
 
-    let mut wrong_page = recognition.clone();
     let page_two = PageDetection::from_result(
         2,
         600.0,
@@ -269,11 +323,11 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
         detection.clone(),
     )
     .unwrap();
-    wrong_page.batch_identity = Some(page_two.identity.clone());
-    wrong_page.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    let wrong_page =
+        crate::BoundRecognition::new(recognition.clone(), page_two.identity.clone(), &context())
+            .unwrap();
     assert!(OcrPageInput::new(page_one, wrong_page).is_err());
 
-    let mut wrong_model = recognition.clone();
     let detected = PageDetection::from_result(
         1,
         600.0,
@@ -282,8 +336,10 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
         detection.clone(),
     )
     .unwrap();
-    wrong_model.batch_identity = Some(detected.identity.clone());
-    wrong_model.recognizer_model = Some("wrong-model");
+    let mut wrong_model =
+        crate::BoundRecognition::new(recognition.clone(), detected.identity.clone(), &context())
+            .unwrap();
+    wrong_model.tamper_model("wrong-model");
     assert!(OcrPageInput::new(detected, wrong_model).is_err());
 
     let mut mutated = detection.clone();
@@ -297,9 +353,9 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
     .unwrap();
     mutated.regions[0].crop.width += 1;
     let tampered = PageDetection { result: mutated, identity: bound.identity };
-    let mut recognized = recognition;
-    recognized.batch_identity = Some(tampered.identity.clone());
-    recognized.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    let recognized =
+        crate::BoundRecognition::new(recognition.clone(), tampered.identity.clone(), &context())
+            .unwrap();
     assert!(OcrPageInput::new(tampered, recognized).is_err());
 
     let mut changed_provider = detection.clone();
@@ -314,6 +370,58 @@ fn batch_identity_rejects_page_region_and_model_mismatches() {
     changed_provider.provider = "substituted.detector".into();
     let tampered = PageDetection { result: changed_provider, identity: bound.identity };
     assert!(tampered.identity.validate(&tampered.result).is_err());
+
+    let detection = PageDetection::from_result(
+        1,
+        600.0,
+        800.0,
+        crate::batch::DETECTOR_MODEL_ID,
+        detection.clone(),
+    )
+    .unwrap();
+    let mut changed_text =
+        crate::BoundRecognition::new(recognition.clone(), detection.identity.clone(), &context())
+            .unwrap();
+    changed_text.tamper_result(|result| {
+        Arc::make_mut(&mut result.regions)[0].text = "substituted".into();
+    });
+    let tampered_input = OcrPageInput::new(detection.clone(), changed_text).unwrap();
+    assert!(
+        merge_document(
+            Document::default(),
+            &[tampered_input],
+            &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+            &context(),
+        )
+        .is_err()
+    );
+
+    let mut changed_index =
+        crate::BoundRecognition::new(recognition.clone(), detection.identity.clone(), &context())
+            .unwrap();
+    changed_index.tamper_result(|result| {
+        Arc::make_mut(&mut result.regions)[0].source_index = 1;
+    });
+    assert!(changed_index.validate_payload(&context()).is_err());
+
+    let mut changed_confidence =
+        crate::BoundRecognition::new(recognition.clone(), detection.identity.clone(), &context())
+            .unwrap();
+    changed_confidence.tamper_result(|result| {
+        Arc::make_mut(&mut result.regions)[0].confidence = 0.5;
+    });
+    assert!(changed_confidence.validate_payload(&context()).is_err());
+
+    let mut changed_provider =
+        crate::BoundRecognition::new(recognition.clone(), detection.identity.clone(), &context())
+            .unwrap();
+    changed_provider.tamper_result(|result| result.provider = "substituted.recognizer".into());
+    assert!(changed_provider.validate_payload(&context()).is_err());
+
+    let mut changed_language =
+        crate::BoundRecognition::new(recognition, detection.identity.clone(), &context()).unwrap();
+    changed_language.tamper_result(|result| result.language_hint = Some("zh-Hant".into()));
+    assert!(changed_language.validate_payload(&context()).is_err());
 }
 
 #[test]

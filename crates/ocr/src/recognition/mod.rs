@@ -2,7 +2,7 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
-use crate::{CropDescriptor, ModelManager, PageDetection, PixelView};
+use crate::{BoundRecognition, CropDescriptor, ModelManager, PageDetection, PixelView};
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ResourceReservation, TensorRuntime,
 };
@@ -76,8 +76,6 @@ pub struct RecognitionResult {
     pub provider: Arc<str>,
     pub language_hint: Option<Arc<str>>,
     pub(crate) _memory_lease: Option<Arc<ResourceReservation>>,
-    pub(crate) batch_identity: Option<crate::batch::BatchIdentity>,
-    pub(crate) recognizer_model: Option<&'static str>,
 }
 
 impl PartialEq for RecognitionResult {
@@ -85,8 +83,6 @@ impl PartialEq for RecognitionResult {
         self.regions == other.regions
             && self.provider == other.provider
             && self.language_hint == other.language_hint
-            && self.batch_identity == other.batch_identity
-            && self.recognizer_model == other.recognizer_model
     }
 }
 
@@ -236,8 +232,6 @@ impl PpOcrTextRecognizer {
                 provider,
                 language_hint,
                 _memory_lease: Some(Arc::new(result_reservation)),
-                batch_identity: None,
-                recognizer_model: None,
             })
         })
     }
@@ -250,7 +244,7 @@ impl PpOcrTextRecognizer {
         detection: &'a PageDetection,
         language_hint: Option<&'a str>,
         context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<RecognitionResult, ConversionError>> {
+    ) -> BoxFuture<'a, Result<BoundRecognition, ConversionError>> {
         Box::pin(async move {
             detection.identity.validate(&detection.result)?;
             if (image.width as f32).to_bits() != detection.page_width().to_bits()
@@ -278,10 +272,8 @@ impl PpOcrTextRecognizer {
                 crop_reservation.grow(to_u64(actual - requested)?)?;
             }
             crops.extend(detection.result.regions.iter().map(|region| region.crop.clone()));
-            let mut output = self.recognize(image, &crops, language_hint, context).await?;
-            output.batch_identity = Some(detection.identity.clone());
-            output.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
-            Ok(output)
+            let output = self.recognize(image, &crops, language_hint, context).await?;
+            BoundRecognition::new(output, detection.identity.clone(), context)
         })
     }
 }

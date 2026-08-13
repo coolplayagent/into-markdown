@@ -208,6 +208,11 @@ mod quality {
                 group["evaluated_characters"].as_u64().unwrap() as usize,
                 "evaluated character authority drift for {name}"
             );
+            assert_eq!(
+                group_edits,
+                group["observed_errors"].as_u64().unwrap() as usize,
+                "observed error authority drift for {name}"
+            );
             let group_cer = group_edits as f64 / group_characters as f64;
             assert!(
                 group_cer <= group["maximum_cer"].as_f64().unwrap(),

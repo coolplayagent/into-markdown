@@ -6,7 +6,10 @@ mod resources;
 mod wire;
 
 use super::*;
-use crate::{CropDescriptor, DetectedTextRegion, DetectionResult, PageDetection, RecognizedText};
+use crate::{
+    CropDescriptor, DetectedTextRegion, DetectionResult, PageDetection, RecognitionResult,
+    RecognizedText,
+};
 use into_markdown_core::{
     Block, BlockNode, Document, ExecutionContext, ExecutionOptions, NodeId, Provenance,
     ProvenanceKind, Rect, ResourceLimits, SourceLocator,
@@ -51,8 +54,6 @@ fn recognition(regions: &[(usize, &str, f32)]) -> RecognitionResult {
         provider: Arc::from("test.recognizer"),
         language_hint: None,
         _memory_lease: None,
-        batch_identity: None,
-        recognizer_model: None,
     }
 }
 
@@ -73,9 +74,9 @@ fn input_for_page(
         detection.clone(),
     )
     .unwrap();
-    let mut recognition = recognition.clone();
-    recognition.batch_identity = Some(detection.identity.clone());
-    recognition.recognizer_model = Some(crate::batch::RECOGNIZER_MODEL_ID);
+    let recognition =
+        crate::BoundRecognition::new(recognition.clone(), detection.identity.clone(), &context())
+            .unwrap();
     OcrPageInput::new(detection, recognition).unwrap()
 }
 

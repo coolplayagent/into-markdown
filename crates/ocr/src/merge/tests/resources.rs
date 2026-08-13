@@ -1,12 +1,21 @@
 use super::*;
 use into_markdown_core::{CancellationToken, ErrorCode, ListItem, ListKind, NodeId, OcrPolicy};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 struct ResetTraversalHook;
 
 impl Drop for ResetTraversalHook {
     fn drop(&mut self) {
         set_traversal_test_hook(None);
+    }
+}
+
+struct ResetTextHook;
+
+impl Drop for ResetTextHook {
+    fn drop(&mut self) {
+        text::set_test_hook(None);
     }
 }
 
@@ -144,5 +153,77 @@ fn large_native_traversal_observes_in_flight_cancel_and_releases_merge_lease() {
     let error = merge_document(document, &[], &MergeConfig::default(), &context).unwrap_err();
     assert_eq!(reached.load(Ordering::SeqCst), 256);
     assert_eq!(error.code(), ErrorCode::Cancelled);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn every_large_text_stage_observes_in_flight_cancel_without_output() {
+    for target in [
+        text::TextStage::Associate,
+        text::TextStage::NormalizePlan,
+        text::TextStage::NormalizeCopy,
+        text::TextStage::LineMaterialize,
+    ] {
+        let cancellation = CancellationToken::new();
+        let reached = Arc::new(AtomicUsize::new(0));
+        let hook_reached = Arc::clone(&reached);
+        let hook_cancellation = cancellation.clone();
+        text::set_test_hook(Some(Box::new(move |stage, bytes| {
+            if stage == target {
+                hook_reached.store(bytes, Ordering::SeqCst);
+                hook_cancellation.cancel();
+            }
+        })));
+        let _reset = ResetTextHook;
+        let context = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
+        let large = "a".repeat(16 * 1024);
+        let recognized = recognition(&[(0, &large, 0.99)]);
+        let error = merge_document(
+            Document::default(),
+            &[input(&detected, &recognized)],
+            &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+            &context,
+        )
+        .unwrap_err();
+        assert!(reached.load(Ordering::SeqCst) >= 4 * 1024, "stage={target:?}");
+        assert_eq!(error.code(), ErrorCode::Cancelled, "stage={target:?}");
+        assert_eq!(context.reserved_memory_bytes(), 0, "stage={target:?}");
+    }
+}
+
+#[test]
+fn large_text_checkpoint_observes_timeout_after_work_begins() {
+    let reached = Arc::new(AtomicUsize::new(0));
+    let hook_reached = Arc::clone(&reached);
+    text::set_test_hook(Some(Box::new(move |stage, bytes| {
+        if stage == text::TextStage::Associate {
+            hook_reached.store(bytes, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    })));
+    let _reset = ResetTextHook;
+    let context = ExecutionContext::new(
+        ExecutionOptions {
+            timeout: Some(Duration::from_millis(10)),
+            ..ExecutionOptions::default()
+        },
+        ResourceLimits::default(),
+    );
+    let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
+    let large = "a".repeat(16 * 1024);
+    let recognized = recognition(&[(0, &large, 0.99)]);
+    let error = merge_document(
+        Document::default(),
+        &[input(&detected, &recognized)],
+        &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
+        &context,
+    )
+    .unwrap_err();
+    assert!(reached.load(Ordering::SeqCst) >= 4 * 1024);
+    assert_eq!(error.code(), ErrorCode::Timeout);
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
