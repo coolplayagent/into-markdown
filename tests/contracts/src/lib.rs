@@ -69,6 +69,7 @@ mod tests {
                 InputFormat::Xml,
                 InputFormat::Feed,
                 InputFormat::Ipynb,
+                InputFormat::Zip,
             ]
         );
 

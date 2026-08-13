@@ -1202,7 +1202,22 @@ fn apply_conversion_overrides(
     arguments: &ConversionArgs,
     loaded: &mut LoadedConfig,
 ) -> Result<(), CliError> {
-    let options = &mut loaded.options;
+    apply_ocr_overrides(arguments, &mut loaded.options)?;
+    apply_text_overrides(arguments, &mut loaded.options);
+    apply_network_overrides(arguments, &mut loaded.options)?;
+    apply_limit_overrides(arguments, &mut loaded.options);
+    apply_output_overrides(arguments, &mut loaded.options);
+    apply_ai_capability_overrides(arguments, loaded)?;
+    if !arguments.ocr_language.is_empty() {
+        loaded.ocr_languages.clone_from(&arguments.ocr_language);
+    }
+    apply_ai_provider_overrides(arguments, loaded)
+}
+
+fn apply_ocr_overrides(
+    arguments: &ConversionArgs,
+    options: &mut ConversionOptions,
+) -> Result<(), CliError> {
     if let Some(policy) = arguments.ocr {
         options.ocr.policy = match policy {
             OcrPolicyArg::Off => OcrPolicy::Off,
@@ -1217,6 +1232,10 @@ fn apply_conversion_overrides(
         config::validate_confidence(confidence)?;
         options.ocr.minimum_confidence = confidence;
     }
+    Ok(())
+}
+
+fn apply_text_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
     if let Some(mode) = arguments.encoding_errors {
         options.text.decoding_mode = match mode {
             EncodingErrorsArg::Strict => TextDecodingMode::Strict,
@@ -1224,6 +1243,12 @@ fn apply_conversion_overrides(
         };
     }
     apply_delimited_overrides(arguments, options);
+}
+
+fn apply_network_overrides(
+    arguments: &ConversionArgs,
+    options: &mut ConversionOptions,
+) -> Result<(), CliError> {
     if let Some(value) = arguments.max_redirects {
         options.network.max_redirects = value;
     }
@@ -1232,7 +1257,10 @@ fn apply_conversion_overrides(
         arguments.allow_network,
         arguments.allow_private_network,
         &arguments.allow_host,
-    )?;
+    )
+}
+
+fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
     macro_rules! assign {
         ($argument:ident, $field:ident) => {
             if let Some(value) = arguments.$argument {
@@ -1256,6 +1284,9 @@ fn apply_conversion_overrides(
     assign!(max_table_cells, max_table_cells);
     assign!(max_field_size, max_field_bytes);
     assign!(max_total_asset_size, max_total_asset_bytes);
+}
+
+fn apply_output_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
     if let Some(mode) = arguments.asset_mode {
         options.output.asset_mode = match mode {
             AssetModeArg::Extract => AssetMode::Extract,
@@ -1263,11 +1294,17 @@ fn apply_conversion_overrides(
             AssetModeArg::Omit => AssetMode::Omit,
         };
     }
+}
+
+fn apply_ai_capability_overrides(
+    arguments: &ConversionArgs,
+    loaded: &mut LoadedConfig,
+) -> Result<(), CliError> {
     for assignment in &arguments.ai {
         let (capability, mode) = split_assignment(assignment, "--ai")?;
         config::validate_capability(capability)?;
         let mode = parse_ai_mode(mode)?;
-        set_ai_mode(options, capability, mode);
+        set_ai_mode(&mut loaded.options, capability, mode);
     }
     for prompt in &arguments.ai_prompt {
         let (capability, path) = split_assignment(prompt, "--ai-prompt")?;
@@ -1277,9 +1314,13 @@ fn apply_conversion_overrides(
         }
         loaded.prompts.insert(capability.into(), PathBuf::from(path));
     }
-    if !arguments.ocr_language.is_empty() {
-        loaded.ocr_languages.clone_from(&arguments.ocr_language);
-    }
+    Ok(())
+}
+
+fn apply_ai_provider_overrides(
+    arguments: &ConversionArgs,
+    loaded: &mut LoadedConfig,
+) -> Result<(), CliError> {
     if let Some(provider) = &arguments.ai_provider {
         if !loaded.effective.providers.contains_key(provider) {
             return Err(CliError::usage(format!("unknown AI provider '{provider}'")));
@@ -1289,7 +1330,7 @@ fn apply_conversion_overrides(
     if let Some(model) = &arguments.ai_model {
         loaded.ai_model = Some(model.clone());
     }
-    if ai_is_enabled(options) {
+    if ai_is_enabled(&loaded.options) {
         let provider_name = loaded.ai_provider.as_deref().ok_or_else(|| {
             CliError::usage(
                 "an enabled AI capability requires --ai-provider or a configured default provider",
@@ -1300,7 +1341,7 @@ fn apply_conversion_overrides(
             .providers
             .get(provider_name)
             .ok_or_else(|| CliError::usage(format!("unknown AI provider '{provider_name}'")))?;
-        validate_network_url(&provider.base_url, options, "AI provider")?;
+        validate_network_url(&provider.base_url, &loaded.options, "AI provider")?;
     }
     Ok(())
 }
