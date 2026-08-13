@@ -215,6 +215,7 @@ fn execute(
         ocr: Some(requests.clone()),
         transcriber: Some(requests.clone()),
         ai: Some(requests.clone()),
+        nested: None,
     };
     let converted = block_on(converter(format).convert(
         &input,

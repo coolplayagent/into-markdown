@@ -1241,6 +1241,9 @@ fn apply_conversion_overrides(
     assign!(max_input_size, max_input_bytes);
     assign!(max_decompressed_size, max_decompressed_bytes);
     assign!(max_archive_entries, max_archive_entries);
+    assign!(max_archive_depth, max_archive_depth);
+    assign!(max_archive_entry_size, max_archive_entry_bytes);
+    assign!(max_archive_compression_ratio, max_archive_compression_ratio);
     assign!(max_depth, max_nesting_depth);
     assign!(max_pages, max_pages);
     assign!(max_asset_size, max_asset_bytes);

@@ -1255,6 +1255,8 @@ pub struct Services {
     pub transcriber: Option<Arc<dyn Transcriber>>,
     /// AI provider.
     pub ai: Option<Arc<dyn AiProvider>>,
+    /// Request-authority-preserving dispatcher for already-resolved container members.
+    pub nested: Option<Arc<dyn crate::NestedConversionService>>,
 }
 
 #[cfg(test)]
