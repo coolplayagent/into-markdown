@@ -264,6 +264,8 @@ pub struct ConversionArgs {
 /// Management command tree.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Run the loopback-only local Web service.
+    Ui(UiArgs),
     /// List and inspect planned or available input formats.
     Formats(FormatsArgs),
     /// Inspect and manage local OCR model bundles.
@@ -280,6 +282,22 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Print detailed build version information.
     Version(VersionArgs),
+}
+
+/// `ui` local service arguments.
+#[derive(Debug, Args)]
+pub struct UiArgs {
+    /// Loopback TCP port; zero asks the operating system for an available port.
+    #[arg(long, default_value_t = 0)]
+    pub port: u16,
+
+    /// Do not open the service URL in the default browser.
+    #[arg(long)]
+    pub no_open: bool,
+
+    /// Private local state directory for the service.
+    #[arg(long, value_name = "DIR")]
+    pub data_dir: Option<PathBuf>,
 }
 
 /// `formats` arguments.
@@ -775,5 +793,15 @@ mod tests {
         assert_eq!(parse_duration_ms("3s").unwrap(), 3_000);
         assert!(parse_duration_ms("0").is_err());
         assert!(parse_byte_size("many").is_err());
+    }
+
+    #[test]
+    fn ui_is_a_command_but_double_dash_preserves_a_same_named_input() {
+        let command = Cli::try_parse_from(["into-md", "ui", "--port", "0", "--no-open"]).unwrap();
+        assert!(matches!(command.command, Some(Command::Ui(_))));
+
+        let input = Cli::try_parse_from(["into-md", "--", "ui"]).unwrap();
+        assert!(input.command.is_none());
+        assert_eq!(input.conversion.inputs, [OsString::from("ui")]);
     }
 }
