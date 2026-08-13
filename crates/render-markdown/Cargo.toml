@@ -14,5 +14,10 @@ sha2.workspace = true
 [dev-dependencies]
 pulldown-cmark.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

@@ -14,6 +14,7 @@ html5ever.workspace = true
 image.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
+into-markdown-pdfium = { path = "../pdfium" }
 pulldown-cmark.workspace = true
 quick-xml.workspace = true
 serde.workspace = true

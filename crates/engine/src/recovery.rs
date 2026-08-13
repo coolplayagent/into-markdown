@@ -4,13 +4,17 @@ mod store;
 
 pub use store::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
-use super::{Attempt, Engine, collect_provenance, measured_input_bytes, normalize_confidence};
+use super::{
+    Attempt, Engine, collect_provenance_preflighted, invoke_converter_preflighted,
+    invoke_renderer_preflighted, measured_input_bytes, normalize_confidence,
+    provenance_inventory_bytes,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionRequest, ConversionResult,
     ConverterOutput, Diagnostic, Document, ErrorCode, ExecutionContext, ExecutionStage,
     ProbeOutcome, Provenance, ResourceReservation, SourceLocator, SourceMetadata,
-    canonical_external_asset_uri,
+    canonical_external_asset_uri, estimate_retained_result, estimate_validation_working_set,
 };
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
 use sha2::{Digest, Sha256};
@@ -374,16 +378,50 @@ pub(super) async fn convert(
                     "checkpoint payload does not match its phase",
                 ));
             }
-            let result = ConversionResult { document, markdown, assets, diagnostics, provenance };
+            let validation_bytes =
+                estimate_validation_working_set(&document, &assets, &diagnostics).map_err(
+                    |error| {
+                        recovery_error(
+                            "corrupt",
+                            format!("checkpoint contains invalid document IR: {error}"),
+                        )
+                    },
+                )?;
+            let validation_memory = context.reserve_memory(validation_bytes)?;
+            document.validate().map_err(|error| {
+                recovery_error(
+                    "corrupt",
+                    format!("checkpoint contains invalid document IR: {error}"),
+                )
+            })?;
+            validate_asset_inventory(&document, &assets, &request)?;
+            validate_diagnostics(&diagnostics)?;
+            if !provenance_matches(&document.blocks, &provenance)
+                || provenance.len() > into_markdown_core::MAX_DTO_PROVENANCE
+            {
+                return Err(recovery_error(
+                    "corrupt",
+                    "checkpoint provenance does not match document reading order",
+                ));
+            }
+            drop(validation_memory);
+            let result = ConversionResult::from_recovered_accounted_parts(
+                document,
+                markdown,
+                assets,
+                diagnostics,
+                provenance,
+                &context,
+                memory,
+            )?;
             let result = validate_recovered_success(engine, &request, &context, result).await?;
             context.report(ExecutionStage::Completed, Some(1), Some(1), Some("resumed"))?;
-            drop(memory);
             return Ok(result);
         }
         existing => existing,
     };
 
-    let (output, _output_memory) = if let Some(store::LoadedCheckpoint {
+    let output = if let Some(store::LoadedCheckpoint {
         payload: CheckpointPayload::Converted { document, assets, diagnostics },
         metadata,
         memory,
@@ -392,13 +430,28 @@ pub(super) async fn convert(
         if metadata.phase != TaskPhase::Converted {
             return Err(recovery_error("corrupt", "checkpoint payload does not match its phase"));
         }
+        let validation_bytes = estimate_validation_working_set(&document, &assets, &diagnostics)
+            .map_err(|error| {
+                recovery_error(
+                    "corrupt",
+                    format!("checkpoint contains invalid document IR: {error}"),
+                )
+            })?;
+        let validation_memory = context.reserve_memory(validation_bytes)?;
         document.validate().map_err(|error| {
             recovery_error("corrupt", format!("checkpoint contains invalid document IR: {error}"))
         })?;
         validate_asset_inventory(&document, &assets, &request)?;
         validate_diagnostics(&diagnostics)?;
+        drop(validation_memory);
         context.report(ExecutionStage::Converting, Some(1), Some(1), Some("resumed"))?;
-        (ConverterOutput { document, assets, diagnostics }, memory)
+        ConverterOutput::new_with_memory_reservation(
+            document,
+            assets,
+            diagnostics,
+            &context,
+            memory,
+        )?
     } else {
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
         let candidates = engine.detect_formats(source.input(), &request.hint, &context).await?;
@@ -441,25 +494,19 @@ pub(super) async fn convert(
                 .join(","),
         })?;
         context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
-        let output = context
-            .run(attempt.converter.convert(
-                source.input(),
-                &attempt.candidate,
-                &request.options,
-                &engine.services,
-                &context,
-            ))
-            .await??;
-        output.document.validate().map_err(|error| ConversionError::Internal {
-            detail: format!(
-                "converter {} returned invalid document IR: {error}",
-                attempt.converter.id()
-            ),
-        })?;
-        validate_asset_inventory(&output.document, &output.assets, &request)?;
-        validate_diagnostics(&output.diagnostics)?;
-        let asset_memory =
-            context.reserve_memory(measured_asset_bytes(&output.assets, &request)?)?;
+        let output = invoke_converter_preflighted(
+            attempt.converter.as_ref(),
+            source.input(),
+            &attempt.candidate,
+            &request.options,
+            &engine.services,
+            &context,
+            |output| {
+                validate_asset_inventory(&output.document, &output.assets, &request)?;
+                validate_diagnostics(&output.diagnostics)
+            },
+        )
+        .await?;
         store.commit(
             token,
             &context,
@@ -472,32 +519,48 @@ pub(super) async fn convert(
                 diagnostics: &output.diagnostics,
             },
         )?;
-        (output, asset_memory)
+        output
     };
 
     let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
         detail: "no Markdown renderer is registered".into(),
     })?;
     context.report(ExecutionStage::Rendering, None, None, Some(renderer.id()))?;
-    let markdown = context
-        .run(renderer.render(&output.document, &output.assets, &request.options, &context))
-        .await??;
-    let _markdown_memory =
-        context.reserve_memory(u64::try_from(markdown.len()).map_err(|_| {
-            ConversionError::ResourceLimit {
-                limit: "max_memory_bytes",
-                detail: "rendered Markdown size cannot be represented as u64".into(),
-            }
-        })?)?;
-    let mut provenance = Vec::new();
-    collect_provenance(&output.document.blocks, &mut provenance);
-    let result = ConversionResult {
-        document: output.document,
+    let (markdown, markdown_memory) = invoke_renderer_preflighted(
+        renderer.as_ref(),
+        &output.document,
+        &output.assets,
+        &request.options,
+        &context,
+    )
+    .await?;
+    let markdown_bytes =
+        u64::try_from(markdown.capacity()).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "rendered Markdown capacity cannot be represented as u64".into(),
+        })?;
+    let (provenance, provenance_memory) =
+        collect_provenance_preflighted(&output.document.blocks, &context)?;
+    let final_required = estimate_retained_result(
+        &output.document,
+        &markdown,
+        &output.assets,
+        &output.diagnostics,
+        &provenance,
+    )?;
+    let final_memory = context.reserve_memory(
+        final_required.saturating_sub(
+            output
+                .leased_memory_for(&context)
+                .saturating_add(markdown_bytes)
+                .saturating_add(provenance_inventory_bytes(&provenance)?),
+        ),
+    )?;
+    let result = output.into_conversion_result(
         markdown,
-        assets: output.assets,
-        diagnostics: output.diagnostics,
         provenance,
-    };
+        [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
+    )?;
     store.commit(
         token,
         &context,
@@ -696,30 +759,20 @@ async fn validate_recovered_success(
     context: &ExecutionContext,
     result: ConversionResult,
 ) -> Result<ConversionResult, ConversionError> {
-    result.document.validate().map_err(|error| {
-        recovery_error("corrupt", format!("checkpoint contains invalid document IR: {error}"))
-    })?;
-    validate_asset_inventory(&result.document, &result.assets, request)?;
-    validate_diagnostics(&result.diagnostics)?;
-    let mut expected_provenance = Vec::new();
-    collect_provenance(&result.document.blocks, &mut expected_provenance);
-    if result.provenance != expected_provenance
-        || result.provenance.len() > into_markdown_core::MAX_DTO_PROVENANCE
-    {
-        return Err(recovery_error(
-            "corrupt",
-            "checkpoint provenance does not match document reading order",
-        ));
-    }
     let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
         detail: "no Markdown renderer is registered".into(),
     })?;
     context.report(ExecutionStage::Rendering, None, None, Some("validating checkpoint"))?;
-    let regenerated_markdown = match context
-        .run(renderer.render(&result.document, &result.assets, &request.options, context))
-        .await?
-    {
-        Ok(markdown) => markdown,
+    let regenerated = invoke_renderer_preflighted(
+        renderer.as_ref(),
+        &result.document,
+        &result.assets,
+        &request.options,
+        context,
+    )
+    .await;
+    let (regenerated_markdown, _regenerated_memory) = match regenerated {
+        Ok(value) => value,
         Err(error)
             if matches!(
                 error.code(),
@@ -735,13 +788,6 @@ async fn validate_recovered_success(
             ));
         }
     };
-    let _regenerated_memory =
-        context.reserve_memory(u64::try_from(regenerated_markdown.len()).map_err(|_| {
-            ConversionError::ResourceLimit {
-                limit: "max_memory_bytes",
-                detail: "regenerated Markdown size cannot be represented as u64".into(),
-            }
-        })?)?;
     if regenerated_markdown != result.markdown {
         return Err(recovery_error(
             "corrupt",
@@ -749,6 +795,37 @@ async fn validate_recovered_success(
         ));
     }
     Ok(result)
+}
+
+fn provenance_matches(nodes: &[BlockNode], inventory: &[Provenance]) -> bool {
+    fn visit(nodes: &[BlockNode], inventory: &[Provenance], index: &mut usize) -> bool {
+        for node in nodes {
+            if inventory.get(*index) != Some(&node.provenance) {
+                return false;
+            }
+            *index = index.saturating_add(1);
+            let valid = match &node.block {
+                Block::List { items, .. } => {
+                    items.iter().all(|item| visit(&item.blocks, inventory, index))
+                }
+                Block::Table { rows, .. } => rows
+                    .iter()
+                    .flat_map(|row| &row.cells)
+                    .all(|cell| visit(&cell.blocks, inventory, index)),
+                Block::Footnote { blocks, .. }
+                | Block::Page { blocks, .. }
+                | Block::Slide { blocks, .. }
+                | Block::Sheet { blocks, .. } => visit(blocks, inventory, index),
+                _ => true,
+            };
+            if !valid {
+                return false;
+            }
+        }
+        true
+    }
+    let mut index = 0_usize;
+    visit(nodes, inventory, &mut index) && index == inventory.len()
 }
 
 fn fingerprint_input(bytes: &[u8], metadata: &SourceMetadata) -> Result<String, ConversionError> {
@@ -797,7 +874,7 @@ mod tests {
     use crate::EngineBuilder;
     use into_markdown_core::{
         BoxFuture, ConversionOptions, Converter, ExecutionOptions, FormatCandidate, FormatDetector,
-        FormatHint, InputFormat, InputRef, MarkdownRenderer, ResolvedInput, ResourceLimits,
+        FormatHint, Inline, InputFormat, InputRef, MarkdownRenderer, ResolvedInput, ResourceLimits,
         Services, SourceResolver,
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -878,6 +955,15 @@ mod tests {
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
 
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn convert<'a>(
             &'a self,
             input: &'a ResolvedInput,
@@ -891,7 +977,7 @@ mod tests {
             Box::pin(async move {
                 let mut document = Document::default();
                 document.metadata.title = Some(title);
-                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
             })
         }
     }
@@ -901,11 +987,24 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct OversizedPlanRenderer {
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct MeasuredPlanRenderer {
+        plan: u64,
+        markdown: String,
+        calls: Arc<AtomicUsize>,
+        observed: Arc<std::sync::Mutex<Option<ExecutionContext>>>,
+    }
+
     struct UniqueConverter(Arc<AtomicUsize>);
 
     struct FixtureConverter {
         conversions: Arc<AtomicUsize>,
-        output: ConverterOutput,
+        document: Document,
+        assets: Vec<Asset>,
+        diagnostics: Vec<Diagnostic>,
     }
 
     impl Converter for UniqueConverter {
@@ -926,6 +1025,15 @@ mod tests {
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
 
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(64 * 1024)
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -939,7 +1047,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 let mut document = Document::default();
                 document.metadata.title = Some(format!("winner-{sequence}"));
-                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
             })
         }
     }
@@ -962,6 +1070,15 @@ mod tests {
             Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
         }
 
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            context: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(context.available_memory_bytes())
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -971,7 +1088,11 @@ mod tests {
             _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             self.conversions.fetch_add(1, Ordering::SeqCst);
-            let output = self.output.clone();
+            let output = ConverterOutput::new(
+                self.document.clone(),
+                self.assets.clone(),
+                self.diagnostics.clone(),
+            );
             Box::pin(async move { Ok(output) })
         }
     }
@@ -981,6 +1102,16 @@ mod tests {
             "recovery.renderer"
         }
 
+        fn planned_markdown_bytes(
+            &self,
+            document: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            context: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            let _ = document;
+            Ok(context.available_memory_bytes())
+        }
         fn render<'a>(
             &'a self,
             document: &'a Document,
@@ -999,6 +1130,75 @@ mod tests {
                 }
             })
         }
+    }
+
+    impl MarkdownRenderer for OversizedPlanRenderer {
+        fn id(&self) -> &'static str {
+            "recovery.oversized-plan-renderer"
+        }
+
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(80_000)
+        }
+
+        fn render<'a>(
+            &'a self,
+            _: &'a Document,
+            _: &'a [Asset],
+            _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<String, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    impl MarkdownRenderer for MeasuredPlanRenderer {
+        fn id(&self) -> &'static str {
+            "recovery.measured-plan-renderer"
+        }
+
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(self.plan)
+        }
+
+        fn render<'a>(
+            &'a self,
+            _: &'a Document,
+            _: &'a [Asset],
+            _: &'a ConversionOptions,
+            context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<String, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.observed.lock().unwrap() = Some(context.clone());
+            let markdown = self.markdown.clone();
+            Box::pin(async move { Ok(markdown) })
+        }
+    }
+
+    fn engine_with_renderer(
+        conversions: Arc<AtomicUsize>,
+        renderer: Arc<dyn MarkdownRenderer>,
+    ) -> Engine {
+        let mut builder = EngineBuilder::new().renderer(renderer);
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(CountingConverter(conversions)));
+        builder.build().unwrap()
     }
 
     fn engine(
@@ -1041,7 +1241,12 @@ mod tests {
             .registry_mut()
             .register_source_resolver(Arc::new(BytesResolver))
             .register_format_detector(Arc::new(TextDetector))
-            .register_converter(Arc::new(FixtureConverter { conversions, output: output.clone() }));
+            .register_converter(Arc::new(FixtureConverter {
+                conversions,
+                document: output.document.clone(),
+                assets: output.assets.clone(),
+                diagnostics: output.diagnostics.clone(),
+            }));
         builder.build().unwrap()
     }
 
@@ -1088,8 +1293,9 @@ mod tests {
     }
 
     fn assert_result_matches_fixture(result: &ConversionResult, fixture: &ConverterOutput) {
-        let mut provenance = Vec::new();
-        collect_provenance(&fixture.document.blocks, &mut provenance);
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let (provenance, _memory) =
+            collect_provenance_preflighted(&fixture.document.blocks, &context).unwrap();
         assert_eq!(result.document, fixture.document);
         assert_eq!(result.assets, fixture.assets);
         assert_eq!(result.diagnostics, fixture.diagnostics);
@@ -1159,6 +1365,77 @@ mod tests {
         })
     }
 
+    fn checkpoint_request(max_memory_bytes: u64) -> ConversionRequest {
+        let mut request = ConversionRequest::new(InputRef::bytes(b"fixture".as_slice(), Some("x")));
+        request.options.limits.max_memory_bytes = max_memory_bytes;
+        request
+    }
+
+    fn commit_fixture_checkpoint(
+        store: &RecoveryStore,
+        token: &RecoveryToken,
+        phase: TaskPhase,
+        fixture: &ConverterOutput,
+        markdown: &str,
+        provenance: &[Provenance],
+        request: &ConversionRequest,
+    ) {
+        let context =
+            ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
+        let metadata =
+            SourceMetadata { name: Some("x".into()), size: 7, ..SourceMetadata::default() };
+        let input_fingerprint = fingerprint_input(b"fixture", &metadata).unwrap();
+        let options_fingerprint =
+            fingerprint_json(&(request.hint.clone(), request.options.clone())).unwrap();
+        match phase {
+            TaskPhase::Converted => store
+                .commit(
+                    token,
+                    &context,
+                    &input_fingerprint,
+                    &options_fingerprint,
+                    phase,
+                    &CheckpointPayloadRef::Converted {
+                        document: &fixture.document,
+                        assets: CheckpointAssetsRef(&fixture.assets),
+                        diagnostics: &fixture.diagnostics,
+                    },
+                )
+                .unwrap(),
+            TaskPhase::Succeeded => store
+                .commit(
+                    token,
+                    &context,
+                    &input_fingerprint,
+                    &options_fingerprint,
+                    phase,
+                    &CheckpointPayloadRef::Succeeded {
+                        document: &fixture.document,
+                        markdown,
+                        assets: CheckpointAssetsRef(&fixture.assets),
+                        diagnostics: &fixture.diagnostics,
+                        provenance,
+                    },
+                )
+                .unwrap(),
+        }
+    }
+
+    fn decoded_checkpoint_reservation(
+        store: &RecoveryStore,
+        token: &RecoveryToken,
+        request: &ConversionRequest,
+    ) -> u64 {
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 64 * 1024 * 1024, ..Default::default() },
+        );
+        let store::LoadedCheckpoint { payload, mut memory, .. } =
+            store.load::<CheckpointPayloadWire>(token, &context).unwrap().unwrap();
+        let _payload = payload.decode(&context, &mut memory, request).unwrap();
+        context.reserved_memory_bytes()
+    }
+
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
         let waker = std::task::Waker::noop();
@@ -1223,20 +1500,165 @@ mod tests {
     }
 
     #[test]
+    fn recovery_renderer_preflight_rejects_converted_and_succeeded_before_render_call() {
+        let directory = private_tempdir();
+        let store = RecoveryStore::open(directory.path()).unwrap();
+        let converted_token = store.create_token().unwrap();
+        let succeeded_token = store.create_token().unwrap();
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let renderer_calls = Arc::new(AtomicUsize::new(0));
+        let request = || {
+            let mut request =
+                ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x")));
+            request.options.limits.max_memory_bytes = 70_000;
+            request
+        };
+
+        let fail = Arc::new(AtomicBool::new(true));
+        let initial =
+            engine(Arc::clone(&conversions), Arc::new(AtomicUsize::new(0)), Arc::clone(&fail));
+        assert_eq!(
+            block_on(initial.convert_recoverable(request(), &store, &converted_token))
+                .unwrap_err()
+                .code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(store.inspect(&converted_token).unwrap().unwrap().phase, TaskPhase::Converted);
+
+        fail.store(false, Ordering::SeqCst);
+        block_on(initial.convert_recoverable(request(), &store, &succeeded_token)).unwrap();
+        assert_eq!(store.inspect(&succeeded_token).unwrap().unwrap().phase, TaskPhase::Succeeded);
+
+        let rejecting = engine_with_renderer(
+            Arc::clone(&conversions),
+            Arc::new(OversizedPlanRenderer { calls: Arc::clone(&renderer_calls) }),
+        );
+        for token in [&converted_token, &succeeded_token] {
+            assert_eq!(
+                block_on(rejecting.convert_recoverable(request(), &store, token))
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::ResourceLimit
+            );
+        }
+        assert_eq!(renderer_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn recovered_decode_lease_shrinks_to_retained_before_renderer_for_both_phases() {
+        const RENDERER_PLAN: u64 = 8 * 1024 * 1024;
+        let mut document = Document::default();
+        document.metadata.title = Some("lease".into());
+        let fixture = ConverterOutput::new(
+            document,
+            vec![Asset {
+                id: AssetId("payload".into()),
+                filename: Some("payload.bin".into()),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![0x5a; 1_200_000],
+                external_uri: None,
+            }],
+            Vec::new(),
+        );
+        let markdown = "# lease\n".to_owned();
+        let provenance = Vec::new();
+        let output_retained = into_markdown_core::estimate_retained_output(
+            &fixture.document,
+            &fixture.assets,
+            &fixture.diagnostics,
+        )
+        .unwrap();
+        let result_retained = estimate_retained_result(
+            &fixture.document,
+            &markdown,
+            &fixture.assets,
+            &fixture.diagnostics,
+            &provenance,
+        )
+        .unwrap();
+        let source_charge = 7_u64;
+
+        for (phase, retained) in
+            [(TaskPhase::Converted, output_retained), (TaskPhase::Succeeded, result_retained)]
+        {
+            for exact in [true, false] {
+                let directory = private_tempdir();
+                let store = RecoveryStore::open(directory.path()).unwrap();
+                let token = store.create_token().unwrap();
+                let exact_limit = source_charge
+                    .checked_add(retained)
+                    .and_then(|value| value.checked_add(RENDERER_PLAN))
+                    .unwrap();
+                let limit = exact_limit - u64::from(!exact);
+                let request = checkpoint_request(limit);
+                commit_fixture_checkpoint(
+                    &store,
+                    &token,
+                    phase,
+                    &fixture,
+                    &markdown,
+                    &provenance,
+                    &request,
+                );
+                let decoded = decoded_checkpoint_reservation(&store, &token, &request);
+                assert!(decoded > retained);
+                assert!(
+                    source_charge + retained + RENDERER_PLAN <= exact_limit
+                        && exact_limit < source_charge + decoded + RENDERER_PLAN
+                );
+
+                let calls = Arc::new(AtomicUsize::new(0));
+                let observed = Arc::new(std::sync::Mutex::new(None));
+                let renderer = Arc::new(MeasuredPlanRenderer {
+                    plan: RENDERER_PLAN,
+                    markdown: markdown.clone(),
+                    calls: Arc::clone(&calls),
+                    observed: Arc::clone(&observed),
+                });
+                let engine = engine_with_renderer(Arc::new(AtomicUsize::new(0)), renderer);
+                let recovered = block_on(engine.convert_recoverable(request, &store, &token));
+                if exact {
+                    let result = recovered.unwrap();
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    let context = observed.lock().unwrap().take().unwrap();
+                    let final_retained = estimate_retained_result(
+                        &result.document,
+                        &result.markdown,
+                        &result.assets,
+                        &result.diagnostics,
+                        &result.provenance,
+                    )
+                    .unwrap();
+                    assert_eq!(context.reserved_memory_bytes(), final_retained);
+                    drop(result);
+                    assert_eq!(context.reserved_memory_bytes(), 0);
+                } else {
+                    assert!(matches!(
+                        recovered,
+                        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+                    ));
+                    assert_eq!(calls.load(Ordering::SeqCst), 0);
+                    assert!(observed.lock().unwrap().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn canonical_binary_asset_over_old_json_width_round_trips_every_phase() {
         let mut document = Document::default();
         document.metadata.title = Some("large asset".into());
-        let fixture = ConverterOutput {
+        let fixture = ConverterOutput::new(
             document,
-            assets: vec![Asset {
+            vec![Asset {
                 id: AssetId("large".into()),
                 filename: Some("large.bin".into()),
                 media_type: "application/octet-stream".into(),
                 bytes: vec![0xa5; 1_200_000],
                 external_uri: None,
             }],
-            diagnostics: Vec::new(),
-        };
+            Vec::new(),
+        );
         assert_fixture_recovers_converted_and_succeeded(fixture);
     }
 
@@ -1244,10 +1666,39 @@ mod tests {
     fn maximum_public_ir_depth_round_trips_every_phase() {
         let document = maximum_depth_document(0);
         document.validate().unwrap();
-        assert_fixture_recovers_converted_and_succeeded(ConverterOutput {
+        assert_fixture_recovers_converted_and_succeeded(ConverterOutput::new(
             document,
-            ..ConverterOutput::default()
-        });
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+
+    #[test]
+    fn source_text_round_trips_every_recovery_phase() {
+        let mut document = Document::default();
+        document.metadata.title = Some("source text".into());
+        document.blocks.push(fixture_node(
+            "source",
+            Block::Paragraph(vec![Inline::SourceText {
+                value: "字".into(),
+                marks: vec![],
+                provenance: Box::new(Provenance {
+                    kind: into_markdown_core::ProvenanceKind::NativeParser,
+                    provider: "pdfium".into(),
+                    locator: SourceLocator {
+                        page: Some(1),
+                        character_index: Some(9),
+                        ..SourceLocator::default()
+                    },
+                    confidence: None,
+                }),
+            }]),
+        ));
+        assert_fixture_recovers_converted_and_succeeded(ConverterOutput::new(
+            document,
+            Vec::new(),
+            Vec::new(),
+        ));
     }
 
     #[test]
@@ -1610,17 +2061,17 @@ mod tests {
             let token = store.create_token().unwrap();
             let mut document = Document::default();
             document.metadata.title = Some("base64".into());
-            let fixture = ConverterOutput {
+            let fixture = ConverterOutput::new(
                 document,
-                assets: vec![Asset {
+                vec![Asset {
                     id: AssetId("asset".into()),
                     filename: None,
                     media_type: "application/octet-stream".into(),
                     bytes: vec![1],
                     external_uri: None,
                 }],
-                diagnostics: Vec::new(),
-            };
+                Vec::new(),
+            );
             let engine = fixture_engine(
                 &fixture,
                 Arc::new(AtomicUsize::new(0)),
@@ -1658,17 +2109,17 @@ mod tests {
         let token = store.create_token().unwrap();
         let mut document = Document::default();
         document.metadata.title = Some("asset limit".into());
-        let fixture = ConverterOutput {
+        let fixture = ConverterOutput::new(
             document,
-            assets: vec![Asset {
+            vec![Asset {
                 id: AssetId("asset".into()),
                 filename: None,
                 media_type: "application/octet-stream".into(),
                 bytes: vec![1],
                 external_uri: None,
             }],
-            diagnostics: Vec::new(),
-        };
+            Vec::new(),
+        );
         let engine = fixture_engine(
             &fixture,
             Arc::new(AtomicUsize::new(0)),
@@ -1709,7 +2160,7 @@ mod tests {
         let token = store.create_token().unwrap();
         let document = maximum_depth_document(0);
         document.validate().unwrap();
-        let fixture = ConverterOutput { document, ..ConverterOutput::default() };
+        let fixture = ConverterOutput::new(document, Vec::new(), Vec::new());
         let engine = fixture_engine(
             &fixture,
             Arc::new(AtomicUsize::new(0)),
@@ -1745,17 +2196,17 @@ mod tests {
         let token = store.create_token().unwrap();
         let mut document = Document::default();
         document.metadata.title = Some("memory".into());
-        let fixture = ConverterOutput {
+        let fixture = ConverterOutput::new(
             document,
-            assets: vec![Asset {
+            vec![Asset {
                 id: AssetId("large".into()),
                 filename: None,
                 media_type: "application/octet-stream".into(),
                 bytes: vec![0xa5; 1_200_000],
                 external_uri: None,
             }],
-            diagnostics: Vec::new(),
-        };
+            Vec::new(),
+        );
         let engine = fixture_engine(
             &fixture,
             Arc::new(AtomicUsize::new(0)),

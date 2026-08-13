@@ -86,6 +86,20 @@ CPU 推理，以验证 adapter、factory 重建和退出析构顺序；另一个
 `resourceLimit`，父进程随后仍能创建 Identity session。该 ceiling 是虚拟地址空间而非
 RSS 声明，模型 session/run 和请求预算仍独立检查。fixture 不是产品 OCR 模型；
 当前模型 authority 没有 ONNX runtime artifact，因而没有产品模型推理验证。
+
+PDF 普通 Cargo/Bazel 测试使用纯 Rust mock、生成式小型数据和缺 runtime 的稳定错误，不下载
+或加载 native 库。单元测试覆盖 UTF-16 surrogate、负 count、极端 limit、损坏 bitmap 长度、
+坐标旋转、危险 URI、句柄析构和并发串行化。显式 macOS ARM64 smoke 的 PDF fixture 由测试
+代码生成（项目自身 MIT 许可），包含 100×200 的 0/90/180/270 度页面、文本、字符几何/字体、
+注释与 web link、内部 page destination、嵌入图片及页面 render；另生成 text-only、mixed、
+full-page scanned、加密、损坏和超页数 fixture，同时运行 production converter 的并发、统一 IR、
+auto/always/off、低预算，以及完整 Engine→中央 renderer→安全 page anchor 分支。四平台下载制品的 export/格式/依赖/哈希
+审计与 native smoke 只由以下 opt-in 命令运行：
+
+```shell
+PDFIUM_AUDIT_NETWORK=1 ./tools/pdfium-audit.sh
+PDFIUM_NATIVE_SMOKE=1 PDFIUM_AUDIT_NETWORK=1 ./tools/pdfium-audit.sh --native-smoke
+```
 独立 `native_archive_binary_audit` 显式 target 会下载四个固定官方包，但不执行异平台
 代码；它有界解析并精确核对四个平台的格式、架构、SONAME/install name、imports 与
 RPATH。普通 `//...` 不包含这些 manual targets。native adapter 的输出检查在任何

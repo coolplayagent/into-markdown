@@ -78,6 +78,8 @@ if [ "${1:-}" = --native-smoke ]; then
     *) echo "native smoke is supported on macOS ARM64 in this workflow" >&2; exit 2 ;;
   esac
   PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown-pdfium native_smoke -- --ignored
+  PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown-converters native_production_converter_is_serialized_and_emits_unified_ir -- --ignored
+  PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown native_pdf_runs_through_engine_and_emits_internal_page_anchor -- --ignored
 fi
 
 echo "PDFium four-platform artifact audit passed"

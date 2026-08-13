@@ -1,7 +1,7 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。DOCX/DOCM、TXT、Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB 状态为
-`available`，其余尚未
+运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、TXT、Markdown、HTML、
+CSV、TSV、JSON、XML、RSS/Atom、IPYNB 状态为 `available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -13,6 +13,33 @@
 | 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
 | 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+
+## PDF
+
+PDF 使用审核并固定版本的 PDFium 动态库；调用方必须以 `PDFIUM_LIBRARY` 或
+`PdfConverter::with_runtime_path` 给出当前平台的精确绝对路径。转换器不搜索系统库、`PATH`
+或动态加载器环境，也不下载运行时；缺失运行时稳定返回 `componentUnavailable`。
+
+每页产生一个 `Block::Page`。字符按 PDFium 原生 character index 忠实进入
+`Inline::SourceText`，携带 index、Unicode scalar（不可映射、surrogate、NUL 与禁用控制字符
+为 U+FFFD）、字体名称线索、字号、规范化到 `[0, 360)` 的字符角度与边界框。这里不把原生字符顺序声称为视觉阅读
+顺序；跨栏、段落与高级 reading-order 合并属于后续版面阶段。页面、字符、链接和图片节点都
+带一基页码 provenance。坐标统一为 PDF point（1/72 inch）、应用页面旋转后的左上原点、X
+向右、Y 向下；page locator 同时记录显示宽高与顺时针旋转角。
+
+注释 link 与 PDFium web link 都被提取。内部目标表示为 `#pdf-page-N`，外部目标只接受绝对
+HTTP(S)/mailto URI；中央 Markdown renderer 为每页发出稳定的 `pdf-page-N` 安全 anchor，因此
+内部目标不会成为悬空链接。无效 UTF-8、NUL、控制字符、危险 scheme 或无法表达的 destination
+fail closed，转换过程从不访问 URI。真实 image object bitmap 会校验尺寸、stride、format 与
+完整 pixel bytes，再转为有界 BMP asset；内容 SHA-256 形成稳定去重 ID，图片节点的 provenance
+保留 object 边界。
+
+扫描页启发式固定为：少于 8 个非空白、非控制的原生字符，且 image object 的保守 union
+覆盖率至少 50%。覆盖以固定 64×64 网格计算，只有完整落入图片矩形的格子才计入，重叠只计
+一次，因此近阈值只可能低估而不会因采样产生 false positive。空白页因没有覆盖图片不会误判；混合页始终同时保留文本和图片。`ocr=auto` 只为扫描页
+创建至多 4096 像素边长的页面 render asset，`ocr=always` 明确为每页创建，`off` 不 render。
+本层只准备 OCR 输入资产，不伪造 OCR 成功。PDFium 无法可靠区分缺密码和错误密码时，两者
+都映射为稳定 `encrypted`；损坏文件为 `malformed`，超页数为 `resourceLimit`。
 
 ## HTML
 

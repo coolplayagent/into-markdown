@@ -14,6 +14,12 @@ through its real converter and Markdown renderer. A limit fixture records an exa
 `ConversionOptions` field, the failing value, the adjacent passing value, the expected error limit,
 and the passing Markdown hash.
 
+PDF is the one native-runtime format: its Apache-2.0 text, mixed, scanned, encrypted, damaged,
+over-page-limit, link, and four-rotation fixtures are generated deterministically by the Rust test
+module and executed only by the explicit pinned-PDFium smoke. Keeping those bytes out of the
+ordinary manifest lets the default Cargo/Bazel corpus remain offline and runtime-independent while
+the registry still declares PDF available.
+
 ## Storage and network boundary
 
 Small fixtures are Apache-2.0 repository-generated files checked into `small/`; ordinary Cargo and

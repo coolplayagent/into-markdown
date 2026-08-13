@@ -3,6 +3,8 @@
 //! This crate deliberately renders asset references only. Writing extracted
 //! assets remains the caller's responsibility.
 
+mod fixed_alloc;
+
 use base64::Engine as _;
 use into_markdown_core::{
     Asset, AssetMode, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
@@ -12,6 +14,8 @@ use into_markdown_core::{
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+
+use fixed_alloc::{ExactString, FixedSlots};
 
 /// Deterministic renderer occupying the single built-in GFM renderer slot.
 #[derive(Debug, Default)]
@@ -250,6 +254,16 @@ impl MarkdownRenderer for GfmRenderer {
         "builtin.gfm"
     }
 
+    fn planned_markdown_bytes(
+        &self,
+        document: &Document,
+        assets: &[Asset],
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        planned_render_peak(document, assets, options, context)
+    }
+
     fn render<'a>(
         &'a self,
         document: &'a Document,
@@ -261,6 +275,542 @@ impl MarkdownRenderer for GfmRenderer {
             context.checkpoint()?;
             render(document, assets, options)
         })
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TablePlanOwners {
+    occupancy: u64,
+    grid_rows: u64,
+    grid_slots: u64,
+    fallback_header: u64,
+    separator_slots: u64,
+    separator_strings: u64,
+    cell_strings: u64,
+    cell_block_joins: u64,
+    output: u64,
+}
+
+impl TablePlanOwners {
+    fn total(&self) -> Result<u64, ConversionError> {
+        [
+            self.occupancy,
+            self.grid_rows,
+            self.grid_slots,
+            self.fallback_header,
+            self.separator_slots,
+            self.separator_strings,
+            self.cell_strings,
+            self.cell_block_joins,
+            self.output,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| total.checked_add(value).ok_or_else(render_plan_overflow))
+    }
+
+    fn verify_within(&self, planned: &Self) -> Result<(), ConversionError> {
+        for (owner, actual, bound) in [
+            ("occupancy", self.occupancy, planned.occupancy),
+            ("grid rows", self.grid_rows, planned.grid_rows),
+            ("grid slots", self.grid_slots, planned.grid_slots),
+            ("fallback header", self.fallback_header, planned.fallback_header),
+            ("separator slots", self.separator_slots, planned.separator_slots),
+            ("separator strings", self.separator_strings, planned.separator_strings),
+            ("cell strings", self.cell_strings, planned.cell_strings),
+            ("cell temporaries", self.cell_block_joins, planned.cell_block_joins),
+            ("output", self.output, planned.output),
+        ] {
+            if actual > bound {
+                return Err(ConversionError::Internal {
+                    detail: format!(
+                        "table renderer {owner} allocation {actual} exceeded its {bound}-byte plan"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+// Planning runs before the request-memory permit exists, so this bounded
+// fixed-size scratch area deliberately stays on the stack instead of making
+// an uncharged heap allocation. Calls are not nested: the shape is discarded
+// before planning any cell's child blocks.
+#[allow(clippy::large_stack_arrays)]
+fn table_shape(rows: &[TableRow]) -> Result<(usize, bool), ConversionError> {
+    let mut occupancy = [0_u32; into_markdown_core::MAX_TABLE_COLUMNS];
+    let mut width = 0_usize;
+    for row in rows {
+        let mut column = 0_usize;
+        for cell in &row.cells {
+            while occupancy.get(column).is_some_and(|remaining| *remaining > 0) {
+                column = column.saturating_add(1);
+            }
+            let span = usize::try_from(cell.column_span).map_err(|_| render_plan_overflow())?;
+            if span == 0 {
+                return Err(render_error("table column span must be positive"));
+            }
+            let end = column.checked_add(span).ok_or_else(render_plan_overflow)?;
+            if end > occupancy.len() {
+                return Err(ConversionError::ResourceLimit {
+                    limit: "max_table_columns",
+                    detail: format!("table renderer width {end} exceeds {}", occupancy.len()),
+                });
+            }
+            occupancy[column..end].fill(cell.row_span);
+            column = end;
+            width = width.max(end);
+        }
+        for remaining in &mut occupancy[..width] {
+            *remaining = remaining.saturating_sub(1);
+        }
+    }
+    let first_has_header = rows
+        .first()
+        .is_some_and(|row| !row.cells.is_empty() && row.cells.iter().all(|cell| cell.header));
+    Ok((width, first_has_header))
+}
+
+fn checked_product(left: usize, right: usize) -> Result<u64, ConversionError> {
+    u64::try_from(left.checked_mul(right).ok_or_else(render_plan_overflow)?)
+        .map_err(|_| render_plan_overflow())
+}
+
+fn fixed_slot_bytes<T>(capacity: usize) -> Result<u64, ConversionError> {
+    checked_product(capacity, std::mem::size_of::<T>())
+}
+
+fn exact_zero_occupancy(width: usize) -> Result<Vec<u32>, ConversionError> {
+    let mut slots = FixedSlots::new(width, "table occupancy allocation failed")?;
+    for _ in 0..width {
+        slots.push(0)?;
+    }
+    let values = slots.into_vec()?;
+    if values.capacity() != width {
+        return Err(render_error("table occupancy allocation lost its exact capacity"));
+    }
+    Ok(values)
+}
+
+fn exact_empty_strings(width: usize, detail: &'static str) -> Result<Vec<String>, ConversionError> {
+    let mut slots = FixedSlots::new(width, detail)?;
+    for _ in 0..width {
+        slots.push(String::new())?;
+    }
+    let values = slots.into_vec()?;
+    if values.capacity() != width {
+        return Err(render_error("table string-slot allocation lost its exact capacity"));
+    }
+    Ok(values)
+}
+
+fn exact_string(value: &str, detail: &'static str) -> Result<String, ConversionError> {
+    let mut output = ExactString::new(value.len(), detail)?;
+    output.push_str(value)?;
+    let output = output.finish()?;
+    if output.capacity() != value.len() {
+        return Err(render_error("table string allocation lost its exact capacity"));
+    }
+    Ok(output)
+}
+
+fn exact_separators(
+    width: usize,
+    alignments: &[TableAlignment],
+) -> Result<Vec<String>, ConversionError> {
+    let mut slots = FixedSlots::new(width, "table separator allocation failed")?;
+    for column in 0..width {
+        let separator = match alignments.get(column).copied().unwrap_or_default() {
+            TableAlignment::None => "---",
+            TableAlignment::Left => ":---",
+            TableAlignment::Center => ":---:",
+            TableAlignment::Right => "---:",
+        };
+        slots.push(exact_string(separator, "table separator string allocation failed")?)?;
+    }
+    let values = slots.into_vec()?;
+    if values.capacity() != width {
+        return Err(render_error("table separator allocation lost its exact capacity"));
+    }
+    Ok(values)
+}
+
+fn string_capacity_bytes(values: &[String]) -> Result<u64, ConversionError> {
+    values.iter().try_fold(0_u64, |total, value| {
+        total
+            .checked_add(u64::try_from(value.capacity()).map_err(|_| render_plan_overflow())?)
+            .ok_or_else(render_plan_overflow)
+    })
+}
+
+fn table_row_length(cells: &[String]) -> Result<usize, ConversionError> {
+    cells.iter().try_fold(2_usize, |length, cell| {
+        length
+            .checked_add(3)
+            .and_then(|value| value.checked_add(cell.len()))
+            .ok_or_else(render_plan_overflow)
+    })
+}
+
+fn write_exact_table_row(
+    output: &mut ExactString,
+    cells: &[String],
+    newline: bool,
+) -> Result<(), ConversionError> {
+    output.push_byte(b'|')?;
+    for cell in cells {
+        output.push_byte(b' ')?;
+        output.push_str(cell)?;
+        output.push_str(" |")?;
+    }
+    if newline {
+        output.push_byte(b'\n')?;
+    }
+    Ok(())
+}
+
+fn table_cell_owner_bounds<F>(
+    rows: &[TableRow],
+    mut block_output: F,
+) -> Result<(u64, u64), ConversionError>
+where
+    F: FnMut(&[BlockNode]) -> Result<u64, ConversionError>,
+{
+    let mut cell_strings = 0_u64;
+    let mut cell_block_joins = 0_u64;
+    for cell in rows.iter().flat_map(|row| &row.cells) {
+        let body = block_output(&cell.blocks)?;
+        let flattened = body.checked_mul(4).ok_or_else(render_plan_overflow)?;
+        let wrapped = flattened
+            .checked_add(if cell.row_span > 1 || cell.column_span > 1 { 112 } else { 0 })
+            .and_then(|value| value.checked_add(if cell.header { 17 } else { 0 }))
+            .ok_or_else(render_plan_overflow)?;
+        cell_strings = cell_strings.checked_add(wrapped).ok_or_else(render_plan_overflow)?;
+        // `render_blocks` keeps its Vec<String> and join output alive while
+        // two LF normalization results, two `<br>` replacement results, and
+        // the optional span/header wrapper are successively constructed.
+        cell_block_joins = cell_block_joins
+            .checked_add(body)
+            .and_then(|value| value.checked_add(body))
+            .and_then(|value| value.checked_add(flattened))
+            .and_then(|value| value.checked_add(flattened))
+            .and_then(|value| value.checked_add(wrapped))
+            .ok_or_else(render_plan_overflow)?;
+    }
+    Ok((cell_strings, cell_block_joins))
+}
+
+fn table_plan_owners(
+    rows: &[TableRow],
+    width: usize,
+    first_has_header: bool,
+    cell_strings: u64,
+    cell_block_joins: u64,
+) -> Result<TablePlanOwners, ConversionError> {
+    let rows_len = rows.len();
+    let rendered_rows = rows_len.checked_add(2).ok_or_else(render_plan_overflow)?;
+    let slot_size = std::mem::size_of::<String>();
+    let separators = checked_product(width, 5)?;
+    let row_overhead = checked_product(rendered_rows, width)?
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(u64::try_from(rendered_rows).ok()? * 2))
+        .ok_or_else(render_plan_overflow)?;
+    Ok(TablePlanOwners {
+        occupancy: checked_product(width, std::mem::size_of::<u32>())?,
+        grid_rows: checked_product(rows_len, std::mem::size_of::<Vec<String>>())?,
+        grid_slots: checked_product(
+            rows_len.checked_mul(width).ok_or_else(render_plan_overflow)?,
+            slot_size,
+        )?,
+        fallback_header: if first_has_header { 0 } else { checked_product(width, slot_size)? },
+        separator_slots: checked_product(width, slot_size)?,
+        separator_strings: separators,
+        cell_strings,
+        cell_block_joins,
+        output: cell_strings
+            .checked_add(separators)
+            .and_then(|value| value.checked_add(row_overhead))
+            .ok_or_else(render_plan_overflow)?,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn planned_render_peak(
+    document: &Document,
+    assets: &[Asset],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<u64, ConversionError> {
+    struct Plan<'a> {
+        bytes: u64,
+        units: u64,
+        visited: usize,
+        context: &'a ExecutionContext,
+    }
+    impl Plan<'_> {
+        fn add(&mut self, bytes: u64) -> Result<(), ConversionError> {
+            self.bytes = self.bytes.checked_add(bytes).ok_or_else(render_plan_overflow)?;
+            Ok(())
+        }
+        fn unit(&mut self) -> Result<(), ConversionError> {
+            self.units = self.units.checked_add(1).ok_or_else(render_plan_overflow)?;
+            self.visited = self.visited.saturating_add(1);
+            if self.visited.is_multiple_of(1_024) {
+                self.context.checkpoint()?;
+            }
+            Ok(())
+        }
+        fn text(&mut self, value: &str, depth: usize) -> Result<u64, ConversionError> {
+            let source = u64::try_from(value.len()).map_err(|_| render_plan_overflow())?;
+            let newlines = u64::try_from(value.bytes().filter(|byte| *byte == b'\n').count())
+                .map_err(|_| render_plan_overflow())?;
+            // `normalize_lf` owns two successive replace results; `single_line`
+            // owns one more. `escape_text` expands each input byte by at most
+            // five bytes (`&amp;`) and marked text can wrap all six supported
+            // marks with at most 13 bytes each.
+            self.add(source)?;
+            self.add(source)?;
+            self.add(source)?;
+            let output = source
+                .checked_mul(5)
+                .and_then(|value| value.checked_add(6 * 13))
+                .ok_or_else(render_plan_overflow)?;
+            let mut rendered = output;
+            self.add(rendered)?;
+            // At each typed block ancestor the child string remains alive while
+            // indentation replacement, formatting, the Vec<String> slot, and
+            // the container join allocate their own result. This recurrence
+            // mirrors those four concrete owners instead of applying a global
+            // depth multiplier.
+            for _ in 0..depth {
+                self.add(rendered)?;
+                rendered = rendered
+                    .checked_add(newlines.checked_mul(4).ok_or_else(render_plan_overflow)?)
+                    .and_then(|value| value.checked_add(64))
+                    .ok_or_else(render_plan_overflow)?;
+                self.add(rendered)?;
+                self.add(rendered)?;
+                self.add(rendered)?;
+            }
+            Ok(output)
+        }
+    }
+
+    fn inlines(
+        values: &[Inline],
+        block_depth: usize,
+        link_depth: usize,
+        plan: &mut Plan<'_>,
+    ) -> Result<u64, ConversionError> {
+        if link_depth > 2 {
+            return Err(ConversionError::Internal {
+                detail: "renderer preflight rejected nested links".into(),
+            });
+        }
+        let mut output = 0_u64;
+        for value in values {
+            plan.unit()?;
+            let rendered = match value {
+                Inline::Text { value, .. }
+                | Inline::SourceText { value, .. }
+                | Inline::Code(value)
+                | Inline::Formula(value)
+                | Inline::FootnoteReference(value) => plan.text(value, block_depth)?,
+                Inline::Link { target, content } => {
+                    let target_output = plan.text(target, block_depth)?;
+                    inlines(content, block_depth, link_depth + 1, plan)?
+                        .checked_add(target_output.checked_mul(3).ok_or_else(render_plan_overflow)?)
+                        .and_then(|value| value.checked_add(6))
+                        .ok_or_else(render_plan_overflow)?
+                }
+                Inline::LineBreak => {
+                    plan.add(3)?;
+                    3
+                }
+                _ => {
+                    return Err(ConversionError::Internal {
+                        detail: "renderer preflight encountered an unsupported future inline"
+                            .into(),
+                    });
+                }
+            };
+            output = output.checked_add(rendered).ok_or_else(render_plan_overflow)?;
+        }
+        Ok(output)
+    }
+    fn nodes(
+        values: &[BlockNode],
+        depth: usize,
+        plan: &mut Plan<'_>,
+    ) -> Result<u64, ConversionError> {
+        if depth > into_markdown_core::MAX_DOCUMENT_DEPTH {
+            return Err(ConversionError::Internal {
+                detail: "renderer preflight received over-deep document IR".into(),
+            });
+        }
+        let mut output = 0_u64;
+        for value in values {
+            plan.unit()?;
+            let rendered = match &value.block {
+                Block::Paragraph(values) | Block::TimedSegment { content: values, .. } => {
+                    inlines(values, depth, 1, plan)?
+                }
+                Block::Heading { content: values, .. } => inlines(values, depth, 1, plan)?
+                    .checked_add(16)
+                    .ok_or_else(render_plan_overflow)?,
+                Block::List { items, .. } => {
+                    let mut rendered = 0_u64;
+                    for item in items {
+                        plan.unit()?;
+                        if let Some(label) = &item.marker_label {
+                            rendered = rendered
+                                .checked_add(plan.text(label, depth)?)
+                                .ok_or_else(render_plan_overflow)?;
+                        }
+                        rendered = rendered
+                            .checked_add(
+                                nodes(&item.blocks, depth + 1, plan)?
+                                    .checked_mul(5)
+                                    .and_then(|value| value.checked_add(128))
+                                    .ok_or_else(render_plan_overflow)?,
+                            )
+                            .ok_or_else(render_plan_overflow)?;
+                    }
+                    rendered
+                }
+                Block::Table { rows, .. } => {
+                    let (width, first_has_header) = table_shape(rows)?;
+                    for row in rows {
+                        plan.unit()?;
+                        for _ in &row.cells {
+                            plan.unit()?;
+                        }
+                    }
+                    let (cell_strings, cell_block_joins) =
+                        table_cell_owner_bounds(rows, |blocks| nodes(blocks, depth + 1, plan))?;
+                    let owners = table_plan_owners(
+                        rows,
+                        width,
+                        first_has_header,
+                        cell_strings,
+                        cell_block_joins,
+                    )?;
+                    plan.add(owners.total()?)?;
+                    owners.output
+                }
+                Block::Code { language, text } => {
+                    let mut rendered = 16_u64;
+                    if let Some(language) = language {
+                        rendered = rendered
+                            .checked_add(plan.text(language, depth)?)
+                            .ok_or_else(render_plan_overflow)?;
+                    }
+                    rendered
+                        .checked_add(plan.text(text, depth)?)
+                        .ok_or_else(render_plan_overflow)?
+                }
+                Block::Formula(value) => plan.text(value, depth)?,
+                Block::Footnote { label, blocks } => plan
+                    .text(label, depth)?
+                    .checked_add(nodes(blocks, depth + 1, plan)?)
+                    .and_then(|value| value.checked_add(16))
+                    .ok_or_else(render_plan_overflow)?,
+                Block::Image { asset, alt } => {
+                    let mut rendered = plan.text(&asset.0, depth)?;
+                    if let Some(alt) = alt {
+                        rendered = rendered
+                            .checked_add(plan.text(alt, depth)?)
+                            .ok_or_else(render_plan_overflow)?;
+                    }
+                    rendered.checked_add(8).ok_or_else(render_plan_overflow)?
+                }
+                Block::Page { blocks, .. } => nodes(blocks, depth + 1, plan)?,
+                Block::Slide { title, blocks, .. } => {
+                    let mut rendered = 32_u64;
+                    if let Some(title) = title {
+                        rendered = rendered
+                            .checked_add(plan.text(title, depth)?)
+                            .ok_or_else(render_plan_overflow)?;
+                    }
+                    rendered
+                        .checked_add(nodes(blocks, depth + 1, plan)?)
+                        .ok_or_else(render_plan_overflow)?
+                }
+                Block::Sheet { name, blocks } => plan
+                    .text(name, depth)?
+                    .checked_add(nodes(blocks, depth + 1, plan)?)
+                    .and_then(|value| value.checked_add(16))
+                    .ok_or_else(render_plan_overflow)?,
+                Block::Rule => {
+                    plan.add(3)?;
+                    3
+                }
+                _ => {
+                    return Err(ConversionError::Internal {
+                        detail: "renderer preflight encountered an unsupported future block".into(),
+                    });
+                }
+            };
+            output = output
+                .checked_add(rendered)
+                .and_then(|value| value.checked_add(2))
+                .ok_or_else(render_plan_overflow)?;
+        }
+        Ok(output)
+    }
+
+    context.checkpoint()?;
+    let mut plan = Plan { bytes: 0, units: 0, visited: 0, context };
+    plan.add(into_markdown_core::estimate_validation_working_set(document, assets, &[])?)?;
+    let _ = nodes(&document.blocks, 1, &mut plan)?;
+    for asset in assets {
+        plan.unit()?;
+        for value in [
+            Some(&asset.id.0),
+            asset.filename.as_ref(),
+            Some(&asset.media_type),
+            asset.external_uri.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            // Asset planning clones each value into grouping and lookup maps.
+            let _ = plan.text(value, 1)?;
+        }
+        if options.output.asset_mode == AssetMode::Embed && !asset.bytes.is_empty() {
+            let source = u64::try_from(asset.bytes.len()).map_err(|_| render_plan_overflow())?;
+            let base64 = source
+                .checked_add(2)
+                .and_then(|value| value.checked_div(3))
+                .and_then(|value| value.checked_mul(4))
+                .ok_or_else(render_plan_overflow)?;
+            let uri = base64
+                .checked_add(u64::try_from(asset.media_type.len()).unwrap_or(u64::MAX))
+                .and_then(|value| value.checked_add(13))
+                .ok_or_else(render_plan_overflow)?;
+            // Base64, data URI, percent-encoded destination, and final image.
+            plan.add(base64)?;
+            plan.add(uri)?;
+            plan.add(uri.checked_mul(3).ok_or_else(render_plan_overflow)?)?;
+            plan.add(uri.checked_mul(3).ok_or_else(render_plan_overflow)?)?;
+        }
+    }
+    // Exact container/header owners used by render Vecs and asset B-trees. One
+    // full 11-slot B-tree node per unit is deliberately conservative for
+    // sparse nodes and includes edges and allocator metadata.
+    let string_headers = u64::try_from(std::mem::size_of::<String>())
+        .unwrap_or(u64::MAX)
+        .checked_mul(16)
+        .and_then(|value| value.checked_add(12 * u64::try_from(std::mem::size_of::<usize>()).ok()?))
+        .ok_or_else(render_plan_overflow)?;
+    plan.add(plan.units.checked_mul(string_headers).ok_or_else(render_plan_overflow)?)?;
+    Ok(plan.bytes)
+}
+
+fn render_plan_overflow() -> ConversionError {
+    ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "Markdown renderer preflight plan overflowed".into(),
     }
 }
 
@@ -361,7 +911,10 @@ impl RenderContext<'_> {
             Block::Image { asset, alt } => self.render_image(&asset.0, alt.as_deref()),
             Block::Page { number, blocks } => {
                 let body = self.render_blocks_in(blocks, inline_context)?;
-                Ok(with_body(format!("## Page {number}"), &body))
+                Ok(with_body(
+                    format!("<a id=\"pdf-page-{number}\"></a>\n\n## Page {number}"),
+                    &body,
+                ))
             }
             Block::Slide { number, title, blocks } => {
                 let mut heading = format!("## Slide {number}");
@@ -455,71 +1008,128 @@ impl RenderContext<'_> {
         rows: &[TableRow],
         alignments: &[TableAlignment],
     ) -> Result<String, ConversionError> {
-        let grid = self.table_grid(rows)?;
-        let width = grid.first().map_or(0, Vec::len);
-        let first_has_header = rows
-            .first()
-            .is_some_and(|row| !row.cells.is_empty() && row.cells.iter().all(|cell| cell.header));
-        let mut output = String::new();
-        if first_has_header {
-            write_table_row(&mut output, &grid[0]);
-        } else {
-            write_table_row(&mut output, &vec![String::new(); width]);
-        }
-        let separators = (0..width)
-            .map(|column| {
-                match alignments.get(column).copied().unwrap_or_default() {
-                    TableAlignment::None => "---",
-                    TableAlignment::Left => ":---",
-                    TableAlignment::Center => ":---:",
-                    TableAlignment::Right => "---:",
-                }
-                .into()
-            })
-            .collect::<Vec<String>>();
-        write_table_row(&mut output, &separators);
-        let start = usize::from(first_has_header);
-        for row in &grid[start..] {
-            write_table_row(&mut output, row);
-        }
-        output.pop();
-        Ok(output)
+        self.render_table_measured(rows, alignments).map(|(output, _)| output)
     }
 
-    fn table_grid(&self, rows: &[TableRow]) -> Result<Vec<Vec<String>>, ConversionError> {
-        let mut occupancy: Vec<u32> = Vec::new();
-        let mut grid = Vec::with_capacity(rows.len());
+    fn render_table_measured(
+        &self,
+        rows: &[TableRow],
+        alignments: &[TableAlignment],
+    ) -> Result<(String, TablePlanOwners), ConversionError> {
+        let (width, first_has_header) = table_shape(rows)?;
+        let (grid, mut actual) = self.table_grid(rows, width)?;
+        let fallback = (!first_has_header)
+            .then(|| exact_empty_strings(width, "table fallback header allocation failed"))
+            .transpose()?;
+        if let Some(fallback) = &fallback {
+            actual.fallback_header = fixed_slot_bytes::<String>(fallback.capacity())?;
+        }
+        let separators = exact_separators(width, alignments)?;
+        actual.separator_slots = fixed_slot_bytes::<String>(separators.capacity())?;
+        actual.separator_strings = string_capacity_bytes(&separators)?;
+
+        let start = usize::from(first_has_header);
+        let header = if first_has_header { &grid[0] } else { fallback.as_deref().unwrap_or(&[]) };
+        let mut output_length = table_row_length(header)?
+            .checked_add(table_row_length(&separators)?)
+            .ok_or_else(render_plan_overflow)?;
+        for row in &grid[start..] {
+            output_length = output_length
+                .checked_add(table_row_length(row)?)
+                .ok_or_else(render_plan_overflow)?;
+        }
+        output_length = output_length.checked_sub(1).ok_or_else(render_plan_overflow)?;
+        let mut output = ExactString::new(output_length, "table output allocation failed")?;
+        write_exact_table_row(&mut output, header, true)?;
+        write_exact_table_row(&mut output, &separators, start < grid.len())?;
+        for (index, row) in grid[start..].iter().enumerate() {
+            write_exact_table_row(&mut output, row, index + start + 1 < grid.len())?;
+        }
+        let output = output.finish()?;
+        actual.output = u64::try_from(output.capacity()).map_err(|_| render_plan_overflow())?;
+        let planned = table_plan_owners(
+            rows,
+            width,
+            first_has_header,
+            actual.cell_strings,
+            actual.cell_block_joins,
+        )?;
+        actual.verify_within(&planned)?;
+        Ok((output, actual))
+    }
+
+    fn table_grid(
+        &self,
+        rows: &[TableRow],
+        width: usize,
+    ) -> Result<(Vec<Vec<String>>, TablePlanOwners), ConversionError> {
+        let mut occupancy = exact_zero_occupancy(width)?;
+        let mut grid_slots = FixedSlots::new(rows.len(), "table row allocation failed")?;
+        let mut actual = TablePlanOwners {
+            occupancy: fixed_slot_bytes::<u32>(occupancy.capacity())?,
+            grid_rows: fixed_slot_bytes::<Vec<String>>(rows.len())?,
+            ..TablePlanOwners::default()
+        };
         for row in rows {
-            let mut rendered = vec![String::new(); occupancy.len()];
+            let mut rendered = exact_empty_strings(width, "table cell-slot allocation failed")?;
+            actual.grid_slots = actual
+                .grid_slots
+                .checked_add(fixed_slot_bytes::<String>(rendered.capacity())?)
+                .ok_or_else(render_plan_overflow)?;
             let mut column = 0_usize;
             for cell in &row.cells {
                 while occupancy.get(column).is_some_and(|remaining| *remaining > 0) {
-                    column += 1;
+                    column = column.checked_add(1).ok_or_else(render_plan_overflow)?;
                 }
                 let span = usize::try_from(cell.column_span)
                     .map_err(|_| render_error("table column span cannot be represented"))?;
                 let end = column
                     .checked_add(span)
                     .ok_or_else(|| render_error("table width overflowed"))?;
-                if occupancy.len() < end {
-                    occupancy.resize(end, 0);
-                    rendered.resize(end, String::new());
+                if end > width {
+                    return Err(render_error("table width changed after deterministic preflight"));
                 }
-                rendered[column] = self.render_cell(cell)?;
+                let (value, temporary) = self.render_cell(cell)?;
+                actual.cell_strings = actual
+                    .cell_strings
+                    .checked_add(
+                        u64::try_from(value.capacity()).map_err(|_| render_plan_overflow())?,
+                    )
+                    .ok_or_else(render_plan_overflow)?;
+                actual.cell_block_joins = actual
+                    .cell_block_joins
+                    .checked_add(temporary)
+                    .ok_or_else(render_plan_overflow)?;
+                rendered[column] = value;
                 occupancy[column..end].fill(cell.row_span);
                 column = end;
             }
             for remaining in &mut occupancy {
                 *remaining = remaining.saturating_sub(1);
             }
-            grid.push(rendered);
+            grid_slots.push(rendered)?;
         }
-        Ok(grid)
+        let grid = grid_slots.into_vec()?;
+        if grid.capacity() != rows.len() {
+            return Err(render_error("table row allocation lost its exact capacity"));
+        }
+        Ok((grid, actual))
     }
 
-    fn render_cell(&self, cell: &Cell) -> Result<String, ConversionError> {
+    fn render_cell(&self, cell: &Cell) -> Result<(String, u64), ConversionError> {
         let rendered = self.render_blocks_in(&cell.blocks, InlineContext::TableCell)?;
-        let flattened = normalize_lf(&rendered).replace("\n\n", "<br><br>").replace('\n', "<br>");
+        let normalized = normalize_lf(&rendered);
+        let paragraphs = normalized.replace("\n\n", "<br><br>");
+        let flattened = paragraphs.replace('\n', "<br>");
+        let base_temporary = [rendered.capacity(), normalized.capacity(), paragraphs.capacity()]
+            .into_iter()
+            .try_fold(0_u64, |total, capacity| {
+                total
+                    .checked_add(u64::try_from(capacity).map_err(|_| render_plan_overflow())?)
+                    .ok_or_else(render_plan_overflow)
+            })?;
+        let mut wrapper_peak =
+            u64::try_from(flattened.capacity()).map_err(|_| render_plan_overflow())?;
         let mut rendered = if cell.row_span > 1 || cell.column_span > 1 {
             format!(
                 "<span data-rowspan=\"{}\" data-colspan=\"{}\">{flattened}</span>",
@@ -529,9 +1139,29 @@ impl RenderContext<'_> {
             flattened
         };
         if cell.header {
-            rendered = format!("<strong>{rendered}</strong>");
+            let wrapped = format!("<strong>{rendered}</strong>");
+            wrapper_peak = wrapper_peak.max(
+                u64::try_from(rendered.capacity())
+                    .ok()
+                    .and_then(|left| {
+                        u64::try_from(wrapped.capacity())
+                            .ok()
+                            .and_then(|right| left.checked_add(right))
+                    })
+                    .ok_or_else(render_plan_overflow)?,
+            );
+            rendered = wrapped;
         }
-        Ok(rendered)
+        let exact = exact_string(&rendered, "table cell string allocation failed")?;
+        wrapper_peak = wrapper_peak.max(
+            u64::try_from(rendered.capacity())
+                .ok()
+                .and_then(|left| {
+                    u64::try_from(exact.capacity()).ok().and_then(|right| left.checked_add(right))
+                })
+                .ok_or_else(render_plan_overflow)?,
+        );
+        Ok((exact, base_temporary.checked_add(wrapper_peak).ok_or_else(render_plan_overflow)?))
     }
 
     fn render_image(&self, id: &str, alt: Option<&str>) -> Result<String, ConversionError> {
@@ -580,7 +1210,7 @@ fn render_inlines(inlines: &[Inline], context: InlineContext) -> Result<String, 
     let mut output = String::new();
     for inline in inlines {
         match inline {
-            Inline::Text { value, marks } => {
+            Inline::Text { value, marks } | Inline::SourceText { value, marks, .. } => {
                 output.push_str(&render_marked_text(value, marks, context));
             }
             Inline::Code(value) => output.push_str(&render_code_span(value, context)),
@@ -763,16 +1393,6 @@ fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
 fn hex_digit(value: u8, uppercase: bool) -> char {
     let alphabet = if uppercase { b"0123456789ABCDEF" } else { b"0123456789abcdef" };
     char::from(alphabet[usize::from(value)])
-}
-
-fn write_table_row(output: &mut String, cells: &[String]) {
-    output.push('|');
-    for cell in cells {
-        output.push(' ');
-        output.push_str(cell);
-        output.push_str(" |");
-    }
-    output.push('\n');
 }
 
 fn indent_continuation(value: &str, spaces: usize) -> String {
@@ -1452,7 +2072,7 @@ mod tests {
         ]);
         assert_eq!(
             output(&doc),
-            "````math\nx```y\nz\n````\n\n[^fn-6e205d0d0a]\n\n[^fn-6e205d0d0a]: foot\n\n## Page 2\n\npage\n\n## Slide 3: A \\# title\n\n## Sheet: Data \\| 2026\n\nsheet\n\n`01:01:01.002 – 01:01:02.003` **A\\*B:** hello\n\n---\n"
+            "````math\nx```y\nz\n````\n\n[^fn-6e205d0d0a]\n\n[^fn-6e205d0d0a]: foot\n\n<a id=\"pdf-page-2\"></a>\n\n## Page 2\n\npage\n\n## Slide 3: A \\# title\n\n## Sheet: Data \\| 2026\n\nsheet\n\n`01:01:01.002 – 01:01:02.003` **A\\*B:** hello\n\n---\n"
         );
     }
 
@@ -1607,12 +2227,12 @@ mod tests {
         options.output.asset_mode = AssetMode::Embed;
         assert_eq!(
             render(&image, std::slice::from_ref(&asset), &options).unwrap(),
-            "## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
+            "<a id=\"pdf-page-1\"></a>\n\n## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
         );
         options.output.asset_mode = AssetMode::Extract;
         assert_eq!(
             render(&image, std::slice::from_ref(&asset), &options).unwrap(),
-            "## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
+            "<a id=\"pdf-page-1\"></a>\n\n## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
         );
         options.output.asset_mode = AssetMode::Omit;
         assert!(render(&image, &[], &options).is_err());
@@ -1693,5 +2313,293 @@ mod tests {
         block.provenance.locator.sheet = Some("Data".into());
         block.provenance.locator.cell = Some(CellRef { row: 4, column: 2 });
         assert_eq!(output(&document(vec![block])), "located\n");
+    }
+
+    #[test]
+    fn builtin_renderer_plan_is_reserved_before_escape_heavy_construction() {
+        let value = format!("{}\n{}", "&<>[]\\`*_{}#!|~".repeat(2_048), "x".repeat(16_384));
+        let mut nested = node(
+            "leaf",
+            Block::Paragraph(vec![Inline::Text { value: value.clone(), marks: vec![] }]),
+        );
+        for depth in (1..16).rev() {
+            nested = node(
+                format!("list-{depth}"),
+                Block::List {
+                    kind: ListKind::Bullet,
+                    start: 1,
+                    items: vec![ListItem {
+                        checked: None,
+                        marker_label: None,
+                        blocks: vec![nested],
+                    }],
+                },
+            );
+        }
+        let document = document(vec![nested]);
+        let renderer = GfmRenderer;
+        let options = ConversionOptions::default();
+        let measuring = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        let plan = renderer.planned_markdown_bytes(&document, &[], &options, &measuring).unwrap();
+        assert!(plan > u64::try_from(value.len() * 16).unwrap());
+
+        let low = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_memory_bytes: plan - 1, ..Default::default() },
+        );
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        assert!(low.reserve_memory(plan).is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let exact = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_memory_bytes: plan, ..Default::default() },
+        );
+        let mut parent = exact.reserve_memory(plan).unwrap();
+        let credit = exact.with_memory_credit(&mut parent).unwrap();
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let markdown = render(&document, &[], &options).unwrap();
+        assert!(u64::try_from(markdown.capacity()).unwrap() <= plan);
+        drop(credit);
+        parent.shrink(plan - u64::try_from(markdown.capacity()).unwrap()).unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn table_plan_covers_each_live_owner_and_exact_preflight_boundary() {
+        fn cell(text: &str, header: bool, row_span: u32, column_span: u32) -> Cell {
+            Cell {
+                row_span,
+                column_span,
+                header,
+                blocks: if text.is_empty() {
+                    Vec::new()
+                } else {
+                    text.split('\n')
+                        .enumerate()
+                        .map(|(line, value)| {
+                            node(
+                                format!(
+                                    "cell-{}-{row_span}-{column_span}-{line}",
+                                    text.replace('\n', "-")
+                                ),
+                                Block::Paragraph(vec![Inline::Text {
+                                    value: value.into(),
+                                    marks: vec![],
+                                }]),
+                            )
+                        })
+                        .collect()
+                },
+            }
+        }
+
+        fn assert_measured_owners(rows: &[TableRow], expected_width: usize) -> String {
+            fn fixture_block_output(blocks: &[BlockNode]) -> Result<u64, ConversionError> {
+                blocks.iter().try_fold(0_u64, |total, block| {
+                    let Block::Paragraph(inlines) = &block.block else {
+                        panic!("table capacity fixture only uses paragraph cells")
+                    };
+                    let rendered = inlines.iter().try_fold(0_u64, |total, inline| {
+                        let Inline::Text { value, .. } = inline else {
+                            panic!("table capacity fixture only uses text cells")
+                        };
+                        let source =
+                            u64::try_from(value.len()).map_err(|_| render_plan_overflow())?;
+                        total
+                            .checked_add(
+                                source
+                                    .checked_mul(5)
+                                    .and_then(|value| value.checked_add(6 * 13))
+                                    .ok_or_else(render_plan_overflow)?,
+                            )
+                            .ok_or_else(render_plan_overflow)
+                    })?;
+                    total
+                        .checked_add(rendered)
+                        .and_then(|value| value.checked_add(2))
+                        .ok_or_else(render_plan_overflow)
+                })
+            }
+
+            let (width, has_header) = table_shape(rows).unwrap();
+            assert_eq!(width, expected_width);
+            assert!(!has_header);
+            let options = ConversionOptions::default();
+            let plan = plan_assets(&Document::default(), &[], &options).unwrap();
+            let context = RenderContext { plan: &plan, assets: &[], options: &options };
+            let (markdown, actual) = context
+                .render_table_measured(
+                    rows,
+                    &[TableAlignment::Center, TableAlignment::Right, TableAlignment::Left],
+                )
+                .unwrap();
+            let (planned_cell_strings, planned_cell_block_joins) =
+                table_cell_owner_bounds(rows, fixture_block_output).unwrap();
+            let planned = table_plan_owners(
+                rows,
+                width,
+                has_header,
+                planned_cell_strings,
+                planned_cell_block_joins,
+            )
+            .unwrap();
+            assert_eq!(actual.occupancy, planned.occupancy);
+            assert_eq!(actual.grid_rows, planned.grid_rows);
+            assert_eq!(actual.grid_slots, planned.grid_slots);
+            assert_eq!(actual.fallback_header, planned.fallback_header);
+            assert_eq!(actual.separator_slots, planned.separator_slots);
+            assert!(actual.separator_strings <= planned.separator_strings);
+            assert!(actual.cell_strings <= planned.cell_strings);
+            assert!(actual.cell_block_joins <= planned.cell_block_joins);
+            assert!(actual.output <= planned.output);
+            assert_eq!(u64::try_from(markdown.capacity()).unwrap(), actual.output);
+            markdown
+        }
+
+        let span_rows = vec![
+            TableRow { cells: vec![cell("head\nline", true, 2, 2), cell("h3", true, 1, 1)] },
+            TableRow { cells: vec![cell("", false, 1, 1)] },
+            TableRow {
+                cells: vec![cell("a", false, 1, 1), cell("b", false, 1, 1), cell("c", false, 1, 1)],
+            },
+        ];
+        let (width, has_header) = table_shape(&span_rows).unwrap();
+        assert_eq!((width, has_header), (3, true));
+        let owners = table_plan_owners(&span_rows, width, has_header, 1_000, 2_000).unwrap();
+        assert_eq!(owners.occupancy, 3 * u64::try_from(std::mem::size_of::<u32>()).unwrap());
+        assert_eq!(
+            owners.grid_rows,
+            3 * u64::try_from(std::mem::size_of::<Vec<String>>()).unwrap()
+        );
+        assert_eq!(owners.grid_slots, 9 * u64::try_from(std::mem::size_of::<String>()).unwrap());
+        assert_eq!(owners.fallback_header, 0);
+        assert_eq!(
+            owners.separator_slots,
+            3 * u64::try_from(std::mem::size_of::<String>()).unwrap()
+        );
+        assert_eq!(owners.separator_strings, 15);
+        assert_eq!(owners.cell_strings, 1_000);
+        assert_eq!(owners.cell_block_joins, 2_000);
+        assert!(owners.output >= owners.cell_strings + owners.separator_strings);
+
+        let no_header =
+            vec![TableRow { cells: vec![cell("body", false, 1, 1), cell("", false, 1, 2)] }];
+        let (width, has_header) = table_shape(&no_header).unwrap();
+        assert_eq!((width, has_header), (3, false));
+        let owners = table_plan_owners(&no_header, width, has_header, 0, 0).unwrap();
+        assert_eq!(
+            owners.fallback_header,
+            3 * u64::try_from(std::mem::size_of::<String>()).unwrap()
+        );
+
+        let growth_boundary_span = 8_193_u32;
+        let growth_boundary = vec![
+            TableRow {
+                cells: vec![
+                    cell("growth\nfirst", false, 1, growth_boundary_span),
+                    cell("growth\nsecond", false, 1, 1),
+                ],
+            },
+            TableRow { cells: vec![cell("growth\nbody", false, 1, growth_boundary_span + 1)] },
+        ];
+        let growth_markdown = assert_measured_owners(&growth_boundary, 8_194);
+        assert!(growth_markdown.contains("growth<br><br>first"));
+        assert!(growth_markdown.contains("growth<br><br>body"));
+
+        let maximum_span = u32::try_from(into_markdown_core::MAX_TABLE_COLUMNS).unwrap();
+        let adversarial_first_span = 8_193_u32;
+        let adversarial_second_span = maximum_span - adversarial_first_span;
+        let maximum = vec![
+            TableRow {
+                cells: vec![
+                    cell("maximum\nfirst", false, 1, adversarial_first_span),
+                    cell("maximum\nsecond", false, 1, adversarial_second_span),
+                ],
+            },
+            TableRow { cells: vec![cell("maximum\nbody", false, 1, maximum_span)] },
+        ];
+        let wide_markdown = assert_measured_owners(&maximum, into_markdown_core::MAX_TABLE_COLUMNS);
+        let options = ConversionOptions::default();
+        assert!(wide_markdown.contains("maximum<br><br>first"));
+        assert!(wide_markdown.contains("maximum<br><br>body"));
+
+        for rows in [span_rows, no_header, growth_boundary, maximum] {
+            let document =
+                document(vec![node("table-plan", Block::Table { rows, alignments: Vec::new() })]);
+            let measuring = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                into_markdown_core::ResourceLimits::default(),
+            );
+            let plan = planned_render_peak(&document, &[], &options, &measuring).unwrap();
+            let low = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                into_markdown_core::ResourceLimits {
+                    max_memory_bytes: plan - 1,
+                    ..Default::default()
+                },
+            );
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            // This is the renderer-call boundary used by the engine: the
+            // plan-minus-one reservation fails before the render closure is
+            // invoked, so no table allocation or formatting has begun.
+            assert!(low.reserve_memory(plan).is_err());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+            let exact = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                into_markdown_core::ResourceLimits { max_memory_bytes: plan, ..Default::default() },
+            );
+            let permit = exact.reserve_memory(plan).unwrap();
+            let render_after_preflight = || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                render(&document, &[], &options)
+            };
+            let markdown = render_after_preflight().unwrap();
+            assert!(u64::try_from(markdown.capacity()).unwrap() <= plan);
+            drop(permit);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn renderer_plan_rejects_nested_links_and_honors_cancellation_before_render() {
+        let linked = document(vec![node(
+            "p",
+            Block::Paragraph(vec![Inline::Link {
+                target: "https://example.test/outer".into(),
+                content: vec![Inline::Link {
+                    target: "https://example.test/inner".into(),
+                    content: vec![Inline::Text { value: "x".into(), marks: vec![] }],
+                }],
+            }]),
+        )]);
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        assert!(
+            planned_render_peak(&linked, &[], &ConversionOptions::default(), &context).is_err()
+        );
+
+        let cancellation = into_markdown_core::CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions { cancellation, ..Default::default() },
+            into_markdown_core::ResourceLimits::default(),
+        );
+        assert!(matches!(
+            planned_render_peak(
+                &Document::default(),
+                &[],
+                &ConversionOptions::default(),
+                &cancelled
+            ),
+            Err(ConversionError::Cancelled)
+        ));
     }
 }

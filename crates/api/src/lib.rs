@@ -50,6 +50,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
+        .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
@@ -95,6 +96,7 @@ pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::future::Future;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -291,5 +293,64 @@ mod tests {
         assert_eq!(resolver_calls.local.load(Ordering::SeqCst), 1);
         assert_eq!(resolver_calls.remote.load(Ordering::SeqCst), 0);
         assert_eq!(service_calls.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+    fn native_pdf_runs_through_engine_and_emits_internal_page_anchor() {
+        assert!(std::env::var_os("PDFIUM_LIBRARY").is_some());
+        let request = ConversionRequest::new(InputRef::bytes(engine_pdf(), Some("fixture.pdf")));
+        let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+        assert!(result.markdown.contains("#pdf-page-2"));
+        assert!(result.markdown.contains("<a id=\"pdf-page-2\"></a>"));
+        assert!(result.has_memory_lease());
+    }
+
+    fn engine_pdf() -> Vec<u8> {
+        let content = stream_object("", b"BT /F1 12 Tf 10 60 Td (Engine PDF) Tj ET\n");
+        let objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R /Annots [7 0 R] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> >> /Contents 5 0 R >>".to_vec(),
+            content,
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Link /Rect [10 10 50 30] /Dest [4 0 R /Fit] >>".to_vec(),
+        ];
+        assemble_pdf(&objects)
+    }
+
+    fn stream_object(dictionary: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut object =
+            format!("<< {dictionary} /Length {} >>\nstream\n", bytes.len()).into_bytes();
+        object.extend_from_slice(bytes);
+        object.extend_from_slice(b"\nendstream");
+        object
+    }
+
+    fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+        let mut pdf = b"%PDF-1.4\n%\x80\x80\x80\x80\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
     }
 }

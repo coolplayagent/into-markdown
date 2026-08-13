@@ -142,6 +142,16 @@ impl Converter for DelimitedTextConverter {
         })
     }
 
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
+    }
+
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -199,7 +209,7 @@ fn convert_delimited(
     let header = has_header(&records, options.delimited_text.header, &mut decoded.memory)?;
     reserve_table_ir(&records, &mut decoded.memory)?;
     let document = build_table(records, header, &decoded, format, context)?;
-    Ok(ConverterOutput { document, diagnostics, assets: Vec::new() })
+    Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
 }
 
 fn parse_records(

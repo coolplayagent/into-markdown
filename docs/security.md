@@ -73,6 +73,22 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   surrogate pairing。不能用递归 DOM parse 作为格式 guard。
 - 只有策略允许时，Office 宏和内嵌可执行文件才能作为惰性资源保留；它们永远
   不会被执行。
+- PDFium 仅从显式绝对路径加载 authority 中精确 hash/size/ABI 的当前平台制品；不搜索
+  system PDFium、`PATH` 或动态加载器 fallback，也不联网。所有 native count/length、页、字符、
+  object、link、图片 stride/format/pixel bytes 与 render 尺寸在 Rust 分配或 slice 前有界检查，
+  文档打开使用消费式 preflight plan：输入 `Arc` 不复制，密码的 NUL 结尾临时副本按
+  `password.len()+1` 的 exact boxed backing 在 materialize 前计入请求 memory credit，超过限制或
+  含 NUL 时不会调用 native loader。runtime snapshot 的固定、已审计制品加载内存属于进程级
+  loader 生命周期，不混入请求 credit；
+  句柄受 Rust 父子生命周期约束且 native 调用串行化。转换循环在页、图片与编码行执行取消/
+  deadline checkpoint，图片和页面 render 同时受 PDFium 上限、`ExecutionContext` memory、
+  单 asset 与总 asset 上限控制。转换器把 IR/asset 的 live memory lease 随 `ConverterOutput`
+  转交 Engine，并继续随 `ConversionResult` 保持到调用方释放。Engine 在 converter/renderer 调用前
+  取得经过同一 context 认证的 preflight reservation，并按完整 retained IR、asset、diagnostic、
+  Markdown 与 provenance inventory 缩减/转移，避免交接空窗或重复计费。URI 仅作为经 allowlist
+  校验的数据，不触发访问。
+  但 PDFium 仍在本进程解析不可信 native PDF；私有 runtime snapshot 只保护供应链和加载竞态，
+  并不是 PDF 解析 sandbox。高敌意部署仍应在具备 OS hard limit 与 sandbox 的隔离进程运行。
 - 网络访问默认关闭。未来 HTTP 解析器必须解析并验证每次重定向，拒绝回环、
   私有、链路本地、组播和云元数据地址，在配置时执行白名单，并限制响应字节数。
 - AI 响应是不可信的结构化输入，必须验证补丁或 Schema、溯源、节点引用和资源。

@@ -1040,6 +1040,7 @@ dependencies = [
  "html5ever",
  "image",
  "into-markdown-core",
+ "into-markdown-pdfium",
  "into-markdown-render-markdown",
  "libc",
  "pulldown-cmark",

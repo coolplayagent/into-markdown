@@ -58,6 +58,7 @@ mod tests {
         assert_eq!(
             available,
             vec![
+                InputFormat::Pdf,
                 InputFormat::Docx,
                 InputFormat::Text,
                 InputFormat::Markdown,
@@ -229,6 +230,15 @@ mod tests {
                 }
             })
         }
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            context: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(context.available_memory_bytes())
+        }
         fn convert<'a>(
             &'a self,
             _: &'a ResolvedInput,
@@ -248,7 +258,7 @@ mod tests {
                 if self.invalid_ir {
                     document.schema_version = u32::MAX;
                 }
-                Ok(ConverterOutput { document, ..ConverterOutput::default() })
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
             })
         }
     }
@@ -259,6 +269,15 @@ mod tests {
     impl MarkdownRenderer for Renderer {
         fn id(&self) -> &'static str {
             "contract.renderer"
+        }
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            context: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(context.available_memory_bytes())
         }
         fn render<'a>(
             &'a self,
