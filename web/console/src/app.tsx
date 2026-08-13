@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApiClient, StatusResponse } from "./api";
-import { ErrorBoundary } from "./error-boundary";
 import { I18nProvider, useI18n } from "./i18n";
 import { RouteLink, Router, useRouter } from "./router";
 import { ThemeProvider, useTheme } from "./theme";
@@ -125,5 +124,5 @@ function Shell({ api }: { api: ApiClient }) {
 }
 
 export function App({ api }: { api: ApiClient }) {
-  return <ErrorBoundary><I18nProvider><ThemeProvider><Shell api={api} /></ThemeProvider></I18nProvider></ErrorBoundary>;
+  return <I18nProvider><ThemeProvider><Shell api={api} /></ThemeProvider></I18nProvider>;
 }

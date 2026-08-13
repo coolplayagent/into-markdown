@@ -49,6 +49,33 @@ test("checked-in production app mounts without a React global", async () => {
   assert.equal("React" in globalThis, false);
 });
 
+test("checked-in production root contains token-bearing render failures without console or storage disclosure", async () => {
+  const token = "R".repeat(43);
+  const window = installWindow();
+  const observed = [];
+  const methods = ["debug", "error", "info", "log", "warn"];
+  const originals = new Map(methods.map((method) => [method, console[method]]));
+  for (const method of methods) {
+    console[method] = (...values) => observed.push(values.map((value) => {
+      if (value instanceof Error) return `${value.name}:${value.message}:${value.stack ?? ""}`;
+      return String(value);
+    }).join(" "));
+  }
+  try {
+    const module = await import(pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);
+    function TokenBearingProviderFailure() { throw new Error(`provider rejected ${token}`); }
+    module.startConsole(token, TokenBearingProviderFailure);
+    await waitFor(() => window.document.body.textContent.includes("The page encountered a problem"));
+    assert.equal(window.document.documentElement.outerHTML.includes(token), false);
+    assert.equal(observed.join("\n").includes(token), false);
+    assert.equal(window.localStorage.length, 0);
+    assert.equal(window.sessionStorage.length, 0);
+    assert.equal(JSON.stringify([window.localStorage, window.sessionStorage]).includes(token), false);
+  } finally {
+    for (const [method, original] of originals) console[method] = original;
+  }
+});
+
 test("checked-in bootstrap completes hash clear, dynamic import, mount, and authenticated API", async () => {
   const token = "B".repeat(43);
   const window = installWindow(`#into-md-session=${token}`);

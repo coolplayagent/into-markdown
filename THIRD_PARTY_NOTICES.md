@@ -48,7 +48,8 @@ copyright and complete license text are preserved at
 `third_party/licenses/npm-release.spdx.json` describes the exact content-hashed
 production JavaScript and its three runtime packages. The release audit verifies
 that SPDX graph, the checked asset bytes, the inventory, and the upstream license
-file in both directions. Build and test
+file in both directions. Both the SBOM and complete MIT text are mandatory members
+of the root `//:release_license_files` distribution set. Build and test
 packages are not copied into the CLI release. `axe-core` is MPL-2.0 and is used
 only by the accessibility test: its source package and CI/cache artifacts retain
 the upstream MPL file-level notices and source availability obligations, while

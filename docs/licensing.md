@@ -23,6 +23,9 @@ LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务�
 - `third_party/licenses/npm-release.spdx.json` 是嵌入式控制台生产 JavaScript 的确定性
   SPDX 2.3 SBOM。document namespace 绑定实际资产完整 SHA-256，creationInfo 固定且不含
   时间漂移、本机路径或随机值；包、文件与 relationship ID 必须唯一且不能悬空。
+- 根 `//:release_license_files` 是发布归档必须携带的许可证与 SBOM 权威集合。它必须
+  精确包含项目 LICENSE/NOTICE、第三方声明、所有实际 runtime npm 许可文本以及上述 SPDX
+  SBOM；审计对 inventory 推导出的集合双向比较，缺项与未管理的额外项都失败。
 - `reviewed` 表示清单字段已经核对，不表示组件一定进入发布物；
   `planned` 表示版本、来源、构建选项或义务仍待确定，不能用于发布。
 - `included_in_release` 是发布边界。改为 `true` 前必须补齐版本、来源、SPDX
@@ -121,6 +124,8 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 
 所有源码和二进制归档都必须包含项目的 `LICENSE`、`NOTICE`、
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
+控制台进入归档时，还必须从 `//:release_license_files` 复制 React 系列完整 MIT 文本与
+`npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
 当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
 都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
 

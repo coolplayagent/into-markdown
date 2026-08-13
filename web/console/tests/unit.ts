@@ -133,6 +133,21 @@ test("checked CSS color tokens meet WCAG AA normal-text contrast", () => {
     assert.ok(contrast(tokens[1]!, tokens[2]!) >= 4.5);
     assert.ok(contrast(tokens[1]!, tokens[3]!) >= 4.5);
   }
+  const lightButtons = styles.match(/^:root\s*\{([^}]*)\}/i)?.[1];
+  const explicitDark = styles.match(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/i)?.[1];
+  const systemDark = styles.match(/@media \(prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme="light"\]\)\s*\{([^}]*)\}/i)?.[1];
+  assert.ok(lightButtons && explicitDark && systemDark);
+  for (const [mode, block] of [
+    ["light", lightButtons],
+    ["explicit dark", explicitDark],
+    ["system dark", systemDark],
+  ] as const) {
+    const background = block.match(/--accent-strong:\s*(#[0-9a-f]{6});/i)?.[1];
+    const foreground = block.match(/--button-text:\s*(#[0-9a-f]{6});/i)?.[1];
+    assert.ok(background && foreground);
+    assert.ok(contrast(background, foreground) >= 4.5, `${mode} Retry/Reload contrast`);
+  }
+  assert.match(styles, /button\s*\{[^}]*color:\s*var\(--button-text\);[^}]*background:\s*var\(--accent-strong\);/i);
   assert.match(styles, /@media \(max-width: 44rem\)/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(styles, /:focus-visible/);
@@ -177,7 +192,8 @@ test("API rejection renders a recoverable status error rather than the error bou
   await waitFor(() => window.document.body.textContent.includes("Could not read service status"));
   assert.ok(window.document.querySelector('[role="alert"]'));
   assert.equal(window.document.body.textContent.includes("The page encountered a problem"), false);
-  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Retry"));
+  const retry = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Retry");
+  assert.ok(retry?.matches("button"));
   root.unmount();
 });
 
@@ -190,6 +206,7 @@ test("ErrorBoundary contains provider render errors and focuses its fallback hea
   const heading = window.document.querySelector("h1")!;
   assert.equal(window.document.activeElement, heading);
   assert.equal(heading.tabIndex, -1);
-  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Reload"));
+  const reload = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Reload");
+  assert.ok(reload?.matches("button"));
   root.unmount();
 });

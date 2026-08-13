@@ -8,6 +8,7 @@
   --border: #c8d0d8;
   --accent: #095d5b;
   --accent-strong: #064947;
+  --button-text: #ffffff;
   --ok: #087443;
   --error: #b42318;
   --focus: #0067c5;
@@ -24,7 +25,8 @@
   --muted: #b6c0c8;
   --border: #44515b;
   --accent: #68d2cc;
-  --accent-strong: #a2e8e4;
+  --accent-strong: #095d5b;
+  --button-text: #ffffff;
   --ok: #70d69e;
   --error: #ff9b91;
   --focus: #78baff;
@@ -39,7 +41,8 @@
     --muted: #b6c0c8;
     --border: #44515b;
     --accent: #68d2cc;
-    --accent-strong: #a2e8e4;
+    --accent-strong: #095d5b;
+    --button-text: #ffffff;
     --ok: #70d69e;
     --error: #ff9b91;
     --focus: #78baff;
@@ -51,7 +54,7 @@ html, body, #app { min-height: 100%; margin: 0; }
 body { background: var(--bg); }
 a { color: var(--accent); }
 button, select { font: inherit; color: inherit; }
-button { min-height: 2.75rem; border: 0; border-radius: .5rem; padding: .65rem 1rem; color: #fff; background: var(--accent-strong); cursor: pointer; }
+button { min-height: 2.75rem; border: 0; border-radius: .5rem; padding: .65rem 1rem; color: var(--button-text); background: var(--accent-strong); cursor: pointer; }
 :focus-visible { outline: .2rem solid var(--focus); outline-offset: .2rem; }
 
 .skip-link { position: fixed; z-index: 20; top: .5rem; left: .5rem; transform: translateY(-160%); padding: .75rem 1rem; color: var(--text); background: var(--surface); border: 2px solid var(--focus); border-radius: .5rem; }

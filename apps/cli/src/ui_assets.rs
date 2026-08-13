@@ -11,31 +11,31 @@ pub struct Asset {
 pub const INDEX: Asset = Asset {
     path: "/index.html",
     mime: "text/html; charset=utf-8",
-    sha256: "8368d386207547fc02fa0440b4e92f516ecf3fe24d016cae72333788cad2d561",
+    sha256: "f18fd6564f07fca7083c2e12a0d978043504e53e81d7c0c6adb7b8877ee7bc98",
     bytes: include_bytes!("../../../web/console/dist/index.html"),
     immutable: false,
 };
 
 pub const ASSETS: &[Asset] = &[
     Asset {
-        path: "/assets/app.0f97f210b0bda92b.css",
+        path: "/assets/app.f205ee673998c673.css",
         mime: "text/css; charset=utf-8",
-        sha256: "0f97f210b0bda92b80e08591dc5fa42af75299091fc4a0abedfc401b3dfbe7de",
-        bytes: include_bytes!("../../../web/console/dist/assets/app.0f97f210b0bda92b.css"),
+        sha256: "f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d",
+        bytes: include_bytes!("../../../web/console/dist/assets/app.f205ee673998c673.css"),
         immutable: true,
     },
     Asset {
-        path: "/assets/app.13c39d076d44ec59.js",
+        path: "/assets/app.1f993805c976df09.js",
         mime: "text/javascript; charset=utf-8",
-        sha256: "13c39d076d44ec596a51841b542032b84f73e808927c30c4fc3737d7aba1b8e7",
-        bytes: include_bytes!("../../../web/console/dist/assets/app.13c39d076d44ec59.js"),
+        sha256: "1f993805c976df096653d0c289a09a6dffc84a32b52bab0dbfd687dccaa24669",
+        bytes: include_bytes!("../../../web/console/dist/assets/app.1f993805c976df09.js"),
         immutable: true,
     },
     Asset {
-        path: "/assets/bootstrap.d3fb04cfb97caf03.js",
+        path: "/assets/bootstrap.63383b893163f97a.js",
         mime: "text/javascript; charset=utf-8",
-        sha256: "d3fb04cfb97caf0359e504b439442bcc86bd4c3c795a22d0c344768df99e54a7",
-        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.d3fb04cfb97caf03.js"),
+        sha256: "63383b893163f97ac3508a6cf521d58c6cd6f9b778616a8aa6c6d5bb9e59c843",
+        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.63383b893163f97a.js"),
         immutable: true,
     },
 ];

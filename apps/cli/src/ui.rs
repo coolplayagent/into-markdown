@@ -656,7 +656,7 @@ mod tests {
 
         let css = request(
             port,
-            &format!("GET /assets/app.0f97f210b0bda92b.css HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+            &format!("GET /assets/app.f205ee673998c673.css HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
         )
         .await;
         assert!(css.starts_with("HTTP/1.1 200"), "{css}");
@@ -666,9 +666,9 @@ mod tests {
         );
         assert!(
             css.contains(
-                "ETag: \"0f97f210b0bda92b80e08591dc5fa42af75299091fc4a0abedfc401b3dfbe7de\""
+                "ETag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
             ) || css.contains(
-                "etag: \"0f97f210b0bda92b80e08591dc5fa42af75299091fc4a0abedfc401b3dfbe7de\""
+                "etag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
             )
         );
         assert!(css.to_ascii_lowercase().contains("x-content-type-options: nosniff"));
@@ -693,7 +693,7 @@ mod tests {
             request(port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
         assert_schema_error(&bad_host, "HTTP/1.1 400", "invalidHost");
         let bootstrap = std::str::from_utf8(
-            crate::ui_assets::by_path("/assets/bootstrap.d3fb04cfb97caf03.js").unwrap().bytes,
+            crate::ui_assets::by_path("/assets/bootstrap.63383b893163f97a.js").unwrap().bytes,
         )
         .unwrap();
         assert!(bootstrap.find("replaceState").unwrap() < bootstrap.find("import(").unwrap());

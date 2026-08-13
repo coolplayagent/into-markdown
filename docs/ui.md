@@ -40,7 +40,9 @@ fragment 不会进入 HTTP request target。外部 content-hash bootstrap 脚本
 
 合法交接后的动态模块加载或同步启动失败使用独立的通用启动错误，不复述交接错误、异常或
 会话值。React 树外的 bootstrap 负责这类失败；React `ErrorBoundary` 负责 Provider、render
-与 lifecycle 的同步异常，并把焦点移到 fallback 标题。异步 API 拒绝不会被 React 边界捕获，
+与 lifecycle 的同步异常，并把焦点移到 fallback 标题。React production root 显式覆盖
+`onCaughtError`、`onRecoverableError` 与 `onUncaughtError`：前两者静默丢弃可能包含不可信
+会话数据的原始异常，未捕获异常只显示不含原始 message/stack 的通用启动错误。异步 API 拒绝不会被 React 边界捕获，
 而是在状态页显示可重试的受控错误。三类错误路径分别测试，均不把会话值写入 DOM 或日志。
 
 所有 API 路由统一要求：
@@ -102,5 +104,7 @@ Bazel 是前端生产构建权威。Node 24.13.0、pnpm 11.19.0、rules_js、rul
 `//web/console:generated_assets` 在临时输出中生成确定性资产，
 `//web/console:assets` 再逐文件名、逐字节比较仓库内 `web/console/dist`。更新 checked-in
 发布输入必须显式运行 `bazel run //web/console:update_assets` 并审查 manifest；该目标只复制
-Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解析或构建 npm 模块。Rust 不使用 build.rs，也不在运行时
+Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解析或构建 npm 模块。更新器对
+工作区路径组件、现有 `dist` 与备份逐项执行 no-follow 类型/identity 检查，拒绝符号链接，
+只规范化自己创建的临时树，并通过同一父目录内 rename 原子替换。Rust 不使用 build.rs，也不在运行时
 读取源树；四个支持平台的 CLI 都通过 `include_bytes!` 嵌入同一组 checked-in bytes。

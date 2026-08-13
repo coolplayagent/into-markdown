@@ -56,5 +56,7 @@ filegroup(
         "LICENSE",
         "NOTICE",
         "THIRD_PARTY_NOTICES.md",
+        "//third_party/licenses:npm-release.spdx.json",
+        "//third_party/licenses:npm/react-MIT.txt",
     ],
 )

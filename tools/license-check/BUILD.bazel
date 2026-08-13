@@ -5,6 +5,7 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 DATA = [
+    "//:BUILD.bazel",
     "//:Cargo.lock",
     "//:Cargo.toml",
     "//:pnpm-lock.yaml",
