@@ -93,6 +93,13 @@ converters report provenance in original-source byte offsets. Complete top-level
 JSON scalars are auto-detected. Every XML attribute exposes independent QName and
 value spans, and UTF-16 provenance reuses the compact run decoder.
 
+HTML conversion is available through a pinned, error-tolerant HTML5 parser. It extracts main
+content, headings, links, images, lists, tables, code, and metadata with deterministic,
+diagnosed fallback while excluding navigation, advertising, and hidden content. Scripts,
+styles, templates, and active SVG/MathML are never executed or traversed for resources;
+`base` only resolves reference data. External images remain canonical HTTP(S) audit assets
+with no bytes: conversion stays offline and never fetches them automatically.
+
 Markdown/GFM conversion supports headings, emphasis and strikethrough, links and
 autolinks, nested and task lists, tables, code blocks, and footnotes while retaining
 UTF-8 source byte ranges. A standalone safe HTTP(S) image remains structured as an

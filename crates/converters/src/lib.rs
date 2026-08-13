@@ -3,11 +3,13 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod delimited;
+mod html;
 mod markdown;
 mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
+pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
@@ -155,7 +157,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Html,
         family: "text",
         extensions: &["html", "htm"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Csv,
@@ -1269,6 +1271,13 @@ fn structured_text_candidate(
     if html_prelude_identifies_html(text) {
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup")));
     }
+    if !text.starts_with("<?xml") && html_document_evidence(bytes) {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Html,
+            0.94,
+            "complete HTML semantic structure",
+        )));
+    }
     if let Some(root) = xml_root_name(text) {
         return Ok(if root.eq_ignore_ascii_case("html") {
             Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
@@ -1312,6 +1321,22 @@ fn strong_json_prefix(json: &[u8]) -> bool {
 fn strong_xml_prefix(text: &str) -> bool {
     text.starts_with("<?xml")
         || (text.starts_with('<') && (text.contains("</") || text.contains("/>")))
+}
+
+pub(crate) fn html_document_evidence(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    let Ok(text) = std::str::from_utf8(bytes) else { return false };
+    let text = text.trim_start();
+    if html_prelude_identifies_html(text) {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    let strong = ["main", "article", "section", "nav", "table", "ul", "ol", "pre", "title"];
+    let pairs = strong
+        .iter()
+        .filter(|name| lower.contains(&format!("<{name}")) && lower.contains(&format!("</{name}>")))
+        .count();
+    pairs >= 2 || (pairs >= 1 && lower.contains("<p") && lower.contains("</p>"))
 }
 
 fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {

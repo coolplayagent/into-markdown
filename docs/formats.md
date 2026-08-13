@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、CSV、TSV、JSON、XML 状态为
+运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、HTML、CSV、TSV、JSON、XML 状态为
 `available`，其余尚未
 实现的条目保持 `planned`。
 
@@ -13,6 +13,31 @@
 | 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
 | 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+
+## HTML
+
+HTML 转换器使用固定版本 `html5ever 0.39.0` 执行 HTML5 容错树构造，并以确定性规则选择
+正文。非空的 `main`、`article` 与 `role=main` 候选按固定文本量、链接密度、段落和标题权重
+评分；document order 用于打破同分。没有可用显式候选时降级到 `body` 并产生
+`html.mainContentFallback`。`nav`、`aside`、`footer`、导航/广告/弹窗/推荐区域以及
+`hidden`、`inert`、`aria-hidden=true` 内容不会混入正文；仅剩这些区域时稳定返回无可见正文。
+
+标题、段落、行内样式、链接、图片、列表、带 rowspan/colspan 的表格、`pre`/`code`、分隔线、
+title/author/description/lang 等 metadata 进入统一 IR。HTML5 tree builder 可能合成或重挂节点，
+无法唯一证明节点级原始位置时，节点 provenance 只保存整份输入的可靠包含 byte range，并产生
+一次诊断；不会用字符串搜索猜测重复标签、实体或隐式节点位置。
+
+编码统一复用 TXT 安全 decoder。BOM 与显式 charset 优先；安全子集只在原始输入前 1024 bytes
+扫描 `<meta charset>`，未知编码稳定拒绝，冲突产生诊断，显式错误不尝试其他编码。首个有效
+HTTP(S) `<base>` 可与受信 source URI 解析相对引用；userinfo、query、fragment、localhost、
+私有/回环/链路本地 IP 与非 HTTP(S) base 均拒绝。解析 URL 只是数据变换，不授予网络权限。
+图片只有在解析结果已经严格等于 `canonical_external_asset_uri` 时，才作为 bytes 为空的
+external-only audit Asset 返回；转换器不会 fetch，未来获取仍必须经过显式授权的
+`SourceResolver`。
+
+`script`、`style`、`template`、`noscript` 及表单/UI 内容整体忽略；SVG/MathML 整体降级为
+不可执行代码文本并诊断，其内部链接和图片不进入资源。解析、正文选择和资源处理不执行代码、
+不解释 CSS、不会调用网络服务。
 
 ## Markdown 与 GFM
 

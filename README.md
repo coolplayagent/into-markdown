@@ -71,6 +71,11 @@ CDATA 与 PI，并把注释记录在文档 metadata。XML 的 DTD、自定义/�
 两种格式的 provenance 都使用原始输入字节范围。完整 JSON 顶层标量也会自动识别；XML 每个
 属性的 QName/value 具有独立原始 byte span，UTF-16 映射复用 compact run decoder。
 
+HTML 转换可用。固定版本 HTML5 容错 parser 提取正文、标题、链接、图片、列表、表格、代码与
+metadata；确定性正文选择会诊断降级并排除导航、广告和隐藏内容。脚本、样式、模板与
+SVG/MathML active content 不执行也不穿透资源；`base` 只解析引用。外部图片仅作为 canonical
+HTTP(S) audit Asset 保留，转换全程离线且绝不自动获取。
+
 Markdown/GFM 转换支持标题、强调和删除线、链接与 autolink、嵌套列表和任务列表、
 表格、代码块及脚注，并保存 UTF-8 原始字节范围。独立段落的安全 HTTP(S) 图片以
 external-only Asset 保持结构化且不下载；inline、相对或危险目标明确诊断并安全降级。
