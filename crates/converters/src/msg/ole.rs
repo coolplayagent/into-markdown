@@ -641,3 +641,36 @@ fn to_usize64(value: u64, part: &str) -> Result<usize, ConversionError> {
         limit("max_decompressed_bytes", format!("stream {part} is too large for this platform"))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use into_markdown_core::ErrorCode;
+
+    fn stream(size: u64) -> DirectoryEntry {
+        DirectoryEntry {
+            name: "stream".into(),
+            kind: EntryKind::Stream,
+            left: NONE,
+            right: NONE,
+            child: NONE,
+            start: 0,
+            size,
+            path: vec!["stream".into()],
+        }
+    }
+
+    #[test]
+    fn mini_stream_reader_rejects_a_chain_longer_than_declared_data() {
+        let mut owners = vec![None, None];
+        let error = read_mini_stream(&stream(1), &[1, END], &[0; 128], &mut owners, 64, "mini")
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+    }
+
+    #[test]
+    fn regular_stream_reader_rejects_a_chain_longer_than_declared_data() {
+        let error = regular_stream_chain(&stream(1), &[1, END], 2, 512, "regular").unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+    }
+}
