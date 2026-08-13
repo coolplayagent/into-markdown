@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "a0fefd7771c5177bc71e564c45c6ac7b7ab048a8a5543c648822174a7af0efdc",
+    "sha256": "6f7b24ae4bf9b4935d8931d2640f5e5acfd33dc2019887d4b1d8957372e1d16e",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -1032,10 +1032,10 @@
         "source_sha256": ""
       },
       "expected": {
-        "outcome": "error",
-        "error_code": "componentUnavailable",
-        "semantic_sha256": "",
-        "description": "LZFu is validated before the bounded RTF adapter"
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367",
+        "description": "LZFu is decoded and passed to the bounded RTF converter on the same request context"
       }
     },
     {

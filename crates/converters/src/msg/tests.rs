@@ -126,6 +126,33 @@ fn rtf_selection_uses_lzfu_then_the_narrow_adapter() {
 }
 
 #[test]
+fn builtin_rtf_body_reuses_the_request_context_and_preserves_source_provenance() {
+    let raw = b"{\\rtf1\\ansi Repository RTF body}";
+    let envelope = lzfu_uncompressed(raw);
+    let bytes = message(vec![], vec![], None, None, Some(&envelope));
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let output = convert_msg(&bytes, &options, &context, &BuiltinBodyAdapter).unwrap();
+
+    assert_eq!(output.document.metadata.properties["msg.body_kind"], "rtf");
+    assert!(paragraph_text(&output).contains("Repository RTF body"));
+    assert!(output.leased_memory_for(&context) > 0);
+    let sources = output
+        .document
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.provenance.locator.part.as_deref().is_some_and(|part| part.ends_with("#10090102"))
+        })
+        .collect::<Vec<_>>();
+    assert!(!sources.is_empty());
+    assert!(sources.iter().all(|block| {
+        let locator = &block.provenance.locator;
+        locator.byte_start.zip(locator.byte_end).is_some_and(|(start, end)| start < end)
+    }));
+}
+
+#[test]
 fn corrupt_and_adversarial_cfb_fail_closed_without_panics() {
     let valid = message(vec![], vec![], Some("body"), None, None);
     let mut cases = vec![valid[..valid.len() - 17].to_vec()];

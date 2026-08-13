@@ -2,8 +2,8 @@ use super::body::{BodyKind, SelectedBody};
 use super::properties::Properties;
 use super::recipients::{Mailbox, Recipient, RecipientKind};
 use into_markdown_core::{
-    Asset, Block, BlockNode, ConverterOutput, Document, DocumentMetadata, Inline, NodeId,
-    Provenance, ProvenanceKind, SourceLocator,
+    Asset, Block, BlockNode, ConversionError, ConverterOutput, Document, DocumentMetadata,
+    ExecutionContext, Inline, NodeId, Provenance, ProvenanceKind, SourceLocator,
 };
 use std::collections::BTreeMap;
 
@@ -29,13 +29,16 @@ pub(super) fn assemble(
     mut body: SelectedBody,
     attachments: Vec<AttachmentOutput>,
     prefix: &str,
-) -> ConverterOutput {
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
     prefix_output(&mut body.output, prefix);
+    let mut output = ConverterOutput::new(Document::default(), Vec::new(), Vec::new());
+    output.absorb_memory_lease(&mut body.output, context)?;
     let subject = properties.text(PR_SUBJECT).map(str::to_owned);
     let mut metadata = metadata(properties, subject.clone(), sender, recipients, body.kind);
     let mut blocks = Vec::new();
-    let mut diagnostics = body.output.diagnostics;
-    let mut assets = body.output.assets;
+    let mut diagnostics = std::mem::take(&mut body.output.diagnostics);
+    let mut assets = std::mem::take(&mut body.output.assets);
     let mut next_id = 1_usize;
 
     if let Some(subject) = subject.as_deref().filter(|value| !value.trim().is_empty()) {
@@ -146,6 +149,7 @@ pub(super) fn assemble(
         }
         if let Some(mut nested) = attachment.nested {
             prefix_output(&mut nested, &attachment_prefix);
+            output.absorb_memory_lease(&mut nested, context)?;
             blocks.push(node(
                 prefix,
                 &mut next_id,
@@ -155,9 +159,9 @@ pub(super) fn assemble(
                 },
                 &attachment.source,
             ));
-            blocks.extend(nested.document.blocks);
-            assets.extend(nested.assets);
-            diagnostics.extend(nested.diagnostics);
+            blocks.append(&mut nested.document.blocks);
+            assets.append(&mut nested.assets);
+            diagnostics.append(&mut nested.diagnostics);
         }
     }
     if let Some(headers) = properties.text(PR_TRANSPORT_HEADERS).filter(|value| !value.is_empty()) {
@@ -177,7 +181,10 @@ pub(super) fn assemble(
         ));
     }
     let document = Document { metadata, blocks, ..Document::default() };
-    ConverterOutput::new(document, assets, diagnostics)
+    output.document = document;
+    output.assets = assets;
+    output.diagnostics = diagnostics;
+    output.account_retained(context)
 }
 
 fn metadata(

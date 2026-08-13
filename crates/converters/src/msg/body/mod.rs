@@ -54,14 +54,11 @@ impl BodyAdapter for BuiltinBodyAdapter {
 
     fn rtf(
         &self,
-        _bytes: &[u8],
-        _options: &ConversionOptions,
-        _context: &ExecutionContext,
+        bytes: &[u8],
+        options: &ConversionOptions,
+        context: &ExecutionContext,
     ) -> Result<ConverterOutput, ConversionError> {
-        Err(ConversionError::ComponentUnavailable {
-            component: "builtin.converter.rtf".into(),
-            detail: "MSG RTF body requires the bounded RTF converter integration".into(),
-        })
+        crate::rtf::convert_rtf_bytes(bytes, options, context)
     }
 }
 

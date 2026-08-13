@@ -299,7 +299,7 @@ transcriber，RTF 成功和失败路径均不得调用这些服务。crate 单�
 context lease 获取与释放。
 
 MSG 样本由仓库生成器直接写出 CFB directory/FAT/miniFAT 和 MAPI property streams，不依赖
-Outlook 或外部邮件。plain、HTML、LZFu/RTF adapter、CID、by-value/embedded attachment、
+Outlook 或外部邮件。plain、HTML、同一请求上下文中的 LZFu/RTF 转换、CID、by-value/embedded attachment、
 截断、循环 FAT 和精确输入边界进入同一 manifest；模块内额外用程序生成的变体覆盖 sector
 重叠、String8 codepage、附件来源链以及取消/资源错误不会 panic。
 

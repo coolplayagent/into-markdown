@@ -158,7 +158,8 @@ fn convert_storage(
         selected_body,
         completed,
         prefix,
-    );
+        context,
+    )?;
     output.document.validate().map_err(|error| ConversionError::Internal {
         detail: format!(
             "MSG merger returned invalid document IR ({} at {}): {}",

@@ -341,7 +341,7 @@ def msg_fixture_definitions() -> list[tuple[str, str, bytes, dict[str, object]]]
         ("msg-html", "html", html, expected_hash("HTML is selected ahead of the plain fallback", "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1")),
         ("msg-cid", "cid", cid, expected_hash("CID attachment remains an offline extracted asset", "5de8c08dbced6c2ed6ab94bb7cc04e7853933c0eb74b8a97e2716918328ae54d")),
         ("msg-attachment-nested", "attachment", nested, expected_hash("by-value and embedded MSG attachments retain assets and source chains", "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a")),
-        ("msg-rtf", "rtf", rtf, expected("error", "LZFu is validated before the bounded RTF adapter", error_code="componentUnavailable")),
+        ("msg-rtf", "rtf", rtf, expected_hash("LZFu is decoded and passed to the bounded RTF converter on the same request context", "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367")),
         ("msg-corrupt", "corrupt", plain[:-17], expected("error", "truncated CFB sector", error_code="malformed")),
         ("msg-malicious", "malicious", bytes(malicious), expected("error", "cyclic CFB directory FAT chain", error_code="malformed")),
         ("msg-limit", "limit", plain, limit_expected("MSG crosses the exact input byte boundary", "max_input_bytes", len(plain) - 1, len(plain), "max_input_bytes", "", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
