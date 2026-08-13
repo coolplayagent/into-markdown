@@ -2285,7 +2285,19 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), DtoError>
     Ok(())
 }
 
-fn sanitize_external_uri(value: &str) -> Option<String> {
+/// Return the canonical external-only asset URI accepted by every public boundary.
+#[must_use]
+pub fn canonical_external_asset_uri(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    for index in 0..bytes.len() {
+        if bytes[index] == b'%'
+            && (index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit())
+        {
+            return None;
+        }
+    }
     let mut url = url::Url::parse(value).ok()?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return None;
@@ -2299,7 +2311,7 @@ fn sanitize_external_uri(value: &str) -> Option<String> {
 }
 
 fn validate_external_uri(value: &str, path: &str) -> Result<(), DtoError> {
-    let sanitized = sanitize_external_uri(value).ok_or_else(|| {
+    let sanitized = canonical_external_asset_uri(value).ok_or_else(|| {
         DtoError::new(
             DtoErrorCode::InvalidField,
             path,
@@ -2838,6 +2850,31 @@ mod tests {
             ResultDto::from_json(&value.to_string()).unwrap_err().code,
             DtoErrorCode::InvalidField
         );
+    }
+
+    #[test]
+    fn canonical_external_asset_uri_handles_ports_ipv6_idn_and_percent_encoding() {
+        for accepted in [
+            "https://example.com:8443/a%20b.png",
+            "http://[2001:db8::1]:8080/image.png",
+            "https://xn--fsqu00a.xn--0zwm56d/image.png",
+        ] {
+            assert_eq!(canonical_external_asset_uri(accepted).as_deref(), Some(accepted));
+        }
+        for rejected in [
+            "https://例子.测试/image.png",
+            "HTTPS://EXAMPLE.COM/image.png",
+            "https://example.com:443/image.png",
+            "http://example.com:80/image.png",
+            "https://example.com/a/../image.png",
+            "https://user@example.com/image.png",
+            "https://example.com/image.png?token=x",
+            "https://example.com/image.png#fragment",
+            "file:///image.png",
+            "https://example.com/%zz.png",
+        ] {
+            assert_ne!(canonical_external_asset_uri(rejected).as_deref(), Some(rejected));
+        }
     }
 
     #[test]

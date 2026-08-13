@@ -4,7 +4,8 @@
 
 `into-markdown` 是一个使用 Rust 开发、由 Bazel 构建的文档转 Markdown
 平台。仓库当前提供架构设计、公共服务提供者接口、注册表与转换流水线、确定性
-GFM 渲染器、TXT/CSV/TSV/JSON/XML 与字符集转换器、命令行程序及契约测试；暂未实现 OCR 推理、
+GFM 渲染器、TXT/Markdown/CSV/TSV/JSON/XML 与字符集转换器、命令行程序及契约测试；暂未实现
+OCR 推理、
 网络客户端或 LLM 调用。
 
 本项目完全独立于相邻的 `anydoc` 和 `markitdown` 项目实现。包括 PDF、OCR
@@ -63,6 +64,12 @@ lexeme；XML 支持 UTF-8 和 UTF-16LE/BE，保留 QName、namespace、属性源
 CDATA 与 PI，并把注释记录在文档 metadata。XML 的 DTD、自定义/外部实体稳定拒绝，
 两种格式的 provenance 都使用原始输入字节范围。完整 JSON 顶层标量也会自动识别；XML 每个
 属性的 QName/value 具有独立原始 byte span，UTF-16 映射复用 compact run decoder。
+
+Markdown/GFM 转换支持标题、强调和删除线、链接与 autolink、嵌套列表和任务列表、
+表格、代码块及脚注，并保存 UTF-8 原始字节范围。独立段落的安全 HTTP(S) 图片以
+external-only Asset 保持结构化且不下载；inline、相对或危险目标明确诊断并安全降级。
+raw HTML 与 blockquote 在现有 IR 中保存为不可执行代码容器并产生诊断。
+详细检测、编码、资源与降级规则见[格式矩阵](docs/formats.md)。
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定

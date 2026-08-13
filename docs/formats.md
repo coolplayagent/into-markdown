@@ -1,6 +1,7 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT、CSV、TSV、JSON、XML 状态为 `available`，其余尚未
+运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、CSV、TSV、JSON、XML 状态为
+`available`，其余尚未
 实现的条目保持 `planned`。
 
 | 类别 | 格式 |
@@ -12,6 +13,38 @@
 | 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
 | 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+
+## Markdown 与 GFM
+
+Markdown 转换器使用固定版本的 `pulldown-cmark 0.13.4`，启用 CommonMark、GFM 表格、
+删除线、任务列表、脚注与 GitHub blockquote 类型解析。ATX/setext 标题、段落、软换行和
+硬换行、强调、链接与 autolink、嵌套有序/无序/任务列表、fenced/indented code、表格、
+脚注定义和引用都会进入统一 IR；fenced code 的首个 info-string token 保存在 language。
+reference link 与脚注由解析器跨全文解析，允许定义位于引用之后；重复定义遵循 first-wins，
+同时产生带原始字节范围的诊断。
+
+Markdown 规范输入固定为 UTF-8，允许 UTF-8 BOM 且 BOM 不进入正文。默认严格拒绝非法
+UTF-8；只有显式 replacement 解码策略才插入 U+FFFD 并继承共享文本解码器的原始字节诊断。
+块节点的 provenance 保存源编码半开 byte range。当前 IR 没有独立的行内 provenance 字段，
+因此行内内容由其最小包含块的范围覆盖，不伪造字符位置。
+
+当前 IR 没有 blockquote 与 raw HTML 专属节点。blockquote 原始片段保存为 language 为
+`markdown-blockquote` 的代码块；HTML block 保存为 `html` 代码块，inline HTML 保存为
+inline code，并产生明确降级诊断。`script`、`style` 及事件属性不会执行，也不会作为可执行
+HTML 输出。独立段落中的绝对 HTTP(S) 图片以 `externalUri` 和空 bytes 的 external-only
+Asset 进入 `Block::Image`，extract/embed 直接渲染经校验的原 URI，omit 只保留 alt；转换器
+始终不联网。外部图片 URI 禁止 userinfo、query、fragment 和危险 scheme。inline 图片因现有
+IR 只有 block image 而明确诊断并降级为链接；相对/fragment 图片不读取，data URI 不解码，
+均保留 alt 与 target 后诊断降级。不会创建空 bytes 且没有 `externalUri` 的假资源，也不会
+绕过统一 AssetPlan 校验。result-json 保留 external-only Asset；portable bundle 要求资源
+具有可携带 bytes，因此对这类结果返回稳定的 `bundleAssetMissingContent`。
+远程 SVG 仍不会由转换器获取或解析，并额外产生 active-content 风险诊断；Markdown
+消费者若主动打开该 URI，可能自行发起网络请求或执行其安全模型允许的 SVG 内容。
+
+内容自动检测只在多项明确结构、完整 fence 或 GFM table separator 构成强证据时产生
+Markdown 候选；普通散文和单个偶然 marker 仍由 TXT 处理。扩展名、`text/markdown` MIME
+与显式格式提示继续走统一 hint 优先级。解析使用 offset event iterator，定期执行 execution
+checkpoint，并在构造 IR 前限制输入、事件深度、块数、行内数和请求内存。
 
 ## TXT 与字符集
 

@@ -11,6 +11,11 @@
 - XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
   实体和合法 numeric character reference；namespace 作用域、重复 expanded attribute、
   closing tag、深度、事件数、属性/文本与扩张预算均在构造 IR 前校验。
+- Markdown 解析固定离线，不读取相对图片、不获取 HTTP(S) 图片、不解码 data URI。
+  external-only 图片 URI 必须是 canonical HTTP(S)，且没有 userinfo、query 或 fragment；
+  该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content
+  诊断，因为后续 Markdown 消费者主动打开链接时适用消费者自身的网络与 SVG 安全模型。
+  raw HTML 与 blockquote 只进入不可执行代码降级节点，危险标签不会作为 HTML 执行。
 - TXT 自动探测按候选字符集增量解码完整输入；除 TAB、LF、CR 外，NUL、C0、DEL 或 C1
   都会拒绝自动候选，多字节编码不能借原始字节形态绕过规则。BOM 仅决定候选编码，
   不能绕过完整控制字符扫描、有界严格解码与文本安全阈值。结构化文本、具备三行及

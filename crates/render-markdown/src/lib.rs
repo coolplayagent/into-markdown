@@ -7,6 +7,7 @@ use base64::Engine as _;
 use into_markdown_core::{
     Asset, AssetMode, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
     Document, ExecutionContext, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer, TableRow,
+    canonical_external_asset_uri,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -224,7 +225,13 @@ pub fn plan_assets(
     let mut referenced = BTreeSet::new();
     validate_planned_references(&document.blocks, &plan, &mut referenced)?;
     for id in referenced {
-        if options.output.asset_mode != AssetMode::Omit && plan.uri(id).is_none() {
+        let reference = plan
+            .reference(id)
+            .ok_or_else(|| render_error(format!("planned image reference disappeared: {id}")))?;
+        let source = &assets[reference.source_index];
+        let external_only = source.bytes.is_empty() && source.external_uri.is_some();
+        if options.output.asset_mode != AssetMode::Omit && plan.uri(id).is_none() && !external_only
+        {
             return Err(render_error(format!(
                 "asset {id} has no bytes for {} mode",
                 match options.output.asset_mode {
@@ -524,13 +531,18 @@ impl RenderContext<'_> {
         let asset = &self.assets[reference.source_index];
         let target = match self.options.output.asset_mode {
             AssetMode::Omit => return Ok(alt),
+            AssetMode::Embed | AssetMode::Extract if asset.bytes.is_empty() => asset
+                .external_uri
+                .as_deref()
+                .ok_or_else(|| render_error(format!("asset {id} has neither bytes nor URI")))?
+                .to_owned(),
             AssetMode::Embed if !asset.bytes.is_empty() => format!(
                 "data:{};base64,{}",
                 asset.media_type,
                 base64::engine::general_purpose::STANDARD.encode(&asset.bytes)
             ),
             AssetMode::Embed => {
-                return Err(render_error(format!("asset {id} has no bytes for embed mode")));
+                return Err(render_error(format!("asset {id} has no bytes or external URI")));
             }
             AssetMode::Extract => self
                 .plan
@@ -538,12 +550,13 @@ impl RenderContext<'_> {
                 .ok_or_else(|| render_error(format!("asset {id} has no extracted URI")))?
                 .to_owned(),
         };
-        let destination = if self.options.output.asset_mode == AssetMode::Embed {
-            escape_generated_destination(&target)
-        } else {
-            validate_link_target(&target)?;
-            escape_destination(&target, InlineContext::Normal)
-        };
+        let destination =
+            if self.options.output.asset_mode == AssetMode::Embed && !asset.bytes.is_empty() {
+                escape_generated_destination(&target)
+            } else {
+                validate_link_target(&target)?;
+                escape_destination(&target, InlineContext::Normal)
+            };
         Ok(format!("![{alt}](<{destination}>)"))
     }
 }
@@ -843,9 +856,16 @@ fn validate_asset_uri_prefix(prefix: Option<&str>) -> Result<(), ConversionError
 
 fn validate_external_uri(uri: Option<&str>, id: &str) -> Result<(), ConversionError> {
     let Some(uri) = uri else { return Ok(()) };
-    validate_link_target(uri).map_err(|_| {
+    validate_link_target(uri).and_then(|()| validate_external_asset_uri(uri)).map_err(|_| {
         asset_plan_error("unsafeExternalAssetUri", format!("asset {id} has an unsafe external URI"))
     })
+}
+
+fn validate_external_asset_uri(value: &str) -> Result<(), ConversionError> {
+    if canonical_external_asset_uri(value).as_deref() != Some(value) {
+        return Err(render_error("external asset URI is not canonical safe HTTP(S)"));
+    }
+    Ok(())
 }
 
 fn validate_link_target(value: &str) -> Result<(), ConversionError> {
@@ -1527,10 +1547,29 @@ mod tests {
             )
             .is_err()
         );
+        for uri in [
+            "https://example.invalid/x.png?token=secret",
+            "https://example.invalid/x.png#fragment",
+            "https://user@example.invalid/x.png",
+            "file:///tmp/x.png",
+        ] {
+            let external = Asset {
+                id: AssetId("external".into()),
+                filename: None,
+                media_type: "image/png".into(),
+                bytes: vec![],
+                external_uri: Some(uri.into()),
+            };
+            let image = document(vec![node(
+                "external",
+                Block::Image { asset: AssetId("external".into()), alt: None },
+            )]);
+            assert!(render(&image, &[external], &ConversionOptions::default()).is_err());
+        }
     }
 
     #[test]
-    fn embed_requires_bytes_and_all_modes_validate_nested_image_references() {
+    fn external_only_images_render_original_uri_offline_in_extract_and_embed() {
         let image = document(vec![node(
             "page",
             Block::Page {
@@ -1550,7 +1589,15 @@ mod tests {
         };
         let mut options = ConversionOptions::default();
         options.output.asset_mode = AssetMode::Embed;
-        assert!(render(&image, std::slice::from_ref(&asset), &options).is_err());
+        assert_eq!(
+            render(&image, std::slice::from_ref(&asset), &options).unwrap(),
+            "## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
+        );
+        options.output.asset_mode = AssetMode::Extract;
+        assert_eq!(
+            render(&image, std::slice::from_ref(&asset), &options).unwrap(),
+            "## Page 1\n\n![remote](<https://example.invalid/x.png>)\n"
+        );
         options.output.asset_mode = AssetMode::Omit;
         assert!(render(&image, &[], &options).is_err());
         assert!(render(&image, &[asset], &options).is_ok());

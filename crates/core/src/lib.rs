@@ -20,7 +20,7 @@ pub use dto::{
     DtoError, DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
     MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH, MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES,
     MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES, MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES,
-    ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto,
+    ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto, canonical_external_asset_uri,
 };
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{

@@ -38,6 +38,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
+        .register_converter(Arc::new(into_markdown_converters::MarkdownConverter))
         .register_converter(Arc::new(into_markdown_converters::DelimitedTextConverter))
         .register_converter(Arc::new(into_markdown_converters::TextConverter));
     builder
