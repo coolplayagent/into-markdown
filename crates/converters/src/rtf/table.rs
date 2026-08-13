@@ -1,6 +1,6 @@
 //! Paragraph, list, and table IR construction.
 
-use super::budget::{limit, malformed, reserve_vec};
+use super::budget::{limit, malformed, parameter_i32, reserve_vec};
 use super::parser::{CellMerge, ListKey, Paragraph, Parser};
 use into_markdown_core::{
     Block, BlockNode, Cell, ConversionError, Inline, ListItem, ListKind, MAX_TABLE_COLUMNS,
@@ -154,12 +154,37 @@ impl Parser<'_> {
         self.table.cell_definitions.clear();
         self.table.cell_definition_index = 0;
         self.table.pending_cell_merge = CellMerge::Normal;
+        self.table.last_cell_boundary = None;
         self.table.row_width = 0;
         self.state_mut().in_table = true;
         Ok(())
     }
 
-    pub(super) fn add_cell_definition(&mut self) -> Result<(), ConversionError> {
+    pub(super) fn set_cell_merge(&mut self, merge: CellMerge) -> Result<(), ConversionError> {
+        if !self.table.active {
+            return Err(malformed("RTF cell merge property appears outside a table row"));
+        }
+        if self.table.pending_cell_merge != CellMerge::Normal {
+            return Err(malformed("RTF cell has conflicting horizontal merge properties"));
+        }
+        self.table.pending_cell_merge = merge;
+        Ok(())
+    }
+
+    pub(super) fn add_cell_definition(
+        &mut self,
+        parameter: Option<i64>,
+    ) -> Result<(), ConversionError> {
+        if !self.table.active {
+            return Err(malformed("cellx appears outside a table row"));
+        }
+        let boundary = parameter_i32(parameter, "cell boundary")?;
+        if boundary <= 0 {
+            return Err(malformed("RTF cell boundary must be positive"));
+        }
+        if self.table.last_cell_boundary.is_some_and(|previous| boundary <= previous) {
+            return Err(malformed("RTF cell boundaries must be strictly increasing"));
+        }
         let next = self
             .table
             .cell_definitions
@@ -170,15 +195,39 @@ impl Parser<'_> {
         if u64::try_from(next).unwrap_or(u64::MAX) > maximum {
             return Err(limit("max_table_columns", format!("{next} > {maximum}")));
         }
+        if self.table.pending_cell_merge == CellMerge::Continue {
+            let previous = self.table.cell_definitions.last().copied();
+            if !matches!(previous, Some(CellMerge::Start | CellMerge::Continue)) {
+                return Err(malformed(
+                    "horizontal merge continuation must immediately follow its origin chain",
+                ));
+            }
+            let mut span = 1_usize;
+            for merge in self.table.cell_definitions.iter().rev() {
+                span = span
+                    .checked_add(1)
+                    .ok_or_else(|| limit("max_table_columns", "RTF cell span overflow"))?;
+                if *merge == CellMerge::Start {
+                    break;
+                }
+            }
+            if u64::try_from(span).unwrap_or(u64::MAX) > maximum {
+                return Err(limit("max_table_columns", format!("{span} > {maximum}")));
+            }
+        }
         reserve_vec(&mut self.table.cell_definitions, 1, &mut self.memory)?;
         self.table.cell_definitions.push(self.table.pending_cell_merge);
         self.table.pending_cell_merge = CellMerge::Normal;
+        self.table.last_cell_boundary = Some(boundary);
         Ok(())
     }
 
     pub(super) fn finish_cell(&mut self, end: usize) -> Result<(), ConversionError> {
         if !self.table.active {
             return Err(malformed("RTF cell appears outside a table row"));
+        }
+        if self.table.pending_cell_merge != CellMerge::Normal {
+            return Err(malformed("RTF cell merge property requires a cellx boundary"));
         }
         let next_width = self
             .table
@@ -311,6 +360,7 @@ impl Parser<'_> {
         self.table.rows.push(TableRow { cells: std::mem::take(&mut self.table.cells) });
         self.table.cell_definitions.clear();
         self.table.cell_definition_index = 0;
+        self.table.last_cell_boundary = None;
         self.table.row_width = 0;
         Ok(())
     }

@@ -1,7 +1,7 @@
 //! Control-word and control-symbol dispatch.
 
 use super::budget::{limit, locator, malformed, parameter_i32, parameter_u16, reserve_vec};
-use super::destinations::{destination, is_known_non_destination_control};
+use super::destinations::{child_destination, is_known_non_destination_control};
 use super::parser::{
     CellMerge, Destination, FontCharset, MAX_CONTROL_WORD_LEN, MAX_CONTROLS, MAX_NUMERIC_DIGITS,
     MAX_RTF_FONTS, Parser,
@@ -84,10 +84,11 @@ impl Parser<'_> {
     ) -> Result<(), ConversionError> {
         let at_start = self.state().at_group_start;
         let inherited_destination = self.state().destination;
-        if at_start
-            && inherited_destination != Destination::Skip
-            && let Some(destination) = destination(name, self.state().ignorable)
-        {
+        let selected_destination = at_start
+            .then(|| child_destination(name, self.state().ignorable, inherited_destination))
+            .flatten();
+        let entered_destination = selected_destination.is_some();
+        if let Some(destination) = selected_destination {
             self.enter_destination(destination, start)?;
         }
         self.state_mut().at_group_start = false;
@@ -136,7 +137,15 @@ impl Parser<'_> {
             }
             return Ok(());
         }
-        if matches!(destination, Destination::Skip) {
+        if matches!(
+            destination,
+            Destination::Skip | Destination::InfoContainer | Destination::ShapePictureContainer
+        ) {
+            return Ok(());
+        }
+        // The control word that opens a capture destination is structural, not an
+        // unknown formatting control. Controls inside the capture still dispatch below.
+        if entered_destination {
             return Ok(());
         }
 
@@ -238,10 +247,10 @@ impl Parser<'_> {
             "trowd" => self.start_table_row(end)?,
             "cell" => self.finish_cell(end)?,
             "row" => self.finish_row(end)?,
-            "clmgf" => self.table.pending_cell_merge = CellMerge::Start,
-            "clmrg" => self.table.pending_cell_merge = CellMerge::Continue,
+            "clmgf" => self.set_cell_merge(CellMerge::Start)?,
+            "clmrg" => self.set_cell_merge(CellMerge::Continue)?,
             "cellx" => {
-                self.add_cell_definition()?;
+                self.add_cell_definition(parameter)?;
             }
             "rtf" | "ansi" | "deff" | "viewkind" | "field" | "trgaph" | "trleft" | "li" | "ri"
             | "fi" | "sa" | "sb" | "fs" | "cf" | "highlight" | "lang" | "langfe" | "langnp"

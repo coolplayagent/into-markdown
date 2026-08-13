@@ -132,15 +132,30 @@ impl Parser<'_> {
         destination: Destination,
         start: usize,
     ) -> Result<(), ConversionError> {
+        if destination == Destination::Pict {
+            if self.picture.is_some() {
+                return Err(malformed("nested pict destination is invalid"));
+            }
+            if self.state().list_id.is_some() || self.pending_list_marker.is_some() {
+                return Err(malformed(
+                    "RTF picture inside a list item cannot be represented as an inline block",
+                ));
+            }
+            if self.state().destination == Destination::FieldResult {
+                return Err(malformed(
+                    "RTF picture inside a field result cannot be represented as inline content",
+                ));
+            }
+            // An image is a block, so any text accumulated before it is a complete
+            // paragraph. Text after the image starts a distinct paragraph.
+            self.finish_paragraph(start)?;
+        }
         if let Some(frame) = self.frames.last_mut() {
             frame.state.destination = destination;
             frame.introduced = Some(destination);
         }
         match destination {
             Destination::Pict => {
-                if self.picture.is_some() {
-                    return Err(malformed("nested pict destination is invalid"));
-                }
                 self.picture = Some(Picture { start, ..Picture::default() });
             }
             Destination::ListText
@@ -171,16 +186,53 @@ pub(super) fn destination(name: &str, ignorable: bool) -> Option<Destination> {
         "author" => Destination::MetaAuthor,
         "fldinst" => Destination::FieldInstruction,
         "fldrslt" => Destination::FieldResult,
-        "colortbl" | "stylesheet" | "info" | "listtable" | "listoverridetable" | "generator"
-        | "object" | "objdata" | "filetbl" | "datastore" | "themedata" | "colorschememapping"
-        | "htmltag" | "xmlopen" | "xmlattrname" | "xmlattrvalue" | "xmlclose" | "nonshppict"
-        | "shppict" | "header" | "headerl" | "headerr" | "headerf" | "footer" | "footerl"
-        | "footerr" | "footerf" | "annotation" | "footnote" | "aftncn" | "aftnsep" | "aftnsepc"
-        | "private" | "passwordhash" => Destination::Skip,
+        "info" => Destination::InfoContainer,
+        "shppict" => Destination::ShapePictureContainer,
+        "colortbl" | "stylesheet" | "listtable" | "listoverridetable" | "generator" | "object"
+        | "objdata" | "filetbl" | "datastore" | "themedata" | "colorschememapping" | "htmltag"
+        | "xmlopen" | "xmlattrname" | "xmlattrvalue" | "xmlclose" | "nonshppict" | "header"
+        | "headerl" | "headerr" | "headerf" | "footer" | "footerl" | "footerr" | "footerf"
+        | "annotation" | "footnote" | "aftncn" | "aftnsep" | "aftnsepc" | "private"
+        | "passwordhash" => Destination::Skip,
         _ if ignorable => Destination::Skip,
         _ => return None,
     };
     Some(value)
+}
+
+/// Select a destination using the parent container's explicit allowlist.
+/// `Skip` is deliberately opaque: descendants can never reactivate parsing.
+pub(super) fn child_destination(
+    name: &str,
+    ignorable: bool,
+    parent: Destination,
+) -> Option<Destination> {
+    match parent {
+        Destination::Skip => None,
+        Destination::Body => match name {
+            // These metadata destinations are valid only as children of `info`.
+            "title" | "author" => Some(Destination::Skip),
+            _ => destination(name, ignorable),
+        },
+        Destination::InfoContainer => Some(match name {
+            "title" => Destination::MetaTitle,
+            "author" => Destination::MetaAuthor,
+            _ => Destination::Skip,
+        }),
+        Destination::ShapePictureContainer => Some(match name {
+            "pict" => Destination::Pict,
+            _ => Destination::Skip,
+        }),
+        // Formatting groups inherit their capture destination. A nested destination,
+        // however, cannot escape into metadata, pictures, or active content.
+        Destination::FontTable
+        | Destination::Pict
+        | Destination::ListText
+        | Destination::MetaTitle
+        | Destination::MetaAuthor
+        | Destination::FieldInstruction
+        | Destination::FieldResult => destination(name, ignorable).map(|_| Destination::Skip),
+    }
 }
 
 pub(super) fn is_known_non_destination_control(name: &str) -> bool {

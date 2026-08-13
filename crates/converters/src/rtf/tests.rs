@@ -69,6 +69,32 @@ fn active_destinations_are_skipped() {
 }
 
 #[test]
+fn safe_destination_containers_allow_only_their_documented_children() {
+    let output = convert(
+        b"{\\rtf1\\ansi{\\info{\\title Good}{\\author Writer}{\\object{\\title BAD}}{\\*\\unknown{\\author BAD}}}body\\par}",
+    )
+    .unwrap();
+    assert_eq!(output.document.metadata.title.as_deref(), Some("Good"));
+    assert_eq!(output.document.metadata.authors, ["Writer"]);
+    assert_eq!(paragraph_text(&output), "body");
+
+    let wrong_scope = convert(
+        b"{\\rtf1\\ansi{\\title BAD}{\\info{\\title before{\\shppict{\\pict\\pngblip 00}}after}}safe}",
+    )
+    .unwrap();
+    assert_eq!(wrong_scope.document.metadata.title.as_deref(), Some("beforeafter"));
+    assert!(wrong_scope.assets.is_empty());
+
+    let dangerous = convert(
+        b"{\\rtf1\\ansi{\\object{\\info{\\title BAD}}{\\shppict{\\pict\\pngblip 00}}}safe\\par}",
+    )
+    .unwrap();
+    assert!(dangerous.document.metadata.title.is_none());
+    assert!(dangerous.assets.is_empty());
+    assert_eq!(paragraph_text(&dangerous), "safe");
+}
+
+#[test]
 fn skipped_descendants_stay_skipped_and_bin_bytes_are_structurally_opaque() {
     let output = convert(
         b"{\\rtf1\\ansi before{\\object{\\title BAD}{\\pict\\pngblip 00}{\\fldrslt BAD}\\bin3 {}\\}after\\par}",
@@ -78,7 +104,7 @@ fn skipped_descendants_stay_skipped_and_bin_bytes_are_structurally_opaque() {
     assert!(output.document.metadata.title.is_none());
     assert!(output.assets.is_empty());
 
-    let metadata = convert(b"{\\rtf1\\ansi{\\title hi\\bin3 {}\\there}body\\par}").unwrap();
+    let metadata = convert(b"{\\rtf1\\ansi{\\info{\\title hi\\bin3 {}\\there}}body\\par}").unwrap();
     assert_eq!(metadata.document.metadata.title.as_deref(), Some("hithere"));
     assert_eq!(paragraph_text(&metadata), "body");
 
@@ -141,7 +167,7 @@ fn text_destinations_reject_controls_but_tab_and_line_are_structured() {
         b"{\\rtf1\\ansi \\u0?}".as_slice(),
         b"{\\rtf1\\ansi \\u127?}".as_slice(),
         b"{\\rtf1\\ansi \\u128?}".as_slice(),
-        b"{\\rtf1\\ansi{\\title safe\\'00bad}}".as_slice(),
+        b"{\\rtf1\\ansi{\\info{\\title safe\\'00bad}}}".as_slice(),
         b"{\\rtf1\\ansi{\\field{\\*\\fldinst HYPERLINK \\u0?}{\\fldrslt x}}}".as_slice(),
         b"{\\rtf1\\ansi{\\field{\\*\\fldinst HYPERLINK \\\"https://example.invalid\\\"}{\\fldrslt x\\'00}}}".as_slice(),
     ] {
@@ -152,6 +178,23 @@ fn text_destinations_reject_controls_but_tab_and_line_are_structured() {
     let Block::Paragraph(inlines) = &allowed.document.blocks[0].block else { panic!("paragraph") };
     assert!(inlines.iter().any(|inline| matches!(inline, Inline::LineBreak)));
     assert_eq!(paragraph_text(&allowed), "a\tb\tcd");
+}
+
+#[test]
+fn single_byte_codepages_validate_decoded_unicode_scalars() {
+    let printable = convert(b"{\\rtf1\\ansi\\ansicpg1252 \\'80 \\'91 \\'92}").unwrap();
+    assert_eq!(paragraph_text(&printable), "€ ‘ ’");
+
+    let mut raw = b"{\\rtf1\\ansi\\ansicpg1252 ".to_vec();
+    raw.extend_from_slice(&[0x80, b'}']);
+    assert_eq!(paragraph_text(&convert(&raw).unwrap()), "€");
+
+    for source in [
+        b"{\\rtf1\\ansi\\ansicpg1252 \\'81}".as_slice(),
+        b"{\\rtf1\\ansi\\ansicpg1252 \\'8d}".as_slice(),
+    ] {
+        assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
 }
 
 #[test]
@@ -334,6 +377,36 @@ fn table_list_and_safe_field_map_to_structured_ir() {
         panic!("unsafe link fallback paragraph")
     };
     assert!(matches!(&inlines[0], Inline::Text { value, .. } if value == "label"));
+    assert!(
+        !link.diagnostics.iter().any(|diagnostic| diagnostic.code == "rtf.unknownControlIgnored")
+    );
+    let unknown = convert(b"{\\rtf1\\ansi\\definitelyunknown text}").unwrap();
+    assert!(
+        unknown.diagnostics.iter().any(|diagnostic| diagnostic.code == "rtf.unknownControlIgnored")
+    );
+}
+
+#[test]
+fn table_cell_definitions_reject_ambiguous_boundaries_and_merge_chains() {
+    for source in [
+        b"{\\rtf1\\ansi\\trowd\\cellx A\\cell\\row}".as_slice(),
+        b"{\\rtf1\\ansi\\trowd\\cellx0 A\\cell\\row}".as_slice(),
+        b"{\\rtf1\\ansi\\trowd\\cellx200\\cellx100 A\\cell B\\cell\\row}".as_slice(),
+        b"{\\rtf1\\ansi\\trowd\\clmrg\\cellx100 A\\cell\\row}".as_slice(),
+        b"{\\rtf1\\ansi\\trowd\\cellx100\\clmrg\\cellx200 A\\cell B\\cell\\row}".as_slice(),
+        b"{\\rtf1\\ansi\\clmgf text}".as_slice(),
+    ] {
+        assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
+
+    let output = convert(
+        b"{\\rtf1\\ansi\\trowd\\clmgf\\cellx100\\clmrg\\cellx200\\cellx300\\intbl merged\\cell\\cell ordinary\\cell\\row}",
+    )
+    .unwrap();
+    let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!("table") };
+    assert_eq!(rows[0].cells.len(), 2);
+    assert_eq!(rows[0].cells[0].column_span, 2);
+    assert_eq!(rows[0].cells[1].column_span, 1);
 }
 
 #[test]
@@ -361,6 +434,45 @@ fn png_picture_is_decoded_and_retained_but_vector_is_not() {
     assert!(vector.assets.is_empty());
     assert!(
         vector.diagnostics.iter().any(|diagnostic| diagnostic.code == "rtf.unsupportedVectorImage")
+    );
+}
+
+#[test]
+fn shape_picture_wrapper_preserves_block_order_and_rejects_other_children() {
+    let png = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082";
+    let source = format!(
+        "{{\\rtf1\\ansi before{{\\*\\shppict{{\\object{{\\title BAD}}}}{{\\pict\\pngblip {png}}}{{\\*\\unknown BAD}}}}after\\par}}"
+    );
+    let output = convert(source.as_bytes()).unwrap();
+    assert_eq!(output.assets.len(), 1);
+    assert!(output.document.metadata.title.is_none());
+    assert_eq!(output.document.blocks.len(), 3);
+    assert!(matches!(output.document.blocks[0].block, Block::Paragraph(_)));
+    assert!(matches!(output.document.blocks[1].block, Block::Image { .. }));
+    assert!(matches!(output.document.blocks[2].block, Block::Paragraph(_)));
+    assert_eq!(paragraph_text(&output), "beforeafter");
+
+    let no_picture =
+        convert(b"{\\rtf1\\ansi{\\*\\shppict{\\object{\\pict\\pngblip 00}}}safe}").unwrap();
+    assert!(no_picture.assets.is_empty());
+    assert_eq!(paragraph_text(&no_picture), "safe");
+
+    let table_source = format!(
+        "{{\\rtf1\\ansi\\trowd\\cellx100\\intbl before{{\\pict\\pngblip {png}}}after\\cell\\row}}"
+    );
+    let table = convert(table_source.as_bytes()).unwrap();
+    let Block::Table { rows, .. } = &table.document.blocks[0].block else { panic!("table") };
+    let blocks = &rows[0].cells[0].blocks;
+    assert_eq!(blocks.len(), 3);
+    assert!(matches!(blocks[0].block, Block::Paragraph(_)));
+    assert!(matches!(blocks[1].block, Block::Image { .. }));
+    assert!(matches!(blocks[2].block, Block::Paragraph(_)));
+
+    assert_eq!(
+        convert(b"{\\rtf1\\ansi\\ls1{\\listtext 1.\\tab}before{\\pict\\pngblip 00}}")
+            .unwrap_err()
+            .code(),
+        ErrorCode::Malformed
     );
 }
 

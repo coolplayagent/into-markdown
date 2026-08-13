@@ -105,7 +105,6 @@ impl Parser<'_> {
         }
         self.flush_pending_surrogate()?;
         let encoding = encoding_for_codepage(codepage)?;
-        validate_ansi_units(bytes, codepage)?;
         if !bytes.is_ascii() {
             let decode_bound = u64::try_from(bytes.len())
                 .unwrap_or(u64::MAX)
@@ -300,23 +299,6 @@ fn is_dbcs_trail(codepage: u16, byte: u8) -> bool {
         950 => matches!(byte, 0x40..=0x7e | 0xa1..=0xfe),
         _ => false,
     }
-}
-
-fn validate_ansi_units(bytes: &[u8], codepage: u16) -> Result<(), ConversionError> {
-    let mut offset = 0;
-    while let Some(&byte) = bytes.get(offset) {
-        if is_dbcs_lead(codepage, byte)
-            && bytes.get(offset + 1).is_some_and(|trail| is_dbcs_trail(codepage, *trail))
-        {
-            offset += 2;
-            continue;
-        }
-        if byte <= 0x1f && byte != b'\t' || (0x7f..=0x9f).contains(&byte) {
-            return Err(malformed("RTF ANSI text contains a forbidden C0, C1, or DEL byte"));
-        }
-        offset += 1;
-    }
-    Ok(())
 }
 
 fn skip_ansi_units(bytes: &[u8], codepage: u16, maximum: u8) -> (usize, u8) {

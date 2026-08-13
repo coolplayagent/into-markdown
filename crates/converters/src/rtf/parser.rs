@@ -19,6 +19,8 @@ pub(super) const MAX_RTF_FONTS: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Destination {
     Body,
+    InfoContainer,
+    ShapePictureContainer,
     Skip,
     FontTable,
     Pict,
@@ -95,6 +97,7 @@ pub(super) struct TableBuilder {
     pub(super) cell_definitions: Vec<CellMerge>,
     pub(super) cell_definition_index: usize,
     pub(super) pending_cell_merge: CellMerge,
+    pub(super) last_cell_boundary: Option<i32>,
     pub(super) row_width: u64,
     pub(super) table_width: Option<u64>,
     pub(super) node_reserved: bool,

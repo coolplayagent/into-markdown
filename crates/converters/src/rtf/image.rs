@@ -131,7 +131,13 @@ impl Parser<'_> {
             external_uri: None,
         });
         let node = self.node(Block::Image { asset: AssetId(id), alt: None }, picture.start, end)?;
-        self.push_block(node)
+        if self.table.active || self.state().in_table {
+            reserve_vec(&mut self.table.cell_blocks, 1, &mut self.memory)?;
+            self.table.cell_blocks.push(node);
+            Ok(())
+        } else {
+            self.push_block(node)
+        }
     }
 }
 
