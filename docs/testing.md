@@ -181,20 +181,29 @@ PaddleOCR commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854` 的 DB 路径执行�
 - `96x64` 概率图中的 `[20,20]-[59,39]` 矩形：score
   `0.8999999761581421`，unclip box `[(11,11),(68,11),(68,48),(11,48)]`；
 - `112x96` 概率图中的 `[(18,35),(34,14),(88,54),(72,75)]` 非对称旋转四边形：
-  score `0.8938303229741388`，原始 unclip box
-  `[(30.7121,-6.3614),(107.0248,50.1665),(74.2879,94.3614),(-2.0248,37.8335)]`，
-  Rust golden 比较映射到 source bounds 后的坐标；
+  fast score `0.8998934356977029`，pyclipper 整数路径的原始 unclip box
+  `[(30.7036,-5.6755),(107.0327,51.2244),(74.8757,94.3619),(-1.4535,37.4620)]`；
+  映射到 source bounds 并按官方 round 后为 `[(30,0),(107,51),(75,94),(0,37)]`；
 - `96x96` ring：`RETR_LIST` 返回 outer 与 inner 两个 contour，inner 经过同一 score
   流程后低于 box threshold，最终只保留 score `0.7603305583705149` 的 outer box。
 
-Rust 实现使用 `imageproc 0.25.0` 的 Suzuki–Abe 完整边界；官方的
-`CHAIN_APPROX_SIMPLE` 只删去同一直线中间点，对 convex hull/minimum rectangle 不改变
-语义。closed polygon offset 使用 `clipper2-rust 1.1.0`。坐标允许小范围浮点/rounding
-容差，score 容差为 `0.03`；矩形容差为 1 pixel，旋转框容差为 3 pixels。旋转 fixture
-刻意非对称，避免两个等面积 minimum rectangle 都合法时 OpenCV 与 imageproc 的 tie
-选择不同。resize 的 `round(dim / 32) * 32` 使用 Rust `round_ties_even`，与 Python
-`round` 一致，并对 `47.5`、`48.0`、`80.0`、`80.1` 固定 drift 测试；输入尺寸在此前
-已验证为非零，因此不存在负尺寸 rounding 路径。
+Rust 的 request-accounted Suzuki–Abe scanner 一次只保留一个正在跟踪的 contour，
+在线执行 `CHAIN_APPROX_SIMPLE`，并按 OpenCV 4.13 的 reverse-scan `RETR_LIST` 顺序仅保留
+scanner 正向发现序列的最后 3000 个，再整体逆序；这精确对应官方
+`contours[:max_candidates]`，不是对 OpenCV 返回序再取 suffix。3600 个隔离岛 reference
+明确固定返回前 3 个为 `[(178,178),(175,178),(172,178)]`、第 3000 个为 `(1,31)`。
+三个分离岛和带 hole ring 另固定验证顺序与 hole 语义；恶意小岛
+另受 contour event 上限约束。fast score 把四点转为 int32 后复刻 `fillPoly` 的 even-odd
+内部与 OpenCV 8-connected 整数边界线；倾斜 convex/concave mask reference 要求像素集合
+完全相等。closed polygon offset 使用 `clipper2-rust 1.1.0` 的 i64 path，多个输出 path
+与官方一样拒绝。
+
+resize reference 还覆盖 3x2 到 7x5 的所有 BGR 输出样本、确定种子的随机 BGR 图、
+downsample 和 tiny-image padding 边缘，锁定 OpenCV 4.13 默认
+`INTER_LINEAR` 的 uint8 结果，每通道最多允许 1 LSB；不把它表述为跨 OpenCV 版本或
+`INTER_LINEAR_EXACT` 等价。`99x2` 固定验证先 padding 后的两阶段 int 截断结果为
+`4000x64`。score 要求 `1e-5`，整数映射坐标仅允许 minimum-rectangle 浮点 tie 导致的
+1 pixel 差异。
 
 CLI 契约测试还必须覆盖直接输入与保留命令冲突、双语帮助、stdin、目录展开、
 配置合并、联网授权、稳定退出码、JSON Schema、Bundle 路径净化、原子输出、冲突

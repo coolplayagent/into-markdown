@@ -2,15 +2,14 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
 
-use clipper2_rust::{EndType, JoinType, PointD, inflate_paths_d};
-use image::GrayImage;
-use imageproc::contours::find_contours;
-use imageproc::geometry::min_area_rect;
+use clipper2_rust::{EndType, JoinType, Point64, inflate_paths_64};
+use imageproc::geometry::{convex_hull, min_area_rect};
 use imageproc::point::Point;
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ResourceReservation, Tensor, TensorRuntime,
 };
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 const PROVIDER: &str = "builtin.ocr.ppocrv6-detector";
@@ -18,6 +17,12 @@ const MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
 const STRIDE: usize = 32;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
+const MIN_SIDE_LEN: usize = 736;
+const MAX_SIDE_LEN: usize = 4000;
+const BITMAP_THRESHOLD: f32 = 0.2;
+const BOX_THRESHOLD: f32 = 0.4;
+const UNCLIP_RATIO: f64 = 1.4;
+const MAX_CANDIDATES: usize = 3000;
 
 /// Byte layout supplied by a future audited image decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,17 +93,13 @@ pub struct DetectionResult {
     pub provider: String,
 }
 
-/// Audited PP-OCRv6 tiny detection parameters and local safety bounds.
+/// Local safety bounds. Detection algorithm parameters come only from the
+/// embedded, commit-pinned authority and cannot be changed by callers.
 #[derive(Debug, Clone)]
 pub struct DetectionConfig {
-    pub min_side_len: usize,
-    pub max_side_len: usize,
-    pub bitmap_threshold: f32,
-    pub box_threshold: f32,
-    pub unclip_ratio: f32,
-    pub max_candidates: usize,
     pub max_source_pixels: usize,
     pub max_model_pixels: usize,
+    pub max_contour_events: usize,
     pub max_contour_points: usize,
     pub max_offset_points: usize,
 }
@@ -106,14 +107,9 @@ pub struct DetectionConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            min_side_len: 736,
-            max_side_len: 4000,
-            bitmap_threshold: 0.2,
-            box_threshold: 0.4,
-            unclip_ratio: 1.4,
-            max_candidates: 3000,
             max_source_pixels: 100_000_000,
             max_model_pixels: 16_000_000,
+            max_contour_events: 16_000_000,
             max_contour_points: 16_000_000,
             max_offset_points: 4096,
         }
@@ -165,6 +161,7 @@ struct DetectorAuthority {
     input_color: String,
     resize_stride: usize,
     resize_rounding: String,
+    opencv_reference_version: String,
     resize_interpolation: String,
     minimum_side: usize,
     maximum_side: usize,
@@ -177,6 +174,9 @@ struct DetectorAuthority {
     unclip_ratio: f32,
     contour_retrieval: String,
     contour_approximation: String,
+    contour_result_order: String,
+    score_mode: String,
+    box_type: String,
     offset_join: String,
     offset_end: String,
 }
@@ -194,7 +194,8 @@ fn validate_authority() -> Result<(), ConversionError> {
         || value.input_color != "BGR"
         || value.resize_stride != STRIDE
         || value.resize_rounding != "ties-to-even"
-        || value.resize_interpolation != "bilinear"
+        || value.opencv_reference_version != "4.13.0"
+        || value.resize_interpolation != "INTER_LINEAR-to-uint8"
         || value.minimum_side != 736
         || value.maximum_side != 4000
         || (value.scale - 1.0 / 255.0).abs() > f64::EPSILON
@@ -206,6 +207,9 @@ fn validate_authority() -> Result<(), ConversionError> {
         || value.unclip_ratio.to_bits() != 1.4_f32.to_bits()
         || value.contour_retrieval != "list"
         || value.contour_approximation != "simple"
+        || value.contour_result_order != "reverse-scan"
+        || value.score_mode != "fast"
+        || value.box_type != "quad"
         || value.offset_join != "round"
         || value.offset_end != "closed-polygon"
     {
@@ -228,22 +232,11 @@ struct Prepared {
 }
 
 fn validate_config(c: &DetectionConfig) -> Result<(), ConversionError> {
-    if c.min_side_len == 0
-        || c.min_side_len > c.max_side_len
-        || c.max_side_len < STRIDE
-        || c.max_side_len > 4000
-        || c.max_candidates == 0
-        || c.max_source_pixels == 0
+    if c.max_source_pixels == 0
         || c.max_model_pixels == 0
+        || c.max_contour_events == 0
         || c.max_contour_points == 0
         || c.max_offset_points < 3
-        || !c.bitmap_threshold.is_finite()
-        || !(0.0..=1.0).contains(&c.bitmap_threshold)
-        || !c.box_threshold.is_finite()
-        || !(0.0..=1.0).contains(&c.box_threshold)
-        || !c.unclip_ratio.is_finite()
-        || c.unclip_ratio <= 0.0
-        || c.unclip_ratio > 4.0
     {
         return Err(ocr("invalidDetectionConfig"));
     }
@@ -282,15 +275,34 @@ fn oriented_size(image: PixelView<'_>) -> (usize, usize) {
     }
 }
 
-fn round_stride(value: f64) -> Result<usize, ConversionError> {
-    if !value.is_finite() || value < 1.0 {
+fn round_stride(value: usize) -> Result<usize, ConversionError> {
+    if value == 0 {
         return Err(limit("modelPixels"));
     }
-    let stride_units = (value / STRIDE as f64).round_ties_even().max(1.0);
+    let stride_units = (value as f64 / STRIDE as f64).round_ties_even().max(1.0);
     if stride_units > usize::MAX as f64 {
         return Err(limit("modelPixels"));
     }
     (stride_units as usize).checked_mul(STRIDE).ok_or_else(|| limit("modelPixels"))
+}
+
+fn official_resize_dimensions(
+    width: usize,
+    height: usize,
+) -> Result<(usize, usize), ConversionError> {
+    let short = width.min(height) as f64;
+    let ratio = if short < MIN_SIDE_LEN as f64 { MIN_SIDE_LEN as f64 / short } else { 1.0 };
+    // Paddle first converts each scaled dimension with Python int(), which
+    // truncates a positive value toward zero.
+    let mut resized_w = (width as f64 * ratio) as usize;
+    let mut resized_h = (height as f64 * ratio) as usize;
+    let resized_long = resized_w.max(resized_h);
+    if resized_long > MAX_SIDE_LEN {
+        let limit_ratio = MAX_SIDE_LEN as f64 / resized_long as f64;
+        resized_w = (resized_w as f64 * limit_ratio) as usize;
+        resized_h = (resized_h as f64 * limit_ratio) as usize;
+    }
+    Ok((round_stride(resized_w)?, round_stride(resized_h)?))
 }
 
 fn preprocess(
@@ -300,14 +312,14 @@ fn preprocess(
 ) -> Result<Prepared, ConversionError> {
     validate_pixels(image, c)?;
     let (ow, oh) = oriented_size(image);
-    let short = ow.min(oh) as f64;
-    let long = ow.max(oh) as f64;
-    let mut ratio = if short < c.min_side_len as f64 { c.min_side_len as f64 / short } else { 1.0 };
-    if long * ratio > c.max_side_len as f64 {
-        ratio = c.max_side_len as f64 / long;
-    }
-    let mw = round_stride(ow as f64 * ratio)?;
-    let mh = round_stride(oh as f64 * ratio)?;
+    // DetResizeForTest pads only this tiny-image case before it computes the
+    // resize ratio. The recorded destination shape remains the unpadded source.
+    let (padded_w, padded_h) = if ow.checked_add(oh).ok_or_else(|| limit("sourcePixels"))? < 64 {
+        (ow.max(STRIDE), oh.max(STRIDE))
+    } else {
+        (ow, oh)
+    };
+    let (mw, mh) = official_resize_dimensions(padded_w, padded_h)?;
     let count = mw.checked_mul(mh).ok_or_else(|| limit("modelPixels"))?;
     if count > c.max_model_pixels {
         return Err(limit("modelPixels"));
@@ -324,13 +336,15 @@ fn preprocess(
         if y % 32 == 0 {
             context.checkpoint()?;
         }
-        let sy = ((y as f64 + 0.5) * oh as f64 / mh as f64 - 0.5).clamp(0.0, (oh - 1) as f64);
+        let sy = ((y as f64 + 0.5) * padded_h as f64 / mh as f64 - 0.5)
+            .clamp(0.0, (padded_h - 1) as f64);
         for x in 0..mw {
-            let sx = ((x as f64 + 0.5) * ow as f64 / mw as f64 - 0.5).clamp(0.0, (ow - 1) as f64);
-            let bgr = bilinear(image, sx, sy)?;
+            let sx = ((x as f64 + 0.5) * padded_w as f64 / mw as f64 - 0.5)
+                .clamp(0.0, (padded_w - 1) as f64);
+            let bgr = bilinear_u8(image, ow, oh, padded_w, padded_h, sx, sy)?;
             for channel in 0..3 {
                 output[channel * count + y * mw + x] =
-                    (bgr[channel] / 255.0 - MEAN[channel]) / STD[channel];
+                    (f32::from(bgr[channel]) / 255.0 - MEAN[channel]) / STD[channel];
             }
         }
     }
@@ -355,7 +369,7 @@ fn source_xy(image: PixelView<'_>, x: usize, y: usize) -> (usize, usize) {
     }
 }
 
-fn pixel_bgr(image: PixelView<'_>, x: usize, y: usize) -> Result<[f32; 3], ConversionError> {
+fn pixel_bgr(image: PixelView<'_>, x: usize, y: usize) -> Result<[u8; 3], ConversionError> {
     let (x, y) = source_xy(image, x, y);
     let base = y
         .checked_mul(image.row_stride)
@@ -363,38 +377,243 @@ fn pixel_bgr(image: PixelView<'_>, x: usize, y: usize) -> Result<[f32; 3], Conve
         .ok_or_else(|| limit("pixelStride"))?;
     let p = &image.bytes[base..base + image.format.channels()];
     Ok(match image.format {
-        PixelFormat::Gray8 => [f32::from(p[0]); 3],
-        PixelFormat::Rgb8 | PixelFormat::Rgba8 => {
-            [f32::from(p[2]), f32::from(p[1]), f32::from(p[0])]
-        }
-        PixelFormat::Bgr8 | PixelFormat::Bgra8 => {
-            [f32::from(p[0]), f32::from(p[1]), f32::from(p[2])]
-        }
+        PixelFormat::Gray8 => [p[0]; 3],
+        PixelFormat::Rgb8 | PixelFormat::Rgba8 => [p[2], p[1], p[0]],
+        PixelFormat::Bgr8 | PixelFormat::Bgra8 => [p[0], p[1], p[2]],
     })
 }
 
-fn bilinear(
+fn padded_pixel_bgr(
     image: PixelView<'_>,
+    oriented_w: usize,
+    oriented_h: usize,
+    x: usize,
+    y: usize,
+) -> Result<[u8; 3], ConversionError> {
+    if x >= oriented_w || y >= oriented_h { Ok([0; 3]) } else { pixel_bgr(image, x, y) }
+}
+
+fn bilinear_u8(
+    image: PixelView<'_>,
+    oriented_w: usize,
+    oriented_h: usize,
+    padded_w: usize,
+    padded_h: usize,
     sample_x: f64,
     sample_y: f64,
-) -> Result<[f32; 3], ConversionError> {
-    let (ow, oh) = oriented_size(image);
+) -> Result<[u8; 3], ConversionError> {
     let x0 = sample_x.floor() as usize;
     let y0 = sample_y.floor() as usize;
-    let x1 = (x0 + 1).min(ow - 1);
-    let y1 = (y0 + 1).min(oh - 1);
-    let fx = (sample_x - x0 as f64) as f32;
-    let fy = (sample_y - y0 as f64) as f32;
-    let top_left = pixel_bgr(image, x0, y0)?;
-    let top_right = pixel_bgr(image, x1, y0)?;
-    let bottom_left = pixel_bgr(image, x0, y1)?;
-    let bottom_right = pixel_bgr(image, x1, y1)?;
-    let mut out = [0.0; 3];
+    let x1 = (x0 + 1).min(padded_w - 1);
+    let y1 = (y0 + 1).min(padded_h - 1);
+    let fx = sample_x - x0 as f64;
+    let fy = sample_y - y0 as f64;
+    let top_left = padded_pixel_bgr(image, oriented_w, oriented_h, x0, y0)?;
+    let top_right = padded_pixel_bgr(image, oriented_w, oriented_h, x1, y0)?;
+    let bottom_left = padded_pixel_bgr(image, oriented_w, oriented_h, x0, y1)?;
+    let bottom_right = padded_pixel_bgr(image, oriented_w, oriented_h, x1, y1)?;
+    let mut out = [0; 3];
     for c in 0..3 {
-        out[c] = (top_left[c] * (1.0 - fx) + top_right[c] * fx) * (1.0 - fy)
-            + (bottom_left[c] * (1.0 - fx) + bottom_right[c] * fx) * fy;
+        let value = (f64::from(top_left[c]) * (1.0 - fx) + f64::from(top_right[c]) * fx)
+            * (1.0 - fy)
+            + (f64::from(bottom_left[c]) * (1.0 - fx) + f64::from(bottom_right[c]) * fx) * fy;
+        out[c] = value.round_ties_even().clamp(0.0, 255.0) as u8;
     }
     Ok(out)
+}
+
+// Border following below is a request-accounted adaptation of the Suzuki-Abe
+// scanner in imageproc 0.25.0 (`src/contours.rs`), copyright 2015
+// PistonDevelopers, MIT licensed. Unlike the dependency API it emits one
+// contour at a time, polls cancellation while scanning/following, and never
+// materializes an attacker-controlled Vec of every contour. RETR_LIST does not
+// require hierarchy, so parent bookkeeping is deliberately omitted.
+fn scan_contours(
+    bitmap: &[u8],
+    width: usize,
+    height: usize,
+    config: &DetectionConfig,
+    context: &ExecutionContext,
+    reservation: &mut ResourceReservation,
+) -> Result<Vec<Vec<Point<i32>>>, ConversionError> {
+    let pixels = width.checked_mul(height).ok_or_else(|| limit("modelPixels"))?;
+    let mut labels = Vec::new();
+    labels.try_reserve_exact(pixels).map_err(|_| limit("contourMemory"))?;
+    labels.extend(bitmap.iter().map(|value| i32::from(*value)));
+    let at = |x: usize, y: usize| x + width * y;
+    let mut diffs = VecDeque::from([
+        Point::new(-1, 0),
+        Point::new(-1, -1),
+        Point::new(0, -1),
+        Point::new(1, -1),
+        Point::new(1, 0),
+        Point::new(1, 1),
+        Point::new(0, 1),
+        Point::new(-1, 1),
+    ]);
+    let mut selected = VecDeque::<Vec<Point<i32>>>::new();
+    let mut border_number = 1_i32;
+    let mut events = 0_usize;
+    let mut total_points = 0_usize;
+
+    for y in 0..height {
+        if y % 16 == 0 {
+            context.checkpoint()?;
+        }
+        for x in 0..width {
+            let point_x = i32::try_from(x).map_err(|_| limit("modelPixels"))?;
+            let point_y = i32::try_from(y).map_err(|_| limit("modelPixels"))?;
+            if labels[at(x, y)] == 0 {
+                continue;
+            }
+            let adjacent = if labels[at(x, y)] == 1 && (x == 0 || labels[at(x - 1, y)] == 0) {
+                Some(Point::new(point_x - 1, point_y))
+            } else if labels[at(x, y)] > 0 && (x + 1 == width || labels[at(x + 1, y)] == 0) {
+                Some(Point::new(point_x + 1, point_y))
+            } else {
+                None
+            };
+            let Some(adjacent) = adjacent else { continue };
+            events = events.checked_add(1).ok_or_else(|| limit("contourEvents"))?;
+            if events > config.max_contour_events {
+                return Err(limit("contourEvents"));
+            }
+            border_number = border_number.checked_add(1).ok_or_else(|| limit("contourEvents"))?;
+            let start = Point::new(point_x, point_y);
+            rotate_diffs(&mut diffs, adjacent - start)?;
+            let neighbor = diffs.iter().find_map(|difference| {
+                foreground_neighbor(&labels, width, height, start + *difference)
+            });
+            let mut points = Vec::<Point<i32>>::new();
+            if let Some(first) = neighbor {
+                let mut previous = first;
+                let mut current = start;
+                loop {
+                    if points.len() == points.capacity() {
+                        let extra = 64_usize;
+                        let bytes = extra
+                            .checked_mul(std::mem::size_of::<Point<i32>>())
+                            .ok_or_else(|| limit("contourMemory"))?;
+                        reservation
+                            .grow(u64::try_from(bytes).map_err(|_| limit("contourMemory"))?)?;
+                        if points.try_reserve_exact(extra).is_err() {
+                            reservation.shrink(
+                                u64::try_from(bytes).map_err(|_| limit("contourMemory"))?,
+                            )?;
+                            return Err(limit("contourMemory"));
+                        }
+                    }
+                    points.push(current);
+                    total_points =
+                        total_points.checked_add(1).ok_or_else(|| limit("contourPoints"))?;
+                    if total_points > config.max_contour_points {
+                        return Err(limit("contourPoints"));
+                    }
+                    if total_points.is_multiple_of(4096) {
+                        context.checkpoint()?;
+                    }
+                    rotate_diffs(&mut diffs, previous - current)?;
+                    let next = diffs
+                        .iter()
+                        .rev()
+                        .find_map(|difference| {
+                            foreground_neighbor(&labels, width, height, current + *difference)
+                        })
+                        .ok_or_else(|| ocr("invalidContourTopology"))?;
+                    let mut right_edge = false;
+                    for difference in diffs.iter().rev() {
+                        if *difference == next - current {
+                            break;
+                        }
+                        if *difference == Point::new(1, 0) {
+                            right_edge = true;
+                            break;
+                        }
+                    }
+                    let index = at(current.x as usize, current.y as usize);
+                    if current.x as usize + 1 == width || right_edge {
+                        labels[index] = -border_number;
+                    } else if labels[index] == 1 {
+                        labels[index] = border_number;
+                    }
+                    if next == start && current == first {
+                        break;
+                    }
+                    previous = current;
+                    current = next;
+                }
+            } else {
+                reservation.grow(std::mem::size_of::<Point<i32>>() as u64)?;
+                points.try_reserve_exact(1).map_err(|_| limit("contourMemory"))?;
+                points.push(start);
+                labels[at(x, y)] = -border_number;
+                total_points = total_points.checked_add(1).ok_or_else(|| limit("contourPoints"))?;
+            }
+            chain_approx_simple(&mut points);
+            // OpenCV's current RETR_LIST implementation exposes completed
+            // contours in reverse scanner order. Keep only the suffix needed by
+            // maxCandidates, then reverse once scanning and event accounting end.
+            selected.push_back(points);
+            if selected.len() > MAX_CANDIDATES
+                && let Some(discarded) = selected.pop_front()
+            {
+                let bytes = discarded
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<Point<i32>>())
+                    .ok_or_else(|| limit("contourMemory"))?;
+                drop(discarded);
+                reservation.shrink(u64::try_from(bytes).map_err(|_| limit("contourMemory"))?)?;
+            }
+        }
+    }
+    let mut result = selected.into_iter().collect::<Vec<_>>();
+    result.reverse();
+    Ok(result)
+}
+
+fn foreground_neighbor(
+    labels: &[i32],
+    width: usize,
+    height: usize,
+    point: Point<i32>,
+) -> Option<Point<i32>> {
+    (point.x >= 0
+        && point.y >= 0
+        && (point.x as usize) < width
+        && (point.y as usize) < height
+        && labels[point.y as usize * width + point.x as usize] != 0)
+        .then_some(point)
+}
+
+fn rotate_diffs(
+    diffs: &mut VecDeque<Point<i32>>,
+    value: Point<i32>,
+) -> Result<(), ConversionError> {
+    let index = diffs
+        .iter()
+        .position(|difference| *difference == value)
+        .ok_or_else(|| ocr("invalidContourDirection"))?;
+    diffs.rotate_left(index);
+    Ok(())
+}
+
+fn chain_approx_simple(points: &mut Vec<Point<i32>>) {
+    if points.len() < 3 {
+        return;
+    }
+    let original_len = points.len();
+    let direction = |a: Point<i32>, b: Point<i32>| ((b.x - a.x).signum(), (b.y - a.y).signum());
+    let mut write = 0;
+    for index in 0..original_len {
+        let previous = points[(index + original_len - 1) % original_len];
+        let current = points[index];
+        let next = points[(index + 1) % original_len];
+        if direction(previous, current) != direction(current, next) {
+            points[write] = current;
+            write += 1;
+        }
+    }
+    points.truncate(write);
 }
 
 fn postprocess(
@@ -418,62 +637,64 @@ fn postprocess(
     if output.values.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
         return Err(ocr("invalidDetectionProbability"));
     }
-    // imageproc's Suzuki-Abe implementation retains one i32 label and at most one
-    // point per source pixel in addition to this u8 bitmap. This cooperative
-    // logical reservation is not a measurement of allocator metadata or RSS.
+    // Reserve all fixed scanner/output structures before allocation. Individual
+    // contour capacities grow this guard before their Vec grows.
     let logical = pixels
-        .checked_mul(1 + std::mem::size_of::<i32>() + std::mem::size_of::<Point<i32>>())
-        .and_then(|bytes| bytes.checked_add(config.max_candidates.checked_mul(256)?))
+        .checked_mul(1 + std::mem::size_of::<i32>())
+        .and_then(|bytes| bytes.checked_add(MAX_CANDIDATES.checked_mul(256)?))
         .and_then(|bytes| {
             bytes.checked_add(
                 config
                     .max_offset_points
-                    .checked_mul(std::mem::size_of::<PointD>())?
+                    .checked_mul(std::mem::size_of::<Point64>())?
                     .checked_mul(4)?,
             )
         })
         .ok_or_else(|| limit("contourMemory"))?;
-    let _geometry =
+    let mut geometry =
         context.reserve_memory(u64::try_from(logical).map_err(|_| limit("contourMemory"))?)?;
     let mut bitmap = Vec::new();
     bitmap.try_reserve_exact(pixels).map_err(|_| limit("contourMemory"))?;
-    bitmap.extend(output.values.iter().map(|value| u8::from(*value > config.bitmap_threshold)));
-    let width = u32::try_from(transform.model_w).map_err(|_| limit("modelPixels"))?;
-    let height = u32::try_from(transform.model_h).map_err(|_| limit("modelPixels"))?;
-    let mask =
-        GrayImage::from_raw(width, height, bitmap).ok_or_else(|| ocr("invalidDetectionBitmap"))?;
+    bitmap.extend(output.values.iter().map(|value| u8::from(*value > BITMAP_THRESHOLD)));
     context.checkpoint()?;
-    let contours = find_contours::<i32>(&mask);
-    let contour_points = contours.iter().try_fold(0_usize, |total, contour| {
-        total.checked_add(contour.points.len()).ok_or_else(|| limit("contourPoints"))
-    })?;
-    if contour_points > config.max_contour_points {
-        return Err(limit("contourPoints"));
-    }
+    let contours = scan_contours(
+        &bitmap,
+        transform.model_w,
+        transform.model_h,
+        config,
+        context,
+        &mut geometry,
+    )?;
     let mut regions = Vec::new();
-    regions
-        .try_reserve(config.max_candidates.min(contours.len()))
-        .map_err(|_| limit("contourMemory"))?;
-    for (index, contour) in contours.iter().take(config.max_candidates).enumerate() {
+    regions.try_reserve(MAX_CANDIDATES.min(contours.len())).map_err(|_| limit("contourMemory"))?;
+    let mut geometry_events = 0_usize;
+    for (index, contour) in contours.iter().enumerate() {
         if index % 32 == 0 {
             context.checkpoint()?;
         }
-        if contour.points.len() < 3 || contour.points.len() > pixels {
+        if contour.len() < 3 || contour.len() > pixels {
             continue;
         }
-        let first = min_area_rect(&contour.points);
-        let first_quad = first.map(|p| [f64::from(p.x), f64::from(p.y)]);
+        let first_quad = minimum_rect_contour(
+            contour,
+            context,
+            &mut geometry,
+            &mut geometry_events,
+            config.max_contour_events,
+        )?;
+        if !is_convex_quad(first_quad) {
+            return Err(ocr("invalidDetectionGeometry"));
+        }
         let short = quad_sides(first_quad).0;
         if short < 3.0 {
             continue;
         }
         let confidence =
             polygon_score(&output.values, transform.model_w, transform.model_h, first_quad)?;
-        if confidence < config.box_threshold {
+        if confidence < BOX_THRESHOLD {
             continue;
         }
-        let expanded =
-            unclip(first_quad, f64::from(config.unclip_ratio), config.max_offset_points)?;
+        let expanded = unclip(first_quad, UNCLIP_RATIO, config.max_offset_points)?;
         let Some(expanded) = expanded else { continue };
         let final_quad = minimum_rect_f64(&expanded)?;
         let (short, _) = quad_sides(final_quad);
@@ -536,7 +757,11 @@ fn polygon_score(
     let mut count = 0_u64;
     for y in min_y..=max_y {
         for x in min_x..=max_x {
-            if point_in_polygon([x as f64, y as f64], &polygon) {
+            if opencv_fill_poly_contains(
+                i32::try_from(x).map_err(|_| limit("modelPixels"))?,
+                i32::try_from(y).map_err(|_| limit("modelPixels"))?,
+                &polygon,
+            ) {
                 let value = *values
                     .get(
                         y.checked_mul(width)
@@ -553,6 +778,62 @@ fn polygon_score(
         return Ok(0.0);
     }
     Ok((sum / count as f64) as f32)
+}
+
+fn opencv_fill_poly_contains(x: i32, y: i32, polygon: &[[f64; 2]; 4]) -> bool {
+    let integer = polygon.map(|point| Point::new(point[0] as i32, point[1] as i32));
+    if integer.iter().enumerate().any(|(index, end)| {
+        opencv_line_contains(integer[(index + integer.len() - 1) % integer.len()], *end, x, y)
+    }) {
+        return true;
+    }
+    let converted = integer.map(|point| [f64::from(point.x), f64::from(point.y)]);
+    point_in_polygon([f64::from(x), f64::from(y)], &converted)
+}
+
+// OpenCV 4.13 LineIterator connectivity=8, leftToRight=true. fillPoly draws
+// these integer outlines before its even-odd scan conversion.
+fn opencv_line_contains(mut start: Point<i32>, mut end: Point<i32>, x: i32, y: i32) -> bool {
+    let mut delta_x = 1;
+    let mut delta_y = 1;
+    let mut dx = end.x - start.x;
+    let mut dy = end.y - start.y;
+    if dx < 0 {
+        dx = -dx;
+        dy = -dy;
+        std::mem::swap(&mut start, &mut end);
+    }
+    if dy < 0 {
+        dy = -dy;
+        delta_y = -1;
+    }
+    let vertical = dy > dx;
+    if vertical {
+        std::mem::swap(&mut dx, &mut dy);
+        std::mem::swap(&mut delta_x, &mut delta_y);
+    }
+    let mut error = dx - 2 * dy;
+    let plus_delta = 2 * dx;
+    let minus_delta = -2 * dy;
+    let mut minus_shift = delta_x;
+    let mut plus_shift = 0;
+    let mut minus_step = 0;
+    let mut plus_step = delta_y;
+    if vertical {
+        std::mem::swap(&mut plus_step, &mut plus_shift);
+        std::mem::swap(&mut minus_step, &mut minus_shift);
+    }
+    let mut point = start;
+    for _ in 0..=dx {
+        if point.x == x && point.y == y {
+            return true;
+        }
+        let mask = if error < 0 { -1 } else { 0 };
+        error += minus_delta + (plus_delta & mask);
+        point.x += minus_shift + (plus_shift & mask);
+        point.y += minus_step + (plus_step & mask);
+    }
+    false
 }
 
 fn point_in_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
@@ -604,17 +885,112 @@ fn unclip(
     if !distance.is_finite() {
         return Err(ocr("invalidDetectionGeometry"));
     }
-    let path: Vec<PointD> = polygon.iter().map(|p| PointD::new(p[0], p[1])).collect();
+    // pyclipper's Path conversion consumes integer coordinates. Python/NumPy
+    // values reaching this point are integral for the quad path; reject rather
+    // than silently accepting geometry outside the audited i64 range.
+    let path = polygon
+        .iter()
+        .map(|point| {
+            if !point[0].is_finite()
+                || !point[1].is_finite()
+                || point[0] < i64::MIN as f64
+                || point[0] > i64::MAX as f64
+                || point[1] < i64::MIN as f64
+                || point[1] > i64::MAX as f64
+            {
+                return Err(ocr("invalidDetectionGeometry"));
+            }
+            Ok(Point64::new(point[0] as i64, point[1] as i64))
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
     let paths =
-        inflate_paths_d(&vec![path], distance, JoinType::Round, EndType::Polygon, 2.0, 3, 0.0);
+        inflate_paths_64(&vec![path], distance, JoinType::Round, EndType::Polygon, 2.0, 0.0);
     if paths.len() != 1 || paths[0].len() < 3 {
         return Ok(None);
     }
     if paths[0].len() > max_offset_points {
         return Err(limit("offsetPoints"));
     }
-    let result = paths[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
-    Ok(result.iter().flatten().all(|v| v.is_finite()).then_some(result))
+    let result = paths[0].iter().map(|point| [point.x as f64, point.y as f64]).collect::<Vec<_>>();
+    Ok(Some(result))
+}
+
+fn minimum_rect_contour(
+    points: &[Point<i32>],
+    context: &ExecutionContext,
+    reservation: &mut ResourceReservation,
+    events: &mut usize,
+    max_events: usize,
+) -> Result<[[f64; 2]; 4], ConversionError> {
+    let scratch = points
+        .len()
+        .checked_mul(std::mem::size_of::<Point<i32>>())
+        .and_then(|bytes| bytes.checked_mul(4))
+        .ok_or_else(|| limit("contourMemory"))?;
+    reservation.grow(u64::try_from(scratch).map_err(|_| limit("contourMemory"))?)?;
+    let hull = convex_hull(points.to_vec());
+    let result = minimum_rect_hull(&hull, context, events, max_events);
+    drop(hull);
+    reservation.shrink(u64::try_from(scratch).map_err(|_| limit("contourMemory"))?)?;
+    result
+}
+
+fn minimum_rect_hull(
+    hull: &[Point<i32>],
+    context: &ExecutionContext,
+    events: &mut usize,
+    max_events: usize,
+) -> Result<[[f64; 2]; 4], ConversionError> {
+    if hull.len() < 3 {
+        return Err(ocr("invalidDetectionGeometry"));
+    }
+    let mut best_area = f64::INFINITY;
+    let mut best = [[0.0; 2]; 4];
+    for edge_index in 0..hull.len() {
+        let start = hull[edge_index];
+        let end = hull[(edge_index + 1) % hull.len()];
+        let dx = f64::from(end.x - start.x);
+        let dy = f64::from(end.y - start.y);
+        let length = dx.hypot(dy);
+        if length == 0.0 {
+            continue;
+        }
+        let (ux, uy) = (dx / length, dy / length);
+        let (vx, vy) = (-uy, ux);
+        let (mut min_u, mut max_u, mut min_v, mut max_v) =
+            (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+        for point in hull {
+            *events = events.checked_add(1).ok_or_else(|| limit("contourEvents"))?;
+            if *events > max_events {
+                return Err(limit("contourEvents"));
+            }
+            if (*events).is_multiple_of(4096) {
+                context.checkpoint()?;
+            }
+            let projection_u = f64::from(point.x) * ux + f64::from(point.y) * uy;
+            let projection_v = f64::from(point.x) * vx + f64::from(point.y) * vy;
+            min_u = min_u.min(projection_u);
+            max_u = max_u.max(projection_u);
+            min_v = min_v.min(projection_v);
+            max_v = max_v.max(projection_v);
+        }
+        let area = (max_u - min_u) * (max_v - min_v);
+        if area < best_area {
+            best_area = area;
+            let to_xy = |u: f64, v: f64| [u * ux + v * vx, u * uy + v * vy];
+            best = [
+                to_xy(min_u, min_v),
+                to_xy(max_u, min_v),
+                to_xy(max_u, max_v),
+                to_xy(min_u, max_v),
+            ];
+        }
+    }
+    best.iter()
+        .flatten()
+        .all(|value| value.is_finite())
+        .then_some(best)
+        .ok_or_else(|| ocr("invalidDetectionGeometry"))
 }
 
 fn minimum_rect_f64(points: &[[f64; 2]]) -> Result<[[f64; 2]; 4], ConversionError> {
@@ -668,10 +1044,31 @@ fn quad_sides(quad: [[f64; 2]; 4]) -> (f64, f64) {
     (a.min(b), a.max(b))
 }
 
+fn is_convex_quad(quad: [[f64; 2]; 4]) -> bool {
+    let mut sign = 0_i8;
+    for index in 0..4 {
+        let a = quad[index];
+        let b = quad[(index + 1) % 4];
+        let c = quad[(index + 2) % 4];
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if !cross.is_finite() || cross.abs() <= f64::EPSILON {
+            return false;
+        }
+        let current = if cross > 0.0 { 1 } else { -1 };
+        if sign != 0 && sign != current {
+            return false;
+        }
+        sign = current;
+    }
+    true
+}
+
 fn model_to_source(point: [f64; 2], image: PixelView<'_>, transform: Transform) -> (f32, f32) {
     let oriented_x = (point[0] * transform.oriented_w as f64 / transform.model_w as f64)
+        .round_ties_even()
         .clamp(0.0, (transform.oriented_w - 1) as f64);
     let oriented_y = (point[1] * transform.oriented_h as f64 / transform.model_h as f64)
+        .round_ties_even()
         .clamp(0.0, (transform.oriented_h - 1) as f64);
     let (source_width, source_height) = (image.width as f64, image.height as f64);
     let source_point = match image.orientation {
@@ -705,33 +1102,22 @@ fn canonical_quad(mut q: [(f32, f32); 4]) -> [(f32, f32); 4] {
 }
 
 fn sort_reading_order(regions: &mut [DetectedTextRegion]) {
-    let center_y =
-        |region: &DetectedTextRegion| region.polygon.iter().map(|point| point.1).sum::<f32>() / 4.0;
     regions.sort_by(|a, b| {
-        center_y(a).total_cmp(&center_y(b)).then_with(|| a.polygon[0].0.total_cmp(&b.polygon[0].0))
+        a.polygon[0]
+            .1
+            .total_cmp(&b.polygon[0].1)
+            .then_with(|| a.polygon[0].0.total_cmp(&b.polygon[0].0))
     });
-    // PaddleOCR applies adjacent same-line swaps after the primary y ordering.
-    // The relative-height threshold retains that behavior across source scales.
-    for _ in 0..regions.len() {
-        let mut changed = false;
-        for index in 0..regions.len().saturating_sub(1) {
-            let a = &regions[index];
-            let b = &regions[index + 1];
-            let ah = ((a.polygon[3].1 - a.polygon[0].1).abs()
-                + (a.polygon[2].1 - a.polygon[1].1).abs())
-                * 0.5;
-            let bh = ((b.polygon[3].1 - b.polygon[0].1).abs()
-                + (b.polygon[2].1 - b.polygon[1].1).abs())
-                * 0.5;
-            if (center_y(a) - center_y(b)).abs() <= 0.5 * ah.max(bh)
-                && a.polygon[0].0 > b.polygon[0].0
+    // Exact insertion-style adjacent swaps from PaddleOCR predict_system.py.
+    for index in 0..regions.len().saturating_sub(1) {
+        for previous in (0..=index).rev() {
+            if (regions[previous + 1].polygon[0].1 - regions[previous].polygon[0].1).abs() < 10.0
+                && regions[previous + 1].polygon[0].0 < regions[previous].polygon[0].0
             {
-                regions.swap(index, index + 1);
-                changed = true;
+                regions.swap(previous, previous + 1);
+            } else {
+                break;
             }
-        }
-        if !changed {
-            break;
         }
     }
 }
@@ -758,13 +1144,11 @@ mod tests {
 
     fn small_config() -> DetectionConfig {
         DetectionConfig {
-            min_side_len: 32,
-            max_side_len: 64,
             max_source_pixels: 4096,
-            max_model_pixels: 4096,
+            max_model_pixels: 736 * 736,
+            max_contour_events: 4096,
             max_contour_points: 4096,
             max_offset_points: 512,
-            ..DetectionConfig::default()
         }
     }
 
@@ -784,13 +1168,6 @@ mod tests {
         validate_authority().unwrap();
         assert!(
             validate_config(&DetectionConfig {
-                bitmap_threshold: f32::NAN,
-                ..DetectionConfig::default()
-            })
-            .is_err()
-        );
-        assert!(
-            validate_config(&DetectionConfig {
                 max_offset_points: 2,
                 ..DetectionConfig::default()
             })
@@ -800,10 +1177,280 @@ mod tests {
 
     #[test]
     fn stride_rounding_matches_paddle_ties_to_even() {
-        assert_eq!(round_stride(47.5).unwrap(), 32);
-        assert_eq!(round_stride(48.0).unwrap(), 64);
-        assert_eq!(round_stride(80.0).unwrap(), 64);
-        assert_eq!(round_stride(80.1).unwrap(), 96);
+        assert_eq!(round_stride(47).unwrap(), 32);
+        assert_eq!(round_stride(48).unwrap(), 64);
+        assert_eq!(round_stride(80).unwrap(), 64);
+        assert_eq!(round_stride(81).unwrap(), 96);
+        assert_eq!(official_resize_dimensions(99, 32).unwrap(), (2272, 736));
+        assert_eq!(official_resize_dimensions(99, 2).unwrap(), (4000, 64));
+    }
+
+    #[test]
+    fn bilinear_uint8_matches_opencv_4_13_reference_within_one_lsb() {
+        let bytes = (0_u8..18).map(|value| value * 10).collect::<Vec<_>>();
+        let image = PixelView {
+            width: 3,
+            height: 2,
+            row_stride: 9,
+            format: PixelFormat::Bgr8,
+            orientation: ImageOrientation::Normal,
+            bytes: &bytes,
+        };
+        let reference = [
+            0, 10, 20, 4, 14, 24, 17, 27, 37, 30, 40, 50, 43, 53, 63, 56, 66, 76, 60, 70, 80, 9,
+            19, 29, 13, 23, 33, 26, 36, 46, 39, 49, 59, 52, 62, 72, 65, 75, 85, 69, 79, 89, 45, 55,
+            65, 49, 59, 69, 62, 72, 82, 75, 85, 95, 88, 98, 108, 101, 111, 121, 105, 115, 125, 81,
+            91, 101, 85, 95, 105, 98, 108, 118, 111, 121, 131, 124, 134, 144, 137, 147, 157, 141,
+            151, 161, 90, 100, 110, 94, 104, 114, 107, 117, 127, 120, 130, 140, 133, 143, 153, 146,
+            156, 166, 150, 160, 170,
+        ];
+        let mut actual = Vec::new();
+        for y in 0..5 {
+            for x in 0..7 {
+                let sx = ((f64::from(x) + 0.5) * 3.0 / 7.0 - 0.5).clamp(0.0, 2.0);
+                let sy = ((f64::from(y) + 0.5) * 2.0 / 5.0 - 0.5).clamp(0.0, 1.0);
+                actual.extend(bilinear_u8(image, 3, 2, 3, 2, sx, sy).unwrap());
+            }
+        }
+        assert!(
+            actual.iter().zip(reference).all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "actual={actual:?}"
+        );
+
+        let downsample_reference = [53, 63, 73, 98, 108, 118];
+        let mut downsample = Vec::new();
+        for x in 0..2 {
+            let sx = (f64::from(x) + 0.5) * 3.0 / 2.0 - 0.5;
+            let sy = 0.5;
+            downsample.extend(bilinear_u8(image, 3, 2, 3, 2, sx, sy).unwrap());
+        }
+        assert!(
+            downsample
+                .iter()
+                .zip(downsample_reference)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "downsample={downsample:?}"
+        );
+
+        let padded_bytes = [10, 20, 30, 40, 50, 60];
+        let padded_image = PixelView {
+            width: 2,
+            height: 1,
+            row_stride: 6,
+            format: PixelFormat::Bgr8,
+            orientation: ImageOrientation::Normal,
+            bytes: &padded_bytes,
+        };
+        let padded_reference = [
+            10, 20, 30, 17, 27, 37, 32, 42, 52, 30, 37, 45, 10, 12, 15, 0, 0, 0, 8, 15, 23, 13, 21,
+            28, 24, 32, 39, 23, 28, 34, 8, 9, 11, 0, 0, 0, 3, 5, 8, 4, 7, 9, 8, 11, 13, 8, 9, 11,
+            3, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let mut padded_actual = Vec::new();
+        for y in 0..4 {
+            for x in 0..6 {
+                let sx = (f64::from(x) + 0.5) * 0.5 - 0.5;
+                let sy = (f64::from(y) + 0.5) * 0.5 - 0.5;
+                padded_actual.extend(
+                    bilinear_u8(padded_image, 2, 1, 32, 32, sx.max(0.0), sy.max(0.0)).unwrap(),
+                );
+            }
+        }
+        assert!(
+            padded_actual
+                .iter()
+                .zip(padded_reference)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "padded_actual={padded_actual:?}"
+        );
+
+        let random_bytes = [
+            127, 211, 151, 39, 151, 73, 162, 102, 0, 144, 40, 24, 175, 3, 39, 136, 220, 246, 81,
+            210, 47, 117, 171, 125, 176, 69, 179, 5, 45, 82, 46, 184, 126, 23, 156, 161,
+        ];
+        let random_image = PixelView {
+            width: 4,
+            height: 3,
+            row_stride: 12,
+            format: PixelFormat::Bgr8,
+            orientation: ImageOrientation::Normal,
+            bytes: &random_bytes,
+        };
+        let random_reference = [
+            127, 211, 151, 65, 169, 96, 100, 126, 36, 156, 83, 7, 144, 40, 24, 134, 181, 135, 77,
+            167, 109, 102, 139, 52, 147, 100, 16, 140, 59, 38, 154, 92, 87, 112, 161, 146, 105,
+            177, 99, 119, 149, 43, 128, 115, 82, 175, 3, 39, 148, 155, 184, 109, 215, 147, 92, 198,
+            70, 117, 171, 125, 175, 31, 99, 108, 111, 153, 73, 172, 128, 69, 189, 99, 77, 164, 140,
+            176, 59, 159, 69, 67, 121, 37, 129, 110, 47, 179, 127, 36, 158, 156, 176, 69, 179, 56,
+            52, 111, 25, 114, 104, 39, 175, 136, 23, 156, 161,
+        ];
+        let mut random_actual = Vec::new();
+        for y in 0..7 {
+            for x in 0..5 {
+                let sx = ((f64::from(x) + 0.5) * 4.0 / 5.0 - 0.5).clamp(0.0, 3.0);
+                let sy = ((f64::from(y) + 0.5) * 3.0 / 7.0 - 0.5).clamp(0.0, 2.0);
+                random_actual.extend(bilinear_u8(random_image, 4, 3, 4, 3, sx, sy).unwrap());
+            }
+        }
+        assert!(
+            random_actual
+                .iter()
+                .zip(random_reference)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "random_actual={random_actual:?}"
+        );
+    }
+
+    #[test]
+    fn fill_poly_integer_masks_match_opencv_4_13_reference() {
+        let fixtures = [
+            (
+                [[1.0, 1.0], [8.0, 3.0], [6.0, 9.0], [2.0, 7.0]],
+                &[
+                    13, 14, 25, 26, 27, 28, 29, 30, 37, 38, 39, 40, 41, 42, 43, 44, 49, 50, 51, 52,
+                    53, 54, 55, 56, 62, 63, 64, 65, 66, 67, 74, 75, 76, 77, 78, 79, 86, 87, 88, 89,
+                    90, 91, 100, 101, 102, 114,
+                ][..],
+            ),
+            (
+                [[2.0, 2.0], [8.0, 5.0], [2.0, 8.0], [4.0, 5.0]],
+                &[
+                    26, 27, 39, 40, 41, 51, 52, 53, 54, 55, 64, 65, 66, 67, 68, 75, 76, 77, 78, 79,
+                    87, 88, 89, 98, 99,
+                ][..],
+            ),
+        ];
+        for (polygon, reference) in fixtures {
+            let actual = (0..144)
+                .filter(|index| opencv_fill_poly_contains(index % 12, index / 12, &polygon))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, reference);
+        }
+    }
+
+    #[test]
+    fn retr_list_candidate_order_matches_opencv_4_13() {
+        let (width, height) = (60, 30);
+        let mut bitmap = vec![0; width * height];
+        for (left, top) in [(2, 2), (20, 2), (2, 15)] {
+            for y in top..top + 6 {
+                for x in left..left + 6 {
+                    bitmap[y * width + x] = 1;
+                }
+            }
+        }
+        let context = context();
+        let fixed = width * height * (1 + std::mem::size_of::<i32>()) + MAX_CANDIDATES * 256;
+        let mut reservation = context.reserve_memory(fixed as u64).unwrap();
+        let contours = scan_contours(
+            &bitmap,
+            width,
+            height,
+            &DetectionConfig {
+                max_source_pixels: width * height,
+                max_model_pixels: width * height,
+                max_contour_events: 16,
+                max_contour_points: width * height,
+                max_offset_points: 64,
+            },
+            &context,
+            &mut reservation,
+        )
+        .unwrap();
+        let top_left = contours
+            .iter()
+            .map(|contour| {
+                (
+                    contour.iter().map(|point| point.x).min().unwrap(),
+                    contour.iter().map(|point| point.y).min().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(top_left, [(2, 15), (20, 2), (2, 2)]);
+
+        let mut ring = vec![0; width * height];
+        for y in 2..25 {
+            for x in 2..25 {
+                if !(8..18).contains(&x) || !(8..18).contains(&y) {
+                    ring[y * width + x] = 1;
+                }
+            }
+        }
+        let fixed = width * height * (1 + std::mem::size_of::<i32>()) + MAX_CANDIDATES * 256;
+        let mut ring_reservation = context.reserve_memory(fixed as u64).unwrap();
+        let ring_contours = scan_contours(
+            &ring,
+            width,
+            height,
+            &DetectionConfig {
+                max_source_pixels: width * height,
+                max_model_pixels: width * height,
+                max_contour_events: 16,
+                max_contour_points: width * height,
+                max_offset_points: 64,
+            },
+            &context,
+            &mut ring_reservation,
+        )
+        .unwrap();
+        let bounds = ring_contours
+            .iter()
+            .map(|contour| {
+                let min_x = contour.iter().map(|point| point.x).min().unwrap();
+                let max_x = contour.iter().map(|point| point.x).max().unwrap();
+                let min_y = contour.iter().map(|point| point.y).min().unwrap();
+                let max_y = contour.iter().map(|point| point.y).max().unwrap();
+                (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bounds, [(7, 7, 12, 12), (2, 2, 23, 23)]);
+    }
+
+    #[test]
+    fn max_candidates_keeps_opencv_reverse_scan_prefix() {
+        let (width, height) = (180, 180);
+        let mut bitmap = vec![0; width * height];
+        let mut discovered = Vec::new();
+        for y in (1..height).step_by(3) {
+            for x in (1..width).step_by(3) {
+                bitmap[y * width + x] = 1;
+                discovered.push((i32::try_from(x).unwrap(), i32::try_from(y).unwrap()));
+            }
+        }
+        assert!(discovered.len() > MAX_CANDIDATES);
+        let context = context();
+        let fixed = width * height * (1 + std::mem::size_of::<i32>()) + MAX_CANDIDATES * 256;
+        let mut reservation = context.reserve_memory(fixed as u64).unwrap();
+        let contours = scan_contours(
+            &bitmap,
+            width,
+            height,
+            &DetectionConfig {
+                max_source_pixels: width * height,
+                max_model_pixels: width * height,
+                max_contour_events: discovered.len() + 1,
+                max_contour_points: discovered.len() + 1,
+                max_offset_points: 64,
+            },
+            &context,
+            &mut reservation,
+        )
+        .unwrap();
+        assert_eq!(contours.len(), MAX_CANDIDATES);
+        assert_eq!(
+            contours.iter().take(3).map(|contour| contour[0]).collect::<Vec<_>>(),
+            [Point::new(178, 178), Point::new(175, 178), Point::new(172, 178)]
+        );
+        assert_eq!(
+            contours[0][0],
+            Point::new(discovered.last().unwrap().0, discovered.last().unwrap().1)
+        );
+        let cutoff = discovered.len() - MAX_CANDIDATES;
+        assert_eq!(
+            contours[MAX_CANDIDATES - 1][0],
+            Point::new(discovered[cutoff].0, discovered[cutoff].1)
+        );
+        assert_eq!(contours[MAX_CANDIDATES - 1][0], Point::new(1, 31));
     }
 
     #[test]
@@ -834,8 +1481,8 @@ mod tests {
             bytes: &bytes,
         };
         let prepared = preprocess(input, &small_config(), &context()).unwrap();
-        assert_eq!(prepared.tensor.shape, [1, 3, 32, 32]);
-        let plane = 32 * 32;
+        assert_eq!(prepared.tensor.shape, [1, 3, 736, 736]);
+        let plane = 736 * 736;
         assert!((prepared.tensor.values[0] - (0.0 - MEAN[0]) / STD[0]).abs() < 1e-6);
         assert!((prepared.tensor.values[plane] - (0.0 - MEAN[1]) / STD[1]).abs() < 1e-6);
         assert!((prepared.tensor.values[plane * 2] - (1.0 - MEAN[2]) / STD[2]).abs() < 1e-6);
@@ -922,10 +1569,7 @@ mod tests {
             orientation: ImageOrientation::Normal,
             bytes: &bytes,
         };
-        assert_eq!(
-            pixel_bgr(image, 0, 0).unwrap().map(f32::to_bits),
-            [30.0_f32, 20.0, 10.0].map(f32::to_bits)
-        );
+        assert_eq!(pixel_bgr(image, 0, 0).unwrap(), [30, 20, 10]);
     }
 
     #[test]
@@ -1003,12 +1647,16 @@ mod tests {
         let cross = (q[1].0 - q[0].0) * (q[2].1 - q[1].1) - (q[1].1 - q[0].1) * (q[2].0 - q[1].0);
         assert!(cross > 0.0, "{q:?}");
         // Reference after source-bound clipping and Paddle point ordering.
-        let reference = [(30.7121, 0.0), (107.0248, 50.1665), (74.2879, 94.3614), (0.0, 37.8335)];
+        let reference = [(30.0, 0.0), (107.0, 51.0), (75.0, 94.0), (0.0, 37.0)];
         for (actual, expected) in q.into_iter().zip(reference) {
-            assert!((actual.0 - expected.0).abs() <= 3.0, "actual={q:?}");
-            assert!((actual.1 - expected.1).abs() <= 3.0, "actual={q:?}");
+            assert!((actual.0 - expected.0).abs() <= 1.0, "actual={q:?}");
+            assert!((actual.1 - expected.1).abs() <= 1.0, "actual={q:?}");
         }
-        assert!((region.confidence - 0.893_830_3).abs() <= 0.03);
+        assert!(
+            (region.confidence - 0.899_893_46).abs() <= 1e-5,
+            "confidence={}",
+            region.confidence
+        );
     }
 
     #[test]
@@ -1022,13 +1670,6 @@ mod tests {
                 }
             }
         }
-        let mask = GrayImage::from_raw(
-            width as u32,
-            height as u32,
-            values.iter().map(|value| u8::from(*value > 0.2)).collect(),
-        )
-        .unwrap();
-        assert!(find_contours::<i32>(&mask).len() >= 2, "fixture must exercise outer and hole");
         let bytes = vec![0; width * height];
         let result = postprocess(
             &[Tensor { shape: vec![1, 1, height, width], values }],
@@ -1132,6 +1773,84 @@ mod tests {
     }
 
     #[test]
+    fn foreground_touching_image_edges_uses_virtual_background() {
+        let (width, height) = (32, 32);
+        let values = vec![0.9; width * height];
+        let bytes = vec![0; width * height];
+        let result = postprocess(
+            &[Tensor { shape: vec![1, 1, height, width], values }],
+            view(&bytes, width, height),
+            Transform { oriented_w: width, oriented_h: height, model_w: width, model_h: height },
+            &DetectionConfig {
+                max_source_pixels: width * height,
+                max_model_pixels: width * height,
+                max_contour_events: 128,
+                max_contour_points: width * height,
+                max_offset_points: 128,
+            },
+            &context(),
+        )
+        .unwrap();
+        assert_eq!(result.regions.len(), 1);
+    }
+
+    #[test]
+    fn contour_memory_and_event_limits_fail_before_unbounded_geometry() {
+        let (width, height) = (32, 32);
+        let mut values = vec![0.0; width * height];
+        for (x, y) in [(2, 2), (20, 20)] {
+            for row in y..y + 4 {
+                for column in x..x + 4 {
+                    values[row * width + column] = 1.0;
+                }
+            }
+        }
+        let bytes = vec![0; width * height];
+        let config = DetectionConfig {
+            max_source_pixels: width * height,
+            max_model_pixels: width * height,
+            max_contour_events: 1,
+            max_contour_points: width * height,
+            max_offset_points: 64,
+        };
+        assert!(
+            postprocess(
+                &[Tensor { shape: vec![1, 1, height, width], values: values.clone() }],
+                view(&bytes, width, height),
+                Transform {
+                    oriented_w: width,
+                    oriented_h: height,
+                    model_w: width,
+                    model_h: height
+                },
+                &config,
+                &context(),
+            )
+            .is_err()
+        );
+
+        let limited = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 64, ..ResourceLimits::default() },
+        );
+        assert!(
+            postprocess(
+                &[Tensor { shape: vec![1, 1, height, width], values }],
+                view(&bytes, width, height),
+                Transform {
+                    oriented_w: width,
+                    oriented_h: height,
+                    model_w: width,
+                    model_h: height
+                },
+                &DetectionConfig { max_contour_events: 8, ..config },
+                &limited,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn cancellation_is_observed_before_pixel_work() {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
@@ -1160,6 +1879,24 @@ mod tests {
             regions.iter().map(|r| r.polygon[0]).collect::<Vec<_>>(),
             vec![(0.0, 0.0), (30.0, 0.5), (0.0, 12.0)]
         );
+
+        let mut strict_boundary = vec![region(30.0, 0.0), region(0.0, 10.0)];
+        sort_reading_order(&mut strict_boundary);
+        assert_eq!(strict_boundary[0].polygon[0], (30.0, 0.0));
+
+        let tall = |x: f32, y: f32| DetectedTextRegion {
+            polygon: [(x, y), (x + 10.0, y), (x + 10.0, y + 100.0), (x, y + 100.0)],
+            angle_degrees: 0.0,
+            confidence: 1.0,
+            crop: CropDescriptor {
+                polygon: [(x, y), (x + 10.0, y), (x + 10.0, y + 100.0), (x, y + 100.0)],
+                width: 10,
+                height: 100,
+            },
+        };
+        let mut not_same_line = vec![tall(30.0, 0.0), tall(0.0, 40.0)];
+        sort_reading_order(&mut not_same_line);
+        assert_eq!(not_same_line[0].polygon[0], (30.0, 0.0));
     }
 
     #[test]
@@ -1227,7 +1964,7 @@ mod tests {
         assert!(result.regions.is_empty());
         let call = fake.call.lock().unwrap().clone().unwrap();
         assert_eq!(call.0, MODEL_ID);
-        assert_eq!(call.1, [1, 3, 32, 32]);
+        assert_eq!(call.1, [1, 3, 736, 736]);
         assert!((call.2 - (1.0 - MEAN[0]) / STD[0]).abs() < 1e-6);
     }
 }

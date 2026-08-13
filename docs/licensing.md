@@ -66,8 +66,9 @@ API 28 兼容绑定；worker 直接使用该预生成 C API table，运行时仍
 SHA-256、Apache-2.0 许可、生成器版本、未知字段策略和递归上限记录在
 `third_party/onnx/proto-authority.json`。
 
-OCR 检测边界精确固定 `imageproc 0.25.0`、`image 0.25.10`，两者均关闭 default
-features。审计确认 `image` 没有启用任何 decoder/encoder 或原生 feature；
+OCR 检测边界精确固定 `imageproc 0.25.0`，并与图片转换边界共享主分支固定的
+`image 0.25.8`。`imageproc` 关闭 default features；workspace 的 `image` 仅启用图片转换
+所需的 `gif`/`jpeg`/`png`/`webp` 纯 Rust codec，检测模块本身不调用 decoder/encoder。
 `imageproc` 及其 Cargo.lock 传递依赖均为 Rust 数学、字体或容器实现，其精确 SPDX
 结论记录在 `rust-lock.tsv`，没有 native library 或下载步骤。closed polygon round
 offset 使用 `clipper2-rust 1.1.0`，选择精确 SPDX `BSL-1.0`；完整许可文本在

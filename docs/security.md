@@ -76,7 +76,10 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
   稳定拒绝。长预处理与候选循环执行协作式 checkpoint。调用 `imageproc`/`clipper2-rust`
   前按 model pixels 和最大几何结构保留请求逻辑内存，并把 tensor reservation 保持到
   runtime 与后处理结束；这只表示请求 heap capacity 的保守逻辑计费，不是 allocator
-  metadata、RSS 或防止系统 OOM 的声明。尺寸和 unclip 配置被限制在已证明不会溢出
+  metadata、RSS 或防止系统 OOM 的声明。边界扫描一次只构造一个 contour，每次扩容
+  前增长 reservation，释放对应 Vec 后才退款；扫描行、边界跟踪和 minimum rectangle
+  工作都执行 checkpoint，恶意小岛受 contour event 硬上限约束。算法阈值、候选数和
+  unclip ratio 只来自内嵌 authority，公开配置只能收紧资源上限。尺寸被限制在不会溢出
   `imageproc` i32 orientation arithmetic 的范围；实现不使用 panic 捕获冒充内存安全。
 - ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
   cwd、`PATH`、`LD_LIBRARY_PATH`、`DYLD_*` 或其它隐式环境。路径逐段拒绝 symlink/

@@ -8,7 +8,8 @@
   "input_color": "BGR",
   "resize_stride": 32,
   "resize_rounding": "ties-to-even",
-  "resize_interpolation": "bilinear",
+  "opencv_reference_version": "4.13.0",
+  "resize_interpolation": "INTER_LINEAR-to-uint8",
   "minimum_side": 736,
   "maximum_side": 4000,
   "scale": 0.00392156862745098,
@@ -20,6 +21,9 @@
   "unclip_ratio": 1.4,
   "contour_retrieval": "list",
   "contour_approximation": "simple",
+  "contour_result_order": "reverse-scan",
+  "score_mode": "fast",
+  "box_type": "quad",
   "offset_join": "round",
   "offset_end": "closed-polygon"
 }

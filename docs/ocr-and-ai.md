@@ -26,8 +26,11 @@ PP-OCRv6 tiny 检测参数的机器可读权威文件是
 `2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、
 `configs/det/PP-OCRv6/PP-OCRv6_tiny_det.yml` 和 DB 论文
 `https://arxiv.org/abs/1911.08947`。预处理按官方配置进行 BGR、短边 736、长边
-最多 4000、尺寸 round 到 32 的倍数、`1/255`、mean/std 和 NCHW 排列；官方 resize
-直接生成 stride 对齐尺寸，因此不会额外合成 padding 像素。八种方向在采样前映射，
+最多 4000、尺寸 round 到 32 的倍数、`1/255`、mean/std 和 NCHW 排列。输入宽高之和
+小于 64 时，严格按固定 Paddle 实现先向右/下补零到至少 32；缩放尺寸先经 Python
+`int` 截断，超出 4000 时基于截断尺寸二次缩放并再次截断，最后才按 Python ties-even
+round 到 stride。像素插值固定以 OpenCV 4.13 默认 `INTER_LINEAR` 的 uint8 输出为参考，
+参考集每通道误差最多 1 LSB，归一化只发生在 uint8 舍入之后。八种方向在采样前映射，
 输出框再以同一像素中心坐标规则逆变换到原图。
 
 DB 后处理固定 bitmap threshold `0.2`、polygon box score `0.4`、最多 3000 个
@@ -37,7 +40,9 @@ DB 后处理固定 bitmap threshold `0.2`、polygon box score `0.4`、最多 300
 offset 和第二次 minimum-area rectangle，再按 PaddleOCR 的 top-left、top-right、
 bottom-right、bottom-left 规则规范四点。输出仅包含原图坐标、角度、置信度和供后续
 识别使用的 crop descriptor；recognizer、CTC、透视裁剪执行和 IR 合并不属于检测模块。
-中英文混排区域先按纵向位置稳定排列，同一行按从左到右排列。
+中英文混排区域严格使用固定 Paddle `predict_system.py` 的横排启发式：先按左上点
+`(y,x)` 稳定排序，再仅对左上点 y 差严格小于 10 的相邻框向左插入。该规则不声明
+支持垂排阅读顺序。
 
 普通测试使用 fake runtime 与人工概率图，不下载模型。当前 manifest 没有可执行
 detector ONNX 文件，因此产品 resolver 稳定返回 `ModelUnavailable`，不能把 source

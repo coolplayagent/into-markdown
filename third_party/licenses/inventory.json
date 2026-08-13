@@ -2,6 +2,16 @@
   "schema_version": 1,
   "components": [
     {
+      "id": "imageproc-contour-adaptation",
+      "kind": "embedded-source",
+      "status": "reviewed",
+      "included_in_release": true,
+      "version": "imageproc 0.25.0",
+      "source": "https://crates.io/crates/imageproc/0.25.0",
+      "license": "MIT",
+      "obligations": "The request-accounted Suzuki-Abe scanner is adapted from imageproc src/contours.rs at crates.io checksum 2393fb7808960751a52e8a154f67e7dd3f8a2ef9bd80d1553078a7b4e8ed3f0d. Preserve Copyright (c) 2015 PistonDevelopers and third_party/licenses/imageproc-MIT.txt in source distributions."
+    },
+    {
       "id": "clipper2-rust",
       "kind": "rust-library",
       "status": "reviewed",
