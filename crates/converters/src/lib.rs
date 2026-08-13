@@ -12,6 +12,8 @@ mod pdf;
 mod remote;
 mod structured;
 mod text;
+#[path = "zip/mod.rs"]
+mod zip_converter;
 
 #[cfg(test)]
 mod fixture_corpus_tests;
@@ -26,6 +28,7 @@ pub use pdf::PdfConverter;
 pub use remote::HttpSourceResolver;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
+pub use zip_converter::ZipConverter;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ExecutionContext, FormatCandidate,
@@ -230,7 +233,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Zip,
         family: "container",
         extensions: &["zip"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::OutlookMsg,

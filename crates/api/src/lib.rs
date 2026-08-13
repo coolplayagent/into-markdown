@@ -36,6 +36,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         ocr: Some(Arc::new(into_markdown_ocr::PlaceholderOcrEngine)),
         transcriber: Some(Arc::new(into_markdown_ai::PlaceholderTranscriber)),
         ai: Some(Arc::new(into_markdown_ai::PlaceholderAiProvider)),
+        nested: None,
     };
     let mut builder = EngineBuilder::new()
         .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))
@@ -51,6 +52,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
+        .register_converter(Arc::new(into_markdown_converters::ZipConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
@@ -91,6 +93,9 @@ pub fn planned_ai_providers() -> &'static [AiProviderDescriptor] {
 pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
     into_markdown_ocr::ModelManifest::embedded()
 }
+
+#[cfg(test)]
+mod zip_recursive_tests;
 
 #[cfg(test)]
 mod tests {
@@ -300,6 +305,7 @@ mod tests {
             ocr: Some(service_calls.clone()),
             transcriber: Some(service_calls.clone()),
             ai: Some(service_calls.clone()),
+            nested: None,
         };
         let mut builder = EngineBuilder::new()
             .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))

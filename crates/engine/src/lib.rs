@@ -1,6 +1,7 @@
 //! Deterministic registry and conversion pipeline orchestration.
 
 mod fixed_alloc;
+mod nested;
 mod recovery;
 
 pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
@@ -9,11 +10,11 @@ use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, InputFormat,
-    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
-    SourceLocator, SourceResolver, estimate_retained_result, estimate_validation_working_set,
+    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, MarkdownRenderer,
+    ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services, SourceLocator,
+    SourceResolver, estimate_retained_result, estimate_validation_working_set,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// Explicit registry used by built-ins and future process-isolated plugins.
@@ -117,6 +118,12 @@ impl EngineBuilder {
         self.registry.format_detectors.sort_by(|left, right| {
             right.priority().cmp(&left.priority()).then_with(|| left.id().cmp(right.id()))
         });
+        let nested = nested::NestedDispatcher::new(
+            self.registry.format_detectors.clone(),
+            self.registry.converters.clone(),
+            self.services.clone(),
+        );
+        self.services.nested = Some(nested);
         Ok(Engine {
             source_resolvers: self.registry.source_resolvers,
             format_detectors: self.registry.format_detectors,
@@ -352,43 +359,7 @@ impl Engine {
         hint: &into_markdown_core::FormatHint,
         context: &ExecutionContext,
     ) -> Result<Vec<FormatCandidate>, ConversionError> {
-        let mut best: BTreeMap<InputFormat, FormatCandidate> = BTreeMap::new();
-        if let Some(format) = hint.format {
-            best.insert(format, FormatCandidate::explicit(format));
-        }
-        for detector in &self.format_detectors {
-            for mut candidate in context.run(detector.detect(input, hint, context)).await?? {
-                candidate.explicit = false;
-                candidate.confidence = normalize_confidence(candidate.confidence);
-                candidate.detector_id = detector.id().into();
-                candidate.detector_priority = detector.priority();
-                let replace = best.get(&candidate.format).is_none_or(|existing| {
-                    candidate.explicit && !existing.explicit
-                        || candidate.explicit == existing.explicit
-                            && (candidate.confidence > existing.confidence
-                                || candidate.confidence.total_cmp(&existing.confidence)
-                                    == std::cmp::Ordering::Equal
-                                    && (candidate.detector_priority > existing.detector_priority
-                                        || candidate.detector_priority
-                                            == existing.detector_priority
-                                            && candidate.detector_id < existing.detector_id))
-                });
-                if replace {
-                    best.insert(candidate.format, candidate);
-                }
-            }
-        }
-        let mut candidates = best.into_values().collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
-            right
-                .explicit
-                .cmp(&left.explicit)
-                .then_with(|| right.confidence.total_cmp(&left.confidence))
-                .then_with(|| right.detector_priority.cmp(&left.detector_priority))
-                .then_with(|| left.detector_id.cmp(&right.detector_id))
-                .then_with(|| left.format.cmp(&right.format))
-        });
-        Ok(candidates)
+        nested::detect_formats(&self.format_detectors, input, hint, context).await
     }
 }
 
@@ -658,8 +629,8 @@ fn collect_provenance_preflighted(
 mod tests {
     use super::*;
     use into_markdown_core::{
-        Asset, BoxFuture, ConversionOptions, ConverterOutput, Document, FormatHint, InputRef,
-        MarkdownRenderer, ResolvedInput, SourceMetadata,
+        Asset, BoxFuture, ConversionOptions, ConverterOutput, Document, FormatHint, InputFormat,
+        InputRef, MarkdownRenderer, ResolvedInput, SourceMetadata,
     };
 
     struct BytesResolver;

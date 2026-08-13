@@ -11,6 +11,7 @@ mod execution;
 mod format;
 mod input;
 mod ir;
+mod nested;
 mod options;
 mod spi;
 
@@ -39,6 +40,7 @@ pub use ir::{
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, Provenance, ProvenanceKind, Rect, SourceLocator,
     TableAlignment, TableRow, TimeRange, ValidationLimits,
 };
+pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, DelimitedTextOptions, NetworkOptions,
     OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode,

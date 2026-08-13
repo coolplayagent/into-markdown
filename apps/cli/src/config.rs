@@ -146,6 +146,9 @@ pub struct LimitsConfig {
     pub max_input_bytes: Option<u64>,
     pub max_decompressed_bytes: Option<u64>,
     pub max_archive_entries: Option<u32>,
+    pub max_archive_depth: Option<u16>,
+    pub max_archive_entry_bytes: Option<u64>,
+    pub max_archive_compression_ratio: Option<u32>,
     pub max_nesting_depth: Option<u16>,
     pub max_pages: Option<u32>,
     pub max_asset_bytes: Option<u64>,
@@ -501,6 +504,9 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     assign!(max_input_bytes);
     assign!(max_decompressed_bytes);
     assign!(max_archive_entries);
+    assign!(max_archive_depth);
+    assign!(max_archive_entry_bytes);
+    assign!(max_archive_compression_ratio);
     assign!(max_nesting_depth);
     assign!(max_pages);
     assign!(max_asset_bytes);

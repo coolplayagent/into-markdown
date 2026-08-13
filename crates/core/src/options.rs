@@ -110,6 +110,12 @@ pub struct ResourceLimits {
     pub max_decompressed_bytes: u64,
     /// Maximum archive entry count.
     pub max_archive_entries: u32,
+    /// Maximum nested archive depth, counting the outer archive as one.
+    pub max_archive_depth: u16,
+    /// Maximum decompressed bytes retained for one archive member.
+    pub max_archive_entry_bytes: u64,
+    /// Maximum declared decompressed-to-compressed ratio for one archive member.
+    pub max_archive_compression_ratio: u32,
     /// Maximum XML/container nesting.
     pub max_nesting_depth: u16,
     /// Maximum PDF/page-like units.
@@ -144,6 +150,9 @@ impl Default for ResourceLimits {
             max_input_bytes: 512 * 1024 * 1024,
             max_decompressed_bytes: 1024 * 1024 * 1024,
             max_archive_entries: 100_000,
+            max_archive_depth: 16,
+            max_archive_entry_bytes: 256 * 1024 * 1024,
+            max_archive_compression_ratio: 100,
             max_nesting_depth: 256,
             max_pages: 10_000,
             max_asset_bytes: 256 * 1024 * 1024,

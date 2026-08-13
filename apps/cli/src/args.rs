@@ -216,6 +216,18 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "N")]
     pub max_archive_entries: Option<u32>,
 
+    /// Maximum nested archive depth.
+    #[arg(long, value_name = "N")]
+    pub max_archive_depth: Option<u16>,
+
+    /// Maximum decompressed bytes for one archive member.
+    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
+    pub max_archive_entry_size: Option<u64>,
+
+    /// Maximum decompressed-to-compressed ratio for one archive member.
+    #[arg(long, value_name = "N")]
+    pub max_archive_compression_ratio: Option<u32>,
+
     /// Maximum XML or container nesting depth.
     #[arg(long, value_name = "N")]
     pub max_depth: Option<u16>,

@@ -977,6 +977,7 @@ dependencies = [
  "into-markdown-ocr",
  "into-markdown-render-markdown",
  "into-markdown-task-store",
+ "zip",
 ]
 
 [[package]]
@@ -1047,6 +1048,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "unicode-normalization",
  "url",
  "winapi-util",
  "zip",
