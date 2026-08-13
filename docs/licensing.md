@@ -155,4 +155,6 @@ PP-OCRv6 tiny recognizer ONNX 官方归档固定 SHA-256
 `1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29`，许可为
 Apache-2.0，仅作为后续 OCR 质量目标的 manual 下载 authority，不进入语料或当前发布物。
 两个大输入都必须在 manifest、inventory 与 `fixtures/downloads.json` 三者双向一致；host、大小、hash、
-redirect 上限、许可与发布边界任一漂移都会失败。
+redirect 上限（固定为零）、许可、manual/release 标志、repository 与 portable 下载文件名任一漂移都会失败。
+显式 `//fixtures:download_fixture` 工具拒绝重定向，按流式大小上限读取并在原子落盘前校验精确
+大小与 SHA-256；普通 Cargo/Bazel 图不会调用它。

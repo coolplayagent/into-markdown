@@ -255,3 +255,5 @@ recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只�
 分组阈值、渲染参数和训练污染声明由 license audit 校验。固定 Python/Pillow/FreeType
 环境下用 `fixtures/generate.py --verify` 在临时目录重建并逐字节比对；checked-in PNG
 始终是权威，不宣称任意平台渲染器都能产生相同字节。详细操作见 `fixtures/README.md`。
+大输入只能通过显式 `//fixtures:download_fixture` 工具取得；该工具拒绝所有 redirect，按
+authority 的单一 host、精确大小与流式上限读取，并在落盘前核对 SHA-256。

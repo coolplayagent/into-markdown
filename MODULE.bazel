@@ -8,6 +8,30 @@ bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "aspect_rules_js", version = "3.3.1")
 bazel_dep(name = "aspect_rules_ts", version = "3.9.2")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
+bazel_dep(name = "rules_python", version = "1.7.0")
+
+# Standard-library-only fixture authority tools use the developer/CI Python
+# runtime so ordinary no-download Bazel graphs never fetch a Python archive.
+local_python_runtime = use_repo_rule(
+    "@rules_python//python/local_toolchains:repos.bzl",
+    "local_runtime_repo",
+)
+local_python_toolchains = use_repo_rule(
+    "@rules_python//python/local_toolchains:repos.bzl",
+    "local_runtime_toolchains_repo",
+)
+local_python_runtime(
+    name = "local_python3",
+    dev_dependency = True,
+    interpreter_path = "python3",
+    on_failure = "fail",
+)
+local_python_toolchains(
+    name = "local_python_toolchains",
+    dev_dependency = True,
+    runtimes = ["local_python3"],
+)
+register_toolchains("@local_python_toolchains//:all", dev_dependency = True)
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 node.toolchain(node_version = "24.13.0")
@@ -63,8 +87,6 @@ use_repo(
     "pdfium_linux_x86_64",
     "pdfium_macos_arm64",
     "pdfium_windows_x86_64",
-    "fixture_noto_cjk_font",
-    "fixture_ppocrv6_tiny_recognizer_onnx",
     "ppocrv6_tiny_detector_source",
     "ppocrv6_tiny_recognizer_source",
 )

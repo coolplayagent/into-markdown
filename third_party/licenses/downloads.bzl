@@ -26,17 +26,6 @@ def _downloads_impl(module_ctx):
             urls = [item["url"]],
         )
 
-    fixture_manifest = json.decode(module_ctx.read(Label("//fixtures:downloads.json")))
-    if fixture_manifest.get("schema_version") != 1:
-        fail("unsupported fixture download manifest schema")
-    for item in fixture_manifest.get("artifacts", []):
-        http_file(
-            name = item["repository"],
-            downloaded_file_path = item["downloaded_file_path"],
-            sha256 = item["sha256"],
-            urls = [item["url"]],
-        )
-
     for item in manifest.get("native_archives", []):
         args = {
             "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",

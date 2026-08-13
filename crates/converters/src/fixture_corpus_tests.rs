@@ -1,9 +1,78 @@
 use super::*;
-use into_markdown_core::{Converter, ErrorCode, ExecutionOptions, FormatCandidate, Services};
+use into_markdown_core::{
+    AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, Converter,
+    ErrorCode, ExecutionOptions, FormatCandidate, OcrEngine, OcrRequest, OcrResult, Services,
+    Transcriber, TranscriptionRequest, TranscriptionResult,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[derive(Default)]
+struct RequestCounter(AtomicUsize);
+
+impl RequestCounter {
+    fn unexpected<T>(&self) -> BoxFuture<'static, Result<T, ConversionError>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(ConversionError::Internal {
+                detail: "fixture converter invoked an optional service".into(),
+            })
+        })
+    }
+}
+
+impl OcrEngine for RequestCounter {
+    fn id(&self) -> &'static str {
+        "fixture-request-counter"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _request: OcrRequest<'a>,
+        _context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        self.unexpected()
+    }
+}
+
+impl Transcriber for RequestCounter {
+    fn id(&self) -> &'static str {
+        "fixture-request-counter"
+    }
+
+    fn transcribe<'a>(
+        &'a self,
+        _request: TranscriptionRequest<'a>,
+        _context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>> {
+        self.unexpected()
+    }
+}
+
+impl AiProvider for RequestCounter {
+    fn id(&self) -> &'static str {
+        "fixture-request-counter"
+    }
+
+    fn capabilities(&self) -> BTreeSet<AiCapability> {
+        BTreeSet::from([
+            AiCapability::VisionOcr,
+            AiCapability::AudioTranscription,
+            AiCapability::MarkdownPostprocess,
+        ])
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _request: AiRequest<'a>,
+        _context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
+        self.unexpected()
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,13 +208,26 @@ fn execute(
             size: fixture.bytes,
         },
     };
-    let output = block_on(converter(format).convert(
+    let requests = Arc::new(RequestCounter::default());
+    let services = Services {
+        ocr: Some(requests.clone()),
+        transcriber: Some(requests.clone()),
+        ai: Some(requests.clone()),
+    };
+    let converted = block_on(converter(format).convert(
         &input,
         &FormatCandidate::explicit(format),
         &options,
-        &Services::default(),
+        &services,
         &context,
-    ))?;
+    ));
+    assert_eq!(
+        requests.0.load(Ordering::SeqCst),
+        0,
+        "fixture {} attempted an optional service request",
+        fixture.id
+    );
+    let output = converted?;
     into_markdown_render_markdown::render(&output.document, &output.assets, &options)
 }
 

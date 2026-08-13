@@ -233,10 +233,15 @@ def render_ocr(root: Path, font_path: Path) -> tuple[list[dict[str, object]], li
                 expected("success", f"clear {group} OCR line", text),
             )
         )
+        fixture_sha256 = str(fixtures[-1]["sha256"])
+        semantic_sha256 = str(fixtures[-1]["expected"]["semantic_sha256"])
+        if semantic_sha256 != sha256(text.encode("utf-8")):
+            raise AssertionError("OCR fixture semantic hash is not bound to its golden text")
         evaluated = "".join(character for character in text if not character.isspace())
         goldens.append(
             {
                 "fixture_id": fixture_id,
+                "fixture_sha256": fixture_sha256,
                 "group": group,
                 "ground_truth_nfc": text,
                 "codepoints": len(text),
@@ -305,8 +310,9 @@ def build(root: Path, font_path: Path) -> None:
     nested = b'<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>'
     add("docx-limit", "docx", "limit", "small/docx/limit.docx", docx(nested), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", limit_expected("WordprocessingML crosses the exact configured depth boundary", "max_nesting_depth", 4, 5, "max_nesting_depth", "", "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"))
     add("docx-encrypted", "docx", "encrypted", "small/docx/encrypted.docx", patch_encrypted_flag(normal_docx), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("error", "encrypted ZIP entries are rejected", error_code="encrypted"))
-    external = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="http://127.0.0.1/secret" TargetMode="External"/></Relationships>'
-    add("docx-malicious", "docx", "malicious", "small/docx/malicious.docx", docx(normal_document, external), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("success", "external relationship is not fetched", "Corpus Alpha 中文\n"))
+    external_document = b'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rId9"><w:r><w:t>safe external link</w:t></w:r></w:hyperlink></w:p></w:body></w:document>'
+    external = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/fixture-link" TargetMode="External"/></Relationships>'
+    add("docx-malicious", "docx", "malicious", "small/docx/malicious.docx", docx(external_document, external), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("success", "referenced external hyperlink is rendered without any service or network request", "[safe external link](<https://example.invalid/fixture-link>)\n"))
 
     ocr_fixtures, ocr_goldens = render_ocr(root, font_path)
     fixtures.extend(ocr_fixtures)
@@ -347,6 +353,8 @@ def build(root: Path, font_path: Path) -> None:
                 "redistribution": "font may be cached and redistributed under OFL-1.1; not included in repository or release",
                 "manual_only": True,
                 "included_in_release": False,
+                "repository": "fixture_noto_cjk_font",
+                "downloaded_file_path": "NotoSansCJKsc-Regular.otf",
             },
             {
                 "id": "ppocrv6-tiny-recognizer-onnx-quality",
@@ -366,6 +374,8 @@ def build(root: Path, font_path: Path) -> None:
                 "redistribution": "cache and redistribution permitted with Apache-2.0 notices; not included in repository or release",
                 "manual_only": True,
                 "included_in_release": False,
+                "repository": "fixture_ppocrv6_tiny_recognizer_onnx",
+                "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
             },
         ],
         "ocr_quality": {
@@ -395,6 +405,12 @@ def build(root: Path, font_path: Path) -> None:
             "goldens": ocr_goldens,
         },
     }
+    ocr_fixture_ids = {
+        str(fixture["id"]) for fixture in fixtures if fixture["format"] == "ocr-image"
+    }
+    golden_ids = {str(golden["fixture_id"]) for golden in ocr_goldens}
+    if ocr_fixture_ids != golden_ids or len(golden_ids) != len(ocr_goldens):
+        raise AssertionError("OCR fixtures and goldens are not a one-to-one mapping")
     (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

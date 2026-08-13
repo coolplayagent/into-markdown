@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "8f3e9174b15dd2839f8de7992d6a1a2c43a010fa21cfdccee4283102a9378e3f",
+    "sha256": "8f4fb6286346651f4458f0f3066196186204b0cc54215a67407cdb7d1cbb6551",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -211,8 +211,8 @@
       "format": "docx",
       "scenario": "malicious",
       "path": "small/docx/malicious.docx",
-      "bytes": 1657,
-      "sha256": "d5a749e8d07abac97219df0de04e5bad8d0de4ea2ca6e07dea36f27ba715a759",
+      "bytes": 1786,
+      "sha256": "097cc005e3ff988e8fdef80c4f772fb3311d7d1e431561123b5318ae2c6df40c",
       "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "license": {
         "spdx": "Apache-2.0",
@@ -230,8 +230,8 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
-        "description": "external relationship is not fetched"
+        "semantic_sha256": "3532a18bfe9466f97c54d9714bed5e80865b8353062926d2d4fa2360baf4a491",
+        "description": "referenced external hyperlink is rendered without any service or network request"
       }
     },
     {
@@ -1340,7 +1340,9 @@
       "acquired_on": "2026-08-13",
       "redistribution": "font may be cached and redistributed under OFL-1.1; not included in repository or release",
       "manual_only": true,
-      "included_in_release": false
+      "included_in_release": false,
+      "repository": "fixture_noto_cjk_font",
+      "downloaded_file_path": "NotoSansCJKsc-Regular.otf"
     },
     {
       "id": "ppocrv6-tiny-recognizer-onnx-quality",
@@ -1361,7 +1363,9 @@
       "acquired_on": "2026-08-13",
       "redistribution": "cache and redistribution permitted with Apache-2.0 notices; not included in repository or release",
       "manual_only": true,
-      "included_in_release": false
+      "included_in_release": false,
+      "repository": "fixture_ppocrv6_tiny_recognizer_onnx",
+      "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar"
     }
   ],
   "ocr_quality": {
@@ -1391,6 +1395,7 @@
     "goldens": [
       {
         "fixture_id": "ocr-simplified-clear-1",
+        "fixture_sha256": "992c23d1bc9bd312340d378246f650710a41b0d6758d63b14ec75a9943cfcd23",
         "group": "simplified",
         "ground_truth_nfc": "清晰扫描文本用于验证文档转换质量与字符顺序。",
         "codepoints": 22,
@@ -1399,6 +1404,7 @@
       },
       {
         "fixture_id": "ocr-simplified-clear-2",
+        "fixture_sha256": "32b7b6f067c3ef4bf2700dc5edc9d7fef3b46a18941c514589e2ba7de93d9adb",
         "group": "simplified",
         "ground_truth_nfc": "离线处理应保持标题、段落、数字二零二六和标点。",
         "codepoints": 23,
@@ -1407,6 +1413,7 @@
       },
       {
         "fixture_id": "ocr-simplified-clear-3",
+        "fixture_sha256": "26a527854fcbc771b96edb31056d225449d9da282f20037b9f2a6e25e8a65206",
         "group": "simplified",
         "ground_truth_nfc": "安全边界拒绝损坏输入并返回稳定诊断结果。",
         "codepoints": 20,
@@ -1415,6 +1422,7 @@
       },
       {
         "fixture_id": "ocr-traditional-clear-1",
+        "fixture_sha256": "40decfd1ddff1dd8701f71dd18ee23251c4625100ce3e2ba50364e53d459bcbf",
         "group": "traditional",
         "ground_truth_nfc": "清晰掃描文字用於驗證文件轉換品質與字元順序。",
         "codepoints": 22,
@@ -1423,6 +1431,7 @@
       },
       {
         "fixture_id": "ocr-traditional-clear-2",
+        "fixture_sha256": "98ceb46e120d060870dda61c09360c422978766a04f68bd040e4aea442f44312",
         "group": "traditional",
         "ground_truth_nfc": "離線處理應保持標題、段落、數字二零二六和標點。",
         "codepoints": 23,
@@ -1431,6 +1440,7 @@
       },
       {
         "fixture_id": "ocr-traditional-clear-3",
+        "fixture_sha256": "5ffc5afb1117520fb815b2ffb458e5326d143e2ad89725214303c9489f12d61e",
         "group": "traditional",
         "ground_truth_nfc": "安全邊界拒絕損壞輸入並傳回穩定診斷結果。",
         "codepoints": 20,
@@ -1439,6 +1449,7 @@
       },
       {
         "fixture_id": "ocr-english-clear-1",
+        "fixture_sha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
         "group": "english",
         "ground_truth_nfc": "Clear scans verify document conversion quality and character order.",
         "codepoints": 67,
@@ -1447,6 +1458,7 @@
       },
       {
         "fixture_id": "ocr-english-clear-2",
+        "fixture_sha256": "18b67f82f3428efc2042d81aca51550573fd54e6ad241320528512670562a6fa",
         "group": "english",
         "ground_truth_nfc": "Offline processing keeps headings, paragraphs, digits 2026, and punctuation.",
         "codepoints": 76,
@@ -1455,6 +1467,7 @@
       },
       {
         "fixture_id": "ocr-english-clear-3",
+        "fixture_sha256": "0642ecc2495fe1a1ecd7a0b27d30622f9dca0873685f27aa86e7fc7a262cc1f1",
         "group": "english",
         "ground_truth_nfc": "Safety limits reject damaged input with stable diagnostic results.",
         "codepoints": 66,
@@ -1463,6 +1476,7 @@
       },
       {
         "fixture_id": "ocr-mixed-clear-1",
+        "fixture_sha256": "9f4e61efc6ee6f400b9563729c89569f78125b3048e7a9a39845ae024444b9b2",
         "group": "mixed",
         "ground_truth_nfc": "中英混排 OCR Quality 验证文件轉換與 order 2026。",
         "codepoints": 36,
@@ -1471,6 +1485,7 @@
       },
       {
         "fixture_id": "ocr-mixed-clear-2",
+        "fixture_sha256": "8ca080f69fc66983f975659f77b34c03380e40c3d4ca584670ae5730c49ccf1d",
         "group": "mixed",
         "ground_truth_nfc": "离线 Pipeline 保持標題、paragraphs、数字 42 和 punctuation。",
         "codepoints": 48,
@@ -1479,6 +1494,7 @@
       },
       {
         "fixture_id": "ocr-mixed-clear-3",
+        "fixture_sha256": "23a98a743634de12fc50b85279ce4a1a6aef17724557107ab210a317456a59fe",
         "group": "mixed",
         "ground_truth_nfc": "安全 boundary 拒绝 damaged 輸入並返回 stable diagnostics。",
         "codepoints": 48,

@@ -1,8 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "README.md",
     "downloads.json",
+    "download.py",
+    "download_lib.py",
+    "download_test.py",
     "generate.py",
     "manifest.json",
 ])
@@ -17,16 +22,23 @@ filegroup(
     ] + glob(["small/**"]),
 )
 
-# Explicit-only generator input. Ordinary //... builds exclude manual targets.
-filegroup(
-    name = "ocr_fixture_generation_font",
-    srcs = ["@fixture_noto_cjk_font//file"],
+# Explicit-only acquisition tool. It requires a caller-selected output directory,
+# rejects redirects, streams to the authority size ceiling, and verifies SHA-256.
+py_binary(
+    name = "download_fixture",
+    srcs = ["download.py"],
+    data = ["downloads.json"],
+    deps = [":download_lib"],
     tags = ["manual"],
 )
 
-# Explicit-only runtime input consumed by future OCR quality evaluation.
-filegroup(
-    name = "ocr_quality_model",
-    srcs = ["@fixture_ppocrv6_tiny_recognizer_onnx//file"],
-    tags = ["manual"],
+py_library(
+    name = "download_lib",
+    srcs = ["download_lib.py"],
+)
+
+py_test(
+    name = "download_test",
+    srcs = ["download_test.py"],
+    deps = [":download_lib"],
 )
