@@ -95,6 +95,9 @@ pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
 }
 
 #[cfg(test)]
+mod zip_recursive_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;

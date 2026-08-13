@@ -433,6 +433,70 @@ impl ConverterOutput {
     pub fn leased_memory_for(&self, context: &ExecutionContext) -> u64 {
         self.memory_lease.bytes_for(context)
     }
+
+    /// Transfer opaque retained-memory ownership from a consumed nested output
+    /// without exposing detachable reservations to converter implementations.
+    #[doc(hidden)]
+    pub fn absorb_memory_lease(
+        &mut self,
+        source: &mut Self,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        if self
+            .memory_lease
+            .leases
+            .iter()
+            .chain(&source.memory_lease.leases)
+            .any(|lease| !lease.belongs_to_memory_context(context))
+        {
+            return Err(ConversionError::Internal {
+                detail: "nested output lease belongs to a different context".into(),
+            });
+        }
+        let combined = self
+            .memory_lease
+            .accounted_bytes
+            .checked_add(source.memory_lease.accounted_bytes)
+            .ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "nested output lease accounting overflowed".into(),
+            })?;
+        self.memory_lease.leases.try_reserve(source.memory_lease.leases.len()).map_err(|_| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "nested output lease inventory allocation failed".into(),
+            }
+        })?;
+        self.memory_lease.leases.append(&mut source.memory_lease.leases);
+        self.memory_lease.accounted_bytes = combined;
+        source.memory_lease.accounted_bytes = 0;
+        Ok(())
+    }
+
+    /// Attach one request-owned reservation to an output being assembled by a
+    /// recursive converter.
+    #[doc(hidden)]
+    pub fn attach_memory_reservation(
+        &mut self,
+        context: &ExecutionContext,
+        reservation: ResourceReservation,
+    ) -> Result<(), ConversionError> {
+        if !reservation.belongs_to_memory_context(context) {
+            return Err(ConversionError::Internal {
+                detail: "nested output reservation belongs to a different context".into(),
+            });
+        }
+        let combined =
+            self.memory_lease.accounted_bytes.checked_add(reservation.bytes()).ok_or_else(
+                || ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "nested output reservation accounting overflowed".into(),
+                },
+            )?;
+        self.memory_lease.push(reservation)?;
+        self.memory_lease.accounted_bytes = combined;
+        Ok(())
+    }
 }
 
 fn certify_recovered_reservation(
@@ -1340,6 +1404,28 @@ mod tests {
         assert_eq!(exact.reserved_memory_bytes(), required);
         drop(result);
         assert_eq!(exact.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn nested_output_lease_transfer_rejects_a_different_context() {
+        let limits = crate::ResourceLimits::default();
+        let expected = ExecutionContext::new(ExecutionOptions::default(), limits.clone());
+        let foreign = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let reservation = foreign.reserve_memory(4_096).unwrap();
+        let mut source = ConverterOutput::new_with_memory_reservation(
+            Document::default(),
+            Vec::new(),
+            Vec::new(),
+            &foreign,
+            reservation,
+        )
+        .unwrap();
+        let mut target = ConverterOutput::default();
+        assert!(matches!(
+            target.absorb_memory_lease(&mut source, &expected),
+            Err(ConversionError::Internal { .. })
+        ));
+        assert!(source.leased_memory_for(&foreign) >= 4_096);
     }
 
     #[test]

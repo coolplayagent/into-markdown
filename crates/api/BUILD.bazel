@@ -33,5 +33,6 @@ rust_test(
         "//crates/ocr",
         "//crates/render-markdown:render_markdown",
         "//crates/task-store:task_store",
+        "@crates//:zip",
     ],
 )

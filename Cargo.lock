@@ -977,6 +977,7 @@ dependencies = [
  "into-markdown-ocr",
  "into-markdown-render-markdown",
  "into-markdown-task-store",
+ "zip",
 ]
 
 [[package]]

@@ -338,7 +338,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "feed", "html", "ipynb", "json", "markdown", "text", "tsv", "xml"],
+        "available_formats": ["csv", "docx", "feed", "html", "ipynb", "json", "markdown", "text", "tsv", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {

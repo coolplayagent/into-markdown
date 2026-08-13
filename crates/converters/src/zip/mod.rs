@@ -1,10 +1,15 @@
 //! Strict offline recursive ZIP conversion.
 
+mod allocation;
 mod archive;
 mod budget;
 mod entry_policy;
+mod headers;
 mod merge;
 mod recursive;
+
+#[cfg(test)]
+mod security_tests;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
@@ -28,6 +33,16 @@ impl Converter for ZipConverter {
 
     fn supported_formats(&self) -> &'static [InputFormat] {
         FORMATS
+    }
+
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(context.available_memory_bytes())
     }
 
     fn probe<'a>(

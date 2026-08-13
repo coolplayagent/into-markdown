@@ -10,9 +10,9 @@ use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, InputFormat,
-    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
-    SourceLocator, SourceResolver, estimate_retained_result, estimate_validation_working_set,
+    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, MarkdownRenderer,
+    ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services, SourceLocator,
+    SourceResolver, estimate_retained_result, estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;

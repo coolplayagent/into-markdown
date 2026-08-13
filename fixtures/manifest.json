@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "69414117a437dd914926a1c3629b7e8010a432ebdb2127b5766c5fdf9ac185f1",
+    "sha256": "d461f37e95de8b72d6f5b6f52a76127c2544130a28349e509dd35248ea5a8202",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -23,7 +23,8 @@
     "pdf",
     "text",
     "tsv",
-    "xml"
+    "xml",
+    "zip"
   ],
   "fixtures": [
     {

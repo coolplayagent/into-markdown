@@ -1351,6 +1351,7 @@ fn validate_fixture_corpus(
 
     let required_formats = BTreeSet::from([
         "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "text", "tsv", "xml",
+        "zip",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
@@ -1388,12 +1389,11 @@ fn validate_fixture_corpus(
         validate_fixture_file(root, fixture, &relative, errors);
     }
     for format in required_formats {
-        // PDF fixtures are constructed byte-for-byte in the converter's
-        // opt-in native test module so ordinary license and corpus audits do
-        // not require loading an in-process native runtime. Their source is
-        // Apache-2.0 repository code and `tools/pdfium-audit.sh` executes the
-        // generated normal/corrupt/limit and extended matrix.
-        if format == "pdf" {
+        // PDF and ZIP fixtures are constructed byte-for-byte in their
+        // converter/API test modules. This keeps generated binary archives out
+        // of the corpus while preserving deterministic normal/corrupt/limit
+        // and adversarial contract coverage under the repository license.
+        if matches!(format, "pdf" | "zip") {
             continue;
         }
         let present = scenarios.get(format).cloned().unwrap_or_default();

@@ -15,5 +15,8 @@ into-markdown-ocr = { path = "../ocr" }
 into-markdown-render-markdown = { path = "../render-markdown" }
 into-markdown-task-store = { path = "../task-store" }
 
+[dev-dependencies]
+zip.workspace = true
+
 [lints]
 workspace = true

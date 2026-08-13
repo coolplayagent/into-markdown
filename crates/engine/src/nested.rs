@@ -33,6 +33,9 @@ impl NestedDispatcher {
             detail: "nested conversion dispatcher is unavailable".into(),
         })?;
         let mut services = self.base_services.clone();
+        // This restores only the dispatcher. Every other provider is the
+        // caller-configured instance, and the borrowed request options remain
+        // the sole network/AI authority for the nested converter.
         services.nested = Some(nested);
         Ok(services)
     }
@@ -53,7 +56,7 @@ impl NestedConversionService for NestedDispatcher {
                     detail: "format detectors produced no candidates for container member".into(),
                 });
             }
-            let mut attempts = Vec::new();
+            let mut selected = None;
             for candidate in &candidates {
                 for converter in &self.converters {
                     if request.excluded_converter_ids.contains(&converter.id())
@@ -63,24 +66,20 @@ impl NestedConversionService for NestedDispatcher {
                     }
                     match context.run(converter.probe(request.input, candidate, context)).await?? {
                         ProbeOutcome::NotApplicable => {}
-                        ProbeOutcome::Match { confidence } => attempts.push(Attempt {
-                            converter: Arc::clone(converter),
-                            candidate: candidate.clone(),
-                            confidence: candidate.confidence * normalize_confidence(confidence),
-                        }),
+                        ProbeOutcome::Match { confidence } => {
+                            let attempt = Attempt {
+                                converter: Arc::clone(converter),
+                                candidate,
+                                confidence: candidate.confidence * normalize_confidence(confidence),
+                            };
+                            if selected.as_ref().is_none_or(|current| attempt.precedes(current)) {
+                                selected = Some(attempt);
+                            }
+                        }
                     }
                 }
             }
-            attempts.sort_by(|left, right| {
-                right
-                    .candidate
-                    .explicit
-                    .cmp(&left.candidate.explicit)
-                    .then_with(|| right.confidence.total_cmp(&left.confidence))
-                    .then_with(|| right.converter.priority().cmp(&left.converter.priority()))
-                    .then_with(|| left.converter.id().cmp(right.converter.id()))
-            });
-            let Some(attempt) = attempts.into_iter().next() else {
+            let Some(attempt) = selected else {
                 return Err(ConversionError::NoConverter {
                     format: candidates
                         .iter()
@@ -90,15 +89,40 @@ impl NestedConversionService for NestedDispatcher {
                 });
             };
             let services = self.services()?;
+            let plan = attempt.converter.planned_output_bytes(
+                request.input,
+                attempt.candidate,
+                request.options,
+                context,
+            )?;
+            if plan > context.available_memory_bytes() {
+                return Err(ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: format!(
+                        "nested converter {} planned {plan} bytes but only {} remain",
+                        attempt.converter.id(),
+                        context.available_memory_bytes()
+                    ),
+                });
+            }
+            // The containing converter already runs inside the engine's
+            // globally charged preflight credit. Reusing that exact context is
+            // required: minting a credit from a child credit is forbidden.
             let output = context
                 .run(attempt.converter.convert(
                     request.input,
-                    &attempt.candidate,
+                    attempt.candidate,
                     request.options,
                     &services,
                     context,
                 ))
                 .await??;
+            let validation_bytes = into_markdown_core::estimate_validation_working_set(
+                &output.document,
+                &output.assets,
+                &output.diagnostics,
+            )?;
+            let validation_memory = context.reserve_memory(validation_bytes)?;
             output.document.validate().map_err(|error| ConversionError::Internal {
                 detail: format!(
                     "nested converter {} returned invalid document IR ({} at {}): {}",
@@ -108,15 +132,28 @@ impl NestedConversionService for NestedDispatcher {
                     error.detail
                 ),
             })?;
-            Ok(output)
+            drop(validation_memory);
+            output.account_retained(context)
         })
     }
 }
 
-struct Attempt {
+struct Attempt<'a> {
     converter: Arc<dyn Converter>,
-    candidate: FormatCandidate,
+    candidate: &'a FormatCandidate,
     confidence: f32,
+}
+
+impl Attempt<'_> {
+    fn precedes(&self, other: &Self) -> bool {
+        self.candidate
+            .explicit
+            .cmp(&other.candidate.explicit)
+            .then_with(|| self.confidence.total_cmp(&other.confidence))
+            .then_with(|| self.converter.priority().cmp(&other.converter.priority()))
+            .then_with(|| other.converter.id().cmp(self.converter.id()))
+            .is_gt()
+    }
 }
 
 pub(crate) async fn detect_formats(
