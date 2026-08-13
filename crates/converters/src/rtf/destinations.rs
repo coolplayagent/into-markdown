@@ -275,9 +275,15 @@ pub(super) fn child_destination(
         | Destination::Pict
         | Destination::ListText
         | Destination::MetaTitle
-        | Destination::MetaAuthor
-        | Destination::FieldInstruction
-        | Destination::FieldResult => destination(name, ignorable).map(|_| Destination::Skip),
+        | Destination::MetaAuthor => destination(name, ignorable).map(|_| Destination::Skip),
+        Destination::FieldInstruction | Destination::FieldResult => match name {
+            // Structural field controls inside instruction/result destinations are
+            // invalid, not ignorable descendants. Dispatch them so field-state checks fail closed.
+            "field" => Some(Destination::FieldContainer),
+            "fldinst" => Some(Destination::FieldInstruction),
+            "fldrslt" => Some(Destination::FieldResult),
+            _ => destination(name, ignorable).map(|_| Destination::Skip),
+        },
     }
 }
 

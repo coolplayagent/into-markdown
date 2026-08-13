@@ -93,6 +93,14 @@ impl Parser<'_> {
         }
         self.state_mut().at_group_start = false;
         let destination = self.state().destination;
+        if destination != Destination::Skip
+            && !entered_destination
+            && matches!(name, "field" | "fldinst" | "fldrslt")
+        {
+            return Err(malformed(
+                "field, fldinst, and fldrslt controls must each begin their own group",
+            ));
+        }
 
         if name == "bin" {
             let count =
@@ -255,7 +263,6 @@ impl Parser<'_> {
             "cellx" => {
                 self.add_cell_definition(parameter)?;
             }
-            "field" => return Err(malformed("field control must begin its own group")),
             "rtf" | "ansi" | "deff" | "viewkind" | "trgaph" | "trleft" | "li" | "ri" | "fi"
             | "sa" | "sb" | "fs" | "cf" | "highlight" | "lang" | "langfe" | "langnp" | "rtlch"
             | "ltrch" | "rtlpar" | "ltrpar" | "keep" | "keepn" | "widctlpar" | "nowidctlpar" => {}

@@ -421,6 +421,15 @@ fn field_state_is_scoped_to_one_complete_container() {
         br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://one.invalid"}{\fldrslt one}{\fldrslt two}}}"#
             .as_slice(),
         b"{\\rtf1\\ansi\\field text}".as_slice(),
+        br#"{\rtf1\ansi{\field\field{\*\fldinst HYPERLINK "https://direct.invalid/path"}{\fldrslt x}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field\fldinst HYPERLINK "https://direct.invalid/path"{\fldrslt x}}}"#
+            .as_slice(),
+        b"{\\rtf1\\ansi{\\field\\fldrslt direct}}".as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://outer.invalid/path"{\field{\*\fldinst HYPERLINK "https://inner.invalid/path"}{\fldrslt inner}}}{\fldrslt outer}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://outer.invalid/path"}{\fldrslt outer{\field{\*\fldinst HYPERLINK "https://inner.invalid/path"}{\fldrslt inner}}}}}"#
+            .as_slice(),
     ] {
         assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
     }
