@@ -8,30 +8,39 @@
 
 use into_markdown_core::ConversionError;
 use into_markdown_engine::{RecoveryStore, RecoveryToken, TaskPhase};
-use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
+#[cfg(unix)]
+use rusqlite::OpenFlags;
+use rusqlite::{Connection, OptionalExtension as _, params};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::{Component, Path};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+#[cfg(unix)]
 const SCHEMA_VERSION: i64 = 1;
+#[cfg(unix)]
 const DATABASE_FILE: &str = "tasks.sqlite3";
+#[cfg(unix)]
 const MAX_DATABASE_BYTES: i64 = 256 * 1024 * 1024;
+#[cfg(unix)]
 const PAGE_SIZE: i64 = 4096;
 const MAX_ROWS: u32 = 100;
 const MAX_DIAGNOSTICS: usize = 64;
 const MAX_ARTIFACTS: usize = 128;
 const MAX_JSON_BYTES: usize = 16 * 1024;
+#[cfg(unix)]
 const MAX_JSON_BYTES_I32: i32 = 16 * 1024;
 const MAX_TASKS: i64 = 100_000;
 const ID_BYTES: usize = 16;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! {
     static INJECT_PUBLISH_SOURCE_SWAP: Cell<bool> = const { Cell::new(false) };
     static INJECT_PUBLISHED_FINAL_SWAP: Cell<bool> = const { Cell::new(false) };
@@ -39,6 +48,7 @@ thread_local! {
 
 #[derive(Clone)]
 struct BusyAttempt {
+    #[cfg(unix)]
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
 }
@@ -61,6 +71,7 @@ impl BusyOperation {
             } else {
                 *slot = Some((
                     BusyAttempt {
+                        #[cfg(unix)]
                         deadline: Instant::now()
                             .checked_add(control.timeout)
                             .unwrap_or_else(Instant::now),
@@ -89,6 +100,7 @@ impl Drop for BusyOperation {
     }
 }
 
+#[cfg(unix)]
 fn sqlite_busy_handler(_attempt: i32) -> bool {
     let retry = BUSY_ATTEMPT.with(|slot| {
         slot.borrow().as_ref().is_some_and(|(attempt, _)| {
@@ -554,9 +566,9 @@ impl TaskStore {
         #[cfg(not(unix))]
         {
             let _ = (root, busy);
-            return Err(TaskStoreError::PlatformUnavailable(
+            Err(TaskStoreError::PlatformUnavailable(
                 "capability-bound SQLite files are currently audited only on Unix".into(),
-            ));
+            ))
         }
         #[cfg(unix)]
         {
@@ -1002,6 +1014,19 @@ impl TaskStore {
     /// Recovery is intentionally not automatic: an operator must authorize and
     /// perform replacement while the primary store is closed.
     pub fn backup(&mut self, backup_id: &TaskId) -> Result<PathBuf, TaskStoreError> {
+        #[cfg(unix)]
+        return self.backup_unix(backup_id);
+        #[cfg(not(unix))]
+        {
+            let _ = (self, backup_id);
+            Err(TaskStoreError::PlatformUnavailable(
+                "capability-bound SQLite backups are currently audited only on Unix".into(),
+            ))
+        }
+    }
+
+    #[cfg(unix)]
+    fn backup_unix(&mut self, backup_id: &TaskId) -> Result<PathBuf, TaskStoreError> {
         let _operation = BusyOperation::enter(&self.busy)?;
         self.preflight()?;
         let name = format!("backup-{}.sqlite3", backup_id.as_str());
@@ -1038,7 +1063,9 @@ impl TaskStore {
                         rusqlite::backup::StepResult::More => {}
                         rusqlite::backup::StepResult::Busy
                         | rusqlite::backup::StepResult::Locked => wait_for_current_busy()?,
-                        _ => return Err(TaskStoreError::Io("unknown SQLite backup state".into())),
+                        _ => {
+                            return Err(TaskStoreError::Io("unknown SQLite backup state".into()));
+                        }
                     }
                 }
             }
@@ -1071,7 +1098,7 @@ impl TaskStore {
             let _ = self.directory.unlink_if_identity(&temporary, temporary_identity);
             return Err(error);
         }
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         if INJECT_PUBLISHED_FINAL_SWAP.with(|flag| flag.replace(false)) {
             rustix::fs::renameat(
                 &self.directory.fd,
@@ -1100,8 +1127,14 @@ impl TaskStore {
 
     fn preflight(&self) -> Result<(), TaskStoreError> {
         #[cfg(unix)]
-        self.directory.verify_database_files(self.database_identity)?;
-        Ok(())
+        return self.directory.verify_database_files(self.database_identity);
+        #[cfg(not(unix))]
+        {
+            let _ = &self.directory;
+            Err(TaskStoreError::PlatformUnavailable(
+                "capability-bound SQLite files are currently audited only on Unix".into(),
+            ))
+        }
     }
 
     fn load_diagnostics(&self, id: &TaskId) -> Result<Vec<TaskDiagnostic>, TaskStoreError> {
@@ -1269,11 +1302,13 @@ impl TaskStore {
     }
 }
 
+#[cfg(unix)]
 fn configure_busy(connection: &Connection, busy: &BusyControl) -> Result<(), TaskStoreError> {
     let _ = busy;
     connection.busy_handler(Some(sqlite_busy_handler)).map_err(map_sqlite_generic)
 }
 
+#[cfg(unix)]
 fn wait_for_current_busy() -> Result<(), TaskStoreError> {
     let retry = BUSY_ATTEMPT.with(|slot| {
         slot.borrow().as_ref().is_some_and(|(attempt, _)| {
@@ -1299,6 +1334,7 @@ fn wait_for_busy(busy: &BusyControl, started: Instant) -> Result<(), TaskStoreEr
     Ok(())
 }
 
+#[cfg(unix)]
 fn install_limits(connection: &Connection) {
     use rusqlite::limits::Limit;
     let _ = connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_JSON_BYTES_I32);
@@ -1308,6 +1344,7 @@ fn install_limits(connection: &Connection) {
     let _ = connection.set_limit(Limit::SQLITE_LIMIT_COMPOUND_SELECT, 16);
 }
 
+#[cfg(unix)]
 fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
     connection
         .execute_batch(&format!(
@@ -1361,6 +1398,7 @@ fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -1420,6 +1458,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn check_schema_ceiling(connection: &Connection) -> Result<(), TaskStoreError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -1436,6 +1475,7 @@ fn check_schema_ceiling(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn verify_integrity(connection: &Connection) -> Result<(), TaskStoreError> {
     let result: String = connection
         .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
@@ -1588,6 +1628,7 @@ fn is_interrupt(error: &rusqlite::Error) -> bool {
     )
 }
 
+#[cfg(unix)]
 fn map_sqlite_open(error: rusqlite::Error) -> TaskStoreError {
     map_sqlite_generic(error)
 }
@@ -1968,5 +2009,21 @@ fn path_io(error: rustix::io::Errno) -> TaskStoreError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, not(unix)))]
+mod non_unix_tests {
+    use super::{BusyControl, TaskStore, TaskStoreError};
+
+    #[test]
+    fn open_fails_closed_before_creating_storage() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("must-not-be-created");
+
+        let result = TaskStore::open(&root, BusyControl::default());
+
+        assert!(matches!(result, Err(TaskStoreError::PlatformUnavailable(_))));
+        assert!(!root.exists());
+    }
+}
