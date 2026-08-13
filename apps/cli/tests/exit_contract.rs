@@ -1,6 +1,8 @@
 //! Real-process exit-status contracts shared by Cargo and Bazel.
 
+use std::io::Read;
 use std::io::Write;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -29,6 +31,76 @@ fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
         .unwrap();
     child.stdin.take().unwrap().write_all(input).unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn provider_test_requires_double_authorization_and_never_emits_secret() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let canary = "PROVIDER_SECRET_CANARY_7f912e";
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0_u8];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        assert!(
+            String::from_utf8_lossy(&request)
+                .contains("Authorization: Bearer PROVIDER_SECRET_CANARY_7f912e\r\n")
+        );
+        let body = br#"{"object":"list","data":[{"id":"model","object":"model","created":0,"owned_by":"test"}],"has_more":false}"#;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+        stream.write_all(body).unwrap();
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("provider.toml");
+    std::fs::write(
+        &config,
+        format!("schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\nmodel = \"model\"\napi_key_env = \"PROVIDER_TEST_KEY\"\ncapabilities = [\"image-description\"]\n"),
+    ).unwrap();
+
+    let denied = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "providers",
+            "test",
+            "local",
+            "--allow-network",
+        ])
+        .env("PROVIDER_TEST_KEY", canary)
+        .output()
+        .unwrap();
+    assert_eq!(denied.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("privateNetworkDenied"));
+    assert!(!denied.stdout.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
+    assert!(!denied.stderr.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
+
+    let output = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "providers",
+            "--json",
+            "test",
+            "local",
+            "--allow-network",
+            "--allow-private-network",
+        ])
+        .env("PROVIDER_TEST_KEY", canary)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["configuredModelAvailable"], true);
+    assert!(!output.stdout.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
+    assert!(!output.stderr.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
+    let config_bytes = std::fs::read(config).unwrap();
+    assert!(!config_bytes.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
+    worker.join().unwrap();
 }
 
 #[test]

@@ -2,7 +2,11 @@
 
 use std::sync::Arc;
 
-pub use into_markdown_ai::{AiProviderDescriptor, OpenAiCompatibleConfig};
+pub use into_markdown_ai::{
+    AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
+    OpenAiCompatibleClient, OpenAiCompatibleConfig, ProviderConfig, ProviderError,
+    ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
+};
 pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{

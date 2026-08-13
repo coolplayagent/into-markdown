@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "allowed": ["0BSD", "Apache-2.0", "BSD-3-Clause", "BSL-1.0", "ISC", "LGPL-2.1-or-later", "MIT", "MPL-2.0", "OFL-1.1", "Unicode-3.0", "Unlicense", "Zlib"],
+  "allowed": ["0BSD", "Apache-2.0", "BSD-3-Clause", "BSL-1.0", "CDLA-Permissive-2.0", "ISC", "LGPL-2.1-or-later", "MIT", "MPL-2.0", "OFL-1.1", "Unicode-3.0", "Unlicense", "Zlib"],
   "denied": [
     "AGPL-1.0-only", "AGPL-1.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later",
     "BUSL-1.1",

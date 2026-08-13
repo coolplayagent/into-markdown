@@ -297,6 +297,16 @@ impl ExecutionContext {
         Ok(())
     }
 
+    /// Remaining time before the request deadline, when one exists.
+    ///
+    /// The returned duration is derived from the same monotonic clock used by
+    /// [`Self::checkpoint`]. Callers must still checkpoint after every blocking
+    /// operation because cancellation can win independently of the deadline.
+    #[must_use]
+    pub fn remaining_time(&self) -> Option<Duration> {
+        self.shared.deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
     /// Await one provider operation while enforcing the total request deadline.
     pub fn run<F>(&self, future: F) -> CheckedFuture<'_, F>
     where

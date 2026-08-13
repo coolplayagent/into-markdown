@@ -10,10 +10,12 @@ use into_markdown::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILENAME: &str = ".into-markdown.toml";
+const MAX_PROVIDER_BASE_URL_BYTES: usize = 4 * 1024;
+const MAX_PROVIDER_MODEL_BYTES: usize = 512;
+const MAX_ENVIRONMENT_NAME_BYTES: usize = 256;
 
 /// Paths participating in configuration discovery.
 #[derive(Debug, Clone, Serialize)]
@@ -603,6 +605,12 @@ fn validate_provider(
     if !provider.base_url.is_empty() {
         validate_provider_url(name, &provider.base_url)?;
     }
+    if !provider.model.is_empty()
+        && (provider.model.len() > MAX_PROVIDER_MODEL_BYTES
+            || provider.model.chars().any(char::is_control))
+    {
+        return Err(CliError::config(format!("provider '{name}' model is invalid")));
+    }
     if !provider.api_key_env.is_empty() {
         validate_environment_name(&provider.api_key_env)?;
     }
@@ -630,6 +638,9 @@ fn validate_provider(
 }
 
 fn validate_provider_url(name: &str, value: &str) -> Result<(), CliError> {
+    if value.len() > MAX_PROVIDER_BASE_URL_BYTES {
+        return Err(CliError::config(format!("provider '{name}' URL exceeds its size limit")));
+    }
     let url = url::Url::parse(value)
         .map_err(|error| CliError::config(format!("provider '{name}' URL: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -641,6 +652,11 @@ fn validate_provider_url(name: &str, value: &str) -> Result<(), CliError> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err(CliError::config(format!(
             "provider '{name}' URL must not include user information"
+        )));
+    }
+    if url.query().is_some() || url.fragment().is_some() || url.as_str() != value {
+        return Err(CliError::config(format!(
+            "provider '{name}' URL must be canonical and must not include a query or fragment"
         )));
     }
     Ok(())
@@ -848,6 +864,7 @@ pub fn add_provider(
 }
 
 pub fn remove_provider(scope: Scope, cwd: &Path, name: &str) -> Result<PathBuf, CliError> {
+    validate_id("provider", name)?;
     mutate_scope(scope, cwd, |root| remove_nested(root, &format!("providers.{name}")))
 }
 
@@ -973,20 +990,7 @@ fn parse_toml_value(input: &str) -> toml::Value {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), CliError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    if path.exists() && !replace {
-        return Err(CliError::config(format!("path already exists: {}", path.display())));
-    }
-    let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("config");
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{filename}.into-md-"))
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| CliError::from(error.error))?;
-    Ok(())
+    crate::transaction::atomic_replace_config(path, bytes, replace)
 }
 
 fn merge_value(target: &mut toml::Value, overlay: toml::Value) {
@@ -1077,6 +1081,9 @@ pub fn validate_sha256(value: &str) -> Result<(), CliError> {
 }
 
 pub fn validate_environment_name(value: &str) -> Result<(), CliError> {
+    if value.len() > MAX_ENVIRONMENT_NAME_BYTES {
+        return Err(CliError::usage("environment variable name exceeds its size limit"));
+    }
     let mut bytes = value.bytes();
     let first = bytes.next();
     if first.is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
@@ -1495,14 +1502,14 @@ enabled = true
     }
 
     #[test]
-    fn resolved_display_includes_redacted_value_sources() {
+    fn resolved_display_includes_canonical_provider_value_sources() {
         let root = temporary_directory("resolved-sources");
         fs::write(
             root.join("config.toml"),
             r#"schema_version = 1
 [providers.remote]
 type = "openai-compatible"
-base_url = "https://example.com/v1?signature=secret"
+base_url = "https://example.com/v1"
 model = "vision"
 api_key_env = "VISION_API_KEY"
 "#,
@@ -1512,7 +1519,7 @@ api_key_env = "VISION_API_KEY"
         let display = loaded.display_value(true).unwrap();
         let text = display.to_string();
         assert!(display.get("_sources").is_some());
-        assert!(!text.contains("signature=secret"));
+        assert!(!text.contains("Authorization"));
         assert!(text.contains("config.toml"));
         fs::remove_dir_all(root).unwrap();
     }

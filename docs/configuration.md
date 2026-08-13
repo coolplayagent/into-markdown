@@ -132,8 +132,10 @@ into-md report.pdf --profile quality --allow-network --allow-private-network
 参与主机匹配。
 
 回环、IPv4 私网与链路本地地址、IPv6 ULA (`fc00::/7`) 与链路本地地址
-(`fe80::/10`) 均视为私网。IPv4-mapped IPv6 会先还原为 IPv4，再执行相同检查。
-Provider URL 与远程输入采用同一套规则，且 URL 不得包含用户名或密码。
+(`fe80::/10`) 均视为私网。Provider 传输只把保守判定为 global-only 的地址视为公网；
+IPv4-mapped/translated IPv6、6to4、ORCHID、benchmark、文档和其它 IANA special-purpose
+范围都需要额外私网授权。Provider URL 与远程输入采用同一套规则，且 URL 不得包含用户名
+或密码。
 
 ## 配置操作
 
