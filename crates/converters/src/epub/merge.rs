@@ -163,8 +163,17 @@ pub(super) fn assemble(
         }
     }
     resources.finish(&mut output, context)?;
-    output.document.validate().map_err(|error| ConversionError::Internal {
-        detail: format!("assembled EPUB IR is invalid at {}: {}", error.path, error.detail),
+    output.document.validate().map_err(|error| {
+        if error.code == into_markdown_core::IrErrorCode::ResourceLimit {
+            ConversionError::ResourceLimit {
+                limit: "document_structure",
+                detail: format!("assembled EPUB output exceeds IR limits at {}", error.path),
+            }
+        } else {
+            ConversionError::Internal {
+                detail: format!("assembled EPUB IR is invalid at {}: {}", error.path, error.detail),
+            }
+        }
     })?;
     output.account_retained(context)
 }
@@ -249,10 +258,13 @@ fn navigation_items(
             marker_label: None,
             blocks: vec![node(
                 format!("epub-navigation-entry-{sequence:06}"),
-                Block::Paragraph(vec![Inline::Link {
-                    target: entry.target.clone(),
-                    content: vec![Inline::Text { value: entry.label.clone(), marks: vec![] }],
-                }]),
+                Block::Paragraph(match &entry.target {
+                    Some(target) => vec![Inline::Link {
+                        target: target.clone(),
+                        content: vec![Inline::Text { value: entry.label.clone(), marks: vec![] }],
+                    }],
+                    None => vec![Inline::Text { value: entry.label.clone(), marks: vec![] }],
+                }),
                 source_path,
                 ProvenanceKind::NativeParser,
             )],
@@ -363,7 +375,9 @@ fn validate_targets(
     footnotes: &BTreeMap<String, String>,
 ) -> Result<(), ConversionError> {
     let targets = spine.chapters.iter().flat_map(|chapter| chapter.internal_targets.iter()).chain(
-        navigation.into_iter().flat_map(|nav| nav.entries.iter().map(|entry| &entry.target)),
+        navigation
+            .into_iter()
+            .flat_map(|nav| nav.entries.iter().filter_map(|entry| entry.target.as_ref())),
     );
     for target in targets {
         if let Some((path, _)) = target.split_once('#')

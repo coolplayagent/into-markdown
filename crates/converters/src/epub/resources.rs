@@ -4,7 +4,7 @@ use super::package::{ManifestItem, Package};
 use crate::zip_converter::archive_api::SafeArchive;
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConverterOutput, ExecutionContext,
-    ResourceReservation,
+    MAX_DOCUMENT_NODES, ResourceReservation,
 };
 use std::collections::BTreeMap;
 
@@ -15,6 +15,7 @@ pub(super) struct ResourceStore {
     retained_bytes: u64,
     max_asset_bytes: u64,
     max_total_asset_bytes: u64,
+    limits: into_markdown_core::ResourceLimits,
 }
 
 pub(super) struct CoverResource {
@@ -31,6 +32,7 @@ impl ResourceStore {
             retained_bytes: 0,
             max_asset_bytes: options.limits.max_asset_bytes,
             max_total_asset_bytes: options.limits.max_total_asset_bytes,
+            limits: options.limits.clone(),
         }
     }
 
@@ -40,6 +42,7 @@ impl ResourceStore {
         references: &BTreeMap<String, String>,
         package: &Package,
         archive: &mut SafeArchive<'_, '_>,
+        context: &ExecutionContext,
     ) -> Result<(), ConversionError> {
         let mut replacements = BTreeMap::<String, AssetId>::new();
         let mut retained = Vec::new();
@@ -55,7 +58,7 @@ impl ResourceStore {
             if target.contains('#') {
                 return Err(malformed("image resource reference contains a fragment"));
             }
-            let id = self.ensure_image(target, package, archive)?;
+            let id = self.ensure_image(target, package, archive, context)?;
             replacements.insert(asset.id.0, id);
         }
         output.assets = retained;
@@ -67,10 +70,11 @@ impl ResourceStore {
         &mut self,
         package: &Package,
         archive: &mut SafeArchive<'_, '_>,
+        context: &ExecutionContext,
     ) -> Result<Option<CoverResource>, ConversionError> {
         let Some(id) = package.cover_id.as_deref() else { return Ok(None) };
         let path = &package.item(id)?.path;
-        self.ensure_image(path, package, archive)
+        self.ensure_image(path, package, archive, context)
             .map(|id| Some(CoverResource { id, path: path.clone() }))
     }
 
@@ -91,6 +95,7 @@ impl ResourceStore {
         requested_path: &str,
         package: &Package,
         archive: &mut SafeArchive<'_, '_>,
+        context: &ExecutionContext,
     ) -> Result<AssetId, ConversionError> {
         if let Some(id) = self.by_path.get(requested_path).cloned() {
             return Ok(id);
@@ -125,8 +130,20 @@ impl ResourceStore {
                 detail: format!("EPUB retained asset total would be {next_total} bytes"),
             });
         }
+        if self.assets.len() >= MAX_DOCUMENT_NODES {
+            return Err(ConversionError::ResourceLimit {
+                limit: "documentAssets",
+                detail: format!("EPUB exceeds {MAX_DOCUMENT_NODES} retained assets"),
+            });
+        }
         let entry = archive.read(&selected.path)?;
-        verify_image(&entry.bytes, &selected.media_type)?;
+        super::image::validate(
+            &entry.bytes,
+            &selected.media_type,
+            &selected.path,
+            &self.limits,
+            context,
+        )?;
         let (bytes, memory) = entry.into_parts();
         let id = AssetId(format!("epub-resource-{:06}", self.assets.len() + 1));
         self.assets.push(Asset {
@@ -159,24 +176,6 @@ fn select_safe_image<'a>(
 
 fn safe_image_media(media_type: &str) -> bool {
     matches!(media_type, "image/png" | "image/jpeg" | "image/gif" | "image/webp")
-}
-
-fn verify_image(bytes: &[u8], media_type: &str) -> Result<(), ConversionError> {
-    let valid = match media_type {
-        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
-        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()),
-        _ => false,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(ConversionError::Malformed {
-            part: None,
-            detail: format!("EPUB image bytes do not match declared media type {media_type}"),
-        })
-    }
 }
 
 fn rewrite_image_ids(

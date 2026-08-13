@@ -75,6 +75,8 @@ pub(super) fn prepare(
     let initial_base = BasePath::document(path)?;
     let mut stack = Vec::<Frame>::new();
     let mut root_seen = false;
+    let mut declaration_seen = false;
+    let mut doctype_seen = false;
     let mut references = BTreeMap::new();
     let mut internal_targets = BTreeSet::new();
     let mut anchors = BTreeSet::new();
@@ -87,7 +89,13 @@ pub(super) fn prepare(
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
         match event {
-            Event::DocType(value) if value.as_ref().eq_ignore_ascii_case(b"html") => {
+            Event::DocType(value)
+                if !root_seen
+                    && stack.is_empty()
+                    && !doctype_seen
+                    && value.as_ref().eq_ignore_ascii_case(b"html") =>
+            {
+                doctype_seen = true;
                 writer.write_event(Event::DocType(value.into_owned())).map_err(write_error)?;
             }
             Event::DocType(_) | Event::PI(_) => {
@@ -175,16 +183,20 @@ pub(super) fn prepare(
                 finish_frame(frame, &mut footnotes, budget)?;
             }
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
+                let decoded = xml::decoded_text(&event)?.unwrap_or_default();
+                if stack.is_empty() && !decoded.chars().all(char::is_whitespace) {
+                    return Err(xml::malformed("character data outside XHTML root"));
+                }
                 let suppressed = stack.last().is_some_and(|frame| frame.suppressed_text);
-                if let Some(text) = xml::decoded_text(&event)?
+                if !decoded.is_empty()
                     && let Some(frame) =
                         stack.iter_mut().rev().find(|frame| frame.footnote.is_some())
                     && !suppressed
                     && let Some(footnote) = frame.footnote.as_mut()
                 {
-                    let next = footnote.text.len().saturating_add(text.len());
+                    let next = footnote.text.len().saturating_add(decoded.len());
                     budget.field("footnote", next)?;
-                    footnote.text.push_str(&text);
+                    footnote.text.push_str(&decoded);
                 }
                 if !stack.last().is_some_and(|frame| frame.suppressed_output) {
                     writer.write_event(event.into_owned()).map_err(write_error)?;
@@ -196,9 +208,13 @@ pub(super) fn prepare(
                     writer.write_event(Event::Comment(value.into_owned())).map_err(write_error)?;
                 }
             }
-            Event::Decl(value) => {
+            Event::Decl(value)
+                if !root_seen && stack.is_empty() && !declaration_seen && !doctype_seen =>
+            {
+                declaration_seen = true;
                 writer.write_event(Event::Decl(value.into_owned())).map_err(write_error)?;
             }
+            Event::Decl(_) => return Err(xml::malformed("misplaced or duplicate XML declaration")),
         }
     }
     if !root_seen || !stack.is_empty() {

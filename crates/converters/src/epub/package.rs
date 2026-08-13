@@ -125,15 +125,16 @@ pub(super) fn parse(
                         return Err(xml::malformed("unsupported OPF package version"));
                     }
                     version = Some(parsed_version.to_owned());
-                    unique_identifier = Some(
-                        xml::required(
-                            &attributes,
-                            None,
-                            b"unique-identifier",
-                            "package unique-identifier",
-                        )?
-                        .to_owned(),
-                    );
+                    let identifier = xml::required(
+                        &attributes,
+                        None,
+                        b"unique-identifier",
+                        "package unique-identifier",
+                    )?;
+                    if !xml::valid_ncname(identifier) {
+                        return Err(xml::malformed("package unique-identifier is not an NCName"));
+                    }
+                    unique_identifier = Some(identifier.to_owned());
                     root_seen = true;
                 } else if depth == 2 && name.namespace.as_deref() == Some(OPF_NS) {
                     match name.local.as_slice() {
@@ -402,11 +403,7 @@ fn require_parent(stack: &[Frame], expected: &[u8], label: &str) -> Result<(), C
 }
 
 fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().next().is_some_and(|value| value.is_ascii_alphabetic() || value == '_')
-        && value
-            .chars()
-            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '-' | '.'))
+    xml::valid_ncname(value)
 }
 
 fn valid_media_type(value: &str) -> bool {

@@ -30,7 +30,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-fn epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
     let stored = SimpleFileOptions::default()
@@ -82,7 +82,7 @@ fn mimetype_with_extra(central_only: bool) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
-fn convert(bytes: Vec<u8>) -> Result<crate::ConversionResult, ConversionError> {
+pub(super) fn convert(bytes: Vec<u8>) -> Result<crate::ConversionResult, ConversionError> {
     convert_with(bytes, ConversionOptions::default(), ExecutionOptions::default())
 }
 
@@ -98,15 +98,15 @@ fn convert_with(
     block_on(default_engine().unwrap().convert(request))
 }
 
-fn container() -> &'static [u8] {
+pub(super) fn container() -> &'static [u8] {
     br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#
 }
 
-fn epub3_package() -> &'static [u8] {
+pub(super) fn epub3_package() -> &'static [u8] {
     br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:uuid:original-test-book</dc:identifier><dc:title>Original EPUB Three</dc:title><dc:creator>Example Author</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-13T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="text/two.xhtml" media-type="application/xhtml+xml"/><item id="extra" href="text/extra.xhtml" media-type="application/xhtml+xml"/><item id="cover" href="images/cover.png" media-type="image/png" properties="cover-image"/><item id="style" href="styles/book.css" media-type="text/css"/></manifest><spine><itemref idref="one"/><itemref idref="extra" linear="no"/><itemref idref="two"/></spine></package>"#
 }
 
-fn nav3() -> &'static [u8] {
+pub(super) fn nav3() -> &'static [u8] {
     br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">One</a><ol><li><a href="text/two.xhtml#target">Two</a></li></ol></li></ol></nav></body></html>"#
 }
 
@@ -124,15 +124,15 @@ fn deep_nav(levels: usize) -> String {
     value
 }
 
-fn chapter_one() -> &'static [u8] {
+pub(super) fn chapter_one() -> &'static [u8] {
     br##"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Chapter One</title></head><body><main><h1>One</h1><p>Alpha <a href="two.xhtml#target">next</a>.</p><img src="../images/cover.png" alt="Cover art"/><p>Detail<a epub:type="noteref" href="#note-one">1</a> repeated<a epub:type="noteref" href="#note-one">1</a></p><aside epub:type="footnote" id="note-one"><p>Original footnote text.</p></aside></main></body></html>"##
 }
 
-fn chapter_two() -> &'static [u8] {
+pub(super) fn chapter_two() -> &'static [u8] {
     br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter Two</title></head><body><main><h1 id="target">Two</h1><p>Omega</p></main></body></html>"#
 }
 
-fn epub3_book(package: &[u8], navigation: Option<&[u8]>) -> Vec<u8> {
+pub(super) fn epub3_book(package: &[u8], navigation: Option<&[u8]>) -> Vec<u8> {
     let mut entries = vec![
         ("META-INF/container.xml", container()),
         ("OPS/content.opf", package),
@@ -151,19 +151,25 @@ fn epub3_book(package: &[u8], navigation: Option<&[u8]>) -> Vec<u8> {
     epub(&entries)
 }
 
-fn epub2_package() -> &'static [u8] {
+pub(super) fn epub2_package() -> &'static [u8] {
     br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">urn:uuid:original-epub-two</dc:identifier><dc:title>Original EPUB Two</dc:title><dc:language>en</dc:language><meta name="cover" content="cover"/></metadata><manifest xml:base="text/"><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="shell" href="dummy.svg" media-type="image/svg+xml" fallback="one"/><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/><item id="cover" xml:base="../images/" href="cover.png" media-type="image/png"/></manifest><spine toc="ncx"><itemref idref="shell"/><itemref idref="two"/></spine></package>"#
 }
 
-fn ncx2() -> &'static [u8] {
+pub(super) fn ncx2() -> &'static [u8] {
     br#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>Original EPUB Two</text></docTitle><navMap><navPoint id="p1" playOrder="1"><navLabel><text>First</text></navLabel><content src="one.xhtml#one"/><navPoint id="p2" playOrder="2"><navLabel><text>Second</text></navLabel><content src="two.xhtml"/></navPoint></navPoint></navMap></ncx>"#
 }
 
-fn epub2_one() -> &'static [u8] {
+pub(super) fn epub2_one() -> &'static [u8] {
     br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>First</title></head><body xml:base="../images/"><main><h1 id="one">First</h1><img src="cover.png" alt="Cover"/><p>EPUB two first.</p></main></body></html>"#
 }
 
-const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+pub(super) const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c,
+    0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0xf8, 0x0f, 0x00,
+    0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+    0xae, 0x42, 0x60, 0x82,
+];
 
 #[test]
 fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {

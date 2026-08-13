@@ -97,6 +97,9 @@ pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
 }
 
 #[cfg(test)]
+mod epub_regression_tests;
+
+#[cfg(test)]
 mod epub_tests;
 
 #[cfg(test)]

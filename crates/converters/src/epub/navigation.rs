@@ -15,7 +15,7 @@ const NCX_NS: &[u8] = b"http://www.daisy.org/z3986/2005/ncx/";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NavEntry {
     pub(super) label: String,
-    pub(super) target: String,
+    pub(super) target: Option<String>,
     pub(super) depth: usize,
 }
 
@@ -31,6 +31,7 @@ struct Frame {
     in_toc: bool,
     list_depth: usize,
     href: Option<Reference>,
+    group_label: bool,
     text: String,
     suppressed_text: bool,
 }
@@ -102,6 +103,11 @@ pub(super) fn parse_nav(
                 } else {
                     None
                 };
+                let group_label = in_toc
+                    && name.matches(Some(XHTML_NS), b"span")
+                    && stack
+                        .last()
+                        .is_some_and(|parent| parent.name.matches(Some(XHTML_NS), b"li"));
                 let suppressed_text = stack.last().is_some_and(|frame| frame.suppressed_text)
                     || name.namespace.as_deref() == Some(XHTML_NS)
                         && matches!(name.local.as_slice(), b"script" | b"style");
@@ -111,6 +117,7 @@ pub(super) fn parse_nav(
                     in_toc,
                     list_depth,
                     href,
+                    group_label,
                     text: String::new(),
                     suppressed_text,
                 };
@@ -165,13 +172,13 @@ fn finish_nav_frame(
     entries: &mut Vec<NavEntry>,
     budget: &EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
-    if let Some(reference) = frame.href {
+    if frame.href.is_some() || frame.group_label {
         let label = normalize(&frame.text);
         if label.is_empty() {
             return Err(xml::malformed("navigation link has no label"));
         }
         budget.field("navigation label", label.len())?;
-        let target = reference.canonical_target();
+        let target = frame.href.map(|reference| reference.canonical_target());
         entries.push(NavEntry { label, target, depth: frame.list_depth.saturating_sub(1) });
     }
     Ok(())
@@ -233,10 +240,18 @@ pub(super) fn parse_ncx(
                     if nav_map_seen {
                         return Err(xml::malformed("duplicate NCX navMap"));
                     }
+                    if stack.len() != 1 {
+                        return Err(xml::malformed("NCX navMap is not a direct ncx child"));
+                    }
                     nav_map_seen = true;
                 } else if name.matches(Some(NCX_NS), b"navPoint") {
+                    let inside_nav_map =
+                        stack.iter().any(|frame| frame.name.matches(Some(NCX_NS), b"navMap"));
+                    if !inside_nav_map {
+                        return Err(xml::malformed("NCX navPoint is outside navMap"));
+                    }
                     let id = xml::required(&attributes, None, b"id", "NCX navPoint id")?;
-                    if !ids.insert(id.to_owned()) {
+                    if !xml::valid_ncname(id) || !ids.insert(id.to_owned()) {
                         return Err(xml::malformed("duplicate NCX navPoint ID"));
                     }
                     if let Some(order) = xml::optional(&attributes, None, b"playOrder") {
@@ -251,20 +266,22 @@ pub(super) fn parse_ncx(
                     pending.push(NcxPending::default());
                     entries.push(NavEntry {
                         label: String::new(),
-                        target: String::new(),
+                        target: None,
                         depth: points.len(),
                     });
                     points.push(index);
                 } else if name.matches(Some(NCX_NS), b"content") {
-                    let index = *points
-                        .last()
-                        .ok_or_else(|| xml::malformed("NCX content outside navPoint"))?;
-                    let src = xml::required(&attributes, None, b"src", "NCX content src")?;
-                    let target = base.resolve(src)?.require_existing(archive)?.canonical_target();
-                    if pending[index].target.replace(target).is_some() {
-                        return Err(xml::malformed("duplicate NCX content in navPoint"));
+                    if let Some(index) = points.last().copied() {
+                        let src = xml::required(&attributes, None, b"src", "NCX content src")?;
+                        let target =
+                            base.resolve(src)?.require_existing(archive)?.canonical_target();
+                        if pending[index].target.replace(target).is_some() {
+                            return Err(xml::malformed("duplicate NCX content in navPoint"));
+                        }
                     }
                 } else if name.matches(Some(NCX_NS), b"text")
+                    && !empty
+                    && !points.is_empty()
                     && stack.iter().rev().any(|frame| frame.name.matches(Some(NCX_NS), b"navLabel"))
                 {
                     text_depth = Some(stack.len() + 1);
@@ -309,7 +326,8 @@ pub(super) fn parse_ncx(
     }
     for (entry, value) in entries.iter_mut().zip(pending) {
         entry.label = normalize(&value.label);
-        entry.target = value.target.ok_or_else(|| xml::malformed("NCX navPoint has no content"))?;
+        entry.target =
+            Some(value.target.ok_or_else(|| xml::malformed("NCX navPoint has no content"))?);
         if entry.label.is_empty() {
             return Err(xml::malformed("NCX label is empty"));
         }

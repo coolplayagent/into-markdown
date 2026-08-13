@@ -24,6 +24,9 @@ impl BasePath {
     }
 
     pub(super) fn apply(&self, value: &str) -> Result<Self, ConversionError> {
+        if value.is_empty() {
+            return Ok(self.clone());
+        }
         let raw = split_reference(value)?;
         if raw.external {
             return Err(malformed("xml:base must remain inside the EPUB container"));
@@ -31,14 +34,16 @@ impl BasePath {
         if raw.query.is_some() || raw.fragment.is_some() {
             return Err(malformed("xml:base must not contain a query or fragment"));
         }
-        let directory = raw.path.ends_with('/');
-        let path = resolve_path(self, raw.path, directory)?;
+        let (path, directory) = resolve_path(self, raw.path)?;
         Ok(Self { path, directory })
     }
 
     pub(super) fn resolve(&self, value: &str) -> Result<Reference, ConversionError> {
         let raw = split_reference(value)?;
         if raw.external {
+            if reserved_synthetic_origin(value) {
+                return Err(malformed("EPUB reference collides with the reserved internal origin"));
+            }
             return Ok(Reference::External(value.to_owned()));
         }
         if raw.query.is_some() {
@@ -50,7 +55,11 @@ impl BasePath {
             }
             self.path.clone()
         } else {
-            resolve_path(self, raw.path, false)?
+            let (path, directory) = resolve_path(self, raw.path)?;
+            if directory {
+                return Err(malformed("EPUB resource reference resolves to a directory"));
+            }
+            path
         };
         let fragment = raw.fragment.map(validate_fragment).transpose()?;
         Ok(Reference::Internal { path, fragment })
@@ -133,29 +142,33 @@ fn split_reference(value: &str) -> Result<RawReference<'_>, ConversionError> {
     Ok(RawReference { path, query, fragment, external })
 }
 
-fn resolve_path(
-    base: &BasePath,
-    reference: &str,
-    directory: bool,
-) -> Result<String, ConversionError> {
+fn resolve_path(base: &BasePath, reference: &str) -> Result<(String, bool), ConversionError> {
     if reference.starts_with('/') || reference.contains("//") {
         return Err(malformed("EPUB path must be a relative container URI"));
     }
-    let mut components = if base.directory {
+    let mut components = if base.directory && base.path.is_empty() {
+        Vec::new()
+    } else if base.directory {
         base.path.split('/').map(str::to_owned).collect::<Vec<_>>()
     } else {
         base.path
             .rsplit_once('/')
             .map_or_else(Vec::new, |(parent, _)| parent.split('/').map(str::to_owned).collect())
     };
-    for raw in reference.split('/') {
+    let parts = reference.split('/').collect::<Vec<_>>();
+    let directory = reference.ends_with('/')
+        || parts.last().is_some_and(|component| matches!(*component, "." | ".."));
+    for (index, raw) in parts.iter().enumerate() {
         if raw.is_empty() {
-            if directory && reference.ends_with('/') {
+            if directory && index + 1 == parts.len() {
                 continue;
             }
             return Err(malformed("EPUB path contains an empty component"));
         }
         let component = percent_decode(raw)?;
+        if raw.contains('%') && matches!(component.as_str(), "." | "..") {
+            return Err(malformed("percent-encoded EPUB dot segments are forbidden"));
+        }
         match component.as_str() {
             "." => {}
             ".." => {
@@ -167,9 +180,12 @@ fn resolve_path(
         }
     }
     if components.is_empty() {
+        if directory {
+            return Ok((String::new(), true));
+        }
         return Err(malformed("EPUB path resolves to the container root"));
     }
-    portable_identity(&components.join("/"), directory)
+    portable_identity(&components.join("/"), directory).map(|path| (path, directory))
 }
 
 fn percent_decode(value: &str) -> Result<String, ConversionError> {
@@ -187,6 +203,9 @@ fn percent_decode(value: &str) -> Result<String, ConversionError> {
                     .and_then(|v| v.checked_add(hex(low).ok()?))
                     .ok_or_else(|| malformed("invalid percent escape"))?,
             );
+            if output.last().is_some_and(|byte| matches!(*byte, b'/' | b'\\')) {
+                return Err(malformed("percent-encoded path separators are forbidden"));
+            }
             index += 3;
         } else {
             output.push(bytes[index]);
@@ -194,6 +213,13 @@ fn percent_decode(value: &str) -> Result<String, ConversionError> {
         }
     }
     String::from_utf8(output).map_err(|_| malformed("percent-decoded EPUB path is not UTF-8"))
+}
+
+fn reserved_synthetic_origin(value: &str) -> bool {
+    Url::parse(value)
+        .or_else(|_| Url::parse(SYNTHETIC_ORIGIN).and_then(|base| base.join(value)))
+        .ok()
+        .is_some_and(|url| url.origin().ascii_serialization() == "https://epub.invalid")
 }
 
 fn hex(value: u8) -> Result<u8, ConversionError> {

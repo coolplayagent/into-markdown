@@ -28,6 +28,25 @@ fn xml_base_is_inherited_without_broadening_container_authority() {
 }
 
 #[test]
+fn xml_base_dot_segments_preserve_directory_semantics() {
+    let document = BasePath::document("OPS/content.opf").unwrap();
+    for base in [".", "./", "nested/..", "nested/../"] {
+        assert_eq!(
+            document.apply(base).unwrap().resolve("chapter.xhtml").unwrap(),
+            Reference::Internal { path: "OPS/chapter.xhtml".into(), fragment: None },
+            "base {base:?}"
+        );
+    }
+    assert_eq!(
+        document.apply("").unwrap().resolve("chapter.xhtml").unwrap(),
+        Reference::Internal { path: "OPS/chapter.xhtml".into(), fragment: None }
+    );
+    assert!(document.apply("%2e").is_err());
+    assert!(document.apply("nested%2fescape/").is_err());
+    assert!(document.apply("nested%5cescape/").is_err());
+}
+
+#[test]
 fn external_links_remain_data_and_active_schemes_are_rejected() {
     let base = BasePath::document("OPS/chapter.xhtml").unwrap();
     assert_eq!(

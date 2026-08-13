@@ -3,6 +3,7 @@
 mod budget;
 mod container;
 mod encryption;
+mod image;
 mod merge;
 mod navigation;
 mod package;
@@ -131,9 +132,10 @@ async fn convert_epub(
             &chapter.references,
             &package,
             &mut archive,
+            context,
         )?;
     }
-    let cover = resources.cover(&package, &mut archive)?;
+    let cover = resources.cover(&package, &mut archive, context)?;
     merge::assemble(
         package,
         navigation,

@@ -78,11 +78,7 @@ pub(super) fn attributes(
             .decode_and_unescape_value(reader.decoder())
             .map_err(|error| malformed(format!("invalid XML attribute value: {error}")))?
             .into_owned();
-        if value.chars().any(|character| {
-            character == '\0' || character.is_control() && !character.is_whitespace()
-        }) {
-            return Err(malformed("XML attribute contains a forbidden control character"));
-        }
+        validate_xml_chars(&value, "attribute")?;
         output.push(Attribute { namespace: key.0, local: key.1, value });
     }
     EpubBudget::attributes(output.len())?;
@@ -113,14 +109,22 @@ pub(super) fn required<'a>(
 
 pub(super) fn decoded_text(event: &Event<'_>) -> Result<Option<String>, ConversionError> {
     match event {
-        Event::Text(value) => value
-            .xml_content()
-            .map(|value| Some(value.into_owned()))
-            .map_err(|error| malformed(format!("invalid XML text: {error}"))),
-        Event::CData(value) => value
-            .decode()
-            .map(|value| Some(value.into_owned()))
-            .map_err(|error| malformed(format!("invalid XML CDATA: {error}"))),
+        Event::Text(value) => {
+            let value = value
+                .xml_content()
+                .map_err(|error| malformed(format!("invalid XML text: {error}")))?
+                .into_owned();
+            validate_xml_chars(&value, "text")?;
+            Ok(Some(value))
+        }
+        Event::CData(value) => {
+            let value = value
+                .decode()
+                .map_err(|error| malformed(format!("invalid XML CDATA: {error}")))?
+                .into_owned();
+            validate_xml_chars(&value, "CDATA")?;
+            Ok(Some(value))
+        }
         Event::GeneralRef(value) => {
             let name = std::str::from_utf8(value.as_ref())
                 .map_err(|_| malformed("XML entity name is not UTF-8"))?;
@@ -135,7 +139,9 @@ pub(super) fn decoded_text(event: &Event<'_>) -> Result<Option<String>, Conversi
                         .ok()
                         .and_then(char::from_u32)
                         .ok_or_else(|| malformed("invalid hexadecimal XML character reference"))?;
-                    return Ok(Some(scalar.to_string()));
+                    let scalar = scalar.to_string();
+                    validate_xml_chars(&scalar, "character reference")?;
+                    return Ok(Some(scalar));
                 }
                 value if value.starts_with('#') => {
                     let scalar = value[1..]
@@ -143,13 +149,54 @@ pub(super) fn decoded_text(event: &Event<'_>) -> Result<Option<String>, Conversi
                         .ok()
                         .and_then(char::from_u32)
                         .ok_or_else(|| malformed("invalid decimal XML character reference"))?;
-                    return Ok(Some(scalar.to_string()));
+                    let scalar = scalar.to_string();
+                    validate_xml_chars(&scalar, "character reference")?;
+                    return Ok(Some(scalar));
                 }
                 _ => return Err(malformed("custom XML entities are forbidden")),
             };
             Ok(Some(replacement.into()))
         }
         _ => Ok(None),
+    }
+}
+
+pub(super) fn valid_ncname(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters.next().is_some_and(xml_name_start) && characters.all(xml_name_character)
+}
+
+fn xml_name_start(character: char) -> bool {
+    matches!(character,
+        'A'..='Z' | '_' | 'a'..='z'
+        | '\u{00c0}'..='\u{00d6}' | '\u{00d8}'..='\u{00f6}'
+        | '\u{00f8}'..='\u{02ff}' | '\u{0370}'..='\u{037d}'
+        | '\u{037f}'..='\u{1fff}' | '\u{200c}'..='\u{200d}'
+        | '\u{2070}'..='\u{218f}' | '\u{2c00}'..='\u{2fef}'
+        | '\u{3001}'..='\u{d7ff}' | '\u{f900}'..='\u{fdcf}'
+        | '\u{fdf0}'..='\u{fffd}' | '\u{10000}'..='\u{effff}'
+    )
+}
+
+fn xml_name_character(character: char) -> bool {
+    xml_name_start(character)
+        || matches!(character,
+            '-' | '.' | '0'..='9' | '\u{00b7}'
+            | '\u{0300}'..='\u{036f}' | '\u{203f}'..='\u{2040}'
+        )
+}
+
+fn validate_xml_chars(value: &str, label: &str) -> Result<(), ConversionError> {
+    if value.chars().all(|character| {
+        matches!(character,
+            '\u{0009}' | '\u{000a}' | '\u{000d}'
+            | '\u{0020}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}'
+            | '\u{10000}'..='\u{10ffff}'
+        )
+    }) {
+        Ok(())
+    } else {
+        Err(malformed(format!("XML {label} contains a character forbidden by XML 1.0")))
     }
 }
 
