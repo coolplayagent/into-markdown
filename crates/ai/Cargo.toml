@@ -13,6 +13,7 @@ into-markdown-core = { path = "../core" }
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+socket2.workspace = true
 url.workspace = true
 webpki-roots.workspace = true
 zeroize.workspace = true

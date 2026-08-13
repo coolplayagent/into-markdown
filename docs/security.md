@@ -230,9 +230,10 @@ Provider 配置只保存环境变量名。命令完成 URL、host allowlist、DN
 Clone、不可 Debug/Display 的请求局部对象持有，Authorization 请求缓冲和密钥在释放时清零，
 错误、JSON 输出、日志和配置没有响应自由文本或密钥字段。
 
-传输固定使用 Rustls 0.23.32、ring 和 webpki-roots 1.0.3 的 Mozilla 根集合，四个目标平台
+传输固定使用 Rustls 0.23.32、ring、socket2 0.6.5 和 webpki-roots 1.0.3 的 Mozilla 根集合，四个目标平台
 使用同一根策略；不读取平台证书库、HTTP(S)_PROXY、PATH 或代理环境变量。DNS 在有界工作
-线程解析；空结果或同时包含公网与未授权私网地址均 fail closed。连接只使用已检查的具体
+线程池及有界队列解析；空结果、超量/超容量/端口不符结果，或同时包含公网与未授权私网地址
+均 fail closed。连接只使用已检查的具体
 SocketAddr，Host 与 TLS SNI 使用同一个 canonical hostname。HTTP 只允许已显式双重授权的
 非公网地址；公网 Provider 必须使用 HTTPS。重定向和 protocol upgrade 均拒绝，因此
 Authorization 不会跨 origin 转发。
@@ -243,3 +244,11 @@ HTTP/1.1 parser 对 header、header 数量、Content-Length、chunk、压缩体�
 检查 ExecutionContext 取消与总 deadline。GET 能力探测以及携带显式 idempotency key 的 POST
 才允许对 429/5xx 有限重试；Retry-After 只接受有界 delta-seconds。`providers test` 固定只发
 `GET /models`，不包含用户文档或 prompt；服务端字段不能扩大本地配置的 capability allowlist。
+`/models` 只能证明模型存在，不能证明图像或修复能力，因此不会仅凭配置声明这些能力；声明
+存在后续页的列表返回稳定 incomplete 错误。Chat Completions 与 Responses 使用相互独立的
+REST DTO；Responses 图像输入使用字符串 `image_url`，输出只读取
+`output[].content[].type = output_text`，不信任 SDK convenience 字段。
+
+配置变更通过已认证父目录句柄执行 no-follow 临时文件创建、文件/目录 fsync、目标与临时文件
+identity 复核及 fd-relative rename。父目录、目标、临时文件或符号链接竞态均 fail closed；
+替换已有配置时保留其权限，并要求文件属于当前用户。

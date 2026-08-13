@@ -10,10 +10,12 @@ use into_markdown::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILENAME: &str = ".into-markdown.toml";
+const MAX_PROVIDER_BASE_URL_BYTES: usize = 4 * 1024;
+const MAX_PROVIDER_MODEL_BYTES: usize = 512;
+const MAX_ENVIRONMENT_NAME_BYTES: usize = 256;
 
 /// Paths participating in configuration discovery.
 #[derive(Debug, Clone, Serialize)]
@@ -603,6 +605,12 @@ fn validate_provider(
     if !provider.base_url.is_empty() {
         validate_provider_url(name, &provider.base_url)?;
     }
+    if !provider.model.is_empty()
+        && (provider.model.len() > MAX_PROVIDER_MODEL_BYTES
+            || provider.model.chars().any(char::is_control))
+    {
+        return Err(CliError::config(format!("provider '{name}' model is invalid")));
+    }
     if !provider.api_key_env.is_empty() {
         validate_environment_name(&provider.api_key_env)?;
     }
@@ -630,6 +638,9 @@ fn validate_provider(
 }
 
 fn validate_provider_url(name: &str, value: &str) -> Result<(), CliError> {
+    if value.len() > MAX_PROVIDER_BASE_URL_BYTES {
+        return Err(CliError::config(format!("provider '{name}' URL exceeds its size limit")));
+    }
     let url = url::Url::parse(value)
         .map_err(|error| CliError::config(format!("provider '{name}' URL: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -979,46 +990,7 @@ fn parse_toml_value(input: &str) -> toml::Value {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), CliError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let existing_permissions = match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if !metadata.file_type().is_file() {
-                return Err(CliError::config(format!(
-                    "configuration path is not a regular file: {}",
-                    path.display()
-                )));
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt as _;
-                if metadata.uid() != rustix::process::geteuid().as_raw() {
-                    return Err(CliError::config(format!(
-                        "configuration file is not owned by the current user: {}",
-                        path.display()
-                    )));
-                }
-            }
-            if !replace {
-                return Err(CliError::config(format!("path already exists: {}", path.display())));
-            }
-            Some(metadata.permissions())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
-    let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("config");
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{filename}.into-md-"))
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-    temporary.write_all(bytes)?;
-    if let Some(permissions) = existing_permissions {
-        temporary.as_file().set_permissions(permissions)?;
-    }
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| CliError::from(error.error))?;
-    Ok(())
+    crate::transaction::atomic_replace_config(path, bytes, replace)
 }
 
 fn merge_value(target: &mut toml::Value, overlay: toml::Value) {
@@ -1109,6 +1081,9 @@ pub fn validate_sha256(value: &str) -> Result<(), CliError> {
 }
 
 pub fn validate_environment_name(value: &str) -> Result<(), CliError> {
+    if value.len() > MAX_ENVIRONMENT_NAME_BYTES {
+        return Err(CliError::usage("environment variable name exceeds its size limit"));
+    }
     let mut bytes = value.bytes();
     let first = bytes.next();
     if first.is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')

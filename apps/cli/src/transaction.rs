@@ -39,6 +39,87 @@ const MAX_PATH_UNITS: usize = 32_768;
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_TRANSACTIONS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 
+/// Atomically replace one configuration file through an authenticated parent
+/// directory handle.
+#[cfg(unix)]
+pub(crate) fn atomic_replace_config(
+    path: &Path,
+    bytes: &[u8],
+    replace: bool,
+) -> Result<(), CliError> {
+    atomic_replace_config_inner(path, bytes, replace, |_, _, _| Ok(()))
+}
+
+#[cfg(unix)]
+fn atomic_replace_config_inner(
+    path: &Path,
+    bytes: &[u8],
+    replace: bool,
+    before_commit: impl FnOnce(&SafeDir, &OsStr, &OsStr) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let absolute =
+        if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir()?.join(path) };
+    let parent_path = absolute.parent().ok_or_else(|| recovery_error("config has no parent"))?;
+    let name = absolute.file_name().ok_or_else(|| recovery_error("config has no file name"))?;
+    validate_single_name(name)?;
+    let parent = SafeDir::open_or_create_absolute(parent_path)?;
+    parent.verify_namespace()?;
+    let expected = parent.inspect_regular(name)?;
+    if expected.is_some() && !replace {
+        return Err(CliError::config(format!("path already exists: {}", absolute.display())));
+    }
+    let existing_mode = if expected.is_some() {
+        let file = parent.open_regular(name)?;
+        let metadata = file.metadata()?;
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(CliError::config(format!(
+                "configuration file is not owned by the current user: {}",
+                absolute.display()
+            )));
+        }
+        Some(metadata.permissions().mode() & 0o777)
+    } else {
+        None
+    };
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let sequence = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary_name =
+        OsString::from(format!(".into-md-config-{}-{nonce}-{sequence}.tmp", std::process::id()));
+    let mut temporary = parent.create_regular(&temporary_name)?;
+    let result = (|| {
+        temporary.write_all(bytes)?;
+        if let Some(mode) = existing_mode {
+            temporary.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        temporary.sync_all()?;
+        let temporary_identity = file_identity(&temporary)?;
+        before_commit(&parent, name, &temporary_name)?;
+        parent.verify_namespace()?;
+        verify_name_identity(&parent, name, expected.as_ref())?;
+        verify_name_identity(&parent, &temporary_name, Some(&temporary_identity))?;
+        rustix::fs::renameat(&parent.fd, &temporary_name, &parent.fd, name)?;
+        parent.sync()?;
+        parent.verify_namespace()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = rustix::fs::unlinkat(&parent.fd, &temporary_name, rustix::fs::AtFlags::empty());
+        let _ = parent.sync();
+    }
+    result
+}
+
+#[cfg(not(unix))]
+pub(crate) fn atomic_replace_config(
+    _path: &Path,
+    _bytes: &[u8],
+    _replace: bool,
+) -> Result<(), CliError> {
+    Err(transaction_platform_unavailable())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum JournalPhase {
@@ -255,13 +336,16 @@ impl SafeDir {
     }
 
     fn verify_namespace(&self) -> Result<(), CliError> {
-        let current = Self::open_absolute(&self.path)?;
-        if current.identity != self.identity {
-            return Err(CliError::new(
+        let changed = || {
+            CliError::new(
                 ExitClass::Io,
                 "outputIdentityChanged",
                 format!("output directory changed after authentication: {}", self.path.display()),
-            ));
+            )
+        };
+        let current = Self::open_absolute(&self.path).map_err(|_| changed())?;
+        if current.identity != self.identity {
+            return Err(changed());
         }
         Ok(())
     }
@@ -2787,6 +2871,93 @@ mod tests {
                 managed_nonce(&name).map(|_| entry.path())
             })
             .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_replace_is_fd_relative_durable_and_preserves_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let target = root.join("config.toml");
+        fs::write(&target, b"old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        atomic_replace_config(&target, b"new", true).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o640);
+
+        let created = root.join("created.toml");
+        atomic_replace_config(&created, b"created", false).unwrap();
+        assert_eq!(fs::metadata(&created).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_replace_rejects_target_and_temporary_identity_races() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let target = root.join("config.toml");
+        fs::write(&target, b"old").unwrap();
+        let held = root.join("held.toml");
+        let error = atomic_replace_config_inner(&target, b"new", true, |_, _, _| {
+            fs::rename(&target, &held)?;
+            fs::write(&target, b"racer")?;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(&target).unwrap(), b"racer");
+
+        fs::remove_file(&target).unwrap();
+        fs::rename(&held, &target).unwrap();
+        let error =
+            atomic_replace_config_inner(&target, b"new", true, |parent, _, temporary_name| {
+                let path = parent.path.join(temporary_name);
+                fs::remove_file(&path)?;
+                fs::write(path, b"attacker temporary")?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_replace_rejects_parent_swap_and_symlink_paths() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let parent = root.join("config");
+        let held = root.join("config-held");
+        fs::create_dir(&parent).unwrap();
+        let target = parent.join("settings.toml");
+        fs::write(&target, b"old").unwrap();
+        let error = atomic_replace_config_inner(&target, b"new", true, |_, _, _| {
+            fs::rename(&parent, &held)?;
+            fs::create_dir(&parent)?;
+            fs::write(parent.join("settings.toml"), b"attacker")?;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(parent.join("settings.toml")).unwrap(), b"attacker");
+
+        let destination = root.join("destination.toml");
+        fs::write(&destination, b"keep").unwrap();
+        let link = root.join("link.toml");
+        symlink(&destination, &link).unwrap();
+        assert!(atomic_replace_config(&link, b"new", true).is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"keep");
+
+        let real_parent = root.join("real-parent");
+        fs::create_dir(&real_parent).unwrap();
+        let linked_parent = root.join("linked-parent");
+        symlink(&real_parent, &linked_parent).unwrap();
+        assert!(atomic_replace_config(&linked_parent.join("new.toml"), b"new", false).is_err());
+        assert!(!real_parent.join("new.toml").exists());
     }
 
     #[test]

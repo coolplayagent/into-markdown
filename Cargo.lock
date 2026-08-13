@@ -989,6 +989,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "socket2",
  "url",
  "webpki-roots",
  "zeroize",

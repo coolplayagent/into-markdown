@@ -7,18 +7,22 @@ use base64::Engine as _;
 use flate2::read::GzDecoder;
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
 use rustls::pki_types::ServerName;
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, Cursor, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use url::{Host, Url};
 use zeroize::Zeroize;
 
 const MAX_SECRET_BYTES: usize = 16 * 1024;
+const MAX_BASE_URL_BYTES: usize = 4 * 1024;
+const MAX_ENVIRONMENT_NAME_BYTES: usize = 256;
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROMPT_BYTES: usize = 256 * 1024;
@@ -31,9 +35,13 @@ const MAX_JSON_VALUES: usize = 20_000;
 const MAX_JSON_STRING_BYTES: usize = 16 * 1024;
 const MAX_MODELS: usize = 1_000;
 const MAX_MODEL_ID_BYTES: usize = 512;
-const IO_POLL: Duration = Duration::from_millis(100);
+const IO_POLL: Duration = Duration::from_millis(10);
 const MAX_RETRIES: u8 = 2;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(2);
+const MAX_DNS_ADDRESSES: usize = 64;
+const DNS_WORKERS: usize = 4;
+const DNS_QUEUE_PER_WORKER: usize = 2;
+const MAX_CHUNKS: usize = 4_096;
 
 /// Stable provider transport failure category. Free-form server text is never retained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -76,6 +84,8 @@ pub enum ProviderErrorCode {
     ServerError,
     /// Provider attempted a redirect; redirects are disabled.
     RedirectDenied,
+    /// A bounded discovery response declared additional pages.
+    Incomplete,
     /// HTTP, content type, JSON, or schema validation failed.
     InvalidResponse,
     /// A response framing or decoded-data limit was exceeded.
@@ -123,6 +133,7 @@ impl ProviderError {
             ProviderErrorCode::RateLimited => "providerRateLimited",
             ProviderErrorCode::ServerError => "providerServerError",
             ProviderErrorCode::RedirectDenied => "providerRedirectDenied",
+            ProviderErrorCode::Incomplete => "providerIncomplete",
             ProviderErrorCode::InvalidResponse => "providerInvalidResponse",
             ProviderErrorCode::ResponseTooLarge => "providerResponseTooLarge",
             ProviderErrorCode::ResourceLimit => "resourceLimit",
@@ -173,6 +184,9 @@ impl ProviderConfig {
         timeout: Duration,
         configured_capabilities: impl IntoIterator<Item = String>,
     ) -> Result<Self, ProviderError> {
+        if base_url.len() > MAX_BASE_URL_BYTES {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration));
+        }
         let parsed = Url::parse(base_url)
             .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
         if !matches!(parsed.scheme(), "https" | "http")
@@ -184,6 +198,7 @@ impl ProviderConfig {
             || parsed.as_str() != base_url
             || model.is_empty()
             || model.len() > MAX_MODEL_ID_BYTES
+            || model.chars().any(char::is_control)
             || !valid_environment_name(api_key_environment_variable)
             || timeout.is_zero()
         {
@@ -223,6 +238,9 @@ impl ProviderConfig {
 }
 
 fn valid_environment_name(value: &str) -> bool {
+    if value.len() > MAX_ENVIRONMENT_NAME_BYTES {
+        return false;
+    }
     let mut bytes = value.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
@@ -230,17 +248,16 @@ fn valid_environment_name(value: &str) -> bool {
 
 struct Secret {
     bytes: Vec<u8>,
-    _reservation: ResourceReservation,
 }
 
 impl Secret {
-    fn from_environment(name: &str, context: &ExecutionContext) -> Result<Self, ProviderError> {
+    fn from_environment(name: &str, memory: &mut MemoryBudget) -> Result<Self, ProviderError> {
         let value = std::env::var_os(name)
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::SecretMissing))?;
-        Self::from_os_string(value, context)
+        Self::from_os_string(value, memory)
     }
 
-    fn from_os_string(value: OsString, context: &ExecutionContext) -> Result<Self, ProviderError> {
+    fn from_os_string(value: OsString, memory: &mut MemoryBudget) -> Result<Self, ProviderError> {
         let text = os_string_into_string(value)
             .map_err(|()| ProviderError::new(ProviderErrorCode::SecretInvalid))?;
         if text.is_empty()
@@ -249,8 +266,63 @@ impl Secret {
         {
             return Err(ProviderError::new(ProviderErrorCode::SecretInvalid));
         }
-        let reservation = context.reserve_memory(text.len() as u64).map_err(map_context_error)?;
-        Ok(Self { bytes: text.into_bytes(), _reservation: reservation })
+        memory.grow(text.capacity())?;
+        Ok(Self { bytes: text.into_bytes() })
+    }
+}
+
+struct MemoryBudget {
+    reservation: ResourceReservation,
+    held: usize,
+}
+
+impl MemoryBudget {
+    fn new(context: &ExecutionContext) -> Result<Self, ProviderError> {
+        context
+            .reserve_memory(0)
+            .map(|reservation| Self { reservation, held: 0 })
+            .map_err(map_context_error)
+    }
+
+    fn grow(&mut self, bytes: usize) -> Result<(), ProviderError> {
+        self.reservation
+            .grow(
+                u64::try_from(bytes)
+                    .map_err(|_| ProviderError::new(ProviderErrorCode::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+        self.held = self
+            .held
+            .checked_add(bytes)
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+        Ok(())
+    }
+
+    fn shrink(&mut self, bytes: usize) -> Result<(), ProviderError> {
+        let held = self
+            .held
+            .checked_sub(bytes)
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+        self.reservation
+            .shrink(
+                u64::try_from(bytes)
+                    .map_err(|_| ProviderError::new(ProviderErrorCode::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+        self.held = held;
+        Ok(())
+    }
+
+    fn checkpoint(&self) -> usize {
+        self.held
+    }
+
+    fn restore(&mut self, checkpoint: usize) -> Result<(), ProviderError> {
+        let release = self
+            .held
+            .checked_sub(checkpoint)
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+        self.shrink(release)
     }
 }
 
@@ -272,9 +344,61 @@ struct SystemResolver;
 
 impl Resolver for SystemResolver {
     fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-        (host, port).to_socket_addrs().map(Iterator::collect)
+        (host, port)
+            .to_socket_addrs()
+            .map(|addresses| addresses.take(MAX_DNS_ADDRESSES + 1).collect())
     }
 }
+
+struct DnsJob {
+    resolver: Arc<dyn Resolver>,
+    host: String,
+    port: u16,
+    result: SyncSender<io::Result<Vec<SocketAddr>>>,
+}
+
+struct DnsPool {
+    workers: Vec<SyncSender<DnsJob>>,
+    next: AtomicUsize,
+}
+
+impl DnsPool {
+    fn start() -> Option<Self> {
+        let mut workers = Vec::with_capacity(DNS_WORKERS);
+        for index in 0..DNS_WORKERS {
+            let (sender, receiver) = std::sync::mpsc::sync_channel::<DnsJob>(DNS_QUEUE_PER_WORKER);
+            if std::thread::Builder::new()
+                .name(format!("into-md-provider-dns-{index}"))
+                .spawn(move || {
+                    while let Ok(job) = receiver.recv() {
+                        let result = job.resolver.resolve(&job.host, job.port);
+                        let _ = job.result.send(result);
+                    }
+                })
+                .is_ok()
+            {
+                workers.push(sender);
+            }
+        }
+        (!workers.is_empty()).then(|| Self { workers, next: AtomicUsize::new(0) })
+    }
+
+    fn submit(&self, mut job: DnsJob) -> Result<(), ProviderError> {
+        let start = self.next.fetch_add(1, Ordering::Relaxed);
+        for offset in 0..self.workers.len() {
+            let index = (start + offset) % self.workers.len();
+            match self.workers[index].try_send(job) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(returned) | TrySendError::Disconnected(returned)) => {
+                    job = returned;
+                }
+            }
+        }
+        Err(ProviderError::new(ProviderErrorCode::Dns))
+    }
+}
+
+static DNS_POOL: OnceLock<Option<DnsPool>> = OnceLock::new();
 
 /// Successful minimal connectivity/capability result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -284,7 +408,7 @@ pub struct ProviderTestResult {
     pub schema_version: u32,
     /// The configured model was listed by the endpoint.
     pub configured_model_available: bool,
-    /// Configured capabilities retained after negotiation.
+    /// Capabilities proved by the server and retained by the configured allowlist.
     pub capabilities: Vec<String>,
     /// Bounded number of valid model IDs observed.
     pub model_count: usize,
@@ -371,6 +495,7 @@ impl OpenAiCompatibleClient {
     ///
     /// Returns a stable [`ProviderError`] for policy, transport, HTTP, or schema failures.
     pub fn test(&self, context: &ExecutionContext) -> Result<ProviderTestResult, ProviderError> {
+        let mut memory = MemoryBudget::new(context)?;
         let deadline = Instant::now()
             .checked_add(self.config.timeout)
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
@@ -384,8 +509,14 @@ impl OpenAiCompatibleClient {
         let port = endpoint
             .port_or_known_default()
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-        let addresses =
-            resolve_checked(self.resolver.clone(), host.clone(), port, context, deadline)?;
+        let addresses = resolve_with_memory(
+            self.resolver.clone(),
+            host.clone(),
+            port,
+            context,
+            deadline,
+            &mut memory,
+        )?;
         if addresses.is_empty() {
             return Err(ProviderError::new(ProviderErrorCode::Dns));
         }
@@ -393,21 +524,30 @@ impl OpenAiCompatibleClient {
             self.check_address(address.ip())?;
         }
         // Secret lookup is deliberately after URL, host, DNS, and address authorization.
-        let secret = Secret::from_environment(&self.config.api_key_environment_variable, context)?;
+        let secret =
+            Secret::from_environment(&self.config.api_key_environment_variable, &mut memory)?;
         let mut retry = 0_u8;
         loop {
             check_operation(context, deadline)?;
-            let response =
-                Self::request_models(&endpoint, &host, &addresses, &secret, context, deadline)?;
+            let response = Self::request_models(
+                &endpoint,
+                &host,
+                &addresses,
+                &secret,
+                context,
+                deadline,
+                &mut memory,
+            )?;
             if retry < MAX_RETRIES && matches!(response.status, 429 | 500..=599) {
                 retry += 1;
                 let delay = response.retry_after.unwrap_or_else(|| {
                     Duration::from_millis(100_u64.saturating_mul(1_u64 << retry))
                 });
+                memory.shrink(response.body.capacity())?;
                 checked_sleep(delay.min(MAX_RETRY_AFTER), context, deadline)?;
                 continue;
             }
-            return parse_models_response(response, &self.config);
+            return parse_models_response(response, &self.config, context, deadline, &mut memory);
         }
     }
 
@@ -422,6 +562,7 @@ impl OpenAiCompatibleClient {
         request: GenerationRequest<'_>,
         context: &ExecutionContext,
     ) -> Result<GenerationResult, ProviderError> {
+        let mut memory = MemoryBudget::new(context)?;
         validate_generation_request(&request, &self.config)?;
         let deadline = Instant::now()
             .checked_add(self.config.timeout)
@@ -431,11 +572,16 @@ impl OpenAiCompatibleClient {
             return Err(ProviderError::new(ProviderErrorCode::NetworkDenied));
         }
         let estimated_body = generation_body_bound(&request, self.config.model.len())?;
-        let _body_reservation =
-            context.reserve_memory(estimated_body as u64).map_err(map_context_error)?;
+        let encoding_budget = estimated_body.saturating_mul(3);
+        memory.grow(encoding_budget)?;
         let (path, body) = encode_generation_request(&request, &self.config.model)?;
         if body.len() > MAX_REQUEST_BYTES {
             return Err(ProviderError::new(ProviderErrorCode::ResourceLimit));
+        }
+        if body.capacity() > encoding_budget {
+            memory.grow(body.capacity() - encoding_budget)?;
+        } else {
+            memory.shrink(encoding_budget - body.capacity())?;
         }
         let mut endpoint = self.config.base_url.clone();
         endpoint.set_path(&format!("{}{}", endpoint.path().trim_end_matches('/'), path));
@@ -444,15 +590,22 @@ impl OpenAiCompatibleClient {
         let port = endpoint
             .port_or_known_default()
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-        let addresses =
-            resolve_checked(self.resolver.clone(), host.clone(), port, context, deadline)?;
+        let addresses = resolve_with_memory(
+            self.resolver.clone(),
+            host.clone(),
+            port,
+            context,
+            deadline,
+            &mut memory,
+        )?;
         if addresses.is_empty() {
             return Err(ProviderError::new(ProviderErrorCode::Dns));
         }
         for address in &addresses {
             self.check_address(address.ip())?;
         }
-        let secret = Secret::from_environment(&self.config.api_key_environment_variable, context)?;
+        let secret =
+            Secret::from_environment(&self.config.api_key_environment_variable, &mut memory)?;
         let spec = RequestSpec {
             method: "POST",
             body: Some(&body),
@@ -460,13 +613,22 @@ impl OpenAiCompatibleClient {
         };
         let mut retry = 0_u8;
         loop {
-            let response =
-                Self::request(&endpoint, &host, &addresses, &secret, context, deadline, spec)?;
+            let response = Self::request(
+                &endpoint,
+                &host,
+                &addresses,
+                &secret,
+                context,
+                deadline,
+                spec,
+                &mut memory,
+            )?;
             if request.idempotency_key.is_some()
                 && retry < MAX_RETRIES
                 && matches!(response.status, 429 | 500..=599)
             {
                 retry += 1;
+                memory.shrink(response.body.capacity())?;
                 checked_sleep(
                     response
                         .retry_after
@@ -476,7 +638,24 @@ impl OpenAiCompatibleClient {
                 )?;
                 continue;
             }
-            return parse_generation_response(response, request.endpoint);
+            let mut result = parse_generation_response(
+                response,
+                request.endpoint,
+                context,
+                deadline,
+                &mut memory,
+            )?;
+            if contains_secret(
+                result.text.as_bytes(),
+                &secret.bytes,
+                context,
+                deadline,
+                &mut memory,
+            )? {
+                result.text.zeroize();
+                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+            }
+            return Ok(result);
         }
     }
 
@@ -487,6 +666,7 @@ impl OpenAiCompatibleClient {
         secret: &Secret,
         context: &ExecutionContext,
         deadline: Instant,
+        memory: &mut MemoryBudget,
     ) -> Result<HttpResponse, ProviderError> {
         Self::request(
             endpoint,
@@ -496,6 +676,7 @@ impl OpenAiCompatibleClient {
             context,
             deadline,
             RequestSpec { method: "GET", body: None, idempotency_key: None },
+            memory,
         )
     }
 
@@ -508,19 +689,48 @@ impl OpenAiCompatibleClient {
         context: &ExecutionContext,
         deadline: Instant,
         spec: RequestSpec<'_>,
+        memory: &mut MemoryBudget,
     ) -> Result<HttpResponse, ProviderError> {
         let mut last = ProviderError::new(ProviderErrorCode::Connect);
-        for address in addresses {
+        for (index, address) in addresses.iter().enumerate() {
             check_operation(context, deadline)?;
-            match Self::request_one(endpoint, host, *address, secret, context, deadline, spec) {
+            let remaining = effective_remaining(context, deadline)?;
+            let addresses_left = u32::try_from(addresses.len() - index).unwrap_or(u32::MAX);
+            let address_deadline = Instant::now()
+                .checked_add(remaining / addresses_left.max(1))
+                .unwrap_or(deadline)
+                .min(deadline);
+            let attempt_checkpoint = memory.checkpoint();
+            let attempt = Self::request_one(
+                endpoint,
+                host,
+                *address,
+                secret,
+                context,
+                deadline,
+                address_deadline,
+                spec,
+                memory,
+            );
+            match attempt {
                 Ok(response) => return Ok(response),
-                Err(error) if error.code() == ProviderErrorCode::Connect => last = error,
-                Err(error) => return Err(error),
+                Err(failure)
+                    if (!failure.progressed() || spec.retry_safe())
+                        && index + 1 < addresses.len() =>
+                {
+                    memory.restore(attempt_checkpoint)?;
+                    last = failure.error;
+                }
+                Err(failure) => {
+                    memory.restore(attempt_checkpoint)?;
+                    return Err(failure.error);
+                }
             }
         }
         Err(last)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn request_one(
         endpoint: &Url,
         host: &str,
@@ -528,38 +738,39 @@ impl OpenAiCompatibleClient {
         secret: &Secret,
         context: &ExecutionContext,
         deadline: Instant,
+        address_deadline: Instant,
         spec: RequestSpec<'_>,
-    ) -> Result<HttpResponse, ProviderError> {
-        let connect_timeout = blocking_slice(context, deadline)?;
-        let stream =
-            TcpStream::connect_timeout(&address, connect_timeout).map_err(map_connect_error)?;
-        stream
-            .set_read_timeout(Some(connect_timeout))
-            .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
-        stream
-            .set_write_timeout(Some(connect_timeout))
-            .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
-        let mut stream: Box<dyn ReadWrite> = if endpoint.scheme() == "https" {
-            let roots =
-                webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect::<rustls::RootCertStore>();
-            let tls =
-                rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-            let server_name = ServerName::try_from(host.to_owned())
-                .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
-            let connection = rustls::ClientConnection::new(Arc::new(tls), server_name)
-                .map_err(|_| ProviderError::new(ProviderErrorCode::Tls))?;
-            Box::new(rustls::StreamOwned::new(connection, stream))
+        memory: &mut MemoryBudget,
+    ) -> Result<HttpResponse, AttemptFailure> {
+        let stream = connect_checked(address, context, address_deadline)
+            .map_err(AttemptFailure::before_request)?;
+        let stream: Box<dyn ReadWrite> = if endpoint.scheme() == "https" {
+            Box::new(
+                tls_handshake(stream, host, context, address_deadline)
+                    .map_err(AttemptFailure::before_request)?,
+            )
         } else {
             Box::new(stream)
         };
+        let mut stream = TrackedIo::new(stream);
         let host_header = host_header(endpoint, host)?;
         let target = request_target(endpoint)?;
         let request_capacity = 512_usize
-            .saturating_add(secret.bytes.len())
-            .saturating_add(spec.body.map_or(0, <[u8]>::len));
-        let _request_reservation =
-            context.reserve_memory(request_capacity as u64).map_err(map_context_error)?;
+            .checked_add(target.len())
+            .and_then(|size| size.checked_add(host_header.len()))
+            .and_then(|size| size.checked_add(secret.bytes.len()))
+            .and_then(|size| size.checked_add(spec.idempotency_key.map_or(0, str::len)))
+            .and_then(|size| size.checked_add(spec.body.map_or(0, <[u8]>::len)))
+            .filter(|size| *size <= MAX_REQUEST_BYTES)
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+        memory.grow(request_capacity).map_err(AttemptFailure::before_request)?;
         let mut request = Vec::with_capacity(request_capacity);
+        if request.capacity() > request_capacity {
+            memory
+                .grow(request.capacity() - request_capacity)
+                .map_err(AttemptFailure::before_request)?;
+        }
+        let allocated_request = request.capacity();
         write!(
             request,
             "{} {target} HTTP/1.1\r\nHost: {host_header}\r\nAuthorization: Bearer ",
@@ -586,12 +797,31 @@ impl OpenAiCompatibleClient {
         }
         if request.len() > MAX_REQUEST_BYTES {
             request.zeroize();
-            return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration));
+            return Err(ProviderError::new(ProviderErrorCode::ResourceLimit).into());
         }
-        let result = write_all_checked(&mut *stream, &request, context, deadline)
-            .and_then(|()| read_response(&mut *stream, context, deadline));
+        if request.capacity() > allocated_request
+            && let Err(error) = memory.grow(request.capacity() - allocated_request)
+        {
+            request.zeroize();
+            return Err(AttemptFailure::before_request(error));
+        }
+        let allocated_request = request.capacity();
+        let result = write_all_checked(&mut stream, &request, context, deadline)
+            .and_then(|()| read_response(&mut stream, context, deadline, memory));
         request.zeroize();
-        result
+        let release = memory.shrink(allocated_request);
+        if let Err(error) = release {
+            return Err(AttemptFailure {
+                error,
+                request_bytes: stream.written,
+                response_bytes: stream.read,
+            });
+        }
+        result.map_err(|error| AttemptFailure {
+            error,
+            request_bytes: stream.written,
+            response_bytes: stream.read,
+        })
     }
 
     fn check_host(&self, host: &str) -> Result<(), ProviderError> {
@@ -621,17 +851,16 @@ fn resolve_checked(
     context: &ExecutionContext,
     deadline: Instant,
 ) -> Result<Vec<SocketAddr>, ProviderError> {
+    let pool = DNS_POOL
+        .get_or_init(DnsPool::start)
+        .as_ref()
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::Dns))?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("into-md-provider-dns".into())
-        .spawn(move || {
-            let _ = sender.send(resolver.resolve(&host, port));
-        })
-        .map_err(|_| ProviderError::new(ProviderErrorCode::Dns))?;
+    pool.submit(DnsJob { resolver, host, port, result: sender })?;
     loop {
         check_operation(context, deadline)?;
         match receiver.recv_timeout(blocking_slice(context, deadline)?) {
-            Ok(Ok(addresses)) => return Ok(addresses),
+            Ok(Ok(addresses)) => return validate_dns_addresses(addresses, port),
             Ok(Err(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(ProviderError::new(ProviderErrorCode::Dns));
             }
@@ -640,14 +869,194 @@ fn resolve_checked(
     }
 }
 
+fn resolve_with_memory(
+    resolver: Arc<dyn Resolver>,
+    host: String,
+    port: u16,
+    context: &ExecutionContext,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
+) -> Result<Vec<SocketAddr>, ProviderError> {
+    let reserved = MAX_DNS_ADDRESSES
+        .checked_mul(std::mem::size_of::<SocketAddr>())
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+    memory.grow(reserved)?;
+    let addresses = match resolve_checked(resolver, host, port, context, deadline) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            memory.shrink(reserved)?;
+            return Err(error);
+        }
+    };
+    let actual = addresses
+        .capacity()
+        .checked_mul(std::mem::size_of::<SocketAddr>())
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+    memory.shrink(reserved.saturating_sub(actual))?;
+    Ok(addresses)
+}
+
+fn validate_dns_addresses(
+    mut addresses: Vec<SocketAddr>,
+    port: u16,
+) -> Result<Vec<SocketAddr>, ProviderError> {
+    if addresses.is_empty()
+        || addresses.len() > MAX_DNS_ADDRESSES
+        || addresses.capacity() > MAX_DNS_ADDRESSES
+        || addresses.iter().any(|address| address.port() != port)
+    {
+        return Err(ProviderError::new(ProviderErrorCode::Dns));
+    }
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        Err(ProviderError::new(ProviderErrorCode::Dns))
+    } else {
+        Ok(addresses)
+    }
+}
+
 trait ReadWrite: Read + Write {}
 impl<T: Read + Write> ReadWrite for T {}
+
+struct TrackedIo {
+    inner: Box<dyn ReadWrite>,
+    written: usize,
+    read: usize,
+}
+
+impl TrackedIo {
+    fn new(inner: Box<dyn ReadWrite>) -> Self {
+        Self { inner, written: 0, read: 0 }
+    }
+}
+
+impl Read for TrackedIo {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.read = self.read.saturating_add(read);
+        Ok(read)
+    }
+}
+
+impl Write for TrackedIo {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.written = self.written.saturating_add(written);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+struct AttemptFailure {
+    error: ProviderError,
+    request_bytes: usize,
+    response_bytes: usize,
+}
+
+impl AttemptFailure {
+    fn before_request(error: ProviderError) -> Self {
+        Self { error, request_bytes: 0, response_bytes: 0 }
+    }
+
+    fn progressed(&self) -> bool {
+        self.request_bytes != 0 || self.response_bytes != 0
+    }
+}
+
+impl From<ProviderError> for AttemptFailure {
+    fn from(error: ProviderError) -> Self {
+        Self::before_request(error)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct RequestSpec<'a> {
     method: &'static str,
     body: Option<&'a [u8]>,
     idempotency_key: Option<&'a str>,
+}
+
+impl RequestSpec<'_> {
+    fn retry_safe(self) -> bool {
+        self.method == "GET" || self.idempotency_key.is_some()
+    }
+}
+
+fn connect_checked(
+    address: SocketAddr,
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<TcpStream, ProviderError> {
+    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))
+        .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
+    socket.set_nonblocking(true).map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
+    match socket.connect(&SockAddr::from(address)) {
+        Ok(()) => {}
+        Err(error) if connect_is_pending(&error) => loop {
+            check_operation(context, deadline)?;
+            if socket
+                .take_error()
+                .map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?
+                .is_some()
+            {
+                return Err(ProviderError::new(ProviderErrorCode::Connect));
+            }
+            if socket.peer_addr().is_ok() {
+                break;
+            }
+            std::thread::sleep(blocking_slice(context, deadline)?);
+        },
+        Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
+    }
+    check_operation(context, deadline)?;
+    let stream = TcpStream::from(socket);
+    stream.set_nodelay(true).map_err(|_| ProviderError::new(ProviderErrorCode::Connect))?;
+    Ok(stream)
+}
+
+fn connect_is_pending(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted)
+        || matches!(error.raw_os_error(), Some(36 | 115 | 10035))
+}
+
+fn tls_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let roots =
+                webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect::<rustls::RootCertStore>();
+            Arc::new(
+                rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
+fn tls_handshake(
+    mut stream: TcpStream,
+    host: &str,
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>, ProviderError> {
+    let server_name = ServerName::try_from(host.to_owned())
+        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))?;
+    let mut connection = rustls::ClientConnection::new(tls_config(), server_name)
+        .map_err(|_| ProviderError::new(ProviderErrorCode::Tls))?;
+    while connection.is_handshaking() {
+        check_operation(context, deadline)?;
+        match connection.complete_io(&mut stream) {
+            Ok(_) => {}
+            Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock) => {
+                std::thread::sleep(blocking_slice(context, deadline)?);
+            }
+            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Tls)),
+        }
+    }
+    Ok(rustls::StreamOwned::new(connection, stream))
 }
 
 fn validate_generation_request(
@@ -705,33 +1114,117 @@ fn generation_body_bound(
         .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))
 }
 
+#[allow(clippy::too_many_lines)]
 fn encode_generation_request(
     request: &GenerationRequest<'_>,
     model: &str,
 ) -> Result<(&'static str, Vec<u8>), ProviderError> {
-    let content = match request.input {
-        GenerationInput::Text(text) => serde_json::json!(text),
-        GenerationInput::Image { bytes, media_type, prompt } => {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-            serde_json::json!([
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": format!("data:{media_type};base64,{encoded}")}}
-            ])
+    #[derive(Serialize)]
+    struct ChatRequest<'a> {
+        model: &'a str,
+        messages: [ChatMessage<'a>; 1],
+        max_tokens: u32,
+    }
+    #[derive(Serialize)]
+    struct ChatMessage<'a> {
+        role: &'static str,
+        content: ChatContent<'a>,
+    }
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum ChatContent<'a> {
+        Text(&'a str),
+        Parts([ChatPart<'a>; 2]),
+    }
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum ChatPart<'a> {
+        #[serde(rename = "text")]
+        Text { text: &'a str },
+        #[serde(rename = "image_url")]
+        ImageUrl { image_url: ChatImageUrl<'a> },
+    }
+    #[derive(Serialize)]
+    struct ChatImageUrl<'a> {
+        url: &'a str,
+    }
+    #[derive(Serialize)]
+    struct ResponsesRequest<'a> {
+        model: &'a str,
+        input: [ResponsesMessage<'a>; 1],
+        max_output_tokens: u32,
+    }
+    #[derive(Serialize)]
+    struct ResponsesMessage<'a> {
+        role: &'static str,
+        content: ResponsesContent<'a>,
+    }
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum ResponsesContent<'a> {
+        Text([ResponsesText<'a>; 1]),
+        Image([ResponsesPart<'a>; 2]),
+    }
+    #[derive(Serialize)]
+    struct ResponsesText<'a> {
+        r#type: &'static str,
+        text: &'a str,
+    }
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum ResponsesPart<'a> {
+        #[serde(rename = "input_text")]
+        Text { text: &'a str },
+        #[serde(rename = "input_image")]
+        Image { image_url: &'a str },
+    }
+
+    let image_url = match request.input {
+        GenerationInput::Image { bytes, media_type, .. } => Some(format!(
+            "data:{media_type};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )),
+        GenerationInput::Text(_) => None,
+    };
+    let body = match request.endpoint {
+        GenerationEndpoint::ChatCompletions => {
+            let content = match (request.input, image_url.as_deref()) {
+                (GenerationInput::Text(text), None) => ChatContent::Text(text),
+                (GenerationInput::Image { prompt, .. }, Some(url)) => ChatContent::Parts([
+                    ChatPart::Text { text: prompt },
+                    ChatPart::ImageUrl { image_url: ChatImageUrl { url } },
+                ]),
+                _ => return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration)),
+            };
+            serde_json::to_vec(&ChatRequest {
+                model,
+                messages: [ChatMessage { role: "user", content }],
+                max_tokens: request.max_output_tokens,
+            })
+            .map(|body| ("/chat/completions", body))
+        }
+        GenerationEndpoint::Responses => {
+            let content = match (request.input, image_url.as_deref()) {
+                (GenerationInput::Text(text), None) => {
+                    ResponsesContent::Text([ResponsesText { r#type: "input_text", text }])
+                }
+                (GenerationInput::Image { prompt, .. }, Some(image_url)) => {
+                    ResponsesContent::Image([
+                        ResponsesPart::Text { text: prompt },
+                        ResponsesPart::Image { image_url },
+                    ])
+                }
+                _ => return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration)),
+            };
+            serde_json::to_vec(&ResponsesRequest {
+                model,
+                input: [ResponsesMessage { role: "user", content }],
+                max_output_tokens: request.max_output_tokens,
+            })
+            .map(|body| ("/responses", body))
         }
     };
-    let (path, value) = match request.endpoint {
-        GenerationEndpoint::ChatCompletions => (
-            "/chat/completions",
-            serde_json::json!({"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": request.max_output_tokens}),
-        ),
-        GenerationEndpoint::Responses => (
-            "/responses",
-            serde_json::json!({"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": request.max_output_tokens}),
-        ),
-    };
-    serde_json::to_vec(&value)
-        .map(|body| (path, body))
-        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))
+    body.map_err(|_| ProviderError::new(ProviderErrorCode::InvalidConfiguration))
 }
 
 fn models_endpoint(base: &Url) -> Url {
@@ -784,26 +1277,35 @@ fn is_public_ip(address: IpAddr) -> bool {
                 || (a == 172 && (16..=31).contains(&b))
                 || (a == 192 && b == 0 && c == 0)
                 || (a == 192 && b == 0 && c == 2)
+                || (a == 192 && b == 88 && c == 99)
                 || (a == 192 && b == 168)
                 || (a == 198 && (b == 18 || b == 19))
                 || (a == 198 && b == 51 && c == 100)
                 || (a == 203 && b == 0 && c == 113))
         }
         IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return is_public_ip(IpAddr::V4(mapped));
+            if ip.to_ipv4_mapped().is_some() {
+                return false;
             }
             let segments = ip.segments();
-            (segments[0] & 0xe000) == 0x2000 && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+            (segments[0] & 0xe000) == 0x2000
+                // IANA special-purpose aggregate (Teredo, ORCHID, benchmarking,
+                // documentation, and protocol assignments).
+                && !(segments[0] == 0x2001 && segments[1] <= 0x01ff)
+                && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+                // 6to4 embeds an IPv4 address and is not accepted as global-only.
+                && segments[0] != 0x2002
+                // Documentation and segment-routing special-purpose blocks.
+                && !(segments[0] == 0x3fff && (segments[1] & 0xfff0) == 0)
         }
     }
 }
 
+#[derive(Debug)]
 struct HttpResponse {
     status: u16,
     retry_after: Option<Duration>,
     body: Vec<u8>,
-    _reservations: Vec<ResourceReservation>,
 }
 
 fn write_all_checked(
@@ -819,11 +1321,14 @@ fn write_all_checked(
             Ok(0) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
             Ok(count) => written += count,
             Err(error)
-                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
-            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
+                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
+                std::thread::sleep(blocking_slice(context, deadline)?);
+            }
+            Err(error) => return Err(map_stream_error(&error)),
         }
     }
-    stream.flush().map_err(|_| ProviderError::new(ProviderErrorCode::Connect))
+    stream.flush().map_err(|error| map_stream_error(&error))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -831,19 +1336,25 @@ fn read_response(
     stream: &mut dyn ReadWrite,
     context: &ExecutionContext,
     deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<HttpResponse, ProviderError> {
-    let header = read_until(stream, b"\r\n\r\n", MAX_HEADER_BYTES, context, deadline)?;
+    let header = read_until(stream, b"\r\n\r\n", MAX_HEADER_BYTES, context, deadline, memory)?;
     let text = std::str::from_utf8(&header)
         .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
     let mut lines = text[..text.len() - 4].split("\r\n");
     let status_line =
         lines.next().ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    let mut status_parts = status_line.split(' ');
-    if status_parts.next() != Some("HTTP/1.1") {
+    let status_bytes = status_line.as_bytes();
+    if status_bytes.len() < 13
+        || &status_bytes[..9] != b"HTTP/1.1 "
+        || !status_bytes[9..12].iter().all(u8::is_ascii_digit)
+        || status_bytes[12] != b' '
+        || !valid_field_value(&status_bytes[13..])
+    {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let status = status_parts
-        .next()
+    let status = std::str::from_utf8(&status_bytes[9..12])
+        .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|value| (100..=599).contains(value))
         .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
@@ -865,9 +1376,10 @@ fn read_response(
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-        if name.trim() != name
-            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            || value.bytes().any(|b| b == b'\0' || b == b'\r' || b == b'\n')
+        if name.is_empty()
+            || name.trim() != name
+            || !name.bytes().all(is_tchar)
+            || !valid_field_value(value.as_bytes())
         {
             return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
         }
@@ -875,11 +1387,15 @@ fn read_response(
         let value = value.trim();
         match name.as_str() {
             "content-length" => {
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+                }
                 let parsed = value
                     .parse::<usize>()
-                    .ok()
-                    .filter(|v| *v <= MAX_RESPONSE_BYTES)
-                    .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResponseTooLarge))?;
+                    .map_err(|_| ProviderError::new(ProviderErrorCode::ResponseTooLarge))?;
+                if parsed > MAX_RESPONSE_BYTES {
+                    return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+                }
                 if content_length.replace(parsed).is_some() {
                     return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
                 }
@@ -914,7 +1430,7 @@ fn read_response(
                     return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
                 }
                 saw_retry_after = true;
-                retry_after = parse_retry_after(value);
+                retry_after = Some(parse_retry_after(value)?);
             }
             "connection"
                 if value.split(',').any(|token| token.trim().eq_ignore_ascii_case("upgrade")) =>
@@ -928,24 +1444,32 @@ fn read_response(
     if status < 200 || status == 101 {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    if status == 200 && !json {
+    if (200..=299).contains(&status) && !json {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
     if saw_transfer_encoding && content_length.is_some() {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let mut reservations = Vec::new();
+    let header_capacity = header.capacity();
+    drop(header);
+    memory.shrink(header_capacity)?;
     let compressed = if chunked {
-        read_chunked(stream, context, deadline, &mut reservations)?
+        read_chunked(stream, context, deadline, memory)?
     } else if let Some(length) = content_length {
-        reservations.push(context.reserve_memory(length as u64).map_err(map_context_error)?);
-        read_exact_bounded(stream, length, context, deadline)?
+        read_exact_bounded(stream, length, context, deadline, memory)?
     } else {
-        read_to_eof_bounded(stream, context, deadline, &mut reservations)?
+        read_to_eof_bounded(stream, context, deadline, memory)?
     };
-    let body =
-        if gzip { decompress_gzip(&compressed, context, &mut reservations)? } else { compressed };
-    Ok(HttpResponse { status, retry_after, body, _reservations: reservations })
+    let body = if gzip {
+        let body = decompress_gzip(&compressed, context, deadline, memory)?;
+        let compressed_capacity = compressed.capacity();
+        drop(compressed);
+        memory.shrink(compressed_capacity)?;
+        body
+    } else {
+        compressed
+    };
+    Ok(HttpResponse { status, retry_after, body })
 }
 
 fn valid_json_content_type(value: &str) -> bool {
@@ -964,8 +1488,42 @@ fn valid_json_content_type(value: &str) -> bool {
     })
 }
 
-fn parse_retry_after(value: &str) -> Option<Duration> {
-    value.parse::<u64>().ok().map(Duration::from_secs).map(|delay| delay.min(MAX_RETRY_AFTER))
+fn is_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn valid_field_value(value: &[u8]) -> bool {
+    value.iter().all(|byte| *byte == b'\t' || *byte >= 0x20 && *byte != 0x7f)
+}
+
+fn parse_retry_after(value: &str) -> Result<Duration, ProviderError> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    let delay = value
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+        .filter(|delay| *delay <= MAX_RETRY_AFTER)
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+    Ok(delay)
 }
 
 fn read_until(
@@ -974,11 +1532,12 @@ fn read_until(
     limit: usize,
     context: &ExecutionContext,
     deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut output = Vec::new();
     while output.len() < limit {
         let byte = read_one(stream, context, deadline)?;
-        output.push(byte);
+        push_byte(&mut output, byte, memory)?;
         if output.ends_with(delimiter) {
             return Ok(output);
         }
@@ -999,8 +1558,11 @@ fn read_one(
             Ok(0) => return Err(ProviderError::new(ProviderErrorCode::InvalidResponse)),
             Ok(_) => unreachable!(),
             Err(error)
-                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
-            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
+                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
+                std::thread::sleep(blocking_slice(context, deadline)?);
+            }
+            Err(error) => return Err(map_stream_error(&error)),
         }
     }
 }
@@ -1010,11 +1572,16 @@ fn read_exact_bounded(
     length: usize,
     context: &ExecutionContext,
     deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<Vec<u8>, ProviderError> {
     if length > MAX_RESPONSE_BYTES {
         return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
     }
+    memory.grow(length)?;
     let mut output = vec![0; length];
+    if output.capacity() > length {
+        memory.grow(output.capacity() - length)?;
+    }
     let mut read = 0;
     while read < length {
         check_operation(context, deadline)?;
@@ -1022,8 +1589,11 @@ fn read_exact_bounded(
             Ok(0) => return Err(ProviderError::new(ProviderErrorCode::InvalidResponse)),
             Ok(count) => read += count,
             Err(error)
-                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
-            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
+                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
+                std::thread::sleep(blocking_slice(context, deadline)?);
+            }
+            Err(error) => return Err(map_stream_error(&error)),
         }
     }
     Ok(output)
@@ -1033,7 +1603,7 @@ fn read_to_eof_bounded(
     stream: &mut dyn ReadWrite,
     context: &ExecutionContext,
     deadline: Instant,
-    reservations: &mut Vec<ResourceReservation>,
+    memory: &mut MemoryBudget,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut output = Vec::new();
     let mut buffer = [0; 8192];
@@ -1042,13 +1612,15 @@ fn read_to_eof_bounded(
         match stream.read(&mut buffer) {
             Ok(0) => return Ok(output),
             Ok(count) if output.len().saturating_add(count) <= MAX_RESPONSE_BYTES => {
-                reservations.push(context.reserve_memory(count as u64).map_err(map_context_error)?);
-                output.extend_from_slice(&buffer[..count]);
+                extend_bytes(&mut output, &buffer[..count], memory)?;
             }
             Ok(_) => return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge)),
             Err(error)
-                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
-            Err(_) => return Err(ProviderError::new(ProviderErrorCode::Connect)),
+                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
+                std::thread::sleep(blocking_slice(context, deadline)?);
+            }
+            Err(error) => return Err(map_stream_error(&error)),
         }
     }
 }
@@ -1057,47 +1629,114 @@ fn read_chunked(
     stream: &mut dyn ReadWrite,
     context: &ExecutionContext,
     deadline: Instant,
-    reservations: &mut Vec<ResourceReservation>,
+    memory: &mut MemoryBudget,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut output = Vec::new();
+    let mut chunks = 0_usize;
     loop {
-        let line = read_until(stream, b"\r\n", 128, context, deadline)?;
+        let line = read_until(stream, b"\r\n", 128, context, deadline, memory)?;
         let text = std::str::from_utf8(&line[..line.len() - 2])
             .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-        if text.contains(';') || text.is_empty() || text.len() > 16 {
+        if text.contains(';')
+            || text.is_empty()
+            || text.len() > 16
+            || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
         }
         let size_text = text;
         let size = usize::from_str_radix(size_text, 16)
             .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+        let line_capacity = line.capacity();
+        drop(line);
+        memory.shrink(line_capacity)?;
         if size == 0 {
-            let end = read_until(stream, b"\r\n", MAX_HEADER_BYTES, context, deadline)?;
+            let end = read_until(stream, b"\r\n", MAX_HEADER_BYTES, context, deadline, memory)?;
             if end != b"\r\n" {
                 return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
             }
+            let end_capacity = end.capacity();
+            drop(end);
+            memory.shrink(end_capacity)?;
             return Ok(output);
+        }
+        chunks += 1;
+        if chunks > MAX_CHUNKS {
+            return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
         }
         if output.len().saturating_add(size) > MAX_RESPONSE_BYTES {
             return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
         }
-        reservations.push(context.reserve_memory(size as u64).map_err(map_context_error)?);
-        let chunk = read_exact_bounded(stream, size, context, deadline)?;
-        output.extend_from_slice(&chunk);
-        if read_exact_bounded(stream, 2, context, deadline)? != b"\r\n" {
+        let chunk = read_exact_bounded(stream, size, context, deadline, memory)?;
+        extend_bytes(&mut output, &chunk, memory)?;
+        let chunk_capacity = chunk.capacity();
+        drop(chunk);
+        memory.shrink(chunk_capacity)?;
+        let ending = read_exact_bounded(stream, 2, context, deadline, memory)?;
+        if ending != b"\r\n" {
             return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
         }
+        let ending_capacity = ending.capacity();
+        drop(ending);
+        memory.shrink(ending_capacity)?;
     }
+}
+
+fn reserve_vec(
+    output: &mut Vec<u8>,
+    additional: usize,
+    memory: &mut MemoryBudget,
+) -> Result<(), ProviderError> {
+    let required = output
+        .len()
+        .checked_add(additional)
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+    if required <= output.capacity() {
+        return Ok(());
+    }
+    let old = output.capacity();
+    let target = old.saturating_mul(2).max(required);
+    memory.grow(target - old)?;
+    output.reserve_exact(target - output.len());
+    if output.capacity() > target {
+        memory.grow(output.capacity() - target)?;
+    } else if output.capacity() < target {
+        memory.shrink(target - output.capacity())?;
+    }
+    Ok(())
+}
+
+fn push_byte(
+    output: &mut Vec<u8>,
+    byte: u8,
+    memory: &mut MemoryBudget,
+) -> Result<(), ProviderError> {
+    reserve_vec(output, 1, memory)?;
+    output.push(byte);
+    Ok(())
+}
+
+fn extend_bytes(
+    output: &mut Vec<u8>,
+    bytes: &[u8],
+    memory: &mut MemoryBudget,
+) -> Result<(), ProviderError> {
+    reserve_vec(output, bytes.len(), memory)?;
+    output.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn decompress_gzip(
     input: &[u8],
     context: &ExecutionContext,
-    reservations: &mut Vec<ResourceReservation>,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut decoder = GzDecoder::new(Cursor::new(input));
     let mut output = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
+        check_operation(context, deadline)?;
         let count = decoder
             .read(&mut chunk)
             .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
@@ -1107,16 +1746,36 @@ fn decompress_gzip(
         if output.len().saturating_add(count) > MAX_DECOMPRESSED_BYTES {
             return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
         }
-        reservations.push(context.reserve_memory(count as u64).map_err(map_context_error)?);
-        output.extend_from_slice(&chunk[..count]);
+        extend_bytes(&mut output, &chunk[..count], memory)?;
     }
     Ok(output)
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelsListWire {
+    object: String,
+    data: Vec<ModelWire>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelWire {
+    id: String,
+    object: String,
+    created: u64,
+    owned_by: String,
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn parse_models_response(
     response: HttpResponse,
     config: &ProviderConfig,
+    context: &ExecutionContext,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<ProviderTestResult, ProviderError> {
     match response.status {
         200 => {}
@@ -1130,70 +1789,166 @@ fn parse_models_response(
         300..=399 => return Err(ProviderError::new(ProviderErrorCode::RedirectDenied)),
         _ => return Err(ProviderError::new(ProviderErrorCode::InvalidResponse)),
     }
-    let value: Value = serde_json::from_slice(&response.body)
-        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    validate_json_bounds(&value)?;
-    let object =
-        value.as_object().ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    if object
-        .keys()
-        .any(|key| !matches!(key.as_str(), "object" | "data" | "has_more" | "first_id" | "last_id"))
-    {
+    let parsed: ParsedJson<ModelsListWire> =
+        parse_json_bounded(&response.body, context, deadline, memory)?;
+    let mut list = parsed.value;
+    if list.object != "list" {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let data = object
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    if data.len() > MAX_MODELS {
+    if list.has_more {
+        return Err(ProviderError::new(ProviderErrorCode::Incomplete));
+    }
+    if list.data.len() > MAX_MODELS {
         return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
     }
-    let mut ids = BTreeSet::new();
-    for model in data {
-        let entry = model
-            .as_object()
-            .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-        let id = entry
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| {
-                !id.is_empty()
-                    && id.len() <= MAX_MODEL_ID_BYTES
-                    && !id.chars().any(char::is_control)
-            })
-            .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-        ids.insert(id);
+    for model in &list.data {
+        if model.object != "model"
+            || model.id.is_empty()
+            || model.id.len() > MAX_MODEL_ID_BYTES
+            || model.id.chars().any(char::is_control)
+            || model.owned_by.is_empty()
+            || model.owned_by.len() > MAX_MODEL_ID_BYTES
+            || model.owned_by.chars().any(char::is_control)
+        {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
+        let _ = model.created;
     }
+    list.data.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+    list.data.dedup_by(|left, right| left.id == right.id);
+    let configured_model_available =
+        list.data.binary_search_by(|model| model.id.as_str().cmp(config.model.as_str())).is_ok();
+    let model_count = list.data.len();
+    memory.shrink(parsed.reserved.saturating_add(response.body.capacity()))?;
     Ok(ProviderTestResult {
         schema_version: 1,
-        configured_model_available: ids.contains(config.model.as_str()),
-        capabilities: config.configured_capabilities.iter().cloned().collect(),
-        model_count: ids.len(),
+        configured_model_available,
+        // `/models` proves model presence only. It does not prove multimodal or
+        // repair capabilities, so the negotiated set remains empty.
+        capabilities: Vec::new(),
+        model_count,
     })
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn parse_generation_response(
     response: HttpResponse,
     endpoint: GenerationEndpoint,
+    context: &ExecutionContext,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
 ) -> Result<GenerationResult, ProviderError> {
     ensure_success_status(response.status)?;
-    let value: Value = serde_json::from_slice(&response.body)
-        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    validate_json_bounds(&value)?;
     let text = match endpoint {
-        GenerationEndpoint::ChatCompletions => value
-            .get("choices")
-            .and_then(Value::as_array)
-            .filter(|choices| choices.len() == 1)
-            .and_then(|choices| choices[0].get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str),
-        GenerationEndpoint::Responses => value.get("output_text").and_then(Value::as_str),
+        GenerationEndpoint::ChatCompletions => {
+            let parsed: ParsedJson<ChatResponseWire> =
+                parse_json_bounded(&response.body, context, deadline, memory)?;
+            let text = parse_chat_text(parsed.value)?;
+            memory.grow(text.capacity())?;
+            memory.shrink(parsed.reserved)?;
+            text
+        }
+        GenerationEndpoint::Responses => {
+            let parsed: ParsedJson<ResponsesResponseWire> =
+                parse_json_bounded(&response.body, context, deadline, memory)?;
+            let text = parse_responses_text(parsed.value, memory)?;
+            memory.shrink(parsed.reserved)?;
+            text
+        }
+    };
+    memory.shrink(response.body.capacity())?;
+    Ok(GenerationResult { schema_version: 1, text })
+}
+
+#[derive(Deserialize)]
+struct ChatResponseWire {
+    choices: Vec<ChatChoiceWire>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoiceWire {
+    message: ChatMessageWire,
+}
+
+#[derive(Deserialize)]
+struct ChatMessageWire {
+    role: String,
+    content: String,
+}
+
+fn parse_chat_text(value: ChatResponseWire) -> Result<String, ProviderError> {
+    let mut choices = value.choices;
+    if choices.len() != 1 {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    .filter(|text| text.len() <= MAX_JSON_STRING_BYTES)
-    .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    Ok(GenerationResult { schema_version: 1, text: text.to_owned() })
+    let message =
+        choices.pop().ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+    if message.message.role != "assistant"
+        || message.message.content.is_empty()
+        || message.message.content.len() > MAX_JSON_STRING_BYTES
+    {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    Ok(message.message.content)
+}
+
+#[derive(Deserialize)]
+struct ResponsesResponseWire {
+    output: Vec<ResponsesOutputWire>,
+}
+
+#[derive(Deserialize)]
+struct ResponsesOutputWire {
+    r#type: String,
+    role: String,
+    content: Vec<ResponsesOutputPartWire>,
+}
+
+#[derive(Deserialize)]
+struct ResponsesOutputPartWire {
+    r#type: String,
+    text: String,
+}
+
+fn parse_responses_text(
+    value: ResponsesResponseWire,
+    memory: &mut MemoryBudget,
+) -> Result<String, ProviderError> {
+    if value.output.is_empty() || value.output.len() > 64 {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    let mut result_bytes = 0_usize;
+    for item in &value.output {
+        if item.r#type != "message" || item.role != "assistant" {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
+        if item.content.is_empty() || item.content.len() > 64 {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
+        for part in &item.content {
+            if part.r#type != "output_text" {
+                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+            }
+            result_bytes = result_bytes.saturating_add(part.text.len());
+            if result_bytes > MAX_JSON_STRING_BYTES {
+                return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+            }
+        }
+    }
+    if result_bytes == 0 {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    memory.grow(result_bytes)?;
+    let mut result = String::with_capacity(result_bytes);
+    if result.capacity() > result_bytes {
+        memory.grow(result.capacity() - result_bytes)?;
+    }
+    for item in value.output {
+        for part in item.content {
+            result.push_str(&part.text);
+        }
+    }
+    Ok(result)
 }
 
 fn ensure_success_status(status: u16) -> Result<(), ProviderError> {
@@ -1211,29 +1966,158 @@ fn ensure_success_status(status: u16) -> Result<(), ProviderError> {
     }
 }
 
-fn validate_json_bounds(root: &Value) -> Result<(), ProviderError> {
-    let mut stack = vec![(root, 1_usize)];
-    let mut values = 0_usize;
-    while let Some((value, depth)) = stack.pop() {
-        values += 1;
-        if values > MAX_JSON_VALUES || depth > MAX_JSON_DEPTH {
-            return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+fn contains_secret(
+    haystack: &[u8],
+    needle: &[u8],
+    context: &ExecutionContext,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
+) -> Result<bool, ProviderError> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return Ok(false);
+    }
+    let prefix_bytes = needle
+        .len()
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+    memory.grow(prefix_bytes)?;
+    let mut prefix = vec![0_usize; needle.len()];
+    if prefix.capacity() > needle.len() {
+        memory.grow((prefix.capacity() - needle.len()) * std::mem::size_of::<usize>())?;
+    }
+    let prefix_capacity = prefix.capacity() * std::mem::size_of::<usize>();
+    let mut matched = 0_usize;
+    for index in 1..needle.len() {
+        if index.is_multiple_of(4_096) {
+            check_operation(context, deadline)?;
         }
-        match value {
-            Value::String(text) if text.len() > MAX_JSON_STRING_BYTES => {
-                return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
-            }
-            Value::Array(items) => stack.extend(items.iter().map(|item| (item, depth + 1))),
-            Value::Object(object) => {
-                if object.keys().any(|key| key.len() > MAX_JSON_STRING_BYTES) {
-                    return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
-                }
-                stack.extend(object.values().map(|item| (item, depth + 1)));
-            }
-            _ => {}
+        while matched != 0 && needle[index] != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if needle[index] == needle[matched] {
+            matched += 1;
+            prefix[index] = matched;
         }
     }
-    Ok(())
+    matched = 0;
+    let mut found = false;
+    for (index, byte) in haystack.iter().enumerate() {
+        if index.is_multiple_of(4_096) {
+            check_operation(context, deadline)?;
+        }
+        while matched != 0 && *byte != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if *byte == needle[matched] {
+            matched += 1;
+            if matched == needle.len() {
+                found = true;
+                break;
+            }
+        }
+    }
+    drop(prefix);
+    memory.shrink(prefix_capacity)?;
+    Ok(found)
+}
+
+#[derive(Debug)]
+struct ParsedJson<T> {
+    value: T,
+    reserved: usize,
+}
+
+fn parse_json_bounded<T: DeserializeOwned>(
+    bytes: &[u8],
+    context: &ExecutionContext,
+    deadline: Instant,
+    memory: &mut MemoryBudget,
+) -> Result<ParsedJson<T>, ProviderError> {
+    let values = preflight_json(bytes, context, deadline)?;
+    let dom_bound = values
+        .checked_mul(std::mem::size_of::<serde_json::Value>().saturating_mul(2))
+        .and_then(|bound| bound.checked_add(bytes.len().saturating_mul(2)))
+        .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?;
+    memory.grow(dom_bound)?;
+    serde_json::from_slice(bytes)
+        .map(|value| ParsedJson { value, reserved: dom_bound })
+        .map_err(|_| ProviderError::new(ProviderErrorCode::InvalidResponse))
+}
+
+fn preflight_json(
+    bytes: &[u8],
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<usize, ProviderError> {
+    let mut index = 0_usize;
+    let mut depth = 0_usize;
+    let mut values = 0_usize;
+    while index < bytes.len() {
+        if index.is_multiple_of(4_096) {
+            check_operation(context, deadline)?;
+        }
+        match bytes[index] {
+            b'{' | b'[' => {
+                depth += 1;
+                values += 1;
+                if depth > MAX_JSON_DEPTH || values > MAX_JSON_VALUES {
+                    return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+                }
+                index += 1;
+            }
+            b'}' | b']' => {
+                if depth == 0 {
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+                }
+                depth -= 1;
+                index += 1;
+            }
+            b'"' => {
+                values += 1;
+                index += 1;
+                let start = index;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    if index.is_multiple_of(4_096) {
+                        check_operation(context, deadline)?;
+                    }
+                    let byte = bytes[index];
+                    if !escaped && byte == b'"' {
+                        break;
+                    }
+                    escaped = !escaped && byte == b'\\';
+                    if byte != b'\\' {
+                        escaped = false;
+                    }
+                    index += 1;
+                    if index.saturating_sub(start) > MAX_JSON_STRING_BYTES {
+                        return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+                    }
+                }
+                if index == bytes.len() || values > MAX_JSON_VALUES {
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+                }
+                index += 1;
+            }
+            b'-' | b'0'..=b'9' | b't' | b'f' | b'n' => {
+                values += 1;
+                if values > MAX_JSON_VALUES {
+                    return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+                }
+                while index < bytes.len()
+                    && !matches!(bytes[index], b' ' | b'\t' | b'\r' | b'\n' | b',' | b'}' | b']')
+                {
+                    index += 1;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    if depth == 0 {
+        Ok(values)
+    } else {
+        Err(ProviderError::new(ProviderErrorCode::InvalidResponse))
+    }
 }
 
 fn checked_sleep(
@@ -1259,6 +2143,15 @@ fn check_operation(context: &ExecutionContext, deadline: Instant) -> Result<(), 
     }
 }
 
+fn effective_remaining(
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<Duration, ProviderError> {
+    check_operation(context, deadline)?;
+    let local = deadline.saturating_duration_since(Instant::now());
+    Ok(context.remaining_time().map_or(local, |request| request.min(local)))
+}
+
 fn blocking_slice(
     context: &ExecutionContext,
     deadline: Instant,
@@ -1266,7 +2159,8 @@ fn blocking_slice(
     check_operation(context, deadline)?;
     let local = deadline.saturating_duration_since(Instant::now());
     let request = context.remaining_time().unwrap_or(IO_POLL);
-    Ok(IO_POLL.min(local).min(request).max(Duration::from_millis(1)))
+    let slice = IO_POLL.min(local).min(request);
+    if slice.is_zero() { Err(ProviderError::new(ProviderErrorCode::Timeout)) } else { Ok(slice) }
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1281,22 +2175,39 @@ fn map_context_error(error: ConversionError) -> ProviderError {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn map_connect_error(error: io::Error) -> ProviderError {
-    match error.kind() {
-        io::ErrorKind::TimedOut => ProviderError::new(ProviderErrorCode::Timeout),
-        _ => ProviderError::new(ProviderErrorCode::Connect),
+fn map_stream_error(error: &io::Error) -> ProviderError {
+    if error.kind() == io::ErrorKind::InvalidData {
+        ProviderError::new(ProviderErrorCode::Tls)
+    } else {
+        ProviderError::new(ProviderErrorCode::Connect)
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use into_markdown_core::{ExecutionOptions, ResourceLimits};
+    use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::net::TcpListener;
+    use std::sync::{Barrier, Condvar, Mutex};
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
+    }
+
+    fn memory_budget(context: &ExecutionContext) -> MemoryBudget {
+        MemoryBudget::new(context).unwrap()
+    }
+
+    fn parse_raw_response(raw: &[u8]) -> Result<HttpResponse, ProviderError> {
+        let context = context();
+        let mut memory = memory_budget(&context);
+        read_response(
+            &mut Cursor::new(raw.to_vec()),
+            &context,
+            Instant::now() + Duration::from_secs(1),
+            &mut memory,
+        )
     }
 
     #[test]
@@ -1315,6 +2226,30 @@ mod tests {
                 ProviderErrorCode::InvalidConfiguration
             );
         }
+        assert_eq!(
+            ProviderConfig::parse(
+                "https://example.com/v1",
+                "m",
+                &format!("A{}", "B".repeat(MAX_ENVIRONMENT_NAME_BYTES)),
+                Duration::from_secs(1),
+                [],
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::InvalidConfiguration
+        );
+        assert_eq!(
+            ProviderConfig::parse(
+                &format!("https://example.com/{}", "x".repeat(MAX_BASE_URL_BYTES)),
+                "m",
+                "API_KEY",
+                Duration::from_secs(1),
+                [],
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::InvalidConfiguration
+        );
     }
 
     #[test]
@@ -1334,6 +2269,13 @@ mod tests {
             "fc00::1",
             "fe80::1",
             "2001:db8::1",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+            "2001::1",
+            "2001:20::1",
+            "2001:2::1",
+            "2002:0808:0808::1",
+            "3fff::1",
         ] {
             assert!(!is_public_ip(address.parse().unwrap()), "{address}");
         }
@@ -1367,12 +2309,217 @@ mod tests {
         assert!(!valid_json_content_type("text/html"));
         assert!(!valid_json_content_type("application/json; charset=iso-8859-1"));
         assert!(valid_json_content_type("application/json; charset=utf-8"));
-        let mut nested = Value::Null;
+        let mut nested = "null".to_owned();
         for _ in 0..=MAX_JSON_DEPTH {
-            nested = Value::Array(vec![nested]);
+            nested = format!("[{nested}]");
         }
+        let context = context();
+        let mut memory = memory_budget(&context);
         assert_eq!(
-            validate_json_bounds(&nested).unwrap_err().code(),
+            parse_json_bounded::<serde_json::Value>(
+                nested.as_bytes(),
+                &context,
+                Instant::now() + Duration::from_secs(1),
+                &mut memory,
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::ResponseTooLarge
+        );
+    }
+
+    #[test]
+    fn chat_and_responses_use_distinct_exact_wire_contracts() {
+        let chat = GenerationRequest {
+            endpoint: GenerationEndpoint::ChatCompletions,
+            capability: "image-description",
+            input: GenerationInput::Image {
+                bytes: b"abc",
+                media_type: "image/png",
+                prompt: "describe",
+            },
+            max_output_tokens: 42,
+            idempotency_key: None,
+        };
+        let (_, chat_body) = encode_generation_request(&chat, "model").unwrap();
+        assert_eq!(
+            std::str::from_utf8(&chat_body).unwrap(),
+            r#"{"model":"model","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,YWJj"}}]}],"max_tokens":42}"#
+        );
+
+        let responses = GenerationRequest { endpoint: GenerationEndpoint::Responses, ..chat };
+        let (_, responses_body) = encode_generation_request(&responses, "model").unwrap();
+        assert_eq!(
+            std::str::from_utf8(&responses_body).unwrap(),
+            r#"{"model":"model","input":[{"role":"user","content":[{"type":"input_text","text":"describe"},{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]}],"max_output_tokens":42}"#
+        );
+    }
+
+    #[test]
+    fn responses_parser_uses_only_nested_output_text_contract() {
+        let context = context();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut memory = memory_budget(&context);
+        let body = br#"{"output_text":"untrusted convenience","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"trusted"}]}]}"#;
+        let body = body.to_vec();
+        memory.grow(body.capacity()).unwrap();
+        let result = parse_generation_response(
+            HttpResponse { status: 200, retry_after: None, body },
+            GenerationEndpoint::Responses,
+            &context,
+            deadline,
+            &mut memory,
+        )
+        .unwrap();
+        assert_eq!(result.text, "trusted");
+
+        let mut memory = memory_budget(&context);
+        let body = br#"{"output_text":"must not be accepted"}"#;
+        let body = body.to_vec();
+        memory.grow(body.capacity()).unwrap();
+        assert_eq!(
+            parse_generation_response(
+                HttpResponse { status: 200, retry_after: None, body },
+                GenerationEndpoint::Responses,
+                &context,
+                deadline,
+                &mut memory,
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::InvalidResponse
+        );
+    }
+
+    #[test]
+    fn raw_http_parser_rejects_ambiguous_or_illegal_syntax() {
+        let cases: &[&[u8]] = &[
+            b"HTTP/1.1 20 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 2000 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\n: value\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nBad Name: value\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nX-Bad: \x01\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nX-One: a\r\n folded\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\n{}\r\n0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\nX: y\r\n\r\n",
+            b"HTTP/1.1 101 Switching Protocols\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 100 Continue\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 204 No Content\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 429 Slow Down\r\nRetry-After: tomorrow\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 429 Slow Down\r\nRetry-After: 3\r\nContent-Length: 2\r\n\r\n{}",
+        ];
+        for raw in cases {
+            assert_eq!(
+                parse_raw_response(raw).unwrap_err().code(),
+                ProviderErrorCode::InvalidResponse,
+                "accepted malformed fixture: {:?}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+    }
+
+    #[test]
+    fn raw_http_parser_accepts_strict_chunked_json() {
+        let response = parse_raw_response(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+        )
+        .unwrap();
+        assert_eq!(response.body, b"{}");
+    }
+
+    #[test]
+    fn provider_status_codes_have_stable_categories() {
+        for (status, expected) in [
+            (401, ProviderErrorCode::Unauthorized),
+            (403, ProviderErrorCode::Forbidden),
+            (404, ProviderErrorCode::NotFound),
+            (408, ProviderErrorCode::Timeout),
+            (409, ProviderErrorCode::Conflict),
+            (429, ProviderErrorCode::RateLimited),
+            (500, ProviderErrorCode::ServerError),
+            (302, ProviderErrorCode::RedirectDenied),
+        ] {
+            assert_eq!(ensure_success_status(status).unwrap_err().code(), expected);
+        }
+    }
+
+    struct StallingIo;
+
+    impl Read for StallingIo {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
+        }
+    }
+
+    impl Write for StallingIo {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn slowloris_read_observes_request_cancellation() {
+        let cancellation = CancellationToken::new();
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                cancellation: cancellation.clone(),
+                timeout: Some(Duration::from_secs(2)),
+                progress_listener: None,
+            },
+            ResourceLimits::default(),
+        );
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            cancellation.cancel();
+        });
+        let mut memory = memory_budget(&context);
+        let error = read_response(
+            &mut StallingIo,
+            &context,
+            Instant::now() + Duration::from_secs(2),
+            &mut memory,
+        )
+        .unwrap_err();
+        worker.join().unwrap();
+        assert_eq!(error.code(), ProviderErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn gzip_bomb_and_excessive_chunk_framing_are_bounded() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&vec![b'x'; MAX_DECOMPRESSED_BYTES + 1]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let context = context();
+        let mut memory = memory_budget(&context);
+        assert_eq!(
+            decompress_gzip(
+                &compressed,
+                &context,
+                Instant::now() + Duration::from_secs(2),
+                &mut memory,
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::ResponseTooLarge
+        );
+
+        let mut raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .to_vec();
+        for _ in 0..=MAX_CHUNKS {
+            raw.extend_from_slice(b"1\r\nx\r\n");
+        }
+        raw.extend_from_slice(b"0\r\n\r\n");
+        assert_eq!(
+            parse_raw_response(&raw).unwrap_err().code(),
             ProviderErrorCode::ResponseTooLarge
         );
     }
@@ -1384,10 +2531,53 @@ mod tests {
             OsString::from("contains space"),
             OsString::from("x".repeat(MAX_SECRET_BYTES + 1)),
         ] {
-            let error = Secret::from_os_string(value, &context()).err().unwrap();
+            let context = context();
+            let mut memory = memory_budget(&context);
+            let error = Secret::from_os_string(value, &mut memory).err().unwrap();
             assert_eq!(error.code(), ProviderErrorCode::SecretInvalid);
             assert_eq!(error.to_string(), "providerSecretInvalid");
         }
+    }
+
+    #[test]
+    fn missing_secret_has_a_stable_non_echoing_error() {
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let error = Secret::from_environment(
+            "INTO_MD_PROVIDER_TEST_DEFINITELY_MISSING_82C881",
+            &mut memory,
+        )
+        .err()
+        .expect("missing environment variable must fail");
+        assert_eq!(error.code(), ProviderErrorCode::SecretMissing);
+        assert_eq!(error.to_string(), "providerSecretMissing");
+    }
+
+    #[test]
+    fn reflected_secret_detection_is_bounded_and_exact() {
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert!(
+            contains_secret(
+                b"prefix-PROVIDER_SECRET_CANARY-suffix",
+                b"PROVIDER_SECRET_CANARY",
+                &context,
+                deadline,
+                &mut memory,
+            )
+            .unwrap()
+        );
+        assert!(
+            !contains_secret(
+                b"prefix-PROVIDER_SECRET-suffix",
+                b"PROVIDER_SECRET_CANARY",
+                &context,
+                deadline,
+                &mut memory,
+            )
+            .unwrap()
+        );
     }
 
     #[cfg(unix)]
@@ -1395,8 +2585,10 @@ mod tests {
     fn secret_rejects_non_unicode_environment_bytes() {
         use std::os::unix::ffi::OsStringExt as _;
         let value = OsString::from_vec(vec![0xff, 0xfe]);
+        let context = context();
+        let mut memory = memory_budget(&context);
         assert_eq!(
-            Secret::from_os_string(value, &context()).err().unwrap().code(),
+            Secret::from_os_string(value, &mut memory).err().unwrap().code(),
             ProviderErrorCode::SecretInvalid
         );
     }
@@ -1407,6 +2599,79 @@ mod tests {
         fn resolve(&self, _: &str, _: u16) -> io::Result<Vec<SocketAddr>> {
             Ok(self.0.clone())
         }
+    }
+
+    #[test]
+    fn dns_results_are_bounded_deduplicated_and_port_exact() {
+        assert_eq!(
+            validate_dns_addresses(Vec::new(), 443).unwrap_err().code(),
+            ProviderErrorCode::Dns
+        );
+        let mut overallocated = Vec::with_capacity(MAX_DNS_ADDRESSES + 1);
+        overallocated.push("8.8.8.8:443".parse().unwrap());
+        assert_eq!(
+            validate_dns_addresses(overallocated, 443).unwrap_err().code(),
+            ProviderErrorCode::Dns
+        );
+        assert_eq!(
+            validate_dns_addresses(vec!["8.8.8.8:80".parse().unwrap()], 443).unwrap_err().code(),
+            ProviderErrorCode::Dns
+        );
+        let result = validate_dns_addresses(
+            vec!["8.8.8.8:443".parse().unwrap(), "8.8.8.8:443".parse().unwrap()],
+            443,
+        )
+        .unwrap();
+        assert_eq!(result, ["8.8.8.8:443".parse::<SocketAddr>().unwrap()]);
+    }
+
+    struct BlockingResolver {
+        entered: Arc<Barrier>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl Resolver for BlockingResolver {
+        fn resolve(&self, _: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+            self.entered.wait();
+            let (lock, changed) = &*self.release;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = changed.wait(released).unwrap();
+            }
+            Ok(vec![SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port)])
+        }
+    }
+
+    #[test]
+    fn dns_pool_has_fixed_workers_and_bounded_queue_when_resolvers_hang() {
+        let pool = DnsPool::start().unwrap();
+        assert_eq!(pool.workers.len(), DNS_WORKERS);
+        let entered = Arc::new(Barrier::new(DNS_WORKERS + 1));
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let resolver: Arc<dyn Resolver> = Arc::new(BlockingResolver {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        });
+        let job = || {
+            let (result, _) = std::sync::mpsc::sync_channel(1);
+            DnsJob {
+                resolver: Arc::clone(&resolver),
+                host: "blocked.test".into(),
+                port: 443,
+                result,
+            }
+        };
+        for _ in 0..DNS_WORKERS {
+            pool.submit(job()).unwrap();
+        }
+        entered.wait();
+        for _ in 0..DNS_WORKERS * DNS_QUEUE_PER_WORKER {
+            pool.submit(job()).unwrap();
+        }
+        assert_eq!(pool.submit(job()).unwrap_err().code(), ProviderErrorCode::Dns);
+        let (lock, changed) = &*release;
+        *lock.lock().unwrap() = true;
+        changed.notify_all();
     }
 
     #[test]
@@ -1439,6 +2704,195 @@ mod tests {
     }
 
     #[test]
+    fn models_pagination_is_explicitly_incomplete_and_does_not_claim_capabilities() {
+        let config = ProviderConfig::parse(
+            "https://provider.example/v1",
+            "configured",
+            "PATH",
+            Duration::from_secs(1),
+            ["image-description".into()],
+        )
+        .unwrap();
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let body = br#"{"object":"list","data":[{"id":"configured","object":"model","created":0,"owned_by":"test"}],"has_more":true}"#;
+        assert_eq!(
+            parse_models_response(
+                HttpResponse { status: 200, retry_after: None, body: body.to_vec() },
+                &config,
+                &context,
+                Instant::now() + Duration::from_secs(1),
+                &mut memory,
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::Incomplete
+        );
+    }
+
+    #[test]
+    fn post_without_idempotency_key_is_not_replayed_after_write_progress() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).unwrap();
+        let first_worker = std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            let mut byte = [0_u8];
+            stream.read_exact(&mut byte).unwrap();
+        });
+        let config = ProviderConfig::parse(
+            &format!("http://provider.test:{port}/v1"),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            ["image-description".into()],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+        ]));
+        let request = GenerationRequest {
+            endpoint: GenerationEndpoint::Responses,
+            capability: "image-description",
+            input: GenerationInput::Text("fixed test input"),
+            max_output_tokens: 16,
+            idempotency_key: None,
+        };
+        assert!(matches!(
+            client.generate(request, &context()).unwrap_err().code(),
+            ProviderErrorCode::Connect | ProviderErrorCode::InvalidResponse
+        ));
+        first_worker.join().unwrap();
+        second.set_nonblocking(true).unwrap();
+        assert!(matches!(second.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn malformed_tls_peer_is_classified_as_tls() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(b"not tls").unwrap();
+        });
+        let config = ProviderConfig::parse(
+            &format!("https://provider.test:{}/v1", address.port()),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            [],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![address]));
+        assert_eq!(client.test(&context()).unwrap_err().code(), ProviderErrorCode::Tls);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn tls_handshake_stall_observes_total_context_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let config = ProviderConfig::parse(
+            &format!("https://provider.test:{}/v1", address.port()),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            [],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![address]));
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(Duration::from_millis(30)),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        assert_eq!(client.test(&context).unwrap_err().code(), ProviderErrorCode::Timeout);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn idempotent_models_probe_retries_only_within_fixed_limit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            for attempt in 0..=MAX_RETRIES {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0_u8];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                let (status, retry, body): (&str, &str, &[u8]) = if attempt < MAX_RETRIES {
+                    ("500 Server Error", "Retry-After: 0\r\n", b"{}")
+                } else {
+                    (
+                        "200 OK",
+                        "",
+                        br#"{"object":"list","data":[{"id":"configured","object":"model","created":0,"owned_by":"test"}],"has_more":false}"#,
+                    )
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{retry}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        let config = ProviderConfig::parse(
+            &format!("http://{address}/v1"),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            [],
+        )
+        .unwrap();
+        let client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["127.0.0.1".into()],
+            },
+        );
+        assert!(client.test(&context()).unwrap().configured_model_available);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn explicit_loopback_test_sends_only_fixed_models_request() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1454,7 +2908,7 @@ mod tests {
             assert!(request.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
             assert!(!request.windows(8).any(|window| window == b"document"));
             assert!(!request.windows(6).any(|window| window == b"prompt"));
-            let body = br#"{"object":"list","data":[{"id":"configured"}]}"#;
+            let body = br#"{"object":"list","data":[{"id":"configured","object":"model","created":0,"owned_by":"test"}],"has_more":false}"#;
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1481,7 +2935,7 @@ mod tests {
         );
         let result = client.test(&context()).unwrap();
         assert!(result.configured_model_available);
-        assert_eq!(result.capabilities, ["image-description"]);
+        assert!(result.capabilities.is_empty());
         worker.join().unwrap();
     }
 }

@@ -50,7 +50,7 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
             String::from_utf8_lossy(&request)
                 .contains("Authorization: Bearer PROVIDER_SECRET_CANARY_7f912e\r\n")
         );
-        let body = br#"{"object":"list","data":[{"id":"model"}]}"#;
+        let body = br#"{"object":"list","data":[{"id":"model","object":"model","created":0,"owned_by":"test"}],"has_more":false}"#;
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
         stream.write_all(body).unwrap();
     });
