@@ -117,6 +117,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "asset-update"
+version = "0.0.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

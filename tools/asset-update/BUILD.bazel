@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+UNIX_DEPS = select({
+    "@rules_rust//rust/platform:aarch64-apple-darwin": ["@crates//:rustix"],
+    "@rules_rust//rust/platform:aarch64-unknown-linux-gnu": ["@crates//:rustix"],
+    "@rules_rust//rust/platform:x86_64-unknown-linux-gnu": ["@crates//:rustix"],
+    "//conditions:default": [],
+})
+
+rust_library(
+    name = "asset_update_lib",
+    srcs = ["src/lib.rs"],
+    crate_name = "asset_update",
+    edition = "2024",
+    deps = UNIX_DEPS,
+)
+
+rust_binary(
+    name = "asset_updater",
+    srcs = ["src/main.rs"],
+    crate_name = "asset_updater",
+    edition = "2024",
+    deps = [":asset_update_lib"],
+)
+
+rust_test(
+    name = "asset_update_test",
+    crate = ":asset_update_lib",
+    deps = ["@crates//:tempfile"],
+)

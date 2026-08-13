@@ -105,6 +105,11 @@ Bazel 是前端生产构建权威。Node 24.13.0、pnpm 11.19.0、rules_js、rul
 `//web/console:assets` 再逐文件名、逐字节比较仓库内 `web/console/dist`。更新 checked-in
 发布输入必须显式运行 `bazel run //web/console:update_assets` 并审查 manifest；该目标只复制
 Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解析或构建 npm 模块。更新器对
-工作区路径组件、现有 `dist` 与备份逐项执行 no-follow 类型/identity 检查，拒绝符号链接，
-只规范化自己创建的临时树，并通过同一父目录内 rename 原子替换。Rust 不使用 build.rs，也不在运行时
+工作区路径组件、现有 `dist`、临时目录与备份逐项执行 no-follow 类型/identity 检查，拒绝
+符号链接。真正的文件系统更新由受 Bazel 管理的 Rust helper 完成：macOS/Linux 全程持有可信
+父目录 `dirfd`，所有 chmod、复制、清理和发布分别使用句柄或 `*at` 相对操作；已有目标通过
+`RENAME_EXCHANGE` 原子切换，空目标与备份使用 no-replace rename。验证后的 temp、父路径、
+目标或备份被并发替换都会 fail closed，测试以确定性 barrier 证明仓库外只读文件的内容、inode
+和权限不变。Windows 等未实现等价句柄相对语义的平台稳定返回 `assetUpdateUnavailable`，不使用
+路径降级实现。Rust 不使用 build.rs，也不在运行时
 读取源树；四个支持平台的 CLI 都通过 `include_bytes!` 嵌入同一组 checked-in bytes。
