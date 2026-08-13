@@ -10,9 +10,10 @@ use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, MarkdownRenderer,
-    ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services, SourceLocator,
-    SourceResolver, estimate_retained_result, estimate_validation_working_set,
+    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
+    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
+    SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
+    estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -144,6 +145,37 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Compute the exact fingerprints used by recoverable conversion for an
+    /// already-authenticated byte source.
+    ///
+    /// This lets durable task metadata be created before execution without
+    /// resolving a caller-controlled path a second time. `name` is display
+    /// metadata only and is never interpreted as a path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a resource-limit error when the byte length is not representable,
+    /// or a recovery error when trusted metadata/options cannot be serialized.
+    pub fn recoverable_fingerprints(
+        bytes: &[u8],
+        name: Option<&str>,
+        hint: &FormatHint,
+        options: &ConversionOptions,
+    ) -> Result<(String, String), ConversionError> {
+        let metadata = SourceMetadata {
+            name: name.map(str::to_owned),
+            size: u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_input_bytes",
+                detail: "input size cannot be represented as u64".into(),
+            })?,
+            ..SourceMetadata::default()
+        };
+        Ok((
+            recovery::fingerprint_input(bytes, &metadata)?,
+            recovery::fingerprint_json(&(hint.clone(), options.clone()))?,
+        ))
+    }
+
     /// Convert with durable, process-restart-safe phase checkpoints.
     ///
     /// The current input and conversion configuration are fingerprinted on

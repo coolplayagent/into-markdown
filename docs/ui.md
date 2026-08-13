@@ -113,3 +113,8 @@ Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解�
 和权限不变。Windows 等未实现等价句柄相对语义的平台稳定返回 `assetUpdateUnavailable`，不使用
 路径降级实现。Rust 不使用 build.rs，也不在运行时
 读取源树；四个支持平台的 CLI 都通过 `include_bytes!` 嵌入同一组 checked-in bytes。
+
+同一中间件保护任务后端：`POST /api/tasks` 流式接收单文件（受限 display name 位于
+`X-Into-Md-Filename`），`GET /api/tasks/{taskId}` 读取 durable 状态，`DELETE` 请求取消，
+`GET /api/tasks/{taskId}/artifacts/{artifactId}` 仅以 opaque ID 流式下载已验证产物。
+这些路由不实现 #48 SSE 或 #50 文档控制台 UI。

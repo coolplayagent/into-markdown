@@ -37,7 +37,7 @@ fn store() -> (tempfile::TempDir, TaskStore) {
 
 fn create(store: &mut TaskStore) -> TaskRecord {
     let mut task_input = input('b');
-    task_input.recovery_token = random_id().unwrap().as_str().to_owned();
+    random_id().unwrap().as_str().clone_into(&mut task_input.recovery_token);
     store
         .create(NewTask { input: task_input, configuration: ConfigurationSnapshot::default() })
         .unwrap()
@@ -50,6 +50,34 @@ fn transition(expected: TaskStatus, next: TaskStatus, progress: u32) -> TaskTran
         progress_millionths: progress,
         diagnostics: Vec::new(),
         artifacts: Vec::new(),
+    }
+}
+
+fn succeeded_transition() -> TaskTransition {
+    let artifacts = [
+        ArtifactKind::Markdown,
+        ArtifactKind::DocumentIr,
+        ArtifactKind::Diagnostics,
+        ArtifactKind::Bundle,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, kind)| ArtifactReference {
+        storage_key: format!("{index:032x}"),
+        kind,
+        byte_len: 1,
+        sha256: format!("{index:064x}"),
+        asset_id: None,
+        filename: None,
+        media_type: None,
+    })
+    .collect();
+    TaskTransition {
+        expected: TaskStatus::Converted,
+        next: TaskStatus::Succeeded,
+        progress_millionths: 1_000_000,
+        diagnostics: vec![],
+        artifacts,
     }
 }
 
@@ -103,12 +131,6 @@ fn create_get_list_pin_and_legal_state_machine_are_atomic() {
         .transition(&first.id, transition(TaskStatus::Pending, TaskStatus::Running, 100_000))
         .unwrap();
     assert!(running.pinned);
-    let artifact = ArtifactReference {
-        storage_key: "c".repeat(32),
-        kind: ArtifactKind::Markdown,
-        byte_len: 7,
-        sha256: "d".repeat(64),
-    };
     let converted = store
         .transition(
             &first.id,
@@ -117,14 +139,12 @@ fn create_get_list_pin_and_legal_state_machine_are_atomic() {
                 next: TaskStatus::Converted,
                 progress_millionths: 900_000,
                 diagnostics: vec![],
-                artifacts: vec![artifact.clone()],
+                artifacts: vec![],
             },
         )
         .unwrap();
-    assert_eq!(converted.artifacts, vec![artifact]);
-    store
-        .transition(&first.id, transition(TaskStatus::Converted, TaskStatus::Succeeded, 1_000_000))
-        .unwrap();
+    assert!(converted.artifacts.is_empty());
+    store.transition(&first.id, succeeded_transition()).unwrap();
     assert!(matches!(
         store.transition(
             &first.id,
@@ -140,23 +160,26 @@ fn create_get_list_pin_and_legal_state_machine_are_atomic() {
 
 #[test]
 fn illegal_regression_stale_cas_and_invalid_progress_fail_closed() {
-    let (_directory, mut store) = store();
-    let task = create(&mut store);
+    let (_directory, mut write_store) = store();
+    let task = create(&mut write_store);
     assert!(matches!(
-        store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Converted, 1)),
+        write_store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Converted, 1)),
         Err(TaskStoreError::Conflict(_))
     ));
-    store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 50)).unwrap();
+    write_store
+        .transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 50))
+        .unwrap();
     assert!(matches!(
-        store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 60)),
+        write_store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 60)),
         Err(TaskStoreError::Conflict(_))
     ));
     assert!(matches!(
-        store.transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 49)),
+        write_store
+            .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 49)),
         Err(TaskStoreError::Conflict(_))
     ));
     assert!(matches!(
-        store.transition(
+        write_store.transition(
             &task.id,
             transition(TaskStatus::Running, TaskStatus::Converted, 1_000_001)
         ),
@@ -174,8 +197,138 @@ fn schema_migration_is_idempotent_and_newer_versions_are_rejected() {
     drop(connection);
     assert!(matches!(
         TaskStore::open(directory.path(), BusyControl::default()),
-        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: 1 })
+        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: 3 })
     ));
+}
+
+fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
+    let (directory, mut store) = store();
+    let task = create(&mut store);
+    store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 1)).unwrap();
+    store
+        .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 900_000))
+        .unwrap();
+    let mut completed = succeeded_transition();
+    completed.artifacts.push(ArtifactReference {
+        storage_key: "f".repeat(32),
+        kind: ArtifactKind::Asset,
+        byte_len: 7,
+        sha256: "e".repeat(64),
+        asset_id: Some("legacy-id".into()),
+        filename: Some("legacy.bin".into()),
+        media_type: Some("application/octet-stream".into()),
+    });
+    store.transition(&task.id, completed).unwrap();
+    store
+        .connection
+        .execute(
+            "UPDATE artifacts SET asset_id=NULL, filename=NULL, media_type=NULL WHERE kind='asset'",
+            [],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute_batch(&format!(
+            "DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
+                 ALTER TABLE artifacts RENAME TO artifacts_v3;\
+                 CREATE TABLE artifacts(\
+                   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\
+                   storage_key TEXT NOT NULL, kind TEXT NOT NULL, byte_len INTEGER NOT NULL,\
+                   sha256 TEXT NOT NULL, PRIMARY KEY(task_id, storage_key)) STRICT;\
+                 INSERT INTO artifacts SELECT task_id,storage_key,kind,byte_len,sha256 FROM artifacts_v3;\
+                 DROP TABLE artifacts_v3;\
+                 CREATE TRIGGER artifacts_limit BEFORE INSERT ON artifacts WHEN (SELECT count(*) FROM artifacts WHERE task_id=NEW.task_id)>=128 BEGIN SELECT RAISE(ABORT, 'artifact limit'); END;\
+                 CREATE TRIGGER artifacts_terminal BEFORE INSERT ON artifacts WHEN (SELECT status FROM tasks WHERE id=NEW.task_id) IN ('failed','interrupted','cancelled') BEGIN SELECT RAISE(ABORT, 'terminal artifact'); END;\
+                 PRAGMA user_version={version};"
+        ))
+        .unwrap();
+    drop(store);
+    (directory, task.id)
+}
+
+#[test]
+fn legacy_v1_and_v2_assets_migrate_without_fabricating_metadata() {
+    for version in [1, 2] {
+        let (directory, id) = legacy_asset_fixture(version);
+        let store = TaskStore::open(directory.path(), BusyControl::default()).unwrap();
+        let record = store.get(&id).unwrap().unwrap();
+        assert_eq!(record.status, TaskStatus::Succeeded);
+        let asset =
+            record.artifacts.iter().find(|artifact| artifact.kind == ArtifactKind::Asset).unwrap();
+        assert_eq!(asset.byte_len, 7);
+        assert_eq!(asset.sha256, "e".repeat(64));
+        assert_eq!(
+            (asset.asset_id.as_ref(), asset.filename.as_ref(), asset.media_type.as_ref()),
+            (None, None, None)
+        );
+    }
+}
+
+#[test]
+fn v3_assets_require_complete_metadata_on_write_and_load() {
+    let (_directory, mut write_store) = store();
+    let task = create(&mut write_store);
+    let partial = ArtifactReference {
+        storage_key: "d".repeat(32),
+        kind: ArtifactKind::Asset,
+        byte_len: 1,
+        sha256: "e".repeat(64),
+        asset_id: Some("asset".into()),
+        filename: None,
+        media_type: Some("application/octet-stream".into()),
+    };
+    assert!(matches!(
+        write_store.transition(
+            &task.id,
+            TaskTransition {
+                expected: TaskStatus::Pending,
+                next: TaskStatus::Running,
+                progress_millionths: 1,
+                diagnostics: Vec::new(),
+                artifacts: vec![partial],
+            },
+        ),
+        Err(TaskStoreError::Limit(_))
+    ));
+
+    let (_directory, mut corrupt_store) = store();
+    let task = create(&mut corrupt_store);
+    corrupt_store
+        .connection
+        .execute(
+            "INSERT INTO artifacts(task_id,storage_key,kind,byte_len,sha256,asset_id) VALUES(?1,?2,'asset',1,?3,'partial')",
+            params![task.id.as_str(), "d".repeat(32), "e".repeat(64)],
+        )
+        .unwrap();
+    assert!(matches!(corrupt_store.get(&task.id), Err(TaskStoreError::Limit(_))));
+}
+
+#[test]
+fn v2_migration_abort_at_every_statement_is_atomic_and_reopenable() {
+    const ROOT: &str = "INTO_MD_TASK_STORE_V2_MIGRATION_ROOT";
+    const PHASE: &str = "INTO_MD_TASK_STORE_V2_MIGRATION_ABORT_PHASE";
+    if let Ok(root) = std::env::var(ROOT) {
+        let _ = TaskStore::open(root, BusyControl::default());
+        unreachable!();
+    }
+    for phase in 1..=4 {
+        let (directory, id) = legacy_asset_fixture(2);
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::v2_migration_abort_at_every_statement_is_atomic_and_reopenable",
+            ])
+            .env(ROOT, directory.path())
+            .env(PHASE, phase.to_string())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let store = TaskStore::open(directory.path(), BusyControl::default()).unwrap();
+        assert_eq!(store.get(&id).unwrap().unwrap().status, TaskStatus::Succeeded);
+        let version: i64 =
+            store.connection.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
 }
 
 #[test]
@@ -362,6 +515,9 @@ fn terminal_failures_reject_artifact_publication() {
         kind: ArtifactKind::Markdown,
         byte_len: 1,
         sha256: "7".repeat(64),
+        asset_id: None,
+        filename: None,
+        media_type: None,
     };
     assert!(matches!(
         store.transition(
@@ -470,8 +626,8 @@ fn restart_reconcile_promotes_real_converted_and_succeeded_checkpoints() {
         .unwrap();
     drop(restarted);
     let mut restarted = TaskStore::open(&task_root, BusyControl::default()).unwrap();
-    assert_eq!(restarted.reconcile(&recovery).unwrap().succeeded, 1);
-    assert_eq!(restarted.get(&task.id).unwrap().unwrap().status, TaskStatus::Succeeded);
+    assert_eq!(restarted.reconcile(&recovery).unwrap().converted, 1);
+    assert_eq!(restarted.get(&task.id).unwrap().unwrap().status, TaskStatus::Converted);
 
     assert!(matches!(
         restarted.create(NewTask {
@@ -545,9 +701,7 @@ fn reconcile_same_state_repairs_low_progress_and_lost_cas_is_skipped() {
             .unwrap()
     );
     assert_eq!(store.get(&task.id).unwrap().unwrap().progress_millionths, 900_000);
-    store
-        .transition(&task.id, transition(TaskStatus::Converted, TaskStatus::Succeeded, 1_000_000))
-        .unwrap();
+    store.transition(&task.id, succeeded_transition()).unwrap();
     assert!(
         !store
             .reconcile_transition(
@@ -684,6 +838,9 @@ fn limits_reject_oversized_pages_children_and_noncanonical_references() {
         kind: ArtifactKind::Asset,
         byte_len: u64::MAX,
         sha256: "e".repeat(64),
+        asset_id: Some("asset-1".into()),
+        filename: Some("asset.bin".into()),
+        media_type: Some("application/octet-stream".into()),
     };
     assert!(matches!(
         store.transition(
@@ -724,6 +881,32 @@ fn limits_reject_oversized_pages_children_and_noncanonical_references() {
         TaskStore::open(oversized.path(), BusyControl::default()),
         Err(TaskStoreError::Limit(_))
     ));
+}
+
+#[test]
+fn terminal_transaction_accepts_the_complete_128_artifact_boundary() {
+    let (_directory, mut store) = store();
+    let task = create(&mut store);
+    store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 1)).unwrap();
+    store
+        .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 900_000))
+        .unwrap();
+    let mut completed = succeeded_transition();
+    completed.artifacts.try_reserve_exact(124).unwrap();
+    for index in 0..124 {
+        completed.artifacts.push(ArtifactReference {
+            storage_key: format!("{:032x}", index + 4),
+            kind: ArtifactKind::Asset,
+            byte_len: 1,
+            sha256: format!("{:064x}", index + 4),
+            asset_id: Some(format!("asset-{index}")),
+            filename: Some(format!("asset-{index}.bin")),
+            media_type: Some("application/octet-stream".into()),
+        });
+    }
+    let succeeded = store.transition(&task.id, completed).unwrap();
+    assert_eq!(succeeded.status, TaskStatus::Succeeded);
+    assert_eq!(succeeded.artifacts.len(), 128);
 }
 
 #[test]

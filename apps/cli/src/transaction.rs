@@ -293,7 +293,7 @@ pub struct Target<'a> {
 }
 
 #[cfg(unix)]
-struct SafeDir {
+pub(crate) struct SafeDir {
     fd: OwnedFd,
     path: PathBuf,
     identity: FileIdentity,
@@ -301,7 +301,7 @@ struct SafeDir {
 
 #[cfg(unix)]
 impl SafeDir {
-    fn open_absolute(path: &Path) -> Result<Self, CliError> {
+    pub(crate) fn open_absolute(path: &Path) -> Result<Self, CliError> {
         if !path.is_absolute() {
             return Err(recovery_error("directory handle path is not absolute"));
         }
@@ -398,7 +398,7 @@ impl SafeDir {
         Ok(Self { fd, path: current_path, identity })
     }
 
-    fn open_child(&self, name: &OsStr) -> Result<Self, CliError> {
+    pub(crate) fn open_child(&self, name: &OsStr) -> Result<Self, CliError> {
         validate_single_name(name)?;
         let fd = rustix::fs::openat(
             &self.fd,
@@ -411,6 +411,26 @@ impl SafeDir {
         )?;
         let identity = directory_identity(&fd)?;
         Ok(Self { fd, path: self.path.join(name), identity })
+    }
+
+    pub(crate) fn open_child_optional(&self, name: &OsStr) -> Result<Option<Self>, CliError> {
+        validate_single_name(name)?;
+        match rustix::fs::openat(
+            &self.fd,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(fd) => {
+                let identity = directory_identity(&fd)?;
+                Ok(Some(Self { fd, path: self.path.join(name), identity }))
+            }
+            Err(rustix::io::Errno::NOENT) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn open_descendant(&self, relative: &Path) -> Result<Self, CliError> {
@@ -433,7 +453,7 @@ impl SafeDir {
         Ok(current)
     }
 
-    fn verify_namespace(&self) -> Result<(), CliError> {
+    pub(crate) fn verify_namespace(&self) -> Result<(), CliError> {
         let changed = || {
             CliError::new(
                 ExitClass::Io,
@@ -448,7 +468,41 @@ impl SafeDir {
         Ok(())
     }
 
-    fn open_regular(&self, name: &OsStr) -> Result<File, CliError> {
+    pub(crate) fn verify_private_namespace(&self) -> Result<(), CliError> {
+        let stat = rustix::fs::fstat(&self.fd)?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory
+            || stat.st_uid != rustix::process::geteuid().as_raw()
+            || stat.st_mode & 0o777 != 0o700
+        {
+            return Err(recovery_error(
+                "managed directory is not private, owner-bound, and descriptor-authenticated",
+            ));
+        }
+        self.verify_namespace()
+    }
+
+    pub(crate) fn open_child_private(&self, name: &OsStr) -> Result<Self, CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child(name)?;
+        self.verify_private_namespace()?;
+        child.verify_private_namespace()?;
+        Ok(child)
+    }
+
+    pub(crate) fn open_child_private_optional(
+        &self,
+        name: &OsStr,
+    ) -> Result<Option<Self>, CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child_optional(name)?;
+        self.verify_private_namespace()?;
+        if let Some(child) = &child {
+            child.verify_private_namespace()?;
+        }
+        Ok(child)
+    }
+
+    pub(crate) fn open_regular(&self, name: &OsStr) -> Result<File, CliError> {
         validate_single_name(name)?;
         let fd = rustix::fs::openat(
             &self.fd,
@@ -467,8 +521,31 @@ impl SafeDir {
         Ok(File::from(fd))
     }
 
-    fn create_regular(&self, name: &OsStr) -> Result<File, CliError> {
+    pub(crate) fn open_regular_optional(&self, name: &OsStr) -> Result<Option<File>, CliError> {
         validate_single_name(name)?;
+        match rustix::fs::openat(
+            &self.fd,
+            name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(fd) => {
+                let stat = rustix::fs::fstat(&fd)?;
+                if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                    != rustix::fs::FileType::RegularFile
+                {
+                    return Err(recovery_error("optional managed file is not regular"));
+                }
+                Ok(Some(File::from(fd)))
+            }
+            Err(rustix::io::Errno::NOENT) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn create_regular(&self, name: &OsStr) -> Result<File, CliError> {
+        validate_single_name(name)?;
+        self.verify_namespace()?;
         let fd = rustix::fs::openat(
             &self.fd,
             name,
@@ -479,7 +556,24 @@ impl SafeDir {
                 | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
         )?;
+        self.verify_namespace()?;
         Ok(File::from(fd))
+    }
+
+    pub(crate) fn create_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
+        self.verify_private_namespace()?;
+        let file = self.create_regular(name)?;
+        verify_private_regular(&file)?;
+        self.verify_private_namespace()?;
+        Ok(file)
+    }
+
+    pub(crate) fn open_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular(name)?;
+        verify_private_regular(&file)?;
+        self.verify_private_namespace()?;
+        Ok(file)
     }
 
     fn inspect_regular(&self, name: &OsStr) -> Result<Option<FileIdentity>, CliError> {
@@ -505,12 +599,23 @@ impl SafeDir {
         }
     }
 
-    fn sync(&self) -> Result<(), CliError> {
+    pub(crate) fn sync(&self) -> Result<(), CliError> {
         rustix::fs::fsync(&self.fd)?;
         Ok(())
     }
 
-    fn names(&self) -> Result<Vec<OsString>, CliError> {
+    pub(crate) fn names(&self) -> Result<Vec<OsString>, CliError> {
+        self.names_bounded(MAX_RECOVERY_DIRECTORY_ENTRIES)
+    }
+
+    pub(crate) fn names_private(&self) -> Result<Vec<OsString>, CliError> {
+        self.verify_private_namespace()?;
+        let names = self.names()?;
+        self.verify_private_namespace()?;
+        Ok(names)
+    }
+
+    pub(crate) fn names_bounded(&self, limit: usize) -> Result<Vec<OsString>, CliError> {
         use std::os::unix::ffi::OsStringExt as _;
         let mut directory = rustix::fs::Dir::read_from(&self.fd)?;
         let mut names = Vec::new();
@@ -520,19 +625,198 @@ impl SafeDir {
             if bytes == b"." || bytes == b".." {
                 continue;
             }
-            if names.len() >= MAX_RECOVERY_DIRECTORY_ENTRIES {
+            if names.len() >= limit {
                 return Err(CliError::new(
                     ExitClass::Io,
                     "transactionRecoveryLimit",
-                    format!(
-                        "recovery scan exceeded {MAX_RECOVERY_DIRECTORY_ENTRIES} entries under {}",
-                        self.path.display()
-                    ),
+                    format!("recovery scan exceeded {limit} entries under {}", self.path.display()),
                 ));
             }
+            names.try_reserve(1).map_err(|error| {
+                CliError::new(
+                    ExitClass::Io,
+                    "transactionRecoveryLimit",
+                    format!("cannot reserve recovery directory entry: {error}"),
+                )
+            })?;
             names.push(OsString::from_vec(bytes.to_vec()));
         }
         Ok(names)
+    }
+
+    pub(crate) fn create_child_private(&self, name: &OsStr) -> Result<Self, CliError> {
+        validate_single_name(name)?;
+        self.verify_private_namespace()?;
+        rustix::fs::mkdirat(
+            &self.fd,
+            name,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+        )?;
+        self.sync()?;
+        let child = self.open_child(name)?;
+        self.verify_private_namespace()?;
+        child.verify_private_namespace()?;
+        Ok(child)
+    }
+
+    pub(crate) fn rename_child_private_no_replace(
+        &self,
+        source: &OsStr,
+        destination: &OsStr,
+    ) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        self.rename_child_no_replace(source, destination)?;
+        self.verify_private_namespace()
+    }
+
+    pub(crate) fn rename_child_private_to_no_replace(
+        &self,
+        source: &OsStr,
+        destination_directory: &Self,
+        destination: &OsStr,
+    ) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        destination_directory.verify_private_namespace()?;
+        self.rename_child_to_no_replace(source, destination_directory, destination)?;
+        self.verify_private_namespace()?;
+        destination_directory.verify_private_namespace()
+    }
+
+    pub(crate) fn remove_regular_private(&self, name: &OsStr) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular_private(name)?;
+        drop(file);
+        self.remove_regular(name)?;
+        self.verify_private_namespace()
+    }
+
+    pub(crate) fn remove_empty_child_private(&self, name: &OsStr) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child(name)?;
+        child.verify_private_namespace()?;
+        self.remove_empty_child(name)?;
+        self.verify_private_namespace()
+    }
+
+    pub(crate) fn rename_child_no_replace(
+        &self,
+        source: &OsStr,
+        destination: &OsStr,
+    ) -> Result<(), CliError> {
+        validate_single_name(source)?;
+        validate_single_name(destination)?;
+        self.verify_namespace()?;
+        rustix::fs::renameat_with(
+            &self.fd,
+            source,
+            &self.fd,
+            destination,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        self.sync()?;
+        self.verify_namespace()
+    }
+
+    pub(crate) fn rename_child_to_no_replace(
+        &self,
+        source: &OsStr,
+        destination_directory: &Self,
+        destination: &OsStr,
+    ) -> Result<(), CliError> {
+        validate_single_name(source)?;
+        validate_single_name(destination)?;
+        self.verify_namespace()?;
+        destination_directory.verify_namespace()?;
+        rustix::fs::renameat_with(
+            &self.fd,
+            source,
+            &destination_directory.fd,
+            destination,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )?;
+        self.sync()?;
+        destination_directory.sync()?;
+        self.verify_namespace()?;
+        destination_directory.verify_namespace()
+    }
+
+    pub(crate) fn remove_regular(&self, name: &OsStr) -> Result<(), CliError> {
+        validate_single_name(name)?;
+        self.verify_namespace()?;
+        let file = self.open_regular(name)?;
+        if rustix::fs::fstat(&file)?.st_nlink != 1 {
+            return Err(recovery_error("managed file has an external hard link"));
+        }
+        rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::empty())?;
+        self.sync()?;
+        self.verify_namespace()
+    }
+
+    pub(crate) fn remove_empty_child(&self, name: &OsStr) -> Result<(), CliError> {
+        validate_single_name(name)?;
+        self.verify_namespace()?;
+        let child = self.open_child(name)?;
+        if !child.names()?.is_empty() {
+            return Err(recovery_error("managed directory is not empty"));
+        }
+        rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::REMOVEDIR)?;
+        self.sync()?;
+        self.verify_namespace()
+    }
+
+    pub(crate) fn measured_tree_bytes(
+        &self,
+        max_depth: u8,
+        max_entries: usize,
+    ) -> Result<u64, CliError> {
+        fn visit(
+            directory: &SafeDir,
+            depth: u8,
+            max_depth: u8,
+            entries: &mut usize,
+            max_entries: usize,
+        ) -> Result<u64, CliError> {
+            use std::os::unix::ffi::OsStrExt as _;
+            if depth > max_depth {
+                return Err(recovery_error("managed storage depth exceeds its limit"));
+            }
+            let mut reader = rustix::fs::Dir::read_from(&directory.fd)?;
+            let mut total = 0_u64;
+            while let Some(entry) = reader.read() {
+                let entry = entry?;
+                let name = entry.file_name();
+                if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                    continue;
+                }
+                *entries = entries
+                    .checked_add(1)
+                    .ok_or_else(|| recovery_error("managed storage entry count overflow"))?;
+                if *entries > max_entries {
+                    return Err(recovery_error("managed storage entry count exceeds its limit"));
+                }
+                let stat =
+                    rustix::fs::statat(&directory.fd, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+                match rustix::fs::FileType::from_raw_mode(stat.st_mode) {
+                    rustix::fs::FileType::Directory => {
+                        let child = directory.open_child(OsStr::from_bytes(name.to_bytes()))?;
+                        total = total
+                            .checked_add(visit(&child, depth + 1, max_depth, entries, max_entries)?)
+                            .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
+                    }
+                    rustix::fs::FileType::RegularFile if stat.st_nlink == 1 => {
+                        total = total
+                            .checked_add(u64::try_from(stat.st_size).map_err(|_| {
+                                recovery_error("managed file size is not representable")
+                            })?)
+                            .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
+                    }
+                    _ => return Err(recovery_error("managed storage contains an unsafe object")),
+                }
+            }
+            Ok(total)
+        }
+        let mut entries = 0;
+        visit(self, 0, max_depth, &mut entries, max_entries)
     }
 }
 
@@ -564,6 +848,19 @@ fn directory_identity(fd: &impl std::os::fd::AsFd) -> Result<FileIdentity, CliEr
     let mut identity = fd_identity(fd)?;
     identity.size = 0;
     Ok(identity)
+}
+
+#[cfg(unix)]
+fn verify_private_regular(file: &File) -> Result<(), CliError> {
+    let stat = rustix::fs::fstat(file)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || stat.st_uid != rustix::process::geteuid().as_raw()
+        || stat.st_mode & 0o777 != 0o600
+        || stat.st_nlink != 1
+    {
+        return Err(recovery_error("managed file is not private, owner-bound, and singly linked"));
+    }
+    Ok(())
 }
 
 /// Test seam for deterministic failure and crash injection.
@@ -611,10 +908,131 @@ struct AuthenticatedTarget {
 }
 
 #[cfg(not(unix))]
-struct SafeDir;
+pub(crate) struct SafeDir;
 
 #[cfg(not(unix))]
 impl SafeDir {
+    pub(crate) fn open_absolute(_path: &Path) -> Result<Self, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_child(&self, _name: &OsStr) -> Result<Self, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_child_optional(&self, _name: &OsStr) -> Result<Option<Self>, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_regular(&self, _name: &OsStr) -> Result<File, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_regular_optional(&self, _name: &OsStr) -> Result<Option<File>, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn verify_private_namespace(&self) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_child_private(&self, _name: &OsStr) -> Result<Self, CliError> {
+        unsupported_safe_dir()
+    }
+
+    pub(crate) fn open_child_private_optional(
+        &self,
+        _name: &OsStr,
+    ) -> Result<Option<Self>, CliError> {
+        unsupported_safe_dir()
+    }
+
+    pub(crate) fn create_regular(&self, _name: &OsStr) -> Result<File, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn create_regular_private(&self, _name: &OsStr) -> Result<File, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn open_regular_private(&self, _name: &OsStr) -> Result<File, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn names(&self) -> Result<Vec<OsString>, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn names_private(&self) -> Result<Vec<OsString>, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn names_bounded(&self, _limit: usize) -> Result<Vec<OsString>, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn create_child_private(&self, _name: &OsStr) -> Result<Self, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn rename_child_no_replace(
+        &self,
+        _source: &OsStr,
+        _destination: &OsStr,
+    ) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn rename_child_private_no_replace(
+        &self,
+        _source: &OsStr,
+        _destination: &OsStr,
+    ) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn rename_child_to_no_replace(
+        &self,
+        _source: &OsStr,
+        _destination_directory: &Self,
+        _destination: &OsStr,
+    ) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn rename_child_private_to_no_replace(
+        &self,
+        _source: &OsStr,
+        _destination_directory: &Self,
+        _destination: &OsStr,
+    ) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn remove_regular(&self, _name: &OsStr) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn remove_regular_private(&self, _name: &OsStr) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn remove_empty_child(&self, _name: &OsStr) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn remove_empty_child_private(&self, _name: &OsStr) -> Result<(), CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
+    pub(crate) fn measured_tree_bytes(
+        &self,
+        _max_depth: u8,
+        _max_entries: usize,
+    ) -> Result<u64, CliError> {
+        Err(transaction_platform_unavailable())
+    }
+
     fn verify_namespace(&self) -> Result<(), CliError> {
         Err(transaction_platform_unavailable())
     }

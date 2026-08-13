@@ -9,6 +9,7 @@ mod output;
 mod transaction;
 mod ui;
 mod ui_assets;
+mod web_tasks;
 
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};

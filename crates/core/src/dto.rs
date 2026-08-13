@@ -1115,6 +1115,21 @@ impl ResultDto {
 }
 
 impl DiagnosticsDto {
+    /// Validate and stream the legacy bundle member directly from internal records.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for invalid records or serialization failure.
+    pub fn write_bundle_json_from_diagnostics<W: std::io::Write>(
+        values: &[Diagnostic],
+        writer: W,
+    ) -> Result<(), DtoError> {
+        validate_internal_diagnostics(values, &DtoLimits::default(), "$.diagnostics")?;
+        serde_json::to_writer_pretty(writer, &InternalDiagnosticsWire(values)).map_err(|error| {
+            DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
+        })
+    }
+
     /// Construct and validate a versioned diagnostics envelope from internal records.
     ///
     /// # Errors
@@ -1171,6 +1186,21 @@ impl DiagnosticsDto {
 }
 
 impl ProvenanceListDto {
+    /// Validate and stream the legacy bundle member directly from internal records.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`DtoErrorCode`] for invalid records or serialization failure.
+    pub fn write_bundle_json_from_provenance<W: std::io::Write>(
+        values: &[Provenance],
+        writer: W,
+    ) -> Result<(), DtoError> {
+        validate_internal_provenance(values, &DtoLimits::default(), "$.provenance")?;
+        serde_json::to_writer_pretty(writer, &InternalProvenanceWire(values)).map_err(|error| {
+            DtoError::new(DtoErrorCode::InvalidJson, "$", format!("serialize DTO: {error}"))
+        })
+    }
+
     /// Construct and validate a versioned provenance envelope from internal records.
     ///
     /// # Errors
@@ -2188,8 +2218,63 @@ fn validate_diagnostics(
     Ok(())
 }
 
+fn validate_internal_diagnostics(
+    values: &[Diagnostic],
+    limits: &DtoLimits,
+    path: &str,
+) -> Result<(), DtoError> {
+    if values.len() > limits.max_diagnostics {
+        return limit(path, "diagnostics", limits.max_diagnostics);
+    }
+    for (index, value) in values.iter().enumerate() {
+        if value.code.is_empty() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{path}[{index}].code"),
+                "diagnostic code must not be empty",
+            ));
+        }
+        if let Some(locator) = &value.locator {
+            validate_locator(locator, &format!("{path}[{index}].locator"))?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_provenance(
     values: &[ProvenanceDto],
+    limits: &DtoLimits,
+    path: &str,
+) -> Result<(), DtoError> {
+    if values.len() > limits.max_provenance {
+        return limit(path, "provenance", limits.max_provenance);
+    }
+    for (index, value) in values.iter().enumerate() {
+        let item_path = format!("{path}[{index}]");
+        if value.provider.is_empty() {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{item_path}.provider"),
+                "provider must not be empty",
+            ));
+        }
+        if value
+            .confidence
+            .is_some_and(|confidence| !confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+        {
+            return Err(DtoError::new(
+                DtoErrorCode::InvalidField,
+                format!("{item_path}.confidence"),
+                "confidence must be finite and between 0 and 1",
+            ));
+        }
+        validate_locator(&value.locator, &format!("{item_path}.locator"))?;
+    }
+    Ok(())
+}
+
+fn validate_internal_provenance(
+    values: &[Provenance],
     limits: &DtoLimits,
     path: &str,
 ) -> Result<(), DtoError> {

@@ -4,18 +4,41 @@ use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
 use crate::transaction::{self, PreparedTransaction, Target};
 use into_markdown::{
-    BUNDLE_SCHEMA_VERSION, BatchReportDto, BundleAssetDto, BundleManifestDto, ConversionOptions,
-    ConversionResult, DTO_SCHEMA_VERSION, DiagnosticsDto, DtoJsonStyle, ExecutionContext,
-    ProvenanceListDto, ResultDto, plan_assets,
+    BUNDLE_SCHEMA_VERSION, BatchReportDto, ConversionOptions, ConversionResult, DTO_SCHEMA_VERSION,
+    DiagnosticsDto, DtoJsonStyle, ExecutionContext, ProvenanceListDto, ResultDto, plan_assets,
 };
+use serde::Serialize;
 #[cfg(test)]
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Seek, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
 pub use into_markdown::{BatchItemDto as BatchItemReport, BatchItemStatus};
 pub type BatchReport = BatchReportDto;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamingBundleAsset<'a> {
+    id: &'a str,
+    source_asset_ids: &'a [String],
+    path: String,
+    media_type: &'a str,
+    size: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamingBundleManifest<'a> {
+    schema_version: u32,
+    markdown: &'static str,
+    document_ir: &'static str,
+    diagnostics: &'static str,
+    diagnostics_schema_version: u32,
+    provenance: &'static str,
+    provenance_schema_version: u32,
+    assets: &'a [StreamingBundleAsset<'a>],
+}
 
 /// Serialize a conversion result into the selected primary artifact.
 pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
@@ -266,6 +289,16 @@ fn encode_document(document: &into_markdown::Document) -> Result<Vec<u8>, CliErr
 }
 
 fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
+    let mut cursor = Cursor::new(Vec::new());
+    write_bundle(result, &mut cursor)?;
+    Ok(cursor.into_inner())
+}
+
+/// Stream a deterministic portable bundle to a seekable destination.
+pub fn write_bundle<W: Write + Seek>(
+    result: &ConversionResult,
+    destination: W,
+) -> Result<(), CliError> {
     if let Some(asset) = result.assets.iter().find(|asset| asset.bytes.is_empty()) {
         return Err(CliError::new(
             ExitClass::Conversion,
@@ -276,67 +309,73 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
     let mut options = ConversionOptions::default();
     options.output.asset_uri_prefix = Some("assets".into());
     let plan = plan_assets(&result.document, &result.assets, &options).map_err(CliError::from)?;
-    let assets = plan
-        .entries()
-        .iter()
-        .map(|entry| BundleAssetDto {
-            id: entry.asset_ids[0].clone(),
-            source_asset_ids: entry.asset_ids.clone(),
+    let mut assets = Vec::new();
+    assets
+        .try_reserve_exact(plan.entries().len())
+        .map_err(|_| CliError::internal("allocate bounded bundle asset plan"))?;
+    for entry in plan.entries() {
+        let id = entry
+            .asset_ids
+            .first()
+            .ok_or_else(|| CliError::internal("bundle asset plan omitted its source ID"))?;
+        assets.push(StreamingBundleAsset {
+            id,
+            source_asset_ids: &entry.asset_ids,
             path: format!("assets/{}", entry.filename),
-            media_type: entry.media_type.clone(),
+            media_type: &entry.media_type,
             size: entry.size,
-        })
-        .collect();
-    let manifest = BundleManifestDto {
+        });
+    }
+    let manifest = StreamingBundleManifest {
         schema_version: BUNDLE_SCHEMA_VERSION,
-        markdown: "document.md".into(),
-        document_ir: "document.ir.json".into(),
-        diagnostics: "diagnostics.json".into(),
+        markdown: "document.md",
+        document_ir: "document.ir.json",
+        diagnostics: "diagnostics.json",
         diagnostics_schema_version: DTO_SCHEMA_VERSION,
-        provenance: "provenance.json".into(),
+        provenance: "provenance.json",
         provenance_schema_version: DTO_SCHEMA_VERSION,
-        assets,
+        assets: &assets,
     };
-    let manifest_json = manifest
-        .to_pretty_json()
-        .map(json_with_newline)
-        .map_err(|error| CliError::internal(format!("serialize bundle manifest DTO: {error}")))?;
-    let diagnostics = DiagnosticsDto::try_from_diagnostics(&result.diagnostics)
-        .map_err(|error| CliError::internal(format!("build diagnostics DTO: {error}")))?;
-    let provenance = ProvenanceListDto::try_from_provenance(&result.provenance)
-        .map_err(|error| CliError::internal(format!("build provenance DTO: {error}")))?;
-    let entries = [
-        (
-            "diagnostics.json",
-            diagnostics.to_bundle_pretty_json().map(json_with_newline).map_err(|error| {
-                CliError::internal(format!("serialize diagnostics DTO: {error}"))
-            })?,
-        ),
-        ("document.ir.json", encode_document(&result.document)?),
-        ("document.md", result.markdown.as_bytes().to_vec()),
-        ("manifest.json", manifest_json),
-        (
-            "provenance.json",
-            provenance.to_bundle_pretty_json().map(json_with_newline).map_err(|error| {
-                CliError::internal(format!("serialize provenance DTO: {error}"))
-            })?,
-        ),
-    ];
-    let mut cursor = Cursor::new(Vec::new());
     {
-        let mut archive = zip::ZipWriter::new(&mut cursor);
+        let mut archive = zip::ZipWriter::new(destination);
         let file_options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(0o644);
         let directory_options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
-        for (name, bytes) in entries {
-            archive
-                .start_file(name, file_options)
-                .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-            archive.write_all(&bytes)?;
-        }
+        archive
+            .start_file("diagnostics.json", file_options)
+            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
+        DiagnosticsDto::write_bundle_json_from_diagnostics(&result.diagnostics, &mut archive)
+            .map_err(|error| CliError::internal(format!("serialize diagnostics DTO: {error}")))?;
+        archive.write_all(b"\n")?;
+        result
+            .document
+            .validate()
+            .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
+        archive
+            .start_file("document.ir.json", file_options)
+            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
+        serde_json::to_writer_pretty(&mut archive, &result.document)
+            .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
+        archive.write_all(b"\n")?;
+        archive
+            .start_file("document.md", file_options)
+            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
+        archive.write_all(result.markdown.as_bytes())?;
+        archive
+            .start_file("manifest.json", file_options)
+            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
+        serde_json::to_writer_pretty(&mut archive, &manifest)
+            .map_err(|error| CliError::internal(format!("serialize bundle manifest: {error}")))?;
+        archive.write_all(b"\n")?;
+        archive
+            .start_file("provenance.json", file_options)
+            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
+        ProvenanceListDto::write_bundle_json_from_provenance(&result.provenance, &mut archive)
+            .map_err(|error| CliError::internal(format!("serialize provenance DTO: {error}")))?;
+        archive.write_all(b"\n")?;
         archive.add_directory("assets/", directory_options).map_err(|error| {
             CliError::internal(format!("create bundle assets directory: {error}"))
         })?;
@@ -348,7 +387,7 @@ fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
         }
         archive.finish().map_err(|error| CliError::internal(format!("finish bundle: {error}")))?;
     }
-    Ok(cursor.into_inner())
+    Ok(())
 }
 
 fn resolve_conflict(

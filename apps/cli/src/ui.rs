@@ -2,35 +2,81 @@
 
 use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
+use crate::web_tasks::{ArtifactSnapshot, WebTaskBackend, WebTaskError};
 use axum::Json;
 use axum::Router;
-use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::body::{Body, Bytes};
+use axum::extract::{Path as AxumPath, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use futures::StreamExt as _;
 use serde::Serialize;
-use std::future::Future;
+use std::future::{Future, IntoFuture as _};
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
+use tokio::time::{Duration, Instant};
 
 const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
 const SESSION_FRAGMENT: &str = "into-md-session";
 const SESSION_BYTES: usize = 32;
 const SESSION_ENCODED_LEN: usize = 43;
+#[cfg(not(test))]
+const REQUEST_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const REQUEST_IDLE_TIMEOUT: Duration = Duration::from_millis(250);
+#[cfg(not(test))]
+const REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_mins(30);
+#[cfg(test)]
+const REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(not(test))]
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
 struct AppState {
     authority: Arc<str>,
     origin: Arc<str>,
     session: Arc<str>,
+    tasks: WebTaskBackend,
+    shutdown: watch::Receiver<bool>,
+}
+
+struct DownloadSlot {
+    snapshot: Option<ArtifactSnapshot>,
+    expired: bool,
+}
+
+struct DownloadTimerStop {
+    sender: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl Drop for DownloadTimerStop {
+    fn drop(&mut self) {
+        if let Ok(sender) = self.sender.get_mut()
+            && let Some(sender) = sender.take()
+        {
+            let _ = sender.send(());
+        }
+    }
+}
+
+fn expire_download_slot(slot: &std::sync::Mutex<DownloadSlot>) {
+    let snapshot = {
+        let mut slot = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.expired = true;
+        slot.snapshot.take()
+    };
+    drop(snapshot);
 }
 
 #[derive(Serialize)]
@@ -127,6 +173,8 @@ pub async fn run_cli(
             .join("ui"),
     };
     prepare_data_dir(&data_dir)?;
+    let tasks = WebTaskBackend::open(data_dir.join("tasks"))
+        .map_err(|error| CliError::new(ExitClass::Io, "uiTaskBackendFailed", error.to_string()))?;
 
     let listener = bind_loopback(arguments.port).await?;
     let address = listener.local_addr()?;
@@ -135,7 +183,7 @@ pub async fn run_cli(
     let launch_url = format!("{origin}/#{SESSION_FRAGMENT}={session}");
     announce_and_open(&SystemBrowser, arguments.no_open, &origin, &launch_url, stdout, stderr)?;
 
-    serve(listener, session, async {
+    serve(listener, session, tasks, async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await
@@ -170,7 +218,12 @@ async fn bind_loopback(port: u16) -> Result<TcpListener, CliError> {
     })
 }
 
-async fn serve<F>(listener: TcpListener, session: String, shutdown: F) -> Result<(), CliError>
+async fn serve<F>(
+    listener: TcpListener,
+    session: String,
+    tasks: WebTaskBackend,
+    shutdown: F,
+) -> Result<(), CliError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -180,9 +233,22 @@ where
     }
     let authority: Arc<str> = format!("127.0.0.1:{}", address.port()).into();
     let origin: Arc<str> = format!("http://{authority}").into();
-    let state = AppState { authority, origin, session: session.into() };
+    let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let state = AppState {
+        authority,
+        origin,
+        session: session.into(),
+        tasks,
+        shutdown: shutdown_receiver.clone(),
+    };
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
+        .route("/tasks", post(upload_task).fallback(api_method_not_allowed))
+        .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
+        .route(
+            "/tasks/{id}/artifacts/{key}",
+            get(download_artifact).fallback(api_method_not_allowed),
+        )
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(state.clone(), api_security));
     let app = Router::new()
@@ -194,10 +260,30 @@ where
         .layer(middleware::from_fn_with_state(state.clone(), host_security))
         .layer(middleware::from_fn(response_security))
         .with_state(state);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|error| CliError::new(ExitClass::Io, "uiServeFailed", error.to_string()))
+    let mut graceful_receiver = shutdown_receiver;
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            while !*graceful_receiver.borrow() {
+                if graceful_receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .into_future();
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => result
+            .map_err(|error| CliError::new(ExitClass::Io, "uiServeFailed", error.to_string())),
+        () = shutdown => {
+            let _ = shutdown_sender.send(true);
+            match tokio::time::timeout(SHUTDOWN_GRACE, &mut server).await {
+                Ok(result) => result.map_err(|error| {
+                    CliError::new(ExitClass::Io, "uiServeFailed", error.to_string())
+                }),
+                Err(_) => Ok(()),
+            }
+        }
+    }
 }
 
 async fn host_security(State(state): State<AppState>, request: Request, next: Next) -> Response {
@@ -312,6 +398,206 @@ async fn status(headers: HeaderMap) -> Response {
         },
     })
     .into_response()
+}
+
+async fn upload_task(State(state): State<AppState>, request: Request) -> Response {
+    let deadline = Instant::now() + REQUEST_TOTAL_TIMEOUT;
+    let mut shutdown = state.shutdown.clone();
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let Some(name) =
+        request.headers().get("x-into-md-filename").and_then(|value| value.to_str().ok())
+    else {
+        return rejection(StatusCode::BAD_REQUEST, "missingFilename");
+    };
+    let backend = state.tasks.clone();
+    let name = name.to_owned();
+    let mut upload =
+        match tokio::task::spawn_blocking(move || backend.begin_upload(&name, declared)).await {
+            Ok(Ok(upload)) => upload,
+            Ok(Err(error)) => return web_task_rejection(error),
+            Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+        };
+    let mut stream = request.into_body().into_data_stream();
+    loop {
+        let chunk = tokio::select! {
+            changed = shutdown.changed() => {
+                let _ = changed;
+                return rejection(StatusCode::SERVICE_UNAVAILABLE, "shuttingDown");
+            }
+            chunk = tokio::time::timeout_at(
+                deadline.min(Instant::now() + REQUEST_IDLE_TIMEOUT),
+                stream.next(),
+            ) => match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => return rejection(StatusCode::REQUEST_TIMEOUT, "uploadTimeout"),
+            },
+        };
+        let Some(chunk) = chunk else { break };
+        let Ok(chunk) = chunk else {
+            return rejection(StatusCode::BAD_REQUEST, "uploadDisconnected");
+        };
+        upload = match tokio::task::spawn_blocking(move || {
+            upload.write_chunk(&chunk)?;
+            Ok::<_, WebTaskError>(upload)
+        })
+        .await
+        {
+            Ok(Ok(upload)) => upload,
+            Ok(Err(error)) => return web_task_rejection(error),
+            Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+        };
+    }
+    let finish = tokio::task::spawn_blocking(move || upload.finish());
+    let finished = tokio::select! {
+        changed = shutdown.changed() => {
+            let _ = changed;
+            return rejection(StatusCode::SERVICE_UNAVAILABLE, "shuttingDown");
+        }
+        result = tokio::time::timeout_at(deadline, finish) => match result {
+            Ok(result) => result,
+            Err(_) => return rejection(StatusCode::REQUEST_TIMEOUT, "uploadTimeout"),
+        },
+    };
+    match finished {
+        Ok(Ok(record)) => (StatusCode::ACCEPTED, Json(record)).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn task_status(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.get(&id)).await {
+        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn cancel_task(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.cancel(&id)).await {
+        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn download_artifact(
+    State(state): State<AppState>,
+    AxumPath((id, key)): AxumPath<(String, String)>,
+) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    let mut shutdown = state.shutdown.clone();
+    let deadline = Instant::now() + REQUEST_TOTAL_TIMEOUT;
+    let (file, reference) =
+        match tokio::task::spawn_blocking(move || state.tasks.artifact(&id, &key)).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => return web_task_rejection(error),
+            Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+        };
+    let slot =
+        Arc::new(std::sync::Mutex::new(DownloadSlot { snapshot: Some(file), expired: false }));
+    let (timer_sender, timer_receiver) = tokio::sync::oneshot::channel();
+    let timer_stop =
+        Arc::new(DownloadTimerStop { sender: std::sync::Mutex::new(Some(timer_sender)) });
+    let timer_slot = Arc::clone(&slot);
+    tokio::spawn(async move {
+        tokio::select! {
+            () = tokio::time::sleep_until(deadline) => {}
+            () = async {
+                if !*shutdown.borrow() {
+                    let _ = shutdown.changed().await;
+                }
+            } => {}
+            _ = timer_receiver => {}
+        }
+        expire_download_slot(&timer_slot);
+    });
+    let stream = futures::stream::try_unfold((slot, timer_stop), |(slot, timer_stop)| async move {
+        let snapshot = {
+            let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot_guard.expired {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "download deadline expired",
+                ));
+            }
+            slot_guard.snapshot.take().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "download snapshot is unavailable",
+                )
+            })?
+        };
+        let read = tokio::task::spawn_blocking(move || {
+            let mut snapshot = snapshot;
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(64 * 1024).map_err(std::io::Error::other)?;
+            bytes.resize(64 * 1024, 0);
+            let read = std::io::Read::read(&mut snapshot, &mut bytes)?;
+            bytes.truncate(read);
+            Ok::<_, std::io::Error>((bytes, snapshot))
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        let (bytes, snapshot) = read?;
+        {
+            let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot_guard.expired {
+                drop(slot_guard);
+                drop(snapshot);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "download deadline expired",
+                ));
+            }
+            if bytes.is_empty() {
+                drop(slot_guard);
+                drop(snapshot);
+                return Ok(None);
+            }
+            slot_guard.snapshot = Some(snapshot);
+        }
+        Ok(Some((Bytes::from(bytes), (slot, timer_stop))))
+    });
+    let content_type = match reference.kind {
+        into_markdown::ArtifactKind::Markdown => "text/markdown; charset=utf-8",
+        into_markdown::ArtifactKind::DocumentIr | into_markdown::ArtifactKind::Diagnostics => {
+            "application/json"
+        }
+        into_markdown::ArtifactKind::Bundle => "application/zip",
+        into_markdown::ArtifactKind::Asset => "application/octet-stream",
+    };
+    let mut response = Body::from_stream(stream).into_response();
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Ok(length) = HeaderValue::from_str(&reference.byte_len.to_string()) {
+        response.headers_mut().insert(header::CONTENT_LENGTH, length);
+    }
+    response
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn web_task_rejection(error: WebTaskError) -> Response {
+    let (status, code) = match error {
+        WebTaskError::Unsafe(_) => (StatusCode::BAD_REQUEST, "unsafeStorage"),
+        WebTaskError::Limit(_) => (StatusCode::PAYLOAD_TOO_LARGE, "resourceLimit"),
+        WebTaskError::Cancelled => (StatusCode::CONFLICT, "cancelled"),
+        WebTaskError::NotFound => (StatusCode::NOT_FOUND, "notFound"),
+        WebTaskError::Conflict(_) => (StatusCode::CONFLICT, "taskConflict"),
+        WebTaskError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backendIo"),
+    };
+    rejection(status, code)
 }
 
 fn request_body_is_empty(headers: &HeaderMap) -> bool {
@@ -550,16 +836,23 @@ mod tests {
         response
     }
 
-    async fn start()
-    -> (u16, String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<(), CliError>>) {
+    async fn start() -> (
+        tempfile::TempDir,
+        u16,
+        String,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<Result<(), CliError>>,
+    ) {
         let listener = bind_loopback(0).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let session = new_session().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(directory.path().join("backend")).unwrap();
         let (sender, receiver) = oneshot::channel();
-        let task = tokio::spawn(serve(listener, session.clone(), async {
+        let task = tokio::spawn(serve(listener, session.clone(), backend, async {
             let _ = receiver.await;
         }));
-        (port, session, sender, task)
+        (directory, port, session, sender, task)
     }
 
     fn assert_security_headers(response: &str) {
@@ -579,7 +872,7 @@ mod tests {
 
     #[tokio::test]
     async fn real_loopback_server_requires_exact_host_origin_and_session() {
-        let (port, session, shutdown, task) = start().await;
+        let (_directory, port, session, shutdown, task) = start().await;
         let host = format!("127.0.0.1:{port}");
         let origin = format!("http://{host}");
         // Same-origin browser fetches naturally include Origin on non-GET
@@ -645,7 +938,7 @@ mod tests {
 
     #[tokio::test]
     async fn fragment_never_enters_static_request_or_embedded_assets_and_shutdown_is_graceful() {
-        let (port, session, shutdown, task) = start().await;
+        let (_directory, port, session, shutdown, task) = start().await;
         let host = format!("127.0.0.1:{port}");
         let response =
             request(port, &format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"))
@@ -699,6 +992,246 @@ mod tests {
         assert!(bootstrap.find("replaceState").unwrap() < bootstrap.find("import(").unwrap());
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticated_upload_status_and_download_are_real_and_disconnect_cleans_stage() {
+        let (directory, port, session, shutdown, task) = start().await;
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://{host}");
+        let uploaded = request(
+            port,
+            &format!(
+                "POST /api/tasks HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Filename: note.txt\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
+            ),
+        )
+        .await;
+        assert!(uploaded.starts_with("HTTP/1.1 202"), "{uploaded}");
+        let body = uploaded.split_once("\r\n\r\n").unwrap().1;
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        let id = value["id"].as_str().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let artifact = loop {
+            let status = request(
+                port,
+                &format!(
+                    "GET /api/tasks/{id} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+                ),
+            )
+            .await;
+            let status: serde_json::Value =
+                serde_json::from_str(status.split_once("\r\n\r\n").unwrap().1).unwrap();
+            if status["status"] == "succeeded" {
+                break status["artifacts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|artifact| artifact["kind"] == "markdown")
+                    .unwrap()["storageKey"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+            }
+            assert!(std::time::Instant::now() < deadline, "{status}");
+            tokio::task::yield_now().await;
+        };
+        let downloaded = request(
+            port,
+            &format!(
+                "GET /api/tasks/{id}/artifacts/{artifact} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(downloaded.starts_with("HTTP/1.1 200"), "{downloaded}");
+        assert!(downloaded.ends_with("hello\n"), "{downloaded}");
+
+        let mut disconnected =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        disconnected
+            .write_all(
+                format!(
+                    "POST /api/tasks HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Filename: partial.txt\r\nContent-Length: 100\r\n\r\nshort"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        drop(disconnected);
+        let incoming = directory.path().join("backend/incoming");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::fs::read_dir(&incoming).unwrap().next().is_none() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        shutdown.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn slow_upload_and_slow_reader_cannot_block_bounded_shutdown_or_storage_release() {
+        let listener = bind_loopback(0).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let session = new_session().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(directory.path().join("backend")).unwrap();
+        let retained = backend.clone();
+        let (sender, receiver) = oneshot::channel();
+        let server = tokio::spawn(serve(listener, session.clone(), backend, async {
+            let _ = receiver.await;
+        }));
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://{host}");
+
+        let mut slow_upload =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        slow_upload
+            .write_all(
+                format!(
+                    "POST /api/tasks HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Filename: slow.txt\r\nContent-Length: 1000000\r\n\r\nx"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut timeout_response = vec![0_u8; 4096];
+        let read =
+            tokio::time::timeout(Duration::from_secs(1), slow_upload.read(&mut timeout_response))
+                .await
+                .unwrap()
+                .unwrap();
+        let timeout_response = String::from_utf8_lossy(&timeout_response[..read]);
+        assert!(timeout_response.starts_with("HTTP/1.1 408"), "{timeout_response}");
+        drop(slow_upload);
+        let incoming = directory.path().join("backend/incoming");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::read_dir(&incoming).unwrap().next().is_some() {
+            assert!(Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+
+        let mut shutdown_upload =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        shutdown_upload
+            .write_all(
+                format!(
+                    "POST /api/tasks HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Filename: shutdown.txt\r\nContent-Length: 1000000\r\n\r\nx"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+        drop(shutdown_upload);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::read_dir(&incoming).unwrap().next().is_some() {
+            assert!(Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+
+        // Start another server around the retained backend and deliberately do
+        // not consume a large response body, forcing the shutdown grace bound
+        // to release the anonymous artifact snapshot.
+        let mut upload = retained.begin_upload("large.txt", None).unwrap();
+        let chunk = ("x".repeat(1023) + "\n").repeat(256).into_bytes();
+        for _ in 0..8 {
+            upload.write_chunk(&chunk).unwrap();
+        }
+        let submitted = upload.finish().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let artifact = loop {
+            let current = retained.get(&submitted.id).unwrap();
+            if current.status == into_markdown::TaskStatus::Succeeded {
+                break current
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.kind == into_markdown::ArtifactKind::Markdown)
+                    .unwrap()
+                    .storage_key
+                    .clone();
+            }
+            assert!(std::time::Instant::now() < deadline, "{current:?}");
+            tokio::task::yield_now().await;
+        };
+        let listener = bind_loopback(0).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sender, receiver) = oneshot::channel();
+        let server_session = session.clone();
+        let server_backend = retained.clone();
+        let server = tokio::spawn(serve(listener, server_session, server_backend, async {
+            let _ = receiver.await;
+        }));
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://{host}");
+        let mut slow_reader =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        slow_reader
+            .write_all(
+                format!(
+                    "GET /api/tasks/{}/artifacts/{artifact} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\n\r\n",
+                    submitted.id.as_str()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut first_byte = [0_u8; 1];
+        slow_reader.read_exact(&mut first_byte).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while retained.test_reserved_bytes() == 0 {
+            assert!(Instant::now() < deadline, "download snapshot was not charged");
+            tokio::task::yield_now().await;
+        }
+        // Do not signal shutdown: the absolute response deadline must revoke
+        // the anonymous snapshot even while socket backpressure prevents more
+        // Body polling.
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while retained.test_reserved_bytes() != 0 {
+            assert!(Instant::now() < deadline, "download deadline did not release quota");
+            tokio::task::yield_now().await;
+        }
+        assert!(!server.is_finished(), "deadline unexpectedly stopped the listener");
+        drop(slow_reader);
+
+        // A second blocked response still observes explicit server shutdown.
+        let mut shutdown_reader =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        shutdown_reader
+            .write_all(
+                format!(
+                    "GET /api/tasks/{}/artifacts/{artifact} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\n\r\n",
+                    submitted.id.as_str()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        shutdown_reader.read_exact(&mut first_byte).await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while retained.test_reserved_bytes() == 0 {
+            assert!(Instant::now() < deadline, "shutdown snapshot was not charged");
+            tokio::task::yield_now().await;
+        }
+        sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+        drop(shutdown_reader);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while retained.test_reserved_bytes() != 0 {
+            assert!(Instant::now() < deadline, "download snapshot charge was not released");
+            tokio::task::yield_now().await;
+        }
+        let snapshots = directory.path().join("backend/snapshots");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::read_dir(&snapshots).unwrap().next().is_some() {
+            assert!(Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        drop(retained);
     }
 
     #[tokio::test]
