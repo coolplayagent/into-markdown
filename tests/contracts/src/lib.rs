@@ -60,6 +60,7 @@ mod tests {
             vec![
                 InputFormat::Pdf,
                 InputFormat::Docx,
+                InputFormat::Rtf,
                 InputFormat::Text,
                 InputFormat::Markdown,
                 InputFormat::Html,

@@ -53,6 +53,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
         .register_converter(Arc::new(into_markdown_converters::ZipConverter))
+        .register_converter(Arc::new(into_markdown_converters::RtfConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
@@ -295,6 +296,16 @@ mod tests {
         let result = block_on(default_engine().unwrap().convert(request)).unwrap();
         server.join().unwrap();
         assert_eq!(result.markdown, "hello\n");
+    }
+
+    #[test]
+    fn default_engine_detects_and_converts_rtf_offline() {
+        let engine = default_engine().unwrap();
+        let data: Arc<[u8]> = Arc::from(&b"{\\rtf1\\ansi API \\u20013?\\u25991?\\par}"[..]);
+        let input = InputRef::bytes(data, Some("sample.rtf"));
+        let result = block_on(engine.convert(ConversionRequest::new(input))).unwrap();
+        assert_eq!(result.markdown, "API 中文\n");
+        assert!(result.provenance.iter().all(|record| record.provider == "builtin.converter.rtf"));
     }
 
     #[test]

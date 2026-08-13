@@ -1438,8 +1438,8 @@ fn validate_fixture_corpus(
     validate_fixture_generator(root, &corpus.generator, errors);
 
     let required_formats = BTreeSet::from([
-        "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "text", "tsv", "xml",
-        "zip",
+        "csv", "docx", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text", "tsv",
+        "xml", "zip",
     ]);
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {

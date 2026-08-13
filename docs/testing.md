@@ -284,6 +284,11 @@ available 集合比对，并把每个非 OCR 样本送入真实 converter 和 Ma
 `ConversionOptions` 字段、相邻失败/成功值、错误 limit 名和成功输出 hash，防止仅凭文件
 名称推断边界。
 
+RTF corpus 使用仓库原创 ASCII 文件，覆盖中英 Unicode/样式、根组损坏、相邻 group-depth
+边界和 object/local-file field 恶意输入；其许可、生成器、字节数、SHA-256 与最终 Markdown
+hash 和其他 available 格式一起由 manifest 双向审计。转换测试注入计数型 OCR、AI 与
+transcriber，RTF 成功和失败路径均不得调用这些服务。
+
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，
 两者均不进入普通测试或发布物。该质量目标通过产品 `ModelManager` 安装原始官方 TAR，

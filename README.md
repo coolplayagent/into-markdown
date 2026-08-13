@@ -97,6 +97,10 @@ raw HTML 与 blockquote 在现有 IR 中保存为不可执行代码容器并产�
 DOCX 与 DOCM 转换可用，覆盖标题样式、富文本、编号、表格、链接、图片、脚注、页眉页脚、
 批注、字段和公式。宏部件永不读取或执行；加密、损坏及超出 ZIP/XML/资源预算的输入稳定拒绝。
 
+RTF 转换可用，支持字符集与 Unicode escape、行内样式、段落、列表、表格、metadata 和
+经完整解码审计的 PNG/JPEG 图片。内嵌 object、文件路径、HTML 与 active destination 永不
+执行或联网；危险 hyperlink 和 EMF/WMF 安全降级并产生结构化诊断。
+
 模型查询、离线校验、路径和安全清理后端已实现。完整 OCR pipeline 保持
 `planned` / `unavailable`；独立 `pp-ocrv6-tiny-recognizer-onnx` 组件具有审核后的官方
 ONNX、字符表、归档结构与安装事务，可供 library transport 安装和产品 resolver 使用。

@@ -10,6 +10,7 @@ mod markdown;
 mod notebook;
 mod pdf;
 mod remote;
+mod rtf;
 mod structured;
 mod text;
 #[path = "zip/mod.rs"]
@@ -26,6 +27,7 @@ pub use markdown::MarkdownConverter;
 pub use notebook::NotebookConverter;
 pub use pdf::PdfConverter;
 pub use remote::HttpSourceResolver;
+pub use rtf::RtfConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
 pub use zip_converter::ZipConverter;
@@ -149,7 +151,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Rtf,
         family: "document",
         extensions: &["rtf"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Epub,
@@ -1039,7 +1041,7 @@ fn detect_content(
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
     let (format, confidence, evidence) = if bytes.starts_with(b"%PDF-") {
         (InputFormat::Pdf, 0.99, "PDF magic bytes")
-    } else if bytes.starts_with(b"{\\rtf") {
+    } else if strict_rtf_magic(bytes) {
         (InputFormat::Rtf, 0.99, "RTF signature")
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         || bytes.starts_with(&[0xff, 0xd8, 0xff])
@@ -1067,6 +1069,23 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         return None;
     };
     Some(FormatCandidate::new(format, confidence, evidence))
+}
+
+fn strict_rtf_magic(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"{\\rtf") {
+        return false;
+    }
+    let mut offset = 5;
+    if !bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+        return false;
+    }
+    while bytes.get(offset).is_some_and(u8::is_ascii_digit) {
+        offset += 1;
+        if offset - 5 > 10 {
+            return false;
+        }
+    }
+    matches!(bytes.get(offset), Some(b' ' | b'\\' | b'{' | b'}' | b'\r' | b'\n'))
 }
 
 fn valid_mpeg_audio_frame_header(bytes: &[u8]) -> bool {
@@ -3446,6 +3465,14 @@ mod tests {
                 .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Pdf);
         assert!((candidates[0].confidence - 0.99).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn rtf_magic_requires_version_and_delimiter() {
+        assert_eq!(magic_candidate(b"{\\rtf1\\ansi ok}").unwrap().format, InputFormat::Rtf);
+        assert!(magic_candidate(b"{\\rtf\\ansi missing-version}").is_none());
+        assert!(magic_candidate(b"{\\rtf1x plain-prefix}").is_none());
+        assert!(magic_candidate(b"prefix {\\rtf1 no}").is_none());
     }
 
     #[test]

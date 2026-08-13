@@ -136,6 +136,7 @@ fn format(value: &str) -> InputFormat {
         "ipynb" => InputFormat::Ipynb,
         "json" => InputFormat::Json,
         "markdown" => InputFormat::Markdown,
+        "rtf" => InputFormat::Rtf,
         "text" => InputFormat::Text,
         "tsv" => InputFormat::Tsv,
         "xml" => InputFormat::Xml,
@@ -153,6 +154,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Ipynb => Box::new(NotebookConverter),
         InputFormat::Docx => Box::new(DocxConverter),
         InputFormat::Feed => Box::new(FeedConverter),
+        InputFormat::Rtf => Box::new(RtfConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }
