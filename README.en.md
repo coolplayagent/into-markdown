@@ -5,10 +5,11 @@
 `into-markdown` is a Rust-first document-to-Markdown conversion platform built
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
-command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, and
-a pinned ONNX Runtime CPU safety layer, and contract tests. The model authority does not yet
-contain executable ONNX artifacts, so OCR reports model unavailability instead
-of treating Paddle source archives as models. The OpenAI-compatible transport is available only
+command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, a
+pinned ONNX Runtime CPU safety layer, an installable PP-OCRv6 tiny recognition component, and
+contract tests. The complete detection-and-recognition bundle remains unavailable; a controlled
+library transport can install the hash-pinned official recognizer TAR and character table. The
+OpenAI-compatible transport is available only
 under explicit per-invocation network authorization; AI-to-IR routing remains a separate concern.
 
 The project is implemented independently of the neighbouring `anydoc` and
@@ -19,13 +20,15 @@ representation before GitHub Flavored Markdown (GFM) is produced.
 The OCR crate includes bounded PP-OCRv6 tiny text-detection preprocessing and
 DB postprocessing over the `TensorRuntime` seam. It accepts only an explicitly
 described decoded pixel view (including stride, color layout, and orientation),
-produces scored quadrilaterals, angles, and future recognition crop descriptors,
+produces scored quadrilaterals, angles, and raw-source recognition crop descriptors,
 and performs no decoding or I/O. Image decoding remains the responsibility of
-the separately audited image-conversion work. Recognition, CTC decoding, and IR
-merging are also intentionally outside this detector. Since no executable
-detector ONNX artifact is currently approved, the product runtime still returns
-the stable `ModelUnavailable` error; ordinary builds and tests use synthetic
-probability maps and never download a model.
+the separately audited image-conversion work. The recognition module performs bounded official
+perspective cropping, BGR/NCHW preprocessing, stable dynamic batching, strict tensor validation,
+and deterministic CTC decoding, returning structured region results; IR merging remains a separate
+pipeline concern. Since no executable detector ONNX artifact is currently approved, the detector
+runtime still returns `ModelUnavailable`. Ordinary builds and tests stay offline; the explicit
+manual quality target installs and runs the official recognizer through the product resolver and
+native worker.
 
 ## Build
 
@@ -145,11 +148,11 @@ produce explicit diagnostics and safe fallbacks. Raw HTML and blockquotes use ex
 non-executable IR fallbacks; see the [format matrix](docs/formats.md) for the full policy.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
-implemented. The authoritative manifests currently contain upstream source
-archives but no reviewed final ONNX/character-table runtime files, so
-installation fails closed with `componentUnavailable` instead of pretending
-that source archives are installed models. Verify, path, and remove return the
-same error for this source-only entry and ignore forged install-state directories.
+implemented. The complete OCR pipeline remains planned/source-only. The separate
+`pp-ocrv6-tiny-recognizer-onnx` component contains reviewed ONNX, character-table, archive-structure,
+and transaction authority; a library transport can install it and the product resolver accepts only
+the same hash-verified install state. The CLI has no model network transport, so `models install`
+still fails closed with `componentUnavailable` instead of pretending success.
 Windows model installation remains fail-closed until durable, reparse-safe
 directory-handle flushing is implemented; path resolution and offline metadata remain available.
 Other unavailable format conversion, OCR inference,

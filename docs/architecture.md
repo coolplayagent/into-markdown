@@ -194,6 +194,12 @@ slice 并分配返回 `Vec`。GraphProto IO 经有界 wire preflight 和 checked
 解析，与 authority/native metadata 三向核对，initializer graph input 按 IR 规则区分为
 固定值或 overridable input。
 
+识别实现按单向依赖拆分：model acquisition/精确 TAR 校验负责形成经 `ModelManager` 验证的
+组件目录，`ManifestModelResolver` 只从该 install-state 解析模型；recognition authority、
+预算、像素插值、batch 预处理和 CTC 各自独立，编排层只组合这些窄接口与 `TensorRuntime`。
+识别输出是按 source region 顺序恢复的 `RecognitionResult`，不直接构造 Document IR；OCR
+pipeline 在集成边界把结构化结果合入统一 IR，避免模型运行层依赖渲染或文档结构。
+
 ## SQLite 任务元数据层
 
 `into-markdown-task-store` 是同步、默认离线的本地元数据边界。它保存 task id、UTC

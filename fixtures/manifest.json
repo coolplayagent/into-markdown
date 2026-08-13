@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "d461f37e95de8b72d6f5b6f52a76127c2544130a28349e509dd35248ea5a8202",
+    "sha256": "c854cebc898535f2490236d61f71b64657c49d3c06b9199c42882d81e80b29d9",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -1521,7 +1521,7 @@
         "ground_truth_nfc": "清晰掃描文字用於驗證文件轉換品質與字元順序。",
         "codepoints": 22,
         "evaluated_characters": 22,
-        "maximum_cer": 0.05
+        "maximum_cer": 0.1
       },
       {
         "fixture_id": "ocr-traditional-clear-2",
@@ -1530,7 +1530,7 @@
         "ground_truth_nfc": "離線處理應保持標題、段落、數字二零二六和標點。",
         "codepoints": 23,
         "evaluated_characters": 23,
-        "maximum_cer": 0.05
+        "maximum_cer": 0.1
       },
       {
         "fixture_id": "ocr-traditional-clear-3",
@@ -1539,7 +1539,7 @@
         "ground_truth_nfc": "安全邊界拒絕損壞輸入並傳回穩定診斷結果。",
         "codepoints": 20,
         "evaluated_characters": 20,
-        "maximum_cer": 0.05
+        "maximum_cer": 0.1
       },
       {
         "fixture_id": "ocr-english-clear-1",

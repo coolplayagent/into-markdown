@@ -1,6 +1,8 @@
 //! Safe ONNX Runtime policy, model validation, and bounded session caching.
 
-use into_markdown_core::{BoxFuture, ConversionError, ExecutionContext, Tensor, TensorRuntime};
+use into_markdown_core::{
+    BoxFuture, ConversionError, ExecutionContext, ResourceReservation, Tensor, TensorRuntime,
+};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -105,6 +107,8 @@ pub struct ResolvedModel {
     pub contract: ModelContract,
     /// Hash-verified bytes read from the retained no-follow model handle.
     pub bytes: Arc<[u8]>,
+    /// Request accounting retained while the model bytes are live.
+    pub memory_reservation: Option<Arc<ResourceReservation>>,
 }
 
 /// Resolves only installed, hash-verified runtime ONNX models.
@@ -115,28 +119,6 @@ pub trait ModelResolver: Send + Sync {
         model_id: &str,
         context: &ExecutionContext,
     ) -> Result<ResolvedModel, ConversionError>;
-}
-
-/// Product resolver backed by the embedded model authority.
-///
-/// Source archives are deliberately not interpreted as ONNX model files.
-#[derive(Debug, Default)]
-pub struct ManifestModelResolver;
-
-impl ModelResolver for ManifestModelResolver {
-    fn resolve(
-        &self,
-        model_id: &str,
-        context: &ExecutionContext,
-    ) -> Result<ResolvedModel, ConversionError> {
-        context.checkpoint()?;
-        let manifest = super::ModelManifest::embedded()?;
-        let known = manifest.bundles.iter().any(|bundle| bundle.id == model_id);
-        Err(ConversionError::ComponentUnavailable {
-            component: "onnx-model".into(),
-            detail: if known { "ModelUnavailable" } else { "UnknownModel" }.into(),
-        })
-    }
 }
 
 /// CPU session controls that participate in the cache key.
@@ -1530,6 +1512,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ManifestModelResolver;
     use futures::executor::block_on;
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1633,6 +1616,7 @@ mod tests {
             },
             contract: contract(),
             bytes,
+            memory_reservation: None,
         }
     }
 
@@ -2242,7 +2226,13 @@ mod tests {
 
     #[test]
     fn current_manifest_is_stably_unavailable() {
-        let error = ManifestModelResolver.resolve("pp-ocrv6-tiny-zh-en", &context()).unwrap_err();
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            super::super::ModelManager::embedded(temporary.path().to_path_buf(), None).unwrap(),
+        );
+        let error = ManifestModelResolver::new(manager)
+            .resolve("pp-ocrv6-tiny-recognizer-onnx", &context())
+            .unwrap_err();
         assert_eq!(error.code().as_str(), "componentUnavailable");
         assert!(format!("{error}").contains("ModelUnavailable"));
     }

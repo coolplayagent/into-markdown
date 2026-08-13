@@ -12,7 +12,7 @@
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ExecutionContext, ExecutionStage, OcrEngine, OcrRequest, OcrResult,
-    Tensor, TensorRuntime,
+    ResourceReservation, Tensor, TensorRuntime,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,9 +20,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 mod detection;
+mod model_acquisition;
+mod model_archive;
 mod onnx_proto;
+mod recognition;
+mod recognizer_model;
 mod runtime;
 
 pub use detection::{
@@ -30,11 +35,16 @@ pub use detection::{
     PixelFormat, PixelView, PpOcrTextDetector,
 };
 
+pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};
+
+pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
+
+pub use recognizer_model::{ManifestModelResolver, ppocrv6_recognizer_contract};
+
 pub use runtime::{
-    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,
-    ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime,
-    ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory, SessionOptions,
-    TensorElementType, TensorSpec,
+    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS, ModelContract,
+    ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime, ResolvedModel, RuntimeConfig,
+    SessionAdapter, SessionFactory, SessionOptions, TensorElementType, TensorSpec,
 };
 
 const SUPPORTED_TARGETS: [&str; 4] = [
@@ -72,10 +82,24 @@ pub struct RuntimeArtifact {
     pub role: String,
     pub file_name: String,
     pub url: String,
+    pub archive_sha256: Option<String>,
+    pub archive_size: Option<u64>,
+    pub archive_member: Option<String>,
+    pub archive_members: Option<Vec<ArchiveMember>>,
     pub sha256: String,
     pub size: u64,
     pub platforms: Vec<String>,
     pub license: String,
+}
+
+/// One exact entry permitted in an upstream runtime archive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveMember {
+    pub path: String,
+    pub kind: String,
+    pub size: u64,
+    pub sha256: Option<String>,
 }
 
 /// OCR model bundle and its supply-chain contract.
@@ -83,6 +107,8 @@ pub struct RuntimeArtifact {
 #[serde(deny_unknown_fields)]
 pub struct ModelBundle {
     pub id: String,
+    #[serde(default = "pipeline_bundle_kind")]
+    pub kind: String,
     pub availability: String,
     pub upstream_version: String,
     pub languages: Vec<String>,
@@ -91,6 +117,10 @@ pub struct ModelBundle {
     pub character_set: CharacterSet,
     pub runtime_artifacts: Vec<RuntimeArtifact>,
     pub source_artifacts: Vec<ModelArtifact>,
+}
+
+fn pipeline_bundle_kind() -> String {
+    "ocr-pipeline".to_owned()
 }
 
 /// Versioned model manifest.
@@ -172,6 +202,9 @@ struct RuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    archive_sha256: Option<String>,
+    archive_size: Option<u64>,
+    archive_member: Option<String>,
     sha256: String,
     size: u64,
 }
@@ -245,13 +278,26 @@ impl ModelManifest {
         downloads: &str,
         onnxruntime: &str,
     ) -> Result<Self, ConversionError> {
-        let manifest: Self = serde_json::from_str(models)
+        let raw: serde_json::Value = serde_json::from_str(models)
             .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
+        let manifest: Self = serde_json::from_value(raw.clone())
+            .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
+        if manifest.schema_version == 2
+            && raw
+                .get("bundles")
+                .and_then(serde_json::Value::as_array)
+                .is_none_or(|bundles| bundles.iter().any(|bundle| bundle.get("kind").is_none()))
+        {
+            return Err(invalid_manifest("schema 2 bundles require explicit kind"));
+        }
         let downloads: DownloadManifest = serde_json::from_str(downloads)
             .map_err(|error| invalid_manifest(format!("invalid download JSON: {error}")))?;
         let onnxruntime: OrtManifest = serde_json::from_str(onnxruntime)
             .map_err(|error| invalid_manifest(format!("invalid ONNX Runtime JSON: {error}")))?;
         manifest.validate_against(&downloads, &onnxruntime)?;
+        if manifest.schema_version == 2 {
+            recognition::model_authority::validate_manifest_authority(&manifest)?;
+        }
         Ok(manifest)
     }
 
@@ -260,8 +306,17 @@ impl ModelManifest {
         downloads: &DownloadManifest,
         onnxruntime: &OrtManifest,
     ) -> Result<(), ConversionError> {
-        if self.schema_version != 1 || downloads.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) || downloads.schema_version != 1 {
             return Err(invalid_manifest("unsupported schema version"));
+        }
+        if self.schema_version == 1
+            && self.bundles.iter().any(|bundle| {
+                bundle.availability != "planned" || !bundle.runtime_artifacts.is_empty()
+            })
+        {
+            return Err(invalid_manifest(
+                "schema 1 is accepted only for planned source-only bundles",
+            ));
         }
         let mut bundle_ids = BTreeSet::new();
         let mut source_ids = BTreeSet::new();
@@ -274,7 +329,9 @@ impl ModelManifest {
             if !bundle_ids.insert(bundle.id.as_str()) {
                 return Err(invalid_manifest(format!("duplicate bundle ID {}", bundle.id)));
             }
-            if !matches!(bundle.availability.as_str(), "planned" | "available") {
+            if !matches!(bundle.kind.as_str(), "ocr-pipeline" | "recognizer-component")
+                || !matches!(bundle.availability.as_str(), "planned" | "available")
+            {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
             }
             let targets: BTreeSet<_> = bundle.platforms.iter().map(String::as_str).collect();
@@ -350,7 +407,10 @@ impl ModelManifest {
                         if item.url == artifact.url
                             && item.sha256 == artifact.sha256
                             && item.downloaded_file_path == artifact.file_name
-                            && item.size == artifact.size => {}
+                            && item.size == artifact.size
+                            && item.archive_sha256 == artifact.archive_sha256
+                            && item.archive_size == artifact.archive_size
+                            && item.archive_member == artifact.archive_member => {}
                     _ => {
                         return Err(invalid_manifest(format!(
                             "runtime artifact {} disagrees with downloads.json",
@@ -529,11 +589,14 @@ fn validate_native_downloads(
 }
 
 fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
-    const REQUIRED_ROLES: [&str; 2] = ["detector", "recognizer-and-dictionary"];
+    let required_source_roles = match bundle.kind.as_str() {
+        "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+        "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+        _ => return Err(invalid_manifest(format!("{} has invalid kind", bundle.id))),
+    };
     let source_roles: BTreeSet<_> =
         bundle.source_artifacts.iter().map(|artifact| artifact.role.as_str()).collect();
-    if source_roles.len() != bundle.source_artifacts.len()
-        || source_roles != BTreeSet::from(REQUIRED_ROLES)
+    if source_roles.len() != bundle.source_artifacts.len() || source_roles != required_source_roles
     {
         return Err(invalid_manifest(format!(
             "{} source artifacts must have exactly the required unique roles",
@@ -541,10 +604,15 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
         )));
     }
     if !bundle.runtime_artifacts.is_empty() {
+        let required_runtime_roles = match bundle.kind.as_str() {
+            "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+            "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+            _ => unreachable!(),
+        };
         let runtime_roles: BTreeSet<_> =
             bundle.runtime_artifacts.iter().map(|artifact| artifact.role.as_str()).collect();
         if runtime_roles.len() != bundle.runtime_artifacts.len()
-            || runtime_roles != BTreeSet::from(REQUIRED_ROLES)
+            || runtime_roles != required_runtime_roles
         {
             return Err(invalid_manifest(format!(
                 "{} runtime artifacts must have exactly the required unique roles",
@@ -563,6 +631,25 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
     if artifact.size == 0 || artifact.role.is_empty() || artifact.license.is_empty() {
         return Err(invalid_manifest(format!("runtime artifact {} is incomplete", artifact.id)));
     }
+    match (
+        &artifact.archive_sha256,
+        artifact.archive_size,
+        &artifact.archive_member,
+        &artifact.archive_members,
+    ) {
+        (None, None, None, None) => {}
+        (Some(hash), Some(size), Some(member), Some(members))
+            if size > artifact.size
+                && validate_hash(hash).is_ok()
+                && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                && validate_archive_members(artifact, members).is_ok() => {}
+        _ => {
+            return Err(invalid_manifest(format!(
+                "runtime artifact {} has invalid archive acquisition",
+                artifact.id
+            )));
+        }
+    }
     let platforms: BTreeSet<_> = artifact.platforms.iter().map(String::as_str).collect();
     if platforms.is_empty()
         || platforms.len() != artifact.platforms.len()
@@ -570,6 +657,41 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
     {
         return Err(invalid_manifest(format!(
             "runtime artifact {} has invalid platforms",
+            artifact.id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_archive_members(
+    artifact: &RuntimeArtifact,
+    members: &[ArchiveMember],
+) -> Result<(), ConversionError> {
+    let expected = [
+        ("PP-OCRv6_tiny_rec_onnx_infer/", "directory", 0, None),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+            "file",
+            artifact.size,
+            Some(artifact.sha256.as_str()),
+        ),
+        (
+            "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
+            "file",
+            55_571,
+            Some("66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"),
+        ),
+    ];
+    if members.len() != expected.len()
+        || members.iter().zip(expected).any(|(actual, expected)| {
+            actual.path != expected.0
+                || actual.kind != expected.1
+                || actual.size != expected.2
+                || actual.sha256.as_deref() != expected.3
+        })
+    {
+        return Err(invalid_manifest(format!(
+            "runtime artifact {} has invalid archive structure",
             artifact.id
         )));
     }
@@ -713,12 +835,16 @@ pub enum ModelManagerError {
 /// and response-size policy before returning a stream. The manager still
 /// enforces the manifest size and hash while reading.
 pub trait ModelFetcher {
-    /// Opens the exact runtime artifact requested by the manager.
+    /// Opens the authority-identified stream requested by the manager.
+    ///
+    /// Direct acquisitions contain the final runtime file. Archive-member
+    /// acquisitions contain the complete raw archive, never a pre-extracted
+    /// member; the manager verifies both archive and member authorities.
     fn open(
         &self,
         artifact: &RuntimeArtifact,
         context: &ExecutionContext,
-    ) -> Result<Box<dyn Read>, ModelManagerError>;
+    ) -> Result<AcquiredModelArtifact, ModelManagerError>;
 }
 
 /// Observed bundle state. Inspection never accesses the network.
@@ -738,6 +864,14 @@ pub struct ModelManager {
     manifest: ModelManifest,
     writable_root: PathBuf,
     bundled_root: Option<PathBuf>,
+}
+
+pub(crate) struct VerifiedRuntimeArtifact {
+    pub path: PathBuf,
+    pub sha256: String,
+    pub bytes: Arc<[u8]>,
+    pub file_identity: String,
+    pub memory_reservation: Arc<ResourceReservation>,
 }
 
 impl ModelManager {
@@ -777,8 +911,7 @@ impl ModelManager {
         if !is_installable(bundle) {
             return Ok(unavailable_status(bundle));
         }
-        ensure_durable_transactions_supported()?;
-        self.recover_if_present(bundle, context)?;
+        self.reject_pending_transaction(bundle)?;
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
             if safe_existing_directory(&path)? {
@@ -843,9 +976,123 @@ impl ModelManager {
         Ok(status)
     }
 
+    /// Recovers an interrupted install transaction under the durable model lock.
+    ///
+    /// Status, list, show, verify, and path remain read-only on every supported
+    /// product target. Callers must opt in to this mutation before retrying a
+    /// failed install or remove operation.
+    pub fn recover_with_context(
+        &self,
+        id: &str,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        ensure_durable_transactions_supported()?;
+        context.checkpoint()?;
+        if !safe_existing_directory(&self.writable_root)? {
+            return Ok(());
+        }
+        let lock = self.acquire_lock()?;
+        let result = self.recover_locked(bundle, context);
+        drop(lock);
+        result
+    }
+
     /// Returns the path only for a complete installed bundle.
     pub fn path(&self, id: &str) -> Result<PathBuf, ModelManagerError> {
         self.verify(id)?.path.ok_or(ModelManagerError::NotInstalled)
+    }
+
+    pub(crate) fn verified_runtime_artifact(
+        &self,
+        id: &str,
+        role: &str,
+        context: &ExecutionContext,
+    ) -> Result<VerifiedRuntimeArtifact, ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        let artifact = bundle
+            .runtime_artifacts
+            .iter()
+            .find(|artifact| artifact.role == role)
+            .ok_or(ModelManagerError::ComponentUnavailable)?;
+        let status = self.verify_with_context(id, context)?;
+        let directory = status.path.ok_or(ModelManagerError::NotInstalled)?;
+        #[cfg(unix)]
+        let mut file = {
+            use rustix::fs::{Mode, OFlags};
+            let directory_fd = rustix::fs::open(
+                &directory,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| ModelManagerError::Io(std::io::Error::from(error)))?;
+            let fd = rustix::fs::openat(
+                &directory_fd,
+                &artifact.file_name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| ModelManagerError::Io(std::io::Error::from(error)))?;
+            File::from(fd)
+        };
+        #[cfg(not(unix))]
+        let mut file =
+            required_regular_file(&directory.join(&artifact.file_name), "artifact missing")?;
+        let metadata = file.metadata()?;
+        if metadata.len() != artifact.size {
+            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+        }
+        let mut reservation = context.reserve_memory(artifact.size)?;
+        let capacity = usize::try_from(artifact.size)
+            .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            context.checkpoint()?;
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len().checked_add(count).is_none_or(|length| length > capacity) {
+                return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+            }
+            digest.update(&buffer[..count]);
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        if bytes.len() != capacity || format!("{:x}", digest.finalize()) != artifact.sha256 {
+            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+        }
+        #[cfg(unix)]
+        let file_identity = {
+            use std::os::unix::fs::MetadataExt as _;
+            format!("unix-dev-ino:{}:{}", metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let file_identity = format!("verified:{}:{}", artifact.sha256, artifact.size);
+        let actual_bytes = bytes.capacity();
+        if actual_bytes > capacity {
+            return Err(ModelManagerError::Corrupt(format!(
+                "{} allocation exceeded its authority",
+                artifact.file_name
+            )));
+        }
+        // `Arc<[u8]>::from(Vec<u8>)` may allocate a ref-counted backing and
+        // copy while the Vec is still live, so account the conversion peak.
+        reservation.grow(artifact.size)?;
+        context.checkpoint()?;
+        let bytes: Arc<[u8]> = Arc::from(bytes);
+        reservation.shrink(artifact.size)?;
+        Ok(VerifiedRuntimeArtifact {
+            path: directory.join(&artifact.file_name),
+            sha256: artifact.sha256.clone(),
+            bytes,
+            file_identity,
+            memory_reservation: Arc::new(reservation),
+        })
     }
 
     /// Removes only a user-owned directory while holding an interprocess lock.
@@ -928,7 +1175,7 @@ impl ModelManager {
         context.checkpoint()?;
         let total_size = bundle.runtime_artifacts.iter().try_fold(0_u64, |total, artifact| {
             total
-                .checked_add(artifact.size)
+                .checked_add(artifact.archive_size.unwrap_or(artifact.size).max(artifact.size))
                 .ok_or_else(|| ModelManagerError::Corrupt("runtime artifact sizes overflow".into()))
         })?;
         let _temporary = context.reserve_temporary(total_size)?;
@@ -956,38 +1203,15 @@ impl ModelManager {
         let staging = StagingDirectory::new(staging_path);
         for artifact in &bundle.runtime_artifacts {
             context.checkpoint()?;
-            let mut source = fetcher.open(artifact, context)?;
+            let acquired = fetcher.open(artifact, context)?;
             let path = staging.path().join(&artifact.file_name);
             let mut destination = OpenOptions::new().write(true).create_new(true).open(&path)?;
-            let mut digest = Sha256::new();
-            let mut received = 0_u64;
-            let mut buffer = [0_u8; 64 * 1024];
-            loop {
-                context.checkpoint()?;
-                let count = source.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                let count_u64 = u64::try_from(count)
-                    .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
-                received = received
-                    .checked_add(count_u64)
-                    .ok_or_else(|| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
-                if received > artifact.size {
-                    return Err(ModelManagerError::Corrupt(format!(
-                        "{} exceeds declared size",
-                        artifact.file_name
-                    )));
-                }
-                destination.write_all(&buffer[..count])?;
-                digest.update(&buffer[..count]);
-            }
-            if received != artifact.size || format!("{:x}", digest.finalize()) != artifact.sha256 {
-                return Err(ModelManagerError::Corrupt(format!(
-                    "{} has a size or SHA-256 mismatch",
-                    artifact.file_name
-                )));
-            }
+            model_acquisition::write_verified_artifact(
+                artifact,
+                acquired,
+                &mut destination,
+                context,
+            )?;
             destination.sync_all()?;
         }
         let state = serde_json::to_vec(&serde_json::json!({
@@ -1064,18 +1288,31 @@ impl ModelManager {
         Ok(file)
     }
 
-    fn recover_if_present(
-        &self,
-        bundle: &ModelBundle,
-        context: &ExecutionContext,
-    ) -> Result<(), ModelManagerError> {
+    fn reject_pending_transaction(&self, bundle: &ModelBundle) -> Result<(), ModelManagerError> {
         if !safe_existing_directory(&self.writable_root)? {
             return Ok(());
         }
-        let lock = self.acquire_lock()?;
-        let result = self.recover_locked(bundle, context);
-        drop(lock);
-        result
+        let journal = journal_path(&self.writable_root, &bundle.id);
+        match fs::symlink_metadata(&journal) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(ModelManagerError::UnsafePath);
+            }
+            Ok(_) => {
+                return Err(ModelManagerError::Corrupt(
+                    "interrupted model transaction requires explicit recovery".into(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ModelManagerError::Io(error)),
+        }
+        if !transaction_residues(&self.writable_root, &bundle.id)?.is_empty()
+            || journal_temporary_present(&self.writable_root, &bundle.id)?
+        {
+            return Err(ModelManagerError::Corrupt(
+                "interrupted model transaction requires explicit recovery".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn recover_locked(
@@ -1607,6 +1844,18 @@ fn transaction_residues(root: &Path, id: &str) -> Result<Vec<String>, ModelManag
     Ok(result)
 }
 
+fn journal_temporary_present(root: &Path, id: &str) -> Result<bool, ModelManagerError> {
+    let prefix = format!(".{id}.install-journal.tmp-");
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
+        if name.starts_with(&prefix) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn required_file_if_present(path: &Path) -> Result<Option<File>, ModelManagerError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -1806,8 +2055,8 @@ mod tests {
         let models = include_str!("../../../models/manifest.json");
         let downloads = include_str!("../../../third_party/licenses/downloads.json");
         let unknown = models.replacen(
-            "\"schema_version\": 1",
-            "\"schema_version\": 1, \"surprise\": true",
+            "\"schema_version\": 2",
+            "\"schema_version\": 2, \"surprise\": true",
             1,
         );
         assert!(ModelManifest::from_authorities(&unknown, downloads).is_err());
@@ -1837,6 +2086,46 @@ mod tests {
     }
 
     #[test]
+    fn synchronized_model_and_download_drift_cannot_replace_official_recognizer_authority() {
+        let models = include_str!("../../../models/manifest.json");
+        let downloads = include_str!("../../../third_party/licenses/downloads.json");
+        let onnxruntime = include_str!("../../../third_party/onnxruntime/manifest.json");
+        for (original, replacement) in [
+            (
+                "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            (
+                "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            (
+                "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ),
+        ] {
+            let changed_models = models.replace(original, replacement);
+            let changed_downloads = downloads.replace(original, replacement);
+            assert!(
+                ModelManifest::from_all_authorities(
+                    &changed_models,
+                    &changed_downloads,
+                    onnxruntime,
+                )
+                .is_err(),
+                "synchronized mutation {original}"
+            );
+        }
+        let changed_config = models.replace(
+            "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
+            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        );
+        assert!(
+            ModelManifest::from_all_authorities(&changed_config, downloads, onnxruntime).is_err()
+        );
+    }
+
+    #[test]
     fn source_and_runtime_roles_are_exact_complete_and_unique() {
         let mut manifest = ModelManifest::embedded().unwrap();
         let bundle = &mut manifest.bundles[0];
@@ -1849,6 +2138,10 @@ mod tests {
             role: "detector".into(),
             file_name: "detector.onnx".into(),
             url: "https://example.invalid/detector.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
+            archive_members: None,
             sha256: "a".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -1860,6 +2153,10 @@ mod tests {
             role: "recognizer-and-dictionary".into(),
             file_name: "recognizer.onnx".into(),
             url: "https://example.invalid/recognizer.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
+            archive_members: None,
             sha256: "b".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -1930,7 +2227,10 @@ mod tests {
         assert_eq!(status.state, "unavailable");
         assert_eq!(status.ownership, "none");
         assert!(status.path.is_none());
-        assert_eq!(manager.list().unwrap(), vec![status]);
+        let listed = manager.list().unwrap();
+        assert_eq!(listed[0], status);
+        assert_eq!(listed[1].id, "pp-ocrv6-tiny-recognizer-onnx");
+        assert_eq!(listed[1].state, "not-installed");
         assert!(matches!(manager.verify(id), Err(ModelManagerError::ComponentUnavailable)));
         assert!(matches!(manager.path(id), Err(ModelManagerError::ComponentUnavailable)));
         assert!(matches!(manager.remove(id), Err(ModelManagerError::ComponentUnavailable)));
@@ -1953,12 +2253,24 @@ mod tests {
     impl ModelFetcher for BytesFetcher {
         fn open(
             &self,
-            _: &RuntimeArtifact,
+            artifact: &RuntimeArtifact,
             context: &ExecutionContext,
-        ) -> Result<Box<dyn Read>, ModelManagerError> {
+        ) -> Result<AcquiredModelArtifact, ModelManagerError> {
             context.checkpoint()?;
             self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Box::new(std::io::Cursor::new(self.bytes.clone())))
+            let acquisition =
+                match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
+                    (Some(hash), Some(size), Some(member)) => ModelAcquisition::ArchiveMember {
+                        archive_sha256: hash.clone(),
+                        archive_size: size,
+                        member: member.clone(),
+                    },
+                    _ => ModelAcquisition::Direct,
+                };
+            Ok(AcquiredModelArtifact {
+                acquisition,
+                bytes: Box::new(std::io::Cursor::new(self.bytes.clone())),
+            })
         }
     }
 
@@ -1972,6 +2284,10 @@ mod tests {
             role: "detector".into(),
             file_name: "model.onnx".into(),
             url: "https://example.invalid/model.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
+            archive_members: None,
             sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
             size: 5,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -1984,6 +2300,13 @@ mod tests {
         ExecutionContext::new(
             into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits { max_temporary_bytes, ..Default::default() },
+        )
+    }
+
+    fn memory_execution(max_memory_bytes: u64) -> ExecutionContext {
+        ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits { max_memory_bytes, ..Default::default() },
         )
     }
 
@@ -2030,6 +2353,32 @@ mod tests {
     }
 
     #[test]
+    fn verified_artifact_accounts_vec_to_arc_peak_and_retained_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let id = "pp-ocrv6-tiny-zh-en";
+        manager.install(id, &fetcher, &execution(5)).unwrap();
+
+        let insufficient = memory_execution(9);
+        assert!(matches!(
+            manager.verified_runtime_artifact(id, "detector", &insufficient),
+            Err(ModelManagerError::Execution(ConversionError::ResourceLimit { .. }))
+        ));
+        assert_eq!(insufficient.reserved_memory_bytes(), 0);
+
+        let exact = memory_execution(10);
+        let artifact = manager.verified_runtime_artifact(id, "detector", &exact).unwrap();
+        assert_eq!(&*artifact.bytes, b"hello");
+        assert_eq!(exact.reserved_memory_bytes(), 5);
+        drop(artifact);
+        assert_eq!(exact.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
     fn install_journal_recovers_after_backup_and_after_publish() {
         for fault in [InstallFault::AfterBackup, InstallFault::AfterPublish] {
             let temp = tempfile::tempdir().unwrap();
@@ -2046,6 +2395,7 @@ mod tests {
             ));
 
             let restarted = installable_manager(temp.path());
+            restarted.recover_with_context(id, &execution(5)).unwrap();
             assert_eq!(restarted.status(id).unwrap().state, "installed");
             assert_eq!(fs::read(restarted.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
             assert!(!journal_path(temp.path(), id).exists());
@@ -2068,6 +2418,7 @@ mod tests {
             write_complete_test_bundle(&staging, id);
             write_private_file(&temp_path, &bytes[..cut]).unwrap();
             let restarted = installable_manager(temp.path());
+            restarted.recover_with_context(id, &execution(5)).unwrap();
             assert_eq!(restarted.status(id).unwrap().state, "installed", "cut {cut}");
             assert!(!temp_path.exists(), "cut {cut}");
             assert!(!staging.exists(), "cut {cut}");
@@ -2120,7 +2471,10 @@ mod tests {
         destination_manager.install(id, &fetcher, &execution(5)).unwrap();
         fs::copy(journal_path(source.path(), id), journal_path(destination.path(), id)).unwrap();
         let before = fs::read(destination.path().join(id).join("model.onnx")).unwrap();
-        assert!(matches!(destination_manager.status(id), Err(ModelManagerError::Corrupt(_))));
+        assert!(matches!(
+            destination_manager.recover_with_context(id, &execution(5)),
+            Err(ModelManagerError::Corrupt(_))
+        ));
         assert_eq!(fs::read(destination.path().join(id).join("model.onnx")).unwrap(), before);
         assert!(journal_path(destination.path(), id).exists());
     }
@@ -2134,6 +2488,16 @@ mod tests {
             ensure_durable_transactions_supported(),
             Err(ModelManagerError::ComponentUnavailable)
         ));
+    }
+
+    #[test]
+    fn installable_component_status_is_a_read_only_cross_platform_operation() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let status = manager.status("pp-ocrv6-tiny-zh-en").unwrap();
+        assert_eq!(status.state, "not-installed");
+        assert!(!temp.path().join(".models-root.json").exists());
+        assert!(!temp.path().join(".models.lock").exists());
     }
 
     #[test]

@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "model_id": "pp-ocrv6-tiny-recognizer-onnx",
+  "upstream_repository": "https://github.com/PaddlePaddle/PaddleOCR",
+  "upstream_commit": "2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+  "preprocess_reference": "tools/infer/predict_rec.py",
+  "postprocess_reference": "ppocr/postprocess/rec_postprocess.py",
+  "runtime_archive_url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+  "runtime_archive_size": 4526080,
+  "runtime_archive_sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+  "runtime_model_member": "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+  "runtime_model_size": 4462639,
+  "runtime_model_sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+  "runtime_config_member": "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
+  "runtime_config_size": 55571,
+  "runtime_config_sha256": "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
+  "character_table_url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
+  "character_table_size": 27156,
+  "character_table_sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+  "character_table_entries": 6904,
+  "classes": 6906,
+  "blank_index": 0,
+  "append_space": true,
+  "license": "Apache-2.0",
+  "ir_version": 6,
+  "opset_domain": "",
+  "opset_version": 11,
+  "input_name": "x",
+  "input_dtype": "float32",
+  "input_shape": ["N", "3", "48", "W"],
+  "output_name": "fetch_name_0",
+  "output_dtype": "float32",
+  "output_shape": ["N", "T", "6906"],
+  "input_color": "BGR",
+  "crop_reference": "tools/infer/utility.py",
+  "perspective_interpolation": "OpenCV-INTER_CUBIC",
+  "perspective_border": "OpenCV-BORDER_REPLICATE",
+  "vertical_rotation": "numpy-rot90-counterclockwise",
+  "vertical_ratio_threshold": 1.5,
+  "resize_interpolation": "OpenCV-INTER_LINEAR",
+  "normalization_scale": 0.00392156862745098,
+  "normalization_mean": 0.5,
+  "normalization_standard_deviation": 0.5,
+  "maximum_width": 3200,
+  "quality_corpus": "fixtures/manifest.json#ocr_quality",
+  "quality_groups": [
+    {
+      "group": "simplified",
+      "evaluated_characters": 65,
+      "observed_errors": 0,
+      "maximum_cer": 0.05
+    },
+    {
+      "group": "traditional",
+      "evaluated_characters": 65,
+      "observed_errors": 6,
+      "maximum_cer": 0.1
+    },
+    {
+      "group": "english",
+      "evaluated_characters": 185,
+      "observed_errors": 1,
+      "maximum_cer": 0.05
+    },
+    {
+      "group": "mixed",
+      "evaluated_characters": 116,
+      "observed_errors": 1,
+      "maximum_cer": 0.08
+    }
+  ]
+}

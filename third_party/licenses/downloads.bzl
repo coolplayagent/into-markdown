@@ -19,12 +19,26 @@ def _downloads_impl(module_ctx):
     # character tables, licenses, hashes, sizes, and platform coverage are reviewed.
     # When populated, they remain manual and use the same authoritative manifest.
     for item in manifest.get("model_runtime_files", []):
-        http_file(
-            name = item["repository"],
-            downloaded_file_path = item["downloaded_file_path"],
-            sha256 = item["sha256"],
-            urls = [item["url"]],
-        )
+        if item.get("archive_sha256"):
+            http_archive(
+                name = item["repository"],
+                build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+                sha256 = item["archive_sha256"],
+                urls = [item["url"]],
+            )
+            http_file(
+                name = item["repository"] + "_archive",
+                downloaded_file_path = "runtime-model.tar",
+                sha256 = item["archive_sha256"],
+                urls = [item["url"]],
+            )
+        else:
+            http_file(
+                name = item["repository"],
+                downloaded_file_path = item["downloaded_file_path"],
+                sha256 = item["sha256"],
+                urls = [item["url"]],
+            )
 
     for item in manifest.get("native_archives", []):
         args = {

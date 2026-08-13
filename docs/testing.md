@@ -84,8 +84,10 @@ x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称
 CPU 推理，以验证 adapter、factory 重建和退出析构顺序；另一个真实 Expand fixture 请求约
 8 TiB float 输出，在 macOS ARM64 的 1 TiB `RLIMIT_AS` worker 中稳定失败为
 `resourceLimit`，父进程随后仍能创建 Identity session。该 ceiling 是虚拟地址空间而非
-RSS 声明，模型 session/run 和请求预算仍独立检查。fixture 不是产品 OCR 模型；
-当前模型 authority 没有 ONNX runtime artifact，因而没有产品模型推理验证。
+RSS 声明，模型 session/run 和请求预算仍独立检查。Identity/Expand fixture 不是产品 OCR
+模型。独立 recognizer component 的真实产品模型验证由显式
+`//crates/onnxruntime:ppocrv6_recognizer_quality` 执行；完整 detector pipeline 仍因缺少
+detector runtime artifact 而不可用。
 
 PDF 普通 Cargo/Bazel 测试使用纯 Rust mock、生成式小型数据和缺 runtime 的稳定错误，不下载
 或加载 native 库。单元测试覆盖 UTF-16 surrogate、负 count、极端 limit、损坏 bitmap 长度、
@@ -283,8 +285,11 @@ available 集合比对，并把每个非 OCR 样本送入真实 converter 和 Ma
 名称推断边界。
 
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
-recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供后续独立质量目标，
-两者均不进入普通测试或发布物。OCR golden 的 NFC、有效字符数、CER 空白/标点规则、
+recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，
+两者均不进入普通测试或发布物。该质量目标通过产品 `ModelManager` 安装原始官方 TAR，
+再经产品 resolver/ORT worker 运行 12 张图，并精确断言简体 0/65≤5%、繁体 6/65≤10%、
+英文 1/185≤5%、混排 1/116≤8%。普通 Cargo integration 明确报告该用例 ignored；fake
+runtime 单元测试不能满足质量门禁。OCR golden 的 NFC、有效字符数、CER 空白/标点规则、
 分组阈值、渲染参数和训练污染声明由 license audit 校验。固定 Python/Pillow/FreeType
 环境下用 `fixtures/generate.py --verify` 在临时目录重建并逐字节比对；checked-in PNG
 始终是权威，不宣称任意平台渲染器都能产生相同字节。详细操作见 `fixtures/README.md`。

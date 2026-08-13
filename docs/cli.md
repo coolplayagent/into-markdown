@@ -261,10 +261,12 @@ into-md models path <ID>
 
 转换过程不会自动下载模型。下载必须使用固定来源和 SHA-256，先校验再原子安装。
 只读发布模型不能被删除。`list`、`show`、`verify`、`path` 全程离线；JSON 输出包含
-`schemaVersion`、availability、state、ownership 和安装路径。当前清单只有上游
-source archives，尚无经审核的最终 ONNX/字符表文件，因此显示为
-`planned` / `unavailable`；`install`、`verify`、`path`、`remove` 对该 source-only
-条目均稳定返回 `componentUnavailable`。完整的清单、数据目录、事务和威胁边界见
+`schemaVersion`、availability、state、ownership 和安装路径。完整 pipeline bundle
+`pp-ocrv6-tiny-zh-en` 仍为 `planned` / `unavailable`；识别组件
+`pp-ocrv6-tiny-recognizer-onnx` 为 `available`，但 CLI 未配置执行下载的 transport，
+所以 `models install` 仍返回 `componentUnavailable`。library manager 可通过显式受控
+transport 安装组件；安装后 CLI 的离线 `verify`、`path` 和 `remove` 可管理同一状态。
+完整的清单、数据目录、事务和威胁边界见
 [本地模型管理](models.md)。
 
 ### AI Provider

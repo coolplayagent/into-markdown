@@ -1188,6 +1188,7 @@ mod tests {
                 run_memory_bytes: 1024 * 1024,
             },
             bytes,
+            memory_reservation: None,
         }
     }
 
@@ -1246,6 +1247,7 @@ mod tests {
                 run_memory_bytes: 1024 * 1024,
             },
             bytes,
+            memory_reservation: None,
         }
     }
 

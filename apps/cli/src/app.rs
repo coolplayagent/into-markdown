@@ -893,12 +893,14 @@ fn run_doctor(
         DoctorCheck {
             id: "modelFiles".into(),
             status: "unavailable".into(),
-            detail: "model installation and path backend is not implemented".into(),
+            detail: "library model manager is available; CLI download transport is not configured"
+                .into(),
         },
         DoctorCheck {
             id: "onnxRuntime".into(),
             status: "unavailable".into(),
-            detail: "runtime loading is not implemented".into(),
+            detail: "audited CPU loader exists; this CLI distribution has no configured native runtime path"
+                .into(),
         },
         DoctorCheck {
             id: "temporaryDirectory".into(),
