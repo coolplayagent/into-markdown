@@ -25,6 +25,312 @@ const MAX_HTML_EVENTS: usize = 1_000_000;
 const META_PRESCAN_BYTES: usize = 1024;
 const CHECKPOINT_EVENTS: usize = 1024;
 
+/// Persistent-output budget shared by a feed and every nested HTML fragment.
+///
+/// The reservation is owned by the feed until its final `Document` is complete.
+/// Nested HTML must reserve each material object and string before constructing
+/// it; callers only verify the returned counts and never perform the first
+/// limit check after allocation.
+pub(crate) struct FeedHtmlBudget {
+    pub(crate) memory: LogicalMemory,
+    pub(crate) nodes: usize,
+    pub(crate) inlines: usize,
+    pub(crate) assets: usize,
+    pub(crate) diagnostics: usize,
+    pub(crate) strings: usize,
+    pub(crate) output_bytes: u64,
+    persistent_memory_bytes: usize,
+    max_nodes: usize,
+    max_inlines: usize,
+    max_assets: usize,
+    max_diagnostics: usize,
+    max_strings: usize,
+    max_output_bytes: u64,
+    max_persistent_memory_bytes: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FeedHtmlBudgetSnapshot {
+    pub(crate) nodes: usize,
+    pub(crate) inlines: usize,
+    pub(crate) assets: usize,
+    pub(crate) diagnostics: usize,
+    pub(crate) strings: usize,
+    pub(crate) output_bytes: u64,
+    pub(crate) persistent_memory_bytes: usize,
+}
+
+impl FeedHtmlBudget {
+    pub(crate) fn new(
+        max_output_bytes: u64,
+        max_diagnostics: usize,
+        max_memory_bytes: u64,
+        context: &ExecutionContext,
+    ) -> Result<Self, ConversionError> {
+        Ok(Self {
+            memory: LogicalMemory::new(context)?,
+            nodes: 0,
+            inlines: 0,
+            assets: 0,
+            diagnostics: 0,
+            strings: 0,
+            output_bytes: 0,
+            persistent_memory_bytes: 0,
+            max_nodes: MAX_DOCUMENT_NODES,
+            max_inlines: MAX_DOCUMENT_INLINES,
+            max_assets: MAX_DOCUMENT_NODES,
+            max_diagnostics,
+            max_strings: MAX_DOCUMENT_NODES
+                .saturating_mul(8)
+                .saturating_add(MAX_DOCUMENT_INLINES.saturating_mul(2)),
+            max_output_bytes,
+            max_persistent_memory_bytes: max_memory_bytes,
+        })
+    }
+
+    fn charge_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        let next = self.persistent_memory_bytes.checked_add(bytes).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate persistent output memory overflowed".into(),
+            }
+        })?;
+        if u64::try_from(next).unwrap_or(u64::MAX) > self.max_persistent_memory_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!(
+                    "aggregate persistent output memory exceeds {} bytes",
+                    self.max_persistent_memory_bytes
+                ),
+            });
+        }
+        self.memory.charge(bytes)?;
+        self.persistent_memory_bytes = next;
+        Ok(())
+    }
+
+    fn consume(
+        current: &mut usize,
+        maximum: usize,
+        amount: usize,
+        name: &'static str,
+    ) -> Result<(), ConversionError> {
+        let next = current.checked_add(amount).ok_or_else(|| ConversionError::ResourceLimit {
+            limit: name,
+            detail: format!("aggregate {name} count overflowed"),
+        })?;
+        if next > maximum {
+            return Err(ConversionError::ResourceLimit {
+                limit: name,
+                detail: format!("aggregate {name} exceeds {maximum}"),
+            });
+        }
+        *current = next;
+        Ok(())
+    }
+
+    pub(crate) fn node(&mut self) -> Result<(), ConversionError> {
+        Self::consume(&mut self.nodes, self.max_nodes, 1, "feed_nodes")?;
+        self.charge_memory(size_of::<BlockNode>())?;
+        record_feed_html_object(FeedHtmlObjectKind::Node);
+        Ok(())
+    }
+
+    pub(crate) fn nodes(&mut self, count: usize) -> Result<(), ConversionError> {
+        Self::consume(&mut self.nodes, self.max_nodes, count, "feed_nodes")?;
+        self.charge_memory(count.saturating_mul(size_of::<BlockNode>()))?;
+        Ok(())
+    }
+
+    pub(crate) fn inline(&mut self) -> Result<(), ConversionError> {
+        Self::consume(&mut self.inlines, self.max_inlines, 1, "feed_inlines")?;
+        self.charge_memory(size_of::<Inline>())?;
+        record_feed_html_object(FeedHtmlObjectKind::Inline);
+        Ok(())
+    }
+
+    pub(crate) fn inlines(&mut self, count: usize) -> Result<(), ConversionError> {
+        Self::consume(&mut self.inlines, self.max_inlines, count, "feed_inlines")?;
+        self.charge_memory(count.saturating_mul(size_of::<Inline>()))?;
+        Ok(())
+    }
+
+    pub(crate) fn asset(&mut self) -> Result<(), ConversionError> {
+        Self::consume(&mut self.assets, self.max_assets, 1, "feed_assets")?;
+        self.charge_memory(size_of::<Asset>())?;
+        record_feed_html_object(FeedHtmlObjectKind::Asset);
+        Ok(())
+    }
+
+    pub(crate) fn diagnostic(
+        &mut self,
+        code_bytes: usize,
+        message_bytes: usize,
+    ) -> Result<(), ConversionError> {
+        Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
+        self.string(code_bytes)?;
+        self.string(message_bytes)?;
+        self.charge_memory(size_of::<Diagnostic>())?;
+        record_feed_html_object(FeedHtmlObjectKind::Diagnostic);
+        Ok(())
+    }
+
+    pub(crate) fn string(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        self.strings(1, bytes)
+    }
+
+    pub(crate) fn strings(&mut self, count: usize, bytes: usize) -> Result<(), ConversionError> {
+        Self::consume(&mut self.strings, self.max_strings, count, "feed_output_strings")?;
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        let next =
+            self.output_bytes.checked_add(bytes).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_feed_text_bytes",
+                detail: "aggregate feed output bytes overflowed".into(),
+            })?;
+        if next > self.max_output_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_feed_text_bytes",
+                detail: format!("aggregate feed output exceeds {} bytes", self.max_output_bytes),
+            });
+        }
+        self.output_bytes = next;
+        self.charge_memory(usize::try_from(bytes).unwrap_or(usize::MAX))?;
+        record_feed_html_objects(FeedHtmlObjectKind::String, count);
+        Ok(())
+    }
+
+    /// Account for a replacement allocation without counting the replacement
+    /// as another persistent output string. The old allocation remains leased
+    /// until the completed feed is returned, while only growth affects the
+    /// aggregate output-byte ceiling.
+    pub(crate) fn replace_string(
+        &mut self,
+        old_bytes: usize,
+        new_bytes: usize,
+    ) -> Result<(), ConversionError> {
+        let growth = new_bytes.saturating_sub(old_bytes);
+        let growth = u64::try_from(growth).unwrap_or(u64::MAX);
+        let next = self.output_bytes.checked_add(growth).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_feed_text_bytes",
+                detail: "aggregate feed output bytes overflowed".into(),
+            }
+        })?;
+        if next > self.max_output_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_feed_text_bytes",
+                detail: format!("aggregate feed output exceeds {} bytes", self.max_output_bytes),
+            });
+        }
+        self.charge_memory(new_bytes)?;
+        self.output_bytes = next;
+        record_feed_html_object(FeedHtmlObjectKind::String);
+        Ok(())
+    }
+
+    /// Account memory for a temporary string retained while nested output is
+    /// merged. It is not another output string and therefore does not consume
+    /// the persistent string-count or output-byte ceilings.
+    pub(crate) fn temporary_string(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        self.charge_memory(bytes)?;
+        record_feed_html_object(FeedHtmlObjectKind::String);
+        Ok(())
+    }
+
+    pub(crate) const fn snapshot(&self) -> FeedHtmlBudgetSnapshot {
+        FeedHtmlBudgetSnapshot {
+            nodes: self.nodes,
+            inlines: self.inlines,
+            assets: self.assets,
+            diagnostics: self.diagnostics,
+            strings: self.strings,
+            output_bytes: self.output_bytes,
+            persistent_memory_bytes: self.persistent_memory_bytes,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_limits(&mut self, limits: FeedHtmlBudgetSnapshot) {
+        self.max_nodes = limits.nodes;
+        self.max_inlines = limits.inlines;
+        self.max_assets = limits.assets;
+        self.max_diagnostics = limits.diagnostics;
+        self.max_strings = limits.strings;
+        self.max_output_bytes = limits.output_bytes;
+        self.max_persistent_memory_bytes =
+            u64::try_from(limits.persistent_memory_bytes).unwrap_or(u64::MAX);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FeedHtmlObjectKind {
+    Node,
+    Inline,
+    Asset,
+    Diagnostic,
+    String,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FeedHtmlObjectCounts {
+    pub(crate) nodes: usize,
+    pub(crate) inlines: usize,
+    pub(crate) assets: usize,
+    pub(crate) diagnostics: usize,
+    pub(crate) strings: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FEED_HTML_OBJECTS: MutCell<FeedHtmlObjectCounts> = const {
+        MutCell::new(FeedHtmlObjectCounts {
+            nodes: 0,
+            inlines: 0,
+            assets: 0,
+            diagnostics: 0,
+            strings: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+fn record_feed_html_object(kind: FeedHtmlObjectKind) {
+    record_feed_html_objects(kind, 1);
+}
+
+#[cfg(test)]
+fn record_feed_html_objects(kind: FeedHtmlObjectKind, amount: usize) {
+    FEED_HTML_OBJECTS.with(|count| {
+        let mut current = count.get();
+        let target = match kind {
+            FeedHtmlObjectKind::Node => &mut current.nodes,
+            FeedHtmlObjectKind::Inline => &mut current.inlines,
+            FeedHtmlObjectKind::Asset => &mut current.assets,
+            FeedHtmlObjectKind::Diagnostic => &mut current.diagnostics,
+            FeedHtmlObjectKind::String => &mut current.strings,
+        };
+        *target = target.saturating_add(amount);
+        count.set(current);
+    });
+}
+
+#[cfg(not(test))]
+fn record_feed_html_object(_: FeedHtmlObjectKind) {}
+
+#[cfg(not(test))]
+fn record_feed_html_objects(_: FeedHtmlObjectKind, _: usize) {}
+
+#[cfg(test)]
+pub(crate) fn reset_feed_html_object_count() {
+    FEED_HTML_OBJECTS.with(|count| count.set(FeedHtmlObjectCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn feed_html_object_count() -> FeedHtmlObjectCounts {
+    FEED_HTML_OBJECTS.with(MutCell::get)
+}
+
 /// Browser-compatible HTML5 parser with an offline semantic extractor.
 #[derive(Debug, Default)]
 pub struct HtmlConverter;
@@ -485,6 +791,15 @@ fn convert_html(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
+    convert_html_with_budget(input, options, context, None)
+}
+
+fn convert_html_with_budget(
+    input: &ResolvedInput,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    mut feed_budget: Option<&mut FeedHtmlBudget>,
+) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let input_size = u64::try_from(input.bytes.len()).unwrap_or(u64::MAX);
     if input_size > options.limits.max_input_bytes {
@@ -493,7 +808,8 @@ fn convert_html(
             detail: format!("{input_size} > {}", options.limits.max_input_bytes),
         });
     }
-    let (charset, charset_diagnostics) = html_charset(input, options, context)?;
+    let (charset, charset_diagnostics) =
+        html_charset(input, options, context, feed_budget.as_deref_mut())?;
     let (mut decoded, mut diagnostics) =
         decode_source(&input.bytes, charset.as_deref(), options.text.decoding_mode, context)?;
     diagnostics.extend(charset_diagnostics);
@@ -520,10 +836,16 @@ fn convert_html(
         return Err(error);
     }
     if dom.parse_errors.get() > 0 {
+        if let Some(budget) = feed_budget.as_deref_mut() {
+            budget.diagnostic("html.parseRecovered".len(), 96)?;
+        }
         diagnostics.push(warning(
             "html.parseRecovered",
             format!("HTML5 parser recovered from {} syntax error(s)", dom.parse_errors.get()),
         ));
+    }
+    if let Some(budget) = feed_budget.as_deref_mut() {
+        budget.diagnostic("html.sourceLocationUnavailable".len(), 160)?;
     }
     diagnostics.push(warning(
         "html.sourceLocationUnavailable",
@@ -531,7 +853,7 @@ fn convert_html(
     ));
 
     let nodes = dom.nodes.into_inner();
-    let builder = Builder::new(&nodes, input, decoded, options, context, diagnostics);
+    let builder = Builder::new(&nodes, input, decoded, options, context, diagnostics, feed_budget);
     builder.extract()
 }
 
@@ -542,6 +864,7 @@ pub(crate) fn convert_feed_html_fragment(
     base_uri: Option<&str>,
     options: &ConversionOptions,
     context: &ExecutionContext,
+    budget: &mut FeedHtmlBudget,
 ) -> Result<ConverterOutput, ConversionError> {
     let input = ResolvedInput {
         bytes: std::sync::Arc::from(fragment.as_bytes()),
@@ -552,13 +875,14 @@ pub(crate) fn convert_feed_html_fragment(
             ..Default::default()
         },
     };
-    convert_html(&input, options, context)
+    convert_html_with_budget(&input, options, context, Some(budget))
 }
 
 fn html_charset(
     input: &ResolvedInput,
     options: &ConversionOptions,
     context: &ExecutionContext,
+    feed_budget: Option<&mut FeedHtmlBudget>,
 ) -> Result<(Option<String>, Vec<Diagnostic>), ConversionError> {
     let explicit = options
         .text
@@ -570,6 +894,13 @@ fn html_charset(
         if let Some(meta) = prescan_meta_charset(&input.bytes, context)?
             && !meta.eq_ignore_ascii_case(&explicit)
         {
+            let message_len = "meta charset  conflicts with explicit charset "
+                .len()
+                .saturating_add(meta.len())
+                .saturating_add(explicit.len());
+            if let Some(budget) = feed_budget {
+                budget.diagnostic("html.metaCharsetIgnored".len(), message_len)?;
+            }
             diagnostics.push(warning(
                 "html.metaCharsetIgnored",
                 format!("meta charset {meta} conflicts with explicit charset {explicit}"),
@@ -852,7 +1183,7 @@ fn is_html_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0c)
 }
 
-struct Builder<'a> {
+struct Builder<'a, 'budget> {
     nodes: &'a [DomNode],
     input: &'a ResolvedInput,
     _decoded: DecodedText,
@@ -867,6 +1198,7 @@ struct Builder<'a> {
     max_table_rows: u64,
     max_table_columns: u64,
     max_table_cells: u64,
+    feed_budget: Option<&'budget mut FeedHtmlBudget>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -912,7 +1244,7 @@ struct SourceTableRow {
     group: usize,
 }
 
-impl<'a> Builder<'a> {
+impl<'a, 'budget> Builder<'a, 'budget> {
     fn new(
         nodes: &'a [DomNode],
         input: &'a ResolvedInput,
@@ -920,6 +1252,7 @@ impl<'a> Builder<'a> {
         options: &ConversionOptions,
         context: &'a ExecutionContext,
         diagnostics: Vec<Diagnostic>,
+        feed_budget: Option<&'budget mut FeedHtmlBudget>,
     ) -> Self {
         Self {
             nodes,
@@ -936,13 +1269,69 @@ impl<'a> Builder<'a> {
             max_table_rows: options.limits.max_table_rows,
             max_table_columns: options.limits.max_table_columns,
             max_table_cells: options.limits.max_table_cells,
+            feed_budget,
         }
     }
 
+    fn reserve_string(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.string(bytes)?;
+        }
+        Ok(())
+    }
+
+    fn reserve_inline(&mut self) -> Result<(), ConversionError> {
+        self.inline_count =
+            self.inline_count.checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "html_inlines",
+                detail: "HTML inline count overflowed".into(),
+            })?;
+        if self.inline_count > MAX_DOCUMENT_INLINES {
+            return Self::limit("html_inlines", "HTML produced too many inline nodes");
+        }
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.inline()?;
+        }
+        Ok(())
+    }
+
+    fn reserve_structural(&mut self) -> Result<(), ConversionError> {
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.node()?;
+        }
+        Ok(())
+    }
+
+    fn push_warning(&mut self, code: &str, message: &str) -> Result<(), ConversionError> {
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.diagnostic(code.len(), message.len())?;
+        }
+        self.diagnostics.push(warning(code, message.into()));
+        Ok(())
+    }
+
+    fn push_warning_with<F>(
+        &mut self,
+        code: &str,
+        message_bytes: usize,
+        make_message: F,
+    ) -> Result<(), ConversionError>
+    where
+        F: FnOnce() -> String,
+    {
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.diagnostic(code.len(), message_bytes)?;
+        }
+        self.diagnostics.push(warning(code, make_message()));
+        Ok(())
+    }
+
     fn extract(mut self) -> Result<ConverterOutput, ConversionError> {
-        self.read_metadata();
-        self.base = self.valid_base();
-        let root = self.choose_main();
+        if self.feed_budget.is_none() {
+            self.read_metadata();
+        }
+        self.base = self.valid_base()?;
+        let root = self.choose_main()?;
         self.blocks = self.collect_child_blocks(root, 0)?;
         if self.blocks.is_empty() {
             return Err(ConversionError::Malformed {
@@ -1002,7 +1391,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn valid_base(&mut self) -> Option<Url> {
+    fn valid_base(&mut self) -> Result<Option<Url>, ConversionError> {
         let source = self.input.metadata.uri.as_deref().and_then(canonical_base_url);
         for id in 0..self.nodes.len() {
             let context = self.node_context(id);
@@ -1014,18 +1403,18 @@ impl<'a> Builder<'a> {
             {
                 let parsed = Url::parse(href).ok().or_else(|| source.as_ref()?.join(href).ok());
                 if let Some(url) = parsed.and_then(valid_http_base) {
-                    return Some(url);
+                    return Ok(Some(url));
                 }
-                self.diagnostics.push(warning(
+                self.push_warning(
                     "html.baseRejected",
-                    "base URL is not a canonical public HTTP(S) reference".into(),
-                ));
+                    "base URL is not a canonical public HTTP(S) reference",
+                )?;
             }
         }
-        source
+        Ok(source)
     }
 
-    fn choose_main(&mut self) -> usize {
+    fn choose_main(&mut self) -> Result<usize, ConversionError> {
         let body = (0..self.nodes.len()).find(|id| self.name(*id) == Some("body")).unwrap_or(0);
         let explicit = (0..self.nodes.len())
             .filter(|id| {
@@ -1037,13 +1426,13 @@ impl<'a> Builder<'a> {
             .collect::<Vec<_>>();
         let selected = explicit.into_iter().max_by_key(|id| (self.score(*id), usize::MAX - *id));
         if let Some(id) = selected.filter(|id| self.visible_text_len(*id) > 0) {
-            return id;
+            return Ok(id);
         }
-        self.diagnostics.push(warning(
+        self.push_warning(
             "html.mainContentFallback",
-            "no non-empty explicit main-content region; used visible body content".into(),
-        ));
-        body
+            "no non-empty explicit main-content region; used visible body content",
+        )?;
+        Ok(body)
     }
 
     // Fixed scoring constants are intentionally simple and covered by golden tests.
@@ -1075,21 +1464,26 @@ impl<'a> Builder<'a> {
                 continue;
             }
             if self.is_block_node(child) {
-                self.flush_paragraph(&mut blocks, &mut inline);
+                self.flush_paragraph(&mut blocks, &mut inline)?;
                 blocks.extend(self.build_block(child, depth.saturating_add(1))?);
             } else {
                 inline.extend(self.inline_node(child, Vec::new())?);
             }
         }
-        self.flush_paragraph(&mut blocks, &mut inline);
+        self.flush_paragraph(&mut blocks, &mut inline)?;
         Ok(blocks)
     }
 
-    fn flush_paragraph(&mut self, blocks: &mut Vec<BlockNode>, inline: &mut Vec<Inline>) {
+    fn flush_paragraph(
+        &mut self,
+        blocks: &mut Vec<BlockNode>,
+        inline: &mut Vec<Inline>,
+    ) -> Result<(), ConversionError> {
         if inline.is_empty() {
-            return;
+            return Ok(());
         }
-        blocks.push(self.make_node(Block::Paragraph(std::mem::take(inline))));
+        blocks.push(self.make_node(Block::Paragraph(std::mem::take(inline)))?);
+        Ok(())
     }
 
     fn build_block(&mut self, id: usize, depth: usize) -> Result<Vec<BlockNode>, ConversionError> {
@@ -1102,38 +1496,71 @@ impl<'a> Builder<'a> {
         let block = match name.as_str() {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let content = self.inline_children(id)?;
-                (!content.is_empty()).then(|| {
-                    self.make_node(Block::Heading { level: name.as_bytes()[1] - b'0', content })
-                })
+                if content.is_empty() {
+                    None
+                } else {
+                    Some(
+                        self.make_node(Block::Heading {
+                            level: name.as_bytes()[1] - b'0',
+                            content,
+                        })?,
+                    )
+                }
             }
             "p" | "address" | "figcaption" => {
                 let content = self.inline_children(id)?;
-                (!content.is_empty()).then(|| self.make_node(Block::Paragraph(content)))
+                if content.is_empty() {
+                    None
+                } else {
+                    Some(self.make_node(Block::Paragraph(content))?)
+                }
             }
             "div" | "section" | "article" | "main" | "body" | "html" => {
                 return self.collect_child_blocks(id, depth);
             }
-            "ul" | "ol" => {
-                self.build_list(id, name == "ol", depth)?.map(|value| self.make_node(value))
-            }
-            "table" => self.build_table(id, depth)?.map(|value| self.make_node(value)),
+            "ul" | "ol" => match self.build_list(id, name == "ol", depth)? {
+                Some(value) => Some(self.make_node(value)?),
+                None => None,
+            },
+            "table" => match self.build_table(id, depth)? {
+                Some(value) => Some(self.make_node(value)?),
+                None => None,
+            },
             "pre" => {
-                let language = self
-                    .first_visible_descendant(id, "code")
-                    .and_then(|code| self.code_language(code));
-                let text = self.raw_visible_text(id);
-                (!text.is_empty()).then(|| self.make_node(Block::Code { language, text }))
+                let code = self.first_visible_descendant(id, "code");
+                let language_bytes = code.and_then(|code| self.code_language_len(code));
+                let text_bytes = self.raw_visible_text_len(id);
+                if text_bytes == 0 {
+                    None
+                } else {
+                    self.reserve_string(text_bytes)?;
+                    language_bytes.map_or(Ok(()), |bytes| self.reserve_string(bytes))?;
+                    let text = self.raw_visible_text(id);
+                    let language = code.and_then(|code| self.code_language(code));
+                    Some(self.make_node(Block::Code { language, text })?)
+                }
             }
-            "img" => self.build_image(id).map(|value| self.make_node(value)),
-            "hr" => Some(self.make_node(Block::Rule)),
+            "img" => match self.build_image(id)? {
+                Some(value) => Some(self.make_node(value)?),
+                None => None,
+            },
+            "hr" => Some(self.make_node(Block::Rule)?),
             "svg" | "math" => {
+                let text_bytes = self.raw_text_unfiltered_len(id);
+                self.reserve_string(text_bytes)?;
+                self.reserve_string(name.len())?;
                 let text = normalize(&self.raw_text_unfiltered(id));
-                self.diagnostics.push(warning(
-                    "html.activeForeignContentOmitted",
-                    format!("{name} content was not traversed as HTML resources"),
-                ));
-                (!text.is_empty())
-                    .then(|| self.make_node(Block::Code { language: Some(name), text }))
+                let message_bytes =
+                    name.len().saturating_add(" content was not traversed as HTML resources".len());
+                self.push_warning_with("html.activeForeignContentOmitted", message_bytes, || {
+                    format!("{name} content was not traversed as HTML resources")
+                })?;
+                if text.is_empty() {
+                    None
+                } else {
+                    let language = name.clone();
+                    Some(self.make_node(Block::Code { language: Some(language), text })?)
+                }
             }
             "li" | "tr" | "td" | "th" | "code" | "head" => None,
             _ => return self.collect_child_blocks(id, depth),
@@ -1158,6 +1585,7 @@ impl<'a> Builder<'a> {
             }
             let blocks = self.collect_child_blocks(child, depth.saturating_add(1))?;
             if !blocks.is_empty() {
+                self.reserve_structural()?;
                 items.push(ListItem { checked: None, marker_label: None, blocks });
             }
         }
@@ -1215,17 +1643,17 @@ impl<'a> Builder<'a> {
                     if requested_row_span == 0 { remaining_rows } else { requested_row_span };
                 let row_span = requested_row_span.min(remaining_rows);
                 if row_span != requested_row_span {
-                    self.diagnostics.push(warning(
+                    self.push_warning(
                         "html.tableRowspanClamped",
-                        "rowspan extending beyond its row group was clamped".into(),
-                    ));
+                        "rowspan extending beyond its row group was clamped",
+                    )?;
                 }
                 let requested_column_span = table_span(self.attr(cell, "colspan"));
                 let column_span = if requested_column_span == 0 {
-                    self.diagnostics.push(warning(
+                    self.push_warning(
                         "html.tableColspanNormalized",
-                        "zero colspan was normalized to one column".into(),
-                    ));
+                        "zero colspan was normalized to one column",
+                    )?;
                     1
                 } else {
                     requested_column_span
@@ -1296,6 +1724,7 @@ impl<'a> Builder<'a> {
                     let end = column.saturating_add(span).min(planned.width);
                     active[column..end].fill(cell.row_span);
                     let blocks = self.collect_child_blocks(cell.node, depth.saturating_add(1))?;
+                    self.reserve_structural()?;
                     cells.push(Cell {
                         row_span: cell.row_span,
                         column_span: cell.column_span,
@@ -1306,6 +1735,7 @@ impl<'a> Builder<'a> {
                     column = end;
                 } else {
                     active[column] = 1;
+                    self.reserve_structural()?;
                     cells.push(Cell {
                         row_span: 1,
                         column_span: 1,
@@ -1315,6 +1745,7 @@ impl<'a> Builder<'a> {
                     column += 1;
                 }
             }
+            self.reserve_structural()?;
             rows.push(TableRow { cells });
             for remaining in &mut active {
                 *remaining = remaining.saturating_sub(1);
@@ -1323,23 +1754,53 @@ impl<'a> Builder<'a> {
         Ok(rows)
     }
 
-    fn build_image(&mut self, id: usize) -> Option<Block> {
-        let alt = self.attr(id, "alt").map(normalize).filter(|v| !v.is_empty());
-        let src = self.attr(id, "src")?;
-        let resolved = Url::parse(src).ok().or_else(|| self.base.as_ref()?.join(src).ok());
-        let Some(uri) = resolved
-            .map(|url| url.to_string())
-            .filter(|uri| canonical_external_asset_uri(uri).as_deref() == Some(uri.as_ref()))
-        else {
-            self.diagnostics.push(warning(
-                "html.imageUriRejected",
-                "image URI was retained only as alternative text; no network access occurred"
-                    .into(),
-            ));
-            return alt
-                .map(|value| Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }]));
+    fn build_image(&mut self, id: usize) -> Result<Option<Block>, ConversionError> {
+        let resolved = {
+            let Some(src) = self.attr(id, "src") else { return Ok(None) };
+            Url::parse(src).ok().or_else(|| self.base.as_ref().and_then(|base| base.join(src).ok()))
         };
+        let alt_bytes = self.attr(id, "alt").map(str::len);
+        if let Some(bytes) = alt_bytes {
+            self.reserve_string(bytes)?;
+        }
+        let alt = self.attr(id, "alt").map(normalize).filter(|v| !v.is_empty());
+        let Some(resolved) = resolved else {
+            self.push_warning(
+                "html.imageUriRejected",
+                "image URI was retained only as alternative text; no network access occurred",
+            )?;
+            return match alt {
+                Some(value) => {
+                    self.reserve_inline()?;
+                    Ok(Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }])))
+                }
+                None => Ok(None),
+            };
+        };
+        self.reserve_string(resolved.as_str().len())?;
+        let uri = resolved.to_string();
+        if canonical_external_asset_uri(&uri).as_deref() != Some(uri.as_ref()) {
+            self.push_warning(
+                "html.imageUriRejected",
+                "image URI was retained only as alternative text; no network access occurred",
+            )?;
+            return match alt {
+                Some(value) => {
+                    self.reserve_inline()?;
+                    Ok(Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }])))
+                }
+                None => Ok(None),
+            };
+        }
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.asset()?;
+        }
+        self.reserve_string(26)?;
+        self.reserve_string(image_media_type(&uri).len())?;
         let asset_id = AssetId(format!("html-external-image-{:06}", self.assets.len() + 1));
+        // The image block owns a second AssetId string in addition to the
+        // asset-registry key.
+        self.reserve_string(asset_id.0.len())?;
         self.assets.push(Asset {
             id: asset_id.clone(),
             filename: None,
@@ -1347,7 +1808,7 @@ impl<'a> Builder<'a> {
             bytes: Vec::new(),
             external_uri: Some(uri),
         });
-        Some(Block::Image { asset: asset_id, alt })
+        Ok(Some(Block::Image { asset: asset_id, alt }))
     }
 
     fn inline_children(&mut self, id: usize) -> Result<Vec<Inline>, ConversionError> {
@@ -1370,6 +1831,11 @@ impl<'a> Builder<'a> {
             return Ok(output);
         }
         if let NodeData::Text(value) = &self.nodes[id].data {
+            if value.chars().all(char::is_whitespace) {
+                return Ok(output);
+            }
+            self.reserve_string(value.len())?;
+            self.reserve_inline()?;
             let value = normalize(value);
             if !value.is_empty() {
                 output.push(Inline::Text { value, marks });
@@ -1379,19 +1845,28 @@ impl<'a> Builder<'a> {
         if let Some(name) = self.name(id) {
             if name == "a" {
                 let content = self.inline_children_with_marks(id, &marks)?;
-                let Some(href) = self.attr(id, "href") else { return Ok(content) };
-                let target = Url::parse(href)
-                    .ok()
-                    .or_else(|| self.base.as_ref()?.join(href).ok())
-                    .map_or_else(|| href.to_string(), |url| url.to_string());
+                let Some(href) = self.attr(id, "href") else {
+                    return Ok(content);
+                };
+                let href_bytes = href.len();
+                let resolved =
+                    Url::parse(href).ok().or_else(|| self.base.as_ref()?.join(href).ok());
+                let target_bytes =
+                    resolved.as_ref().map_or_else(|| href_bytes, |url| url.as_str().len());
+                self.reserve_string(target_bytes)?;
+                let target = resolved.map_or_else(
+                    || self.attr(id, "href").unwrap_or_default().to_owned(),
+                    |url| url.to_string(),
+                );
                 if safe_link_target(&target) && !content.is_empty() {
+                    self.reserve_inline()?;
                     return Ok(vec![Inline::Link { target, content }]);
                 }
                 if !content.is_empty() {
-                    self.diagnostics.push(warning(
+                    self.push_warning(
                         "html.linkUriRejected",
-                        "unsafe link destination was omitted".into(),
-                    ));
+                        "unsafe link destination was omitted",
+                    )?;
                 }
                 return Ok(content);
             }
@@ -1402,11 +1877,21 @@ impl<'a> Builder<'a> {
                 "u" => marks.push(InlineMark::Underline),
                 "sup" => marks.push(InlineMark::Superscript),
                 "sub" => marks.push(InlineMark::Subscript),
-                "br" => return Ok(vec![Inline::LineBreak]),
+                "br" => {
+                    self.reserve_inline()?;
+                    return Ok(vec![Inline::LineBreak]);
+                }
                 "code" => {
-                    return Ok(nonempty(self.raw_visible_text(id))
-                        .map(|value| vec![Inline::Code(value)])
-                        .unwrap_or_default());
+                    let bound = self.visible_text_len(id);
+                    if bound == 0 {
+                        return Ok(Vec::new());
+                    }
+                    self.reserve_string(bound)?;
+                    let Some(value) = nonempty(self.raw_visible_text(id)) else {
+                        return Ok(Vec::new());
+                    };
+                    self.reserve_inline()?;
+                    return Ok(vec![Inline::Code(value)]);
                 }
                 "svg" | "math" | "script" | "style" | "template" | "noscript" | "img" => {
                     return Ok(output);
@@ -1415,33 +1900,7 @@ impl<'a> Builder<'a> {
             }
         }
         for child in self.nodes[id].children.clone() {
-            match &self.nodes[child].data {
-                NodeData::Element { .. } if self.name(child) == Some("a") => {
-                    let content = self.inline_children_with_marks(child, &marks)?;
-                    if let Some(href) = self.attr(child, "href") {
-                        let target = Url::parse(href)
-                            .ok()
-                            .or_else(|| self.base.as_ref()?.join(href).ok())
-                            .map_or_else(|| href.to_string(), |url| url.to_string());
-                        if safe_link_target(&target) && !content.is_empty() {
-                            output.push(Inline::Link { target, content });
-                        } else if !content.is_empty() {
-                            self.diagnostics.push(warning(
-                                "html.linkUriRejected",
-                                "unsafe link destination was omitted".into(),
-                            ));
-                            output.extend(content);
-                        }
-                    } else {
-                        output.extend(content);
-                    }
-                }
-                _ => output.extend(self.inline_node(child, marks.clone())?),
-            }
-        }
-        self.inline_count = self.inline_count.saturating_add(output.len());
-        if self.inline_count > MAX_DOCUMENT_INLINES {
-            return Self::limit("html_inlines", "HTML produced too many inline nodes");
+            output.extend(self.inline_node(child, marks.clone())?);
         }
         Ok(output)
     }
@@ -1458,9 +1917,12 @@ impl<'a> Builder<'a> {
         Ok(output)
     }
 
-    fn make_node(&mut self, block: Block) -> BlockNode {
+    fn make_node(&mut self, block: Block) -> Result<BlockNode, ConversionError> {
+        self.reserve_structural()?;
+        self.reserve_string(11)?;
+        self.reserve_string(PROVIDER_ID.len())?;
         self.next_node += 1;
-        BlockNode {
+        Ok(BlockNode {
             id: NodeId(format!("html-{:06}", self.next_node)),
             block,
             provenance: Provenance {
@@ -1473,7 +1935,7 @@ impl<'a> Builder<'a> {
                 },
                 confidence: None,
             },
-        }
+        })
     }
     fn name(&self, id: usize) -> Option<&str> {
         match &self.nodes.get(id)?.data {
@@ -1577,6 +2039,20 @@ impl<'a> Builder<'a> {
         }
         out
     }
+    fn raw_visible_text_len(&self, id: usize) -> usize {
+        if self.node_context(id).excluded() {
+            return 0;
+        }
+        match &self.nodes[id].data {
+            NodeData::Text(value) => value.len(),
+            NodeData::Element { .. } | NodeData::Document => self.nodes[id]
+                .children
+                .iter()
+                .map(|child| self.raw_visible_text_len(*child))
+                .fold(0_usize, usize::saturating_add),
+            NodeData::Other => 0,
+        }
+    }
     fn raw_text_unfiltered(&self, id: usize) -> String {
         let mut out = String::new();
         for child in &self.nodes[id].children {
@@ -1589,6 +2065,17 @@ impl<'a> Builder<'a> {
             }
         }
         out
+    }
+    fn raw_text_unfiltered_len(&self, id: usize) -> usize {
+        self.nodes[id]
+            .children
+            .iter()
+            .map(|child| match &self.nodes[*child].data {
+                NodeData::Text(value) => value.len(),
+                NodeData::Element { .. } => self.raw_text_unfiltered_len(*child),
+                _ => 0,
+            })
+            .fold(0_usize, usize::saturating_add)
     }
     fn visible_text_len(&self, id: usize) -> usize {
         self.visible_text(id).len()
@@ -1703,6 +2190,13 @@ impl<'a> Builder<'a> {
         self.attr(id, "class").and_then(|v| {
             v.split_ascii_whitespace()
                 .find_map(|part| part.strip_prefix("language-").map(str::to_string))
+        })
+    }
+    fn code_language_len(&self, id: usize) -> Option<usize> {
+        self.attr(id, "class").and_then(|value| {
+            value
+                .split_ascii_whitespace()
+                .find_map(|part| part.strip_prefix("language-").map(str::len))
         })
     }
     fn limit<T>(limit: &'static str, detail: &str) -> Result<T, ConversionError> {

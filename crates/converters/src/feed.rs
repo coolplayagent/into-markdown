@@ -3,8 +3,8 @@
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter,
     ConverterOutput, Diagnostic, DiagnosticSeverity, Document, DocumentMetadata, ExecutionContext,
-    FormatCandidate, Inline, InputFormat, IrErrorCode, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_NODES,
-    NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput, Services, SourceLocator,
+    FormatCandidate, Inline, InputFormat, IrErrorCode, NodeId, ProbeOutcome, Provenance,
+    ProvenanceKind, ResolvedInput, Services, SourceLocator,
 };
 use quick_xml::Writer;
 use quick_xml::events::{BytesStart, BytesText, Event};
@@ -139,15 +139,11 @@ struct ParsedFeed {
 }
 
 struct FeedBudget {
-    memory: LogicalMemory,
+    aggregate: super::html::FeedHtmlBudget,
     events: usize,
-    nodes: usize,
-    inlines: usize,
-    assets: usize,
-    diagnostics: usize,
-    output_bytes: u64,
+    source_text_bytes: u64,
     html_bytes: u64,
-    max_output_bytes: u64,
+    max_source_text_bytes: u64,
     max_html_bytes: u64,
 }
 
@@ -157,15 +153,16 @@ impl FeedBudget {
         context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
         Ok(Self {
-            memory: LogicalMemory::new(context)?,
+            aggregate: super::html::FeedHtmlBudget::new(
+                options.limits.max_feed_text_bytes,
+                MAX_FEED_DIAGNOSTICS,
+                options.limits.max_memory_bytes,
+                context,
+            )?,
             events: 0,
-            nodes: 0,
-            inlines: 0,
-            assets: 0,
-            diagnostics: 0,
-            output_bytes: 0,
+            source_text_bytes: 0,
             html_bytes: 0,
-            max_output_bytes: options.limits.max_feed_text_bytes,
+            max_source_text_bytes: options.limits.max_feed_text_bytes,
             max_html_bytes: options.limits.max_feed_html_bytes,
         })
     }
@@ -184,16 +181,16 @@ impl FeedBudget {
         Ok(())
     }
 
-    fn output(&mut self, bytes: usize) -> Result<(), ConversionError> {
+    fn source_text(&mut self, bytes: usize) -> Result<(), ConversionError> {
         let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
-        self.output_bytes = self
-            .output_bytes
+        self.source_text_bytes = self
+            .source_text_bytes
             .checked_add(bytes)
-            .ok_or_else(|| limit("max_feed_text_bytes", "feed output byte count overflowed"))?;
-        if self.output_bytes > self.max_output_bytes {
+            .ok_or_else(|| limit("max_feed_text_bytes", "feed text byte count overflowed"))?;
+        if self.source_text_bytes > self.max_source_text_bytes {
             return Err(limit(
                 "max_feed_text_bytes",
-                &format!("feed output exceeds {} bytes", self.max_output_bytes),
+                &format!("feed text exceeds {} bytes", self.max_source_text_bytes),
             ));
         }
         Ok(())
@@ -214,58 +211,13 @@ impl FeedBudget {
     }
 
     fn ir(&mut self, nodes: usize, inlines: usize) -> Result<(), ConversionError> {
-        self.nodes = self
-            .nodes
-            .checked_add(nodes)
-            .ok_or_else(|| limit("feed_nodes", "feed IR node count overflowed"))?;
-        self.inlines = self
-            .inlines
-            .checked_add(inlines)
-            .ok_or_else(|| limit("feed_inlines", "feed IR inline count overflowed"))?;
-        if self.nodes > MAX_DOCUMENT_NODES {
-            return Err(limit(
-                "feed_nodes",
-                &format!("feed exceeds {MAX_DOCUMENT_NODES} IR nodes"),
-            ));
-        }
-        if self.inlines > MAX_DOCUMENT_INLINES {
-            return Err(limit(
-                "feed_inlines",
-                &format!("feed exceeds {MAX_DOCUMENT_INLINES} inline nodes"),
-            ));
-        }
-        Ok(())
-    }
-
-    fn asset(&mut self) -> Result<(), ConversionError> {
-        self.assets = self
-            .assets
-            .checked_add(1)
-            .ok_or_else(|| limit("feed_assets", "feed asset count overflowed"))?;
-        if self.assets > MAX_DOCUMENT_NODES {
-            return Err(limit("feed_assets", &format!("feed exceeds {MAX_DOCUMENT_NODES} assets")));
-        }
+        self.aggregate.nodes(nodes)?;
+        self.aggregate.inlines(inlines)?;
         Ok(())
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), ConversionError> {
-        self.diagnostics = self
-            .diagnostics
-            .checked_add(1)
-            .ok_or_else(|| limit("feed_diagnostics", "feed diagnostic count overflowed"))?;
-        if self.diagnostics > MAX_FEED_DIAGNOSTICS {
-            return Err(limit(
-                "feed_diagnostics",
-                &format!("feed exceeds {MAX_FEED_DIAGNOSTICS} diagnostics"),
-            ));
-        }
-        self.memory.charge(
-            diagnostic
-                .code
-                .len()
-                .saturating_add(diagnostic.message.len())
-                .saturating_add(std::mem::size_of::<Diagnostic>()),
-        )
+        self.aggregate.diagnostic(diagnostic.code.len(), diagnostic.message.len())
     }
 }
 
@@ -452,6 +404,7 @@ fn parse_feed(
                     });
                 }
                 budget
+                    .aggregate
                     .memory
                     .charge(element.as_ref().len().saturating_mul(3).saturating_add(256))?;
                 let (namespace, local) = resolved_name(&reader, &element)?;
@@ -512,7 +465,7 @@ fn parse_feed(
                             ),
                         });
                     }
-                    budget.memory.reserve_vec(&mut entries, 1)?;
+                    budget.aggregate.memory.reserve_vec(&mut entries, 1)?;
                     current_entry = Some(Entry {
                         start: decoded.source_range(start, start).0,
                         ..Entry::default()
@@ -558,14 +511,14 @@ fn parse_feed(
                         limit: "max_memory_bytes",
                         detail: "feed attribute memory overflowed".into(),
                     })?;
-                budget.memory.charge(
+                budget.aggregate.memory.charge(
                     local
                         .len()
                         .saturating_add(namespace.len())
                         .saturating_add(attribute_bytes)
                         .saturating_add(128),
                 )?;
-                budget.memory.reserve_vec(&mut stack, 1)?;
+                budget.aggregate.memory.reserve_vec(&mut stack, 1)?;
                 stack.push(Frame {
                     local,
                     namespace,
@@ -806,9 +759,9 @@ fn append_text(
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
     super::structured::validate_xml_chars(value, "feed text")?;
-    budget.output(value.len())?;
+    budget.source_text(value.len())?;
     if let Some(frame) = frame {
-        budget.memory.reserve_string(&mut frame.text, value.len())?;
+        budget.aggregate.memory.reserve_string(&mut frame.text, value.len())?;
         frame.text.push_str(value);
     }
     Ok(())
@@ -820,7 +773,21 @@ fn push_diagnostic(
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
     budget.diagnostic(&diagnostic)?;
-    budget.memory.reserve_vec(diagnostics, 1)?;
+    budget.aggregate.memory.reserve_vec(diagnostics, 1)?;
+    diagnostics.push(diagnostic);
+    Ok(())
+}
+
+/// Move a diagnostic already charged by the nested HTML helper into the feed
+/// result. Only the destination vector capacity and any caller-side string
+/// replacement are additional allocations; the diagnostic object itself must
+/// not consume the aggregate object ceiling twice.
+fn push_precharged_diagnostic(
+    diagnostics: &mut Vec<Diagnostic>,
+    diagnostic: Diagnostic,
+    budget: &mut FeedBudget,
+) -> Result<(), ConversionError> {
+    budget.aggregate.memory.reserve_vec(diagnostics, 1)?;
     diagnostics.push(diagnostic);
     Ok(())
 }
@@ -1117,7 +1084,7 @@ fn close_frame(
     if entry_closed {
         let mut entry = current.take().ok_or_else(|| malformed("entry state is missing"))?;
         entry.end = decoded.source_range(event_end, event_end).1;
-        budget.memory.reserve_vec(entries, 1)?;
+        budget.aggregate.memory.reserve_vec(entries, 1)?;
         entries.push(entry);
     }
     Ok(())
@@ -1212,7 +1179,7 @@ fn normalize_bounded(
     context: &ExecutionContext,
 ) -> Result<String, ConversionError> {
     let mut output = String::new();
-    budget.memory.reserve_string(&mut output, value.len())?;
+    budget.aggregate.memory.reserve_string(&mut output, value.len())?;
     let mut pending_space = false;
     for (index, character) in value.char_indices() {
         if index % 4096 == 0 {
@@ -1273,7 +1240,10 @@ fn select_link(
     };
     charge_new_diagnostics(diagnostics, previous, budget)?;
     if slot.as_ref().is_none_or(|candidate| rank < candidate.rank) {
-        budget.memory.charge(target.len().saturating_add(std::mem::size_of::<LinkCandidate>()))?;
+        budget
+            .aggregate
+            .memory
+            .charge(target.len().saturating_add(std::mem::size_of::<LinkCandidate>()))?;
         *slot = Some(LinkCandidate { rank, target });
     }
     Ok(())
@@ -1292,14 +1262,14 @@ fn serialize_xhtml(
         .checked_mul(2)
         .ok_or_else(|| limit("max_memory_bytes", "XHTML serialization capacity overflowed"))?;
     let mut writer_buffer = Vec::new();
-    budget.memory.reserve_vec(&mut writer_buffer, writer_capacity)?;
+    budget.aggregate.memory.reserve_vec(&mut writer_buffer, writer_capacity)?;
     let mut reader = NsReader::from_str(fragment);
     reader.config_mut().check_end_names = true;
     let mut writer = Writer::new(writer_buffer);
     let mut bases = Vec::new();
-    budget.memory.reserve_vec(&mut bases, 1)?;
+    budget.aggregate.memory.reserve_vec(&mut bases, 1)?;
     if let Some(base) = inherited_base {
-        budget.memory.charge(base.len())?;
+        budget.aggregate.memory.charge(base.len())?;
     }
     bases.push(inherited_base.map(str::to_owned));
     let mut events = 0_usize;
@@ -1318,6 +1288,7 @@ fn serialize_xhtml(
         match event {
             Event::Start(element) | Event::Empty(element) => {
                 budget
+                    .aggregate
                     .memory
                     .charge(element.as_ref().len().saturating_mul(3).saturating_add(128))?;
                 let (namespace, local) = resolved_name(&reader, &element)?;
@@ -1369,8 +1340,8 @@ fn serialize_xhtml(
                         charge_new_diagnostics(diagnostics, before, budget)?;
                         value = resolved;
                     }
-                    budget.memory.reserve_vec(&mut owned_attributes, 1)?;
-                    budget.memory.charge(name.len().saturating_add(value.len()))?;
+                    budget.aggregate.memory.reserve_vec(&mut owned_attributes, 1)?;
+                    budget.aggregate.memory.charge(name.len().saturating_add(value.len()))?;
                     owned_attributes.push((name.to_owned(), value));
                 }
                 for (name, value) in &owned_attributes {
@@ -1385,14 +1356,14 @@ fn serialize_xhtml(
                                 .saturating_add(4)
                         }),
                     );
-                budget.memory.reserve_vec(writer.get_mut(), serialized_size)?;
+                budget.aggregate.memory.reserve_vec(writer.get_mut(), serialized_size)?;
                 writer
                     .write_event(if empty { Event::Empty(output) } else { Event::Start(output) })
                     .map_err(|error| {
                         malformed(format!("could not serialize Atom XHTML: {error}"))
                     })?;
                 if !empty {
-                    budget.memory.reserve_vec(&mut bases, 1)?;
+                    budget.aggregate.memory.reserve_vec(&mut bases, 1)?;
                     bases.push(base);
                 }
             }
@@ -1480,10 +1451,10 @@ fn build_output(
     };
     let mut authors = Vec::new();
     if let Some(author) = parsed.author.take() {
-        parsed.budget.memory.reserve_vec(&mut authors, 1)?;
+        parsed.budget.aggregate.memory.reserve_vec(&mut authors, 1)?;
         authors.push(author);
     }
-    parsed.budget.memory.charge(256)?;
+    parsed.budget.aggregate.memory.charge(256)?;
     let mut document = Document {
         metadata: DocumentMetadata {
             title: metadata_title,
@@ -1503,17 +1474,17 @@ fn build_output(
         ..Document::default()
     };
     if let Some(link) = parsed.link.take() {
-        parsed.budget.memory.charge(link.target.len().saturating_add(32))?;
+        parsed.budget.aggregate.memory.charge(link.target.len().saturating_add(32))?;
         document.metadata.properties.insert("feed.link".into(), link.target);
     }
     if let Some(value) = parsed.updated.take() {
         match parse_time(parsed.kind, &value) {
             Ok(time) => {
-                parsed.budget.memory.charge(time.len().saturating_add(64))?;
+                parsed.budget.aggregate.memory.charge(time.len().saturating_add(64))?;
                 document.metadata.properties.insert("feed.updated".into(), time);
             }
             Err(detail) => {
-                parsed.budget.memory.charge(value.len().saturating_add(64))?;
+                parsed.budget.aggregate.memory.charge(value.len().saturating_add(64))?;
                 document.metadata.properties.insert("feed.updated.raw".into(), value);
                 push_diagnostic(
                     &mut parsed.diagnostics,
@@ -1572,7 +1543,7 @@ fn build_output(
     for (source_index, mut entry) in parsed.entries.into_iter().enumerate() {
         exec_context.checkpoint()?;
         let key = dedup_key(&entry, &mut parsed.budget)?;
-        parsed.budget.memory.charge(key.len().saturating_add(64))?;
+        parsed.budget.aggregate.memory.charge(key.len().saturating_add(64))?;
         if !seen.insert(key.clone()) {
             push_diagnostic(
                 &mut parsed.diagnostics,
@@ -1760,24 +1731,13 @@ fn append_content(
         return Ok(());
     }
     budget.html(content.value.len())?;
-    // The HTML converter owns its own bounded working-set lease.  This
-    // conservative retained lease additionally covers the returned DOM-derived
-    // IR while it is being allocated, before we can inspect its exact shape.
-    let anticipated_nodes = content.value.len().min(MAX_DOCUMENT_NODES);
-    let anticipated_memory = content
-        .value
-        .len()
-        .checked_mul(2)
-        .and_then(|bytes| {
-            anticipated_nodes.checked_mul(512).and_then(|nodes| bytes.checked_add(nodes))
-        })
-        .ok_or_else(|| limit("max_memory_bytes", "nested HTML merge budget overflowed"))?;
-    budget.memory.charge(anticipated_memory)?;
+    let before = budget.aggregate.snapshot();
     let output = super::html::convert_feed_html_fragment(
         &content.value,
         content.base.as_deref(),
         options,
         exec_context,
+        &mut budget.aggregate,
     );
     let mut output = match output {
         Ok(output) => output,
@@ -1796,10 +1756,14 @@ fn append_content(
         }
         Err(error) => return Err(error),
     };
+    verify_html_fragment_accounting(&output, before, budget.aggregate.snapshot())?;
     for mut diagnostic in output.diagnostics.drain(..) {
+        let old_code_len = diagnostic.code.len();
+        let new_code_len = old_code_len.saturating_add("feed.".len());
+        budget.aggregate.replace_string(old_code_len, new_code_len)?;
         diagnostic.code = format!("feed.{}", diagnostic.code);
         diagnostic.locator = Some(entry_locator(entry));
-        push_diagnostic(diagnostics, diagnostic, budget)?;
+        push_precharged_diagnostic(diagnostics, diagnostic, budget)?;
     }
     if output.document.blocks.is_empty() && output.assets.is_empty() {
         push_diagnostic(
@@ -1817,23 +1781,86 @@ fn append_content(
     let asset_offset = assets.len();
     let mut asset_map = BTreeMap::new();
     for (index, mut asset) in output.assets.drain(..).enumerate() {
-        let old = asset.id.clone();
-        asset.id = AssetId(format!("feed-external-{:06}", asset_offset + index + 1));
-        budget.asset()?;
-        budget.memory.charge(asset_memory(&asset).saturating_add(old.0.len()))?;
-        budget.memory.reserve_vec(assets, 1)?;
+        let new_id_len = "feed-external-".len().saturating_add(6);
+        budget.aggregate.replace_string(asset.id.0.len(), new_id_len)?;
+        let new_id = AssetId(format!("feed-external-{:06}", asset_offset + index + 1));
+        let old = std::mem::replace(&mut asset.id, new_id);
+        budget.aggregate.temporary_string(asset.id.0.len())?;
+        budget
+            .aggregate
+            .memory
+            .charge(std::mem::size_of::<(AssetId, AssetId)>().saturating_add(48))?;
+        budget.aggregate.memory.reserve_vec(assets, 1)?;
         asset_map.insert(old, asset.id.clone());
         assets.push(asset);
     }
-    let (nodes, inlines, bytes) = inspect_nodes(&output.document.blocks);
-    budget.ir(nodes, inlines)?;
-    budget.output(bytes)?;
-    budget.memory.reserve_vec(blocks, output.document.blocks.len())?;
+    budget.aggregate.memory.reserve_vec(blocks, output.document.blocks.len())?;
     for mut node in output.document.blocks.drain(..) {
-        rewrite_node(&mut node, &asset_map, node_index, entry);
+        rewrite_node(&mut node, &asset_map, node_index, entry, budget)?;
         blocks.push(node);
     }
     Ok(())
+}
+
+fn verify_html_fragment_accounting(
+    output: &ConverterOutput,
+    before: super::html::FeedHtmlBudgetSnapshot,
+    after: super::html::FeedHtmlBudgetSnapshot,
+) -> Result<(), ConversionError> {
+    let (nodes, inlines, strings, bytes) = inspect_fragment_nodes(&output.document.blocks);
+    let mut output_strings = strings;
+    let mut output_bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+    for asset in &output.assets {
+        let (asset_strings, asset_bytes) = inspect_asset_strings(asset);
+        output_strings = output_strings.saturating_add(asset_strings);
+        output_bytes = output_bytes.saturating_add(u64::try_from(asset_bytes).unwrap_or(u64::MAX));
+    }
+    for diagnostic in &output.diagnostics {
+        output_strings = output_strings.saturating_add(2);
+        output_bytes = output_bytes
+            .saturating_add(u64::try_from(diagnostic.code.len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(diagnostic.message.len()).unwrap_or(u64::MAX));
+    }
+    let charged_nodes = after.nodes.checked_sub(before.nodes);
+    let charged_inlines = after.inlines.checked_sub(before.inlines);
+    let charged_assets = after.assets.checked_sub(before.assets);
+    let charged_diagnostics = after.diagnostics.checked_sub(before.diagnostics);
+    let charged_strings = after.strings.checked_sub(before.strings);
+    let charged_bytes = after.output_bytes.checked_sub(before.output_bytes);
+    let charged_memory = after.persistent_memory_bytes.checked_sub(before.persistent_memory_bytes);
+    let minimum_memory = nodes
+        .saturating_mul(std::mem::size_of::<BlockNode>())
+        .saturating_add(inlines.saturating_mul(std::mem::size_of::<Inline>()))
+        .saturating_add(output.assets.len().saturating_mul(std::mem::size_of::<Asset>()))
+        .saturating_add(output.diagnostics.len().saturating_mul(std::mem::size_of::<Diagnostic>()))
+        .saturating_add(usize::try_from(output_bytes).unwrap_or(usize::MAX));
+    if charged_nodes.is_none_or(|count| count < nodes)
+        || charged_inlines.is_none_or(|count| count < inlines)
+        || charged_assets.is_none_or(|count| count < output.assets.len())
+        || charged_diagnostics.is_none_or(|count| count < output.diagnostics.len())
+        || charged_strings.is_none_or(|count| count < output_strings)
+        || charged_bytes.is_none_or(|count| count < output_bytes)
+        || charged_memory.is_none_or(|count| count < minimum_memory)
+    {
+        return Err(ConversionError::Internal {
+            detail: "nested HTML returned output that was not precharged to the feed budget".into(),
+        });
+    }
+    Ok(())
+}
+
+fn inspect_asset_strings(asset: &Asset) -> (usize, usize) {
+    let mut strings = 2_usize;
+    let mut bytes = asset.id.0.len().saturating_add(asset.media_type.len());
+    if let Some(filename) = &asset.filename {
+        strings = strings.saturating_add(1);
+        bytes = bytes.saturating_add(filename.len());
+    }
+    if let Some(uri) = &asset.external_uri {
+        strings = strings.saturating_add(1);
+        bytes = bytes.saturating_add(uri.len());
+    }
+    (strings, bytes)
 }
 
 fn rewrite_node(
@@ -1841,9 +1868,14 @@ fn rewrite_node(
     map: &BTreeMap<AssetId, AssetId>,
     index: &mut usize,
     entry: &Entry,
-) {
+    budget: &mut FeedBudget,
+) -> Result<(), ConversionError> {
     *index += 1;
+    budget.aggregate.replace_string(node.id.0.len(), 11)?;
     node.id = NodeId(format!("feed-{:06}", *index));
+    let provider_len =
+        PROVIDER_ID.len().saturating_add(1).saturating_add(node.provenance.provider.len());
+    budget.aggregate.replace_string(node.provenance.provider.len(), provider_len)?;
     node.provenance = Provenance {
         kind: ProvenanceKind::NativeParser,
         provider: format!("{PROVIDER_ID}/{}", node.provenance.provider),
@@ -1853,6 +1885,7 @@ fn rewrite_node(
     match &mut node.block {
         Block::Image { asset, .. } => {
             if let Some(new) = map.get(asset) {
+                budget.aggregate.replace_string(asset.0.len(), new.0.len())?;
                 *asset = new.clone();
             }
         }
@@ -1861,13 +1894,13 @@ fn rewrite_node(
         | Block::Slide { blocks: children, .. }
         | Block::Sheet { blocks: children, .. } => {
             for child in children {
-                rewrite_node(child, map, index, entry);
+                rewrite_node(child, map, index, entry, budget)?;
             }
         }
         Block::List { items, .. } => {
             for item in items {
                 for child in &mut item.blocks {
-                    rewrite_node(child, map, index, entry);
+                    rewrite_node(child, map, index, entry, budget)?;
                 }
             }
         }
@@ -1875,50 +1908,44 @@ fn rewrite_node(
             for row in rows {
                 for cell in &mut row.cells {
                     for child in &mut cell.blocks {
-                        rewrite_node(child, map, index, entry);
+                        rewrite_node(child, map, index, entry, budget)?;
                     }
                 }
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
-fn asset_memory(asset: &Asset) -> usize {
-    asset
-        .id
-        .0
-        .len()
-        .saturating_add(asset.filename.as_deref().map_or(0, str::len))
-        .saturating_add(asset.media_type.len())
-        .saturating_add(asset.bytes.len())
-        .saturating_add(asset.external_uri.as_deref().map_or(0, str::len))
-        .saturating_add(std::mem::size_of::<Asset>())
-}
-
-fn inspect_nodes(nodes: &[BlockNode]) -> (usize, usize, usize) {
-    let mut counts = (0_usize, 0_usize, 0_usize);
+fn inspect_fragment_nodes(nodes: &[BlockNode]) -> (usize, usize, usize, usize) {
+    let mut counts = (0_usize, 0_usize, 0_usize, 0_usize);
     for node in nodes {
         inspect_node(node, &mut counts);
     }
     counts
 }
 
-fn inspect_node(node: &BlockNode, counts: &mut (usize, usize, usize)) {
+fn inspect_node(node: &BlockNode, counts: &mut (usize, usize, usize, usize)) {
     counts.0 = counts.0.saturating_add(1);
-    counts.2 =
-        counts.2.saturating_add(node.id.0.len()).saturating_add(node.provenance.provider.len());
+    counts.2 = counts.2.saturating_add(2);
+    counts.3 =
+        counts.3.saturating_add(node.id.0.len()).saturating_add(node.provenance.provider.len());
     inspect_block(&node.block, counts);
 }
 
-fn inspect_block(block: &Block, counts: &mut (usize, usize, usize)) {
+fn inspect_block(block: &Block, counts: &mut (usize, usize, usize, usize)) {
     match block {
-        Block::Paragraph(content)
-        | Block::Heading { content, .. }
-        | Block::TimedSegment { content, .. } => inspect_inlines(content, counts),
+        Block::Paragraph(content) | Block::Heading { content, .. } => {
+            inspect_inlines(content, counts);
+        }
         Block::List { items, .. } => {
             counts.0 = counts.0.saturating_add(items.len());
             for item in items {
+                if let Some(marker) = &item.marker_label {
+                    counts.2 = counts.2.saturating_add(1);
+                    counts.3 = counts.3.saturating_add(marker.len());
+                }
                 for child in &item.blocks {
                     inspect_node(child, counts);
                 }
@@ -1935,36 +1962,81 @@ fn inspect_block(block: &Block, counts: &mut (usize, usize, usize)) {
                 }
             }
         }
-        Block::Footnote { blocks, .. }
-        | Block::Page { blocks, .. }
-        | Block::Slide { blocks, .. }
-        | Block::Sheet { blocks, .. } => {
+        Block::Footnote { label, blocks } => {
+            counts.2 = counts.2.saturating_add(1);
+            counts.3 = counts.3.saturating_add(label.len());
             for child in blocks {
                 inspect_node(child, counts);
             }
         }
-        Block::Code { text, .. } | Block::Formula(text) => {
-            counts.2 = counts.2.saturating_add(text.len());
+        Block::Page { blocks, .. } => {
+            for child in blocks {
+                inspect_node(child, counts);
+            }
         }
-        Block::Image { alt, .. } => {
-            counts.2 = counts.2.saturating_add(alt.as_deref().map_or(0, str::len));
+        Block::Slide { title, blocks, .. } => {
+            if let Some(title) = title {
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(title.len());
+            }
+            for child in blocks {
+                inspect_node(child, counts);
+            }
+        }
+        Block::Sheet { name, blocks } => {
+            counts.2 = counts.2.saturating_add(1);
+            counts.3 = counts.3.saturating_add(name.len());
+            for child in blocks {
+                inspect_node(child, counts);
+            }
+        }
+        Block::Code { language, text } => {
+            counts.2 = counts.2.saturating_add(1);
+            counts.3 = counts.3.saturating_add(text.len());
+            if let Some(language) = language {
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(language.len());
+            }
+        }
+        Block::Formula(text) => {
+            counts.2 = counts.2.saturating_add(1);
+            counts.3 = counts.3.saturating_add(text.len());
+        }
+        Block::Image { asset, alt } => {
+            counts.2 = counts.2.saturating_add(1);
+            counts.3 = counts.3.saturating_add(asset.0.len());
+            if let Some(alt) = alt {
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(alt.len());
+            }
+        }
+        Block::TimedSegment { speaker, content, .. } => {
+            if let Some(speaker) = speaker {
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(speaker.len());
+            }
+            inspect_inlines(content, counts);
         }
         _ => {}
     }
 }
 
-fn inspect_inlines(inlines: &[Inline], counts: &mut (usize, usize, usize)) {
+fn inspect_inlines(inlines: &[Inline], counts: &mut (usize, usize, usize, usize)) {
     counts.1 = counts.1.saturating_add(inlines.len());
     for inline in inlines {
         match inline {
-            Inline::Text { value, .. } | Inline::Code(value) | Inline::Formula(value) => {
-                counts.2 = counts.2.saturating_add(value.len());
+            Inline::Text { value, .. }
+            | Inline::Code(value)
+            | Inline::Formula(value)
+            | Inline::FootnoteReference(value) => {
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(value.len());
             }
             Inline::Link { target, content } => {
-                counts.2 = counts.2.saturating_add(target.len());
+                counts.2 = counts.2.saturating_add(1);
+                counts.3 = counts.3.saturating_add(target.len());
                 inspect_inlines(content, counts);
             }
-            Inline::FootnoteReference(value) => counts.2 = counts.2.saturating_add(value.len()),
             _ => {}
         }
     }
@@ -1972,11 +2044,11 @@ fn inspect_inlines(inlines: &[Inline], counts: &mut (usize, usize, usize)) {
 
 fn dedup_key(entry: &Entry, budget: &mut FeedBudget) -> Result<String, ConversionError> {
     if let Some(id) = entry.id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        budget.memory.charge(id.len().saturating_add(3))?;
+        budget.aggregate.memory.charge(id.len().saturating_add(3))?;
         return Ok(format!("id:{id}"));
     }
     if let Some(link) = &entry.link {
-        budget.memory.charge(link.target.len().saturating_add(5))?;
+        budget.aggregate.memory.charge(link.target.len().saturating_add(5))?;
         return Ok(format!("link:{}", link.target));
     }
     let mut digest = Sha256::new();
@@ -1992,7 +2064,7 @@ fn dedup_key(entry: &Entry, budget: &mut FeedBudget) -> Result<String, Conversio
         digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
         digest.update(bytes);
     }
-    budget.memory.charge(71)?;
+    budget.aggregate.memory.charge(71)?;
     Ok(format!("digest:{:x}", digest.finalize()))
 }
 
@@ -2022,13 +2094,13 @@ fn push_node(
     provider: &str,
     budget: &mut FeedBudget,
 ) -> Result<(), ConversionError> {
-    let (nodes, inlines, bytes) = inspect_block_value(&block);
+    let (nodes, inlines, strings, bytes) = inspect_block_value(&block);
     budget.ir(nodes, inlines)?;
-    budget.output(bytes)?;
-    budget.memory.charge(
-        bytes.saturating_add(nodes.saturating_mul(256)).saturating_add(inlines.saturating_mul(64)),
-    )?;
-    budget.memory.reserve_vec(blocks, 1)?;
+    let id_len = 11_usize;
+    let strings = strings.saturating_add(2);
+    let bytes = bytes.saturating_add(id_len).saturating_add(provider.len());
+    budget.aggregate.strings(strings, bytes)?;
+    budget.aggregate.memory.reserve_vec(blocks, 1)?;
     *index += 1;
     blocks.push(BlockNode {
         id: NodeId(format!("feed-{:06}", *index)),
@@ -2043,8 +2115,8 @@ fn push_node(
     Ok(())
 }
 
-fn inspect_block_value(block: &Block) -> (usize, usize, usize) {
-    let mut counts = (1, 0, 0);
+fn inspect_block_value(block: &Block) -> (usize, usize, usize, usize) {
+    let mut counts = (1, 0, 0, 0);
     inspect_block(block, &mut counts);
     counts
 }
@@ -2564,6 +2636,169 @@ mod tests {
             error,
             ConversionError::ResourceLimit { limit: "max_feed_html_bytes", .. }
         ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Keep all aggregate-budget dimensions in one regression.
+    fn nested_html_persistent_budget_stops_before_second_fragment_allocation() {
+        #[derive(Clone, Copy, Debug)]
+        enum Dimension {
+            Nodes,
+            Inlines,
+            Assets,
+            Diagnostics,
+            Strings,
+            OutputBytes,
+            Memory,
+        }
+
+        let fragment = "<p>one</p><img src='https://example.com/a.png' alt='a'>";
+        for dimension in [
+            Dimension::Nodes,
+            Dimension::Inlines,
+            Dimension::Assets,
+            Dimension::Diagnostics,
+            Dimension::Strings,
+            Dimension::OutputBytes,
+            Dimension::Memory,
+        ] {
+            let context = context();
+            let options = ConversionOptions::default();
+            let mut budget = super::super::html::FeedHtmlBudget::new(
+                options.limits.max_feed_text_bytes,
+                MAX_FEED_DIAGNOSTICS,
+                options.limits.max_memory_bytes,
+                &context,
+            )
+            .unwrap();
+            let first = super::super::html::convert_feed_html_fragment(
+                fragment,
+                Some("https://example.com/feed.xml"),
+                &options,
+                &context,
+                &mut budget,
+            )
+            .unwrap();
+            assert!(!first.document.blocks.is_empty() && !first.assets.is_empty());
+            let used = budget.snapshot();
+            budget.set_test_limits(super::super::html::FeedHtmlBudgetSnapshot {
+                nodes: if matches!(dimension, Dimension::Nodes) { used.nodes } else { usize::MAX },
+                inlines: if matches!(dimension, Dimension::Inlines) {
+                    used.inlines
+                } else {
+                    usize::MAX
+                },
+                assets: if matches!(dimension, Dimension::Assets) {
+                    used.assets
+                } else {
+                    usize::MAX
+                },
+                diagnostics: if matches!(dimension, Dimension::Diagnostics) {
+                    used.diagnostics
+                } else {
+                    usize::MAX
+                },
+                strings: if matches!(dimension, Dimension::Strings) {
+                    used.strings
+                } else {
+                    usize::MAX
+                },
+                output_bytes: if matches!(dimension, Dimension::OutputBytes) {
+                    used.output_bytes
+                } else {
+                    u64::MAX
+                },
+                persistent_memory_bytes: if matches!(dimension, Dimension::Memory) {
+                    used.persistent_memory_bytes
+                } else {
+                    usize::MAX
+                },
+            });
+            super::super::html::reset_feed_html_object_count();
+            let error = super::super::html::convert_feed_html_fragment(
+                fragment,
+                Some("https://example.com/feed.xml"),
+                &options,
+                &context,
+                &mut budget,
+            )
+            .unwrap_err();
+            let expected = match dimension {
+                Dimension::Nodes => "feed_nodes",
+                Dimension::Inlines => "feed_inlines",
+                Dimension::Assets => "feed_assets",
+                Dimension::Diagnostics => "feed_diagnostics",
+                Dimension::Strings => "feed_output_strings",
+                Dimension::OutputBytes => "max_feed_text_bytes",
+                Dimension::Memory => "max_memory_bytes",
+            };
+            assert!(
+                matches!(&error, ConversionError::ResourceLimit { limit, .. } if *limit == expected),
+                "{dimension:?} returned {error:?}"
+            );
+            let allocated = super::super::html::feed_html_object_count();
+            match dimension {
+                Dimension::Nodes => assert_eq!(allocated.nodes, 0),
+                Dimension::Inlines => assert_eq!(allocated.inlines, 0),
+                Dimension::Assets => assert_eq!(allocated.assets, 0),
+                Dimension::Diagnostics => assert_eq!(allocated.diagnostics, 0),
+                Dimension::Strings | Dimension::OutputBytes | Dimension::Memory => {
+                    assert_eq!(allocated.strings, 0);
+                    assert_eq!(allocated.diagnostics, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn append_content_fails_before_aggregate_second_fragment_node_allocation() {
+        let context = context();
+        let options = ConversionOptions::default();
+        let entry = Entry { start: 10, end: 20, ..Entry::default() };
+        let mut blocks = Vec::new();
+        let mut assets = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut node_index = 0;
+        let mut budget = FeedBudget::new(&options, &context).unwrap();
+        append_content(
+            "Summary",
+            Content { value: "<p>first</p>".into(), kind: ContentType::Html, base: None },
+            &entry,
+            &options,
+            &context,
+            &mut blocks,
+            &mut assets,
+            &mut diagnostics,
+            &mut node_index,
+            &mut budget,
+        )
+        .unwrap();
+        let used = budget.aggregate.snapshot();
+        budget.aggregate.set_test_limits(super::super::html::FeedHtmlBudgetSnapshot {
+            nodes: used.nodes + 1,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: usize::MAX,
+        });
+        super::super::html::reset_feed_html_object_count();
+        let error = append_content(
+            "Content",
+            Content { value: "<p>second</p>".into(), kind: ContentType::Html, base: None },
+            &entry,
+            &options,
+            &context,
+            &mut blocks,
+            &mut assets,
+            &mut diagnostics,
+            &mut node_index,
+            &mut budget,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "feed_nodes", .. }));
+        assert_eq!(super::super::html::feed_html_object_count().nodes, 0);
     }
 
     #[test]
