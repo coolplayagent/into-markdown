@@ -7,6 +7,14 @@ exports_files([
     "ppocrv6_tiny_dict.txt",
 ])
 
+filegroup(
+    name = "license_authority_files",
+    srcs = [
+        "manifest.json",
+        "ppocrv6-tiny-recognizer-authority.json",
+    ],
+)
+
 # Explicit/manual target: ordinary builds and tests never download models.
 filegroup(
     name = "source_models",
