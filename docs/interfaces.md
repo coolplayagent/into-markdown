@@ -204,6 +204,13 @@ handoff。`Vec` 转换为共享 bytes 前按可能复制的峰值预留，转换
 可覆写该方法并从分配前携带 reservation。Engine 持有 wrapper 到检测或转换整体结束。
 内存输入的 `Arc` 虽然不复制，仍按其完整长度计入当前请求。
 
+HTTP(S) resolver 由独立的 policy、DNS、exact-IP connect、TLS、HTTP/1、body 与 error
+模块组成；Provider 通过窄 transport API 复用相同的 host/IP/DNS/connect/TLS 边界，不复制
+另一套 SSRF 或证书策略。remote resolver 自身只装配 options、redirect 与 source metadata。
+成功结果以 `ResolvedSource` 携带 final decoded `Arc<[u8]>` 的 exact memory reservation；
+`SourceMetadata.uri` 是移除 query/fragment 的最终 canonical URL，`redirects` 是同样脱敏的
+有序跳转记录，`name` 与 `media_type` 仅为经过严格语法与 portable-name 校验的检测提示。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，

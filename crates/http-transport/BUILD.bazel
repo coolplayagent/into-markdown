@@ -6,7 +6,7 @@ exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
 
 rust_library(
     name = "http_transport",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "into_markdown_http_transport",
     edition = "2024",
     deps = [

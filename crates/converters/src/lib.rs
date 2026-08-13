@@ -3339,7 +3339,7 @@ mod tests {
 
     #[test]
     fn remote_resolution_is_disabled_by_default() {
-        let resolver = UriSourceResolver;
+        let resolver = UriSourceResolver::default();
         let input = InputRef::Uri("https://example.com/a.pdf".into());
         let options = ConversionOptions::default();
         let context = execution_context();

@@ -2950,6 +2950,54 @@ mod tests {
     }
 
     #[test]
+    fn cli_remote_source_requires_both_authorizations_and_converts_when_present() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let read = stream.read(&mut request).unwrap();
+            assert!(
+                std::str::from_utf8(&request[..read])
+                    .unwrap()
+                    .starts_with("GET /text HTTP/1.1\r\n")
+            );
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\nConnection: close\r\n\r\nhello\n").unwrap();
+        });
+        let root = std::env::temp_dir().join(format!("into-md-http-cli-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![
+                OsString::from("--no-config"),
+                OsString::from(format!("http://{address}/text")),
+                OsString::from("--allow-network"),
+                OsString::from("--allow-private-network"),
+                OsString::from("--allow-host"),
+                OsString::from("127.0.0.1"),
+                OsString::from("--format"),
+                OsString::from("text"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(String::from_utf8(stdout).unwrap(), "hello\n");
+        assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn command_line_host_allowlist_can_only_narrow_configured_hosts() {
         let mut configured_only = vec!["CONFIGURED.example".into()];
         narrow_allowed_hosts(&mut configured_only, &[]).unwrap();

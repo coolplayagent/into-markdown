@@ -17,7 +17,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs}
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, OnceLock};
-use std::thread;
 use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
@@ -29,7 +28,10 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_HEADER_COUNT: usize = 128;
 const IO_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_FILENAME_BYTES: usize = 255;
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_URL_BYTES: usize = 8 * 1024;
+const MAX_ALLOWED_HOSTS: usize = 128;
+const MAX_HOST_BYTES: usize = 253;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 const IO_POLL_SLICE: Duration = Duration::from_millis(25);
 
 mod body;
@@ -115,6 +117,10 @@ pub struct FetchedResource {
     pub redirects: Vec<RedirectHop>,
 }
 
+/// Owned response parts returned by [`FetchedResource::into_parts`].
+pub type FetchedParts =
+    (Arc<[u8]>, ResourceReservation, String, Option<String>, Option<String>, Vec<RedirectHop>);
+
 impl FetchedResource {
     /// Borrow the immutable decoded bytes.
     #[must_use]
@@ -124,10 +130,7 @@ impl FetchedResource {
 
     /// Split the response into metadata, bytes, and the exact source-memory lease.
     #[must_use]
-    pub fn into_parts(
-        self,
-    ) -> (Arc<[u8]>, ResourceReservation, String, Option<String>, Option<String>, Vec<RedirectHop>)
-    {
+    pub fn into_parts(self) -> FetchedParts {
         (
             self.bytes,
             self.reservation,
@@ -142,6 +145,10 @@ impl FetchedResource {
 /// Injectable DNS boundary used by deterministic policy and rebinding tests.
 pub trait DnsResolver: Send + Sync {
     /// Resolve at most a bounded set of addresses for one canonical host and exact port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the injected resolver cannot produce an answer.
     fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
 }
 
@@ -152,6 +159,10 @@ impl<T: Read + Write + Send> Connection for T {}
 /// Injectable exact-IP connector. Production code never supplies a hostname as a route target.
 pub trait ConnectionFactory: Send + Sync {
     /// Connect to `address`; use `host` only for TLS SNI and certificate authentication.
+    ///
+    /// # Errors
+    ///
+    /// Returns a categorized transport error for connect, TLS, timeout, or cancellation failure.
     fn connect(
         &self,
         scheme: &str,
@@ -201,6 +212,10 @@ impl HttpClient {
     /// The returned hostname is canonical and the addresses retain the exact
     /// requested port. Callers must pass one of those addresses to
     /// [`Self::connect_address`] rather than resolving the hostname again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a policy, DNS, timeout, cancellation, or resource error.
     pub fn authorized_addresses(
         &self,
         url: &Url,
@@ -241,6 +256,10 @@ impl HttpClient {
     }
 
     /// Connect one exact address returned by [`Self::authorized_addresses`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a categorized connect, TLS, timeout, or cancellation error.
     pub fn connect_address(
         &self,
         url: &Url,
@@ -253,6 +272,10 @@ impl HttpClient {
     }
 
     /// Fetch one HTTP(S) source with explicit authorization and bounded decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns a policy, transport, protocol, timeout, cancellation, or resource error.
     pub fn get(
         &self,
         source: &str,
@@ -264,10 +287,6 @@ impl HttpClient {
         if !policy.allow_network {
             return Err(TransportError::new(TransportErrorKind::NetworkDenied));
         }
-        if limits.max_decoded_bytes == 0 || limits.max_wire_bytes == 0 {
-            return Err(TransportError::new(TransportErrorKind::ResourceLimit));
-        }
-        let allowed_hosts = normalize_allowlist(&policy.allowed_hosts)?;
         let mut current = canonical_url(source)?;
         let now = Instant::now();
         let local_deadline = now
@@ -282,11 +301,12 @@ impl HttpClient {
         loop {
             check_operation(context, deadline)?;
             let public_current = redacted_url(&current);
-            if !visited.insert(public_current.clone()) {
+            // Retain the full canonical value only in request-local memory so distinct
+            // signed URLs are not conflated. It is never returned or formatted.
+            if !visited.insert(current.as_str().to_owned()) {
                 return Err(TransportError::new(TransportErrorKind::Http));
             }
-            let response =
-                self.request_once(&current, &allowed_hosts, policy, limits, context, deadline)?;
+            let response = self.request_once(&current, policy, limits, context, deadline)?;
             if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
                 let location = response
                     .location
@@ -297,7 +317,7 @@ impl HttpClient {
                 }
                 let next = canonical_redirect(&current, location)?;
                 let public_next = redacted_url(&next);
-                if visited.contains(&public_next) {
+                if visited.contains(next.as_str()) {
                     return Err(TransportError::new(TransportErrorKind::Http));
                 }
                 redirects.push(RedirectHop {
@@ -328,14 +348,31 @@ impl HttpClient {
     fn request_once(
         &self,
         url: &Url,
-        allowed_hosts: &BTreeSet<String>,
         policy: &NetworkPolicy,
         limits: FetchLimits,
         context: &ExecutionContext,
         deadline: Instant,
     ) -> Result<RawResponse, TransportError> {
-        let _ = allowed_hosts;
+        let route_capacity = MAX_DNS_ADDRESSES
+            .checked_mul(std::mem::size_of::<SocketAddr>())
+            .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        let mut route_memory = context
+            .reserve_memory(
+                u64::try_from(route_capacity)
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
         let (host, addresses) = self.authorized_addresses(url, policy, context, deadline)?;
+        let address_capacity = addresses
+            .capacity()
+            .checked_mul(std::mem::size_of::<SocketAddr>())
+            .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        route_memory
+            .shrink(
+                u64::try_from(route_capacity - address_capacity)
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
         let mut last = TransportError::new(TransportErrorKind::Connect);
         for (index, address) in addresses.iter().copied().enumerate() {
             check_operation(context, deadline)?;
@@ -345,7 +382,7 @@ impl HttpClient {
                 Instant::now().checked_add(remaining / left).unwrap_or(deadline).min(deadline);
             match self.connect_address(url, &host, address, context, attempt_deadline) {
                 Ok(mut stream) => {
-                    let request = encode_get_request(url, &host)?;
+                    let (request, _request_memory) = encode_get_request(url, &host, context)?;
                     write_all_checked(&mut stream, request.as_bytes(), context, deadline)?;
                     return read_response(&mut stream, limits, context, deadline);
                 }
@@ -397,4 +434,11 @@ struct ParsedHead {
 struct WireBody {
     chunks: ChunkChain,
     memory: ResourceReservation,
+}
+
+#[cfg(test)]
+mod tests {
+    mod protocol;
+    mod resource;
+    mod ssrf;
 }

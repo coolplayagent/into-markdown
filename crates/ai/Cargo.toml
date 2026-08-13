@@ -11,12 +11,9 @@ base64.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
 into-markdown-http-transport = { path = "../http-transport" }
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-socket2.workspace = true
 url.workspace = true
-webpki-roots.workspace = true
 zeroize.workspace = true
 
 [lints]

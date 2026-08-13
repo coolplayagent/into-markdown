@@ -89,8 +89,24 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   校验的数据，不触发访问。
   但 PDFium 仍在本进程解析不可信 native PDF；私有 runtime snapshot 只保护供应链和加载竞态，
   并不是 PDF 解析 sandbox。高敌意部署仍应在具备 OS hard limit 与 sandbox 的隔离进程运行。
-- 网络访问默认关闭。未来 HTTP 解析器必须解析并验证每次重定向，拒绝回环、
-  私有、链路本地、组播和云元数据地址，在配置时执行白名单，并限制响应字节数。
+- 网络访问默认关闭，HTTP(S) source 在未显式传入 `--allow-network` 时不会进入 DNS；
+  回环、私网及其他非全局地址还必须由同一次调用传入 `--allow-private-network`。配置与
+  CLI host allowlist 先取规范化交集，resolver 在每次重定向逐跳重新检查 host、DNS
+  返回的全部 IP 和端口；连接只使用该次检查所得的 exact IP，而 HTTP `Host` 与 TLS SNI
+  保留原 canonical host，避免 DNS rebinding。HTTP 明文只允许已双重授权且全部地址均为
+  私网的目标；HTTPS 固定使用随程序审核的 WebPKI roots，不读取代理、系统证书、`PATH`
+  或相关环境变量。
+- HTTP/1.0/1.1 response parser 拒绝 C0/DEL、obs-fold、空或非法 header name、重复敏感头、
+  `Content-Length`/`Transfer-Encoding` 冲突、chunk extension/trailer、未知 transfer/content
+  encoding 和主动内容语法。客户端只声明 `gzip`；wire bytes、header、chunk、解压后 source
+  bytes 与所有中间/final backing 都受请求预算和总 deadline/cancel 控制，超限立即断开，
+  不创建缓存或完整临时文件。重定向只接受 301/302/303/307/308 的相对或 HTTP(S)
+  `Location`，限制跳数并检测 cycle；每跳重新授权，不携带 Authorization 或其他凭据。
+  source URL 可以包含签名 query 以支持受控下载，但 metadata、redirect provenance、错误、
+  日志和诊断只保留移除 userinfo/query/fragment 后的 canonical URL。
+- `Content-Type` 只作为格式提示；服务器文件名仅接受严格 quoted/RFC 5987 UTF-8、NFC、
+  长度受限的 portable name，并拒绝路径、设备名和控制字符。扩展名不能覆盖 magic/container
+  检测。HTML、DOCX 等文档中的外部链接仍只是数据，不会触发第二次 source 网络请求。
 - AI 响应是不可信的结构化输入，必须验证补丁或 Schema、溯源、节点引用和资源。
 - 可恢复任务 checkpoint 只使用规范随机 token 定位本地普通文件；Unix store 持有根
   目录 handle 与 dev/inode identity，所有阶段 open/link/unlink 均为相对 no-follow 操作，

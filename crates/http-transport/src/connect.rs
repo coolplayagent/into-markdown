@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    Connection, ConnectionFactory, Domain, Duration, ExecutionContext, IO_POLL_SLICE, Instant,
+    Protocol, SockAddr, Socket, SocketAddr, TcpStream, TransportError, TransportErrorKind, Type,
+    map_context_error, tls_connect,
+};
+use std::io::{self, Read, Write};
+use std::thread;
 
 pub(super) struct DirectConnectionFactory;
 
@@ -33,8 +39,10 @@ pub(super) fn connect_exact(
         Ok(()) => {}
         Err(error) if connect_pending(&error) => loop {
             check_operation(context, deadline)?;
-            if let Some(_) =
-                socket.take_error().map_err(|_| TransportError::new(TransportErrorKind::Connect))?
+            if socket
+                .take_error()
+                .map_err(|_| TransportError::new(TransportErrorKind::Connect))?
+                .is_some()
             {
                 return Err(TransportError::new(TransportErrorKind::Connect));
             }

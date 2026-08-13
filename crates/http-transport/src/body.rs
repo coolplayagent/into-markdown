@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    Connection, ContentEncoding, ExecutionContext, FetchLimits, Framing, GzDecoder, IO_CHUNK_BYTES,
+    Instant, RawResponse, ResourceReservation, TransportError, TransportErrorKind, WireBody,
+    check_operation, map_context_error, parse_head, read_checked, read_head,
+};
+use std::io::{self, Read};
+use std::sync::Arc;
 
 pub(super) struct ChunkNode {
     used: usize,
@@ -67,8 +73,8 @@ pub(super) fn read_response(
     deadline: Instant,
 ) -> Result<RawResponse, TransportError> {
     let mut memory = context.reserve_memory(0).map_err(map_context_error)?;
-    let (head_bytes, initial_body) = read_head(stream, context, deadline, &mut memory)?;
-    let head = parse_head(&head_bytes)?;
+    let (head_bytes, head_end) = read_head(stream, context, deadline, &mut memory)?;
+    let head = parse_head(&head_bytes[..head_end])?;
     if matches!(head.status, 301 | 302 | 303 | 307 | 308) {
         return Ok(RawResponse {
             status: head.status,
@@ -99,11 +105,12 @@ pub(super) fn read_response(
         .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
     let chunks = match head.framing {
         Framing::Length(length) => {
+            let initial_body = &head_bytes[head_end..];
             if length > wire_limit || initial_body.len() > length {
                 return Err(TransportError::new(TransportErrorKind::ResourceLimit));
             }
             let mut chain = ChunkChain::default();
-            chain.push(&initial_body, &mut memory)?;
+            chain.push(initial_body, &mut memory)?;
             let mut remaining = length - initial_body.len();
             while remaining != 0 {
                 check_operation(context, deadline)?;
@@ -119,11 +126,12 @@ pub(super) fn read_response(
             chain
         }
         Framing::Close => {
+            let initial_body = &head_bytes[head_end..];
             let mut chain = ChunkChain::default();
             if initial_body.len() > wire_limit {
                 return Err(TransportError::new(TransportErrorKind::ResourceLimit));
             }
-            chain.push(&initial_body, &mut memory)?;
+            chain.push(initial_body, &mut memory)?;
             loop {
                 check_operation(context, deadline)?;
                 let mut buffer = [0_u8; IO_CHUNK_BYTES];
@@ -138,13 +146,20 @@ pub(super) fn read_response(
             }
             chain
         }
-        Framing::Chunked => {
-            read_chunked(stream, initial_body, wire_limit, context, deadline, &mut memory)?
-        }
+        Framing::Chunked => read_chunked(
+            stream,
+            &head_bytes[head_end..],
+            wire_limit,
+            context,
+            deadline,
+            &mut memory,
+        )?,
     };
+    let header_capacity = head_bytes.capacity();
+    drop(head_bytes);
     memory
         .shrink(
-            u64::try_from(MAX_HEADER_BYTES + IO_CHUNK_BYTES)
+            u64::try_from(header_capacity)
                 .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
         )
         .map_err(map_context_error)?;
@@ -219,7 +234,7 @@ pub(super) fn finalize_body(
 
 pub(super) fn read_chunked(
     stream: &mut dyn Connection,
-    initial: Vec<u8>,
+    initial: &[u8],
     limit: usize,
     context: &ExecutionContext,
     deadline: Instant,
@@ -229,10 +244,13 @@ pub(super) fn read_chunked(
     let mut output = ChunkChain::default();
     loop {
         let line = read_crlf_line(&mut reader, 32, context, deadline)?;
-        if line.is_empty() || line.contains(&b';') || !line.iter().all(u8::is_ascii_hexdigit) {
+        if line.is_empty()
+            || line.as_slice().contains(&b';')
+            || !line.as_slice().iter().all(u8::is_ascii_hexdigit)
+        {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
         }
-        let text = std::str::from_utf8(&line)
+        let text = std::str::from_utf8(line.as_slice())
             .map_err(|_| TransportError::new(TransportErrorKind::InvalidMessage))?;
         let size = usize::from_str_radix(text, 16)
             .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
@@ -256,19 +274,19 @@ pub(super) fn read_chunked(
             output.push(&buffer[..read], memory)?;
             remaining -= read;
         }
-        if read_crlf_line(&mut reader, 2, context, deadline)?.len() != 0 {
+        if !read_crlf_line(&mut reader, 2, context, deadline)?.is_empty() {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
         }
     }
 }
 
 pub(super) struct PrefixedReader<'a> {
-    prefix: std::io::Cursor<Vec<u8>>,
+    prefix: std::io::Cursor<&'a [u8]>,
     stream: &'a mut dyn Connection,
 }
 
 impl<'a> PrefixedReader<'a> {
-    fn new(prefix: Vec<u8>, stream: &'a mut dyn Connection) -> Self {
+    fn new(prefix: &'a [u8], stream: &'a mut dyn Connection) -> Self {
         Self { prefix: std::io::Cursor::new(prefix), stream }
     }
 }
@@ -280,21 +298,40 @@ impl Read for PrefixedReader<'_> {
     }
 }
 
+pub(super) struct FixedLine {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl FixedLine {
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
 pub(super) fn read_crlf_line(
     reader: &mut dyn Read,
     limit: usize,
     context: &ExecutionContext,
     deadline: Instant,
-) -> Result<Vec<u8>, TransportError> {
-    let mut line = Vec::with_capacity(limit);
-    while line.len() < limit {
+) -> Result<FixedLine, TransportError> {
+    if limit > 32 {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
+    let mut line = FixedLine { bytes: [0; 32], len: 0 };
+    while line.len < limit {
         let mut byte = [0_u8; 1];
         if read_checked(reader, &mut byte, context, deadline)? == 0 {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
         }
-        line.push(byte[0]);
-        if line.ends_with(b"\r\n") {
-            line.truncate(line.len() - 2);
+        line.bytes[line.len] = byte[0];
+        line.len += 1;
+        if line.as_slice().ends_with(b"\r\n") {
+            line.len -= 2;
             return Ok(line);
         }
     }

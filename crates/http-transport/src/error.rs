@@ -3,7 +3,6 @@ use into_markdown_core::ConversionError;
 /// Stable transport failure category. It intentionally carries no URL or server payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-
 pub enum TransportErrorKind {
     /// Network access was not explicitly authorized.
     NetworkDenied,
@@ -70,12 +69,12 @@ impl std::fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+#[allow(clippy::needless_pass_by_value)]
 pub(super) fn map_context_error(error: ConversionError) -> TransportError {
     TransportError::new(match error {
         ConversionError::Cancelled => TransportErrorKind::Cancelled,
         ConversionError::Timeout => TransportErrorKind::Timeout,
         ConversionError::ResourceLimit { .. } => TransportErrorKind::ResourceLimit,
-        ConversionError::ComponentUnavailable { .. } => TransportErrorKind::Unavailable,
         _ => TransportErrorKind::Unavailable,
     })
 }

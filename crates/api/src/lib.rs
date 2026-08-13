@@ -261,6 +261,38 @@ mod tests {
     }
 
     #[test]
+    fn authorized_loopback_uri_runs_resolver_detector_converter_and_renderer() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).unwrap();
+            let request = std::str::from_utf8(&request[..read]).unwrap();
+            assert!(request.starts_with("GET /input.txt?signed=canary HTTP/1.1\r\n"));
+            assert!(request.contains(&format!("\r\nHost: {address}\r\n")));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=input.txt\r\nContent-Length: 6\r\nConnection: close\r\n\r\nhello\n")
+                .unwrap();
+        });
+
+        let mut request = ConversionRequest::new(InputRef::Uri(format!(
+            "http://{address}/input.txt?signed=canary"
+        )));
+        request.options.network.enabled = true;
+        request.options.network.deny_private_networks = false;
+        request.options.network.allowed_hosts = vec!["127.0.0.1".into()];
+        request.hint.format = Some(InputFormat::Text);
+        request.execution.timeout = Some(std::time::Duration::from_secs(2));
+        let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+        server.join().unwrap();
+        assert_eq!(result.markdown, "hello\n");
+    }
+
+    #[test]
     fn external_docx_link_never_resolves_or_invokes_optional_services() {
         let resolver_calls = Arc::new(ResolverCalls::default());
         let service_calls = Arc::new(ServiceCalls::default());

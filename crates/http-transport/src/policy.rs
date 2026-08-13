@@ -1,7 +1,10 @@
 use super::*;
 
+const FIXED_REQUEST_BYTES: usize =
+    "GET  HTTP/1.1\r\nHost: \r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\nUser-Agent: into-md/0\r\n\r\n".len();
+
 pub(super) fn canonical_url(value: &str) -> Result<Url, TransportError> {
-    if value.bytes().any(|byte| byte.is_ascii_control()) {
+    if value.len() > MAX_URL_BYTES || value.bytes().any(|byte| byte.is_ascii_control()) {
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
     let mut url =
@@ -18,7 +21,7 @@ pub(super) fn canonical_url(value: &str) -> Result<Url, TransportError> {
 }
 
 pub(super) fn canonical_redirect(base: &Url, location: &str) -> Result<Url, TransportError> {
-    if location.bytes().any(|byte| byte.is_ascii_control()) {
+    if location.len() > MAX_URL_BYTES || location.bytes().any(|byte| byte.is_ascii_control()) {
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
     let joined =
@@ -47,10 +50,13 @@ pub(super) fn canonical_host(url: &Url) -> Result<String, TransportError> {
 }
 
 pub(super) fn normalize_allowlist(values: &[String]) -> Result<BTreeSet<String>, TransportError> {
+    if values.len() > MAX_ALLOWED_HOSTS {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
     values
         .iter()
         .map(|value| {
-            if value.is_empty() || value.trim() != value {
+            if value.is_empty() || value.len() > MAX_HOST_BYTES || value.trim() != value {
                 return Err(TransportError::new(TransportErrorKind::InvalidMessage));
             }
             let value = value.strip_suffix('.').unwrap_or(value);
@@ -64,12 +70,17 @@ pub(super) fn normalize_allowlist(values: &[String]) -> Result<BTreeSet<String>,
         .collect()
 }
 
-pub(super) fn encode_get_request(url: &Url, host: &str) -> Result<String, TransportError> {
-    let target = match url.query() {
-        Some(query) => format!("{}?{query}", url.path()),
-        None => url.path().to_owned(),
-    };
-    if target.is_empty() || target.bytes().any(|byte| byte.is_ascii_control()) {
+pub(super) fn encode_get_request(
+    url: &Url,
+    host: &str,
+    context: &ExecutionContext,
+) -> Result<(String, ResourceReservation), TransportError> {
+    let path = url.path();
+    let query = url.query();
+    if path.is_empty()
+        || path.bytes().any(|byte| byte.is_ascii_control())
+        || query.is_some_and(|value| value.bytes().any(|byte| byte.is_ascii_control()))
+    {
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
     let default_port = match url.scheme() {
@@ -77,16 +88,55 @@ pub(super) fn encode_get_request(url: &Url, host: &str) -> Result<String, Transp
         "https" => 443,
         _ => return Err(TransportError::new(TransportErrorKind::InvalidMessage)),
     };
-    let host_literal =
-        if host.parse::<Ipv6Addr>().is_ok() { format!("[{host}]") } else { host.to_owned() };
-    let host_header = match url.port() {
-        Some(port) if port != default_port => format!("{host_literal}:{port}"),
-        _ => host_literal,
-    };
-    let mut request = String::with_capacity(target.len() + host_header.len() + 160);
-    write!(request, "GET {target} HTTP/1.1\r\nHost: {host_header}\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\nUser-Agent: into-md/0\r\n\r\n")
+    let ipv6 = host.parse::<Ipv6Addr>().is_ok();
+    let explicit_port = url.port().filter(|port| *port != default_port);
+    let port_digits = explicit_port.map_or(0, |port| port.to_string().len() + 1);
+    let required = FIXED_REQUEST_BYTES
+        .checked_add(path.len())
+        .and_then(|size| size.checked_add(query.map_or(0, |value| value.len() + 1)))
+        .and_then(|size| size.checked_add(host.len()))
+        .and_then(|size| size.checked_add(usize::from(ipv6) * 2))
+        .and_then(|size| size.checked_add(port_digits))
+        .filter(|size| *size <= MAX_URL_BYTES + FIXED_REQUEST_BYTES + MAX_HOST_BYTES + 8)
+        .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    let mut memory = context
+        .reserve_memory(
+            u64::try_from(required)
+                .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+        )
+        .map_err(map_context_error)?;
+    let mut request = String::with_capacity(required);
+    write!(request, "GET {path}")
         .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
-    Ok(request)
+    if let Some(query) = query {
+        write!(request, "?{query}")
+            .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    }
+    write!(request, " HTTP/1.1\r\nHost: ")
+        .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    if ipv6 {
+        write!(request, "[{host}]")
+            .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    } else {
+        request.push_str(host);
+    }
+    if let Some(port) = explicit_port {
+        write!(request, ":{port}")
+            .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    }
+    request.push_str("\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\nUser-Agent: into-md/0\r\n\r\n");
+    if request.capacity() > required {
+        memory
+            .grow(
+                u64::try_from(request.capacity() - required)
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+    }
+    if request.len() != required {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
+    Ok((request, memory))
 }
 
 pub(super) fn parse_content_type(value: &str) -> Result<String, TransportError> {

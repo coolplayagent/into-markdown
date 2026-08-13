@@ -1,11 +1,16 @@
-use super::*;
+use super::{
+    Connection, ContentEncoding, ExecutionContext, Framing, IO_CHUNK_BYTES, Instant,
+    MAX_HEADER_BYTES, MAX_HEADER_COUNT, ParsedHead, ResourceReservation, TransportError,
+    TransportErrorKind, find_bytes, invalid_header_value_byte, is_token, map_context_error,
+    parse_content_disposition, parse_content_type, read_checked,
+};
 
 pub(super) fn read_head(
     stream: &mut dyn Connection,
     context: &ExecutionContext,
     deadline: Instant,
     memory: &mut ResourceReservation,
-) -> Result<(Vec<u8>, Vec<u8>), TransportError> {
+) -> Result<(Vec<u8>, usize), TransportError> {
     memory
         .grow(
             u64::try_from(MAX_HEADER_BYTES + IO_CHUNK_BYTES)
@@ -13,6 +18,14 @@ pub(super) fn read_head(
         )
         .map_err(map_context_error)?;
     let mut bytes = Vec::with_capacity(MAX_HEADER_BYTES + IO_CHUNK_BYTES);
+    if bytes.capacity() > MAX_HEADER_BYTES + IO_CHUNK_BYTES {
+        memory
+            .grow(
+                u64::try_from(bytes.capacity() - (MAX_HEADER_BYTES + IO_CHUNK_BYTES))
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+    }
     loop {
         if bytes.len() >= MAX_HEADER_BYTES + IO_CHUNK_BYTES {
             return Err(TransportError::new(TransportErrorKind::ResourceLimit));
@@ -26,8 +39,7 @@ pub(super) fn read_head(
             if end > MAX_HEADER_BYTES {
                 return Err(TransportError::new(TransportErrorKind::ResourceLimit));
             }
-            let body = bytes.split_off(end);
-            return Ok((bytes, body));
+            return Ok((bytes, end));
         }
         if read == 0 {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
@@ -44,17 +56,19 @@ pub(super) fn parse_head(bytes: &[u8]) -> Result<ParsedHead, TransportError> {
         .split("\r\n");
     let status_line =
         lines.next().ok_or_else(|| TransportError::new(TransportErrorKind::InvalidMessage))?;
-    let mut status_parts = status_line.split(' ');
-    let version = status_parts.next().unwrap_or_default();
-    let status_text = status_parts.next().unwrap_or_default();
-    if !matches!(version, "HTTP/1.0" | "HTTP/1.1")
-        || status_text.len() != 3
-        || !status_text.bytes().all(|byte| byte.is_ascii_digit())
-        || status_parts.next().is_some_and(|reason| reason.bytes().any(invalid_header_value_byte))
+    let status_bytes = status_line.as_bytes();
+    if status_bytes.len() < 13
+        || !matches!(&status_bytes[..9], b"HTTP/1.0 " | b"HTTP/1.1 ")
+        || !status_bytes[9..12].iter().all(u8::is_ascii_digit)
+        || status_bytes[12] != b' '
+        || status_bytes
+            .get(13..)
+            .is_some_and(|reason| reason.iter().copied().any(invalid_header_value_byte))
     {
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
-    let status = status_text
+    let status = std::str::from_utf8(&status_bytes[9..12])
+        .map_err(|_| TransportError::new(TransportErrorKind::InvalidMessage))?
         .parse::<u16>()
         .map_err(|_| TransportError::new(TransportErrorKind::InvalidMessage))?;
     if !(200..=599).contains(&status) {
@@ -106,7 +120,7 @@ pub(super) fn parse_head(bytes: &[u8]) -> Result<ParsedHead, TransportError> {
         Some(_) => return Err(TransportError::new(TransportErrorKind::InvalidMessage)),
     };
     let location = unique_header(&headers, "location")?.map(str::to_owned);
-    if location.as_ref().is_some_and(|value| value.is_empty()) {
+    if location.as_ref().is_some_and(String::is_empty) {
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
     let media_type =

@@ -1,12 +1,23 @@
-use super::*;
+use super::{
+    Arc, AtomicUsize, DNS_QUEUE_PER_WORKER, DNS_WORKERS, DnsResolver, ExecutionContext, Instant,
+    MAX_DNS_ADDRESSES, OnceLock, Ordering, SocketAddr, SyncSender, ToSocketAddrs, TransportError,
+    TransportErrorKind, TrySendError, blocking_slice, check_operation, mpsc,
+};
+use std::io;
+use std::thread;
 
 pub(super) struct SystemDnsResolver;
 
 impl DnsResolver for SystemDnsResolver {
     fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-        (host, port)
-            .to_socket_addrs()
-            .map(|addresses| addresses.take(MAX_DNS_ADDRESSES + 1).collect())
+        let mut output = Vec::with_capacity(MAX_DNS_ADDRESSES);
+        for address in (host, port).to_socket_addrs()? {
+            if output.len() == MAX_DNS_ADDRESSES {
+                return Err(io::Error::other("DNS address limit exceeded"));
+            }
+            output.push(address);
+        }
+        Ok(output)
     }
 }
 
@@ -50,7 +61,7 @@ impl DnsPool {
             match self.workers[index].try_send(job) {
                 Ok(()) => return Ok(()),
                 Err(TrySendError::Full(returned) | TrySendError::Disconnected(returned)) => {
-                    job = returned
+                    job = returned;
                 }
             }
         }

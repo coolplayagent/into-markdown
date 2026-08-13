@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    Arc, ExecutionContext, Instant, OnceLock, ServerName, TcpStream, TransportError,
+    TransportErrorKind, check_operation,
+};
+use std::io;
 
 pub(super) fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();

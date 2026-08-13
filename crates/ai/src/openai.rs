@@ -594,6 +594,7 @@ impl OpenAiCompatibleClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn request_models(
         &self,
         endpoint: &Url,
@@ -2268,7 +2269,7 @@ fn map_transport_error(error: TransportError) -> ProviderError {
         TransportErrorKind::HostDenied => ProviderErrorCode::HostDenied,
         TransportErrorKind::PrivateNetworkDenied => ProviderErrorCode::PrivateNetworkDenied,
         TransportErrorKind::Dns => ProviderErrorCode::Dns,
-        TransportErrorKind::Connect => ProviderErrorCode::Connect,
+        TransportErrorKind::Connect | TransportErrorKind::Unavailable => ProviderErrorCode::Connect,
         TransportErrorKind::Tls => ProviderErrorCode::Tls,
         TransportErrorKind::Timeout => ProviderErrorCode::Timeout,
         TransportErrorKind::Cancelled => ProviderErrorCode::Cancelled,
@@ -2276,7 +2277,6 @@ fn map_transport_error(error: TransportError) -> ProviderError {
         TransportErrorKind::Http | TransportErrorKind::InvalidMessage => {
             ProviderErrorCode::InvalidResponse
         }
-        TransportErrorKind::Unavailable => ProviderErrorCode::Connect,
         _ => ProviderErrorCode::InvalidResponse,
     })
 }

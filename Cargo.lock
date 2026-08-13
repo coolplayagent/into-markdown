@@ -987,12 +987,9 @@ dependencies = [
  "flate2",
  "into-markdown-core",
  "into-markdown-http-transport",
- "rustls",
  "serde",
  "serde_json",
- "socket2",
  "url",
- "webpki-roots",
  "zeroize",
 ]
 
@@ -1041,8 +1038,8 @@ dependencies = [
  "html5ever",
  "image",
  "into-markdown-core",
- "into-markdown-pdfium",
  "into-markdown-http-transport",
+ "into-markdown-pdfium",
  "into-markdown-render-markdown",
  "libc",
  "pulldown-cmark",
