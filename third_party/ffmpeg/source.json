@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "version": "8.1.2",
+  "source_url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+  "source_bytes": 11710924,
+  "source_sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+  "source_date_epoch": 1781664539,
+  "signature_url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz.asc",
+  "signature_bytes": 520,
+  "signature_sha256": "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8",
+  "signing_key_url": "https://ffmpeg.org/ffmpeg-devel.asc",
+  "signing_key_bytes": 1709,
+  "signing_key_sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
+  "signing_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+  "license_conclusion": "LGPL-2.1-or-later",
+  "supported_targets": [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc"
+  ]
+}

@@ -3,6 +3,13 @@
 项目代码采用 Apache-2.0，根目录 `LICENSE` 是完整许可证文本，`NOTICE` 只陈述
 当前可验证的第一方归属和分发边界，不把尚未引入的组件描述为已经合规。
 
+## 可选 FFmpeg 媒体运行时
+
+FFmpeg 8.1.2 只在显式手动工作流中从固定官方源码构建。配置先关闭所有组件，并明确
+关闭 GPL、version3、nonfree、网络、自动探测和外部库，再应用最小解码/解封装白名单。
+项目不会发现或调用系统 FFmpeg。生产包必须绑定工作流产物与生成的 authority，并履行
+LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务。
+
 ## 权威清单与状态
 
 - `Cargo.lock` 固定 Rust 依赖；`third_party/licenses/rust-lock.tsv` 必须与所有

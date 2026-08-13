@@ -71,7 +71,16 @@
       "license": "BSD-3-Clause",
       "obligations": "If distributed, preserve the archive LICENSE and complete licenses/ directory covering PDFium and bundled permissive dependencies; select only a hash-pinned platform archive."
     },
-    {"id": "ffmpeg", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {
+      "id": "ffmpeg",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "8.1.2",
+      "source": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+      "license": "LGPL-2.1-or-later",
+      "obligations": "Build only from pinned signed source with GPL, version3, nonfree, external libraries, autodetection, and networking disabled; distributors preserve notices, corresponding source, and relinking/replacement rights."
+    },
     {"id": "libreoffice", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "wasmtime", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "generated-onnx-models", "kind": "model", "status": "planned", "included_in_release": false},

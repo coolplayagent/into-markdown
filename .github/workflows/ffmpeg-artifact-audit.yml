@@ -1,0 +1,55 @@
+name: FFmpeg LGPL artifact audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  build-audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: make diffutils xz curl gnupg jq file binutils python coreutils perl
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Install audit tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes build-essential curl gnupg jq xz-utils
+      - name: Install macOS audit tools
+        if: runner.os == 'macOS'
+        run: brew install gnupg jq
+      - name: Build source and audit artifact
+        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        env:
+          FFMPEG_AUDIT_NETWORK: "1"
+          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
+          FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
+        run: ./tools/ffmpeg-build-audit.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-lgpl-${{ matrix.target }}
+          path: ffmpeg-audit-output/*
+          if-no-files-found: error

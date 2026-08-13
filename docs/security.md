@@ -6,6 +6,14 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
 
 文档、归档文件、标记语言、媒体、模型文件、提供者响应和 URL 均为不可信输入。
 
+媒体字节只进入 FFmpeg 子进程。工具必须位于显式可信根下的绝对规范路径，不能是符号
+链接，并在执行前匹配经过认证的大小、哈希和构建配置。子进程使用空环境、私有工作目录、
+仅 pipe 协议及有界 stdin/stdout/stderr。PCM 容量在启动前由时长、采样率、通道数和
+16-bit 样本宽度精确计算并计费；取消或超时始终 kill 后 wait，超量输出或不完整帧失败。
+Unix 子进程还设置地址空间、CPU、文件大小、文件描述符及 core dump 的 rlimit；Windows
+使用 suspended process 与 kill-on-close、process-memory Job Object。rlimit 不是完整 OS
+sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最小协议与组件面是主隔离层。
+
 - `ResourceLimits` 限制输入大小、解压后字节数、归档条目数、嵌套深度、页数和
   保留资源数，并限制实现显式计费的内存与请求临时文件字节数。所有累加使用 checked
   arithmetic，临时文件由执行上下文负责 RAII 清理。

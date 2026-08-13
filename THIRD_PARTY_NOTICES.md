@@ -57,6 +57,12 @@ component and run:
 
 ```shell
 bazel run //tools/license-check:release_audit
+
+FFmpeg 8.1.2 is an optional, separately built LGPL-2.1-or-later runtime. The
+project does not ship an upstream or system binary. Its signed source authority,
+minimal LGPL-only configuration, and distribution obligations are documented in
+`third_party/ffmpeg/`; generated binaries must retain the upstream LGPL notices
+and corresponding-source/relinking rights.
 ```
 
 The audit rejects Cargo dependency drift, unmanaged source-less packages,
