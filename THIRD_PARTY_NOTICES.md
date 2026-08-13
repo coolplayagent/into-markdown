@@ -43,7 +43,12 @@ The embedded Web console is built from the integrity-pinned `pnpm-lock.yaml`.
 `third_party/licenses/npm-inventory.json` covers every locked npm package and
 distinguishes runtime, build, and test scope. React, React DOM, and Scheduler
 are MIT-licensed runtime code included in the minified console asset; their MIT
-copyright and license notices must accompany distributions. Build and test
+copyright and complete license text are preserved at
+`third_party/licenses/npm/react-MIT.txt` and must accompany distributions.
+`third_party/licenses/npm-release.spdx.json` describes the exact content-hashed
+production JavaScript and its three runtime packages. The release audit verifies
+that SPDX graph, the checked asset bytes, the inventory, and the upstream license
+file in both directions. Build and test
 packages are not copied into the CLI release. `axe-core` is MPL-2.0 and is used
 only by the accessibility test: its source package and CI/cache artifacts retain
 the upstream MPL file-level notices and source availability obligations, while

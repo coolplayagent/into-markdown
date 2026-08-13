@@ -1,0 +1,62 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "into-markdown-web-console-13c39d076d44ec59",
+  "documentNamespace": "https://github.com/coolplayagent/into-markdown/spdx/web-console/sha256-13c39d076d44ec596a51841b542032b84f73e808927c30c4fc3737d7aba1b8e7",
+  "creationInfo": {
+    "created": "2026-08-13T00:00:00Z",
+    "creators": ["Organization: into-markdown contributors"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-react",
+      "name": "react",
+      "versionInfo": "19.2.8",
+      "downloadLocation": "https://registry.npmjs.org/react/-/react-19.2.8.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+      "externalRefs": [{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/react@19.2.8"}]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-react-dom",
+      "name": "react-dom",
+      "versionInfo": "19.2.8",
+      "downloadLocation": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.8.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+      "externalRefs": [{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/react-dom@19.2.8"}]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-scheduler",
+      "name": "scheduler",
+      "versionInfo": "0.27.0",
+      "downloadLocation": "https://registry.npmjs.org/scheduler/-/scheduler-0.27.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+      "externalRefs": [{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl","referenceLocator":"pkg:npm/scheduler@0.27.0"}]
+    }
+  ],
+  "files": [
+    {
+      "SPDXID": "SPDXRef-File-console-app",
+      "fileName": "./web/console/dist/assets/app.13c39d076d44ec59.js",
+      "checksums": [{"algorithm":"SHA256","checksumValue":"13c39d076d44ec596a51841b542032b84f73e808927c30c4fc3737d7aba1b8e7"}],
+      "licenseConcluded": "NOASSERTION",
+      "licenseInfoInFiles": ["MIT"],
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "relationships": [
+    {"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-File-console-app"},
+    {"spdxElementId":"SPDXRef-File-console-app","relationshipType":"GENERATED_FROM","relatedSpdxElement":"SPDXRef-Package-react"},
+    {"spdxElementId":"SPDXRef-File-console-app","relationshipType":"GENERATED_FROM","relatedSpdxElement":"SPDXRef-Package-react-dom"},
+    {"spdxElementId":"SPDXRef-File-console-app","relationshipType":"GENERATED_FROM","relatedSpdxElement":"SPDXRef-Package-scheduler"}
+  ]
+}

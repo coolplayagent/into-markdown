@@ -15,6 +15,9 @@ DATA = [
     "//third_party/licenses:inventory.json",
     "//third_party/licenses:imageproc-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
+    "//third_party/licenses:npm-release.spdx.json",
+    "//third_party/licenses:npm/react-MIT.txt",
+    "//web/console:checked_assets",
     "//third_party/licenses:policy.json",
     "//third_party/licenses:rust-lock.tsv",
     "//third_party/licenses:downloads.json",
@@ -46,6 +49,7 @@ rust_library(
     deps = [
         "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:sha2",
         "@crates//:toml",
         "@crates//:url",
     ],
@@ -72,6 +76,7 @@ rust_binary(
 rust_test(
     name = "license_check_unit_test",
     crate = ":license_check_lib",
+    data = DATA,
 )
 
 rust_test(

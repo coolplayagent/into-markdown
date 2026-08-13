@@ -90,8 +90,10 @@ function Content({ api }: { api: ApiClient }) {
   const main = useRef<HTMLElement>(null);
   useEffect(() => {
     document.title = `${path === "/" || path === "/status" ? t("status") : t("notFound")} · into-markdown`;
-    main.current?.focus();
   }, [path, t]);
+  useEffect(() => {
+    main.current?.focus();
+  }, [path]);
   return (
     <main id="main" ref={main} tabIndex={-1}>
       {path === "/" || path === "/status" ? (
@@ -106,24 +108,22 @@ function Content({ api }: { api: ApiClient }) {
 function Shell({ api }: { api: ApiClient }) {
   const { t } = useI18n();
   return (
-    <ErrorBoundary t={t}>
-      <Router>
-        <a className="skip-link" href="#main">{t("skip")}</a>
-        <div className="app-shell">
-          <header>
-            <RouteLink href="/status" className="brand" aria-label={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink>
-            <Preferences />
-          </header>
-          <div className="body-shell">
-            <nav aria-label={t("appName")}><RouteLink href="/status" className="nav-link">{t("status")}</RouteLink></nav>
-            <Content api={api} />
-          </div>
+    <Router>
+      <a className="skip-link" href="#main">{t("skip")}</a>
+      <div className="app-shell">
+        <header>
+          <RouteLink href="/status" className="brand" aria-label={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink>
+          <Preferences />
+        </header>
+        <div className="body-shell">
+          <nav aria-label={t("appName")}><RouteLink href="/status" className="nav-link">{t("status")}</RouteLink></nav>
+          <Content api={api} />
         </div>
-      </Router>
-    </ErrorBoundary>
+      </div>
+    </Router>
   );
 }
 
 export function App({ api }: { api: ApiClient }) {
-  return <I18nProvider><ThemeProvider><Shell api={api} /></ThemeProvider></I18nProvider>;
+  return <ErrorBoundary><I18nProvider><ThemeProvider><Shell api={api} /></ThemeProvider></I18nProvider></ErrorBoundary>;
 }

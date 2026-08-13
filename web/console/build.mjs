@@ -21,9 +21,16 @@ async function bundle(entryPoint, options = {}) {
     charset: "utf8",
     entryPoints: [entryPoint],
     format: "esm",
+    jsx: "automatic",
+    jsxImportSource: "react",
     legalComments: "eof",
     logLevel: "silent",
-    minify: true,
+    // Identifier mangling incorporates module path identity. Keep source identifiers so
+    // workspace and sandbox absolute paths produce the same release bytes, while still
+    // applying deterministic whitespace and syntax minification.
+    minifyIdentifiers: false,
+    minifySyntax: true,
+    minifyWhitespace: true,
     platform: "browser",
     resolveExtensions: [".tsx", ".ts", ".jsx", ".js", ".css", ".json"],
     sourcemap: false,

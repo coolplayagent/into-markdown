@@ -5,6 +5,8 @@ exports_files([
     "downloads.json",
     "inventory.json",
     "npm-inventory.json",
+    "npm-release.spdx.json",
+    "npm/react-MIT.txt",
     "policy.json",
     "rust-lock.tsv",
 ])

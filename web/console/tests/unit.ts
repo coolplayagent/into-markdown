@@ -1,11 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { createApiClient, ApiError } from "../src/api";
+import { App } from "../src/app";
+import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
 import styles from "../src/styles.css";
 
 const token = "A".repeat(43);
+
+function installWindow(languages = ["en"]): Window {
+  const window = new Window({ url: "http://127.0.0.1:1/status" });
+  Object.defineProperty(window.navigator, "languages", { value: languages, configurable: true });
+  window.document.head.innerHTML = "<title>into-markdown</title>";
+  window.document.body.innerHTML = '<div id="app"></div>';
+  for (const [name, value] of Object.entries({
+    window, document: window.document, navigator: window.navigator,
+    history: window.history, location: window.location, Node: window.Node,
+    Element: window.Element, HTMLElement: window.HTMLElement,
+  })) Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
+  return window;
+}
+
+function waitFor(predicate: () => boolean, timeout = 1_000): Promise<void> {
+  const started = Date.now();
+  return new Promise((resolvePromise, reject) => {
+    const check = () => {
+      if (predicate()) resolvePromise();
+      else if (Date.now() - started > timeout) reject(new Error("DOM condition timed out"));
+      else setTimeout(check, 5);
+    };
+    check();
+  });
+}
+
+const availableApi = {
+  async status() {
+    return {
+      schemaVersion: 1 as const,
+      localApi: { available: true, code: "available", detail: "ok" },
+      documentConsole: { available: false, code: "componentUnavailable", detail: "not installed" },
+    };
+  },
+};
 
 test("session handoff clears every fragment before returning the in-memory token", () => {
   for (const hash of [
@@ -99,19 +138,58 @@ test("checked CSS color tokens meet WCAG AA normal-text contrast", () => {
   assert.match(styles, /:focus-visible/);
 });
 
-test("representative shell has no automated axe accessibility violations", async () => {
-  const window = new Window({ url: "http://127.0.0.1:1/status" });
-  Object.assign(globalThis, {
-    window,
-    document: window.document,
-    Node: window.Node,
-    Element: window.Element,
-    HTMLElement: window.HTMLElement,
-  });
-  window.document.documentElement.lang = "en";
-  window.document.head.innerHTML = "<title>Service status · into-markdown</title>";
-  window.document.body.innerHTML = '<a href="#main">Skip to main content</a><header><a href="/status">into-markdown</a></header><nav aria-label="into-markdown console"><a href="/status">Service status</a></nav><main id="main" tabindex="-1"><h1>Service status</h1><section aria-labelledby="api"><h2 id="api">Local API available</h2><p>available</p></section></main>';
+test("real App mount synchronizes language without stealing preference focus", async () => {
+  const window = installWindow(["zh-CN", "en"]);
+  const root = createRoot(window.document.getElementById("app")!);
+  root.render(createElement(App, { api: availableApi }));
+  await waitFor(() => window.document.body.textContent.includes("本地 API 可用"));
+  assert.equal(window.document.documentElement.lang, "zh-CN");
+  assert.equal(window.document.documentElement.dir, "ltr");
+  const language = window.document.querySelector<HTMLSelectElement>("select")!;
+  language.focus();
+  language.value = "en";
+  language.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => window.document.documentElement.lang === "en");
+  assert.equal(window.document.activeElement, language);
+  assert.match(window.document.title, /Service status/);
+  root.unmount();
+});
+
+test("real mounted App has no axe violations; geometry-incomplete rules are not treated as coverage", async () => {
+  const window = installWindow();
+  const root = createRoot(window.document.getElementById("app")!);
+  root.render(createElement(App, { api: availableApi }));
+  await waitFor(() => window.document.body.textContent.includes("Local API available"));
   const axe = (await import("axe-core")).default;
-  const result = await axe.run(window.document, { rules: { "color-contrast": { enabled: false } } });
+  const result = await axe.run(window.document);
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
+  const incomplete = new Set(result.incomplete.map((item) => item.id));
+  if (incomplete.has("color-contrast")) {
+    assert.equal(result.passes.some((item) => item.id === "color-contrast"), false);
+  }
+  root.unmount();
+});
+
+test("API rejection renders a recoverable status error rather than the error boundary", async () => {
+  const window = installWindow();
+  const root = createRoot(window.document.getElementById("app")!);
+  root.render(createElement(App, { api: { status: async () => { throw new ApiError("unreachable"); } } }));
+  await waitFor(() => window.document.body.textContent.includes("Could not read service status"));
+  assert.ok(window.document.querySelector('[role="alert"]'));
+  assert.equal(window.document.body.textContent.includes("The page encountered a problem"), false);
+  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Retry"));
+  root.unmount();
+});
+
+test("ErrorBoundary contains provider render errors and focuses its fallback heading", async () => {
+  const window = installWindow();
+  const root = createRoot(window.document.getElementById("app")!, { onCaughtError: () => undefined });
+  function FailingProvider(): never { throw new Error("untrusted provider failure"); }
+  root.render(createElement(ErrorBoundary, null, createElement(FailingProvider)));
+  await waitFor(() => window.document.body.textContent.includes("The page encountered a problem"));
+  const heading = window.document.querySelector("h1")!;
+  assert.equal(window.document.activeElement, heading);
+  assert.equal(heading.tabIndex, -1);
+  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Reload"));
+  root.unmount();
 });

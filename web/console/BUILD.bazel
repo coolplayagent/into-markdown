@@ -53,9 +53,21 @@ js_test(
     data = [
         ":node_modules/happy-dom",
         ":node_modules/axe-core",
+        ":node_modules/react",
+        ":node_modules/react-dom",
         ":unit_test_bundle",
     ],
     entry_point = "unit_test_bundle.mjs",
+)
+
+js_test(
+    name = "dist_integration_test",
+    data = [
+        ":checked_assets",
+        ":node_modules/happy-dom",
+    ],
+    entry_point = "tests/dist-integration.mjs",
+    env = {"INTO_MD_DIST": "web/console/dist"},
 )
 
 js_run_binary(
@@ -70,6 +82,13 @@ js_run_binary(
     out_dirs = ["generated_assets_repeat"],
     args = ["web/console/generated_assets_repeat"],
     tool = ":asset_builder",
+)
+
+js_binary(
+    name = "update_assets",
+    data = [":generated_assets"],
+    entry_point = "update-assets.mjs",
+    patch_node_fs = False,
 )
 
 genrule(

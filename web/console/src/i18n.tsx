@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useMemo, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
 export type Locale = "zh-CN" | "en";
 
@@ -66,6 +66,10 @@ function initialLocale(): Locale {
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocale] = useState<Locale>(initialLocale);
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.documentElement.dir = "ltr";
+  }, [locale]);
   const value = useMemo<I18nValue>(
     () => ({ locale, setLocale, t: (key) => messages[locale][key] }),
     [locale],

@@ -70,7 +70,8 @@ status page includes themes, Simplified Chinese and English, keyboard and focus
 support, and truthfully reports unavailable document capabilities. It does not
 include jobs, a database, workbench, preview, or administration. Bazel builds
 content-addressed assets offline and embeds them in the Rust binary; no CDN is
-used. See the Chinese authoritative
+used. The checked release inputs include the complete React-family MIT notice
+and a deterministic SPDX 2.3 SBOM tied to the exact production app hash. See the Chinese authoritative
 [local Web service contract](docs/ui.md).
 
 Conversion results and batch reports use public DTO schema 1 shared by the CLI

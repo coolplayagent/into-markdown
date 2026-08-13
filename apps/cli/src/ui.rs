@@ -693,7 +693,7 @@ mod tests {
             request(port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
         assert_schema_error(&bad_host, "HTTP/1.1 400", "invalidHost");
         let bootstrap = std::str::from_utf8(
-            crate::ui_assets::by_path("/assets/bootstrap.2d8c0e73bc170a2a.js").unwrap().bytes,
+            crate::ui_assets::by_path("/assets/bootstrap.d3fb04cfb97caf03.js").unwrap().bytes,
         )
         .unwrap();
         assert!(bootstrap.find("replaceState").unwrap() < bootstrap.find("import(").unwrap());

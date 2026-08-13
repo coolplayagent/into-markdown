@@ -1,6 +1,7 @@
 //! Offline validation for the repository's license policy and inventories.
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
@@ -51,6 +52,106 @@ struct NpmPackage {
     source: String,
     scope: String,
     included_in_release: bool,
+    #[serde(default)]
+    license_file: Option<String>,
+    #[serde(default)]
+    license_sha256: Option<String>,
+    #[serde(default)]
+    license_source: Option<String>,
+    #[serde(default)]
+    copyright: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxDocument {
+    spdx_version: String,
+    data_license: String,
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    name: String,
+    document_namespace: String,
+    creation_info: SpdxCreationInfo,
+    packages: Vec<SpdxPackage>,
+    files: Vec<SpdxFile>,
+    relationships: Vec<SpdxRelationship>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxCreationInfo {
+    created: String,
+    creators: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxPackage {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    name: String,
+    version_info: String,
+    download_location: String,
+    files_analyzed: bool,
+    license_concluded: String,
+    license_declared: String,
+    copyright_text: String,
+    external_refs: Vec<SpdxExternalRef>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxExternalRef {
+    #[serde(rename = "referenceCategory")]
+    category: String,
+    #[serde(rename = "referenceType")]
+    kind: String,
+    #[serde(rename = "referenceLocator")]
+    locator: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxFile {
+    #[serde(rename = "SPDXID")]
+    spdx_id: String,
+    file_name: String,
+    checksums: Vec<SpdxChecksum>,
+    license_concluded: String,
+    license_info_in_files: Vec<String>,
+    copyright_text: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxChecksum {
+    algorithm: String,
+    checksum_value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SpdxRelationship {
+    spdx_element_id: String,
+    relationship_type: String,
+    related_spdx_element: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ConsoleAssetManifest {
+    schema_version: u64,
+    assets: Vec<ConsoleAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConsoleAsset {
+    path: String,
+    sha256: String,
+    bytes: u64,
+    mime: String,
+    cache: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +457,7 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
         validate_rust_lock(&lock_text, &approvals_text, &workspace_packages, policy, &mut errors);
         if let Some(npm_inventory) = &npm_inventory {
             validate_npm_lock(&pnpm_lock_text, npm_inventory, policy, release, &mut errors);
+            validate_npm_release_metadata(root, npm_inventory, &mut errors);
         }
     }
     if let (Some(policy), Some(inventory)) = (&policy, &inventory) {
@@ -408,7 +510,7 @@ fn validate_npm_lock(
         match locked.get(&key) {
             Some(integrity) if integrity == &package.integrity => {}
             Some(_) => {
-                errors.push(format!("npm package {key} integrity differs from pnpm-lock.yaml"))
+                errors.push(format!("npm package {key} integrity differs from pnpm-lock.yaml"));
             }
             None => errors.push(format!("npm inventory package {key} is orphaned")),
         }
@@ -434,6 +536,284 @@ fn validate_npm_lock(
             errors.push(format!("pnpm lock package {key} has no npm inventory entry"));
         }
     }
+}
+
+const REACT_MIT_SHA256: &str = "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93";
+const REACT_COPYRIGHT: &str = "Copyright (c) Meta Platforms, Inc. and affiliates.";
+
+fn validate_npm_release_metadata(root: &Path, inventory: &NpmInventory, errors: &mut Vec<String>) {
+    let mut released = BTreeMap::new();
+    let mut checked_license_files = BTreeSet::new();
+    for package in &inventory.packages {
+        if !package.included_in_release {
+            if package.license_file.is_some()
+                || package.license_sha256.is_some()
+                || package.license_source.is_some()
+                || package.copyright.is_some()
+            {
+                errors.push(format!(
+                    "non-release npm package {}@{} has release-only notice metadata",
+                    package.name, package.version
+                ));
+            }
+            continue;
+        }
+        let key = format!("{}@{}", package.name, package.version);
+        if released.insert(package.name.as_str(), package).is_some() {
+            errors.push(format!("released npm package name {} is duplicated", package.name));
+        }
+        let fields = [
+            ("license_file", package.license_file.as_deref()),
+            ("license_sha256", package.license_sha256.as_deref()),
+            ("license_source", package.license_source.as_deref()),
+            ("copyright", package.copyright.as_deref()),
+        ];
+        for (field, value) in fields {
+            if value.is_none_or(str::is_empty) {
+                errors.push(format!("released npm package {key} lacks {field}"));
+            }
+        }
+        if package.license_sha256.as_deref() != Some(REACT_MIT_SHA256) {
+            errors.push(format!("released npm package {key} has an unreviewed license hash"));
+        }
+        if package.copyright.as_deref() != Some(REACT_COPYRIGHT) {
+            errors.push(format!("released npm package {key} has unexpected copyright text"));
+        }
+        let expected_source =
+            format!("https://registry.npmjs.org/{0}/-/{0}-{1}.tgz", package.name, package.version);
+        if package.license_source.as_deref() != Some(expected_source.as_str()) {
+            errors.push(format!(
+                "released npm package {key} license source is not its exact tarball"
+            ));
+        }
+        let Some(license_file) = package.license_file.as_deref() else {
+            continue;
+        };
+        if !is_safe_relative_path(license_file)
+            || !license_file.starts_with("third_party/licenses/npm/")
+        {
+            errors.push(format!("released npm package {key} has unsafe license file path"));
+            continue;
+        }
+        if checked_license_files.insert(license_file) {
+            match fs::read(root.join(license_file)) {
+                Ok(bytes) => validate_release_license_contents(license_file, Some(&bytes), errors),
+                Err(_) => validate_release_license_contents(license_file, None, errors),
+            }
+        }
+    }
+
+    let sbom_text = read(&root.join("third_party/licenses/npm-release.spdx.json"), errors);
+    let manifest_text = read(&root.join("web/console/dist/asset-manifest.json"), errors);
+    let sbom: Option<SpdxDocument> = parse_json("npm release SPDX SBOM", &sbom_text, errors);
+    let manifest: Option<ConsoleAssetManifest> =
+        parse_json("console asset manifest", &manifest_text, errors);
+    if let (Some(sbom), Some(manifest)) = (&sbom, &manifest) {
+        validate_npm_spdx(root, &released, sbom, manifest, errors);
+    }
+}
+
+fn validate_release_license_contents(
+    license_file: &str,
+    contents: Option<&[u8]>,
+    errors: &mut Vec<String>,
+) {
+    match contents {
+        Some(bytes) if sha256_hex(bytes) == REACT_MIT_SHA256 => {}
+        Some(_) => errors.push(format!("release license file {license_file} has drifted")),
+        None => errors.push(format!("release license file {license_file} is missing")),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the strict SPDX graph and artifact checks remain together as one release invariant"
+)]
+fn validate_npm_spdx(
+    root: &Path,
+    released: &BTreeMap<&str, &NpmPackage>,
+    sbom: &SpdxDocument,
+    manifest: &ConsoleAssetManifest,
+    errors: &mut Vec<String>,
+) {
+    if manifest.schema_version != 1 {
+        errors.push("unsupported console asset manifest schemaVersion".to_owned());
+    }
+    let mut asset_paths = BTreeSet::new();
+    let mut app_assets = Vec::new();
+    for asset in &manifest.assets {
+        if !asset_paths.insert(asset.path.as_str()) {
+            errors.push(format!("console asset manifest duplicates {}", asset.path));
+        }
+        if is_console_app_path(&asset.path) {
+            app_assets.push(asset);
+        }
+    }
+    let Some(app) = app_assets.first().copied() else {
+        errors.push("console asset manifest has no production app JavaScript".to_owned());
+        return;
+    };
+    if app_assets.len() != 1 {
+        errors.push(
+            "console asset manifest must contain exactly one production app JavaScript".to_owned(),
+        );
+    }
+    let hash_prefix = app.sha256.get(..16).unwrap_or_default();
+    if !is_sha256(&app.sha256)
+        || hash_prefix.is_empty()
+        || !app.path.contains(hash_prefix)
+        || app.mime != "text/javascript; charset=utf-8"
+        || app.cache != "immutable"
+    {
+        errors.push("production app asset has invalid hash, MIME, or cache metadata".to_owned());
+    }
+    let app_relative = app.path.strip_prefix('/').unwrap_or_default();
+    let app_file = root.join("web/console/dist").join(app_relative);
+    match fs::read(&app_file) {
+        Ok(bytes) => {
+            if u64::try_from(bytes.len()).ok() != Some(app.bytes)
+                || sha256_hex(&bytes) != app.sha256
+            {
+                errors.push("production app bytes disagree with the asset manifest".to_owned());
+            }
+        }
+        Err(error) => errors.push(format!("cannot read production app asset: {error}")),
+    }
+
+    let expected_name = format!("into-markdown-web-console-{hash_prefix}");
+    let expected_namespace = format!(
+        "https://github.com/coolplayagent/into-markdown/spdx/web-console/sha256-{}",
+        app.sha256
+    );
+    if sbom.spdx_version != "SPDX-2.3"
+        || sbom.data_license != "CC0-1.0"
+        || sbom.spdx_id != "SPDXRef-DOCUMENT"
+        || sbom.name != expected_name
+        || sbom.document_namespace != expected_namespace
+        || sbom.creation_info.created != "2026-08-13T00:00:00Z"
+        || sbom.creation_info.creators != ["Organization: into-markdown contributors"]
+    {
+        errors.push("npm release SPDX document metadata is not deterministic authority".to_owned());
+    }
+
+    let mut identifiers = BTreeSet::new();
+    identifiers.insert(sbom.spdx_id.as_str());
+    for id in sbom
+        .packages
+        .iter()
+        .map(|package| package.spdx_id.as_str())
+        .chain(sbom.files.iter().map(|file| file.spdx_id.as_str()))
+    {
+        if !id.starts_with("SPDXRef-") || !identifiers.insert(id) {
+            errors.push(format!("npm release SPDX identifier {id} is invalid or duplicated"));
+        }
+    }
+
+    let package_names: Vec<_> = sbom.packages.iter().map(|package| package.name.as_str()).collect();
+    let mut sorted_names = package_names.clone();
+    sorted_names.sort_unstable();
+    if package_names != sorted_names {
+        errors.push("npm release SPDX packages are not deterministically sorted".to_owned());
+    }
+    let mut sbom_names = BTreeSet::new();
+    for package in &sbom.packages {
+        if !sbom_names.insert(package.name.as_str()) {
+            errors.push(format!("npm release SPDX package {} is duplicated", package.name));
+        }
+        let Some(inventory) = released.get(package.name.as_str()).copied() else {
+            errors.push(format!(
+                "npm release SPDX package {} is not a released package",
+                package.name
+            ));
+            continue;
+        };
+        let expected_id = format!("SPDXRef-Package-{}", package.name);
+        let expected_purl = format!("pkg:npm/{}@{}", package.name, package.version_info);
+        let external_ref_ok = matches!(package.external_refs.as_slice(), [reference]
+            if reference.category == "PACKAGE-MANAGER"
+                && reference.kind == "purl"
+                && reference.locator == expected_purl);
+        if package.spdx_id != expected_id
+            || package.version_info != inventory.version
+            || package.download_location != inventory.license_source.as_deref().unwrap_or_default()
+            || package.files_analyzed
+            || package.license_concluded != inventory.license
+            || package.license_declared != inventory.license
+            || package.copyright_text != inventory.copyright.as_deref().unwrap_or_default()
+            || !external_ref_ok
+        {
+            errors.push(format!(
+                "npm release SPDX package {} disagrees with the release inventory",
+                package.name
+            ));
+        }
+    }
+    if sbom_names != released.keys().copied().collect() {
+        errors.push(
+            "npm release SPDX packages do not exactly cover released npm inventory".to_owned(),
+        );
+    }
+
+    let expected_file_name = format!("./web/console/dist{}", app.path);
+    let expected_file_id = "SPDXRef-File-console-app";
+    if !matches!(sbom.files.as_slice(), [file]
+        if file.spdx_id == expected_file_id
+            && file.file_name == expected_file_name
+            && matches!(file.checksums.as_slice(), [checksum]
+                if checksum.algorithm == "SHA256" && checksum.checksum_value == app.sha256)
+            && file.license_concluded == "NOASSERTION"
+            && file.license_info_in_files == ["MIT"]
+            && file.copyright_text == "NOASSERTION")
+    {
+        errors.push(
+            "npm release SPDX file does not describe the exact production app asset".to_owned(),
+        );
+    }
+
+    let mut relationships = BTreeSet::new();
+    for relationship in &sbom.relationships {
+        if !relationships.insert(relationship.clone()) {
+            errors.push("npm release SPDX relationship is duplicated".to_owned());
+        }
+        if !identifiers.contains(relationship.spdx_element_id.as_str())
+            || !identifiers.contains(relationship.related_spdx_element.as_str())
+        {
+            errors.push(format!(
+                "npm release SPDX relationship {} has a dangling endpoint",
+                relationship.relationship_type
+            ));
+        }
+    }
+    let mut expected_relationships = BTreeSet::from([SpdxRelationship {
+        spdx_element_id: "SPDXRef-DOCUMENT".to_owned(),
+        relationship_type: "DESCRIBES".to_owned(),
+        related_spdx_element: expected_file_id.to_owned(),
+    }]);
+    for package in released.keys() {
+        expected_relationships.insert(SpdxRelationship {
+            spdx_element_id: expected_file_id.to_owned(),
+            relationship_type: "GENERATED_FROM".to_owned(),
+            related_spdx_element: format!("SPDXRef-Package-{package}"),
+        });
+    }
+    if relationships != expected_relationships {
+        errors.push(
+            "npm release SPDX relationships do not match the released artifact graph".to_owned(),
+        );
+    }
+}
+
+fn is_console_app_path(path: &str) -> bool {
+    let Some(hash) = path.strip_prefix("/assets/app.").and_then(|value| value.strip_suffix(".js"))
+    else {
+        return false;
+    };
+    hash.len() == 16
+        && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(
@@ -2340,6 +2720,10 @@ version = "9.9.9"
             source: "https://example.invalid/source".into(),
             scope: "test".into(),
             included_in_release: false,
+            license_file: None,
+            license_sha256: None,
+            license_source: None,
+            copyright: None,
         }
     }
 
@@ -2365,5 +2749,74 @@ version = "9.9.9"
         let mut errors = Vec::new();
         validate_npm_lock(lock, &inventory, &policy(), true, &mut errors);
         assert!(errors.iter().any(|error| error.contains("denied concluded license")));
+    }
+
+    #[test]
+    fn release_license_file_deletion_and_drift_are_rejected() {
+        let root = repository_root().expect("repository root");
+        let license = fs::read(root.join("third_party/licenses/npm/react-MIT.txt"))
+            .expect("checked release license");
+        let mut errors = Vec::new();
+        validate_release_license_contents("react-MIT.txt", Some(&license), &mut errors);
+        assert!(errors.is_empty());
+
+        validate_release_license_contents("react-MIT.txt", None, &mut errors);
+        validate_release_license_contents("react-MIT.txt", Some(b"changed"), &mut errors);
+        assert!(errors.iter().any(|error| error.contains("is missing")));
+        assert!(errors.iter().any(|error| error.contains("has drifted")));
+    }
+
+    #[test]
+    fn npm_spdx_deletion_drift_duplicate_and_dangling_relationship_are_rejected() {
+        let root = repository_root().expect("repository root");
+        let inventory: NpmInventory = serde_json::from_str(
+            &fs::read_to_string(root.join("third_party/licenses/npm-inventory.json"))
+                .expect("npm inventory"),
+        )
+        .expect("valid npm inventory");
+        let sbom: SpdxDocument = serde_json::from_str(
+            &fs::read_to_string(root.join("third_party/licenses/npm-release.spdx.json"))
+                .expect("npm SPDX"),
+        )
+        .expect("valid npm SPDX");
+        let manifest: ConsoleAssetManifest = serde_json::from_str(
+            &fs::read_to_string(root.join("web/console/dist/asset-manifest.json"))
+                .expect("asset manifest"),
+        )
+        .expect("valid asset manifest");
+        let released = inventory
+            .packages
+            .iter()
+            .filter(|package| package.included_in_release)
+            .map(|package| (package.name.as_str(), package))
+            .collect();
+
+        let mut errors = Vec::new();
+        validate_npm_spdx(&root, &released, &sbom, &manifest, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let mut duplicate = sbom.clone();
+        duplicate.packages[1].spdx_id = duplicate.packages[0].spdx_id.clone();
+        let mut errors = Vec::new();
+        validate_npm_spdx(&root, &released, &duplicate, &manifest, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("duplicated")));
+
+        let mut dangling = sbom.clone();
+        dangling.relationships[1].related_spdx_element = "SPDXRef-absent".to_owned();
+        let mut errors = Vec::new();
+        validate_npm_spdx(&root, &released, &dangling, &manifest, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("dangling endpoint")));
+
+        let mut deleted = sbom.clone();
+        deleted.packages.remove(0);
+        let mut errors = Vec::new();
+        validate_npm_spdx(&root, &released, &deleted, &manifest, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("do not exactly cover")));
+
+        let mut drifted = sbom.clone();
+        drifted.files[0].checksums[0].checksum_value = "f".repeat(64);
+        let mut errors = Vec::new();
+        validate_npm_spdx(&root, &released, &drifted, &manifest, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("exact production app asset")));
     }
 }

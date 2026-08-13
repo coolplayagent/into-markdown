@@ -38,6 +38,11 @@ fragment 不会进入 HTTP request target。外部 content-hash bootstrap 脚本
 `X-Content-Type-Options: nosniff`，CSP 仅允许同源脚本和连接并禁止 framing、base URI
 及表单提交；样式也只允许同源外部 CSS，不允许 inline style 或 `eval`。
 
+合法交接后的动态模块加载或同步启动失败使用独立的通用启动错误，不复述交接错误、异常或
+会话值。React 树外的 bootstrap 负责这类失败；React `ErrorBoundary` 负责 Provider、render
+与 lifecycle 的同步异常，并把焦点移到 fallback 标题。异步 API 拒绝不会被 React 边界捕获，
+而是在状态页显示可重试的受控错误。三类错误路径分别测试，均不把会话值写入 DOM 或日志。
+
 所有 API 路由统一要求：
 
 1. `Host` 恰好为本次监听的 `127.0.0.1:<port>`；
@@ -82,7 +87,9 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 布局提供 skip link、语义 header/nav/main、可见的 `:focus-visible`、路由后主内容焦点、
 不小于 44px 的主要按钮、44rem 窄屏重排和 reduced-motion。浅色、深色与系统主题均使用
 经自动计算达到 WCAG AA 普通文本阈值的前景/表面 token。主题与语言只保存在当前页面
-内存中，不以 Web Storage 持久化。
+内存中，不以 Web Storage 持久化。语言切换同步更新根元素的 `lang` 与 `dir`，不会被路由
+焦点逻辑抢走当前控件焦点。可访问性测试运行于真实挂载的 App 树；DOM 环境无法完成几何
+计算时不会把 axe 的 incomplete 当作通过，颜色对比度由独立数值测试覆盖。
 
 ## 可复现构建
 
@@ -94,5 +101,6 @@ Bazel 是前端生产构建权威。Node 24.13.0、pnpm 11.19.0、rules_js、rul
 
 `//web/console:generated_assets` 在临时输出中生成确定性资产，
 `//web/console:assets` 再逐文件名、逐字节比较仓库内 `web/console/dist`。更新 checked-in
-发布输入必须显式运行 asset builder 并审查 manifest。Rust 不使用 build.rs，也不在运行时
+发布输入必须显式运行 `bazel run //web/console:update_assets` 并审查 manifest；该目标只复制
+Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解析或构建 npm 模块。Rust 不使用 build.rs，也不在运行时
 读取源树；四个支持平台的 CLI 都通过 `include_bytes!` 嵌入同一组 checked-in bytes。
