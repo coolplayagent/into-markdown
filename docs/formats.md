@@ -103,6 +103,16 @@ entity 与 declaration 契约，拒绝 DTD、DOCTYPE、自定义/外部实体、
 entry、nesting、事件、文本、nested HTML、asset、diagnostic、IR 与输出字符串共用贯穿 Feed
 生命周期的聚合逻辑内存预算，取消与 deadline 长循环 checkpoint 也有硬边界。合并每段 HTML
 时递归重编号所有 BlockNode 与 Asset 引用，并保留 Feed entry span 和 HTML provider 来源链。
+Feed 的已解码 UTF-8 fragment 不再复制进入 HTML charset decoder。由于固定的 html5ever 0.39.0
+没有 allocator hook，转换器在构造 parser 前以无堆、checked arithmetic 扫描预付协作式逻辑
+工作区：模型固定到 servo/html5ever commit `ce64836c685025a5fef0860fa2e9c80b2683e8d0`
+与 tendril commit `d64dfd4c21cf2451649107ade7eaf042d95fbc5a`，覆盖 markup5ever 16-slot
+`BufferQueue`、tokenizer 的 9 类 tendril/attribute、TreeBuilder 四类 vector、Vec 的 2 倍增长、
+tendril 的 next-power-of-two（小于 2 倍）及 adoption-agency
+全部 8 轮。parser、DOM 与最终 Document 使用同一个 Feed lease；parser/DOM 析构后才释放未转为
+持久输出的预付空间。该边界不代表 allocator metadata 或进程 RSS。任意 fragment 错误会先析构
+parser、DOM 与局部输出，再完整恢复 memory、对象、字符串和输出字节快照；随后产生的最小 Feed
+诊断独立计费。
 
 ## Markdown 与 GFM
 

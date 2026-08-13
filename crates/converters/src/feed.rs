@@ -1732,6 +1732,7 @@ fn append_content(
     }
     budget.html(content.value.len())?;
     let before = budget.aggregate.snapshot();
+    let fragment_transaction = budget.aggregate.transaction_snapshot();
     let output = super::html::convert_feed_html_fragment(
         &content.value,
         content.base.as_deref(),
@@ -1757,15 +1758,9 @@ fn append_content(
         Err(error) => return Err(error),
     };
     verify_html_fragment_accounting(&output, before, budget.aggregate.snapshot())?;
-    for mut diagnostic in output.diagnostics.drain(..) {
-        let old_code_len = diagnostic.code.len();
-        let new_code_len = old_code_len.saturating_add("feed.".len());
-        budget.aggregate.replace_string(old_code_len, new_code_len)?;
-        diagnostic.code = format!("feed.{}", diagnostic.code);
-        diagnostic.locator = Some(entry_locator(entry));
-        push_precharged_diagnostic(diagnostics, diagnostic, budget)?;
-    }
     if output.document.blocks.is_empty() && output.assets.is_empty() {
+        drop(output);
+        budget.aggregate.rewind(fragment_transaction)?;
         push_diagnostic(
             diagnostics,
             Diagnostic {
@@ -1777,6 +1772,14 @@ fn append_content(
             budget,
         )?;
         return Ok(());
+    }
+    for mut diagnostic in output.diagnostics.drain(..) {
+        let old_code_len = diagnostic.code.len();
+        let new_code_len = old_code_len.saturating_add("feed.".len());
+        budget.aggregate.replace_string(old_code_len, new_code_len)?;
+        diagnostic.code = format!("feed.{}", diagnostic.code);
+        diagnostic.locator = Some(entry_locator(entry));
+        push_precharged_diagnostic(diagnostics, diagnostic, budget)?;
     }
     let asset_offset = assets.len();
     let mut asset_map = BTreeMap::new();
@@ -2765,7 +2768,13 @@ mod tests {
             &mut measured,
         )
         .unwrap();
-        let exact = measured.snapshot();
+        let mut exact = measured.snapshot();
+        exact.persistent_memory_bytes = exact
+            .persistent_memory_bytes
+            .checked_add(
+                super::super::html::feed_html_parser_memory_bound(fragment, &context).unwrap(),
+            )
+            .unwrap();
         let mut replay = super::super::html::FeedHtmlBudget::new(
             options.limits.max_feed_text_bytes,
             MAX_FEED_DIAGNOSTICS,

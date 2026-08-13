@@ -26,6 +26,251 @@ const META_PRESCAN_BYTES: usize = 1024;
 const CHECKPOINT_EVENTS: usize = 1024;
 const SOURCE_LOCATION_MESSAGE: &str = "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span";
 
+// Feed fragments use a cooperative logical-memory bound because html5ever has
+// no allocator hook. This model is tied to crates.io html5ever/markup5ever
+// 0.39.0 from servo/html5ever commit ce64836c685025a5fef0860fa2e9c80b2683e8d0
+// (Cargo checksums 46a176…/7122d9…) and tendril 0.5.1 from commit
+// d64dfd4c21cf2451649107ade7eaf042d95fbc5a (checksum 5fed54…).
+// Audited sources: html5ever tokenizer/mod.rs 815a67…, tree_builder/mod.rs
+// e8f663…, markup5ever buffer_queue.rs 5d0bcd…, tendril buf32.rs 77947b….
+// The model includes BufferQueue's 16 slots, every tokenizer tendril and
+// attribute, four TreeBuilder vectors, a twofold Vec capacity factor, tendril's
+// next-power-of-two (<2x) capacity, and all 8 adoption-agency outer rounds.
+const HTML5EVER_MODEL_ID: &str = "html5ever@ce64836c+markup5ever@ce64836c+tendril@d64dfd4c;bufq=16;token-tendrils=9;tree-vecs=4;vec=2;tendril=2;adoption=8;mutation=64";
+const PARSER_BASE_BYTES: usize = 64 * 1024;
+const BUFFER_QUEUE_SLOTS: usize = 16;
+const TOKENIZER_TENDRILS: usize = 9;
+const TREE_BUILDER_VECTORS: usize = 4;
+const VEC_GROWTH_FACTOR: usize = 2;
+const TENDRIL_GROWTH_FACTOR: usize = 2;
+const ADOPTION_AGENCY_ROUNDS: usize = 8;
+const MUTATIONS_PER_TOKEN: usize = 64;
+const PARSER_BYTES_PER_MUTATION: usize = 256;
+
+#[derive(Clone, Copy, Debug)]
+struct HtmlParserPreflight {
+    bytes: usize,
+    tags: usize,
+    attributes: usize,
+    entities: usize,
+    text_runs: usize,
+    max_tag_bytes: usize,
+    max_attributes_per_tag: usize,
+}
+
+fn parser_limit(detail: &'static str) -> ConversionError {
+    ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: detail.into() }
+}
+
+fn checked_add(left: usize, right: usize, detail: &'static str) -> Result<usize, ConversionError> {
+    left.checked_add(right).ok_or_else(|| parser_limit(detail))
+}
+
+fn checked_mul(left: usize, right: usize, detail: &'static str) -> Result<usize, ConversionError> {
+    left.checked_mul(right).ok_or_else(|| parser_limit(detail))
+}
+
+fn validate_html_model_id(model: &str) -> Result<(), ConversionError> {
+    if model == HTML5EVER_MODEL_ID {
+        Ok(())
+    } else {
+        Err(ConversionError::Internal {
+            detail: "feed HTML parser allocation model does not match the audited dependency"
+                .into(),
+        })
+    }
+}
+
+/// Allocation-free, checkpointed scan run before an html5ever parser exists.
+/// It deliberately treats every `<`, `&`, whitespace run, and `=` as possible
+/// work, including malformed/unclosed tags and raw-text contents. Over-counting
+/// is allowed; under-counting third-party parser work is not.
+fn preflight_feed_html(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<HtmlParserPreflight, ConversionError> {
+    validate_html_model_id(HTML5EVER_MODEL_ID)?;
+    let mut result = HtmlParserPreflight {
+        bytes: bytes.len(),
+        tags: 0,
+        attributes: 0,
+        entities: 0,
+        text_runs: 0,
+        max_tag_bytes: 0,
+        max_attributes_per_tag: 0,
+    };
+    let mut in_tag = false;
+    let mut quote = 0_u8;
+    let mut tag_start = 0_usize;
+    let mut tag_attributes = 0_usize;
+    let mut whitespace = false;
+    let mut text = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if index.is_multiple_of(CHECKPOINT_EVENTS) {
+            context.checkpoint()?;
+        }
+        if byte == b'&' {
+            result.entities = checked_add(result.entities, 1, "HTML entity count overflowed")?;
+        }
+        if !in_tag {
+            if byte == b'<' {
+                result.tags = checked_add(result.tags, 1, "HTML tag count overflowed")?;
+                in_tag = true;
+                quote = 0;
+                tag_start = index;
+                tag_attributes = 0;
+                whitespace = false;
+                text = false;
+            } else if !text {
+                result.text_runs =
+                    checked_add(result.text_runs, 1, "HTML text-run count overflowed")?;
+                text = true;
+            }
+            continue;
+        }
+        if quote != 0 {
+            if byte == quote {
+                quote = 0;
+            }
+            continue;
+        }
+        if byte == b'<' {
+            let length = index.saturating_sub(tag_start);
+            result.max_tag_bytes = result.max_tag_bytes.max(length);
+            result.attributes =
+                checked_add(result.attributes, tag_attributes, "HTML attribute total overflowed")?;
+            result.max_attributes_per_tag = result.max_attributes_per_tag.max(tag_attributes);
+            result.tags = checked_add(result.tags, 1, "HTML tag count overflowed")?;
+            tag_start = index;
+            tag_attributes = 0;
+            whitespace = false;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"') {
+            quote = byte;
+            continue;
+        }
+        if byte.is_ascii_whitespace() {
+            if !whitespace {
+                tag_attributes = checked_add(tag_attributes, 1, "HTML attribute count overflowed")?;
+            }
+            whitespace = true;
+            continue;
+        }
+        if byte == b'=' {
+            tag_attributes = checked_add(tag_attributes, 1, "HTML attribute count overflowed")?;
+        }
+        whitespace = false;
+        if byte == b'>' {
+            let length = index.saturating_add(1).saturating_sub(tag_start);
+            result.max_tag_bytes = result.max_tag_bytes.max(length);
+            result.attributes =
+                checked_add(result.attributes, tag_attributes, "HTML attribute total overflowed")?;
+            result.max_attributes_per_tag = result.max_attributes_per_tag.max(tag_attributes);
+            in_tag = false;
+        }
+    }
+    if in_tag {
+        let length = bytes.len().saturating_sub(tag_start);
+        result.max_tag_bytes = result.max_tag_bytes.max(length);
+        result.attributes =
+            checked_add(result.attributes, tag_attributes, "HTML attribute total overflowed")?;
+        result.max_attributes_per_tag = result.max_attributes_per_tag.max(tag_attributes);
+    }
+    Ok(result)
+}
+
+impl HtmlParserPreflight {
+    /// Checked upper bound for parser workspace plus the complete retained DOM.
+    /// Vec and tendril factors are applied once here; DOM's prepaid meter checks
+    /// real capacities without charging the feed lease a second time.
+    fn memory_bound(self) -> Result<usize, ConversionError> {
+        let tokens = checked_add(
+            checked_add(self.tags, self.entities, "HTML token count overflowed")?,
+            checked_add(self.text_runs, 8, "HTML token count overflowed")?,
+            "HTML token count overflowed",
+        )?;
+        let mutations = checked_mul(tokens, MUTATIONS_PER_TOKEN, "HTML mutation bound overflowed")?;
+        let adoption = checked_mul(
+            checked_mul(self.tags, ADOPTION_AGENCY_ROUNDS, "HTML adoption bound overflowed")?,
+            checked_add(
+                self.max_tag_bytes,
+                checked_mul(
+                    self.max_attributes_per_tag,
+                    size_of::<Attribute>(),
+                    "HTML adoption attribute bound overflowed",
+                )?,
+                "HTML adoption payload bound overflowed",
+            )?,
+            "HTML adoption payload bound overflowed",
+        )?;
+        let input_tendril_factor =
+            checked_mul(TENDRIL_GROWTH_FACTOR, 4, "HTML tendril factor overflowed")?;
+        let input_tendrils =
+            checked_mul(self.bytes, input_tendril_factor, "HTML tendril bound overflowed")?;
+        let tokenizer_tendrils = checked_mul(
+            checked_mul(
+                self.max_tag_bytes,
+                TOKENIZER_TENDRILS,
+                "HTML tokenizer tendril bound overflowed",
+            )?,
+            TENDRIL_GROWTH_FACTOR,
+            "HTML tokenizer tendril bound overflowed",
+        )?;
+        let attribute_payload = checked_mul(
+            checked_add(
+                self.bytes,
+                checked_mul(self.attributes, size_of::<Attribute>(), "HTML attrs overflowed")?,
+                "HTML attrs overflowed",
+            )?,
+            TENDRIL_GROWTH_FACTOR,
+            "HTML attrs overflowed",
+        )?;
+        let mutation_unit = checked_mul(
+            PARSER_BYTES_PER_MUTATION,
+            VEC_GROWTH_FACTOR,
+            "HTML mutation unit overflowed",
+        )?;
+        let mutation_payload =
+            checked_mul(mutations, mutation_unit, "HTML mutation bytes overflowed")?;
+        let tree_vectors = checked_mul(
+            checked_mul(tokens, TREE_BUILDER_VECTORS, "HTML TreeBuilder vector bound overflowed")?,
+            checked_mul(
+                size_of::<usize>(),
+                VEC_GROWTH_FACTOR,
+                "HTML TreeBuilder vector bound overflowed",
+            )?,
+            "HTML TreeBuilder vector bound overflowed",
+        )?;
+        let queue = checked_mul(
+            BUFFER_QUEUE_SLOTS,
+            size_of::<StrTendril>(),
+            "HTML buffer queue overflowed",
+        )?;
+        [
+            input_tendrils,
+            tokenizer_tendrils,
+            attribute_payload,
+            mutation_payload,
+            tree_vectors,
+            adoption,
+            queue,
+        ]
+        .into_iter()
+        .try_fold(PARSER_BASE_BYTES, |sum, value| {
+            checked_add(sum, value, "HTML parser preflight memory overflowed")
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn feed_html_parser_memory_bound(
+    fragment: &str,
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
+    preflight_feed_html(fragment.as_bytes(), context)?.memory_bound()
+}
+
 /// Persistent-output budget shared by a feed and every nested HTML fragment.
 ///
 /// The reservation is owned by the feed until its final `Document` is complete.
@@ -59,6 +304,12 @@ pub(crate) struct FeedHtmlBudgetSnapshot {
     pub(crate) strings: usize,
     pub(crate) output_bytes: u64,
     pub(crate) persistent_memory_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FeedHtmlTransactionSnapshot {
+    counters: FeedHtmlBudgetSnapshot,
+    memory_bytes: usize,
 }
 
 impl FeedHtmlBudget {
@@ -108,6 +359,25 @@ impl FeedHtmlBudget {
         self.memory.charge(bytes)?;
         self.persistent_memory_bytes = next;
         Ok(())
+    }
+
+    fn prepay_parser_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        let next = self.memory.mark().checked_add(bytes).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate HTML parser preflight memory overflowed".into(),
+            }
+        })?;
+        if u64::try_from(next).unwrap_or(u64::MAX) > self.max_persistent_memory_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!(
+                    "aggregate feed and nested HTML memory exceeds {} bytes",
+                    self.max_persistent_memory_bytes
+                ),
+            });
+        }
+        self.memory.charge(bytes)
     }
 
     fn consume(
@@ -169,18 +439,6 @@ impl FeedHtmlBudget {
         Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
         self.consume_strings(1, code_bytes)?;
         self.consume_strings(1, message_bytes)
-    }
-
-    fn account_existing_diagnostic(
-        &mut self,
-        diagnostic: &Diagnostic,
-    ) -> Result<(), ConversionError> {
-        self.html_diagnostic(diagnostic.code.len(), diagnostic.message.len())?;
-        self.charge_memory(diagnostic.code.capacity())?;
-        self.charge_memory(diagnostic.message.capacity())?;
-        record_feed_html_object(FeedHtmlObjectKind::String);
-        record_feed_html_object(FeedHtmlObjectKind::String);
-        Ok(())
     }
 
     pub(crate) fn string(&mut self, bytes: usize) -> Result<(), ConversionError> {
@@ -254,6 +512,7 @@ impl FeedHtmlBudget {
         let memory_mark = self.memory.mark();
         let persistent_mark = self.persistent_memory_bytes;
         self.charge_memory(bytes)?;
+        record_feed_html_capacity_reserve_call();
         if let Err(error) = string.try_reserve_exact(target - string.len()) {
             self.memory.rewind(memory_mark)?;
             self.persistent_memory_bytes = persistent_mark;
@@ -261,6 +520,23 @@ impl FeedHtmlBudget {
                 limit: "max_memory_bytes",
                 detail: format!("aggregate HTML string allocation failed: {error}"),
             });
+        }
+        let Some(actual_bytes) = string.capacity().checked_sub(target) else {
+            *string = String::new();
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(ConversionError::Internal {
+                detail: "aggregate HTML string reserve returned less than requested capacity"
+                    .into(),
+            });
+        };
+        if actual_bytes > 0
+            && let Err(error) = self.charge_memory(actual_bytes)
+        {
+            *string = String::new();
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(error);
         }
         record_feed_html_capacity_growth();
         Ok(())
@@ -296,6 +572,7 @@ impl FeedHtmlBudget {
         let memory_mark = self.memory.mark();
         let persistent_mark = self.persistent_memory_bytes;
         self.charge_memory(bytes)?;
+        record_feed_html_capacity_reserve_call();
         if let Err(error) = vector.try_reserve_exact(target - vector.len()) {
             self.memory.rewind(memory_mark)?;
             self.persistent_memory_bytes = persistent_mark;
@@ -303,6 +580,29 @@ impl FeedHtmlBudget {
                 limit: "max_memory_bytes",
                 detail: format!("aggregate HTML vector allocation failed: {error}"),
             });
+        }
+        let Some(actual_slots) = vector.capacity().checked_sub(target) else {
+            *vector = Vec::new();
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(ConversionError::Internal {
+                detail: "aggregate HTML vector reserve returned less than requested capacity"
+                    .into(),
+            });
+        };
+        if actual_slots > 0
+            && let Err(error) =
+                self.charge_memory(actual_slots.checked_mul(size_of::<T>()).ok_or_else(|| {
+                    ConversionError::ResourceLimit {
+                        limit: "max_memory_bytes",
+                        detail: "aggregate HTML vector actual capacity overflowed".into(),
+                    }
+                })?)
+        {
+            *vector = Vec::new();
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(error);
         }
         record_feed_html_capacity_growth();
         Ok(())
@@ -350,13 +650,6 @@ impl FeedHtmlBudget {
         Ok(())
     }
 
-    fn new_temporary_string(&mut self, value: &str) -> Result<String, ConversionError> {
-        let mut output = String::new();
-        self.reserve_string_capacity(&mut output, value.len())?;
-        output.push_str(value);
-        Ok(output)
-    }
-
     pub(crate) const fn snapshot(&self) -> FeedHtmlBudgetSnapshot {
         FeedHtmlBudgetSnapshot {
             nodes: self.nodes,
@@ -367,6 +660,27 @@ impl FeedHtmlBudget {
             output_bytes: self.output_bytes,
             persistent_memory_bytes: self.persistent_memory_bytes,
         }
+    }
+
+    pub(crate) fn transaction_snapshot(&self) -> FeedHtmlTransactionSnapshot {
+        FeedHtmlTransactionSnapshot { counters: self.snapshot(), memory_bytes: self.memory.mark() }
+    }
+
+    /// Restore a fragment transaction after every value created since the
+    /// snapshot has been dropped by the caller.
+    pub(crate) fn rewind(
+        &mut self,
+        snapshot: FeedHtmlTransactionSnapshot,
+    ) -> Result<(), ConversionError> {
+        self.memory.rewind(snapshot.memory_bytes)?;
+        self.nodes = snapshot.counters.nodes;
+        self.inlines = snapshot.counters.inlines;
+        self.assets = snapshot.counters.assets;
+        self.diagnostics = snapshot.counters.diagnostics;
+        self.strings = snapshot.counters.strings;
+        self.output_bytes = snapshot.counters.output_bytes;
+        self.persistent_memory_bytes = snapshot.counters.persistent_memory_bytes;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -400,6 +714,8 @@ pub(crate) struct FeedHtmlObjectCounts {
     pub(crate) diagnostics: usize,
     pub(crate) strings: usize,
     pub(crate) capacity_growths: usize,
+    pub(crate) capacity_reserve_calls: usize,
+    pub(crate) parser_constructions: usize,
 }
 
 #[cfg(test)]
@@ -412,6 +728,8 @@ thread_local! {
             diagnostics: 0,
             strings: 0,
             capacity_growths: 0,
+            capacity_reserve_calls: 0,
+            parser_constructions: 0,
         })
     };
 }
@@ -427,6 +745,30 @@ fn record_feed_html_capacity_growth() {
 
 #[cfg(not(test))]
 fn record_feed_html_capacity_growth() {}
+
+#[cfg(test)]
+fn record_feed_html_capacity_reserve_call() {
+    FEED_HTML_OBJECTS.with(|count| {
+        let mut current = count.get();
+        current.capacity_reserve_calls = current.capacity_reserve_calls.saturating_add(1);
+        count.set(current);
+    });
+}
+
+#[cfg(not(test))]
+fn record_feed_html_capacity_reserve_call() {}
+
+#[cfg(test)]
+fn record_feed_html_parser_construction() {
+    FEED_HTML_OBJECTS.with(|count| {
+        let mut current = count.get();
+        current.parser_constructions = current.parser_constructions.saturating_add(1);
+        count.set(current);
+    });
+}
+
+#[cfg(not(test))]
+fn record_feed_html_parser_construction() {}
 
 #[cfg(test)]
 fn record_feed_html_object(kind: FeedHtmlObjectKind) {
@@ -544,7 +886,14 @@ impl Dom {
         options: &ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
-        let mut memory = LogicalMemory::new(context)?;
+        Self::with_memory(options, context, LogicalMemory::new(context)?)
+    }
+
+    fn with_memory(
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+        mut memory: LogicalMemory,
+    ) -> Result<Self, ConversionError> {
         let mut nodes = Vec::new();
         memory.reserve_vec(&mut nodes, 2)?;
         nodes.push(DomNode {
@@ -982,15 +1331,6 @@ fn convert_html(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    convert_html_with_budget(input, options, context, None)
-}
-
-fn convert_html_with_budget(
-    input: &ResolvedInput,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-    mut feed_budget: Option<&mut FeedHtmlBudget>,
-) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let input_size = u64::try_from(input.bytes.len()).unwrap_or(u64::MAX);
     if input_size > options.limits.max_input_bytes {
@@ -999,25 +1339,10 @@ fn convert_html_with_budget(
             detail: format!("{input_size} > {}", options.limits.max_input_bytes),
         });
     }
-    let (charset, charset_diagnostics, charset_diagnostics_precharged) =
-        html_charset(input, options, context, feed_budget.as_deref_mut())?;
+    let (charset, charset_diagnostics) = html_charset(input, options, context)?;
     let (mut decoded, decoded_diagnostics) =
         decode_source(&input.bytes, charset.as_deref(), options.text.decoding_mode, context)?;
     let mut diagnostics = Vec::new();
-    if let Some(budget) = feed_budget.as_deref_mut() {
-        let count = decoded_diagnostics.len().saturating_add(charset_diagnostics.len());
-        budget.reserve_vec(&mut diagnostics, count)?;
-        for diagnostic in &decoded_diagnostics {
-            budget.account_existing_diagnostic(diagnostic)?;
-            FeedHtmlBudget::constructed(FeedHtmlObjectKind::Diagnostic);
-        }
-        if !charset_diagnostics_precharged {
-            for diagnostic in &charset_diagnostics {
-                budget.account_existing_diagnostic(diagnostic)?;
-                FeedHtmlBudget::constructed(FeedHtmlObjectKind::Diagnostic);
-            }
-        }
-    }
     diagnostics.extend(decoded_diagnostics);
     diagnostics.extend(charset_diagnostics);
 
@@ -1031,6 +1356,20 @@ fn convert_html_with_budget(
     decoded.memory.charge(parser_work)?;
 
     let sink = Dom::new(options, context)?;
+    let dom = parse_html_dom(sink, decoded.text.as_str());
+    finish_html_dom(
+        dom,
+        input.bytes.len(),
+        input.metadata.uri.as_deref(),
+        Some(decoded),
+        options,
+        context,
+        diagnostics,
+        None,
+    )
+}
+
+fn parse_html_dom(sink: Dom, text: &str) -> Dom {
     let parse_options = ParseOpts {
         tree_builder: html5ever::tree_builder::TreeBuilderOpts {
             scripting_enabled: false,
@@ -1038,7 +1377,20 @@ fn convert_html_with_budget(
         },
         ..Default::default()
     };
-    let dom = parse_document(sink, parse_options).one(decoded.text.as_str());
+    parse_document(sink, parse_options).one(text)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_html_dom(
+    dom: Dom,
+    input_len: usize,
+    source_uri: Option<&str>,
+    decoded: Option<DecodedText>,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    mut diagnostics: Vec<Diagnostic>,
+    mut feed_budget: Option<&mut FeedHtmlBudget>,
+) -> Result<ConverterOutput, ConversionError> {
     if let Some(error) = dom.error.into_inner() {
         return Err(error);
     }
@@ -1079,7 +1431,16 @@ fn convert_html_with_budget(
     diagnostics.push(source_diagnostic);
 
     let nodes = dom.nodes.into_inner();
-    let builder = Builder::new(&nodes, input, decoded, options, context, diagnostics, feed_budget);
+    let builder = Builder::new(
+        &nodes,
+        input_len,
+        source_uri,
+        decoded,
+        options,
+        context,
+        diagnostics,
+        feed_budget,
+    );
     builder.extract()
 }
 
@@ -1092,27 +1453,51 @@ pub(crate) fn convert_feed_html_fragment(
     context: &ExecutionContext,
     budget: &mut FeedHtmlBudget,
 ) -> Result<ConverterOutput, ConversionError> {
-    budget.charge_memory(fragment.len())?;
-    let media_type = budget.new_temporary_string("text/html; charset=utf-8")?;
-    let uri = base_uri.map(|value| budget.new_temporary_string(value)).transpose()?;
-    let input = ResolvedInput {
-        bytes: std::sync::Arc::from(fragment.as_bytes()),
-        metadata: into_markdown_core::SourceMetadata {
-            media_type: Some(media_type),
-            uri,
-            size: u64::try_from(fragment.len()).unwrap_or(u64::MAX),
-            ..Default::default()
-        },
-    };
-    convert_html_with_budget(&input, options, context, Some(budget))
+    let snapshot = budget.transaction_snapshot();
+    let preflight = preflight_feed_html(fragment.as_bytes(), context)?;
+    let parser_memory = preflight.memory_bound()?;
+    budget.prepay_parser_memory(parser_memory)?;
+    let result = (|| {
+        // Feed XML decoding already produced valid UTF-8. Bypassing the HTML
+        // charset decoder avoids a redundant owned copy and lets the same
+        // feed-owned lease cover parser workspace, DOM, and final output.
+        let sink = Dom::with_memory(options, context, LogicalMemory::prepaid(parser_memory))?;
+        record_feed_html_parser_construction();
+        let dom = parse_html_dom(sink, fragment);
+        finish_html_dom(
+            dom,
+            fragment.len(),
+            base_uri,
+            None,
+            options,
+            context,
+            Vec::new(),
+            Some(budget),
+        )
+    })();
+    match result {
+        Ok(output) => {
+            if let Err(error) = budget.memory.release(parser_memory) {
+                drop(output);
+                budget.rewind(snapshot)?;
+                return Err(error);
+            }
+            Ok(output)
+        }
+        Err(error) => {
+            // `result` owns and drops parser, DOM, and partial output before
+            // the full fragment transaction is rewound.
+            budget.rewind(snapshot)?;
+            Err(error)
+        }
+    }
 }
 
 fn html_charset(
     input: &ResolvedInput,
     options: &ConversionOptions,
     context: &ExecutionContext,
-    mut feed_budget: Option<&mut FeedHtmlBudget>,
-) -> Result<(Option<String>, Vec<Diagnostic>, bool), ConversionError> {
+) -> Result<(Option<String>, Vec<Diagnostic>), ConversionError> {
     let explicit = options
         .text
         .charset
@@ -1120,40 +1505,17 @@ fn html_charset(
         .or_else(|| input.metadata.media_type.as_deref().and_then(media_type_charset));
     if let Some(explicit) = explicit {
         let mut diagnostics = Vec::new();
-        let mut precharged = false;
         if let Some(meta) = prescan_meta_charset(&input.bytes, context)?
             && !meta.eq_ignore_ascii_case(explicit)
         {
-            let message_len = "meta charset ".len()
-                + meta.len()
-                + " conflicts with explicit charset ".len()
-                + explicit.len();
-            let diagnostic = if let Some(budget) = feed_budget.as_deref_mut() {
-                budget.html_diagnostic("html.metaCharsetIgnored".len(), message_len)?;
-                budget.reserve_vec(&mut diagnostics, 1)?;
-                precharged = true;
-                budgeted_warning(budget, "html.metaCharsetIgnored", message_len, |message| {
-                    write!(
-                        message,
-                        "meta charset {meta} conflicts with explicit charset {explicit}"
-                    )
-                })?
-            } else {
-                warning(
-                    "html.metaCharsetIgnored",
-                    format!("meta charset {meta} conflicts with explicit charset {explicit}"),
-                )
-            };
-            diagnostics.push(diagnostic);
+            diagnostics.push(warning(
+                "html.metaCharsetIgnored",
+                format!("meta charset {meta} conflicts with explicit charset {explicit}"),
+            ));
         }
-        let explicit = if let Some(budget) = feed_budget {
-            budget.new_temporary_string(explicit)?
-        } else {
-            explicit.to_owned()
-        };
-        return Ok((Some(explicit), diagnostics, precharged));
+        return Ok((Some(explicit.to_owned()), diagnostics));
     }
-    Ok((prescan_meta_charset(&input.bytes, context)?, Vec::new(), false))
+    Ok((prescan_meta_charset(&input.bytes, context)?, Vec::new()))
 }
 
 fn media_type_charset(value: &str) -> Option<&str> {
@@ -1430,8 +1792,9 @@ fn is_html_space(byte: u8) -> bool {
 
 struct Builder<'a, 'budget> {
     nodes: &'a [DomNode],
-    input: &'a ResolvedInput,
-    _decoded: DecodedText,
+    input_len: usize,
+    source_uri: Option<&'a str>,
+    _decoded: Option<DecodedText>,
     context: &'a ExecutionContext,
     diagnostics: Vec<Diagnostic>,
     blocks: Vec<BlockNode>,
@@ -1490,10 +1853,12 @@ struct SourceTableRow {
 }
 
 impl<'a, 'budget> Builder<'a, 'budget> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         nodes: &'a [DomNode],
-        input: &'a ResolvedInput,
-        decoded: DecodedText,
+        input_len: usize,
+        source_uri: Option<&'a str>,
+        decoded: Option<DecodedText>,
         options: &ConversionOptions,
         context: &'a ExecutionContext,
         diagnostics: Vec<Diagnostic>,
@@ -1501,7 +1866,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     ) -> Self {
         Self {
             nodes,
-            input,
+            input_len,
+            source_uri,
             _decoded: decoded,
             context,
             diagnostics,
@@ -1734,7 +2100,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     }
 
     fn valid_base(&mut self) -> Result<Option<Url>, ConversionError> {
-        let source = self.input.metadata.uri.as_deref().and_then(canonical_base_url);
+        let source = self.source_uri.and_then(canonical_base_url);
         for id in 0..self.nodes.len() {
             let context = self.node_context(id);
             if self.is_html_element(id)
@@ -2366,7 +2732,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 provider,
                 locator: SourceLocator {
                     byte_start: Some(0),
-                    byte_end: u64::try_from(self.input.bytes.len()).ok(),
+                    byte_end: u64::try_from(self.input_len).ok(),
                     ..SourceLocator::default()
                 },
                 confidence: None,
@@ -2881,6 +3247,7 @@ mod tests {
         assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
         assert_eq!(blocks.capacity(), 0);
         assert_eq!(feed_html_object_count().capacity_growths, 0);
+        assert_eq!(feed_html_object_count().capacity_reserve_calls, 0);
 
         let exact_bytes = 4 * size_of::<BlockNode>();
         budget.set_test_limits(FeedHtmlBudgetSnapshot {
@@ -2896,6 +3263,7 @@ mod tests {
         assert_eq!(blocks.capacity(), 4);
         assert_eq!(budget.snapshot().persistent_memory_bytes, exact_bytes);
         assert_eq!(feed_html_object_count().capacity_growths, 1);
+        assert_eq!(feed_html_object_count().capacity_reserve_calls, 1);
 
         let mut string_budget = FeedHtmlBudget::new(
             options.limits.max_feed_text_bytes,
@@ -2930,7 +3298,186 @@ mod tests {
         assert_eq!(output.capacity(), 64);
         assert_eq!(string_budget.snapshot().persistent_memory_bytes, 64);
         assert_eq!(feed_html_object_count().capacity_growths, 1);
+        assert_eq!(feed_html_object_count().capacity_reserve_calls, 1);
         assert_eq!(feed_html_object_count().strings, 1);
+    }
+
+    #[test]
+    fn feed_capacity_snapshots_follow_actual_allocator_capacity_for_varied_growth() {
+        let context = context();
+        let options = ConversionOptions::default();
+        let mut budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            options.limits.max_memory_bytes,
+            &context,
+        )
+        .unwrap();
+        for requested in [1_usize, 4, 5, 17, 63, 64, 65, 129] {
+            let before = budget.snapshot().persistent_memory_bytes;
+            let mut values = Vec::<u32>::new();
+            budget.reserve_vec(&mut values, requested).unwrap();
+            assert_eq!(
+                budget.snapshot().persistent_memory_bytes - before,
+                values.capacity() * size_of::<u32>()
+            );
+        }
+
+        let mut values = Vec::<u8>::new();
+        for additional in [1_usize, 4, 5, 31, 67] {
+            values.resize(values.capacity(), 0);
+            let old_capacity = values.capacity();
+            let before = budget.snapshot().persistent_memory_bytes;
+            budget.reserve_vec(&mut values, additional).unwrap();
+            assert_eq!(
+                budget.snapshot().persistent_memory_bytes - before,
+                values.capacity() - old_capacity
+            );
+        }
+
+        for requested in [1_usize, 63, 64, 65, 67, 129] {
+            let before = budget.snapshot().persistent_memory_bytes;
+            let mut value = String::new();
+            budget.reserve_string_capacity(&mut value, requested).unwrap();
+            assert_eq!(budget.snapshot().persistent_memory_bytes - before, value.capacity());
+        }
+    }
+
+    #[test]
+    fn feed_parser_preflight_is_pinned_checked_and_precedes_parser_construction() {
+        let workspace = include_str!("../../../Cargo.toml");
+        let lock = include_str!("../../../Cargo.lock");
+        assert!(workspace.contains("html5ever = \"=0.39.0\""));
+        assert!(lock.contains(
+            "name = \"html5ever\"\nversion = \"0.39.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"46a1761807faccc9a19e86944bbf40610014066306f96edcdedc2fb714bcb7b8\""
+        ));
+        assert!(lock.contains(
+            "name = \"markup5ever\"\nversion = \"0.39.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"7122d987ec5f704ee56f6e5b41a7d93722e9aae27ae07cafa4036c4d3f9757de\""
+        ));
+        assert!(lock.contains(
+            "name = \"tendril\"\nversion = \"0.5.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08\""
+        ));
+        assert_eq!(BUFFER_QUEUE_SLOTS, 16);
+        assert_eq!(TOKENIZER_TENDRILS, 9);
+        assert_eq!(TREE_BUILDER_VECTORS, 4);
+        assert_eq!(VEC_GROWTH_FACTOR, 2);
+        assert_eq!(TENDRIL_GROWTH_FACTOR, 2);
+        assert_eq!(ADOPTION_AGENCY_ROUNDS, 8);
+        assert_eq!(MUTATIONS_PER_TOKEN, 64);
+        assert!(HTML5EVER_MODEL_ID.contains("html5ever@ce64836c"));
+        assert!(HTML5EVER_MODEL_ID.contains("tendril@d64dfd4c"));
+        assert!(validate_html_model_id("html5ever-0.40.0").is_err());
+
+        let mut fragment = String::from("<div");
+        for index in 0..64 {
+            write!(&mut fragment, " a{index}='{}'", "x".repeat(16)).unwrap();
+        }
+        fragment.push_str("><table><tr><td><template>");
+        for _ in 0..32 {
+            fragment.push_str("<b><i>");
+        }
+        fragment.push_str("deep");
+        for _ in 0..32 {
+            fragment.push_str("</b></i>");
+        }
+        fragment.push_str("</template></td></tr></table><script>");
+        fragment.push_str(&"raw<&text".repeat(512));
+        fragment.push_str("</script><p>safe</p></div>");
+
+        let probe_context = context();
+        let bound = feed_html_parser_memory_bound(&fragment, &probe_context).unwrap();
+        let limits = ResourceLimits {
+            max_memory_bytes: u64::try_from(bound - 1).unwrap(),
+            ..ResourceLimits::default()
+        };
+        let fail_context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let options = ConversionOptions::default();
+        let mut fail_budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            u64::try_from(bound - 1).unwrap(),
+            &fail_context,
+        )
+        .unwrap();
+        reset_feed_html_object_count();
+        let error =
+            convert_feed_html_fragment(&fragment, None, &options, &fail_context, &mut fail_budget)
+                .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(feed_html_object_count().parser_constructions, 0);
+
+        let success_limit = bound.checked_add(2 * 1024 * 1024).unwrap();
+        let success_context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits {
+                max_memory_bytes: u64::try_from(success_limit).unwrap(),
+                ..ResourceLimits::default()
+            },
+        );
+        let mut success_budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            u64::try_from(success_limit).unwrap(),
+            &success_context,
+        )
+        .unwrap();
+        reset_feed_html_object_count();
+        let output = convert_feed_html_fragment(
+            &fragment,
+            None,
+            &options,
+            &success_context,
+            &mut success_budget,
+        )
+        .unwrap();
+        assert!(!output.document.blocks.is_empty());
+        assert_eq!(feed_html_object_count().parser_constructions, 1);
+    }
+
+    #[test]
+    fn malformed_fragment_drops_and_rewinds_before_exact_memory_reuse() {
+        let options = ConversionOptions::default();
+        let safe = "<p>safe</p>";
+        let malformed = "<nav><p>discard</p></nav>";
+        let measuring_context = context();
+        let mut measuring_budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            options.limits.max_memory_bytes,
+            &measuring_context,
+        )
+        .unwrap();
+        convert_feed_html_fragment(safe, None, &options, &measuring_context, &mut measuring_budget)
+            .unwrap();
+        let safe_persistent = measuring_budget.snapshot().persistent_memory_bytes;
+        let safe_parser = feed_html_parser_memory_bound(safe, &measuring_context).unwrap();
+        let malformed_parser =
+            feed_html_parser_memory_bound(malformed, &measuring_context).unwrap();
+        let exact = safe_parser.max(malformed_parser).checked_add(safe_persistent).unwrap();
+
+        let exact_context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits {
+                max_memory_bytes: u64::try_from(exact).unwrap(),
+                ..ResourceLimits::default()
+            },
+        );
+        let mut budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            u64::try_from(exact).unwrap(),
+            &exact_context,
+        )
+        .unwrap();
+        let initial = budget.snapshot();
+        assert!(matches!(
+            convert_feed_html_fragment(malformed, None, &options, &exact_context, &mut budget,),
+            Err(ConversionError::Malformed { .. })
+        ));
+        assert_eq!(budget.snapshot().nodes, initial.nodes);
+        assert_eq!(budget.snapshot().persistent_memory_bytes, initial.persistent_memory_bytes);
+        convert_feed_html_fragment(safe, None, &options, &exact_context, &mut budget).unwrap();
+        assert_eq!(budget.snapshot().persistent_memory_bytes, safe_persistent);
     }
 
     #[test]

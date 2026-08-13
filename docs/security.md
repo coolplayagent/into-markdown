@@ -29,6 +29,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   累计文本、nested HTML、asset、diagnostic、IR、字符串与输出采用贯穿解析、去重和合并阶段的
   聚合逻辑内存预算，长循环持续 checkpoint；DTD、外部 entity、namespace 混淆、Atom XHTML
   foreign element 与 active content 均 fail closed，过滤后的原始 markup 不会作为 fallback 回显。
+  nested HTML 使用固定 html5ever 0.39.0 / tendril 0.5.1 source commit 模型，在 parser 构造前通过无堆扫描
+  保守预付 tokenizer、TreeBuilder、8 轮 adoption-agency、tendril 与 DOM workspace；Feed-owned
+  lease 贯穿 parser、DOM 和最终 Document。预付是协作式逻辑上界，并非 allocator metadata 或
+  进程 RSS。fragment 失败只在局部对象全部析构后回滚完整预算快照，避免失败片段留下幽灵计费。
 - Markdown 解析固定离线，不读取相对图片、不获取 HTTP(S) 图片、不解码 data URI。
   external-only 图片 URI 必须是 canonical HTTP(S)，且没有 userinfo、query 或 fragment；
   该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content

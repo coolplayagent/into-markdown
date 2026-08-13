@@ -589,17 +589,25 @@ pub(crate) fn decode_source(
 
 /// Logical heap-capacity accounting shared by text-family converters.
 ///
-/// The accounting covers requested `String` bytes and `Vec<T>` element slots.
-/// Allocator bookkeeping and platform-specific size-class slack are excluded;
-/// every logical capacity increase is charged before its allocation request.
+/// The accounting covers actual `String` bytes and `Vec<T>` element slots.
+/// Allocator bookkeeping is excluded. Every target increase is charged before
+/// its allocation request; if the allocator returns a larger capacity, the
+/// difference is charged before the value can escape this function.
 pub(crate) struct LogicalMemory {
-    reservation: ResourceReservation,
+    reservation: Option<ResourceReservation>,
     charged: usize,
+    prepaid_limit: Option<usize>,
 }
 
 impl LogicalMemory {
     pub(crate) fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
-        Ok(Self { reservation: context.reserve_memory(0)?, charged: 0 })
+        Ok(Self { reservation: Some(context.reserve_memory(0)?), charged: 0, prepaid_limit: None })
+    }
+
+    /// Create an allocation meter backed by an already-held caller lease.
+    /// This meter never changes the execution context reservation itself.
+    pub(crate) const fn prepaid(limit: usize) -> Self {
+        Self { reservation: None, charged: 0, prepaid_limit: Some(limit) }
     }
 
     pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ConversionError> {
@@ -612,12 +620,20 @@ impl LogicalMemory {
                 limit: "max_memory_bytes",
                 detail: "logical heap capacity overflowed".into(),
             })?;
-        self.reservation.grow(bytes_u64)?;
+        if self.prepaid_limit.is_some_and(|limit| next > limit) {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "prepaid logical heap capacity was exceeded".into(),
+            });
+        }
+        if let Some(reservation) = &mut self.reservation {
+            reservation.grow(bytes_u64)?;
+        }
         self.charged = next;
         Ok(())
     }
 
-    pub(crate) fn mark(&self) -> usize {
+    pub(crate) const fn mark(&self) -> usize {
         self.charged
     }
 
@@ -625,13 +641,34 @@ impl LogicalMemory {
         let released = self.charged.checked_sub(mark).ok_or_else(|| ConversionError::Internal {
             detail: "logical memory mark exceeds current charge".into(),
         })?;
-        self.reservation.shrink(u64::try_from(released).map_err(|_| {
-            ConversionError::ResourceLimit {
-                limit: "max_memory_bytes",
-                detail: "logical memory release cannot be represented as u64".into(),
-            }
-        })?)?;
+        if let Some(reservation) = &mut self.reservation {
+            reservation.shrink(u64::try_from(released).map_err(|_| {
+                ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "logical memory release cannot be represented as u64".into(),
+                }
+            })?)?;
+        }
         self.charged = mark;
+        Ok(())
+    }
+
+    /// Release one independently prepaid range while retaining charges made
+    /// after it. This is used when parser workspace precedes persistent output
+    /// in the same feed-owned lease.
+    pub(crate) fn release(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        let next = self.charged.checked_sub(bytes).ok_or_else(|| ConversionError::Internal {
+            detail: "logical memory release exceeds current charge".into(),
+        })?;
+        if let Some(reservation) = &mut self.reservation {
+            reservation.shrink(u64::try_from(bytes).map_err(|_| {
+                ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "logical memory release cannot be represented as u64".into(),
+                }
+            })?)?;
+        }
+        self.charged = next;
         Ok(())
     }
 
@@ -669,6 +706,26 @@ impl LogicalMemory {
                 detail: format!("logical vector allocation failed: {error}"),
             });
         }
+        let Some(actual_slots) = vector.capacity().checked_sub(target) else {
+            *vector = Vec::new();
+            self.rewind(mark)?;
+            return Err(ConversionError::Internal {
+                detail: "logical vector reserve returned less than requested capacity".into(),
+            });
+        };
+        if actual_slots > 0
+            && let Err(error) =
+                self.charge(actual_slots.checked_mul(size_of::<T>()).ok_or_else(|| {
+                    ConversionError::ResourceLimit {
+                        limit: "max_memory_bytes",
+                        detail: "logical vector actual capacity overflowed".into(),
+                    }
+                })?)
+        {
+            *vector = Vec::new();
+            self.rewind(mark)?;
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -694,6 +751,20 @@ impl LogicalMemory {
                 limit: "max_memory_bytes",
                 detail: format!("logical string allocation failed: {error}"),
             });
+        }
+        let Some(actual_bytes) = string.capacity().checked_sub(target) else {
+            *string = String::new();
+            self.rewind(mark)?;
+            return Err(ConversionError::Internal {
+                detail: "logical string reserve returned less than requested capacity".into(),
+            });
+        };
+        if actual_bytes > 0
+            && let Err(error) = self.charge(actual_bytes)
+        {
+            *string = String::new();
+            self.rewind(mark)?;
+            return Err(error);
         }
         Ok(())
     }
