@@ -1496,8 +1496,7 @@ mod tests {
         let model = ResolvedModel {
             identity: ModelIdentity {
                 canonical_path: model_path,
-                sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6"
-                    .into(),
+                sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6".into(),
                 bytes: 4_462_639,
                 file_identity: identity,
             },
@@ -1507,10 +1506,10 @@ mod tests {
         let library = option_env!("OCR_QUALITY_ORT_LIBRARY").unwrap();
         let worker = option_env!("OCR_QUALITY_WORKER").unwrap();
         let runtime_repository = option_env!("OCR_QUALITY_ORT_REPOSITORY").unwrap();
-        let library_runfile = runfiles.join(runtime_repository).join(library).canonicalize().unwrap();
+        let library_runfile =
+            runfiles.join(runtime_repository).join(library).canonicalize().unwrap();
         let component_count = Path::new(library).components().count();
-        let trusted_root =
-            library_runfile.ancestors().nth(component_count).unwrap().to_path_buf();
+        let trusted_root = library_runfile.ancestors().nth(component_count).unwrap().to_path_buf();
         let loaded = Arc::new(RuntimeLibrary::load(&trusted_root, &library_runfile).unwrap());
         let worker = runfiles.join(worker).canonicalize().unwrap();
         let factory = Arc::new(OrtSessionFactory::new(loaded, worker).unwrap());
@@ -1538,7 +1537,8 @@ mod tests {
         let mut crops = Vec::new();
         for golden in goldens {
             let id = golden["fixture_id"].as_str().unwrap();
-            let bytes = fs::read(runfiles.join(format!("_main/fixtures/small/ocr/{id}.png"))).unwrap();
+            let bytes =
+                fs::read(runfiles.join(format!("_main/fixtures/small/ocr/{id}.png"))).unwrap();
             let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
                 .unwrap()
                 .to_rgb8();
@@ -1550,15 +1550,19 @@ mod tests {
                     ((width - 1) as f32, (height - 1) as f32),
                     (0.0, (height - 1) as f32),
                 ],
-                width,
-                height,
+                width: width - 1,
+                height: height - 1,
             });
             images.push(image);
         }
         let limits = into_markdown_core::ResourceLimits::default();
         let mut group_totals = std::collections::BTreeMap::<String, (usize, usize, f64)>::new();
         for ((golden, image), crop) in goldens.iter().zip(&images).zip(&crops) {
-            let context = ExecutionContext::new(into_markdown_core::ExecutionOptions::default(), limits.clone());
+            let id = golden["fixture_id"].as_str().unwrap();
+            let context = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                limits.clone(),
+            );
             let view = into_markdown_ocr::PixelView {
                 width: image.width() as usize,
                 height: image.height() as usize,
@@ -1577,6 +1581,15 @@ mod tests {
             let expected = cer_chars(golden["ground_truth_nfc"].as_str().unwrap());
             let actual = cer_chars(&result.regions[0].text);
             let edits = edit_distance(&expected, &actual);
+            eprintln!(
+                "{} expected={:?} actual={:?} edits={} chars={} confidence={}",
+                id,
+                golden["ground_truth_nfc"].as_str().unwrap(),
+                result.regions[0].text,
+                edits,
+                expected.len(),
+                result.regions[0].confidence
+            );
             let group = golden["group"].as_str().unwrap().to_owned();
             let maximum = golden["maximum_cer"].as_f64().unwrap();
             let total = group_totals.entry(group).or_insert((0, 0, maximum));

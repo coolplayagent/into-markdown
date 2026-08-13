@@ -617,7 +617,12 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
             if size > artifact.size
                 && validate_hash(hash).is_ok()
                 && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx" => {}
-        _ => return Err(invalid_manifest(format!("runtime artifact {} has invalid archive acquisition", artifact.id))),
+        _ => {
+            return Err(invalid_manifest(format!(
+                "runtime artifact {} has invalid archive acquisition",
+                artifact.id
+            )));
+        }
     }
     let platforms: BTreeSet<_> = artifact.platforms.iter().map(String::as_str).collect();
     if platforms.is_empty()
@@ -768,13 +773,24 @@ pub enum ModelManagerError {
 /// Network implementations must enforce HTTPS, redirect, DNS/address, host,
 /// and response-size policy before returning a stream. The manager still
 /// enforces the manifest size and hash while reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelAcquisition {
+    Direct,
+    ArchiveMember { archive_sha256: String, archive_size: u64, member: String },
+}
+
+pub struct AcquiredModelArtifact {
+    pub acquisition: ModelAcquisition,
+    pub bytes: Box<dyn Read>,
+}
+
 pub trait ModelFetcher {
     /// Opens the exact runtime artifact requested by the manager.
     fn open(
         &self,
         artifact: &RuntimeArtifact,
         context: &ExecutionContext,
-    ) -> Result<Box<dyn Read>, ModelManagerError>;
+    ) -> Result<AcquiredModelArtifact, ModelManagerError>;
 }
 
 /// Observed bundle state. Inspection never accesses the network.
@@ -1099,7 +1115,26 @@ impl ModelManager {
         let staging = StagingDirectory::new(staging_path);
         for artifact in &bundle.runtime_artifacts {
             context.checkpoint()?;
-            let mut source = fetcher.open(artifact, context)?;
+            let acquired = fetcher.open(artifact, context)?;
+            let expected_acquisition =
+                match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
+                    (None, None, None) => ModelAcquisition::Direct,
+                    (Some(archive_sha256), Some(archive_size), Some(member)) => {
+                        ModelAcquisition::ArchiveMember {
+                            archive_sha256: archive_sha256.clone(),
+                            archive_size,
+                            member: member.clone(),
+                        }
+                    }
+                    _ => return Err(ModelManagerError::Corrupt(artifact.id.clone())),
+                };
+            if acquired.acquisition != expected_acquisition {
+                return Err(ModelManagerError::Corrupt(format!(
+                    "{} acquisition authority mismatch",
+                    artifact.id
+                )));
+            }
+            let mut source = acquired.bytes;
             let path = staging.path().join(&artifact.file_name);
             let mut destination = OpenOptions::new().write(true).create_new(true).open(&path)?;
             let mut digest = Sha256::new();
@@ -2105,12 +2140,24 @@ mod tests {
     impl ModelFetcher for BytesFetcher {
         fn open(
             &self,
-            _: &RuntimeArtifact,
+            artifact: &RuntimeArtifact,
             context: &ExecutionContext,
-        ) -> Result<Box<dyn Read>, ModelManagerError> {
+        ) -> Result<AcquiredModelArtifact, ModelManagerError> {
             context.checkpoint()?;
             self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Box::new(std::io::Cursor::new(self.bytes.clone())))
+            let acquisition =
+                match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
+                    (Some(hash), Some(size), Some(member)) => ModelAcquisition::ArchiveMember {
+                        archive_sha256: hash.clone(),
+                        archive_size: size,
+                        member: member.clone(),
+                    },
+                    _ => ModelAcquisition::Direct,
+                };
+            Ok(AcquiredModelArtifact {
+                acquisition,
+                bytes: Box::new(std::io::Cursor::new(self.bytes.clone())),
+            })
         }
     }
 

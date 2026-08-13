@@ -330,6 +330,26 @@ fn validated_crop(
     }
     let width = crop.width as usize;
     let height = crop.height as usize;
+    let distance = |left: (f32, f32), right: (f32, f32)| {
+        let dx = f64::from(right.0) - f64::from(left.0);
+        let dy = f64::from(right.1) - f64::from(left.1);
+        dx.hypot(dy)
+    };
+    let expected_width = distance(crop.polygon[0], crop.polygon[1])
+        .max(distance(crop.polygon[3], crop.polygon[2]))
+        .ceil()
+        .max(1.0);
+    let expected_height = distance(crop.polygon[0], crop.polygon[3])
+        .max(distance(crop.polygon[1], crop.polygon[2]))
+        .ceil()
+        .max(1.0);
+    if !expected_width.is_finite()
+        || !expected_height.is_finite()
+        || expected_width != f64::from(crop.width)
+        || expected_height != f64::from(crop.height)
+    {
+        return Err(ocr("recognitionCropAxisMismatch"));
+    }
     if width.checked_mul(height).is_none_or(|pixels| pixels > config.max_crop_pixels) {
         return Err(limit("recognitionCropPixels"));
     }
@@ -757,13 +777,13 @@ mod tests {
         let crops = [
             CropDescriptor {
                 polygon: [(0.0, 0.0), (29.0, 0.0), (29.0, 9.0), (0.0, 9.0)],
-                width: 30,
-                height: 10,
+                width: 29,
+                height: 9,
             },
             CropDescriptor {
                 polygon: [(0.0, 20.0), (9.0, 20.0), (9.0, 29.0), (0.0, 29.0)],
-                width: 10,
-                height: 10,
+                width: 9,
+                height: 9,
             },
         ];
         let result =
