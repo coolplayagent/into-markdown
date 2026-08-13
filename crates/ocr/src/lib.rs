@@ -21,8 +21,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+mod detection;
 mod onnx_proto;
 mod runtime;
+
+pub use detection::{
+    CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
+    PixelFormat, PixelView, PpOcrTextDetector,
+};
 
 pub use runtime::{
     CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,

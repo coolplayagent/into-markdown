@@ -1,4 +1,5 @@
 exports_files([
+    "BSL-1.0.txt",
     "downloads.bzl",
     "downloads.json",
     "inventory.json",

@@ -29,6 +29,7 @@ clap = { version = "4.5.45", features = ["derive", "string"] }
 clap_complete = "4.5.57"
 directories = "6.0.0"
 chardetng = "0.1.17"
+clipper2-rust = "=1.1.0"
 encoding_rs = "0.8.35"
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 futures = "0.3.31"
@@ -36,6 +37,7 @@ getrandom = "0.4.3"
 globset = "0.4.16"
 html5ever = "=0.39.0"
 image = { version = "=0.25.8", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+imageproc = { version = "=0.25.0", default-features = false }
 libc = "0.2.189"
 libloading = "0.9.0"
 object = { version = "=0.40.0", default-features = false, features = ["read", "std"] }

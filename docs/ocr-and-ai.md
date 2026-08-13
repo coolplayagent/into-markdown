@@ -16,9 +16,33 @@ runtime files。模型管理命令会将 bundle 显示为 `planned` / `unavailab
 `//models:source_models` 用于获取已固定哈希的上游源归档。未来会增加可复现的
 转换动作，以生成准确的 ONNX 部署产物及其派生哈希。
 
-OCR 实现负责图像解码、方向检测、归一化、DBNet 后处理、阅读顺序、裁剪批处理、
-CTC 解码、置信度计算和 IR 合并。模型执行隐藏在 `TensorRuntime` 之后，初始
-实现使用支持平台上固定版本的 ONNX Runtime CPU 包。
+检测模块只接收调用方已解码且明确描述的 `PixelView`：宽、高、row stride、
+`Gray8`/`RGB8`/`BGR8`/`RGBA8`/`BGRA8`、八种 EXIF 方向和借用的像素字节。
+它不猜测格式、不解码图片、不访问文件或网络；完整 `ImageConverter` 由独立的图片
+转换安全边界提供。透明通道与 PaddleOCR 的 BGR 转换一致地忽略，不做背景合成。
+
+PP-OCRv6 tiny 检测参数的机器可读权威文件是
+`models/ppocrv6-tiny-detector-authority.json`。它固定 PaddleOCR 仓库 commit
+`2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、
+`configs/det/PP-OCRv6/PP-OCRv6_tiny_det.yml` 和 DB 论文
+`https://arxiv.org/abs/1911.08947`。预处理按官方配置进行 BGR、短边 736、长边
+最多 4000、尺寸 round 到 32 的倍数、`1/255`、mean/std 和 NCHW 排列；官方 resize
+直接生成 stride 对齐尺寸，因此不会额外合成 padding 像素。八种方向在采样前映射，
+输出框再以同一像素中心坐标规则逆变换到原图。
+
+DB 后处理固定 bitmap threshold `0.2`、polygon box score `0.4`、最多 3000 个
+候选和 unclip ratio `1.4`。二值图使用 Suzuki–Abe 边界跟踪；与官方
+`RETR_LIST` 一样，outer 与 hole contour 都进入相同评分流程，而不是静默丢弃 hole。
+每个候选经过 minimum-area rectangle、polygon mean score、closed round polygon
+offset 和第二次 minimum-area rectangle，再按 PaddleOCR 的 top-left、top-right、
+bottom-right、bottom-left 规则规范四点。输出仅包含原图坐标、角度、置信度和供后续
+识别使用的 crop descriptor；recognizer、CTC、透视裁剪执行和 IR 合并不属于检测模块。
+中英文混排区域先按纵向位置稳定排列，同一行按从左到右排列。
+
+普通测试使用 fake runtime 与人工概率图，不下载模型。当前 manifest 没有可执行
+detector ONNX 文件，因此产品 resolver 稳定返回 `ModelUnavailable`，不能把 source
+archive 当作模型。矩形、旋转框、hole、空图、噪点、非法概率、极端 stride、方向
+逆变换、取消与逻辑预算均有离线测试。
 
 `OcrPolicy` 可取 `off`、`auto` 或 `always`，默认值为 `auto`。自动模式下，
 只有图片输入、纯图片页面、可能含文字的内嵌图片，或原生文本提取不足的页面才应

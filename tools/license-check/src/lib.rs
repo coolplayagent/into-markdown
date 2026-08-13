@@ -1808,6 +1808,23 @@ version = "9.9.9"
     }
 
     #[test]
+    fn boost_license_approval_is_exact_and_rejects_nearby_identifiers() {
+        let mut policy = policy();
+        policy.allowed.insert("BSL-1.0".to_owned());
+        let mut errors = Vec::new();
+        validate_license_conclusion("clipper2-rust", "BSL-1.0", &policy, &mut errors);
+        assert!(errors.is_empty());
+
+        for invalid in ["BSL", "BSL-1", "BSL-1.0+", "Boost-1.0"] {
+            validate_license_conclusion("lookalike", invalid, &policy, &mut errors);
+        }
+        assert_eq!(
+            errors.iter().filter(|error| error.contains("non-allowed concluded license")).count(),
+            4
+        );
+    }
+
+    #[test]
     fn fixed_cli_modes_reject_override_arguments() {
         assert!(arguments_are_empty(Vec::<&str>::new()));
         assert!(!arguments_are_empty(["check"]));

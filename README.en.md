@@ -16,6 +16,17 @@ The project is implemented independently of the neighbouring `anydoc` and
 AI-derived content, pass through one provenance-aware intermediate
 representation before GitHub Flavored Markdown (GFM) is produced.
 
+The OCR crate includes bounded PP-OCRv6 tiny text-detection preprocessing and
+DB postprocessing over the `TensorRuntime` seam. It accepts only an explicitly
+described decoded pixel view (including stride, color layout, and orientation),
+produces scored quadrilaterals, angles, and future recognition crop descriptors,
+and performs no decoding or I/O. Image decoding remains the responsibility of
+the separately audited image-conversion work. Recognition, CTC decoding, and IR
+merging are also intentionally outside this detector. Since no executable
+detector ONNX artifact is currently approved, the product runtime still returns
+the stable `ModelUnavailable` error; ordinary builds and tests use synthetic
+probability maps and never download a model.
+
 ## Build
 
 ```shell

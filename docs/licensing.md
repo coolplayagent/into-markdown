@@ -65,6 +65,18 @@ API 28 兼容绑定；worker 直接使用该预生成 C API table，运行时仍
 只编译 checked-in 的安全边界消息类型。ONNX `onnx.proto3` 的来源、v1.20.0 tag、
 SHA-256、Apache-2.0 许可、生成器版本、未知字段策略和递归上限记录在
 `third_party/onnx/proto-authority.json`。
+
+OCR 检测边界精确固定 `imageproc 0.25.0`、`image 0.25.10`，两者均关闭 default
+features。审计确认 `image` 没有启用任何 decoder/encoder 或原生 feature；
+`imageproc` 及其 Cargo.lock 传递依赖均为 Rust 数学、字体或容器实现，其精确 SPDX
+结论记录在 `rust-lock.tsv`，没有 native library 或下载步骤。closed polygon round
+offset 使用 `clipper2-rust 1.1.0`，选择精确 SPDX `BSL-1.0`；完整许可文本在
+`third_party/licenses/BSL-1.0.txt`。该 crate 的 crates.io checksum 是
+`0fd663fe209e7030c956e3be4c051dcc20cdb73da794f31466762cff12ca11bf`，上游 VCS
+revision 是 `09e9505f99a18136505a64485011a292d4375a3a`。已审源码是 18,590 行、
+22 个 Rust 文件的纯 Rust port，crate 级 `forbid(unsafe_code)`、`build = false`，唯一
+runtime dependency 是 `num-traits`。任何版本升级都必须重新审计源码、unsafe、build、
+依赖与许可；许可策略只接受精确 `BSL-1.0`，相邻或宽松拼写由负例测试拒绝。
 当前默认
 发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
 发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。

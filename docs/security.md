@@ -70,6 +70,14 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
   恢复 succeeded 还会重验资源 ID/MIME/外部 URI、嵌套引用、diagnostics、
   provenance，并重渲染逐字节比较 Markdown。整个协议不访问网络。
 - 模型通过 HTTPS 下载并固定 SHA-256，同时携带许可证元数据。
+- OCR 检测不接收编码图片，只接收带 checked width/height/row stride/格式/方向的借用
+  像素视图；像素数、stride 乘加、tensor shape/元素数、概率范围、contour 总点数、
+  candidate 数和 polygon offset 点数都在使用前后有界，NaN/Infinity 和 `[0,1]` 外概率
+  稳定拒绝。长预处理与候选循环执行协作式 checkpoint。调用 `imageproc`/`clipper2-rust`
+  前按 model pixels 和最大几何结构保留请求逻辑内存，并把 tensor reservation 保持到
+  runtime 与后处理结束；这只表示请求 heap capacity 的保守逻辑计费，不是 allocator
+  metadata、RSS 或防止系统 OOM 的声明。尺寸和 unclip 配置被限制在已证明不会溢出
+  `imageproc` i32 orientation arithmetic 的范围；实现不使用 panic 捕获冒充内存安全。
 - ONNX Runtime 只接受调用方从 Bazel runfiles 得到的显式绝对路径和受信根；不查询
   cwd、`PATH`、`LD_LIBRARY_PATH`、`DYLD_*` 或其它隐式环境。路径逐段拒绝 symlink/
   reparse point，源文件以 no-follow handle 打开并核对文件身份，再按 authority 中的

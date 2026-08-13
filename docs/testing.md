@@ -164,6 +164,38 @@ checkpoint envelope、typed wire、base64 字符串和解码资源的共存峰�
 每个支持平台都运行构建、单元测试和 CLI 冒烟测试。模型与原生运行时不会进入
 常规构建，因此模型推理测试通过手动触发或定时工作流运行。
 
+## PP-OCRv6 检测 reference golden
+
+检测测试中的概率图由测试代码按矩形、非对称旋转四边形、带 hole 的 ring 和多个
+文本岛直接生成，不包含图片、字体、模型输出或第三方数据，因此没有额外 fixture
+许可义务。普通测试只调用 fake `TensorRuntime`，不安装 Python、不下载模型，也不依赖
+OpenCV。
+
+几何期望值在审查时用临时目录中的 `opencv-python-headless 4.13.0.92`、
+`pyclipper 1.4.0` 和 `numpy 2.4.2` 生成，临时目录随后删除。reference 脚本按
+PaddleOCR commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854` 的 DB 路径执行：
+`findContours(RETR_LIST, CHAIN_APPROX_SIMPLE)`、`minAreaRect`、四点 left/right 后各自
+按 y 排序、`fillPoly` polygon mean、`distance = area * 1.4 / perimeter`、
+`PyclipperOffset(JT_ROUND, ET_CLOSEDPOLYGON)` 和第二次 `minAreaRect`。固定 reference 为：
+
+- `96x64` 概率图中的 `[20,20]-[59,39]` 矩形：score
+  `0.8999999761581421`，unclip box `[(11,11),(68,11),(68,48),(11,48)]`；
+- `112x96` 概率图中的 `[(18,35),(34,14),(88,54),(72,75)]` 非对称旋转四边形：
+  score `0.8938303229741388`，原始 unclip box
+  `[(30.7121,-6.3614),(107.0248,50.1665),(74.2879,94.3614),(-2.0248,37.8335)]`，
+  Rust golden 比较映射到 source bounds 后的坐标；
+- `96x96` ring：`RETR_LIST` 返回 outer 与 inner 两个 contour，inner 经过同一 score
+  流程后低于 box threshold，最终只保留 score `0.7603305583705149` 的 outer box。
+
+Rust 实现使用 `imageproc 0.25.0` 的 Suzuki–Abe 完整边界；官方的
+`CHAIN_APPROX_SIMPLE` 只删去同一直线中间点，对 convex hull/minimum rectangle 不改变
+语义。closed polygon offset 使用 `clipper2-rust 1.1.0`。坐标允许小范围浮点/rounding
+容差，score 容差为 `0.03`；矩形容差为 1 pixel，旋转框容差为 3 pixels。旋转 fixture
+刻意非对称，避免两个等面积 minimum rectangle 都合法时 OpenCV 与 imageproc 的 tie
+选择不同。resize 的 `round(dim / 32) * 32` 使用 Rust `round_ties_even`，与 Python
+`round` 一致，并对 `47.5`、`48.0`、`80.0`、`80.1` 固定 drift 测试；输入尺寸在此前
+已验证为非零，因此不存在负尺寸 rounding 路径。
+
 CLI 契约测试还必须覆盖直接输入与保留命令冲突、双语帮助、stdin、目录展开、
 配置合并、联网授权、稳定退出码、JSON Schema、Bundle 路径净化、原子输出、冲突
 改名和批量失败汇总。尚无后端的管理操作应返回 `componentUnavailable`，不得联网或
