@@ -57,11 +57,17 @@ pub struct SourceMetadata {
     pub uri: Option<String>,
     /// Byte length after resolution.
     pub size: u64,
-    /// Redacted, canonical HTTP redirect provenance in request order.
+}
+
+/// Resolver-specific provenance carried beside the source without changing
+/// the source-compatible [`SourceMetadata`] struct layout.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceResolutionMetadata {
+    /// Redacted, canonical HTTP redirects in request order.
     pub redirects: Vec<SourceRedirect>,
 }
 
-/// One HTTP redirect recorded without credentials, query, or fragment.
+/// One HTTP redirect recorded without user information, query, or fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRedirect {
     /// Redacted canonical source URL.
@@ -91,13 +97,18 @@ pub struct ResolvedInput {
 pub struct ResolvedSource {
     input: ResolvedInput,
     memory_reservation: Option<ResourceReservation>,
+    resolution_metadata: SourceResolutionMetadata,
 }
 
 impl ResolvedSource {
     /// Wrap resolver output that has not carried a source-memory reservation.
     #[must_use]
     pub fn new(input: ResolvedInput) -> Self {
-        Self { input, memory_reservation: None }
+        Self {
+            input,
+            memory_reservation: None,
+            resolution_metadata: SourceResolutionMetadata::default(),
+        }
     }
 
     /// Wrap resolver output with its request-scoped memory reservation.
@@ -109,13 +120,30 @@ impl ResolvedSource {
         input: ResolvedInput,
         memory_reservation: ResourceReservation,
     ) -> Self {
-        Self { input, memory_reservation: Some(memory_reservation) }
+        Self {
+            input,
+            memory_reservation: Some(memory_reservation),
+            resolution_metadata: SourceResolutionMetadata::default(),
+        }
+    }
+
+    /// Attach resolver-specific provenance without changing `ResolvedInput`.
+    #[must_use]
+    pub fn with_resolution_metadata(mut self, metadata: SourceResolutionMetadata) -> Self {
+        self.resolution_metadata = metadata;
+        self
     }
 
     /// Borrow resolved bytes and metadata.
     #[must_use]
     pub fn input(&self) -> &ResolvedInput {
         &self.input
+    }
+
+    /// Borrow resolver-specific provenance retained at the accounted resolver boundary.
+    #[must_use]
+    pub fn resolution_metadata(&self) -> &SourceResolutionMetadata {
+        &self.resolution_metadata
     }
 
     /// Consume the accounting wrapper and return its ordinary resolver output.
@@ -216,5 +244,28 @@ mod tests {
             metadata: SourceMetadata::default(),
         };
         assert_eq!(&*input.bytes, b"legacy");
+    }
+
+    #[test]
+    fn resolution_provenance_is_a_compatible_resolved_source_sidecar() {
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata {
+                name: None,
+                media_type: None,
+                uri: Some("https://example.test/final".into()),
+                size: 4,
+            },
+        };
+        let source =
+            ResolvedSource::new(input).with_resolution_metadata(SourceResolutionMetadata {
+                redirects: vec![SourceRedirect {
+                    from: "https://example.test/start".into(),
+                    to: "https://example.test/final".into(),
+                    status: 302,
+                }],
+            });
+        assert_eq!(source.resolution_metadata().redirects.len(), 1);
+        assert_eq!(source.input().metadata.size, 4);
     }
 }

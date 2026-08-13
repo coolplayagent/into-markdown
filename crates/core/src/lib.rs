@@ -30,6 +30,7 @@ pub use execution::{
 pub use format::{FormatCandidate, InputFormat};
 pub use input::{
     FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata, SourceRedirect,
+    SourceResolutionMetadata,
 };
 pub use ir::{
     Asset, AssetId, Block, BlockNode, Cell, CellRef, DOCUMENT_SCHEMA_VERSION, Diagnostic,

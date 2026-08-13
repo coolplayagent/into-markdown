@@ -125,6 +125,25 @@ fn chunked_and_gzip_decoded_limits_stop_bombs() {
 }
 
 #[test]
+fn chunked_wire_limit_counts_every_framing_octet_at_exact_boundary() {
+    const BODY: &[u8] = b"000000000000000000000000000001\r\nX\r\n0\r\n\r\n";
+    let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    raw.extend_from_slice(BODY);
+    let exact = u64::try_from(BODY.len()).unwrap();
+    assert_eq!(
+        &*decode_raw(raw.clone(), FetchLimits { max_wire_bytes: exact, max_decoded_bytes: 1 })
+            .unwrap(),
+        b"X"
+    );
+    assert_eq!(
+        decode_raw(raw, FetchLimits { max_wire_bytes: exact - 1, max_decoded_bytes: 1 })
+            .unwrap_err()
+            .kind(),
+        TransportErrorKind::ResourceLimit
+    );
+}
+
+#[test]
 fn empty_identity_body_obeys_exact_zero_boundary() {
     let bytes = decode_raw(
         b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),

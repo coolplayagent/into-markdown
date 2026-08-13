@@ -240,10 +240,16 @@ pub(super) fn read_chunked(
     deadline: Instant,
     memory: &mut ResourceReservation,
 ) -> Result<ChunkChain, TransportError> {
+    if initial.len() > limit {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
     let mut reader = PrefixedReader::new(initial, stream);
+    // `initial` was already physically read from the socket together with the
+    // header. Charge it once now; consuming the prefix below must not charge it twice.
+    let mut wire_bytes = initial.len();
     let mut output = ChunkChain::default();
     loop {
-        let line = read_crlf_line(&mut reader, 32, context, deadline)?;
+        let line = read_crlf_line(&mut reader, 32, limit, &mut wire_bytes, context, deadline)?;
         if line.is_empty()
             || line.as_slice().contains(&b';')
             || !line.as_slice().iter().all(u8::is_ascii_hexdigit)
@@ -255,7 +261,9 @@ pub(super) fn read_chunked(
         let size = usize::from_str_radix(text, 16)
             .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
         if size == 0 {
-            if !read_crlf_line(&mut reader, 2, context, deadline)?.is_empty() {
+            if !read_crlf_line(&mut reader, 2, limit, &mut wire_bytes, context, deadline)?
+                .is_empty()
+            {
                 return Err(TransportError::new(TransportErrorKind::InvalidMessage));
             }
             return Ok(output);
@@ -267,14 +275,21 @@ pub(super) fn read_chunked(
         while remaining != 0 {
             let mut buffer = [0_u8; IO_CHUNK_BYTES];
             let requested = remaining.min(buffer.len());
-            let read = read_checked(&mut reader, &mut buffer[..requested], context, deadline)?;
+            let read = read_wire_checked(
+                &mut reader,
+                &mut buffer[..requested],
+                limit,
+                &mut wire_bytes,
+                context,
+                deadline,
+            )?;
             if read == 0 {
                 return Err(TransportError::new(TransportErrorKind::InvalidMessage));
             }
             output.push(&buffer[..read], memory)?;
             remaining -= read;
         }
-        if !read_crlf_line(&mut reader, 2, context, deadline)?.is_empty() {
+        if !read_crlf_line(&mut reader, 2, limit, &mut wire_bytes, context, deadline)?.is_empty() {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
         }
     }
@@ -288,6 +303,10 @@ pub(super) struct PrefixedReader<'a> {
 impl<'a> PrefixedReader<'a> {
     fn new(prefix: &'a [u8], stream: &'a mut dyn Connection) -> Self {
         Self { prefix: std::io::Cursor::new(prefix), stream }
+    }
+
+    fn has_prefetched_bytes(&self) -> bool {
+        self.prefix.position() < u64::try_from(self.prefix.get_ref().len()).unwrap_or(u64::MAX)
     }
 }
 
@@ -314,8 +333,10 @@ impl FixedLine {
 }
 
 pub(super) fn read_crlf_line(
-    reader: &mut dyn Read,
+    reader: &mut PrefixedReader<'_>,
     limit: usize,
+    wire_limit: usize,
+    wire_bytes: &mut usize,
     context: &ExecutionContext,
     deadline: Instant,
 ) -> Result<FixedLine, TransportError> {
@@ -325,7 +346,7 @@ pub(super) fn read_crlf_line(
     let mut line = FixedLine { bytes: [0; 32], len: 0 };
     while line.len < limit {
         let mut byte = [0_u8; 1];
-        if read_checked(reader, &mut byte, context, deadline)? == 0 {
+        if read_wire_checked(reader, &mut byte, wire_limit, wire_bytes, context, deadline)? == 0 {
             return Err(TransportError::new(TransportErrorKind::InvalidMessage));
         }
         line.bytes[line.len] = byte[0];
@@ -336,4 +357,29 @@ pub(super) fn read_crlf_line(
         }
     }
     Err(TransportError::new(TransportErrorKind::ResourceLimit))
+}
+
+pub(super) fn read_wire_checked(
+    reader: &mut PrefixedReader<'_>,
+    bytes: &mut [u8],
+    limit: usize,
+    consumed: &mut usize,
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<usize, TransportError> {
+    if reader.has_prefetched_bytes() {
+        return read_checked(reader, bytes, context, deadline);
+    }
+    let remaining = limit
+        .checked_sub(*consumed)
+        .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    if remaining == 0 {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
+    let requested = bytes.len().min(remaining);
+    let read = read_checked(reader, &mut bytes[..requested], context, deadline)?;
+    *consumed = consumed
+        .checked_add(read)
+        .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    Ok(read)
 }

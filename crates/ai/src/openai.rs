@@ -2401,7 +2401,7 @@ mod tests {
             assert!(!is_public_ip(address.parse().unwrap()), "{address}");
         }
         assert!(is_public_ip("8.8.8.8".parse().unwrap()));
-        assert!(is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 

@@ -186,7 +186,7 @@ fn address_policy_covers_special_and_mapped_ranges() {
         assert!(!is_public_ip(address.parse().unwrap()), "{address}");
     }
     assert!(is_public_ip("8.8.8.8".parse().unwrap()));
-    assert!(is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
+    assert!(!is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
 }
 
 #[test]

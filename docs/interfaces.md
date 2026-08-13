@@ -208,8 +208,10 @@ HTTP(S) resolver 由独立的 policy、DNS、exact-IP connect、TLS、HTTP/1、b
 模块组成；Provider 通过窄 transport API 复用相同的 host/IP/DNS/connect/TLS 边界，不复制
 另一套 SSRF 或证书策略。remote resolver 自身只装配 options、redirect 与 source metadata。
 成功结果以 `ResolvedSource` 携带 final decoded `Arc<[u8]>` 的 exact memory reservation；
-`SourceMetadata.uri` 是移除 query/fragment 的最终 canonical URL，`redirects` 是同样脱敏的
-有序跳转记录，`name` 与 `media_type` 仅为经过严格语法与 portable-name 校验的检测提示。
+`SourceMetadata.uri` 是移除 query/fragment 的最终 canonical URL；兼容的
+`ResolvedSource::resolution_metadata()` sidecar 携带同样脱敏的有序 redirect 记录，避免给
+公开 `SourceMetadata` struct literal 增加必填字段。`name` 与 `media_type` 仅为经过严格语法
+与 portable-name 校验的检测提示。
 
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。

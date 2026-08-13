@@ -1,5 +1,7 @@
 use super::redirect::source_redirects;
-use into_markdown_core::{ConversionError, ResolvedInput, ResolvedSource, SourceMetadata};
+use into_markdown_core::{
+    ConversionError, ResolvedInput, ResolvedSource, SourceMetadata, SourceResolutionMetadata,
+};
 use into_markdown_http_transport::FetchedResource;
 
 pub(super) fn resolved_source(
@@ -13,14 +15,9 @@ pub(super) fn resolved_source(
     Ok(ResolvedSource::with_memory_reservation(
         ResolvedInput {
             bytes,
-            metadata: SourceMetadata {
-                name: filename,
-                media_type,
-                uri: Some(final_url),
-                size,
-                redirects: source_redirects(redirects),
-            },
+            metadata: SourceMetadata { name: filename, media_type, uri: Some(final_url), size },
         },
         reservation,
-    ))
+    )
+    .with_resolution_metadata(SourceResolutionMetadata { redirects: source_redirects(redirects) }))
 }

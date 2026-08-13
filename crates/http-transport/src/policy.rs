@@ -348,9 +348,10 @@ pub(super) fn is_localhost_name(host: &str) -> bool {
 pub fn is_public_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => is_public_ipv4(address),
-        IpAddr::V6(address) => {
-            address.to_ipv4_mapped().map_or_else(|| is_public_ipv6(address), is_public_ipv4)
-        }
+        // Mapped routes remain behind private authorization so callers never
+        // depend on platform-specific IPv4/IPv6 socket reinterpretation.
+        IpAddr::V6(address) if address.to_ipv4_mapped().is_some() => false,
+        IpAddr::V6(address) => is_public_ipv6(address),
     }
 }
 

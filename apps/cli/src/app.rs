@@ -1385,7 +1385,7 @@ fn expand_inputs(
         let text = value.to_string_lossy();
         if is_uri(&text) {
             let parsed = url::Url::parse(&text)
-                .map_err(|error| CliError::usage(format!("invalid input URI '{text}': {error}")))?;
+                .map_err(|error| CliError::usage(format!("invalid input URI: {error}")))?;
             let name = parsed
                 .path_segments()
                 .and_then(Iterator::last)
@@ -1393,7 +1393,7 @@ fn expand_inputs(
                 .unwrap_or("remote-document");
             output.push(WorkItem {
                 input: InputRef::Uri(text.into_owned()),
-                display: value.to_string_lossy().into_owned(),
+                display: redact_parsed_url(parsed.clone()),
                 relative: PathBuf::from(sanitize_component(name)),
                 root_label: sanitize_component(parsed.host_str().unwrap_or("remote")),
                 from_directory: false,
@@ -2316,13 +2316,19 @@ fn write_stderr_event(
 }
 
 fn redact_url(value: &str) -> String {
-    if let Ok(mut parsed) = url::Url::parse(value) {
-        parsed.set_query(None);
-        parsed.set_fragment(None);
-        parsed.to_string()
+    if let Ok(parsed) = url::Url::parse(value) {
+        redact_parsed_url(parsed)
     } else {
-        value.into()
+        "<invalid-url>".into()
     }
+}
+
+fn redact_parsed_url(mut parsed: url::Url) -> String {
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
 }
 
 #[cfg(test)]
@@ -2994,6 +3000,83 @@ mod tests {
         server.join().unwrap();
         assert_eq!(String::from_utf8(stdout).unwrap(), "hello\n");
         assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn signed_uri_secrets_never_enter_stdout_stderr_or_report() {
+        const CANARY: &str = "SIGNED_QUERY_CANARY";
+        let root =
+            std::env::temp_dir().join(format!("into-md-http-redaction-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let mut dry_stdout = Vec::new();
+        let mut dry_stderr = Vec::new();
+        run(
+            vec![
+                OsString::from(format!(
+                    "https://user:{CANARY}@example.test/input.txt?token={CANARY}#{CANARY}"
+                )),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut dry_stdout,
+                stderr: &mut dry_stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap();
+        assert!(!String::from_utf8_lossy(&dry_stdout).contains(CANARY));
+        assert!(!String::from_utf8_lossy(&dry_stderr).contains(CANARY));
+
+        let items = expand_inputs(
+            &ConversionArgs {
+                inputs: vec![OsString::from(format!(
+                    "https://example.test/input.txt?token={CANARY}#{CANARY}"
+                ))],
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(&items[0].input, InputRef::Uri(uri) if uri.contains(CANARY)));
+        assert!(!items[0].display.contains(CANARY));
+        let report = BatchItemReport {
+            input: items[0].display.clone(),
+            output: None,
+            format: None,
+            status: BatchItemStatus::Success,
+            diagnostics: Vec::new(),
+            error_code: None,
+            message: None,
+            warnings: Vec::new(),
+        };
+        let report_json = BatchReport::try_new(vec![report]).unwrap().to_pretty_json().unwrap();
+        assert!(!report_json.contains(CANARY));
+        let mut stderr = Vec::new();
+        write_stderr_event(
+            &mut stderr,
+            true,
+            "error",
+            "canary",
+            "safe",
+            Some(&items[0].display),
+            "safe",
+        )
+        .unwrap();
+        assert!(!String::from_utf8_lossy(&stderr).contains(CANARY));
+
+        let malformed = format!("https://example.test:bad/input?token={CANARY}");
+        let error = expand_inputs(
+            &ConversionArgs { inputs: vec![OsString::from(malformed)], ..Default::default() },
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(!error.to_string().contains(CANARY));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -208,7 +208,6 @@ fn execute(
             media_type: Some(fixture.media_type.clone()),
             uri: None,
             size: fixture.bytes,
-            redirects: Vec::new(),
         },
     };
     let requests = Arc::new(RequestCounter::default());
