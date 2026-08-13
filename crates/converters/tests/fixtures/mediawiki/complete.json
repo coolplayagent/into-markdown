@@ -1,0 +1,13 @@
+{
+  "requestid": "Rust (programming language)",
+  "curtimestamp": "2026-08-13T00:00:00Z",
+  "parse": {
+    "title": "Rust (programming language)",
+    "pageid": 1,
+    "revid": 123456,
+    "text": "<main><p>Rust is a systems language.</p><p><a href=\"/wiki/Type_system\">Type system</a></p><h2>History</h2><p>It began as a personal project.</p><img src=\"//upload.wikimedia.org/rust.png\" alt=\"Rust logo\"></main>",
+    "sections": [{"line": "History"}],
+    "links": [{"title": "Type system"}],
+    "images": ["Rust.png"]
+  }
+}

@@ -46,7 +46,11 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_source_resolver(Arc::new(into_markdown_converters::MemorySourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::LocalFileSourceResolver))
         .register_source_resolver(Arc::new(into_markdown_converters::StdinSourceResolver))
+        .register_source_resolver(Arc::new(
+            into_markdown_converters::MediaWikiSourceResolver::default(),
+        ))
         .register_source_resolver(Arc::new(into_markdown_converters::HttpSourceResolver::default()))
+        .register_format_detector(Arc::new(into_markdown_converters::MediaWikiFormatDetector))
         .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
@@ -58,6 +62,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::MsgConverter))
+        .register_converter(Arc::new(into_markdown_converters::MediaWikiConverter))
         .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
         .register_converter(Arc::new(into_markdown_converters::MarkdownConverter))
         .register_converter(Arc::new(into_markdown_converters::DelimitedTextConverter))
@@ -112,7 +117,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::future::Future;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[derive(Default)]
     struct ResolverCalls {
@@ -272,6 +277,172 @@ mod tests {
     #[test]
     fn default_engine_builds_with_builtin_converters() {
         assert!(default_engine().is_ok());
+    }
+
+    #[test]
+    fn mediawiki_resolver_precedence_is_unambiguous_in_engine_selection() {
+        let calls = Arc::new(ResolverCalls::default());
+        let mut builder = EngineBuilder::new();
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(
+                into_markdown_converters::MediaWikiSourceResolver::default(),
+            ))
+            .register_source_resolver(Arc::new(ObservedFixtureResolver { calls: calls.clone() }));
+        let engine = builder.build().unwrap();
+
+        for fallback in [
+            "https://example.test/assets/wiki/manual.html",
+            "https://example.test/wiki/help.json",
+            "https://en.wikipedia.org/docs/wiki/Rust",
+            "mediawiki+https://wiki.example.test/docs/wiki/Rust",
+        ] {
+            let error =
+                block_on(engine.convert(ConversionRequest::new(InputRef::Uri(fallback.into()))))
+                    .unwrap_err();
+            assert!(error.to_string().contains("external fixture resolution is forbidden"));
+        }
+        assert_eq!(calls.remote.load(Ordering::SeqCst), 4);
+
+        for mediawiki in
+            ["https://en.wikipedia.org/wiki/Rust", "mediawiki+https://wiki.example.test/wiki/Rust"]
+        {
+            let error =
+                block_on(engine.convert(ConversionRequest::new(InputRef::Uri(mediawiki.into()))))
+                    .unwrap_err();
+            assert!(error.to_string().contains("network resolution is disabled by default"));
+        }
+        assert_eq!(calls.remote.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn default_engine_mediawiki_pipeline_has_exact_memory_boundary_and_source_inventory() {
+        use std::io::{ErrorKind, Read, Write};
+        use std::net::TcpListener;
+
+        let body = br#"{"requestid":"Rust","curtimestamp":"2026-08-13T00:00:00Z","parse":{"title":"Rust","pageid":1,"revid":123456,"text":"<main><ul><li><p>safe list</p></li></ul><table><tr><td>safe cell</td></tr></table><p><a href=\"/wiki/Safe\">safe link</a></p></main>","sections":[],"links":[{"title":"Safe"}],"images":[]}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        )
+        .into_bytes();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut request = [0_u8; 4096];
+                        let read = stream.read(&mut request).unwrap();
+                        let request = std::str::from_utf8(&request[..read]).unwrap();
+                        assert!(request.starts_with("GET /w/api.php?"));
+                        assert!(request.contains("requestid=Rust"));
+                        stream.write_all(&response).unwrap();
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        std::thread::yield_now();
+                    }
+                    Err(error) => panic!("controlled MediaWiki server failed: {error}"),
+                }
+            }
+        });
+        let engine = default_engine().unwrap();
+        let source = format!("mediawiki+http://{address}/wiki/Rust");
+        let run = |memory| {
+            let mut request = ConversionRequest::new(InputRef::Uri(source.clone()));
+            request.options.network.enabled = true;
+            request.options.network.deny_private_networks = false;
+            request.options.network.allowed_hosts = vec!["127.0.0.1".into()];
+            request.options.limits.max_memory_bytes = memory;
+            request.execution.timeout = Some(std::time::Duration::from_secs(2));
+            block_on(engine.convert(request))
+        };
+
+        let (mut low, mut high) = (0_u64, 32 * 1024 * 1024_u64);
+        if let Err(error) = run(high) {
+            panic!("controlled MediaWiki baseline failed: {error}");
+        }
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if run(middle).is_ok() {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        let exact = low;
+        let result = run(exact).unwrap();
+        let error = run(exact - 1).unwrap_err();
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert!(result.markdown.contains("safe list") && result.markdown.contains("safe cell"));
+        assert_eq!(
+            result.document.metadata.properties.get("mediawiki.provider").map(String::as_str),
+            Some("builtin.converter.mediawiki")
+        );
+        assert_eq!(
+            result.document.metadata.properties.get("mediawiki.sourceUrl").map(String::as_str),
+            Some(format!("http://{address}/wiki/Rust").as_str())
+        );
+        assert!(!result.provenance.is_empty());
+        assert!(result.provenance.iter().all(|item| {
+            item.provider == "builtin.converter.mediawiki"
+                && item.locator == SourceLocator::default()
+        }));
+    }
+
+    #[test]
+    fn ordinary_http_json_api_path_cannot_acquire_mediawiki_resolver_identity() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let body = br#"{"ordinary":true}"#;
+        for content_type in
+            ["application/json", "application/json; x-into-markdown-resolver=mediawiki"]
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            )
+            .into_bytes();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let read = stream.read(&mut request).unwrap();
+                let request = std::str::from_utf8(&request[..read]).unwrap();
+                assert!(request.starts_with("GET /w/api.php HTTP/1.1\r\n"));
+                stream.write_all(&response).unwrap();
+            });
+
+            let mut request =
+                ConversionRequest::new(InputRef::Uri(format!("http://{address}/w/api.php")));
+            request.options.network.enabled = true;
+            request.options.network.deny_private_networks = false;
+            request.options.network.allowed_hosts = vec!["127.0.0.1".into()];
+            request.execution.timeout = Some(std::time::Duration::from_secs(2));
+            let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+            server.join().unwrap();
+
+            assert!(result.markdown.contains("ordinary"));
+            assert!(!result.document.metadata.properties.contains_key("mediawiki.provider"));
+            assert!(!result.provenance.is_empty());
+            assert!(
+                result
+                    .provenance
+                    .iter()
+                    .all(|item| item.provider == "builtin.converter.structured-data")
+            );
+        }
     }
 
     #[test]

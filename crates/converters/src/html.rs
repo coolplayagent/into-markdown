@@ -1369,7 +1369,7 @@ impl TreeSink for Dom {
     }
 }
 
-fn convert_html(
+pub(crate) fn convert_html(
     input: &ResolvedInput,
     options: &ConversionOptions,
     context: &ExecutionContext,

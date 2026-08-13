@@ -97,6 +97,7 @@ pub struct ResolvedInput {
 pub struct ResolvedSource {
     input: ResolvedInput,
     memory_reservation: Option<ResourceReservation>,
+    retained_metadata_memory: Option<ResourceReservation>,
     resolution_metadata: SourceResolutionMetadata,
 }
 
@@ -107,6 +108,7 @@ impl ResolvedSource {
         Self {
             input,
             memory_reservation: None,
+            retained_metadata_memory: None,
             resolution_metadata: SourceResolutionMetadata::default(),
         }
     }
@@ -123,8 +125,22 @@ impl ResolvedSource {
         Self {
             input,
             memory_reservation: Some(memory_reservation),
+            retained_metadata_memory: None,
             resolution_metadata: SourceResolutionMetadata::default(),
         }
+    }
+
+    /// Retain one additional resolver-owned lease for source metadata and
+    /// resolver state that must outlive the resolution call.
+    ///
+    /// Unlike the source-buffer lease, this reservation is deliberately not
+    /// resized to the byte length of `input.bytes` by
+    /// [`Self::ensure_memory_reservation`]. This additive method does not
+    /// change the source-compatible [`ResolvedInput`] layout.
+    #[must_use]
+    pub fn with_retained_metadata_memory(mut self, reservation: ResourceReservation) -> Self {
+        self.retained_metadata_memory = Some(reservation);
+        self
     }
 
     /// Attach resolver-specific provenance without changing `ResolvedInput`.
@@ -168,6 +184,12 @@ impl ResolvedSource {
         &mut self,
         context: &ExecutionContext,
     ) -> Result<(), ConversionError> {
+        if let Some(retained) = self.retained_metadata_memory.as_ref()
+            && !retained.belongs_to_memory_context(context)
+        {
+            let replacement = context.reserve_memory(retained.bytes())?;
+            self.retained_metadata_memory = Some(replacement);
+        }
         let bytes =
             u64::try_from(self.input.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
@@ -267,5 +289,43 @@ mod tests {
             });
         assert_eq!(source.resolution_metadata().redirects.len(), 1);
         assert_eq!(source.input().metadata.size, 4);
+    }
+
+    #[test]
+    fn retained_metadata_lease_is_not_shrunk_to_source_bytes() {
+        let context = context(12);
+        let source_memory = context.reserve_memory(4).unwrap();
+        let metadata_memory = context.reserve_memory(8).unwrap();
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source = ResolvedSource::with_memory_reservation(input, source_memory)
+            .with_retained_metadata_memory(metadata_memory);
+
+        source.ensure_memory_reservation(&context).unwrap();
+        assert_eq!(context.reserved_memory_bytes(), 12);
+        assert!(context.reserve_memory(1).is_err());
+        drop(source);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn foreign_retained_metadata_lease_is_reauthenticated_before_use() {
+        let foreign = context(12);
+        let current = context(12);
+        let input = ResolvedInput {
+            bytes: Arc::from(b"data".as_slice()),
+            metadata: SourceMetadata { size: 4, ..SourceMetadata::default() },
+        };
+        let mut source =
+            ResolvedSource::with_memory_reservation(input, foreign.reserve_memory(4).unwrap())
+                .with_retained_metadata_memory(foreign.reserve_memory(8).unwrap());
+
+        source.ensure_memory_reservation(&current).unwrap();
+        assert_eq!(foreign.reserved_memory_bytes(), 0);
+        assert_eq!(current.reserved_memory_bytes(), 12);
+        drop(source);
+        assert_eq!(current.reserved_memory_bytes(), 0);
     }
 }

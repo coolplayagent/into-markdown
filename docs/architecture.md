@@ -92,6 +92,11 @@ IR 可表达段落、标题、富文本、嵌套列表、表格、代码、公�
 每个实质内容节点都必须标明来源：原生解析、
 本地 OCR、AI 提供者、元数据或确定性后处理。
 
+远程格式无法证明响应内生成 HTML 的原始 byte offset 时，不得沿用嵌套 parser 的整份 HTML
+locator。MediaWiki 将所有递归 block 标为稳定 MediaWiki provider、清空不可证明 locator，并在
+Document metadata 保存唯一 namespaced source record；Engine 的 reading-order provenance inventory
+保留相同 provider，从而在不扩展 schema 1 `SourceLocator` 的前提下形成明确关联。
+
 AI 提供者不能返回无法追踪的整篇重写文档。它只能返回带 AI 溯源信息的新节点，
 或带版本的 `DocumentPatch`；引擎验证补丁后才能应用。原始来源节点始终可审计。
 

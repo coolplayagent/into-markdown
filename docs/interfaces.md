@@ -213,6 +213,14 @@ HTTP(S) resolver 由独立的 policy、DNS、exact-IP connect、TLS、HTTP/1、b
 公开 `SourceMetadata` struct literal 增加必填字段。`name` 与 `media_type` 仅为经过严格语法
 与 portable-name 校验的检测提示。
 
+resolver 若还保留 URL、policy 或 redirect/source metadata，可在私有 `ResolvedSource` wrapper
+上附加独立 retained-metadata lease；Engine 的 source-byte exact resize 不会缩减该 lease，二者
+持续到 terminal event 后共同释放。MediaWiki resolver 使用此路径，并保留 transport 返回的真实
+final API URL；它先验证 transport 的严格 `application/json`，再在同一 base MIME 上附加仅供进程内
+使用的 authenticated-resolver 参数。HTTP transport 会剥离服务器提供的全部 Content-Type 参数，
+因此普通 HTTP 响应不能伪造该 identity。专用 detector/probe 只有在 identity、标准 API endpoint 与
+JSON object shape 同时成立时才接受 Wikipedia；普通 `/w/api.php` JSON 仍进入通用 JSON converter。
+
 检测候选携带置信度、稳定检测器 ID、证据和非致命诊断。用户显式候选始终优先，
 其余候选按置信度、检测器优先级和稳定检测器 ID 排序；显式格式的置信度为 1。
 检测器不能自行声明显式候选，置信度在引擎边界归一化。扩展名和 MIME 只构成提示，

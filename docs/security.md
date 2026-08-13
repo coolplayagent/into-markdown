@@ -123,6 +123,13 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - `Content-Type` 只作为格式提示；服务器文件名仅接受严格 quoted/RFC 5987 UTF-8、NFC、
   长度受限的 portable name，并拒绝路径、设备名和控制字符。扩展名不能覆盖 magic/container
   检测。HTML、DOCX 等文档中的外部链接仍只是数据，不会触发第二次 source 网络请求。
+- Wikipedia 自动识别只覆盖受限 `*.wikipedia.org` 的根 `/wiki/<title>`；通用 MediaWiki 必须
+  使用 `mediawiki+http(s)` 显式 opt-in。API redirect 即使逐跳通过公共 SSRF 策略，最终仍须保持
+  原 origin 与 `/w/api.php` endpoint，且响应必须声明严格 JSON MIME。专用 detector 还要求
+  MediaWiki resolver 在验证后附加的进程内 identity；transport 会先剥离全部服务器 MIME 参数，
+  普通 HTTP `/w/api.php` 响应即使回送同名参数也只能进入通用 JSON 检测。typed JSON parse 前的
+  checkpointed shape pass 拒绝全部层级的重复键、过深/过宽集合和超长字段；resolver-owned URL、
+  policy、redirect metadata 与 body 分用持续 lease，失败、取消和 handoff drop 均释放完整计费。
 - AI 响应是不可信的结构化输入，必须验证补丁或 Schema、溯源、节点引用和资源。
 - 可恢复任务 checkpoint 只使用规范随机 token 定位本地普通文件；Unix store 持有根
   目录 handle 与 dev/inode identity，所有阶段 open/link/unlink 均为相对 no-follow 操作，

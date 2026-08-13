@@ -30,7 +30,9 @@ pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use pdf::PdfConverter;
-pub use remote::HttpSourceResolver;
+pub use remote::{
+    HttpSourceResolver, MediaWikiConverter, MediaWikiFormatDetector, MediaWikiSourceResolver,
+};
 pub use rtf::RtfConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
@@ -257,7 +259,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Wikipedia,
         family: "remote",
         extensions: &[],
-        status: PLANNED,
+        status: AVAILABLE,
     },
 ];
 
@@ -952,7 +954,10 @@ impl FormatDetector for HintFormatDetector {
                 .map(|(format, reasons)| {
                     let confidence = if matches!(
                         format,
-                        InputFormat::Markdown | InputFormat::Csv | InputFormat::Tsv
+                        InputFormat::Markdown
+                            | InputFormat::Csv
+                            | InputFormat::Tsv
+                            | InputFormat::Wikipedia
                     ) {
                         0.99
                     } else if reasons.len() > 1 {

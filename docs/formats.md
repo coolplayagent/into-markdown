@@ -107,6 +107,26 @@ external-only audit Asset 返回；转换器不会 fetch，未来获取仍必须
 不可执行代码文本并诊断，其内部链接和图片不进入资源。解析、正文选择和资源处理不执行代码、
 不解释 CSS、不会调用网络服务。
 
+## Wikipedia / MediaWiki
+
+标准 Wikipedia `http(s)://<lang>.wikipedia.org/wiki/<title>` 会进入专用远程来源；其他
+MediaWiki host 必须使用显式 `mediawiki+http(s)://host/wiki/<title>` opt-in。只接受根
+`/wiki/` article path，并固定派生同 origin `/w/api.php?action=parse`，因此普通站点的
+`/assets/wiki/`、`.json` 或自定义 script prefix 不会被猜测为 MediaWiki。
+
+网络默认关闭。解析器复用公共 HTTP transport 的 allowlist、逐跳 DNS/IP/私网检查、redirect、
+wire/decoded size、deadline 和 cancellation，并在转换前要求最终响应仍为同 origin 的
+`/w/api.php` 与严格 `application/json`。JSON 在 typed serde 前以 checkpointed、非递归 shape
+scan 验证完整语法、全部对象的重复键、request nesting、集合和字符串上限。返回的 HTML 继续
+使用统一 HTML 语义提取；正文、章节、链接和页面内主要图片进入 Document/Asset IR，图片仍只作
+external-only audit 引用，不产生第二次网络请求。
+
+单篇结果使用一个文档级 `mediawiki.*` source record：`provider`、无凭据/无 query 的 canonical
+`sourceUrl`、`pageId`、`revisionId` 与 UTC `retrievedAt`。全部递归 block provenance 使用稳定
+`builtin.converter.mediawiki` provider，并清除无法由 API HTML 证明的 byte locator；引擎导出的
+provenance inventory 可按该 provider 关联唯一 source record。当前 Asset IR 没有独立 provenance，
+所以图片通过所属 Document source record 与其 `externalUri` 审计，而不伪造图片来源坐标。
+
 ## Jupyter Notebook
 
 IPYNB 转换器严格解析 nbformat 4 JSON，不执行 cell 代码、JavaScript、HTML，也不读取
