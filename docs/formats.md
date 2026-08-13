@@ -1,6 +1,6 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。TXT、Markdown、HTML、CSV、TSV、JSON、XML、IPYNB 状态为
+运行时的权威列表以 `into-md formats` 输出为准。DOCX/DOCM、TXT、Markdown、HTML、CSV、TSV、JSON、XML、IPYNB 状态为
 `available`，其余尚未
 实现的条目保持 `planned`。
 
@@ -68,6 +68,15 @@ Notebook 使用单次 strict seeded JSON parse，在分配 DOM 时直接拒绝�
 结构均有界验证，并要求必要顺序/唯一性及容器与 bitstream 尺寸一致；随后在预留完整 decode
 working set、设置 decoder width/height/allocation limits 后实际解码全部像素并复核尺寸。损坏 codec
 payload、截断图片与尺寸炸弹都不会成为 Asset。
+
+## DOCX 与 DOCM
+
+Word Open XML 转换器离线解析样式标题、富文本、编号列表、表格、关系链接、图片、脚注、
+页眉页脚、批注、字段和 OMML 公式，并统一写入 Document IR 后交由中央 GFM 渲染器输出。
+DOCM 的 VBA 部件只在 ZIP 目录中识别，内容永不解压、加载或执行；结果包含明确诊断。
+解析在分配和解压前执行输入、条目数、解压总量、单项/总资源、XML 深度、IR 节点和行内
+节点预算。加密的 OOXML/OLE 包返回 `encrypted`；损坏 ZIP/XML、重复或越界部件名、重复关系、
+DTD/实体及逃逸包根的内部关系均 fail closed。外部关系只保留为 URI，不发起网络访问。
 
 ## Markdown 与 GFM
 

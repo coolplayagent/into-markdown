@@ -913,6 +913,7 @@ dependencies = [
  "base64",
  "chardetng",
  "encoding_rs",
+ "flate2",
  "html5ever",
  "image",
  "into-markdown-core",

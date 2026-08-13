@@ -58,6 +58,7 @@ mod tests {
         assert_eq!(
             available,
             vec![
+                InputFormat::Docx,
                 InputFormat::Text,
                 InputFormat::Markdown,
                 InputFormat::Html,
