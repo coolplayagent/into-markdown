@@ -34,7 +34,7 @@ pub use ir::{
     DiagnosticSeverity, Document, DocumentMetadata, Inline, InlineMark, IrError, IrErrorCode,
     ListItem, ListKind, MAX_DOCUMENT_DEPTH, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_JSON_BYTES,
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, Provenance, ProvenanceKind, Rect, SourceLocator,
-    TableRow, TimeRange, ValidationLimits,
+    TableAlignment, TableRow, TimeRange, ValidationLimits,
 };
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, DelimitedTextOptions, NetworkOptions,

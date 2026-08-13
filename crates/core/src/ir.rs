@@ -289,6 +289,21 @@ pub struct TableRow {
     pub cells: Vec<Cell>,
 }
 
+/// Horizontal alignment of one logical table column.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TableAlignment {
+    /// No explicit source alignment.
+    #[default]
+    None,
+    /// Left aligned.
+    Left,
+    /// Center aligned.
+    Center,
+    /// Right aligned.
+    Right,
+}
+
 /// Structural block content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -316,6 +331,9 @@ pub enum Block {
     Table {
         /// Logical rows in reading order.
         rows: Vec<TableRow>,
+        /// Per-logical-column alignment. Empty decodes legacy schema-v1 JSON as all `none`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        alignments: Vec<TableAlignment>,
     },
     /// Fenced code block.
     Code {
@@ -1073,7 +1091,7 @@ fn validate_block(
         Block::List { kind, start, items } => {
             validate_list(*kind, *start, items, path, depth, state)
         }
-        Block::Table { rows } => validate_table(rows, path, depth, state),
+        Block::Table { rows, alignments } => validate_table(rows, alignments, path, depth, state),
         Block::Code { language, .. } => {
             if language.as_ref().is_some_and(|value| value.trim().is_empty()) {
                 return invalid_node(
@@ -1150,6 +1168,7 @@ fn validate_list(
 
 fn validate_table(
     rows: &[TableRow],
+    alignments: &[TableAlignment],
     path: &str,
     depth: usize,
     state: &mut ValidationState<'_>,
@@ -1231,6 +1250,12 @@ fn validate_table(
         return invalid_node(
             format!("{path}.data.rows"),
             "row span extends beyond the final table row",
+        );
+    }
+    if !alignments.is_empty() && Some(alignments.len()) != table_width {
+        return invalid_node(
+            format!("{path}.data.alignments"),
+            "table alignments must be empty or match the logical column count",
         );
     }
     Ok(())
@@ -1415,6 +1440,7 @@ mod tests {
                 node(
                     "table",
                     Block::Table {
+                        alignments: vec![],
                         rows: vec![TableRow {
                             cells: vec![Cell {
                                 row_span: 1,
@@ -1585,7 +1611,7 @@ mod tests {
 
         let invalid_blocks = [
             Block::List { kind: ListKind::Bullet, start: 1, items: vec![] },
-            Block::Table { rows: vec![] },
+            Block::Table { rows: vec![], alignments: vec![] },
             Block::Formula(String::new()),
             Block::Image { asset: AssetId(String::new()), alt: None },
             Block::Page { number: 0, blocks: vec![] },
@@ -1752,7 +1778,10 @@ mod tests {
     }
 
     fn table_document(rows: Vec<TableRow>) -> Document {
-        Document { blocks: vec![node("table-grid", Block::Table { rows })], ..Document::default() }
+        Document {
+            blocks: vec![node("table-grid", Block::Table { rows, alignments: vec![] })],
+            ..Document::default()
+        }
     }
 
     #[test]
@@ -1767,6 +1796,28 @@ mod tests {
         let fully_spanned_row =
             table_document(vec![TableRow { cells: vec![cell(2, 1)] }, TableRow { cells: vec![] }]);
         assert!(fully_spanned_row.validate().is_ok());
+    }
+
+    #[test]
+    fn table_alignment_is_additive_and_matches_logical_width() {
+        let legacy = table_document(vec![TableRow { cells: vec![cell(1, 2)] }]);
+        let json = legacy.to_json().unwrap();
+        assert!(!json.contains("alignments"));
+        let decoded = Document::from_json(&json).unwrap();
+        let Block::Table { alignments, .. } = &decoded.blocks[0].block else { panic!() };
+        assert!(alignments.is_empty());
+
+        let mut aligned = legacy.clone();
+        let Block::Table { alignments, .. } = &mut aligned.blocks[0].block else { panic!() };
+        *alignments = vec![TableAlignment::Left, TableAlignment::Right];
+        let aligned_json = aligned.to_json().unwrap();
+        assert!(aligned_json.contains("\"alignments\":[\"left\",\"right\"]"));
+        assert_eq!(Document::from_json(&aligned_json).unwrap(), aligned);
+
+        let Block::Table { alignments, .. } = &mut aligned.blocks[0].block else { panic!() };
+        alignments.pop();
+        let error = aligned.validate().unwrap_err();
+        assert_eq!(error.path, "$.blocks[0].block.data.alignments");
     }
 
     #[test]

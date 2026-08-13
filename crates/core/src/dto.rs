@@ -2967,6 +2967,33 @@ mod tests {
     }
 
     #[test]
+    fn result_document_preserves_additive_table_alignment() {
+        let mut value = result_value();
+        value["document"]["blocks"] = serde_json::json!([{
+            "id": "table",
+            "block": {"type": "table", "data": {
+                "rows": [{"cells": [{"rowSpan": 1, "columnSpan": 2,
+                    "header": true, "blocks": []}]}],
+                "alignments": ["left", "right"]
+            }},
+            "provenance": {
+                "kind": "nativeParser", "provider": "test",
+                "locator": {"page": null, "slide": null, "sheet": null, "cell": null,
+                    "bounds": null, "time": null, "part": null},
+                "confidence": 1.0
+            }
+        }]);
+        let dto = ResultDto::from_json(&value.to_string()).unwrap();
+        let encoded = dto.to_json().unwrap();
+        assert!(encoded.contains("\"alignments\":[\"left\",\"right\"]"));
+        assert_eq!(ResultDto::from_json(&encoded).unwrap(), dto);
+
+        value["document"]["blocks"][0]["block"]["data"]["futureAlignmentPolicy"] =
+            serde_json::json!({"mode": "future"});
+        assert!(ResultDto::from_json(&value.to_string()).is_ok());
+    }
+
+    #[test]
     fn unsafe_bundle_paths_and_duplicate_paths_are_rejected() {
         let manifest = BundleManifestDto {
             schema_version: DTO_SCHEMA_VERSION,

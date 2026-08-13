@@ -394,7 +394,7 @@ fn collect_provenance(nodes: &[BlockNode], output: &mut Vec<into_markdown_core::
                     collect_provenance(&item.blocks, output);
                 }
             }
-            Block::Table { rows } => {
+            Block::Table { rows, .. } => {
                 for row in rows {
                     for cell in &row.cells {
                         collect_provenance(&cell.blocks, output);

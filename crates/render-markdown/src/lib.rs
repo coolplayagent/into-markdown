@@ -6,8 +6,8 @@
 use base64::Engine as _;
 use into_markdown_core::{
     Asset, AssetMode, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
-    Document, ExecutionContext, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer, TableRow,
-    canonical_external_asset_uri,
+    Document, ExecutionContext, Inline, InlineMark, ListItem, ListKind, MarkdownRenderer,
+    TableAlignment, TableRow, canonical_external_asset_uri,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -344,7 +344,7 @@ impl RenderContext<'_> {
             Block::List { kind, start, items } => {
                 self.render_list(*kind, *start, items, inline_context)
             }
-            Block::Table { rows } => self.render_table(rows),
+            Block::Table { rows, alignments } => self.render_table(rows, alignments),
             Block::Code { language, text } => {
                 Ok(render_fence(text, language.as_deref().map(sanitize_info_string).as_deref()))
             }
@@ -450,7 +450,11 @@ impl RenderContext<'_> {
         Ok(lines.join("\n"))
     }
 
-    fn render_table(&self, rows: &[TableRow]) -> Result<String, ConversionError> {
+    fn render_table(
+        &self,
+        rows: &[TableRow],
+        alignments: &[TableAlignment],
+    ) -> Result<String, ConversionError> {
         let grid = self.table_grid(rows)?;
         let width = grid.first().map_or(0, Vec::len);
         let first_has_header = rows
@@ -462,7 +466,18 @@ impl RenderContext<'_> {
         } else {
             write_table_row(&mut output, &vec![String::new(); width]);
         }
-        write_table_row(&mut output, &vec!["---".into(); width]);
+        let separators = (0..width)
+            .map(|column| {
+                match alignments.get(column).copied().unwrap_or_default() {
+                    TableAlignment::None => "---",
+                    TableAlignment::Left => ":---",
+                    TableAlignment::Center => ":---:",
+                    TableAlignment::Right => "---:",
+                }
+                .into()
+            })
+            .collect::<Vec<String>>();
+        write_table_row(&mut output, &separators);
         let start = usize::from(first_has_header);
         for row in &grid[start..] {
             write_table_row(&mut output, row);
@@ -1006,7 +1021,7 @@ fn validate_planned_references<'a>(
                     validate_planned_references(&item.blocks, plan, referenced_assets)?;
                 }
             }
-            Block::Table { rows } => {
+            Block::Table { rows, .. } => {
                 for row in rows {
                     for cell in &row.cells {
                         validate_planned_references(&cell.blocks, plan, referenced_assets)?;
@@ -1193,7 +1208,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            output(&document(vec![node("t", Block::Table { rows })])),
+            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
             "| <strong><span data-rowspan=\"2\" data-colspan=\"1\">A\\|x</span></strong> | <strong><span data-rowspan=\"1\" data-colspan=\"2\">B line</span></strong> |  |\n| --- | --- | --- |\n|  | C | D |\n"
         );
     }
@@ -1214,7 +1229,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            output(&document(vec![node("t", Block::Table { rows })])),
+            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
             "|  |  |  |  |\n| --- | --- | --- | --- |\n| <span data-rowspan=\"2\" data-colspan=\"2\">A</span> |  | <span data-rowspan=\"1\" data-colspan=\"2\">B</span> |  |\n|  |  | <span data-rowspan=\"2\" data-colspan=\"1\">C</span> | D |\n| E | F |  | G |\n"
         );
     }
@@ -1290,7 +1305,8 @@ mod tests {
                 )],
             }],
         }];
-        let markdown = output(&document(vec![node("t", Block::Table { rows })]));
+        let markdown =
+            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
         assert!(markdown.contains(r"`a\\|b`"));
         assert!(markdown.contains("https://example.invalid/a%7Cb"));
         let mut html = String::new();

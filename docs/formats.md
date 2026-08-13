@@ -20,6 +20,9 @@ Markdown 转换器使用固定版本的 `pulldown-cmark 0.13.4`，启用 CommonM
 删除线、任务列表、脚注与 GitHub blockquote 类型解析。ATX/setext 标题、段落、软换行和
 硬换行、强调、链接与 autolink、嵌套有序/无序/任务列表、fenced/indented code、表格、
 脚注定义和引用都会进入统一 IR；fenced code 的首个 info-string token 保存在 language。
+混合普通项与任务项的源列表按连续 marker 类型拆成相邻列表节点；有序普通区间保留对应
+起始序号，嵌套内容仍留在原列表项内。GFM 表格的每列 left/center/right/none alignment
+直接保存在 Table IR；schema v1 中缺少 alignment 字段的旧 JSON 按全 none 解码。
 reference link 与脚注由解析器跨全文解析，允许定义位于引用之后；重复定义遵循 first-wins，
 同时产生带原始字节范围的诊断。
 
@@ -29,8 +32,9 @@ UTF-8；只有显式 replacement 解码策略才插入 U+FFFD 并继承共享文
 因此行内内容由其最小包含块的范围覆盖，不伪造字符位置。
 
 当前 IR 没有 blockquote 与 raw HTML 专属节点。blockquote 原始片段保存为 language 为
-`markdown-blockquote` 的代码块；HTML block 保存为 `html` 代码块，inline HTML 保存为
-inline code，并产生明确降级诊断。`script`、`style` 及事件属性不会执行，也不会作为可执行
+`markdown-blockquote` 的代码块；HTML block 保存为 `html` 代码块。局部、严格白名单且
+正确嵌套的 renderer 格式标签序列只恢复为 InlineMark；其他 inline HTML 保存为 inline
+code 并产生明确降级诊断，raw HTML token 从不进入 CommonMark parser frame。`script`、`style` 及事件属性不会执行，也不会作为可执行
 HTML 输出。独立段落中的绝对 HTTP(S) 图片以 `externalUri` 和空 bytes 的 external-only
 Asset 进入 `Block::Image`，extract/embed 直接渲染经校验的原 URI，omit 只保留 alt；转换器
 始终不联网。外部图片 URI 禁止 userinfo、query、fragment 和危险 scheme。inline 图片因现有
@@ -44,7 +48,9 @@ IR 只有 block image 而明确诊断并降级为链接；相对/fragment 图片
 内容自动检测只在多项明确结构、完整 fence 或 GFM table separator 构成强证据时产生
 Markdown 候选；普通散文和单个偶然 marker 仍由 TXT 处理。扩展名、`text/markdown` MIME
 与显式格式提示继续走统一 hint 优先级。解析使用 offset event iterator，定期执行 execution
-checkpoint，并在构造 IR 前限制输入、事件深度、块数、行内数和请求内存。
+checkpoint，并在构造 IR 前限制输入、事件深度、块数、行内数和请求内存。parser 内部可能
+物化的 Cow 工作集在构造 parser 前按源长度预留；转换器控制的 Vec/String 均按 capacity
+delta 在分配前向同一 ExecutionContext 计费，所有权转移不重复计费。
 
 ## TXT 与字符集
 

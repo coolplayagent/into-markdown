@@ -575,7 +575,7 @@ fn build_table(
     Ok(Document {
         blocks: vec![BlockNode {
             id: NodeId("delimited-table-1".into()),
-            block: Block::Table { rows },
+            block: Block::Table { rows, alignments: vec![] },
             provenance: provenance(start, end, None, None),
         }],
         ..Document::default()
@@ -633,7 +633,7 @@ mod tests {
             InputFormat::Csv,
             &ConversionOptions::default(),
         );
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 2);
         let Block::Paragraph(value) = &rows[1].cells[1].blocks[0].block else { panic!() };
         assert!(
@@ -651,7 +651,7 @@ mod tests {
             bytes.extend(unit.to_le_bytes());
         }
         let output = convert(&bytes, InputFormat::Tsv, &ConversionOptions::default());
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows[0].cells[0].blocks[0].provenance.locator.byte_start, Some(2));
         assert_eq!(rows[0].cells[0].blocks[0].provenance.locator.byte_end, Some(6));
     }
@@ -662,14 +662,14 @@ mod tests {
         options.delimited_text.header = TableHeaderMode::Always;
         options.delimited_text.ragged_rows = RaggedRowsMode::Pad;
         let output = convert(b"a,b\n1", InputFormat::Csv, &options);
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert!(rows[0].cells.iter().all(|cell| cell.header));
         assert_eq!(rows[1].cells.len(), 2);
         assert_eq!(output.diagnostics[0].code, RAGGED_CODE);
 
         let output =
             convert(b"Name,name\n1,2\n3,4", InputFormat::Csv, &ConversionOptions::default());
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert!(rows[0].cells.iter().all(|cell| !cell.header));
     }
 
@@ -711,7 +711,7 @@ mod tests {
             InputFormat::Csv,
             &ConversionOptions::default(),
         );
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].cells[0].blocks[0].provenance.locator.byte_start, Some(3));
         let Block::Paragraph(value) = &rows[2].cells[2].blocks[0].block else { panic!() };
@@ -723,7 +723,7 @@ mod tests {
         let mut options = ConversionOptions::default();
         options.delimited_text.ragged_rows = RaggedRowsMode::Pad;
         let output = convert(b"head,value\rone,1\r\rthree,3", InputFormat::Csv, &options);
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 4);
         assert!(rows[0].cells.iter().all(|cell| cell.header));
         assert_eq!(rows[2].cells.len(), 2);
@@ -750,7 +750,7 @@ mod tests {
         let mut options = ConversionOptions::default();
         options.delimited_text.ragged_rows = RaggedRowsMode::Pad;
         let output = convert(bytes, candidate.format, &options);
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[2].cells.len(), 2);
         assert_eq!(output.diagnostics[0].code, RAGGED_CODE);
@@ -765,7 +765,7 @@ mod tests {
         let output =
             convert_delimited(&input, InputFormat::Csv, &ConversionOptions::default(), &context)
                 .unwrap();
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         assert_eq!(rows.len(), 1);
     }
 
@@ -774,7 +774,7 @@ mod tests {
         let mut options = ConversionOptions::default();
         options.text.charset = Some("big5".into());
         let output = convert(&[0x88, 0x62, b',', b'1'], InputFormat::Csv, &options);
-        let Block::Table { rows } = &output.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &output.document.blocks[0].block else { panic!() };
         let cell = &rows[0].cells[0].blocks[0];
         let Block::Paragraph(content) = &cell.block else { panic!() };
         assert!(matches!(&content[0], Inline::Text { value, .. } if value == "Ê\u{304}"));

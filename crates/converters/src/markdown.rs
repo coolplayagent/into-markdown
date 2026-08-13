@@ -5,11 +5,10 @@ use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, BoxFuture, Cell, ConversionError, ConversionOptions,
     Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
     FormatCandidate, Inline, InlineMark, InputFormat, ListItem, ListKind, MAX_DOCUMENT_INLINES,
-    MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput,
-    ResourceReservation, Services, SourceLocator, TableRow, canonical_external_asset_uri,
+    MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput, Services,
+    SourceLocator, TableAlignment, TableRow, canonical_external_asset_uri,
 };
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use std::mem::size_of;
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::ops::Range;
 
 const FORMATS: &[InputFormat] = &[InputFormat::Markdown];
@@ -164,7 +163,7 @@ enum FrameKind {
     List { start: u64, ordered: bool },
     Item,
     Footnote(String),
-    Table,
+    Table(Vec<TableAlignment>),
     TableHead,
     TableRow,
     TableCell { header: bool },
@@ -192,6 +191,7 @@ struct Frame {
     checked: Option<bool>,
     literal: String,
     images: Vec<ExternalImage>,
+    html_marks: Vec<PendingHtmlMark>,
 }
 
 impl Frame {
@@ -207,8 +207,17 @@ impl Frame {
             checked: None,
             literal: String::new(),
             images: Vec::new(),
+            html_marks: Vec::new(),
         }
     }
+}
+
+#[derive(Debug)]
+struct PendingHtmlMark {
+    tag: &'static str,
+    mark: InlineMark,
+    inline_index: usize,
+    span: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -227,7 +236,7 @@ struct Builder<'a> {
     node_count: usize,
     inline_count: usize,
     sequence: u64,
-    parser_memory: ResourceReservation,
+    parser_memory: text::LogicalMemory,
     assets: Vec<Asset>,
     footnotes: std::collections::BTreeSet<String>,
 }
@@ -239,22 +248,13 @@ impl<'a> Builder<'a> {
         context: &'a ExecutionContext,
         diagnostics: Vec<Diagnostic>,
     ) -> Result<Self, ConversionError> {
+        let mut parser_memory = text::LogicalMemory::new(context)?;
+        // pulldown-cmark may materialize borrowed event text. Reserve its bounded
+        // source-sized working set before constructing the parser.
+        parser_memory.charge(source.text.len())?;
         let mut frames = Vec::new();
-        frames.try_reserve_exact(8).map_err(allocation_error)?;
+        parser_memory.reserve_vec(&mut frames, 8)?;
         frames.push(Frame::new(FrameKind::Root, 0..source.text.len()));
-        let parser_bytes = u64::try_from(source.text.len())
-            .map_err(|_| ConversionError::ResourceLimit {
-                limit: "max_memory_bytes",
-                detail: "Markdown parser reservation cannot be represented as u64".into(),
-            })?
-            .checked_add(u64_size(
-                frames.capacity().saturating_mul(size_of::<Frame>()),
-                "Markdown initial frame stack",
-            )?)
-            .ok_or_else(|| ConversionError::ResourceLimit {
-                limit: "max_memory_bytes",
-                detail: "Markdown parser reservation overflowed".into(),
-            })?;
         Ok(Self {
             source,
             options,
@@ -264,7 +264,7 @@ impl<'a> Builder<'a> {
             node_count: 0,
             inline_count: 0,
             sequence: 0,
-            parser_memory: context.reserve_memory(parser_bytes)?,
+            parser_memory,
             assets: Vec::new(),
             footnotes: std::collections::BTreeSet::new(),
         })
@@ -298,7 +298,9 @@ impl<'a> Builder<'a> {
                 }
                 Event::InlineHtml(value) => self.inline_html(&value, span)?,
                 Event::FootnoteReference(label) => {
-                    self.push_inline(Inline::FootnoteReference(normalize_footnote_label(&label)))?;
+                    self.parser_memory.charge(label.len())?;
+                    let label = normalize_footnote_label(&label);
+                    self.push_inline(Inline::FootnoteReference(label))?;
                 }
                 Event::SoftBreak => self.text("\n")?,
                 Event::HardBreak => self.push_inline(Inline::LineBreak)?,
@@ -327,7 +329,9 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn start(&mut self, tag: Tag<'_>, span: Range<usize>) -> Result<(), ConversionError> {
+        self.flush_pending_html_marks()?;
         let kind = match tag {
             Tag::Paragraph => FrameKind::Paragraph,
             Tag::Heading { level, .. } => FrameKind::Heading(heading_level(level)),
@@ -336,7 +340,12 @@ impl<'a> Builder<'a> {
                 CodeBlockKind::Indented => None,
                 CodeBlockKind::Fenced(info) => {
                     let language = info.split_whitespace().next().unwrap_or_default().trim();
-                    (!language.is_empty()).then(|| language.to_owned())
+                    if language.is_empty() {
+                        None
+                    } else {
+                        self.parser_memory.charge(language.len())?;
+                        Some(language.to_owned())
+                    }
                 }
             }),
             Tag::HtmlBlock | Tag::MetadataBlock(_) => FrameKind::HtmlBlock,
@@ -344,11 +353,25 @@ impl<'a> Builder<'a> {
                 FrameKind::List { start: start.unwrap_or(1), ordered: start.is_some() }
             }
             Tag::Item => FrameKind::Item,
-            Tag::FootnoteDefinition(label) => FrameKind::Footnote(normalize_footnote_label(&label)),
+            Tag::FootnoteDefinition(label) => {
+                self.parser_memory.charge(label.len())?;
+                let label = normalize_footnote_label(&label);
+                FrameKind::Footnote(label)
+            }
             Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
                 FrameKind::BlockQuote
             }
-            Tag::Table(_) => FrameKind::Table,
+            Tag::Table(alignments) => {
+                let mut converted = Vec::new();
+                self.parser_memory.reserve_vec(&mut converted, alignments.len())?;
+                converted.extend(alignments.into_iter().map(|alignment| match alignment {
+                    Alignment::None => TableAlignment::None,
+                    Alignment::Left => TableAlignment::Left,
+                    Alignment::Center => TableAlignment::Center,
+                    Alignment::Right => TableAlignment::Right,
+                }));
+                FrameKind::Table(converted)
+            }
             Tag::TableHead => FrameKind::TableHead,
             Tag::TableRow => FrameKind::TableRow,
             Tag::TableCell => {
@@ -382,7 +405,7 @@ impl<'a> Builder<'a> {
             FrameKind::List { .. }
                 | FrameKind::Item
                 | FrameKind::Footnote(_)
-                | FrameKind::Table
+                | FrameKind::Table(_)
                 | FrameKind::TableRow
                 | FrameKind::TableCell { .. }
         );
@@ -395,7 +418,7 @@ impl<'a> Builder<'a> {
                     FrameKind::List { .. }
                         | FrameKind::Item
                         | FrameKind::Footnote(_)
-                        | FrameKind::Table
+                        | FrameKind::Table(_)
                         | FrameKind::TableRow
                         | FrameKind::TableCell { .. }
                 )
@@ -410,8 +433,7 @@ impl<'a> Builder<'a> {
                 ),
             });
         }
-        self.parser_memory.grow(u64_size(size_of::<Frame>(), "Markdown frame")?)?;
-        self.frames.try_reserve_exact(1).map_err(allocation_error)?;
+        self.parser_memory.reserve_vec(&mut self.frames, 1)?;
         self.frames.push(Frame::new(kind, span));
         Ok(())
     }
@@ -433,6 +455,13 @@ impl<'a> Builder<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn close(&mut self, mut frame: Frame) -> Result<(), ConversionError> {
+        for pending in &frame.html_marks {
+            self.diagnostic(
+                RAW_HTML_CODE,
+                "unclosed raw inline HTML was preserved as non-executable code",
+                &pending.span,
+            )?;
+        }
         match frame.kind {
             FrameKind::Paragraph => {
                 if frame.images.len() == 1 && frame.inlines.len() == 1 {
@@ -452,11 +481,10 @@ impl<'a> Builder<'a> {
                         )?;
                     }
                     let asset_id = format!("markdown-external-image-{}", self.assets.len() + 1);
-                    self.parser_memory.grow(u64_size(size_of::<Asset>(), "Markdown asset")?)?;
                     self.charge_text(&asset_id, "Markdown asset ID")?;
                     self.charge_text(&image.target, "Markdown external URI")?;
                     self.charge_text(&image.alt, "Markdown image alt")?;
-                    self.assets.try_reserve_exact(1).map_err(allocation_error)?;
+                    self.parser_memory.reserve_vec(&mut self.assets, 1)?;
                     self.assets.push(Asset {
                         id: AssetId(asset_id.clone()),
                         filename: None,
@@ -489,33 +517,59 @@ impl<'a> Builder<'a> {
                 self.push_block(node)
             }
             FrameKind::List { start, ordered } => {
-                let task = frame.items.iter().any(|item| item.checked.is_some());
-                let kind = if task {
-                    ListKind::Task
-                } else if ordered {
-                    ListKind::Ordered
-                } else {
-                    ListKind::Bullet
-                };
-                let node =
-                    self.node(Block::List { kind, start, items: frame.items }, frame.span)?;
-                self.push_block(node)
+                let mut group = Vec::new();
+                let mut group_task = frame.items.first().is_some_and(|item| item.checked.is_some());
+                let mut group_offset = 0_usize;
+                for (offset, item) in frame.items.into_iter().enumerate() {
+                    let item_task = item.checked.is_some();
+                    if !group.is_empty() && item_task != group_task {
+                        self.push_list_group(
+                            std::mem::take(&mut group),
+                            group_task,
+                            ordered,
+                            start,
+                            group_offset,
+                            frame.span.clone(),
+                        )?;
+                        group_offset = offset;
+                        group_task = item_task;
+                    }
+                    self.parser_memory.reserve_vec(&mut group, 1)?;
+                    group.push(item);
+                }
+                if !group.is_empty() {
+                    self.push_list_group(
+                        group,
+                        group_task,
+                        ordered,
+                        start,
+                        group_offset,
+                        frame.span,
+                    )?;
+                }
+                Ok(())
             }
             FrameKind::Item => {
                 self.consume_structural_container()?;
                 if !frame.inlines.is_empty() {
                     let paragraph =
                         self.node(Block::Paragraph(frame.inlines), frame.span.clone())?;
+                    self.parser_memory.reserve_vec(&mut frame.blocks, 1)?;
                     frame.blocks.insert(0, paragraph);
                 }
                 let item =
                     ListItem { checked: frame.checked, marker_label: None, blocks: frame.blocks };
-                let parent = self.parent_mut()?;
-                parent.items.try_reserve_exact(1).map_err(allocation_error)?;
+                let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+                let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                    detail: "Markdown event stack is empty".into(),
+                })?;
+                memory.reserve_vec(&mut parent.items, 1)?;
                 parent.items.push(item);
                 Ok(())
             }
             FrameKind::Footnote(label) => {
+                self.parser_memory
+                    .charge(label.len().saturating_add(std::mem::size_of::<String>()))?;
                 if !self.footnotes.insert(label.clone()) {
                     self.diagnostic(
                         DUPLICATE_DEFINITION_CODE,
@@ -527,30 +581,38 @@ impl<'a> Builder<'a> {
                 if !frame.inlines.is_empty() {
                     let paragraph =
                         self.node(Block::Paragraph(frame.inlines), frame.span.clone())?;
+                    self.parser_memory.reserve_vec(&mut frame.blocks, 1)?;
                     frame.blocks.push(paragraph);
                 }
                 let node =
                     self.node(Block::Footnote { label, blocks: frame.blocks }, frame.span)?;
                 self.push_block(node)
             }
-            FrameKind::Table => {
-                let node = self.node(Block::Table { rows: frame.rows }, frame.span)?;
+            FrameKind::Table(alignments) => {
+                let node = self.node(Block::Table { rows: frame.rows, alignments }, frame.span)?;
                 self.push_block(node)
             }
             FrameKind::TableHead => {
                 if !frame.cells.is_empty() {
+                    self.parser_memory.reserve_vec(&mut frame.rows, 1)?;
                     frame.rows.push(TableRow { cells: std::mem::take(&mut frame.cells) });
                 }
-                let parent = self.parent_mut()?;
-                parent.rows.try_reserve_exact(frame.rows.len()).map_err(allocation_error)?;
+                let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+                let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                    detail: "Markdown event stack is empty".into(),
+                })?;
+                memory.reserve_vec(&mut parent.rows, frame.rows.len())?;
                 parent.rows.append(&mut frame.rows);
                 Ok(())
             }
             FrameKind::TableRow => {
                 self.consume_structural_container()?;
                 let row = TableRow { cells: frame.cells };
-                let parent = self.parent_mut()?;
-                parent.rows.try_reserve_exact(1).map_err(allocation_error)?;
+                let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+                let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                    detail: "Markdown event stack is empty".into(),
+                })?;
+                memory.reserve_vec(&mut parent.rows, 1)?;
                 parent.rows.push(row);
                 Ok(())
             }
@@ -564,11 +626,15 @@ impl<'a> Builder<'a> {
                 if !frame.inlines.is_empty() {
                     let paragraph =
                         self.node(Block::Paragraph(frame.inlines), frame.span.clone())?;
+                    self.parser_memory.reserve_vec(&mut frame.blocks, 1)?;
                     frame.blocks.push(paragraph);
                 }
                 let cell = Cell { row_span: 1, column_span: 1, header, blocks: frame.blocks };
-                let parent = self.parent_mut()?;
-                parent.cells.try_reserve_exact(1).map_err(allocation_error)?;
+                let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+                let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                    detail: "Markdown event stack is empty".into(),
+                })?;
+                memory.reserve_vec(&mut parent.cells, 1)?;
                 parent.cells.push(cell);
                 Ok(())
             }
@@ -589,6 +655,7 @@ impl<'a> Builder<'a> {
                 )?;
                 let raw = self.source.text.get(frame.span.clone()).unwrap_or_default().to_owned();
                 self.charge_text(&raw, "Markdown blockquote fallback")?;
+                self.parser_memory.charge("markdown-blockquote".len())?;
                 let node = self.node(
                     Block::Code { language: Some("markdown-blockquote".into()), text: raw },
                     frame.span,
@@ -603,6 +670,7 @@ impl<'a> Builder<'a> {
                 )?;
                 let raw = self.source.text.get(frame.span.clone()).unwrap_or_default().to_owned();
                 self.charge_text(&raw, "Markdown HTML fallback")?;
+                self.parser_memory.charge("html".len())?;
                 let node = self
                     .node(Block::Code { language: Some("html".into()), text: raw }, frame.span)?;
                 self.push_block(node)
@@ -627,8 +695,12 @@ impl<'a> Builder<'a> {
             FrameKind::Image(target) => {
                 let alt = plain_text(&frame.inlines, &mut self.parser_memory)?;
                 if safe_external_image_target(&target) {
-                    let parent = self.parent_mut()?;
-                    parent.images.try_reserve_exact(1).map_err(allocation_error)?;
+                    self.parser_memory.charge(target.len().saturating_add(alt.len()))?;
+                    let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+                    let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                        detail: "Markdown event stack is empty".into(),
+                    })?;
+                    memory.reserve_vec(&mut parent.images, 1)?;
                     parent.images.push(ExternalImage {
                         target: target.clone(),
                         alt: alt.clone(),
@@ -654,6 +726,8 @@ impl<'a> Builder<'a> {
                         "unsafe image target was preserved as literal text",
                         &frame.span,
                     )?;
+                    self.parser_memory
+                        .charge(alt.len().saturating_add(target.len()).saturating_add(3))?;
                     self.push_inline(Inline::Text {
                         value: format!("{alt} ({target})"),
                         marks: Vec::new(),
@@ -668,52 +742,115 @@ impl<'a> Builder<'a> {
 
     fn text(&mut self, value: &str) -> Result<(), ConversionError> {
         if matches!(self.frames.last().map(|frame| &frame.kind), Some(FrameKind::Code(_))) {
-            let frame = self.parent_mut()?;
-            frame.literal.try_reserve_exact(value.len()).map_err(allocation_error)?;
+            let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+            let frame = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                detail: "Markdown event stack is empty".into(),
+            })?;
+            memory.reserve_string(&mut frame.literal, value.len())?;
             frame.literal.push_str(value);
             Ok(())
         } else {
-            self.parser_memory.grow(u64_size(value.len(), "Markdown text")?)?;
+            self.parser_memory.charge(value.len())?;
             self.push_inline(Inline::Text { value: value.to_owned(), marks: Vec::new() })
         }
     }
 
-    fn inline_html(&mut self, value: &str, span: Range<usize>) -> Result<(), ConversionError> {
-        let normalized = value.trim().to_ascii_lowercase();
-        let start = match normalized.as_str() {
-            "<strong>" => Some(FrameKind::Strong),
-            "<em>" => Some(FrameKind::Emphasis),
-            "<del>" => Some(FrameKind::Strikethrough),
-            "<sup>" => Some(FrameKind::Superscript),
-            "<sub>" => Some(FrameKind::Subscript),
-            _ => None,
+    fn push_list_group(
+        &mut self,
+        items: Vec<ListItem>,
+        task: bool,
+        ordered: bool,
+        source_start: u64,
+        offset: usize,
+        span: Range<usize>,
+    ) -> Result<(), ConversionError> {
+        let kind = if task {
+            ListKind::Task
+        } else if ordered {
+            ListKind::Ordered
+        } else {
+            ListKind::Bullet
         };
-        if let Some(kind) = start {
-            self.push_inline_frame(kind, span)?;
+        let offset = u64::try_from(offset).map_err(|_| ConversionError::ResourceLimit {
+            limit: "documentNodes",
+            detail: "Markdown ordered-list offset cannot be represented as u64".into(),
+        })?;
+        let start = if ordered && !task {
+            source_start.checked_add(offset).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "documentNodes",
+                detail: "Markdown ordered-list start overflowed u64".into(),
+            })?
+        } else {
+            1
+        };
+        let node = self.node(Block::List { kind, start, items }, span)?;
+        self.push_block(node)
+    }
+
+    fn inline_html(&mut self, value: &str, span: Range<usize>) -> Result<(), ConversionError> {
+        if let Some((inner, mark)) = safe_self_contained_html_mark(value) {
+            self.parser_memory.charge(inner.len())?;
+            let mut marks = Vec::new();
+            self.parser_memory.reserve_vec(&mut marks, 1)?;
+            marks.push(mark);
+            self.push_inline(Inline::Text { value: inner.to_owned(), marks })?;
             return Ok(());
         }
-        let closes_current = self.frames.last().is_some_and(|frame| {
-            matches!(
-                (normalized.as_str(), &frame.kind),
-                ("</strong>", FrameKind::Strong)
-                    | ("</em>", FrameKind::Emphasis)
-                    | ("</del>", FrameKind::Strikethrough)
-                    | ("</sup>", FrameKind::Superscript)
-                    | ("</sub>", FrameKind::Subscript)
-            )
-        });
-        if closes_current {
-            let mut frame = self.frames.pop().ok_or_else(|| ConversionError::Internal {
-                detail: "inline HTML formatting frame disappeared".into(),
+        let normalized = value.trim().to_ascii_lowercase();
+        if let Some((tag, mark)) = html_mark_open(&normalized) {
+            self.inline_count = self.inline_count.saturating_add(1);
+            if self.inline_count > MAX_DOCUMENT_INLINES {
+                return Err(ConversionError::ResourceLimit {
+                    limit: "documentInlines",
+                    detail: format!("{} > {MAX_DOCUMENT_INLINES}", self.inline_count),
+                });
+            }
+            let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+            let frame = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                detail: "Markdown event stack is empty".into(),
             })?;
-            frame.span.end = frame.span.end.max(span.end);
-            return self.close(frame);
+            memory.reserve_vec(&mut frame.inlines, 1)?;
+            memory.charge(value.len())?;
+            let inline_index = frame.inlines.len();
+            frame.inlines.push(Inline::Code(value.to_owned()));
+            memory.reserve_vec(&mut frame.html_marks, 1)?;
+            frame.html_marks.push(PendingHtmlMark { tag, mark, inline_index, span });
+            return Ok(());
+        }
+        if let Some(tag) = html_mark_close(&normalized) {
+            let frame = self.frames.last_mut().ok_or_else(|| ConversionError::Internal {
+                detail: "Markdown event stack is empty".into(),
+            })?;
+            if frame.html_marks.last().is_some_and(|pending| pending.tag == tag) {
+                let pending = frame.html_marks.pop().ok_or_else(|| ConversionError::Internal {
+                    detail: "Markdown inline HTML matcher disappeared".into(),
+                })?;
+                if !matches!(frame.inlines.get(pending.inline_index), Some(Inline::Code(_))) {
+                    return Err(ConversionError::Internal {
+                        detail: "Markdown inline HTML opener moved unexpectedly".into(),
+                    });
+                }
+                let removed_index = pending.inline_index;
+                frame.inlines.remove(removed_index);
+                self.inline_count = self.inline_count.saturating_sub(1);
+                for open in &mut frame.html_marks {
+                    if open.inline_index > removed_index {
+                        open.inline_index -= 1;
+                    }
+                }
+                for inline in &mut frame.inlines[removed_index..] {
+                    reserve_mark(inline, pending.mark, &mut self.parser_memory)?;
+                    apply_mark(inline, pending.mark);
+                }
+                return Ok(());
+            }
         }
         self.diagnostic(
             RAW_HTML_CODE,
             "raw inline HTML was preserved as non-executable code",
             &span,
         )?;
+        self.parser_memory.charge(value.len())?;
         self.push_inline(Inline::Code(value.to_owned()))
     }
 
@@ -723,9 +860,26 @@ impl<'a> Builder<'a> {
         mark: InlineMark,
     ) -> Result<(), ConversionError> {
         for inline in &mut inlines {
+            reserve_mark(inline, mark, &mut self.parser_memory)?;
             apply_mark(inline, mark);
         }
         self.extend_inlines(inlines)
+    }
+
+    fn flush_pending_html_marks(&mut self) -> Result<(), ConversionError> {
+        let pending = self
+            .frames
+            .last_mut()
+            .map(|frame| std::mem::take(&mut frame.html_marks))
+            .unwrap_or_default();
+        for open in pending {
+            self.diagnostic(
+                RAW_HTML_CODE,
+                "raw inline HTML crossing a CommonMark container was preserved as code",
+                &open.span,
+            )?;
+        }
+        Ok(())
     }
 
     fn push_inline(&mut self, inline: Inline) -> Result<(), ConversionError> {
@@ -736,31 +890,33 @@ impl<'a> Builder<'a> {
                 detail: format!("{} > {MAX_DOCUMENT_INLINES}", self.inline_count),
             });
         }
-        self.parser_memory.grow(u64_size(size_of::<Inline>(), "Markdown inline")?)?;
-        let parent = self.parent_mut()?;
-        parent.inlines.try_reserve_exact(1).map_err(allocation_error)?;
+        let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+        let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+            detail: "Markdown event stack is empty".into(),
+        })?;
+        memory.reserve_vec(&mut parent.inlines, 1)?;
         parent.inlines.push(inline);
         Ok(())
     }
 
     fn extend_inlines(&mut self, inlines: Vec<Inline>) -> Result<(), ConversionError> {
-        let parent = self.parent_mut()?;
-        parent.inlines.try_reserve_exact(inlines.len()).map_err(allocation_error)?;
+        let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+        let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+            detail: "Markdown event stack is empty".into(),
+        })?;
+        memory.reserve_vec(&mut parent.inlines, inlines.len())?;
         parent.inlines.extend(inlines);
         Ok(())
     }
 
     fn push_block(&mut self, block: BlockNode) -> Result<(), ConversionError> {
-        let parent = self.parent_mut()?;
-        parent.blocks.try_reserve_exact(1).map_err(allocation_error)?;
+        let (memory, frames) = (&mut self.parser_memory, &mut self.frames);
+        let parent = frames.last_mut().ok_or_else(|| ConversionError::Internal {
+            detail: "Markdown event stack is empty".into(),
+        })?;
+        memory.reserve_vec(&mut parent.blocks, 1)?;
         parent.blocks.push(block);
         Ok(())
-    }
-
-    fn parent_mut(&mut self) -> Result<&mut Frame, ConversionError> {
-        self.frames.last_mut().ok_or_else(|| ConversionError::Internal {
-            detail: "Markdown event stack is empty".into(),
-        })
     }
 
     fn node(&mut self, block: Block, span: Range<usize>) -> Result<BlockNode, ConversionError> {
@@ -771,8 +927,12 @@ impl<'a> Builder<'a> {
                 detail: "Markdown node sequence overflowed".into(),
             })?;
         let (start, end) = self.source.source_range(span.start, span.end);
+        let digits = usize::try_from(self.sequence.ilog10()).unwrap_or(19).saturating_add(1);
+        self.parser_memory
+            .charge(9_usize.saturating_add(digits).saturating_add(PROVIDER_ID.len()))?;
+        let id = format!("markdown-{}", self.sequence);
         Ok(BlockNode {
-            id: NodeId(format!("markdown-{}", self.sequence)),
+            id: NodeId(id),
             block,
             provenance: Provenance {
                 kind: ProvenanceKind::NativeParser,
@@ -791,23 +951,6 @@ impl<'a> Builder<'a> {
                 detail: format!("{} > {MAX_DOCUMENT_NODES}", self.node_count),
             });
         }
-        self.parser_memory.grow(u64_size(size_of::<BlockNode>(), "Markdown block")?)
-    }
-
-    fn push_inline_frame(
-        &mut self,
-        kind: FrameKind,
-        span: Range<usize>,
-    ) -> Result<(), ConversionError> {
-        if self.frames.len() > usize::from(self.options.limits.max_nesting_depth) {
-            return Err(ConversionError::ResourceLimit {
-                limit: "max_nesting_depth",
-                detail: "inline HTML formatting exceeds Markdown nesting budget".into(),
-            });
-        }
-        self.parser_memory.grow(u64_size(size_of::<Frame>(), "Markdown frame")?)?;
-        self.frames.try_reserve_exact(1).map_err(allocation_error)?;
-        self.frames.push(Frame::new(kind, span));
         Ok(())
     }
 
@@ -817,12 +960,8 @@ impl<'a> Builder<'a> {
         message: &str,
         span: &Range<usize>,
     ) -> Result<(), ConversionError> {
-        self.parser_memory.grow(u64_size(size_of::<Diagnostic>(), "Markdown diagnostic")?)?;
-        self.parser_memory.grow(u64_size(
-            code.len().saturating_add(message.len()),
-            "Markdown diagnostic strings",
-        )?)?;
-        self.diagnostics.try_reserve_exact(1).map_err(allocation_error)?;
+        self.parser_memory.reserve_vec(&mut self.diagnostics, 1)?;
+        self.parser_memory.charge(code.len().saturating_add(message.len()))?;
         let (start, end) = self.source.source_range(span.start, span.end);
         self.diagnostics.push(Diagnostic {
             code: code.into(),
@@ -834,7 +973,8 @@ impl<'a> Builder<'a> {
     }
 
     fn charge_text(&mut self, value: &str, label: &str) -> Result<(), ConversionError> {
-        self.parser_memory.grow(u64_size(value.len(), label)?)
+        let _ = label;
+        self.parser_memory.charge(value.len())
     }
 
     fn finish(mut self) -> Result<(Document, Vec<Diagnostic>, Vec<Asset>), ConversionError> {
@@ -850,12 +990,53 @@ impl<'a> Builder<'a> {
     }
 }
 
+fn html_mark_open(value: &str) -> Option<(&'static str, InlineMark)> {
+    match value {
+        "<strong>" => Some(("strong", InlineMark::Bold)),
+        "<em>" => Some(("em", InlineMark::Italic)),
+        "<del>" => Some(("del", InlineMark::Strikethrough)),
+        "<sup>" => Some(("sup", InlineMark::Superscript)),
+        "<sub>" => Some(("sub", InlineMark::Subscript)),
+        _ => None,
+    }
+}
+
+fn html_mark_close(value: &str) -> Option<&'static str> {
+    match value {
+        "</strong>" => Some("strong"),
+        "</em>" => Some("em"),
+        "</del>" => Some("del"),
+        "</sup>" => Some("sup"),
+        "</sub>" => Some("sub"),
+        _ => None,
+    }
+}
+
 fn parser_options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_GFM
+}
+
+fn safe_self_contained_html_mark(value: &str) -> Option<(&str, InlineMark)> {
+    let candidates = [
+        ("<strong>", "</strong>", InlineMark::Bold),
+        ("<em>", "</em>", InlineMark::Italic),
+        ("<del>", "</del>", InlineMark::Strikethrough),
+        ("<sup>", "</sup>", InlineMark::Superscript),
+        ("<sub>", "</sub>", InlineMark::Subscript),
+    ];
+    for (open, close, mark) in candidates {
+        if let Some(inner) = value.strip_prefix(open).and_then(|rest| rest.strip_suffix(close))
+            && !inner.is_empty()
+            && !inner.contains(['<', '>'])
+        {
+            return Some((inner, mark));
+        }
+    }
+    None
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
@@ -909,6 +1090,27 @@ fn apply_mark(inline: &mut Inline, mark: InlineMark) {
     }
 }
 
+fn reserve_mark(
+    inline: &mut Inline,
+    mark: InlineMark,
+    memory: &mut text::LogicalMemory,
+) -> Result<(), ConversionError> {
+    match inline {
+        Inline::Text { marks, .. } => {
+            if !marks.contains(&mark) {
+                memory.reserve_vec(marks, 1)?;
+            }
+        }
+        Inline::Link { content, .. } => {
+            for nested in content {
+                reserve_mark(nested, mark, memory)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn remove_mark(inline: &mut Inline, mark: InlineMark) {
     match inline {
         Inline::Text { marks, .. } => marks.retain(|candidate| *candidate != mark),
@@ -923,34 +1125,24 @@ fn remove_mark(inline: &mut Inline, mark: InlineMark) {
 
 fn plain_text(
     inlines: &[Inline],
-    memory: &mut ResourceReservation,
+    memory: &mut text::LogicalMemory,
 ) -> Result<String, ConversionError> {
     let mut output = String::new();
-    let mut stack = inlines.iter().rev().collect::<Vec<_>>();
-    memory.grow(u64_size(
-        stack.capacity().saturating_mul(size_of::<&Inline>()),
-        "Markdown inline traversal",
-    )?)?;
+    let mut stack = Vec::new();
+    memory.reserve_vec(&mut stack, inlines.len())?;
+    stack.extend(inlines.iter().rev());
     while let Some(inline) = stack.pop() {
         match inline {
             Inline::Text { value, .. } | Inline::Code(value) | Inline::Formula(value) => {
-                memory.grow(u64_size(value.len(), "Markdown plain text")?)?;
-                output.try_reserve_exact(value.len()).map_err(allocation_error)?;
+                memory.reserve_string(&mut output, value.len())?;
                 output.push_str(value);
             }
             Inline::Link { content, .. } => {
-                memory.grow(u64_size(
-                    content.len().saturating_mul(size_of::<&Inline>()),
-                    "Markdown inline traversal",
-                )?)?;
-                stack.try_reserve_exact(content.len()).map_err(allocation_error)?;
+                memory.reserve_vec(&mut stack, content.len())?;
                 stack.extend(content.iter().rev());
             }
             Inline::FootnoteReference(label) => {
-                memory.grow(u64_size(label.len().saturating_add(3), "Markdown footnote text")?)?;
-                output
-                    .try_reserve_exact(label.len().saturating_add(3))
-                    .map_err(allocation_error)?;
+                memory.reserve_string(&mut output, label.len().saturating_add(3))?;
                 output.push_str("[^");
                 output.push_str(label);
                 output.push(']');
@@ -1042,8 +1234,10 @@ fn scan_duplicate_definitions(
                 let start = offset + leading;
                 let end = offset + line.trim_end_matches(['\r', '\n']).len();
                 let (source_start, source_end) = decoded.source_range(start, end);
-                decoded.memory.charge(size_of::<Diagnostic>())?;
-                diagnostics.try_reserve_exact(1).map_err(allocation_error)?;
+                decoded.memory.reserve_vec(diagnostics, 1)?;
+                decoded.memory.charge(
+                    DUPLICATE_DEFINITION_CODE.len().saturating_add(label.len()).saturating_add(72),
+                )?;
                 diagnostics.push(Diagnostic {
                     code: DUPLICATE_DEFINITION_CODE.into(),
                     severity: DiagnosticSeverity::Warning,
@@ -1065,21 +1259,6 @@ fn byte_locator(start: usize, end: usize) -> SourceLocator {
         byte_end: u64::try_from(end).ok(),
         ..SourceLocator::default()
     }
-}
-
-#[allow(clippy::needless_pass_by_value)] // `map_err` supplies the owned standard error.
-fn allocation_error(error: std::collections::TryReserveError) -> ConversionError {
-    ConversionError::ResourceLimit {
-        limit: "max_memory_bytes",
-        detail: format!("Markdown parser allocation failed: {error}"),
-    }
-}
-
-fn u64_size(value: usize, label: &str) -> Result<u64, ConversionError> {
-    u64::try_from(value).map_err(|_| ConversionError::ResourceLimit {
-        limit: "max_memory_bytes",
-        detail: format!("{label} capacity cannot be represented as u64"),
-    })
 }
 
 #[cfg(test)]
@@ -1227,12 +1406,12 @@ mod tests {
     }
 
     #[test]
-    fn inline_html_depth_and_deep_links_are_bounded_without_recursion() {
+    fn inline_html_is_local_and_deep_links_are_bounded_without_recursion() {
         let mut options = ConversionOptions::default();
         options.limits.max_nesting_depth = 8;
         let html = format!("{}x{}\n", "<em>".repeat(9), "</em>".repeat(9));
-        let error = convert_markdown(&input(html.as_bytes()), &options, &context()).unwrap_err();
-        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_nesting_depth", .. }));
+        let output = convert_markdown(&input(html.as_bytes()), &options, &context()).unwrap();
+        assert!(!output.document.blocks.is_empty());
 
         let mut links = String::new();
         for _ in 0..64 {
@@ -1253,6 +1432,148 @@ mod tests {
             .join();
         assert!(joined.is_ok(), "bounded Markdown parsing must not abort a small-stack thread");
         assert!(joined.unwrap().is_ok());
+    }
+
+    #[test]
+    fn mixed_lists_split_into_valid_reversible_groups() {
+        let source =
+            b"3. plain\n4. [x] task\n5. plain again\n   - nested bullet\n   - [ ] nested task\n";
+        let first = convert(source).unwrap();
+        first.document.validate().unwrap();
+        let kinds = first
+            .document
+            .blocks
+            .iter()
+            .filter_map(|node| match node.block {
+                Block::List { kind, start, .. } => Some((kind, start)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![(ListKind::Ordered, 3), (ListKind::Task, 1), (ListKind::Ordered, 5)]
+        );
+        let rendered = into_markdown_render_markdown::render(
+            &first.document,
+            &first.assets,
+            &ConversionOptions::default(),
+        )
+        .unwrap();
+        let second = convert(rendered.as_bytes()).unwrap();
+        second.document.validate().unwrap();
+        let rendered_again = into_markdown_render_markdown::render(
+            &second.document,
+            &second.assets,
+            &ConversionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(rendered_again, rendered);
+    }
+
+    #[test]
+    fn table_alignments_survive_parse_render_parse() {
+        let source = b"| L | C | R | N |\n|:---|:---:|---:|---|\n| a | b | c | d |\n";
+        let first = convert(source).unwrap();
+        let Block::Table { alignments, .. } = &first.document.blocks[0].block else { panic!() };
+        assert_eq!(
+            alignments,
+            &[
+                TableAlignment::Left,
+                TableAlignment::Center,
+                TableAlignment::Right,
+                TableAlignment::None,
+            ]
+        );
+        let rendered = into_markdown_render_markdown::render(
+            &first.document,
+            &first.assets,
+            &ConversionOptions::default(),
+        )
+        .unwrap();
+        assert!(rendered.contains("| :--- | :---: | ---: | --- |"));
+        let second = convert(rendered.as_bytes()).unwrap();
+        let Block::Table { alignments, .. } = &second.document.blocks[0].block else { panic!() };
+        assert_eq!(
+            alignments,
+            &[
+                TableAlignment::Left,
+                TableAlignment::Center,
+                TableAlignment::Right,
+                TableAlignment::None,
+            ]
+        );
+        let rendered_again = into_markdown_render_markdown::render(
+            &second.document,
+            &second.assets,
+            &ConversionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(rendered_again, rendered);
+    }
+
+    #[test]
+    fn interleaved_and_unclosed_inline_html_never_corrupts_parser_frames() {
+        for source in ["a <em>x</strong> y\n", "a <em>x\n", "a </em>x<strong> y\n"] {
+            let output = convert(source.as_bytes()).unwrap();
+            output.document.validate().unwrap();
+            assert!(output.diagnostics.iter().any(|item| item.code == RAW_HTML_CODE));
+        }
+
+        let nested = convert(b"<em><em>x</em></em>\n").unwrap();
+        nested.document.validate().unwrap();
+        let rendered = into_markdown_render_markdown::render(
+            &nested.document,
+            &nested.assets,
+            &ConversionOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(rendered, "<em>x</em>\n");
+
+        let crossing = convert(b"<em>[x](https://example.com)</em>\n").unwrap();
+        crossing.document.validate().unwrap();
+        assert!(crossing.diagnostics.iter().any(|item| item.code == RAW_HTML_CODE));
+        let Block::Paragraph(inlines) = &crossing.document.blocks[0].block else { panic!() };
+        assert!(matches!(inlines.first(), Some(Inline::Code(value)) if value == "<em>"));
+        assert!(matches!(inlines.last(), Some(Inline::Code(value)) if value == "</em>"));
+    }
+
+    #[test]
+    fn markdown_allocations_obey_the_execution_memory_budget() {
+        let limits = ResourceLimits { max_memory_bytes: 32, ..ResourceLimits::default() };
+        let limited = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let error = convert_markdown(
+            &input(b"# heading\n\n- item one\n- item two\n"),
+            &ConversionOptions::default(),
+            &limited,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+    }
+
+    #[test]
+    fn logical_allocation_is_charged_before_the_allocator_and_at_the_exact_boundary() {
+        let success_limits = ResourceLimits {
+            max_memory_bytes: 4 * std::mem::size_of::<u64>() as u64,
+            ..ResourceLimits::default()
+        };
+        let success_context =
+            ExecutionContext::new(ExecutionOptions::default(), success_limits.clone());
+        let mut success_memory = text::LogicalMemory::new(&success_context).unwrap();
+        let mut values = Vec::<u64>::new();
+        text::reset_logical_allocation_attempts();
+        success_memory.reserve_vec(&mut values, 1).unwrap();
+        assert_eq!(text::logical_allocation_attempts(), 1);
+
+        let mut failure_limits = success_limits;
+        failure_limits.max_memory_bytes -= 1;
+        let failure_context = ExecutionContext::new(ExecutionOptions::default(), failure_limits);
+        let mut failure_memory = text::LogicalMemory::new(&failure_context).unwrap();
+        let mut rejected = Vec::<u64>::new();
+        text::reset_logical_allocation_attempts();
+        let error = failure_memory.reserve_vec(&mut rejected, 1).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(text::logical_allocation_attempts(), 0);
+        assert_eq!(rejected.capacity(), 0);
     }
 
     #[test]
