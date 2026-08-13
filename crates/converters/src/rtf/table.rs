@@ -99,10 +99,13 @@ impl Parser<'_> {
     }
 
     pub(super) fn finish_field_result(&mut self) -> Result<(), ConversionError> {
-        let Some(start) = self.field_inline_start.take() else {
-            return Ok(());
-        };
-        let Some(target) = self.active_link.take() else {
+        let field =
+            self.field.as_mut().ok_or_else(|| malformed("field result has no enclosing field"))?;
+        let start = field
+            .inline_start
+            .take()
+            .ok_or_else(|| malformed("field result state is incomplete"))?;
+        let Some(target) = field.link.take() else {
             return Ok(());
         };
         if start > self.paragraph.inlines.len() {

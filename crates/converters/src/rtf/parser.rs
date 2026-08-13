@@ -19,6 +19,7 @@ pub(super) const MAX_RTF_FONTS: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Destination {
     Body,
+    FieldContainer,
     InfoContainer,
     ShapePictureContainer,
     Skip,
@@ -128,6 +129,14 @@ pub(super) struct Picture {
     pub(super) high_nibble: Option<u8>,
 }
 
+#[derive(Debug, Default)]
+pub(super) struct Field {
+    pub(super) instruction_seen: bool,
+    pub(super) result_seen: bool,
+    pub(super) link: Option<String>,
+    pub(super) inline_start: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FontCharset {
     pub(super) font: i32,
@@ -155,9 +164,7 @@ pub(super) struct Parser<'a> {
     pub(super) picture: Option<Picture>,
     pub(super) pending_list_marker: Option<String>,
     pub(super) last_list_key: Option<ListKey>,
-    pub(super) pending_link: Option<String>,
-    pub(super) active_link: Option<String>,
-    pub(super) field_inline_start: Option<usize>,
+    pub(super) field: Option<Field>,
     pub(super) pending_high_surrogate: Option<(u16, usize, usize)>,
     pub(super) node_sequence: u64,
     pub(super) document_nodes: usize,
@@ -221,9 +228,7 @@ impl<'a> Parser<'a> {
             picture: None,
             pending_list_marker: None,
             last_list_key: None,
-            pending_link: None,
-            active_link: None,
-            field_inline_start: None,
+            field: None,
             pending_high_surrogate: None,
             node_sequence: 0,
             document_nodes: 0,

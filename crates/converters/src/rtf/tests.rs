@@ -387,6 +387,46 @@ fn table_list_and_safe_field_map_to_structured_ir() {
 }
 
 #[test]
+fn field_state_is_scoped_to_one_complete_container() {
+    let two_links = convert(
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://one.invalid/path"}{\fldrslt one}} {\field{\*\fldinst HYPERLINK "https://two.invalid/path"}{\fldrslt two}}}"#,
+    )
+    .unwrap();
+    let Block::Paragraph(inlines) = &two_links.document.blocks[0].block else {
+        panic!("field paragraph")
+    };
+    assert!(
+        matches!(&inlines[0], Inline::Link { target, .. } if target == "https://one.invalid/path"),
+        "{inlines:?}"
+    );
+    assert!(
+        matches!(&inlines[2], Inline::Link { target, .. } if target == "https://two.invalid/path"),
+        "{inlines:?}"
+    );
+
+    for source in [
+        // A link instruction from an incomplete field cannot pollute a later result.
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://bad.invalid"}}{\field{\fldrslt later}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\*\fldinst HYPERLINK "https://orphan.invalid"}}"#.as_slice(),
+        b"{\\rtf1\\ansi{\\fldrslt orphan}}".as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://outer.invalid"}{\field{\*\fldinst HYPERLINK "https://inner.invalid"}{\fldrslt inner}}{\fldrslt outer}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://interrupt.invalid"}{\fldrslt before\par after}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://interrupt.invalid"\par}{\fldrslt after}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://one.invalid"}{\*\fldinst HYPERLINK "https://two.invalid"}{\fldrslt label}}}"#
+            .as_slice(),
+        br#"{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://one.invalid"}{\fldrslt one}{\fldrslt two}}}"#
+            .as_slice(),
+        b"{\\rtf1\\ansi\\field text}".as_slice(),
+    ] {
+        assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
+}
+
+#[test]
 fn table_cell_definitions_reject_ambiguous_boundaries_and_merge_chains() {
     for source in [
         b"{\\rtf1\\ansi\\trowd\\cellx A\\cell\\row}".as_slice(),

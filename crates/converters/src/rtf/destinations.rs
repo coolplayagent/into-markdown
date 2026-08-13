@@ -1,7 +1,7 @@
 //! Group destinations and inherited state transitions.
 
 use super::budget::{limit, locator, malformed, reserve_string, reserve_vec};
-use super::parser::{Destination, Frame, Parser, Picture, State};
+use super::parser::{Destination, Field, Frame, Parser, Picture, State};
 use into_markdown_core::{ConversionError, DiagnosticSeverity, canonical_external_asset_uri};
 use std::cmp::Reverse;
 
@@ -111,8 +111,8 @@ impl Parser<'_> {
                 let instruction = std::mem::take(&mut self.capture);
                 // The canonical URL helper returns an owned string; prepay its maximum UTF-8 size.
                 self.memory.grow(u64::try_from(instruction.len()).unwrap_or(u64::MAX))?;
-                self.pending_link = safe_hyperlink(&instruction);
-                if self.pending_link.is_none() && instruction.trim().starts_with("HYPERLINK") {
+                let link = safe_hyperlink(&instruction);
+                if link.is_none() && instruction.trim().starts_with("HYPERLINK") {
                     self.add_diagnostic(
                         "rtf.unsafeHyperlinkSkipped",
                         DiagnosticSeverity::Warning,
@@ -120,9 +120,27 @@ impl Parser<'_> {
                         Some(locator(start, end)),
                     )?;
                 }
+                let field = self
+                    .field
+                    .as_mut()
+                    .ok_or_else(|| malformed("field instruction has no enclosing field"))?;
+                field.link = link;
+                field.instruction_seen = true;
                 Ok(())
             }
             Some(Destination::FieldResult) => self.finish_field_result(),
+            Some(Destination::FieldContainer) => {
+                let field = self
+                    .field
+                    .take()
+                    .ok_or_else(|| malformed("field container state is missing"))?;
+                if !field.instruction_seen || !field.result_seen || field.inline_start.is_some() {
+                    return Err(malformed(
+                        "RTF field requires one complete instruction followed by one result",
+                    ));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -155,6 +173,12 @@ impl Parser<'_> {
             frame.introduced = Some(destination);
         }
         match destination {
+            Destination::FieldContainer => {
+                if self.field.is_some() {
+                    return Err(malformed("nested RTF fields are not supported"));
+                }
+                self.field = Some(Field::default());
+            }
             Destination::Pict => {
                 self.picture = Some(Picture { start, ..Picture::default() });
             }
@@ -162,14 +186,29 @@ impl Parser<'_> {
             | Destination::MetaTitle
             | Destination::MetaAuthor
             | Destination::FieldInstruction => {
+                if destination == Destination::FieldInstruction {
+                    let field = self
+                        .field
+                        .as_ref()
+                        .ok_or_else(|| malformed("field instruction appears outside a field"))?;
+                    if field.instruction_seen || field.result_seen {
+                        return Err(malformed(
+                            "RTF field has a duplicate or out-of-order instruction",
+                        ));
+                    }
+                }
                 self.capture.clear();
             }
             Destination::FieldResult => {
-                if self.field_inline_start.is_some() {
-                    return Err(malformed("nested field result is invalid"));
+                let field = self
+                    .field
+                    .as_mut()
+                    .ok_or_else(|| malformed("field result appears outside a field"))?;
+                if !field.instruction_seen || field.result_seen || field.inline_start.is_some() {
+                    return Err(malformed("RTF field has a duplicate or out-of-order result"));
                 }
-                self.active_link = self.pending_link.take();
-                self.field_inline_start = Some(self.paragraph.inlines.len());
+                field.result_seen = true;
+                field.inline_start = Some(self.paragraph.inlines.len());
             }
             _ => {}
         }
@@ -186,6 +225,7 @@ pub(super) fn destination(name: &str, ignorable: bool) -> Option<Destination> {
         "author" => Destination::MetaAuthor,
         "fldinst" => Destination::FieldInstruction,
         "fldrslt" => Destination::FieldResult,
+        "field" => Destination::FieldContainer,
         "info" => Destination::InfoContainer,
         "shppict" => Destination::ShapePictureContainer,
         "colortbl" | "stylesheet" | "listtable" | "listoverridetable" | "generator" | "object"
@@ -221,6 +261,12 @@ pub(super) fn child_destination(
         }),
         Destination::ShapePictureContainer => Some(match name {
             "pict" => Destination::Pict,
+            _ => Destination::Skip,
+        }),
+        Destination::FieldContainer => Some(match name {
+            "fldinst" => Destination::FieldInstruction,
+            "fldrslt" => Destination::FieldResult,
+            "field" => Destination::FieldContainer,
             _ => Destination::Skip,
         }),
         // Formatting groups inherit their capture destination. A nested destination,

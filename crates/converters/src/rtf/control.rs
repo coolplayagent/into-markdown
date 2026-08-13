@@ -139,7 +139,10 @@ impl Parser<'_> {
         }
         if matches!(
             destination,
-            Destination::Skip | Destination::InfoContainer | Destination::ShapePictureContainer
+            Destination::Skip
+                | Destination::FieldContainer
+                | Destination::InfoContainer
+                | Destination::ShapePictureContainer
         ) {
             return Ok(());
         }
@@ -170,8 +173,8 @@ impl Parser<'_> {
                 self.state_mut().fallback_remaining = self.state().unicode_skip;
             }
             "par" => {
-                if destination == Destination::FieldResult {
-                    self.finish_field_result()?;
+                if matches!(destination, Destination::FieldInstruction | Destination::FieldResult) {
+                    return Err(malformed("paragraph break interrupts an RTF field"));
                 }
                 self.finish_paragraph(end)?;
             }
@@ -252,10 +255,10 @@ impl Parser<'_> {
             "cellx" => {
                 self.add_cell_definition(parameter)?;
             }
-            "rtf" | "ansi" | "deff" | "viewkind" | "field" | "trgaph" | "trleft" | "li" | "ri"
-            | "fi" | "sa" | "sb" | "fs" | "cf" | "highlight" | "lang" | "langfe" | "langnp"
-            | "rtlch" | "ltrch" | "rtlpar" | "ltrpar" | "keep" | "keepn" | "widctlpar"
-            | "nowidctlpar" => {}
+            "field" => return Err(malformed("field control must begin its own group")),
+            "rtf" | "ansi" | "deff" | "viewkind" | "trgaph" | "trleft" | "li" | "ri" | "fi"
+            | "sa" | "sb" | "fs" | "cf" | "highlight" | "lang" | "langfe" | "langnp" | "rtlch"
+            | "ltrch" | "rtlpar" | "ltrpar" | "keep" | "keepn" | "widctlpar" | "nowidctlpar" => {}
             _ if is_known_non_destination_control(name) => {}
             _ => self.add_diagnostic(
                 "rtf.unknownControlIgnored",

@@ -207,7 +207,10 @@ impl Parser<'_> {
             ));
         }
         let marks = self.current_marks()?;
-        let starts_field = self.field_inline_start == Some(self.paragraph.inlines.len());
+        let starts_field = self
+            .field
+            .as_ref()
+            .is_some_and(|field| field.inline_start == Some(self.paragraph.inlines.len()));
         if let Some(Inline::Text { value: current, marks: current_marks }) =
             self.paragraph.inlines.last_mut()
             && *current_marks == marks
