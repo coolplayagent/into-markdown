@@ -23,6 +23,7 @@ rust_library(
 rust_test(
     name = "api_test",
     crate = ":into_markdown",
+    data = ["//fixtures:corpus"],
     edition = "2024",
     deps = [
         "//crates/ai",

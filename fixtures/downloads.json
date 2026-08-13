@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "noto-sans-cjk-sc-regular-generator-font",
+      "repository": "fixture_noto_cjk_font",
+      "downloaded_file_path": "NotoSansCJKsc-Regular.otf",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "allowed_hosts": ["raw.githubusercontent.com"],
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "size": 16437364,
+      "maximum_redirects": 0,
+      "license": "OFL-1.1",
+      "manual_only": true,
+      "included_in_release": false
+    },
+    {
+      "artifact_id": "ppocrv6-tiny-recognizer-onnx-quality",
+      "repository": "fixture_ppocrv6_tiny_recognizer_onnx",
+      "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "allowed_hosts": ["paddle-model-ecology.bj.bcebos.com"],
+      "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+      "size": 4526080,
+      "maximum_redirects": 0,
+      "license": "Apache-2.0",
+      "manual_only": true,
+      "included_in_release": false
+    }
+  ]
+}

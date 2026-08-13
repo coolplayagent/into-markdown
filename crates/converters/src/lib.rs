@@ -10,6 +10,9 @@ mod notebook;
 mod structured;
 mod text;
 
+#[cfg(test)]
+mod fixture_corpus_tests;
+
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;
 pub use html::HtmlConverter;

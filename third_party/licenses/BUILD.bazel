@@ -1,6 +1,7 @@
 exports_files([
     "BSL-1.0.txt",
     "imageproc-MIT.txt",
+    "OFL-1.1.txt",
     "downloads.bzl",
     "downloads.json",
     "inventory.json",

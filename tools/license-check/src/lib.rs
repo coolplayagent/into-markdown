@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use toml::Value as TomlValue;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,11 +19,14 @@ struct Policy {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Component {
     id: String,
     kind: String,
     status: String,
     included_in_release: bool,
+    #[serde(default)]
+    manual_only: bool,
     version: Option<String>,
     source: Option<String>,
     license: Option<String>,
@@ -333,6 +337,179 @@ struct DownloadManifest {
     model_runtime_files: Vec<ModelRuntimeDownload>,
     native_archives: Vec<NativeDownload>,
     pdfium_archives: Vec<NativeDownload>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FixtureDownloadManifest {
+    schema_version: u64,
+    artifacts: Vec<FixtureDownload>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FixtureDownload {
+    artifact_id: String,
+    repository: String,
+    downloaded_file_path: String,
+    url: String,
+    allowed_hosts: Vec<String>,
+    sha256: String,
+    size: u64,
+    maximum_redirects: u8,
+    license: String,
+    manual_only: bool,
+    included_in_release: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureCorpus {
+    schema_version: u32,
+    generator: FixtureGenerator,
+    available_formats: Vec<String>,
+    fixtures: Vec<CorpusFixture>,
+    large_artifacts: Vec<CorpusArtifact>,
+    ocr_quality: OcrQuality,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureGenerator {
+    path: String,
+    version: String,
+    source_revision: String,
+    sha256: String,
+    seed: u64,
+    python: String,
+    pillow: String,
+    freetype: String,
+    reference_platform: String,
+    pillow_wheel_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CorpusFixture {
+    id: String,
+    format: String,
+    scenario: String,
+    path: String,
+    bytes: u64,
+    sha256: String,
+    media_type: String,
+    license: FixtureLicense,
+    provenance: FixtureProvenance,
+    expected: FixtureExpected,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureLicense {
+    spdx: String,
+    copyright: String,
+    redistribution: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureProvenance {
+    kind: String,
+    source_url: String,
+    author: String,
+    acquired_on: String,
+    generator: String,
+    source_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureExpected {
+    outcome: String,
+    error_code: String,
+    semantic_sha256: String,
+    description: String,
+    #[serde(default)]
+    limit: Option<FixtureLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureLimit {
+    option: String,
+    failing_value: u64,
+    passing_value: u64,
+    error_limit: String,
+    passing_semantic_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CorpusArtifact {
+    id: String,
+    purpose: String,
+    url: String,
+    allowed_hosts: Vec<String>,
+    bytes: u64,
+    sha256: String,
+    maximum_redirects: u8,
+    source_revision: String,
+    source_container: String,
+    source_container_sha256: String,
+    license: String,
+    license_url: String,
+    author: String,
+    acquired_on: String,
+    redistribution: String,
+    manual_only: bool,
+    included_in_release: bool,
+    repository: String,
+    downloaded_file_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrQuality {
+    license: String,
+    copyright: String,
+    unicode_normalization: String,
+    line_endings: String,
+    whitespace_rule: String,
+    punctuation_rule: String,
+    font_artifact_id: String,
+    render: OcrRender,
+    training_pollution_statement: String,
+    goldens: Vec<OcrGolden>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrRender {
+    mode: String,
+    canvas_width: u32,
+    canvas_height: u32,
+    font_size: u32,
+    origin_x: u32,
+    origin_y: u32,
+    foreground: u8,
+    background: u8,
+    png_compress_level: u8,
+    layout_engine: String,
+    antialiasing: String,
+    locale: String,
+    dpi_metadata: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrGolden {
+    fixture_id: String,
+    fixture_sha256: String,
+    group: String,
+    ground_truth_nfc: String,
+    codepoints: usize,
+    evaluated_characters: usize,
+    maximum_cer: f64,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -1085,6 +1262,12 @@ fn validate_inventory(
         if release && component.included_in_release && component.status != "reviewed" {
             errors.push(format!("release component {} is not reviewed", component.id));
         }
+        if component.manual_only && component.included_in_release {
+            errors.push(format!(
+                "manual-only component {} cannot be included in a release",
+                component.id
+            ));
+        }
     }
     for required in [
         "pdfium",
@@ -1110,6 +1293,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
     let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
     let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
+    let fixture_corpus_text = read(&root.join("fixtures/manifest.json"), errors);
+    let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let downloads: Option<DownloadManifest> =
@@ -1118,6 +1303,10 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ffmpeg: Option<FfmpegSource> = parse_json("FFmpeg source manifest", &ffmpeg_text, errors);
     let ffmpeg_fixtures: Option<FfmpegFixtures> =
         parse_json("FFmpeg fixture policy", &ffmpeg_fixtures_text, errors);
+    let fixture_corpus: Option<FixtureCorpus> =
+        parse_json("fixture corpus manifest", &fixture_corpus_text, errors);
+    let fixture_downloads: Option<FixtureDownloadManifest> =
+        parse_json("fixture download manifest", &fixture_downloads_text, errors);
     if let Some(ffmpeg) = &ffmpeg {
         validate_ffmpeg_source(inventory, ffmpeg, errors);
     }
@@ -1140,6 +1329,422 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     if let (Some(pdfium), Some(downloads)) = (&pdfium, &downloads) {
         validate_pdfium_manifest(inventory, pdfium, downloads, errors);
     }
+    if let Some(downloads) = &fixture_downloads {
+        validate_fixture_download_fields(downloads, errors);
+    }
+    if let (Some(corpus), Some(downloads)) = (&fixture_corpus, &fixture_downloads) {
+        validate_fixture_corpus(root, inventory, corpus, downloads, errors);
+    }
+}
+
+fn validate_fixture_corpus(
+    root: &Path,
+    inventory: &Inventory,
+    corpus: &FixtureCorpus,
+    downloads: &FixtureDownloadManifest,
+    errors: &mut Vec<String>,
+) {
+    if corpus.schema_version != 1 {
+        errors.push("unsupported fixture corpus schema_version".to_owned());
+    }
+    validate_fixture_generator(root, &corpus.generator, errors);
+
+    let required_formats =
+        BTreeSet::from(["csv", "docx", "html", "ipynb", "json", "markdown", "text", "tsv", "xml"]);
+    let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
+    if formats != required_formats || formats.len() != corpus.available_formats.len() {
+        errors.push(
+            "fixture corpus available_formats must exactly match converter availability".to_owned(),
+        );
+    }
+
+    let mut ids = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut fixtures_by_id = BTreeMap::new();
+    let mut scenarios: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut declared_files = BTreeSet::new();
+    for fixture in &corpus.fixtures {
+        if !ids.insert(fixture.id.as_str()) || !is_safe_model_id(&fixture.id) {
+            errors.push(format!("fixture {} has a duplicate or unsafe ID", fixture.id));
+        }
+        fixtures_by_id.insert(fixture.id.as_str(), fixture);
+        if !paths.insert(fixture.path.as_str()) || !is_safe_fixture_path(&fixture.path) {
+            errors.push(format!("fixture {} has a duplicate or unsafe path", fixture.id));
+        }
+        if fixture.format != "ocr-image" && !formats.contains(fixture.format.as_str()) {
+            errors.push(format!("fixture {} uses an unavailable format", fixture.id));
+        }
+        if !matches!(
+            fixture.scenario.as_str(),
+            "normal" | "corrupt" | "limit" | "encrypted" | "nested" | "malicious"
+        ) {
+            errors.push(format!("fixture {} has unknown scenario", fixture.id));
+        }
+        scenarios.entry(&fixture.format).or_default().insert(&fixture.scenario);
+        validate_fixture_metadata(fixture, errors);
+        let relative = Path::new("fixtures").join(&fixture.path);
+        declared_files.insert(relative.clone());
+        validate_fixture_file(root, fixture, &relative, errors);
+    }
+    for format in required_formats {
+        let present = scenarios.get(format).cloned().unwrap_or_default();
+        for required in ["normal", "corrupt", "limit"] {
+            if !present.contains(required) {
+                errors.push(format!("fixture format {format} lacks required {required} scenario"));
+            }
+        }
+    }
+    let actual_files = collect_fixture_files(root, errors);
+    for orphan in actual_files.difference(&declared_files) {
+        errors.push(format!("orphan fixture file {}", orphan.display()));
+    }
+    for missing in declared_files.difference(&actual_files) {
+        errors.push(format!("declared fixture file {} is missing", missing.display()));
+    }
+
+    validate_fixture_artifacts(inventory, &corpus.large_artifacts, downloads, errors);
+    validate_ocr_quality(corpus, &fixtures_by_id, errors);
+}
+
+fn validate_fixture_generator(root: &Path, generator: &FixtureGenerator, errors: &mut Vec<String>) {
+    if generator.path != "fixtures/generate.py"
+        || generator.version != "1.0.0"
+        || generator.source_revision != "repository-commit"
+        || generator.seed != 20_260_813
+        || generator.python != "3.13.14"
+        || generator.pillow != "11.3.0"
+        || generator.freetype != "2.13.3"
+        || generator.reference_platform != "macos-11-arm64-cp313"
+        || generator.pillow_wheel_sha256
+            != "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd"
+        || !is_sha256(&generator.sha256)
+    {
+        errors.push("fixture generator authority is incomplete".to_owned());
+    }
+    match fs::read(root.join(&generator.path)) {
+        Ok(bytes) if sha256_hex(&bytes) == generator.sha256 => {}
+        Ok(_) => errors.push("fixture generator SHA-256 disagrees with manifest".to_owned()),
+        Err(error) => errors.push(format!("cannot read fixture generator: {error}")),
+    }
+}
+
+fn validate_fixture_metadata(fixture: &CorpusFixture, errors: &mut Vec<String>) {
+    if fixture.bytes == 0
+        || fixture.bytes > 8 * 1024 * 1024
+        || !is_sha256(&fixture.sha256)
+        || fixture.media_type.trim().is_empty()
+        || fixture.license.spdx != "Apache-2.0"
+        || fixture.license.copyright != "2026 into-markdown contributors"
+        || fixture.license.redistribution.trim().is_empty()
+        || fixture.provenance.kind != "repository-generated"
+        || !fixture.provenance.source_url.is_empty()
+        || fixture.provenance.author != "into-markdown contributors"
+        || fixture.provenance.acquired_on != "2026-08-13"
+        || fixture.provenance.generator != "fixtures/generate.py@1.0.0"
+        || !fixture.provenance.source_sha256.is_empty()
+        || fixture.expected.description.trim().is_empty()
+    {
+        errors
+            .push(format!("fixture {} has incomplete provenance or license metadata", fixture.id));
+    }
+    match fixture.expected.outcome.as_str() {
+        "success"
+            if fixture.expected.error_code.is_empty()
+                && is_sha256(&fixture.expected.semantic_sha256)
+                && fixture.expected.limit.is_none() => {}
+        "error"
+            if !fixture.expected.error_code.is_empty()
+                && fixture.expected.semantic_sha256.is_empty()
+                && ((fixture.scenario == "limit") == fixture.expected.limit.is_some()) => {}
+        _ => errors.push(format!("fixture {} has inconsistent expected semantics", fixture.id)),
+    }
+    if let Some(limit) = &fixture.expected.limit
+        && (fixture.expected.error_code != "resourceLimit"
+            || !matches!(
+                limit.option.as_str(),
+                "max_input_bytes" | "max_nesting_depth" | "max_table_columns"
+            )
+            || limit.failing_value.checked_add(1) != Some(limit.passing_value)
+            || limit.error_limit.trim().is_empty()
+            || !is_sha256(&limit.passing_semantic_sha256))
+    {
+        errors.push(format!("fixture {} has an invalid exact limit contract", fixture.id));
+    }
+}
+
+fn validate_fixture_file(
+    root: &Path,
+    fixture: &CorpusFixture,
+    relative: &Path,
+    errors: &mut Vec<String>,
+) {
+    let path = root.join(relative);
+    let runfiles = env::var_os("TEST_SRCDIR").is_some();
+    let metadata = if runfiles { fs::metadata(&path) } else { fs::symlink_metadata(&path) };
+    match metadata {
+        Ok(metadata) if metadata.is_file() && (runfiles || !metadata.file_type().is_symlink()) => {
+            if metadata.len() != fixture.bytes {
+                errors.push(format!("fixture {} byte size disagrees with manifest", fixture.id));
+            }
+            match fs::read(&path) {
+                Ok(bytes) if sha256_hex(&bytes) == fixture.sha256 => {}
+                Ok(_) => {
+                    errors.push(format!("fixture {} SHA-256 disagrees with manifest", fixture.id));
+                }
+                Err(error) => errors.push(format!("cannot read fixture {}: {error}", fixture.id)),
+            }
+        }
+        Ok(_) => errors.push(format!("fixture {} is not a regular no-follow file", fixture.id)),
+        Err(error) => errors.push(format!("cannot stat fixture {}: {error}", fixture.id)),
+    }
+}
+
+fn collect_fixture_files(root: &Path, errors: &mut Vec<String>) -> BTreeSet<PathBuf> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut BTreeSet<PathBuf>,
+        errors: &mut Vec<String>,
+    ) {
+        let entries = match fs::read_dir(root.join(directory)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                errors.push(format!("cannot scan {}: {error}", directory.display()));
+                return;
+            }
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                errors.push(format!("cannot read entry under {}", directory.display()));
+                continue;
+            };
+            let relative = directory.join(entry.file_name());
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => visit(root, &relative, files, errors),
+                Ok(kind) if kind.is_file() && !kind.is_symlink() => {
+                    files.insert(relative);
+                }
+                Ok(kind)
+                    if env::var_os("TEST_SRCDIR").is_some()
+                        && kind.is_symlink()
+                        && fs::metadata(root.join(&relative))
+                            .is_ok_and(|target| target.is_file()) =>
+                {
+                    files.insert(relative);
+                }
+                Ok(_) => errors
+                    .push(format!("fixture corpus contains non-regular {}", relative.display())),
+                Err(error) => {
+                    errors.push(format!("cannot inspect {}: {error}", relative.display()));
+                }
+            }
+        }
+    }
+    let mut files = BTreeSet::new();
+    visit(root, Path::new("fixtures/small"), &mut files, errors);
+    files
+}
+
+fn validate_fixture_artifacts(
+    inventory: &Inventory,
+    artifacts: &[CorpusArtifact],
+    downloads: &FixtureDownloadManifest,
+    errors: &mut Vec<String>,
+) {
+    let mut by_id = BTreeMap::new();
+    for artifact in artifacts {
+        if by_id.insert(artifact.id.as_str(), artifact).is_some() {
+            errors.push(format!("duplicate fixture artifact {}", artifact.id));
+        }
+        let parsed = url::Url::parse(&artifact.url).ok();
+        let host = parsed.as_ref().and_then(url::Url::host_str);
+        if !is_safe_model_id(&artifact.id)
+            || artifact.purpose.trim().is_empty()
+            || !is_canonical_https(&artifact.url)
+            || artifact.allowed_hosts.len() != 1
+            || host != artifact.allowed_hosts.first().map(String::as_str)
+            || artifact.bytes == 0
+            || artifact.bytes > 64 * 1024 * 1024
+            || !is_sha256(&artifact.sha256)
+            || artifact.maximum_redirects != 0
+            || artifact.source_revision.trim().is_empty()
+            || !matches!(artifact.source_container.as_str(), "raw-file" | "tar")
+            || artifact.source_container_sha256 != artifact.sha256
+            || !is_canonical_https(&artifact.license_url)
+            || artifact.author.trim().is_empty()
+            || artifact.acquired_on != "2026-08-13"
+            || artifact.redistribution.trim().is_empty()
+            || !artifact.manual_only
+            || artifact.included_in_release
+            || !is_safe_model_id(&artifact.repository)
+            || !is_safe_fixture_download_file_name(&artifact.downloaded_file_path)
+        {
+            errors.push(format!("fixture artifact {} has incomplete authority", artifact.id));
+        }
+        match exact_component(inventory, &artifact.id, errors) {
+            Some(component)
+                if component.kind == "fixture-input"
+                    && component.status == "reviewed"
+                    && !component.included_in_release
+                    && component.manual_only == artifact.manual_only
+                    && component.source.as_deref() == Some(artifact.url.as_str())
+                    && component.license.as_deref() == Some(artifact.license.as_str()) => {}
+            Some(_) => {
+                errors.push(format!("fixture artifact {} disagrees with inventory", artifact.id));
+            }
+            None => {}
+        }
+    }
+    let download_by_id: BTreeMap<_, _> = downloads
+        .artifacts
+        .iter()
+        .map(|download| (download.artifact_id.as_str(), download))
+        .collect();
+    if by_id.keys().copied().collect::<BTreeSet<_>>()
+        != download_by_id.keys().copied().collect::<BTreeSet<_>>()
+    {
+        errors.push(
+            "fixture corpus artifacts and download authority are not bidirectional".to_owned(),
+        );
+    }
+    for (id, artifact) in by_id {
+        if download_by_id.get(id).is_none_or(|download| {
+            download.url != artifact.url
+                || download.allowed_hosts != artifact.allowed_hosts
+                || download.sha256 != artifact.sha256
+                || download.size != artifact.bytes
+                || download.maximum_redirects != artifact.maximum_redirects
+                || download.license != artifact.license
+                || download.manual_only != artifact.manual_only
+                || download.included_in_release != artifact.included_in_release
+                || download.repository != artifact.repository
+                || download.downloaded_file_path != artifact.downloaded_file_path
+        }) {
+            errors.push(format!("fixture artifact {id} disagrees with download authority"));
+        }
+    }
+}
+
+fn validate_ocr_quality(
+    corpus: &FixtureCorpus,
+    fixtures_by_id: &BTreeMap<&str, &CorpusFixture>,
+    errors: &mut Vec<String>,
+) {
+    let quality = &corpus.ocr_quality;
+    if quality.license != "Apache-2.0"
+        || quality.copyright != "2026 into-markdown contributors"
+        || quality.unicode_normalization != "NFC"
+        || quality.line_endings != "LF"
+        || quality.whitespace_rule
+            != "collapse Unicode whitespace runs, then exclude whitespace from edit distance"
+        || quality.punctuation_rule
+            != "retain punctuation and compare Unicode scalar values exactly"
+        || quality.training_pollution_statement.trim().is_empty()
+        || !corpus.large_artifacts.iter().any(|item| item.id == quality.font_artifact_id)
+        || quality.render.mode != "L"
+        || quality.render.canvas_width != 1800
+        || quality.render.canvas_height != 80
+        || quality.render.font_size != 42
+        || quality.render.origin_x != 20
+        || quality.render.origin_y != 9
+        || quality.render.foreground != 0
+        || quality.render.background != 255
+        || quality.render.png_compress_level != 9
+        || quality.render.layout_engine != "Pillow ImageFont.Layout.BASIC"
+        || quality.render.antialiasing != "FreeType 2.13.3 grayscale rasterization"
+        || quality.render.locale != "locale-independent Unicode codepoint input"
+        || quality.render.dpi_metadata != "absent"
+    {
+        errors.push("OCR fixture quality authority is incomplete".to_owned());
+    }
+    let mut golden_ids = BTreeSet::new();
+    let mut groups: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut group_text = BTreeMap::<&str, String>::new();
+    for golden in &quality.goldens {
+        let fixture = fixtures_by_id.get(golden.fixture_id.as_str()).copied();
+        let evaluated =
+            golden.ground_truth_nfc.chars().filter(|character| !character.is_whitespace()).count();
+        let nfc: String = golden.ground_truth_nfc.nfc().collect();
+        let expected_threshold = if golden.group == "mixed" { 0.08 } else { 0.05 };
+        if !golden_ids.insert(golden.fixture_id.as_str())
+            || fixture.is_none()
+            || !matches!(golden.group.as_str(), "simplified" | "traditional" | "english" | "mixed")
+            || nfc != golden.ground_truth_nfc
+            || golden.ground_truth_nfc.contains(['\r', '\n'])
+            || golden.codepoints != golden.ground_truth_nfc.chars().count()
+            || golden.evaluated_characters != evaluated
+            || (golden.maximum_cer - expected_threshold).abs() > f64::EPSILON
+        {
+            errors.push(format!("OCR golden {} has invalid text or threshold", golden.fixture_id));
+        }
+        if fixture.is_none_or(|fixture| !valid_ocr_fixture_binding(golden, fixture)) {
+            errors.push(format!(
+                "OCR golden {} disagrees with its fixture authority",
+                golden.fixture_id
+            ));
+        }
+        *groups.entry(&golden.group).or_default() += evaluated;
+        group_text.entry(&golden.group).or_default().push_str(&golden.ground_truth_nfc);
+    }
+    let ocr_fixture_ids: BTreeSet<_> = fixtures_by_id
+        .values()
+        .filter(|fixture| fixture.format == "ocr-image")
+        .map(|fixture| fixture.id.as_str())
+        .collect();
+    if golden_ids != ocr_fixture_ids {
+        errors.push("OCR fixtures and goldens are not bidirectional".to_owned());
+    }
+    let minimums =
+        BTreeMap::from([("simplified", 60), ("traditional", 60), ("english", 150), ("mixed", 100)]);
+    if groups.len() != minimums.len()
+        || minimums
+            .iter()
+            .any(|(group, minimum)| groups.get(group).is_none_or(|count| count < minimum))
+    {
+        errors.push(
+            "OCR goldens do not provide the minimum independently authored character coverage"
+                .to_owned(),
+        );
+    }
+    let simplified = group_text.get("simplified").map_or("", String::as_str);
+    let traditional = group_text.get("traditional").map_or("", String::as_str);
+    let mixed = group_text.get("mixed").map_or("", String::as_str);
+    if simplified == traditional
+        || !simplified.contains(['验', '质', '线', '标', '损'])
+        || !traditional.contains(['驗', '質', '線', '標', '損'])
+        || !mixed.chars().any(|character| character.is_ascii_alphabetic())
+        || !mixed.contains(['验', '线'])
+        || !mixed.contains(['轉', '標', '輸'])
+    {
+        errors.push(
+            "OCR script groups do not contain distinct simplified, traditional, and mixed text"
+                .to_owned(),
+        );
+    }
+}
+
+fn valid_ocr_fixture_binding(golden: &OcrGolden, fixture: &CorpusFixture) -> bool {
+    fixture.format == "ocr-image"
+        && fixture.scenario == "normal"
+        && fixture.media_type == "image/png"
+        && fixture.path.starts_with("small/ocr/")
+        && Path::new(&fixture.path).extension() == Some(std::ffi::OsStr::new("png"))
+        && fixture.expected.outcome == "success"
+        && fixture.expected.error_code.is_empty()
+        && fixture.expected.limit.is_none()
+        && fixture.expected.semantic_sha256 == sha256_hex(golden.ground_truth_nfc.as_bytes())
+        && is_sha256(&golden.fixture_sha256)
+        && golden.fixture_sha256 == fixture.sha256
+}
+
+fn is_safe_fixture_path(value: &str) -> bool {
+    value.starts_with("small/")
+        && is_safe_relative_path(value)
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'/' | b'.' | b'-' | b'_')
+        })
 }
 
 fn validate_pdfium_manifest(
@@ -1454,6 +2059,15 @@ fn is_safe_model_file_name(value: &str) -> bool {
         && matches!(path.components().next(), Some(std::path::Component::Normal(_)))
 }
 
+fn is_safe_fixture_download_file_name(value: &str) -> bool {
+    is_safe_model_file_name(value)
+        && value.len() <= 128
+        && value.bytes().next().is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
 fn is_safe_relative_path(value: &str) -> bool {
     let path = Path::new(value);
     !value.is_empty()
@@ -1506,6 +2120,72 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             errors.push(format!("duplicate runtime download artifact {}", item.artifact_id));
         }
     }
+    validate_native_download_fields(downloads, errors);
+}
+
+fn validate_fixture_download_fields(downloads: &FixtureDownloadManifest, errors: &mut Vec<String>) {
+    if downloads.schema_version != 1 {
+        errors.push("unsupported fixture download manifest schema_version".to_owned());
+    }
+    let mut repositories = BTreeSet::new();
+    let mut fixture_ids = BTreeSet::new();
+    for item in &downloads.artifacts {
+        if !repositories.insert(item.repository.as_str()) {
+            errors.push(format!("duplicate download repository {}", item.repository));
+        }
+        if !fixture_ids.insert(item.artifact_id.as_str()) {
+            errors.push(format!("duplicate fixture download artifact {}", item.artifact_id));
+        }
+        if !is_safe_model_id(&item.artifact_id)
+            || !is_safe_model_id(&item.repository)
+            || !is_safe_fixture_download_file_name(&item.downloaded_file_path)
+            || !is_canonical_https(&item.url)
+            || item.allowed_hosts.len() != 1
+            || url::Url::parse(&item.url).ok().and_then(|url| url.host_str().map(str::to_owned))
+                != item.allowed_hosts.first().cloned()
+            || !is_sha256(&item.sha256)
+            || item.size == 0
+            || item.size > 64 * 1024 * 1024
+            || item.maximum_redirects != 0
+            || item.license.trim().is_empty()
+            || !item.manual_only
+            || item.included_in_release
+        {
+            errors.push(format!("fixture download {} has incomplete fields", item.repository));
+        }
+    }
+    let required = BTreeMap::from([
+        (
+            "noto-sans-cjk-sc-regular-generator-font",
+            ("fixture_noto_cjk_font", "NotoSansCJKsc-Regular.otf"),
+        ),
+        (
+            "ppocrv6-tiny-recognizer-onnx-quality",
+            ("fixture_ppocrv6_tiny_recognizer_onnx", "PP-OCRv6_tiny_rec_onnx_infer.tar"),
+        ),
+    ]);
+    if fixture_ids != required.keys().copied().collect() {
+        errors.push("fixture download authority has missing or unexpected artifacts".to_owned());
+    }
+    for item in &downloads.artifacts {
+        if required.get(item.artifact_id.as_str()).is_none_or(|(repository, path)| {
+            item.repository != *repository || item.downloaded_file_path != *path
+        }) {
+            errors.push(format!(
+                "fixture download {} has an unexpected portable repository path",
+                item.artifact_id
+            ));
+        }
+    }
+}
+
+fn validate_native_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
+    let mut repositories: BTreeSet<&str> = downloads
+        .model_files
+        .iter()
+        .map(|item| item.repository.as_str())
+        .chain(downloads.model_runtime_files.iter().map(|item| item.repository.as_str()))
+        .collect();
     for item in &downloads.native_archives {
         if !repositories.insert(item.repository.as_str()) {
             errors.push(format!("duplicate download repository {}", item.repository));
@@ -2076,12 +2756,52 @@ mod tests {
         }
     }
 
+    fn fixture_authorities() -> (PathBuf, FixtureCorpus, FixtureDownloadManifest, Inventory) {
+        let root = repository_root().expect("repository root");
+        let parse = |path: &str| fs::read_to_string(root.join(path)).expect(path);
+        (
+            root.clone(),
+            serde_json::from_str(&parse("fixtures/manifest.json")).expect("fixture corpus"),
+            serde_json::from_str(&parse("fixtures/downloads.json")).expect("fixture downloads"),
+            serde_json::from_str(&parse("third_party/licenses/inventory.json")).expect("inventory"),
+        )
+    }
+
+    fn assert_download_mutation_rejected(mutator: impl FnOnce(&mut FixtureDownload)) {
+        let (_, corpus, mut downloads, inventory) = fixture_authorities();
+        let mut baseline = Vec::new();
+        validate_fixture_artifacts(&inventory, &corpus.large_artifacts, &downloads, &mut baseline);
+        validate_fixture_download_fields(&downloads, &mut baseline);
+        assert!(baseline.is_empty(), "baseline fixture downloads: {baseline:?}");
+        mutator(&mut downloads.artifacts[0]);
+        let mut errors = Vec::new();
+        validate_fixture_artifacts(&inventory, &corpus.large_artifacts, &downloads, &mut errors);
+        validate_fixture_download_fields(&downloads, &mut errors);
+        assert!(!errors.is_empty(), "mutated fixture download was accepted");
+    }
+
+    fn assert_ocr_mutation_rejected(mutator: impl FnOnce(&mut CorpusFixture, &mut OcrGolden)) {
+        let (root, mut corpus, downloads, inventory) = fixture_authorities();
+        let fixture_id = corpus.ocr_quality.goldens[0].fixture_id.clone();
+        let fixture = corpus
+            .fixtures
+            .iter_mut()
+            .find(|fixture| fixture.id == fixture_id)
+            .expect("OCR fixture");
+        let golden = &mut corpus.ocr_quality.goldens[0];
+        mutator(fixture, golden);
+        let mut errors = Vec::new();
+        validate_fixture_corpus(&root, &inventory, &corpus, &downloads, &mut errors);
+        assert!(!errors.is_empty(), "mutated OCR authority was accepted");
+    }
+
     fn planned_component(id: &str) -> Component {
         Component {
             id: id.to_owned(),
             kind: "placeholder".to_owned(),
             status: "planned".to_owned(),
             included_in_release: false,
+            manual_only: false,
             version: None,
             source: None,
             license: None,
@@ -2095,6 +2815,7 @@ mod tests {
             kind: "model-source".to_owned(),
             status: "reviewed".to_owned(),
             included_in_release: false,
+            manual_only: false,
             version: Some(version.to_owned()),
             source: Some(artifact.url.clone()),
             license: Some(artifact.license.clone()),
@@ -2311,6 +3032,7 @@ mod tests {
                 kind: "native-runtime".to_owned(),
                 status: "reviewed".to_owned(),
                 included_in_release: false,
+                manual_only: false,
                 version: Some(version.to_owned()),
                 source: Some(source),
                 license: Some("MIT".to_owned()),
@@ -2367,6 +3089,7 @@ mod tests {
                     kind: "native-runtime".to_owned(),
                     status: "reviewed".to_owned(),
                     included_in_release: false,
+                    manual_only: false,
                     version: Some("153.0.7999.0".to_owned()),
                     source: Some(source.to_owned()),
                     license: Some("BSD-3-Clause".to_owned()),
@@ -2926,5 +3649,144 @@ filegroup(
         let mut errors = Vec::new();
         validate_npm_spdx(&root, &released, &drifted, &manifest, &mut errors);
         assert!(errors.iter().any(|error| error.contains("exact production app asset")));
+    }
+
+    #[test]
+    fn fixture_schema_rejects_unknown_expected_fields() {
+        let value = r#"{
+            "outcome":"error",
+            "error_code":"malformed",
+            "semantic_sha256":"",
+            "description":"damaged input",
+            "unexpected":true
+        }"#;
+        assert!(serde_json::from_str::<FixtureExpected>(value).is_err());
+    }
+
+    #[test]
+    fn fixture_paths_are_portable_and_normalized() {
+        assert!(is_safe_fixture_path("small/text/normal.txt"));
+        assert!(is_safe_fixture_path("small/text/ss.txt"));
+        assert!(!is_safe_fixture_path("../small/text/normal.txt"));
+        assert!(!is_safe_fixture_path("small\\text\\normal.txt"));
+        assert!(!is_safe_fixture_path("small/text/e\u{301}.txt"));
+        assert!(!is_safe_fixture_path("small/C:/device.txt"));
+        for non_ascii in ["ß", "Σ", "σ", "ς"] {
+            assert!(!is_safe_fixture_path(&format!("small/text/{non_ascii}.txt")));
+        }
+    }
+
+    #[test]
+    fn ocr_goldens_and_png_fixtures_are_strictly_bidirectional() {
+        let (root, mut corpus, downloads, inventory) = fixture_authorities();
+        let mut baseline = Vec::new();
+        validate_fixture_corpus(&root, &inventory, &corpus, &downloads, &mut baseline);
+        assert!(baseline.is_empty(), "baseline fixture corpus: {baseline:?}");
+
+        corpus.ocr_quality.goldens[0].ground_truth_nfc.push('x');
+        let mut errors = Vec::new();
+        validate_fixture_corpus(&root, &inventory, &corpus, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("OCR golden")));
+
+        let (root, mut corpus, downloads, inventory) = fixture_authorities();
+        let fixture_id = corpus.ocr_quality.goldens[0].fixture_id.clone();
+        corpus
+            .fixtures
+            .iter_mut()
+            .find(|fixture| fixture.id == fixture_id)
+            .expect("OCR fixture")
+            .sha256 = "f".repeat(64);
+        let mut errors = Vec::new();
+        validate_fixture_corpus(&root, &inventory, &corpus, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("SHA-256 disagrees")));
+        assert!(errors.iter().any(|error| error.contains("fixture authority")));
+
+        let (root, mut corpus, downloads, inventory) = fixture_authorities();
+        corpus.ocr_quality.goldens.pop();
+        let mut errors = Vec::new();
+        validate_fixture_corpus(&root, &inventory, &corpus, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("not bidirectional")));
+    }
+
+    #[test]
+    fn ocr_fixture_contract_rejects_each_bound_metadata_or_hash_drift() {
+        assert_ocr_mutation_rejected(|fixture, _| fixture.format = "text".into());
+        assert_ocr_mutation_rejected(|fixture, _| fixture.scenario = "corrupt".into());
+        assert_ocr_mutation_rejected(|fixture, _| fixture.media_type = "image/jpeg".into());
+        assert_ocr_mutation_rejected(|fixture, _| {
+            fixture.expected.semantic_sha256 = "f".repeat(64);
+        });
+        assert_ocr_mutation_rejected(|_, golden| golden.fixture_sha256 = "f".repeat(64));
+    }
+
+    #[test]
+    fn fixture_download_authority_rejects_every_bound_field_mutation() {
+        assert_download_mutation_rejected(|item| item.allowed_hosts[0] = "invalid.example".into());
+        assert_download_mutation_rejected(|item| item.url.push_str("?drift=1"));
+        assert_download_mutation_rejected(|item| item.maximum_redirects = 1);
+        assert_download_mutation_rejected(|item| item.size -= 1);
+        assert_download_mutation_rejected(|item| item.sha256 = "f".repeat(64));
+        assert_download_mutation_rejected(|item| item.license = "MIT".into());
+        assert_download_mutation_rejected(|item| item.manual_only = false);
+        assert_download_mutation_rejected(|item| item.included_in_release = true);
+        assert_download_mutation_rejected(|item| item.repository.push_str("_drift"));
+        assert_download_mutation_rejected(|item| item.downloaded_file_path.push_str(".drift"));
+    }
+
+    #[test]
+    fn fixture_inventory_manual_and_release_flags_are_bound() {
+        let (_, corpus, downloads, mut inventory) = fixture_authorities();
+        let component = inventory
+            .components
+            .iter_mut()
+            .find(|component| component.id == corpus.large_artifacts[0].id)
+            .expect("fixture inventory component");
+        component.manual_only = false;
+        component.included_in_release = true;
+        let mut errors = Vec::new();
+        validate_fixture_artifacts(&inventory, &corpus.large_artifacts, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("disagrees with inventory")));
+    }
+
+    #[test]
+    fn fixture_limit_requires_adjacent_boundaries_and_hash() {
+        let fixture = CorpusFixture {
+            id: "text-limit".into(),
+            format: "text".into(),
+            scenario: "limit".into(),
+            path: "small/text/limit.txt".into(),
+            bytes: 1,
+            sha256: "a".repeat(64),
+            media_type: "text/plain".into(),
+            license: FixtureLicense {
+                spdx: "Apache-2.0".into(),
+                copyright: "2026 into-markdown contributors".into(),
+                redistribution: "permitted".into(),
+            },
+            provenance: FixtureProvenance {
+                kind: "repository-generated".into(),
+                source_url: String::new(),
+                author: "into-markdown contributors".into(),
+                acquired_on: "2026-08-13".into(),
+                generator: "fixtures/generate.py@1.0.0".into(),
+                source_sha256: String::new(),
+            },
+            expected: FixtureExpected {
+                outcome: "error".into(),
+                error_code: "resourceLimit".into(),
+                semantic_sha256: String::new(),
+                description: "exact input boundary".into(),
+                limit: Some(FixtureLimit {
+                    option: "max_input_bytes".into(),
+                    failing_value: 10,
+                    passing_value: 12,
+                    error_limit: "max_input_bytes".into(),
+                    passing_semantic_sha256: "not-a-hash".into(),
+                }),
+            },
+        };
+        let mut errors = Vec::new();
+        validate_fixture_metadata(&fixture, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("exact limit contract")));
     }
 }

@@ -1,0 +1,1 @@
+<!DOCTYPE x [<!ENTITY e "payload">]><x>&e;</x>

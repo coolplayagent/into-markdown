@@ -29,6 +29,7 @@ winapi-util.workspace = true
 
 [dev-dependencies]
 into-markdown-render-markdown = { path = "../render-markdown" }
+sha2.workspace = true
 
 [lints]
 workspace = true

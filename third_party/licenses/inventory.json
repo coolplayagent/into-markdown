@@ -62,6 +62,28 @@
       "obligations": "If distributed, include Apache-2.0 and any upstream NOTICE; preserve dictionary and derived-model provenance."
     },
     {
+      "id": "ppocrv6-tiny-recognizer-onnx-quality",
+      "kind": "fixture-input",
+      "status": "reviewed",
+      "included_in_release": false,
+      "manual_only": true,
+      "version": "PP-OCRv6 tiny / PaddleOCR commit 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "license": "Apache-2.0",
+      "obligations": "Manual OCR quality input only. If cached or redistributed, preserve PaddleOCR Apache-2.0 attribution and license; never include it in ordinary test or release outputs."
+    },
+    {
+      "id": "noto-sans-cjk-sc-regular-generator-font",
+      "kind": "fixture-input",
+      "status": "reviewed",
+      "included_in_release": false,
+      "manual_only": true,
+      "version": "Noto CJK commit f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "source": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "license": "OFL-1.1",
+      "obligations": "Manual fixture-generator input only. Preserve the SIL Open Font License 1.1 and copyright notices if cached or redistributed; generated raster fixtures do not embed a usable font and remain repository-authored Apache-2.0 test data."
+    },
+    {
       "id": "pdfium",
       "kind": "native-runtime",
       "status": "reviewed",
