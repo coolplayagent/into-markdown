@@ -35,6 +35,7 @@ rust_test(
     deps = [
         "@crates//:serde_json",
         "@crates//:tempfile",
+        "@crates//:zip",
     ],
     edition = "2024",
     env = {"INTO_MD_BIN": "$(location :into-md)"},
