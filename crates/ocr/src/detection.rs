@@ -85,6 +85,11 @@ pub struct PixelView<'a> {
 }
 
 /// Geometry needed by recognition to construct a perspective crop later.
+///
+/// `polygon` remains in raw, original source-image coordinates. Its canonical
+/// order is top-left, top-right, bottom-right, bottom-left. `width` is the
+/// ceiling of the longer p0-p1/p3-p2 axis, while `height` is the ceiling of the
+/// longer p0-p3/p1-p2 axis; positive subpixel axes are represented by one pixel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CropDescriptor {
     pub polygon: [(f32, f32); 4],
@@ -741,9 +746,7 @@ fn postprocess(
         if source.iter().any(|point| !point.0.is_finite() || !point.1.is_finite()) {
             return Err(ocr("invalidDetectionGeometry"));
         }
-        let source_sides = quad_sides(source.map(|p| [f64::from(p.0), f64::from(p.1)]));
-        let crop_width = source_sides.1.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
-        let crop_height = source_sides.0.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
+        let (crop_width, crop_height) = crop_dimensions(source)?;
         let dx = source[1].0 - source[0].0;
         let dy = source[1].1 - source[0].1;
         let angle = dy.atan2(dx).to_degrees();
@@ -1225,6 +1228,28 @@ fn quad_sides(quad: [[f64; 2]; 4]) -> (f64, f64) {
     let a = (quad[1][0] - quad[0][0]).hypot(quad[1][1] - quad[0][1]);
     let b = (quad[2][0] - quad[1][0]).hypot(quad[2][1] - quad[1][1]);
     (a.min(b), a.max(b))
+}
+
+fn crop_dimensions(polygon: [(f32, f32); 4]) -> Result<(u32, u32), ConversionError> {
+    let distance = |a: (f32, f32), b: (f32, f32)| {
+        let dx = f64::from(b.0) - f64::from(a.0);
+        let dy = f64::from(b.1) - f64::from(a.1);
+        let length = dx.hypot(dy);
+        length.is_finite().then_some(length).ok_or_else(|| ocr("invalidDetectionGeometry"))
+    };
+    let rounded_axis = |first: f64, second: f64| {
+        let rounded = first.max(second).ceil().max(1.0);
+        if !rounded.is_finite() || rounded > f64::from(u32::MAX) {
+            return Err(ocr("invalidDetectionGeometry"));
+        }
+        Ok(rounded as u32)
+    };
+
+    let top = distance(polygon[0], polygon[1])?;
+    let bottom = distance(polygon[3], polygon[2])?;
+    let left = distance(polygon[0], polygon[3])?;
+    let right = distance(polygon[1], polygon[2])?;
+    Ok((rounded_axis(top, bottom)?, rounded_axis(left, right)?))
 }
 
 fn is_convex_quad(quad: [[f64; 2]; 4]) -> bool {
@@ -1786,6 +1811,106 @@ mod tests {
     }
 
     #[test]
+    fn crop_dimensions_preserve_canonical_source_axes() {
+        let horizontal = [(0.0, 0.0), (100.0, 0.0), (100.0, 10.0), (0.0, 10.0)];
+        let vertical = [(10.0, 0.0), (20.0, 0.0), (20.0, 100.0), (10.0, 100.0)];
+        let asymmetric = [(0.0, 0.0), (10.0, 0.0), (12.0, 20.0), (-2.0, 20.0)];
+        let slanted = [(0.0, 0.0), (10.0, 10.0), (13.0, 30.0), (3.0, 20.0)];
+
+        assert_eq!(crop_dimensions(horizontal).unwrap(), (100, 10));
+        assert_eq!(crop_dimensions(vertical).unwrap(), (10, 100));
+        assert_eq!(crop_dimensions(asymmetric).unwrap(), (14, 21));
+        assert_eq!(crop_dimensions(slanted).unwrap(), (15, 21));
+    }
+
+    #[test]
+    fn crop_dimensions_fail_closed_for_non_finite_or_unrepresentable_axes() {
+        let non_finite = [(0.0, 0.0), (f32::INFINITY, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let largest_representable =
+            [(0.0, 0.0), (4_294_967_040.0, 0.0), (4_294_967_040.0, 1.0), (0.0, 1.0)];
+        let too_wide = [(0.0, 0.0), (f32::MAX, 0.0), (f32::MAX, 1.0), (0.0, 1.0)];
+        assert_eq!(crop_dimensions(largest_representable).unwrap(), (u32::MAX - 255, 1));
+        assert!(matches!(
+            crop_dimensions(non_finite),
+            Err(ConversionError::Ocr { ref detail, .. }) if detail == "invalidDetectionGeometry"
+        ));
+        assert!(matches!(
+            crop_dimensions(too_wide),
+            Err(ConversionError::Ocr { ref detail, .. }) if detail == "invalidDetectionGeometry"
+        ));
+    }
+
+    #[test]
+    fn all_exif_orientations_produce_raw_source_crop_axes_exactly_once() {
+        let (source_width, source_height) = (128, 64);
+        let bytes = vec![0; source_width * source_height];
+        let variants = [
+            (ImageOrientation::Normal, false),
+            (ImageOrientation::MirrorHorizontal, false),
+            (ImageOrientation::Rotate180, false),
+            (ImageOrientation::MirrorVertical, false),
+            (ImageOrientation::MirrorHorizontalRotate270, true),
+            (ImageOrientation::Rotate90, true),
+            (ImageOrientation::MirrorHorizontalRotate90, true),
+            (ImageOrientation::Rotate270, true),
+        ];
+
+        for (orientation, swaps_axes) in variants {
+            let image = PixelView {
+                width: source_width,
+                height: source_height,
+                row_stride: source_width,
+                format: PixelFormat::Gray8,
+                orientation,
+                bytes: &bytes,
+            };
+            let (oriented_w, oriented_h) = oriented_size(image);
+            let mut values = vec![0.0; oriented_w * oriented_h];
+            for y in 20..=30 {
+                for x in 6..=50 {
+                    values[y * oriented_w + x] = 0.9;
+                }
+            }
+            let result = postprocess(
+                &[Tensor { shape: vec![1, 1, oriented_h, oriented_w], values }],
+                image,
+                Transform { oriented_w, oriented_h, model_w: oriented_w, model_h: oriented_h },
+                &DetectionConfig {
+                    max_source_pixels: source_width * source_height,
+                    max_model_pixels: oriented_w * oriented_h,
+                    max_contour_points: oriented_w * oriented_h,
+                    max_offset_points: 512,
+                    ..DetectionConfig::default()
+                },
+                &context(),
+            )
+            .unwrap();
+            assert_eq!(result.regions.len(), 1, "orientation={orientation:?}");
+            let region = &result.regions[0];
+            assert_eq!(region.crop.polygon, region.polygon, "orientation={orientation:?}");
+            assert_eq!(
+                (region.crop.width, region.crop.height),
+                crop_dimensions(region.polygon).unwrap(),
+                "orientation={orientation:?}"
+            );
+            assert!(
+                region.polygon.iter().all(|(x, y)| {
+                    (0.0..source_width as f32).contains(x)
+                        && (0.0..source_height as f32).contains(y)
+                }),
+                "orientation={orientation:?}, polygon={:?}",
+                region.polygon
+            );
+            assert_eq!(
+                region.crop.height > region.crop.width,
+                swaps_axes,
+                "orientation={orientation:?}, crop={:?}",
+                region.crop
+            );
+        }
+    }
+
+    #[test]
     fn transparent_alpha_is_ignored_like_the_official_bgr_conversion() {
         let bytes = [10, 20, 30, 0];
         let image = PixelView {
@@ -1838,6 +1963,12 @@ mod tests {
         assert!((max_x - 68.0).abs() <= 1.0, "max_x={max_x}");
         assert!((min_y - 11.0).abs() <= 1.0, "min_y={min_y}");
         assert!((max_y - 48.0).abs() <= 1.0, "max_y={max_y}");
+        assert_eq!(region.crop.polygon, region.polygon);
+        assert_eq!(
+            (region.crop.width, region.crop.height),
+            crop_dimensions(region.polygon).unwrap()
+        );
+        assert!(region.crop.width > region.crop.height);
     }
 
     #[test]
@@ -1879,6 +2010,12 @@ mod tests {
             assert!((actual.0 - expected.0).abs() <= 1.0, "actual={q:?}");
             assert!((actual.1 - expected.1).abs() <= 1.0, "actual={q:?}");
         }
+        assert_eq!(region.crop.polygon, region.polygon);
+        assert_eq!(
+            (region.crop.width, region.crop.height),
+            crop_dimensions(region.polygon).unwrap()
+        );
+        assert!(region.crop.width > region.crop.height);
         assert!(
             (region.confidence - 0.899_893_46).abs() <= 1e-5,
             "confidence={}",
