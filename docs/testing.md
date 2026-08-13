@@ -238,3 +238,20 @@ error 不改 task。
 四产品目标门禁执行 Rust all-targets cross-check 与 Bazel platform build。bundled SQLite 是 C
 source build；没有对应目标 native runner 时，交叉编译只证明 toolchain/source/link
 compatibility，不能替代 Windows reparse/DACL 或 Linux filesystem runtime 测试。
+
+## 全格式 fixture 语料库
+
+`fixtures/manifest.json` 是小型离线语料的机器权威。它覆盖产品格式 registry 中每个
+`available` 格式的 normal、corrupt、limit 场景，并按适用范围加入 encrypted 和
+malicious 场景。converter 测试直接读取同一 manifest，与 `planned_formats()` 的动态
+available 集合比对，并把每个非 OCR 样本送入真实 converter 和 Markdown renderer。
+成功样本核对最终 Markdown SHA-256；失败样本核对稳定错误码；limit 样本还记录精确
+`ConversionOptions` 字段、相邻失败/成功值、错误 limit 名和成功输出 hash，防止仅凭文件
+名称推断边界。
+
+普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
+recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供后续独立质量目标，
+两者均不进入普通测试或发布物。OCR golden 的 NFC、有效字符数、CER 空白/标点规则、
+分组阈值、渲染参数和训练污染声明由 license audit 校验。固定 Python/Pillow/FreeType
+环境下用 `fixtures/generate.py --verify` 在临时目录重建并逐字节比对；checked-in PNG
+始终是权威，不宣称任意平台渲染器都能产生相同字节。详细操作见 `fixtures/README.md`。

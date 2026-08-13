@@ -137,3 +137,22 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 amalgamation 上游声明为 public domain。新引入的 build/iterator/hash helper 已加入
 `rust-lock.tsv`，其中 `foldhash 0.1.5` 为 Zlib。Cargo/Bazel 离线 license/release audit 共同
 检查锁文件漂移。构建未启用 rusqlite load-extension API，运行时也不调用 extension loading。
+
+## Fixture 许可与来源
+
+`fixtures/small/` 全部由仓库生成，文本由 into-markdown contributors 编写，不复制外部
+文档或相邻项目语料，按 Apache-2.0 随仓库和测试发布。`fixtures/manifest.json` 对每个
+文件记录作者、SPDX、再分发结论、生成器、获取日期、大小和不可变 SHA-256；license audit
+同时拒绝 manifest 未声明文件和缺失文件。
+
+OCR 图片使用固定 Noto Sans CJK SC Regular 字体生成。字体来源固定到 notofonts/noto-cjk
+commit `f8d157532fbfaeda587e826d4cd5b21a49186f7c`，单文件 SHA-256 为
+`2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b`，许可为
+OFL-1.1，全文位于 `third_party/licenses/OFL-1.1.txt`。字体不提交且不进入发布物；生成
+PNG 的仓库原创文字与图像按 Apache-2.0 管理。
+
+PP-OCRv6 tiny recognizer ONNX 官方归档固定 SHA-256
+`1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29`，许可为
+Apache-2.0，仅作为后续 OCR 质量目标的 manual 下载 authority，不进入语料或当前发布物。
+两个大输入都必须在 manifest、inventory 与 downloads 三者双向一致；host、大小、hash、
+redirect 上限、许可与发布边界任一漂移都会失败。

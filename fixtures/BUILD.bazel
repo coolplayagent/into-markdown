@@ -1,0 +1,30 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "README.md",
+    "generate.py",
+    "manifest.json",
+])
+
+filegroup(
+    name = "corpus",
+    srcs = [
+        "README.md",
+        "generate.py",
+        "manifest.json",
+    ] + glob(["small/**"]),
+)
+
+# Explicit-only generator input. Ordinary //... builds exclude manual targets.
+filegroup(
+    name = "ocr_fixture_generation_font",
+    srcs = ["@fixture_noto_cjk_font//file"],
+    tags = ["manual"],
+)
+
+# Explicit-only runtime input consumed by future OCR quality evaluation.
+filegroup(
+    name = "ocr_quality_model",
+    srcs = ["@fixture_ppocrv6_tiny_recognizer_onnx//file"],
+    tags = ["manual"],
+)

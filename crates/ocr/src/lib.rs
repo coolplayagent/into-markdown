@@ -108,9 +108,28 @@ struct DownloadManifest {
     schema_version: u32,
     model_files: Vec<SourceDownload>,
     model_runtime_files: Vec<RuntimeDownload>,
+    #[serde(default, rename = "fixture_files")]
+    _fixture_files: Vec<FixtureDownload>,
     native_archives: Vec<NativeDownload>,
     #[serde(default, rename = "pdfium_archives")]
     _pdfium_archives: Vec<NativeDownload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureDownload {
+    #[serde(rename = "artifact_id")]
+    _artifact_id: String,
+    #[serde(rename = "repository")]
+    _repository: String,
+    #[serde(rename = "downloaded_file_path")]
+    _downloaded_file_path: String,
+    #[serde(rename = "url")]
+    _url: String,
+    #[serde(rename = "sha256")]
+    _sha256: String,
+    #[serde(rename = "size")]
+    _size: u64,
 }
 
 #[derive(Debug, Deserialize)]

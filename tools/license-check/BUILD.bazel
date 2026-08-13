@@ -26,6 +26,7 @@ DATA = [
     "//third_party/ffmpeg:fixtures.json",
     "//third_party/ffmpeg:source.json",
     "//third_party/pdfium:manifest.json",
+    "//fixtures:corpus",
     ":Cargo.toml",
     "//apps/cli:Cargo.toml",
     "//crates/ai:Cargo.toml",
@@ -53,6 +54,7 @@ rust_library(
         "@crates//:serde_json",
         "@crates//:sha2",
         "@crates//:toml",
+        "@crates//:unicode-normalization",
         "@crates//:url",
     ],
 )

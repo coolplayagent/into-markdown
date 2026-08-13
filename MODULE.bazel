@@ -63,6 +63,8 @@ use_repo(
     "pdfium_linux_x86_64",
     "pdfium_macos_arm64",
     "pdfium_windows_x86_64",
+    "fixture_noto_cjk_font",
+    "fixture_ppocrv6_tiny_recognizer_onnx",
     "ppocrv6_tiny_detector_source",
     "ppocrv6_tiny_recognizer_source",
 )

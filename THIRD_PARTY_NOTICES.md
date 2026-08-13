@@ -67,10 +67,19 @@ platforms, but remains a manual input and is not in current release outputs. Its
 redistribution archives include the upstream BSD license and a `licenses/` directory
 for bundled permissive dependencies; both must be preserved if distributed.
 
-FFmpeg, LibreOffice, Wasmtime, generated models, and fonts remain
+FFmpeg, LibreOffice, Wasmtime, generated models, and distribution fonts remain
 machine-readable `planned` entries. No version, build configuration, source, or
 compliance conclusion is asserted for them. In particular, a future FFmpeg entry must document a reproducible
 LGPL-compatible configuration and prove that GPL/nonfree components are off.
+
+Noto Sans CJK SC Regular is a hash-pinned, manual fixture-generator input under
+OFL-1.1. The complete license text is in `third_party/licenses/OFL-1.1.txt`.
+The font itself is not committed or included in release outputs; repository-authored
+text rendered into checked-in OCR PNG fixtures is distributed under Apache-2.0.
+The PP-OCRv6 tiny recognizer ONNX archive is separately hash-pinned under
+Apache-2.0 for an explicit OCR quality target and is likewise absent from ordinary
+build and release outputs. Their exact source, size, hash, and boundary are audited
+across `fixtures/manifest.json`, the inventory, and the download authority.
 
 ## Release obligation
 

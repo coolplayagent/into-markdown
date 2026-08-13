@@ -194,3 +194,16 @@ secret redaction 使用结构化 allowlist。schema 没有 provider key/token、
 来源、URL/query 或自由文本 diagnostic 字段；input/artifact location 仅接受固定长度 opaque
 hex reference。`ConfigurationSnapshot` 拒绝未知字段。测试以 canary 尝试加入 `apiKey`，并
 扫描 database 与存在的 WAL/SHM 字节确认未编码。
+
+## Fixture 语料安全边界
+
+Fixture 语料只允许 `fixtures/small/` 下的 NFC portable 相对路径；审计拒绝绝对路径、
+父目录跳转、反斜杠、盘符、NUL、大小写折叠冲突、重复 ID、symlink 和非普通文件。
+每个文件在执行测试前核对 manifest 中的大小与 SHA-256。malicious 样本均由仓库安全合成，
+不含真实凭据、个人数据或外部可访问秘密；DOCX 外链使用 loopback 占位并验证不会发起请求，
+HTML/XML/notebook 活动内容只验证解析与惰性展示边界。
+
+大 fixture 输入不在普通依赖图中。显式 manual target 只接受固定 HTTPS URL、单一 host
+allowlist、不可变 SHA-256、大小和 redirect authority；普通测试、license check 和 release
+audit 都不得触发下载。release audit 进一步要求这些 `fixture-input` inventory 项保持
+`included_in_release=false`，避免测试生成工具或模型意外进入产品归档。

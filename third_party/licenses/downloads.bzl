@@ -26,6 +26,14 @@ def _downloads_impl(module_ctx):
             urls = [item["url"]],
         )
 
+    for item in manifest.get("fixture_files", []):
+        http_file(
+            name = item["repository"],
+            downloaded_file_path = item["downloaded_file_path"],
+            sha256 = item["sha256"],
+            urls = [item["url"]],
+        )
+
     for item in manifest.get("native_archives", []):
         args = {
             "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",

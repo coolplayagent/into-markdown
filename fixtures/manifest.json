@@ -1,0 +1,1490 @@
+{
+  "schema_version": 1,
+  "generator": {
+    "path": "fixtures/generate.py",
+    "version": "1.0.0",
+    "source_revision": "repository-commit",
+    "sha256": "8f3e9174b15dd2839f8de7992d6a1a2c43a010fa21cfdccee4283102a9378e3f",
+    "seed": 20260813,
+    "python": "3.13.14",
+    "pillow": "11.3.0",
+    "freetype": "2.13.3",
+    "reference_platform": "macos-11-arm64-cp313",
+    "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd"
+  },
+  "available_formats": [
+    "csv",
+    "docx",
+    "html",
+    "ipynb",
+    "json",
+    "markdown",
+    "text",
+    "tsv",
+    "xml"
+  ],
+  "fixtures": [
+    {
+      "id": "csv-corrupt",
+      "format": "csv",
+      "scenario": "corrupt",
+      "path": "small/csv/corrupt.csv",
+      "bytes": 27,
+      "sha256": "4eb365983a0ea543ace2faebcfbbb6abfa985849dfedb3f777ee59495e44c7bb",
+      "media_type": "text/csv",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "unterminated quoted field"
+      }
+    },
+    {
+      "id": "csv-limit",
+      "format": "csv",
+      "scenario": "limit",
+      "path": "small/csv/limit.csv",
+      "bytes": 122,
+      "sha256": "e6a1fa0c01ab5d88672586a076c02644b640be56348ff4f33e568243bf548cab",
+      "media_type": "text/csv",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "column count crosses the exact configured boundary",
+        "limit": {
+          "option": "max_table_columns",
+          "failing_value": 32,
+          "passing_value": 33,
+          "error_limit": "max_table_columns",
+          "passing_semantic_sha256": "bedc28a22c18681a165e567d8bb7c818230e6ff7dc047b8484ed229ba4db3d5e"
+        }
+      }
+    },
+    {
+      "id": "csv-normal",
+      "format": "csv",
+      "scenario": "normal",
+      "path": "small/csv/normal.csv",
+      "bytes": 28,
+      "sha256": "aa1c07ff23ca3b711a66e40ace74e368a6e407dae0c2e3941499ed45e1462601",
+      "media_type": "text/csv",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "76a17f00b5373cb28760bf6bd9cafbd04b00f2bfc95c0b8520b156936306ddbe",
+        "description": "header and two rows"
+      }
+    },
+    {
+      "id": "docx-corrupt",
+      "format": "docx",
+      "scenario": "corrupt",
+      "path": "small/docx/corrupt.docx",
+      "bytes": 619,
+      "sha256": "2e9fca351c31527b4cb0f0bcc8f2f68ea9c12be7481ff6fa0943b63c309bffaf",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated ZIP package"
+      }
+    },
+    {
+      "id": "docx-encrypted",
+      "format": "docx",
+      "scenario": "encrypted",
+      "path": "small/docx/encrypted.docx",
+      "bytes": 1239,
+      "sha256": "f2fdf172bf4435d66bd5955bf3750165ffc27f520df2c3b816d41a6a58b4b84f",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "encrypted",
+        "semantic_sha256": "",
+        "description": "encrypted ZIP entries are rejected"
+      }
+    },
+    {
+      "id": "docx-limit",
+      "format": "docx",
+      "scenario": "limit",
+      "path": "small/docx/limit.docx",
+      "bytes": 1204,
+      "sha256": "397e206385ac83162e0529e9b4d0d5152dada2023766f1f0fe093c51ed661a20",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "WordprocessingML crosses the exact configured depth boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 4,
+          "passing_value": 5,
+          "error_limit": "max_nesting_depth",
+          "passing_semantic_sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        }
+      }
+    },
+    {
+      "id": "docx-malicious",
+      "format": "docx",
+      "scenario": "malicious",
+      "path": "small/docx/malicious.docx",
+      "bytes": 1657,
+      "sha256": "d5a749e8d07abac97219df0de04e5bad8d0de4ea2ca6e07dea36f27ba715a759",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+        "description": "external relationship is not fetched"
+      }
+    },
+    {
+      "id": "docx-normal",
+      "format": "docx",
+      "scenario": "normal",
+      "path": "small/docx/normal.docx",
+      "bytes": 1239,
+      "sha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+        "description": "one WordprocessingML paragraph"
+      }
+    },
+    {
+      "id": "html-corrupt",
+      "format": "html",
+      "scenario": "corrupt",
+      "path": "small/html/corrupt.html",
+      "bytes": 27,
+      "sha256": "44225ca404de6b68b000b26e8e029be9f80c6111a3e29414d6aa570b614d8176",
+      "media_type": "text/html",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid explicit UTF-8"
+      }
+    },
+    {
+      "id": "html-limit",
+      "format": "html",
+      "scenario": "limit",
+      "path": "small/html/limit.html",
+      "bytes": 92,
+      "sha256": "d5f21909c93248338db73bf029d3b655aad0767bcf675eb84a96be85dd9aac54",
+      "media_type": "text/html",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "DOM crosses the exact configured depth boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 10,
+          "passing_value": 11,
+          "error_limit": "html_nesting_depth",
+          "passing_semantic_sha256": "64896f89fd11190013b70103e603a1c5826e56b7fb7d2197ab279b0690043599"
+        }
+      }
+    },
+    {
+      "id": "html-malicious",
+      "format": "html",
+      "scenario": "malicious",
+      "path": "small/html/malicious.html",
+      "bytes": 104,
+      "sha256": "3fada50125e09f54e51083b4e7b760185b219ee0d8acbb68d31feaa6dea81db2",
+      "media_type": "text/html",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "83af816a04951bb121da45426927ea37f9c21225412c50c5bd384d13326308d6",
+        "description": "active content and unsafe URL are omitted"
+      }
+    },
+    {
+      "id": "html-normal",
+      "format": "html",
+      "scenario": "normal",
+      "path": "small/html/normal.html",
+      "bytes": 96,
+      "sha256": "f0d8f7eab0c834c792f90610f07bdd756dd611987af32bb129e38f078eed4b31",
+      "media_type": "text/html",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "08bc3be2f1fc5713bb565fd2f043cc0c930e24dbff81f183eb5685b55e268810",
+        "description": "main landmark with heading and paragraph"
+      }
+    },
+    {
+      "id": "ipynb-corrupt",
+      "format": "ipynb",
+      "scenario": "corrupt",
+      "path": "small/ipynb/corrupt.ipynb",
+      "bytes": 12,
+      "sha256": "0eee4bde1ac5f075a58ec7f9ae71d59cd62038b61eaea05c99321be2859d7cc2",
+      "media_type": "application/x-ipynb+json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid notebook JSON"
+      }
+    },
+    {
+      "id": "ipynb-limit",
+      "format": "ipynb",
+      "scenario": "limit",
+      "path": "small/ipynb/limit.ipynb",
+      "bytes": 82,
+      "sha256": "0590c7488aec4e85aa0ce1f1cb9a1ed16b4fcfd000da40764e3aa8aa5713d819",
+      "media_type": "application/x-ipynb+json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "notebook JSON crosses the exact configured nesting boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 4,
+          "passing_value": 5,
+          "error_limit": "json_nesting_depth",
+          "passing_semantic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "id": "ipynb-malicious",
+      "format": "ipynb",
+      "scenario": "malicious",
+      "path": "small/ipynb/malicious.ipynb",
+      "bytes": 274,
+      "sha256": "c8f2f66aa0402d8e902aa03120bb207cc8c5e3e813323fc7ad25aa1c2016df75",
+      "media_type": "application/x-ipynb+json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "7b32ea186c4f48048889f969080b21ca66dda8bef9ea47f27121d3ed3e24a2f4",
+        "description": "active HTML output is inert inside a fenced code block"
+      }
+    },
+    {
+      "id": "ipynb-normal",
+      "format": "ipynb",
+      "scenario": "normal",
+      "path": "small/ipynb/normal.ipynb",
+      "bytes": 143,
+      "sha256": "f7a48080f3eb066b303c1865d36ee6023cc03fa3247dc6e6b1c1dd8a91ddebcd",
+      "media_type": "application/x-ipynb+json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "92d34950fd2a67b5852c5ddaeadb73202a3976461771fc18268953deb30af995",
+        "description": "one markdown cell"
+      }
+    },
+    {
+      "id": "json-corrupt",
+      "format": "json",
+      "scenario": "corrupt",
+      "path": "small/json/corrupt.json",
+      "bytes": 20,
+      "sha256": "ade78ea61cb4c2bf88209947e30365d43121494122c1eecc75e27d1ffb9e8453",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "trailing comma"
+      }
+    },
+    {
+      "id": "json-limit",
+      "format": "json",
+      "scenario": "limit",
+      "path": "small/json/limit.json",
+      "bytes": 17,
+      "sha256": "c68a1f8a52adde034f599f300ce94e4f30714d6766c7ae39021cbc52c70324ad",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "JSON crosses the exact configured nesting boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 7,
+          "passing_value": 8,
+          "error_limit": "json_nesting_depth",
+          "passing_semantic_sha256": "bd5491d5b6fcc8aab48d9c8b2b9a251e31dfaffd603aff7023845b1aa611d8e1"
+        }
+      }
+    },
+    {
+      "id": "json-normal",
+      "format": "json",
+      "scenario": "normal",
+      "path": "small/json/normal.json",
+      "bytes": 35,
+      "sha256": "b6164f03e3da188d84826b0f3520d1d8d37f8669fd0eb4ca5b6622079b27933c",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "008a8404f4c53e27f712b84f06b4c670c00cf75f420f87054ea1f745634114ec",
+        "description": "object with ordered array"
+      }
+    },
+    {
+      "id": "markdown-corrupt",
+      "format": "markdown",
+      "scenario": "corrupt",
+      "path": "small/markdown/corrupt.md",
+      "bytes": 15,
+      "sha256": "4a9814b80bd559f441f93196c804536828902c3966ac6f3da5e0cec2e402c9be",
+      "media_type": "text/markdown",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid UTF-8"
+      }
+    },
+    {
+      "id": "markdown-limit",
+      "format": "markdown",
+      "scenario": "limit",
+      "path": "small/markdown/limit.md",
+      "bytes": 21,
+      "sha256": "c8ae7bbb2985ec203aff8e74732d2004568bea7a8f9c7b3a80908fb940ab3a7a",
+      "media_type": "text/markdown",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "nested block quote crosses the exact parser-depth boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 8,
+          "passing_value": 9,
+          "error_limit": "max_nesting_depth",
+          "passing_semantic_sha256": "0b5587bf924fa4b9abd8f28f256f553079f3cd64b8493f5b059c4e238cf7a76b"
+        }
+      }
+    },
+    {
+      "id": "markdown-normal",
+      "format": "markdown",
+      "scenario": "normal",
+      "path": "small/markdown/normal.md",
+      "bytes": 29,
+      "sha256": "aca52b961cd1c739f12c6c85ca33634246db9e4b4a7e30c894b052344673bda4",
+      "media_type": "text/markdown",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "8b79086cc60edcac290c41c1984f8787626cdaef587fb39baf8cdf316fc7b691",
+        "description": "heading and rich list"
+      }
+    },
+    {
+      "id": "ocr-english-clear-1",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-english-clear-1.png",
+      "bytes": 5896,
+      "sha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "394e8eb6bcd45ce7a8f4d0d5a8b403799d8aca9f6d768dff0997e4e794f46e85",
+        "description": "clear english OCR line"
+      }
+    },
+    {
+      "id": "ocr-english-clear-2",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-english-clear-2.png",
+      "bytes": 7381,
+      "sha256": "18b67f82f3428efc2042d81aca51550573fd54e6ad241320528512670562a6fa",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "ab73159568ac06eea1394f7ca34729ee13c8484312e4d357e884a21ac3bcdbdd",
+        "description": "clear english OCR line"
+      }
+    },
+    {
+      "id": "ocr-english-clear-3",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-english-clear-3.png",
+      "bytes": 6659,
+      "sha256": "0642ecc2495fe1a1ecd7a0b27d30622f9dca0873685f27aa86e7fc7a262cc1f1",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "f2947ca775fc3e77efc03561ffbaccb0e350d6e4ebdd2c7c6c348c12ac2953d2",
+        "description": "clear english OCR line"
+      }
+    },
+    {
+      "id": "ocr-mixed-clear-1",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-mixed-clear-1.png",
+      "bytes": 10095,
+      "sha256": "9f4e61efc6ee6f400b9563729c89569f78125b3048e7a9a39845ae024444b9b2",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "541181fbf3a8c8b60e32ba6d42e1c72e667f2302ad7a15c8316d3bed283c3cb8",
+        "description": "clear mixed OCR line"
+      }
+    },
+    {
+      "id": "ocr-mixed-clear-2",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-mixed-clear-2.png",
+      "bytes": 9562,
+      "sha256": "8ca080f69fc66983f975659f77b34c03380e40c3d4ca584670ae5730c49ccf1d",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "f10f237812b66f59451d20b9a4b745f8d5754ccf9437d3275892c134a3e4234e",
+        "description": "clear mixed OCR line"
+      }
+    },
+    {
+      "id": "ocr-mixed-clear-3",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-mixed-clear-3.png",
+      "bytes": 8811,
+      "sha256": "23a98a743634de12fc50b85279ce4a1a6aef17724557107ab210a317456a59fe",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "79e8a2d2252f792f13939cf34a12a57c23e000648546ce8590610ff2f7906431",
+        "description": "clear mixed OCR line"
+      }
+    },
+    {
+      "id": "ocr-simplified-clear-1",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-simplified-clear-1.png",
+      "bytes": 9200,
+      "sha256": "992c23d1bc9bd312340d378246f650710a41b0d6758d63b14ec75a9943cfcd23",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "1526e9d3ecc191910012eab1ba0029c32af1930187a2399caf2728f60d69da75",
+        "description": "clear simplified OCR line"
+      }
+    },
+    {
+      "id": "ocr-simplified-clear-2",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-simplified-clear-2.png",
+      "bytes": 9560,
+      "sha256": "32b7b6f067c3ef4bf2700dc5edc9d7fef3b46a18941c514589e2ba7de93d9adb",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "6464350fbc742645852c376a07a369a2db676d137e2f07a2aed8083ef18ceb57",
+        "description": "clear simplified OCR line"
+      }
+    },
+    {
+      "id": "ocr-simplified-clear-3",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-simplified-clear-3.png",
+      "bytes": 9805,
+      "sha256": "26a527854fcbc771b96edb31056d225449d9da282f20037b9f2a6e25e8a65206",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "6a3ad14f260ace0f173a05de4fbe79634ab1c6d8ed7c71802c66a5a99b28edf5",
+        "description": "clear simplified OCR line"
+      }
+    },
+    {
+      "id": "ocr-traditional-clear-1",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-traditional-clear-1.png",
+      "bytes": 9447,
+      "sha256": "40decfd1ddff1dd8701f71dd18ee23251c4625100ce3e2ba50364e53d459bcbf",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "cc81bf1994172bc4fd2cbba7dd017b04f043933ea242f81e5178b0e445fd9f6e",
+        "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "ocr-traditional-clear-2",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-traditional-clear-2.png",
+      "bytes": 10152,
+      "sha256": "98ceb46e120d060870dda61c09360c422978766a04f68bd040e4aea442f44312",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "235a469f399ced50747110ebe791f6bfc6384175117a4868dfce1ba778502b32",
+        "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "ocr-traditional-clear-3",
+      "format": "ocr-image",
+      "scenario": "normal",
+      "path": "small/ocr/ocr-traditional-clear-3.png",
+      "bytes": 10536,
+      "sha256": "5ffc5afb1117520fb815b2ffb458e5326d143e2ad89725214303c9489f12d61e",
+      "media_type": "image/png",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "4cf2715adb1376bf8eb1a85af435559110df8b6d3e720f44c918318398cc8745",
+        "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "text-corrupt",
+      "format": "text",
+      "scenario": "corrupt",
+      "path": "small/text/corrupt.txt",
+      "bytes": 13,
+      "sha256": "b7cba1205f6256a5c0e0f8b9fa84dbe7a7389250714d3b0df1a193466dc53de5",
+      "media_type": "text/plain",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid UTF-8/UTF-16 byte sequence"
+      }
+    },
+    {
+      "id": "text-limit",
+      "format": "text",
+      "scenario": "limit",
+      "path": "small/text/limit.txt",
+      "bytes": 4096,
+      "sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+      "media_type": "text/plain",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "input exceeds the exact configured byte budget",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 4095,
+          "passing_value": 4096,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "5d05023e33a88151e829770ac45c53a2acd6f5bd111cbb101b8d649d7f9c2906"
+        }
+      }
+    },
+    {
+      "id": "text-normal",
+      "format": "text",
+      "scenario": "normal",
+      "path": "small/text/normal.txt",
+      "bytes": 30,
+      "sha256": "f7f03809b54332db68bc0ff81889f7130b0012e389bb112a779331163ab5b2d7",
+      "media_type": "text/plain",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "7409dc576cbe54a382d7253c5019f173812fb18391f200500af467444d084c55",
+        "description": "two UTF-8 paragraphs"
+      }
+    },
+    {
+      "id": "tsv-corrupt",
+      "format": "tsv",
+      "scenario": "corrupt",
+      "path": "small/tsv/corrupt.tsv",
+      "bytes": 19,
+      "sha256": "3923f174d666dcfd3f52f83d2db730168ce940dff2995b7e6a8f964287010a36",
+      "media_type": "text/tab-separated-values",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid UTF-8"
+      }
+    },
+    {
+      "id": "tsv-limit",
+      "format": "tsv",
+      "scenario": "limit",
+      "path": "small/tsv/limit.tsv",
+      "bytes": 122,
+      "sha256": "764b5bef5ff4eb790805a2151ffeb51dd0d23a4aded9970022818037eafb1750",
+      "media_type": "text/tab-separated-values",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "column count crosses the exact configured boundary",
+        "limit": {
+          "option": "max_table_columns",
+          "failing_value": 32,
+          "passing_value": 33,
+          "error_limit": "max_table_columns",
+          "passing_semantic_sha256": "bedc28a22c18681a165e567d8bb7c818230e6ff7dc047b8484ed229ba4db3d5e"
+        }
+      }
+    },
+    {
+      "id": "tsv-normal",
+      "format": "tsv",
+      "scenario": "normal",
+      "path": "small/tsv/normal.tsv",
+      "bytes": 28,
+      "sha256": "bd6a4e526798bd1dce07cfc1a1dd0202e78cb9f3e03a8d3d97194b2dadbad575",
+      "media_type": "text/tab-separated-values",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "800366d08763acec506041dafe98faef619db37fe74dc52b76a640b8a520d3e2",
+        "description": "header and two rows"
+      }
+    },
+    {
+      "id": "xml-corrupt",
+      "format": "xml",
+      "scenario": "corrupt",
+      "path": "small/xml/corrupt.xml",
+      "bytes": 51,
+      "sha256": "01ee38ea54bcaf79b37d917e53242ec46ab12856d6887c0fad71fc37b609832e",
+      "media_type": "application/xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "mismatched closing element"
+      }
+    },
+    {
+      "id": "xml-limit",
+      "format": "xml",
+      "scenario": "limit",
+      "path": "small/xml/limit.xml",
+      "bytes": 57,
+      "sha256": "41da15b2e69864454e221a29d7b17232a542560f077ce395a62d424ff13d3212",
+      "media_type": "application/xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "XML crosses the exact configured nesting boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 7,
+          "passing_value": 8,
+          "error_limit": "xml_nesting_depth",
+          "passing_semantic_sha256": "466e6540a9adaabdbd98b8a065097b4b4ddcc3b48edd4fae25636d88d08e3d55"
+        }
+      }
+    },
+    {
+      "id": "xml-malicious",
+      "format": "xml",
+      "scenario": "malicious",
+      "path": "small/xml/malicious.xml",
+      "bytes": 46,
+      "sha256": "491d419349ad008230f3993f7c7c0349bd97f55f194ac28dd9efe9a13df0c275",
+      "media_type": "application/xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "DTD and custom entity are rejected"
+      }
+    },
+    {
+      "id": "xml-normal",
+      "format": "xml",
+      "scenario": "normal",
+      "path": "small/xml/normal.xml",
+      "bytes": 82,
+      "sha256": "e4bc8e4917c8b8f0b13304e990a88e51c69ba836f845bfe529e68ea6e584878e",
+      "media_type": "application/xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "081c32b986d57ae4f39102444a642b1ea0408d252e99afeeddb7a517e743cf42",
+        "description": "title and paragraph elements"
+      }
+    }
+  ],
+  "large_artifacts": [
+    {
+      "id": "noto-sans-cjk-sc-regular-generator-font",
+      "purpose": "OCR fixture generation only",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "allowed_hosts": [
+        "raw.githubusercontent.com"
+      ],
+      "bytes": 16437364,
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "maximum_redirects": 0,
+      "source_revision": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "source_container": "raw-file",
+      "source_container_sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "license": "OFL-1.1",
+      "license_url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+      "author": "Adobe and Google",
+      "acquired_on": "2026-08-13",
+      "redistribution": "font may be cached and redistributed under OFL-1.1; not included in repository or release",
+      "manual_only": true,
+      "included_in_release": false
+    },
+    {
+      "id": "ppocrv6-tiny-recognizer-onnx-quality",
+      "purpose": "explicit OCR quality target only",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "allowed_hosts": [
+        "paddle-model-ecology.bj.bcebos.com"
+      ],
+      "bytes": 4526080,
+      "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+      "maximum_redirects": 0,
+      "source_revision": "PaddleOCR@2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "source_container": "tar",
+      "source_container_sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+      "license": "Apache-2.0",
+      "license_url": "https://github.com/PaddlePaddle/PaddleOCR/blob/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/LICENSE",
+      "author": "PaddlePaddle Authors",
+      "acquired_on": "2026-08-13",
+      "redistribution": "cache and redistribution permitted with Apache-2.0 notices; not included in repository or release",
+      "manual_only": true,
+      "included_in_release": false
+    }
+  ],
+  "ocr_quality": {
+    "license": "Apache-2.0",
+    "copyright": "2026 into-markdown contributors",
+    "unicode_normalization": "NFC",
+    "line_endings": "LF",
+    "whitespace_rule": "collapse Unicode whitespace runs, then exclude whitespace from edit distance",
+    "punctuation_rule": "retain punctuation and compare Unicode scalar values exactly",
+    "font_artifact_id": "noto-sans-cjk-sc-regular-generator-font",
+    "render": {
+      "mode": "L",
+      "canvas_width": 1800,
+      "canvas_height": 80,
+      "font_size": 42,
+      "origin_x": 20,
+      "origin_y": 9,
+      "foreground": 0,
+      "background": 255,
+      "png_compress_level": 9,
+      "layout_engine": "Pillow ImageFont.Layout.BASIC",
+      "antialiasing": "FreeType 2.13.3 grayscale rasterization",
+      "locale": "locale-independent Unicode codepoint input",
+      "dpi_metadata": "absent"
+    },
+    "training_pollution_statement": "Repository-authored phrases were created after the model release, are not copied from PaddleOCR training or evaluation data, and are used only as independent regression goldens.",
+    "goldens": [
+      {
+        "fixture_id": "ocr-simplified-clear-1",
+        "group": "simplified",
+        "ground_truth_nfc": "清晰扫描文本用于验证文档转换质量与字符顺序。",
+        "codepoints": 22,
+        "evaluated_characters": 22,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-simplified-clear-2",
+        "group": "simplified",
+        "ground_truth_nfc": "离线处理应保持标题、段落、数字二零二六和标点。",
+        "codepoints": 23,
+        "evaluated_characters": 23,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-simplified-clear-3",
+        "group": "simplified",
+        "ground_truth_nfc": "安全边界拒绝损坏输入并返回稳定诊断结果。",
+        "codepoints": 20,
+        "evaluated_characters": 20,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-traditional-clear-1",
+        "group": "traditional",
+        "ground_truth_nfc": "清晰掃描文字用於驗證文件轉換品質與字元順序。",
+        "codepoints": 22,
+        "evaluated_characters": 22,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-traditional-clear-2",
+        "group": "traditional",
+        "ground_truth_nfc": "離線處理應保持標題、段落、數字二零二六和標點。",
+        "codepoints": 23,
+        "evaluated_characters": 23,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-traditional-clear-3",
+        "group": "traditional",
+        "ground_truth_nfc": "安全邊界拒絕損壞輸入並傳回穩定診斷結果。",
+        "codepoints": 20,
+        "evaluated_characters": 20,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-english-clear-1",
+        "group": "english",
+        "ground_truth_nfc": "Clear scans verify document conversion quality and character order.",
+        "codepoints": 67,
+        "evaluated_characters": 59,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-english-clear-2",
+        "group": "english",
+        "ground_truth_nfc": "Offline processing keeps headings, paragraphs, digits 2026, and punctuation.",
+        "codepoints": 76,
+        "evaluated_characters": 68,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-english-clear-3",
+        "group": "english",
+        "ground_truth_nfc": "Safety limits reject damaged input with stable diagnostic results.",
+        "codepoints": 66,
+        "evaluated_characters": 58,
+        "maximum_cer": 0.05
+      },
+      {
+        "fixture_id": "ocr-mixed-clear-1",
+        "group": "mixed",
+        "ground_truth_nfc": "中英混排 OCR Quality 验证文件轉換與 order 2026。",
+        "codepoints": 36,
+        "evaluated_characters": 31,
+        "maximum_cer": 0.08
+      },
+      {
+        "fixture_id": "ocr-mixed-clear-2",
+        "group": "mixed",
+        "ground_truth_nfc": "离线 Pipeline 保持標題、paragraphs、数字 42 和 punctuation。",
+        "codepoints": 48,
+        "evaluated_characters": 43,
+        "maximum_cer": 0.08
+      },
+      {
+        "fixture_id": "ocr-mixed-clear-3",
+        "group": "mixed",
+        "ground_truth_nfc": "安全 boundary 拒绝 damaged 輸入並返回 stable diagnostics。",
+        "codepoints": 48,
+        "evaluated_characters": 42,
+        "maximum_cer": 0.08
+      }
+    ]
+  }
+}
