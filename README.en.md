@@ -132,6 +132,10 @@ and duplicates use deterministic ID, canonical-link, then length-framed content-
 keys. Parsing, nested extraction, deduplication, recursive IR/asset renumbering, and output share
 one aggregate logical budget. DTDs, external entities, namespace confusion, and bounded-resource
 violations fail closed.
+Feed XML expanded names and attributes, `xml:base`/URLs, diagnostics, and event-by-event XHTML
+output use the same lease. Owned vectors and strings are charged before allocation using actual
+capacity; CDATA and attribute escape growth is measured before writing. This cooperative logical
+budget does not claim a physical RSS limit or hard isolation of a third-party allocator.
 
 Markdown/GFM conversion supports headings, emphasis and strikethrough, links and
 autolinks, nested and task lists, tables, code blocks, and footnotes while retaining

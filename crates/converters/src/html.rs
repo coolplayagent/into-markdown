@@ -340,7 +340,7 @@ impl FeedHtmlBudget {
         })
     }
 
-    fn charge_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
+    pub(crate) fn charge_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
         let next = self.persistent_memory_bytes.checked_add(bytes).ok_or_else(|| {
             ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
@@ -361,7 +361,7 @@ impl FeedHtmlBudget {
         Ok(())
     }
 
-    fn prepay_parser_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
+    pub(crate) fn prepay_parser_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
         let next = self.memory.mark().checked_add(bytes).ok_or_else(|| {
             ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
@@ -420,15 +420,18 @@ impl FeedHtmlBudget {
         Self::consume(&mut self.assets, self.max_assets, 1, "feed_assets")
     }
 
-    pub(crate) fn diagnostic(
+    /// Consume diagnostic/string/output quotas before the feed constructs the
+    /// two owned strings. Their real allocator capacities are charged by
+    /// `reserve_string_capacity`, so this method deliberately does not charge
+    /// payload bytes a second time.
+    pub(crate) fn begin_feed_diagnostic(
         &mut self,
         code_bytes: usize,
         message_bytes: usize,
     ) -> Result<(), ConversionError> {
         Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
-        self.string(code_bytes)?;
-        self.string(message_bytes)?;
-        Ok(())
+        self.consume_strings(1, code_bytes)?;
+        self.consume_strings(1, message_bytes)
     }
 
     fn html_diagnostic(
@@ -439,10 +442,6 @@ impl FeedHtmlBudget {
         Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
         self.consume_strings(1, code_bytes)?;
         self.consume_strings(1, message_bytes)
-    }
-
-    pub(crate) fn string(&mut self, bytes: usize) -> Result<(), ConversionError> {
-        self.strings(1, bytes)
     }
 
     pub(crate) fn strings(&mut self, count: usize, bytes: usize) -> Result<(), ConversionError> {
@@ -489,7 +488,7 @@ impl FeedHtmlBudget {
         Ok(output)
     }
 
-    fn reserve_string_capacity(
+    pub(crate) fn reserve_string_capacity(
         &mut self,
         string: &mut String,
         additional: usize,
@@ -548,7 +547,7 @@ impl FeedHtmlBudget {
     /// the vector's slots account for the object representation, while owned
     /// `String`/nested-vector payloads account for their own capacities. This
     /// avoids charging `size_of::<T>()` once as an object and again as a slot.
-    fn reserve_vec<T>(
+    pub(crate) fn reserve_vec<T>(
         &mut self,
         vector: &mut Vec<T>,
         additional: usize,
@@ -605,6 +604,28 @@ impl FeedHtmlBudget {
             return Err(error);
         }
         record_feed_html_capacity_growth();
+        Ok(())
+    }
+
+    /// Release a conservatively prepaid third-party/parser workspace range.
+    /// Persistent allocations made while the range was held remain charged.
+    pub(crate) fn release_parser_memory(&mut self, bytes: usize) -> Result<(), ConversionError> {
+        self.memory.release(bytes)
+    }
+
+    /// Release an explicitly temporary capacity after its owner has been
+    /// dropped, while retaining later persistent allocations in the lease.
+    pub(crate) fn release_temporary_capacity(
+        &mut self,
+        bytes: usize,
+    ) -> Result<(), ConversionError> {
+        let next = self.persistent_memory_bytes.checked_sub(bytes).ok_or_else(|| {
+            ConversionError::Internal {
+                detail: "temporary capacity exceeds persistent feed memory".into(),
+            }
+        })?;
+        self.memory.release(bytes)?;
+        self.persistent_memory_bytes = next;
         Ok(())
     }
 

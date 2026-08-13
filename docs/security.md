@@ -33,6 +33,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   保守预付 tokenizer、TreeBuilder、8 轮 adoption-agency、tendril 与 DOM workspace；Feed-owned
   lease 贯穿 parser、DOM 和最终 Document。预付是协作式逻辑上界，并非 allocator metadata 或
   进程 RSS。fragment 失败只在局部对象全部析构后回滚完整预算快照，避免失败片段留下幽灵计费。
+  Feed XML 的 element/attribute expanded-name、解码值、`xml:base`/URL、diagnostic 及 Atom XHTML
+  序列化同样使用该 lease：自有 Vec/String 在增长前预留目标 capacity，并在 allocator 返回后按
+  真实 capacity 补差。属性不进入另一个未计费的树/集合；XHTML 逐事件写入预算化 String，CDATA
+  与 attribute escaping 先无堆计算扩张长度再申请，失败对象析构后恢复完整事务快照。
 - Markdown 解析固定离线，不读取相对图片、不获取 HTTP(S) 图片、不解码 data URI。
   external-only 图片 URI 必须是 canonical HTTP(S)，且没有 userinfo、query 或 fragment；
   该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content

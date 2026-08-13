@@ -1459,7 +1459,7 @@ fn validate_namespace_declaration(raw: &str, value: &str) -> Result<(), Conversi
     Ok(())
 }
 
-pub(crate) fn predefined_or_numeric_entity(raw: &str) -> Result<String, ConversionError> {
+pub(crate) fn predefined_or_numeric_entity_scalar(raw: &str) -> Result<char, ConversionError> {
     let value = match raw {
         "lt" => '<',
         "gt" => '>',
@@ -1491,7 +1491,11 @@ pub(crate) fn predefined_or_numeric_entity(raw: &str) -> Result<String, Conversi
             format!("numeric entity &{raw}; is not an XML character"),
         ));
     }
-    Ok(value.to_string())
+    Ok(value)
+}
+
+pub(crate) fn predefined_or_numeric_entity(raw: &str) -> Result<String, ConversionError> {
+    Ok(predefined_or_numeric_entity_scalar(raw)?.to_string())
 }
 
 fn xml_char(value: char) -> bool {

@@ -85,6 +85,8 @@ RSS 2.0 与 Atom 1.0 Feed 转换可用，提取标题、作者、时间、链接
 DTD、外部实体、错误 namespace、RSS/Atom 混淆与超限输入稳定拒绝。
 Nested HTML 在 parser 构造前预付固定 html5ever 0.39.0 的保守逻辑工作区，并与 Feed 最终输出
 共享同一 lease；失败 fragment 析构后完整回滚。该预算不表示 allocator metadata 或进程 RSS。
+Feed XML 的 expanded-name/attribute、`xml:base`/URL、diagnostic 与 XHTML 逐事件写入也共享该
+lease；自有 Vec/String 按真实 capacity 在分配前计费，CDATA/attribute escaping 在写入前计算扩张。
 
 Markdown/GFM 转换支持标题、强调和删除线、链接与 autolink、嵌套列表和任务列表、
 表格、代码块及脚注，并保存 UTF-8 原始字节范围。独立段落的安全 HTTP(S) 图片以

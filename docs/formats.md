@@ -113,6 +113,11 @@ tendril 的 next-power-of-two（小于 2 倍）及 adoption-agency
 持久输出的预付空间。该边界不代表 allocator metadata 或进程 RSS。任意 fragment 错误会先析构
 parser、DOM 与局部输出，再完整恢复 memory、对象、字符串和输出字节快照；随后产生的最小 Feed
 诊断独立计费。
+Feed XML 本身不再用 start-tag 长度倍率估算持久对象：每个 element/attribute 的 expanded-name、
+解码值、`xml:base` 结果、URL 与 diagnostic 都在构造前从共享 lease 预扣，自有容器按 allocator
+返回的真实 capacity 补差。Atom XHTML 不使用带隐藏增长的通用 writer；逐事件写入预算化 String，
+CDATA 与 attribute escape 先无堆计算精确扩张长度。任何属性、URL、诊断或 XHTML 事件失败都会先
+析构局部值，再恢复该操作的完整预算快照。
 
 ## Markdown 与 GFM
 

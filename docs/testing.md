@@ -109,6 +109,11 @@ adoption-agency 与每 token 64 个保守 mutation unit。fixture 覆盖大量 a
 growth 按实际 capacity delta 核对 snapshot，包含非 64/4 的请求。失败 fragment 在 parser/DOM/
 局部输出析构后回滚完整事务，再以精确内存运行安全 fragment，证明没有幽灵 charge 或重复计费。
 这些断言验证协作式逻辑边界，不测量 allocator metadata 或进程 RSS。
+Feed XML 另有 1000 个唯一空属性的容量回归：记录实际 attribute vector 与 raw/namespace/local/value
+String capacity，精确峰值减一必须在下一对象 constructor hook 前失败并完整回滚，足额重试得到相同
+snapshot；75,000-byte request memory 复现稳定返回 `resourceLimit`。Atom XHTML 的大 CDATA
+`&<>` escape-growth 回归在真实 writer String reserve 后才触发 write hook，扩张峰值减一时 hook 保持
+为零，足额峰值可重试成功。
 
 仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
