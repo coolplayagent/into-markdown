@@ -76,6 +76,34 @@ struct OrtCompanionDependency {
     sha256: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PdfiumManifest {
+    schema_version: u64,
+    version: String,
+    chromium_build: u64,
+    source: String,
+    release_download_base: String,
+    upstream_source: String,
+    license: String,
+    distribution_license_note: String,
+    required_exports: Vec<String>,
+    targets: BTreeMap<String, PdfiumTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PdfiumTarget {
+    asset: String,
+    archive_size: u64,
+    archive_sha256: String,
+    library: String,
+    library_size: u64,
+    library_sha256: String,
+    format_pattern: String,
+    allowed_dependencies: Vec<String>,
+}
+
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
@@ -143,6 +171,7 @@ struct DownloadManifest {
     model_files: Vec<ModelDownload>,
     model_runtime_files: Vec<ModelRuntimeDownload>,
     native_archives: Vec<NativeDownload>,
+    pdfium_archives: Vec<NativeDownload>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -173,7 +202,8 @@ struct NativeDownload {
     repository: String,
     url: String,
     sha256: String,
-    strip_prefix: String,
+    #[serde(default)]
+    strip_prefix: Option<String>,
 }
 
 /// Runs the repository audit. Release mode applies distribution-boundary rules.
@@ -489,10 +519,12 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ort_text = read(&root.join("third_party/onnxruntime/manifest.json"), errors);
     let models_text = read(&root.join("models/manifest.json"), errors);
     let downloads_text = read(&root.join("third_party/licenses/downloads.json"), errors);
+    let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let downloads: Option<DownloadManifest> =
         parse_json("download manifest", &downloads_text, errors);
+    let pdfium: Option<PdfiumManifest> = parse_json("PDFium manifest", &pdfium_text, errors);
 
     if let (Some(ort), Some(downloads)) = (&ort, &downloads) {
         validate_ort_manifest(inventory, ort, downloads, errors);
@@ -506,7 +538,243 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
         }
         validate_download_fields(downloads, errors);
     }
+    if let (Some(pdfium), Some(downloads)) = (&pdfium, &downloads) {
+        validate_pdfium_manifest(inventory, pdfium, downloads, errors);
+    }
 }
+
+fn validate_pdfium_manifest(
+    inventory: &Inventory,
+    manifest: &PdfiumManifest,
+    downloads: &DownloadManifest,
+    errors: &mut Vec<String>,
+) {
+    let Some(component) = exact_component(inventory, "pdfium", errors) else {
+        return;
+    };
+    if component.status != "reviewed"
+        || component.kind != "native-runtime"
+        || component.version.as_deref() != Some(manifest.version.as_str())
+        || component.source.as_deref() != Some(manifest.source.as_str())
+        || component.license.as_deref() != Some(manifest.license.as_str())
+    {
+        errors.push("component pdfium disagrees with its reviewed manifest".to_owned());
+    }
+    if manifest.schema_version != 1
+        || manifest.version != "153.0.7999.0"
+        || manifest.chromium_build != 7999
+        || manifest.license != "BSD-3-Clause"
+        || manifest.source
+            != "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7999"
+        || manifest.release_download_base
+            != "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999"
+        || manifest.upstream_source
+            != "https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/7999"
+        || manifest.distribution_license_note.is_empty()
+    {
+        errors.push("PDFium manifest is not the reviewed chromium/7999 release".to_owned());
+    }
+
+    let actual_exports: BTreeSet<_> =
+        manifest.required_exports.iter().map(String::as_str).collect();
+    let expected_exports: BTreeSet<_> = PDFIUM_REQUIRED_EXPORTS.iter().copied().collect();
+    if manifest.required_exports.len() != expected_exports.len()
+        || actual_exports != expected_exports
+    {
+        errors.push("PDFium manifest must contain the exact reviewed ABI export set".to_owned());
+    }
+
+    let expected_targets = pdfium_expected_targets();
+    let actual_target_keys: BTreeSet<_> = manifest.targets.keys().map(String::as_str).collect();
+    let expected_target_keys: BTreeSet<_> = expected_targets.keys().copied().collect();
+    if actual_target_keys != expected_target_keys {
+        errors.push("PDFium manifest must contain exactly the four reviewed targets".to_owned());
+    }
+
+    let mut downloads_by_target = BTreeMap::new();
+    for download in &downloads.pdfium_archives {
+        if downloads_by_target.insert(download.target.as_str(), download).is_some() {
+            errors.push(format!("duplicate PDFium download target {}", download.target));
+        }
+    }
+    if downloads_by_target.keys().copied().collect::<BTreeSet<_>>() != expected_target_keys {
+        errors.push("download manifest PDFium targets do not match reviewed targets".to_owned());
+    }
+
+    for (target, expected) in expected_targets {
+        let Some(item) = manifest.targets.get(target) else {
+            errors.push(format!("PDFium target {target} is missing"));
+            continue;
+        };
+        if item != &expected.artifact
+            || !is_sha256(&item.archive_sha256)
+            || !is_sha256(&item.library_sha256)
+        {
+            errors.push(format!("PDFium target {target} differs from the reviewed artifact"));
+        }
+        let Some(download) = downloads_by_target.get(target) else {
+            continue;
+        };
+        let expected_url = format!("{}/{}", manifest.release_download_base, item.asset);
+        if download.repository != expected.repository
+            || download.url != expected_url
+            || download.sha256 != item.archive_sha256
+            || download.strip_prefix.as_deref() != Some("")
+        {
+            errors.push(format!("PDFium target {target} disagrees with downloads.json"));
+        }
+    }
+}
+
+struct ExpectedPdfiumTarget {
+    repository: &'static str,
+    artifact: PdfiumTarget,
+}
+
+// This reviewed data table intentionally keeps every target's binary identity adjacent.
+#[allow(clippy::too_many_lines)]
+fn pdfium_expected_targets() -> BTreeMap<&'static str, ExpectedPdfiumTarget> {
+    BTreeMap::from([
+        (
+            "aarch64-apple-darwin",
+            ExpectedPdfiumTarget {
+                repository: "pdfium_macos_arm64",
+                artifact: PdfiumTarget {
+                    asset: "pdfium-mac-arm64.tgz".to_owned(),
+                    archive_size: 3_453_147,
+                    archive_sha256:
+                        "e214ee33f22b2204daa765a545aee1e425d88448e6154dac95c6a06206b7437f"
+                            .to_owned(),
+                    library: "lib/libpdfium.dylib".to_owned(),
+                    library_size: 7_191_008,
+                    library_sha256:
+                        "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc601d52b0"
+                            .to_owned(),
+                    format_pattern: "Mach-O 64-bit.*arm64".to_owned(),
+                    allowed_dependencies: [
+                        "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+                        "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+                        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+                        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+                        "/usr/lib/libSystem.B.dylib",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                },
+            },
+        ),
+        (
+            "aarch64-unknown-linux-gnu",
+            ExpectedPdfiumTarget {
+                repository: "pdfium_linux_arm64",
+                artifact: PdfiumTarget {
+                    asset: "pdfium-linux-arm64.tgz".to_owned(),
+                    archive_size: 3_618_464,
+                    archive_sha256:
+                        "a19862a36e2b2da3c3fb43f0deef45fbbc331f58cd47943782ae4bd9db4c66d9"
+                            .to_owned(),
+                    library: "lib/libpdfium.so".to_owned(),
+                    library_size: 7_867_192,
+                    library_sha256:
+                        "95a4d8cde3500f57f486478d27795d411b531a14712df08379f4793538a24a88"
+                            .to_owned(),
+                    format_pattern: "ELF 64-bit.*ARM aarch64".to_owned(),
+                    allowed_dependencies: [
+                        "libpthread.so.0",
+                        "libm.so.6",
+                        "libgcc_s.so.1",
+                        "libc.so.6",
+                        "ld-linux-aarch64.so.1",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                },
+            },
+        ),
+        (
+            "x86_64-pc-windows-msvc",
+            ExpectedPdfiumTarget {
+                repository: "pdfium_windows_x86_64",
+                artifact: PdfiumTarget {
+                    asset: "pdfium-win-x64.tgz".to_owned(),
+                    archive_size: 3_762_593,
+                    archive_sha256:
+                        "55329d5cb5de8a379a2fc563106492d7f385a1f795d18970922c71f708f9fbb4"
+                            .to_owned(),
+                    library: "bin/pdfium.dll".to_owned(),
+                    library_size: 7_260_672,
+                    library_sha256:
+                        "fb898a1f5ace57805834f390407500bdb6ef93eff326a252ad334a8aae809d8e"
+                            .to_owned(),
+                    format_pattern: "PE32+.*x86-64|coff-x86-64".to_owned(),
+                    allowed_dependencies: [
+                        "KERNEL32.dll",
+                        "ADVAPI32.dll",
+                        "GDI32.dll",
+                        "USER32.dll",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                },
+            },
+        ),
+        (
+            "x86_64-unknown-linux-gnu",
+            ExpectedPdfiumTarget {
+                repository: "pdfium_linux_x86_64",
+                artifact: PdfiumTarget {
+                    asset: "pdfium-linux-x64.tgz".to_owned(),
+                    archive_size: 3_675_613,
+                    archive_sha256:
+                        "c3af580f9df0fef9545b44115bc5ea440f286956b5f231df69fb373b8efc4f69"
+                            .to_owned(),
+                    library: "lib/libpdfium.so".to_owned(),
+                    library_size: 7_669_256,
+                    library_sha256:
+                        "224f8ece41f7e35891f11c10073b7b7062d7a18e9ef870586162a85c46130f7d"
+                            .to_owned(),
+                    format_pattern: "ELF 64-bit.*x86-64".to_owned(),
+                    allowed_dependencies: [
+                        "libpthread.so.0",
+                        "libm.so.6",
+                        "libgcc_s.so.1",
+                        "libc.so.6",
+                        "ld-linux-x86-64.so.2",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                },
+            },
+        ),
+    ])
+}
+
+const PDFIUM_REQUIRED_EXPORTS: [&str; 24] = [
+    "FPDF_InitLibraryWithConfig",
+    "FPDF_DestroyLibrary",
+    "FPDF_LoadMemDocument64",
+    "FPDF_CloseDocument",
+    "FPDF_GetPageCount",
+    "FPDF_LoadPage",
+    "FPDF_ClosePage",
+    "FPDFText_LoadPage",
+    "FPDFText_ClosePage",
+    "FPDFText_CountChars",
+    "FPDFText_GetText",
+    "FPDFPage_CountObjects",
+    "FPDFPage_GetObject",
+    "FPDFPageObj_GetType",
+    "FPDFBitmap_CreateEx",
+    "FPDFBitmap_Destroy",
+    "FPDFBitmap_GetBuffer",
+    "FPDFBitmap_GetFormat",
+    "FPDFBitmap_GetHeight",
+    "FPDFBitmap_GetStride",
+    "FPDFBitmap_GetWidth",
+    "FPDFImageObj_GetBitmap",
+    "FPDF_RenderPageBitmap",
+    "FPDF_GetLastError",
+];
 
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
@@ -587,11 +855,27 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
         }
         if !SUPPORTED_MODEL_TARGETS.contains(&item.target.as_str())
             || !is_safe_model_id(&item.repository)
-            || !is_safe_model_file_name(&item.strip_prefix)
+            || item
+                .strip_prefix
+                .as_deref()
+                .is_some_and(|value| !value.is_empty() && !is_safe_model_file_name(value))
             || !is_canonical_https(&item.url)
             || !is_sha256(&item.sha256)
         {
             errors.push(format!("native download {} has incomplete fields", item.repository));
+        }
+    }
+    for item in &downloads.pdfium_archives {
+        if !repositories.insert(item.repository.as_str()) {
+            errors.push(format!("duplicate download repository {}", item.repository));
+        }
+        if !SUPPORTED_MODEL_TARGETS.contains(&item.target.as_str())
+            || !is_safe_model_id(&item.repository)
+            || item.strip_prefix.as_deref() != Some("")
+            || !is_canonical_https(&item.url)
+            || !is_sha256(&item.sha256)
+        {
+            errors.push(format!("PDFium download {} has incomplete fields", item.repository));
         }
     }
 }
@@ -693,7 +977,7 @@ fn validate_ort_manifest(
         if download.repository != repository
             || download.url != expected_url
             || download.sha256 != asset.sha256
-            || Some(download.strip_prefix.as_str()) != expected_strip_prefix
+            || download.strip_prefix.as_deref() != expected_strip_prefix
         {
             errors.push(format!(
                 "ONNX Runtime target {target} disagrees with authoritative download {repository}"
@@ -1178,6 +1462,7 @@ mod tests {
             model_files: vec![],
             model_runtime_files: vec![],
             native_archives: vec![],
+            pdfium_archives: vec![],
         }
     }
 
@@ -1237,6 +1522,7 @@ mod tests {
             ],
             model_runtime_files: vec![],
             native_archives: vec![],
+            pdfium_archives: vec![],
         };
         let manifest = ModelManifest {
             schema_version: 1,
@@ -1344,11 +1630,13 @@ mod tests {
                     "https://github.com/microsoft/onnxruntime/releases/download/v{version}/{asset}"
                 ),
                 sha256,
-                strip_prefix: asset
-                    .strip_suffix(".tgz")
-                    .or_else(|| asset.strip_suffix(".zip"))
-                    .unwrap()
-                    .to_owned(),
+                strip_prefix: Some(
+                    asset
+                        .strip_suffix(".tgz")
+                        .or_else(|| asset.strip_suffix(".zip"))
+                        .unwrap()
+                        .to_owned(),
+                ),
             });
         }
         let source = format!("https://github.com/microsoft/onnxruntime/releases/tag/v{version}");
@@ -1380,6 +1668,60 @@ mod tests {
                 model_files: vec![],
                 model_runtime_files: vec![],
                 native_archives,
+                pdfium_archives: vec![],
+            },
+        )
+    }
+
+    fn pdfium_fixture() -> (PdfiumManifest, Inventory, DownloadManifest) {
+        let source = "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7999";
+        let release_download_base =
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999";
+        let mut targets = BTreeMap::new();
+        let mut pdfium_archives = Vec::new();
+        for (target, expected) in pdfium_expected_targets() {
+            pdfium_archives.push(NativeDownload {
+                target: target.to_owned(),
+                repository: expected.repository.to_owned(),
+                url: format!("{release_download_base}/{}", expected.artifact.asset),
+                sha256: expected.artifact.archive_sha256.clone(),
+                strip_prefix: Some(String::new()),
+            });
+            targets.insert(target.to_owned(), expected.artifact);
+        }
+        (
+            PdfiumManifest {
+                schema_version: 1,
+                version: "153.0.7999.0".to_owned(),
+                chromium_build: 7999,
+                source: source.to_owned(),
+                release_download_base: release_download_base.to_owned(),
+                upstream_source:
+                    "https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/7999".to_owned(),
+                license: "BSD-3-Clause".to_owned(),
+                distribution_license_note: "preserve all notices".to_owned(),
+                required_exports: PDFIUM_REQUIRED_EXPORTS.map(str::to_owned).into(),
+                targets,
+            },
+            Inventory {
+                schema_version: 1,
+                components: vec![Component {
+                    id: "pdfium".to_owned(),
+                    kind: "native-runtime".to_owned(),
+                    status: "reviewed".to_owned(),
+                    included_in_release: false,
+                    version: Some("153.0.7999.0".to_owned()),
+                    source: Some(source.to_owned()),
+                    license: Some("BSD-3-Clause".to_owned()),
+                    obligations: Some("preserve all notices".to_owned()),
+                }],
+            },
+            DownloadManifest {
+                schema_version: 1,
+                model_files: vec![],
+                model_runtime_files: vec![],
+                native_archives: vec![],
+                pdfium_archives,
             },
         )
     }
@@ -1520,7 +1862,7 @@ version = "9.9.9"
             match mutate {
                 "repository" => download.repository = "wrong_repository".into(),
                 "sha256" => download.sha256 = "f".repeat(64),
-                "strip_prefix" => download.strip_prefix = "wrong-prefix".into(),
+                "strip_prefix" => download.strip_prefix = Some("wrong-prefix".into()),
                 _ => unreachable!(),
             }
             let mut errors = Vec::new();
@@ -1549,6 +1891,40 @@ version = "9.9.9"
         assert!(errors.iter().any(|error| {
             error.contains("x86_64-pc-windows-msvc") && error.contains("invalid audited fields")
         }));
+    }
+
+    #[test]
+    fn pdfium_manifest_rejects_abi_artifact_and_download_drift() {
+        let (manifest, inventory, downloads) = pdfium_fixture();
+        let mut errors = Vec::new();
+        validate_pdfium_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let mut changed = manifest.clone();
+        changed.required_exports.pop();
+        changed.targets.get_mut("aarch64-apple-darwin").unwrap().library_size += 1;
+        let mut changed_downloads = downloads;
+        changed_downloads
+            .pdfium_archives
+            .iter_mut()
+            .find(|download| download.target == "aarch64-apple-darwin")
+            .unwrap()
+            .url
+            .push_str(".wrong");
+        let mut errors = Vec::new();
+        validate_pdfium_manifest(&inventory, &changed, &changed_downloads, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("exact reviewed ABI export set")));
+        assert!(errors.iter().any(|error| error.contains("reviewed artifact")));
+        assert!(errors.iter().any(|error| error.contains("disagrees with downloads.json")));
+    }
+
+    #[test]
+    fn pdfium_manifest_rejects_unknown_fields() {
+        let mut errors = Vec::new();
+        let parsed: Option<PdfiumManifest> =
+            parse_json("PDFium manifest", r#"{"schema_version":1,"unexpected":true}"#, &mut errors);
+        assert!(parsed.is_none());
+        assert!(errors.iter().any(|error| error.contains("unknown field")));
     }
 
     #[test]

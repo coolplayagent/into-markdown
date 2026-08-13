@@ -103,6 +103,8 @@ struct DownloadManifest {
     model_files: Vec<SourceDownload>,
     model_runtime_files: Vec<RuntimeDownload>,
     native_archives: Vec<NativeDownload>,
+    #[serde(default, rename = "pdfium_archives")]
+    _pdfium_archives: Vec<NativeDownload>,
 }
 
 #[derive(Debug, Deserialize)]

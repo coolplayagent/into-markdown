@@ -16,6 +16,7 @@ DATA = [
     "//third_party/licenses:rust-lock.tsv",
     "//third_party/licenses:downloads.json",
     "//third_party/onnxruntime:manifest.json",
+    "//third_party/pdfium:manifest.json",
     ":Cargo.toml",
     "//apps/cli:Cargo.toml",
     "//crates/ai:Cargo.toml",
@@ -25,6 +26,7 @@ DATA = [
     "//crates/engine:Cargo.toml",
     "//crates/ocr:Cargo.toml",
     "//crates/onnxruntime:Cargo.toml",
+    "//crates/pdfium:Cargo.toml",
     "//crates/render-markdown:Cargo.toml",
     "//tests/contracts:Cargo.toml",
 ]

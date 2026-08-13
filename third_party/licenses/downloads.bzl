@@ -27,11 +27,27 @@ def _downloads_impl(module_ctx):
         )
 
     for item in manifest.get("native_archives", []):
+        args = {
+            "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+            "sha256": item["sha256"],
+            "urls": [item["url"]],
+        }
+        if item.get("strip_prefix"):
+            args["strip_prefix"] = item["strip_prefix"]
+        http_archive(name = item["repository"], **args)
+
+    for item in manifest.get("pdfium_archives", []):
         http_archive(
             name = item["repository"],
-            build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+            build_file_content = """
+exports_files(glob(["**"]), visibility = ["//visibility:public"])
+filegroup(
+    name = "distribution",
+    srcs = glob(["lib/**", "bin/**", "LICENSE", "licenses/**"]),
+    visibility = ["//visibility:public"],
+)
+""",
             sha256 = item["sha256"],
-            strip_prefix = item["strip_prefix"],
             urls = [item["url"]],
         )
 

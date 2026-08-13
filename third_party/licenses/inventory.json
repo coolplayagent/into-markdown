@@ -41,7 +41,16 @@
       "license": "Apache-2.0",
       "obligations": "If distributed, include Apache-2.0 and any upstream NOTICE; preserve dictionary and derived-model provenance."
     },
-    {"id": "pdfium", "kind": "native-runtime", "status": "planned", "included_in_release": false},
+    {
+      "id": "pdfium",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "153.0.7999.0",
+      "source": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7999",
+      "license": "BSD-3-Clause",
+      "obligations": "If distributed, preserve the archive LICENSE and complete licenses/ directory covering PDFium and bundled permissive dependencies; select only a hash-pinned platform archive."
+    },
     {"id": "ffmpeg", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "libreoffice", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "wasmtime", "kind": "native-runtime", "status": "planned", "included_in_release": false},

@@ -1,0 +1,40 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "pdfium",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["//third_party/pdfium:manifest.json"],
+    crate_name = "into_markdown_pdfium",
+    edition = "2024",
+    deps = [
+        "@crates//:libloading",
+        "@crates//:libc",
+        "@crates//:object",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "pdfium_test",
+    crate = ":pdfium",
+    compile_data = ["//third_party/pdfium:manifest.json"],
+    edition = "2024",
+    deps = [
+        "@crates//:libloading",
+        "@crates//:libc",
+        "@crates//:object",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+    ],
+)
