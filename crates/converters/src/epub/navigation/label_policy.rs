@@ -327,10 +327,10 @@ fn validate_url_attributes(
                 b"datatype" | b"itemprop" | b"property" | b"rel" | b"rev" | b"role" | b"typeof" => {
                     validate_rdfa_terms(base, &attribute.value, budget)?;
                 }
-                b"about" | b"action" | b"archive" | b"background" | b"cite" | b"classid"
-                | b"codebase" | b"data" | b"dynsrc" | b"formaction" | b"href" | b"itemid"
-                | b"longdesc" | b"lowsrc" | b"manifest" | b"poster" | b"profile" | b"resource"
-                | b"src" | b"usemap" | b"vocab" => {
+                b"about" | b"action" | b"altimg" | b"archive" | b"background" | b"cite"
+                | b"classid" | b"codebase" | b"data" | b"dynsrc" | b"formaction" | b"href"
+                | b"itemid" | b"longdesc" | b"lowsrc" | b"manifest" | b"poster" | b"profile"
+                | b"resource" | b"src" | b"usemap" | b"vocab" => {
                     validate_internal(base, &attribute.value, budget)?;
                 }
                 _ if potentially_url_bearing_name(&attribute.local) => {

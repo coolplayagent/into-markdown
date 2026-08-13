@@ -58,6 +58,39 @@ fn rdfa_iri_attributes_are_confined_and_unknown_url_names_fail_closed() {
 }
 
 #[test]
+fn mathml_altimg_is_a_container_confined_iri() {
+    let math = Name { namespace: Some(MATHML_NS.to_vec()), local: b"math".to_vec() };
+    for value in ["https://example.invalid/math.png", "javascript:bad"] {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut budget = EpubBudget::new(&options, &context);
+        assert!(
+            validate_element(
+                &math,
+                &[attribute(b"alt", "equation"), attribute(b"altimg", value)],
+                &base(),
+                &mut budget,
+            )
+            .is_err(),
+            "accepted {value:?}"
+        );
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut budget = EpubBudget::new(&options, &context);
+    validate_element(
+        &math,
+        &[attribute(b"alt", "equation"), attribute(b"altimg", "images/equation.png")],
+        &base(),
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
 fn navigation_url_bytes_checkpoint_across_attributes_and_release_scratch() {
     for timeout in [false, true] {
         let cancellation = CancellationToken::new();
