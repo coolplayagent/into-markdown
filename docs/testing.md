@@ -287,7 +287,9 @@ available 集合比对，并把每个非 OCR 样本送入真实 converter 和 Ma
 RTF corpus 使用仓库原创 ASCII 文件，覆盖中英 Unicode/样式、根组损坏、相邻 group-depth
 边界和 object/local-file field 恶意输入；其许可、生成器、字节数、SHA-256 与最终 Markdown
 hash 和其他 available 格式一起由 manifest 双向审计。转换测试注入计数型 OCR、AI 与
-transcriber，RTF 成功和失败路径均不得调用这些服务。
+transcriber，RTF 成功和失败路径均不得调用这些服务。crate 单元测试另外覆盖 font table
+重复定义的确定性覆盖、4096 项硬边界、低内存分配前失败，以及受控 bytes helper 的同一
+context lease 获取与释放。
 
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，

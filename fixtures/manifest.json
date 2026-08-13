@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "c854cebc898535f2490236d61f71b64657c49d3c06b9199c42882d81e80b29d9",
+    "sha256": "8f10627c76ab84cf3b05dd46b59d38db9fbb53118126a4d98b68bd7c0ca59c89",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",

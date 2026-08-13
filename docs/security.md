@@ -55,7 +55,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   canonical HTTP(S) hyperlink 数据变换，绝不授权网络。PNG/JPEG pict 在保留前受尺寸、
   单项/总资源、完整像素解码和请求内存预算约束；EMF/WMF 不解析。group、control、数字、
   Unicode fallback、decoded text、IR/table/asset/diagnostic 与 heap capacity 均有 checked
-  hard limit，并在长扫描循环 checkpoint。
+  hard limit，并在长扫描循环 checkpoint。font table 最多接受 4096 项，使用分配前计费并按
+  实际 capacity 补差的 `Vec`；destination 结束后原地排序/去重，正文只做 binary search。
+  容器内 RTF helper 不接受 `Services`，不能重建 context 或重置 limit，返回值继续持有同一
+  request memory lease。
 - TXT 自动探测按候选字符集增量解码完整输入；除 TAB、LF、CR 外，NUL、C0、DEL 或 C1
   都会拒绝自动候选，多字节编码不能借原始字节形态绕过规则。BOM 仅决定候选编码，
   不能绕过完整控制字符扫描、有界严格解码与文本安全阈值。结构化文本、具备三行及

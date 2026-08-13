@@ -222,6 +222,9 @@ HTTP(S) resolver 由独立的 policy、DNS、exact-IP connect、TLS、HTTP/1、b
 只有 directory stream 中的流名可产生高置信候选；损坏或超限结构只产生带诊断的
 低置信歧义候选。RTF magic 只有在输入开头严格匹配 `{\\rtf`、至少一位版本号和合法 delimiter 时才形成
 高置信候选；`.rtf`/MIME 提示本身不能使不符合该 header 的普通文本通过 converter probe。
+converter crate 还提供窄作用域的 `convert_rtf_bytes(bytes, options, context)` 给 MSG 等已解压
+容器正文复用；该入口不接受 `Services`，沿用调用方同一个 `ExecutionContext`、limit、取消、
+provenance 和 live-memory lease，不能重置预算或获得网络能力。
 HTML、XML 与 RSS/Atom 探测最多检查 1 MiB UTF-8 前缀。JSON 与
 Jupyter Notebook 使用带 checkpoint 和 nesting 上限的非递归状态机扫描完整 resolved
 bytes；采样边界处无论结构开放还是恰好闭合都不会提前定案，完整结构后的非空白尾部
