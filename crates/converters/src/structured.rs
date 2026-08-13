@@ -21,6 +21,8 @@ const CHECKPOINT_BYTES: usize = 4096;
 #[cfg(test)]
 thread_local! {
     static JSON_STRING_DECODE_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static XML_READ_EVENT_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static XML_SCAN_CHECKPOINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Strict, offline JSON/XML converter.
@@ -607,6 +609,136 @@ struct XmlFrame {
     expanded: String,
 }
 
+const XML_NAMESPACE_URI: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE_URI: &str = "http://www.w3.org/2000/xmlns/";
+
+fn xml_scan_checkpoint(
+    context: &ExecutionContext,
+    offset: usize,
+    next: &mut usize,
+) -> Result<(), ConversionError> {
+    while offset >= *next {
+        #[cfg(test)]
+        XML_SCAN_CHECKPOINTS.with(|count| count.set(count.get() + 1));
+        context.checkpoint()?;
+        *next = next.saturating_add(CHECKPOINT_BYTES);
+    }
+    Ok(())
+}
+
+/// Allocation-free lexical pass used to bound the largest slice quick-xml can
+/// materialize as one event. It deliberately understands quoted tag content
+/// and the distinct comment, CDATA, and PI terminators.
+fn preflight_xml(source: &str, context: &ExecutionContext) -> Result<usize, ConversionError> {
+    let bytes = source.as_bytes();
+    let mut offset = 0;
+    let mut next_checkpoint = 0;
+    let mut largest = 0;
+    while offset < bytes.len() {
+        xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
+        let start = offset;
+        if bytes[offset] != b'<' {
+            while offset < bytes.len() && bytes[offset] != b'<' {
+                offset += 1;
+                xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
+            }
+        } else if bytes[offset..].starts_with(b"<!--") {
+            offset = scan_xml_terminator(bytes, offset + 4, b"-->", context, &mut next_checkpoint)?;
+        } else if bytes[offset..].starts_with(b"<![CDATA[") {
+            offset = scan_xml_terminator(bytes, offset + 9, b"]]>", context, &mut next_checkpoint)?;
+        } else if bytes[offset..].starts_with(b"<?") {
+            offset = scan_xml_terminator(bytes, offset + 2, b"?>", context, &mut next_checkpoint)?;
+        } else {
+            offset += 1;
+            let mut quote = None;
+            loop {
+                xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
+                let Some(byte) = bytes.get(offset).copied() else {
+                    return Err(malformed(InputFormat::Xml, "unterminated XML markup"));
+                };
+                offset += 1;
+                match (quote, byte) {
+                    (Some(expected), actual) if expected == actual => quote = None,
+                    (None, b'\'' | b'\"') => quote = Some(byte),
+                    (None, b'>') => break,
+                    _ => {}
+                }
+            }
+        }
+        largest = largest.max(offset.saturating_sub(start));
+    }
+    context.checkpoint()?;
+    Ok(largest)
+}
+
+fn scan_xml_terminator(
+    bytes: &[u8],
+    mut offset: usize,
+    terminator: &[u8],
+    context: &ExecutionContext,
+    next_checkpoint: &mut usize,
+) -> Result<usize, ConversionError> {
+    loop {
+        xml_scan_checkpoint(context, offset, next_checkpoint)?;
+        if bytes.get(offset..).is_some_and(|tail| tail.starts_with(terminator)) {
+            return Ok(offset + terminator.len());
+        }
+        if offset == bytes.len() {
+            return Err(malformed(InputFormat::Xml, "unterminated XML lexical event"));
+        }
+        offset += 1;
+    }
+}
+
+fn xml_name_start(character: char) -> bool {
+    matches!(character as u32,
+        0x41..=0x5a | 0x5f | 0x61..=0x7a | 0xc0..=0xd6 | 0xd8..=0xf6 |
+        0xf8..=0x2ff | 0x370..=0x37d | 0x37f..=0x1fff | 0x200c..=0x200d |
+        0x2070..=0x218f | 0x2c00..=0x2fef | 0x3001..=0xd7ff |
+        0xf900..=0xfdcf | 0xfdf0..=0xfffd | 0x1_0000..=0xe_ffff)
+}
+
+fn xml_name_char(character: char) -> bool {
+    xml_name_start(character)
+        || matches!(character as u32, 0x2d | 0x2e | 0x30..=0x39 | 0xb7 | 0x300..=0x36f | 0x203f..=0x2040)
+}
+
+fn validate_ncname(name: &str, part: &str) -> Result<(), ConversionError> {
+    let mut characters = name.chars();
+    if !characters.next().is_some_and(xml_name_start)
+        || characters.any(|character| !xml_name_char(character))
+    {
+        return Err(malformed(InputFormat::Xml, format!("invalid XML NCName in {part}")));
+    }
+    Ok(())
+}
+
+fn validate_xml_name(name: &str, part: &str) -> Result<(), ConversionError> {
+    let mut characters = name.chars();
+    if !characters.next().is_some_and(|character| character == ':' || xml_name_start(character))
+        || characters.any(|character| character != ':' && !xml_name_char(character))
+    {
+        return Err(malformed(InputFormat::Xml, format!("invalid XML Name in {part}")));
+    }
+    Ok(())
+}
+
+fn validate_qname(name: &str, part: &str) -> Result<(), ConversionError> {
+    let mut pieces = name.split(':');
+    let first = pieces.next().unwrap_or_default();
+    validate_ncname(first, part)?;
+    if let Some(local) = pieces.next() {
+        validate_ncname(local, part)?;
+        if pieces.next().is_some() {
+            return Err(malformed(
+                InputFormat::Xml,
+                format!("XML QName in {part} has multiple colons"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn xml_charset(source: &[u8]) -> (&'static str, &'static str) {
     if source.starts_with(&[0xff, 0xfe]) || source.starts_with(&[b'<', 0, b'?', 0]) {
         ("utf-16le", "utf-16le")
@@ -659,7 +791,9 @@ fn convert_xml(
             detail: "strict XML decoding unexpectedly produced recovery diagnostics".into(),
         });
     }
-    reject_xml_encoding_conflict(&decoded_source.text, actual_encoding)?;
+    let largest_event = preflight_xml(&decoded_source.text, context)?;
+    let mut parse_memory = LogicalMemory::new(context)?;
+    let mut scratch_memory = LogicalMemory::new(context)?;
     let mut reader = NsReader::from_str(&decoded_source.text);
     {
         let config = reader.config_mut();
@@ -669,7 +803,6 @@ fn convert_xml(
         config.check_comments = true;
     }
     let mut builder = IrBuilder::new(InputFormat::Xml, context)?;
-    let mut parse_memory = LogicalMemory::new(context)?;
     let mut stack: Vec<XmlFrame> = Vec::new();
     let mut root_seen = false;
     let mut events = 0_usize;
@@ -677,6 +810,13 @@ fn convert_xml(
     let mut previous = 0_usize;
     loop {
         context.checkpoint()?;
+        let scratch_mark = scratch_memory.mark();
+        // quick-xml and all event-local decoding/formatting may materialize an
+        // owned representation proportional to one complete lexical event.
+        // Reserve the preflight upper bound before every parser call.
+        scratch_memory.charge(largest_event)?;
+        #[cfg(test)]
+        XML_READ_EVENT_INVOCATIONS.with(|count| count.set(count.get() + 1));
         let event = reader.read_event().map_err(|error| {
             malformed(
                 InputFormat::Xml,
@@ -712,7 +852,15 @@ fn convert_xml(
                 if stack.is_empty() && root_seen {
                     return Err(malformed(InputFormat::Xml, "XML contains multiple root elements"));
                 }
-                let (qname, expanded, element_identity) = resolved_element(&reader, &element)?;
+                let element_name = element.name();
+                let raw_name = std::str::from_utf8(element_name.as_ref())
+                    .map_err(|_| malformed(InputFormat::Xml, "XML QName is not UTF-8"))?;
+                validate_qname(raw_name, "element name")?;
+                if raw_name.split_once(':').is_some_and(|(prefix, _)| prefix == "xmlns") {
+                    return Err(malformed(InputFormat::Xml, "xmlns cannot be an element prefix"));
+                }
+                let (qname, expanded, element_identity) =
+                    resolved_element(&reader, &element, &mut parse_memory)?;
                 if stack.len() >= usize::from(options.limits.max_nesting_depth) {
                     return Err(ConversionError::ResourceLimit {
                         limit: "xml_nesting_depth",
@@ -735,7 +883,8 @@ fn convert_xml(
                     start,
                     end,
                     options,
-                    &mut parse_memory,
+                    context,
+                    &mut scratch_memory,
                     &mut builder,
                 )?;
                 if !empty {
@@ -757,10 +906,13 @@ fn convert_xml(
                 let expected = stack.pop().ok_or_else(|| {
                     malformed(InputFormat::Xml, "XML end tag has no open element")
                 })?;
-                let raw = std::str::from_utf8(element.name().as_ref())
-                    .map_err(|_| malformed(InputFormat::Xml, "XML name is not UTF-8"))?
-                    .to_owned();
-                let (_, expanded) = resolved_end(&reader, element.name())?;
+                let element_name = element.name();
+                let raw = std::str::from_utf8(element_name.as_ref())
+                    .map_err(|_| malformed(InputFormat::Xml, "XML name is not UTF-8"))?;
+                validate_qname(raw, "end tag")?;
+                scratch_memory.charge(raw.len())?;
+                let raw = raw.to_owned();
+                let (_, expanded) = resolved_end(&reader, element.name(), &mut scratch_memory)?;
                 if raw != expected.qname || expanded != expected.expanded {
                     return Err(malformed(
                         InputFormat::Xml,
@@ -819,6 +971,7 @@ fn convert_xml(
                     malformed(InputFormat::Xml, format!("invalid comment: {error}"))
                 })?;
                 validate_xml_chars(&decoded, "comment")?;
+                scratch_memory.charge(32)?;
                 builder.insert_metadata(
                     format!("xml.comment.{:06}", builder.metadata.len() + 1),
                     decoded.into_owned(),
@@ -826,6 +979,16 @@ fn convert_xml(
             }
             Event::PI(value) => {
                 let raw_range = decoded_source.source_range(start, end);
+                let target = std::str::from_utf8(value.target()).map_err(|_| {
+                    malformed(InputFormat::Xml, "processing instruction target is not UTF-8")
+                })?;
+                validate_xml_name(target, "processing instruction target")?;
+                if target.eq_ignore_ascii_case("xml") {
+                    return Err(malformed(
+                        InputFormat::Xml,
+                        "processing instruction target xml is reserved",
+                    ));
+                }
                 let decoded = reader.decoder().decode(value.as_ref()).map_err(|error| {
                     malformed(InputFormat::Xml, format!("invalid processing instruction: {error}"))
                 })?;
@@ -842,6 +1005,10 @@ fn convert_xml(
                     return Err(malformed(InputFormat::Xml, "XML declaration must be first"));
                 }
                 let _ = decl;
+                let declaration = decoded_source.text.get(start..end).ok_or_else(|| {
+                    ConversionError::Internal { detail: "XML declaration span is invalid".into() }
+                })?;
+                validate_xml_declaration(declaration, actual_encoding)?;
             }
             Event::DocType(_) => {
                 return Err(malformed(InputFormat::Xml, "DOCTYPE and DTD are not allowed"));
@@ -867,8 +1034,12 @@ fn convert_xml(
                     &mut builder,
                 )?;
             }
-            Event::Eof => break,
+            Event::Eof => {
+                scratch_memory.rewind(scratch_mark)?;
+                break;
+            }
         }
+        scratch_memory.rewind(scratch_mark)?;
     }
     if !root_seen || !stack.is_empty() {
         return Err(malformed(InputFormat::Xml, "XML root is missing or incomplete"));
@@ -876,36 +1047,100 @@ fn convert_xml(
     builder.finish()
 }
 
-fn reject_xml_encoding_conflict(text: &str, actual: &str) -> Result<(), ConversionError> {
-    let prefix = &text[..text.len().min(256)];
-    if let Some(decl) = prefix.strip_prefix("<?xml")
-        && let Some(pos) = decl.find("encoding")
-    {
-        let tail = &decl[pos + "encoding".len()..];
-        let quote =
-            tail.find(['\'', '"']).and_then(|i| tail.as_bytes().get(i).copied().map(|q| (i, q)));
-        if let Some((at, quote)) = quote
-            && let Some(end) = tail[at + 1..].bytes().position(|b| b == quote)
-        {
-            let label = &tail[at + 1..at + 1 + end];
-            let matches = match actual {
-                "utf-8" => {
-                    label.eq_ignore_ascii_case("utf-8") || label.eq_ignore_ascii_case("utf8")
-                }
-                "utf-16le" => {
-                    label.eq_ignore_ascii_case("utf-16") || label.eq_ignore_ascii_case("utf-16le")
-                }
-                "utf-16be" => {
-                    label.eq_ignore_ascii_case("utf-16") || label.eq_ignore_ascii_case("utf-16be")
-                }
-                _ => false,
-            };
-            if !matches {
+fn validate_xml_declaration(declaration: &str, actual: &str) -> Result<(), ConversionError> {
+    let body = declaration
+        .strip_prefix("<?xml")
+        .and_then(|value| value.strip_suffix("?>"))
+        .ok_or_else(|| malformed(InputFormat::Xml, "invalid XML declaration delimiters"))?;
+    let bytes = body.as_bytes();
+    let mut offset = 0;
+    let mut field = 0;
+    let mut encoding = None;
+    while offset < bytes.len() {
+        let before_space = offset;
+        while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
+            offset += 1;
+        }
+        if offset == bytes.len() {
+            break;
+        }
+        if offset == before_space {
+            return Err(malformed(InputFormat::Xml, "XML declaration fields require whitespace"));
+        }
+        let name_start = offset;
+        while bytes.get(offset).is_some_and(u8::is_ascii_alphabetic) {
+            offset += 1;
+        }
+        let name = &body[name_start..offset];
+        while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
+            offset += 1;
+        }
+        if bytes.get(offset) != Some(&b'=') {
+            return Err(malformed(InputFormat::Xml, "XML declaration field is missing '='"));
+        }
+        offset += 1;
+        while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
+            offset += 1;
+        }
+        let Some(quote @ (b'\'' | b'\"')) = bytes.get(offset).copied() else {
+            return Err(malformed(InputFormat::Xml, "XML declaration value is not quoted"));
+        };
+        offset += 1;
+        let value_start = offset;
+        while bytes.get(offset).is_some_and(|byte| *byte != quote) {
+            offset += 1;
+        }
+        if bytes.get(offset) != Some(&quote) {
+            return Err(malformed(InputFormat::Xml, "unterminated XML declaration value"));
+        }
+        let value = &body[value_start..offset];
+        offset += 1;
+        match (field, name) {
+            (0, "version") if value == "1.0" => {}
+            (0, _) => {
                 return Err(malformed(
                     InputFormat::Xml,
-                    format!("XML encoding declaration {label:?} conflicts with {actual} input"),
+                    "XML declaration must begin with version=\"1.0\"",
                 ));
             }
+            (1, "encoding") => {
+                let mut chars = value.chars();
+                if !chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                    || chars.any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+                {
+                    return Err(malformed(InputFormat::Xml, "invalid XML encoding name"));
+                }
+                encoding = Some(value);
+            }
+            (1 | 2, "standalone") if matches!(value, "yes" | "no") => {}
+            _ => {
+                return Err(malformed(
+                    InputFormat::Xml,
+                    "invalid, duplicate, or out-of-order XML declaration field",
+                ));
+            }
+        }
+        field += 1;
+    }
+    if field == 0 {
+        return Err(malformed(InputFormat::Xml, "XML declaration is missing version"));
+    }
+    if let Some(label) = encoding {
+        let matches = match actual {
+            "utf-8" => label.eq_ignore_ascii_case("utf-8"),
+            "utf-16le" => {
+                label.eq_ignore_ascii_case("utf-16") || label.eq_ignore_ascii_case("utf-16le")
+            }
+            "utf-16be" => {
+                label.eq_ignore_ascii_case("utf-16") || label.eq_ignore_ascii_case("utf-16be")
+            }
+            _ => false,
+        };
+        if !matches {
+            return Err(malformed(
+                InputFormat::Xml,
+                format!("XML encoding declaration {label:?} conflicts with {actual} input"),
+            ));
         }
     }
     Ok(())
@@ -914,18 +1149,29 @@ fn reject_xml_encoding_conflict(text: &str, actual: &str) -> Result<(), Conversi
 fn resolved_element(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
+    memory: &mut LogicalMemory,
 ) -> Result<(String, String, String), ConversionError> {
-    let qname = std::str::from_utf8(element.name().as_ref())
-        .map_err(|_| malformed(InputFormat::Xml, "XML QName is not UTF-8"))?
-        .to_owned();
+    let element_name = element.name();
+    let qname = std::str::from_utf8(element_name.as_ref())
+        .map_err(|_| malformed(InputFormat::Xml, "XML QName is not UTF-8"))?;
     let (namespace, local) = reader.resolve_element(element.name());
-    let namespace = namespace_uri(namespace)?;
+    let namespace = namespace_uri(namespace, memory)?;
     let local = std::str::from_utf8(local.as_ref())
         .map_err(|_| malformed(InputFormat::Xml, "XML local name is not UTF-8"))?;
     let prefix = qname.split_once(':').map_or("", |(prefix, _)| prefix);
     let uri = namespace.unwrap_or_default();
+    memory.charge(
+        qname
+            .len()
+            .saturating_mul(2)
+            .saturating_add(local.len())
+            .saturating_mul(2)
+            .saturating_add(uri.len())
+            .saturating_mul(2)
+            .saturating_add(80),
+    )?;
     Ok((
-        qname.clone(),
+        qname.to_owned(),
         format!("{{{uri}}}{local}"),
         format!("{qname} (local={local}, prefix={prefix:?}, namespace={uri:?})"),
     ))
@@ -934,25 +1180,36 @@ fn resolved_element(
 fn resolved_end(
     reader: &NsReader<&[u8]>,
     name: quick_xml::name::QName<'_>,
+    memory: &mut LogicalMemory,
 ) -> Result<(String, String), ConversionError> {
     let qname = std::str::from_utf8(name.as_ref())
-        .map_err(|_| malformed(InputFormat::Xml, "XML QName is not UTF-8"))?
-        .to_owned();
+        .map_err(|_| malformed(InputFormat::Xml, "XML QName is not UTF-8"))?;
     let (namespace, local) = reader.resolve_element(name);
-    let namespace = namespace_uri(namespace)?;
+    let namespace = namespace_uri(namespace, memory)?;
     let local = std::str::from_utf8(local.as_ref())
         .map_err(|_| malformed(InputFormat::Xml, "XML local name is not UTF-8"))?;
-    Ok((qname, format!("{{{}}}{local}", namespace.unwrap_or_default())))
+    memory.charge(
+        qname
+            .len()
+            .saturating_add(local.len())
+            .saturating_add(namespace.as_deref().map_or(0, str::len))
+            .saturating_add(2),
+    )?;
+    Ok((qname.to_owned(), format!("{{{}}}{local}", namespace.unwrap_or_default())))
 }
 
-fn namespace_uri(value: ResolveResult<'_>) -> Result<Option<String>, ConversionError> {
+fn namespace_uri(
+    value: ResolveResult<'_>,
+    memory: &mut LogicalMemory,
+) -> Result<Option<String>, ConversionError> {
     match value {
         ResolveResult::Unbound => Ok(None),
-        ResolveResult::Bound(uri) => Ok(Some(
-            std::str::from_utf8(uri.as_ref())
-                .map_err(|_| malformed(InputFormat::Xml, "namespace URI is not UTF-8"))?
-                .to_owned(),
-        )),
+        ResolveResult::Bound(uri) => {
+            let uri = std::str::from_utf8(uri.as_ref())
+                .map_err(|_| malformed(InputFormat::Xml, "namespace URI is not UTF-8"))?;
+            memory.charge(uri.len())?;
+            Ok(Some(uri.to_owned()))
+        }
         ResolveResult::Unknown(prefix) => Err(malformed(
             InputFormat::Xml,
             format!("unbound namespace prefix {:?}", String::from_utf8_lossy(&prefix)),
@@ -972,6 +1229,7 @@ fn scan_xml_attribute_spans(
     source: &str,
     event_start: usize,
     event_end: usize,
+    context: &ExecutionContext,
     memory: &mut LogicalMemory,
 ) -> Result<Vec<XmlAttributeSpan>, ConversionError> {
     let bytes =
@@ -983,8 +1241,10 @@ fn scan_xml_attribute_spans(
         .position(|byte| *byte == b'<')
         .ok_or_else(|| malformed(InputFormat::Xml, "start-tag event has no opening delimiter"))?;
     let mut offset = tag + 1;
+    let mut next_checkpoint = 0;
     while bytes.get(offset).is_some_and(|byte| !xml_space(*byte) && !matches!(*byte, b'/' | b'>')) {
         offset += 1;
+        xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
     }
     if offset == tag + 1 {
         return Err(malformed(InputFormat::Xml, "start tag has no QName"));
@@ -993,6 +1253,7 @@ fn scan_xml_attribute_spans(
     loop {
         while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
             offset += 1;
+            xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
         }
         match bytes.get(offset).copied() {
             Some(b'>') => break,
@@ -1005,6 +1266,7 @@ fn scan_xml_attribute_spans(
             !xml_space(*byte) && !matches!(*byte, b'=' | b'/' | b'>' | b'<' | b'\'' | b'"')
         }) {
             offset += 1;
+            xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
         }
         let name_end = offset;
         if name_end == name_start {
@@ -1012,6 +1274,7 @@ fn scan_xml_attribute_spans(
         }
         while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
             offset += 1;
+            xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
         }
         if bytes.get(offset) != Some(&b'=') {
             return Err(malformed(InputFormat::Xml, "attribute QName is not followed by '='"));
@@ -1019,6 +1282,7 @@ fn scan_xml_attribute_spans(
         offset += 1;
         while bytes.get(offset).is_some_and(|byte| xml_space(*byte)) {
             offset += 1;
+            xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
         }
         let Some(quote @ (b'\'' | b'"')) = bytes.get(offset).copied() else {
             return Err(malformed(InputFormat::Xml, "attribute value is not quoted"));
@@ -1030,6 +1294,7 @@ fn scan_xml_attribute_spans(
                 return Err(malformed(InputFormat::Xml, "attribute value contains '<'"));
             }
             offset += 1;
+            xml_scan_checkpoint(context, offset, &mut next_checkpoint)?;
         }
         let value_end = offset;
         if bytes.get(offset) != Some(&quote) {
@@ -1059,10 +1324,11 @@ fn emit_xml_attributes(
     event_start: usize,
     event_end: usize,
     options: &ConversionOptions,
+    context: &ExecutionContext,
     memory: &mut LogicalMemory,
     builder: &mut IrBuilder,
 ) -> Result<(), ConversionError> {
-    let spans = scan_xml_attribute_spans(&decoded.text, event_start, event_end, memory)?;
+    let spans = scan_xml_attribute_spans(&decoded.text, event_start, event_end, context, memory)?;
     let mut expanded = BTreeSet::new();
     for (index, attribute) in element.attributes().enumerate() {
         if index >= MAX_DOCUMENT_INLINES {
@@ -1076,6 +1342,7 @@ fn emit_xml_attributes(
         })?;
         let raw = std::str::from_utf8(attribute.key.as_ref())
             .map_err(|_| malformed(InputFormat::Xml, "attribute QName is not UTF-8"))?;
+        validate_qname(raw, "attribute name")?;
         let span = spans.get(index).copied().ok_or_else(|| ConversionError::Internal {
             detail: "quick-xml returned more attributes than the bounded start-tag scanner".into(),
         })?;
@@ -1087,7 +1354,7 @@ fn emit_xml_attributes(
         let value = attribute.decode_and_unescape_value(reader.decoder()).map_err(|error| {
             malformed(InputFormat::Xml, format!("invalid attribute {raw:?}: {error}"))
         })?;
-        validate_xml_chars(&value, &format!("attribute {raw:?}"))?;
+        validate_xml_chars(&value, raw)?;
         if value.len() > usize::try_from(options.limits.max_field_bytes).unwrap_or(usize::MAX) {
             return Err(ConversionError::ResourceLimit {
                 limit: "xml_attribute_bytes",
@@ -1100,6 +1367,8 @@ fn emit_xml_attributes(
         let name_range = decoded.source_range(span.name_start, span.name_end);
         let value_range = decoded.source_range(span.value_start, span.value_end);
         if raw == "xmlns" || raw.starts_with("xmlns:") {
+            validate_namespace_declaration(raw, &value)?;
+            memory.charge(raw.len())?;
             builder.code(Some("xml-attribute-name"), raw.to_owned(), name_range.0, name_range.1)?;
             builder.code(
                 Some("xml-attribute-value"),
@@ -1110,7 +1379,12 @@ fn emit_xml_attributes(
             continue;
         }
         let (namespace, local) = reader.resolve_attribute(attribute.key);
-        let uri = namespace_uri(namespace)?.unwrap_or_default();
+        let uri = namespace_uri(namespace, memory)?.unwrap_or_default();
+        if raw.split_once(':').is_some_and(|(prefix, _)| prefix == "xml")
+            && uri != XML_NAMESPACE_URI
+        {
+            return Err(malformed(InputFormat::Xml, "xml prefix is not bound to its reserved URI"));
+        }
         memory.charge(
             uri.len()
                 .checked_add(local.as_ref().len())
@@ -1148,6 +1422,33 @@ fn emit_xml_attributes(
         return Err(ConversionError::Internal {
             detail: "start-tag scanner returned more attributes than quick-xml".into(),
         });
+    }
+    Ok(())
+}
+
+fn validate_namespace_declaration(raw: &str, value: &str) -> Result<(), ConversionError> {
+    let prefix = raw.strip_prefix("xmlns:");
+    if prefix == Some("xmlns") {
+        return Err(malformed(InputFormat::Xml, "xmlns prefix cannot be declared"));
+    }
+    if value == XMLNS_NAMESPACE_URI {
+        return Err(malformed(InputFormat::Xml, "the xmlns namespace URI is reserved"));
+    }
+    if prefix == Some("xml") {
+        if value != XML_NAMESPACE_URI {
+            return Err(malformed(
+                InputFormat::Xml,
+                "xml prefix must bind only to its reserved URI",
+            ));
+        }
+    } else if value == XML_NAMESPACE_URI {
+        return Err(malformed(InputFormat::Xml, "the XML namespace URI may bind only to xml"));
+    }
+    if prefix.is_some() && value.is_empty() {
+        return Err(malformed(
+            InputFormat::Xml,
+            "XML 1.0 does not allow undeclaring a namespace prefix",
+        ));
     }
     Ok(())
 }
@@ -1456,6 +1757,127 @@ mod tests {
     }
 
     #[test]
+    fn xml_encoding_is_read_only_from_the_declaration_event() {
+        for input in [
+            br#"<r encoding="UTF-16">encoding="ISO-8859-1"</r>"#.as_slice(),
+            br#"<r><!-- encoding="UTF-16" --></r>"#.as_slice(),
+            br#"<r><?target encoding="UTF-16"?></r>"#.as_slice(),
+        ] {
+            assert!(convert_xml(input, &ConversionOptions::default(), &context()).is_ok());
+        }
+    }
+
+    #[test]
+    fn xml_declaration_obeys_xml_1_0_grammar() {
+        for valid in [
+            br#"<?xml version="1.0"?><r/>"#.as_slice(),
+            br#"<?xml version='1.0' encoding="UTF-8"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" standalone='yes'?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="no"?><r/>"#.as_slice(),
+        ] {
+            assert!(convert_xml(valid, &ConversionOptions::default(), &context()).is_ok());
+        }
+        for invalid in [
+            br"<?xml?><r/>".as_slice(),
+            br#"<?xml encoding="UTF-8" version="1.0"?><r/>"#.as_slice(),
+            br#"<?xml version="1.1"?><r/>"#.as_slice(),
+            br#"<?xml version "1.0"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" version="1.0"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" standalone="maybe"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" standalone="yes" encoding="UTF-8"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" encoding="8UTF"?><r/>"#.as_slice(),
+            br#"<?xml version="1.0" extra="x"?><r/>"#.as_slice(),
+        ] {
+            assert!(matches!(
+                convert_xml(invalid, &ConversionOptions::default(), &context()),
+                Err(ConversionError::Malformed { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn xml_validates_qnames_and_reserved_namespace_bindings() {
+        for valid in [
+            "<根 属性='值'/>",
+            "<r xmlns='urn:a'><x xmlns=''/></r>",
+            "<xml:r xmlns:xml='http://www.w3.org/XML/1998/namespace'/>",
+        ] {
+            assert!(
+                convert_xml(valid.as_bytes(), &ConversionOptions::default(), &context()).is_ok()
+            );
+        }
+        for invalid in [
+            "<1r/>",
+            "<a:b:c xmlns:a='x'/>",
+            "<r bad:name:again='x'/>",
+            "<xmlns:r/>",
+            "<r xmlns:xml='urn:not-xml'/>",
+            "<r xmlns:p='http://www.w3.org/XML/1998/namespace'/>",
+            "<r xmlns='http://www.w3.org/XML/1998/namespace'/>",
+            "<r xmlns:p='http://www.w3.org/2000/xmlns/'/>",
+            "<r xmlns:xmlns='urn:x'/>",
+            "<r xmlns:p=''/>",
+            "<r xmlns:p='urn:x' xmlns:q='urn:x' p:a='1' q:a='2'/>",
+        ] {
+            assert!(
+                matches!(
+                    convert_xml(invalid.as_bytes(), &ConversionOptions::default(), &context()),
+                    Err(ConversionError::Malformed { .. })
+                ),
+                "accepted invalid XML: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_single_event_preflight_is_memory_bounded_and_quote_aware() {
+        let quoted = format!("<r a='{}>{}'/>", "x".repeat(CHECKPOINT_BYTES + 7), "y");
+        assert!(convert_xml(quoted.as_bytes(), &ConversionOptions::default(), &context()).is_ok());
+
+        let huge = format!("<r>{}</r>", "x".repeat(256 * 1024));
+        let bounded = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 192 * 1024, ..ResourceLimits::default() },
+        );
+        XML_READ_EVENT_INVOCATIONS.with(|count| count.set(0));
+        assert!(matches!(
+            convert_xml(huge.as_bytes(), &ConversionOptions::default(), &bounded),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        XML_READ_EVENT_INVOCATIONS.with(|count| assert_eq!(count.get(), 0));
+
+        let timed_out = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        assert!(matches!(
+            preflight_xml(&format!("<r>{}</r>", "x".repeat(CHECKPOINT_BYTES * 2)), &timed_out),
+            Err(ConversionError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn xml_preflight_checkpoints_every_large_event_channel() {
+        let payload = "x".repeat(CHECKPOINT_BYTES * 2 + 17);
+        let samples = [
+            format!("<r>{payload}</r>"),
+            format!("<r><![CDATA[{payload}]]></r>"),
+            format!("<{payload}/>"),
+            format!("<r a='{payload}'/>"),
+            format!("<r><!--{payload}--></r>"),
+            format!("<r><?target {payload}?></r>"),
+        ];
+        for sample in samples {
+            XML_SCAN_CHECKPOINTS.with(|count| count.set(0));
+            preflight_xml(&sample, &context()).unwrap();
+            XML_SCAN_CHECKPOINTS.with(|count| assert!(count.get() >= 3, "{sample}"));
+        }
+    }
+
+    #[test]
     fn xml_utf16_maps_original_offsets_and_allows_bounded_character_refs() {
         let source = r#"<?xml version="1.0" encoding="UTF-16"?><r>&amp;&#x1F642;</r>"#;
         let mut bytes = vec![0xff, 0xfe];
@@ -1532,6 +1954,12 @@ mod tests {
             Some("note")
         );
         assert!(document.blocks.iter().any(|node| matches!(&node.block, Block::Code { language: Some(language), .. } if language == "xml-processing-instruction")));
+        for invalid in [br"<r><?1bad?></r>".as_slice(), br"<r><?XML?></r>".as_slice()] {
+            assert!(matches!(
+                convert_xml(invalid, &ConversionOptions::default(), &context()),
+                Err(ConversionError::Malformed { .. })
+            ));
+        }
     }
 
     #[test]

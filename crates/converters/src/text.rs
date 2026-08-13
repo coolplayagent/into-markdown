@@ -617,11 +617,11 @@ impl LogicalMemory {
         Ok(())
     }
 
-    fn mark(&self) -> usize {
+    pub(crate) fn mark(&self) -> usize {
         self.charged
     }
 
-    fn rewind(&mut self, mark: usize) -> Result<(), ConversionError> {
+    pub(crate) fn rewind(&mut self, mark: usize) -> Result<(), ConversionError> {
         let released = self.charged.checked_sub(mark).ok_or_else(|| ConversionError::Internal {
             detail: "logical memory mark exceeds current charge".into(),
         })?;
