@@ -47,15 +47,33 @@ pub(crate) fn atomic_replace_config(
     bytes: &[u8],
     replace: bool,
 ) -> Result<(), CliError> {
-    atomic_replace_config_inner(path, bytes, replace, |_, _, _| Ok(()))
+    atomic_replace_config_inner_with_barriers(
+        path,
+        bytes,
+        replace,
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+    )
 }
 
 #[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn atomic_replace_config_inner(
     path: &Path,
     bytes: &[u8],
     replace: bool,
     before_commit: impl FnOnce(&SafeDir, &OsStr, &OsStr) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    atomic_replace_config_inner_with_barriers(path, bytes, replace, before_commit, |_, _, _| Ok(()))
+}
+
+#[cfg(unix)]
+fn atomic_replace_config_inner_with_barriers(
+    path: &Path,
+    bytes: &[u8],
+    replace: bool,
+    before_final_check: impl FnOnce(&SafeDir, &OsStr, &OsStr) -> Result<(), CliError>,
+    after_final_check: impl FnOnce(&SafeDir, &OsStr, &OsStr) -> Result<(), CliError>,
 ) -> Result<(), CliError> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
@@ -95,20 +113,100 @@ fn atomic_replace_config_inner(
         }
         temporary.sync_all()?;
         let temporary_identity = file_identity(&temporary)?;
-        before_commit(&parent, name, &temporary_name)?;
+        before_final_check(&parent, name, &temporary_name)?;
         parent.verify_namespace()?;
         verify_name_identity(&parent, name, expected.as_ref())?;
         verify_name_identity(&parent, &temporary_name, Some(&temporary_identity))?;
-        rustix::fs::renameat(&parent.fd, &temporary_name, &parent.fd, name)?;
+        after_final_check(&parent, name, &temporary_name)?;
+        // Re-authenticate sources after the deterministic race barrier. The
+        // destination itself is protected by the atomic primitive below: an
+        // absent target can never be overwritten, while replacement exchanges
+        // the old inode so it can be verified and restored losslessly.
+        parent.verify_namespace()?;
+        verify_name_identity(&parent, &temporary_name, Some(&temporary_identity))?;
+        publish_config(&parent, name, &temporary_name, expected.as_ref(), &temporary_identity)?;
+        // Persist the exchange before discarding the displaced old target. If
+        // this fsync fails, the old inode remains recoverable under the private
+        // temporary name rather than being prematurely destroyed.
         parent.sync()?;
+        if let Some(expected) = expected.as_ref() {
+            unlink_name_if_identity(&parent, &temporary_name, expected)?;
+            parent.sync()?;
+        }
         parent.verify_namespace()?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = rustix::fs::unlinkat(&parent.fd, &temporary_name, rustix::fs::AtFlags::empty());
+        let _ = unlink_name_if_identity(&parent, &temporary_name, &file_identity(&temporary)?);
         let _ = parent.sync();
     }
     result
+}
+
+#[cfg(unix)]
+fn publish_config(
+    parent: &SafeDir,
+    name: &OsStr,
+    temporary_name: &OsStr,
+    expected: Option<&FileIdentity>,
+    temporary_identity: &FileIdentity,
+) -> Result<(), CliError> {
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    {
+        if let Some(expected) = expected {
+            rustix::fs::renameat_with(
+                &parent.fd,
+                temporary_name,
+                &parent.fd,
+                name,
+                rustix::fs::RenameFlags::EXCHANGE,
+            )?;
+            let installed = verify_name_identity(parent, name, Some(temporary_identity));
+            let displaced = verify_name_identity(parent, temporary_name, Some(expected));
+            if let Err(error) = installed.and(displaced) {
+                // Both namespace entries still exist after EXCHANGE. Put them
+                // back before surfacing any identity mismatch; no old target is
+                // discarded on the error path.
+                rustix::fs::renameat_with(
+                    &parent.fd,
+                    temporary_name,
+                    &parent.fd,
+                    name,
+                    rustix::fs::RenameFlags::EXCHANGE,
+                )?;
+                return Err(error);
+            }
+        } else {
+            rustix::fs::renameat_with(
+                &parent.fd,
+                temporary_name,
+                &parent.fd,
+                name,
+                rustix::fs::RenameFlags::NOREPLACE,
+            )?;
+            verify_name_identity(parent, name, Some(temporary_identity))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    Err(transaction_platform_unavailable())
+}
+
+#[cfg(unix)]
+fn unlink_name_if_identity(
+    directory: &SafeDir,
+    name: &OsStr,
+    expected: &FileIdentity,
+) -> Result<(), CliError> {
+    if directory.inspect_regular(name)?.as_ref() != Some(expected) {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "outputIdentityChanged",
+            format!("refusing to unlink changed file: {}", directory.path.join(name).display()),
+        ));
+    }
+    rustix::fs::unlinkat(&directory.fd, name, rustix::fs::AtFlags::empty())?;
+    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -2856,6 +2954,7 @@ fn recovery_failed(operation: &str, error: &CliError) -> CliError {
 mod tests {
     use super::*;
     use into_markdown::{ExecutionOptions, ResourceLimits};
+    use std::sync::Arc;
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
@@ -2921,6 +3020,97 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code(), "outputIdentityChanged");
         assert_eq!(fs::read(&target).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_publish_atomic_primitive_closes_post_check_destination_races() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+
+        let absent = root.join("absent.toml");
+        let error = atomic_replace_config_inner_with_barriers(
+            &absent,
+            b"new",
+            false,
+            |_, _, _| Ok(()),
+            |_, _, _| {
+                fs::write(&absent, b"racer")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "io");
+        assert_eq!(fs::read(&absent).unwrap(), b"racer");
+
+        let target = root.join("existing.toml");
+        let held = root.join("original-held.toml");
+        fs::write(&target, b"old").unwrap();
+        let error = atomic_replace_config_inner_with_barriers(
+            &target,
+            b"new",
+            true,
+            |_, _, _| Ok(()),
+            |_, _, _| {
+                fs::rename(&target, &held)?;
+                fs::write(&target, b"racer")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(&target).unwrap(), b"racer");
+        assert_eq!(fs::read(&held).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_publish_reauthenticates_parent_and_temporary_after_final_check() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let parent = root.join("config");
+        let held = root.join("config-held");
+        fs::create_dir(&parent).unwrap();
+        let target = parent.join("settings.toml");
+        fs::write(&target, b"old").unwrap();
+        let error = atomic_replace_config_inner_with_barriers(
+            &target,
+            b"new",
+            true,
+            |_, _, _| Ok(()),
+            |_, _, _| {
+                fs::rename(&parent, &held)?;
+                fs::create_dir(&parent)?;
+                fs::write(parent.join("settings.toml"), b"attacker")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(parent.join("settings.toml")).unwrap(), b"attacker");
+        assert_eq!(fs::read(held.join("settings.toml")).unwrap(), b"old");
+
+        let target = held.join("settings.toml");
+        let attacker_temporary = Arc::new(Mutex::new(None::<PathBuf>));
+        let captured = Arc::clone(&attacker_temporary);
+        let error = atomic_replace_config_inner_with_barriers(
+            &target,
+            b"new",
+            true,
+            |_, _, _| Ok(()),
+            move |directory, _, temporary_name| {
+                let path = directory.path.join(temporary_name);
+                fs::remove_file(&path)?;
+                fs::write(&path, b"attacker temporary")?;
+                *captured.lock().unwrap() = Some(path);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "outputIdentityChanged");
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        let attacker_temporary = attacker_temporary.lock().unwrap().clone().unwrap();
+        assert_eq!(fs::read(attacker_temporary).unwrap(), b"attacker temporary");
     }
 
     #[cfg(unix)]

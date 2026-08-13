@@ -253,6 +253,10 @@ struct Secret {
     bytes: Vec<u8>,
 }
 
+struct SecretCandidate {
+    bytes: Vec<u8>,
+}
+
 impl Secret {
     fn from_environment(name: &str, memory: &mut MemoryBudget) -> Result<Self, ProviderError> {
         let value = std::env::var_os(name)
@@ -261,17 +265,41 @@ impl Secret {
     }
 
     fn from_os_string(value: OsString, memory: &mut MemoryBudget) -> Result<Self, ProviderError> {
-        let text = os_string_into_string(value)
-            .map_err(|()| ProviderError::new(ProviderErrorCode::SecretInvalid))?;
-        if text.is_empty()
-            || text.len() > MAX_SECRET_BYTES
-            || text.bytes().any(|b| b <= 0x20 || b == 0x7f)
-        {
-            return Err(ProviderError::new(ProviderErrorCode::SecretInvalid));
-        }
-        memory.grow(text.capacity())?;
-        Ok(Self { bytes: text.into_bytes() })
+        SecretCandidate::from_os_string(value).into_secret(memory)
     }
+}
+
+impl SecretCandidate {
+    fn from_os_string(value: OsString) -> Self {
+        // Consume the environment-owned allocation immediately. The candidate is
+        // subsequently held only by a zeroizing byte owner, including invalid
+        // Unicode and all validation/allocation failure paths.
+        Self { bytes: value.into_encoded_bytes() }
+    }
+
+    fn into_secret(mut self, memory: &mut MemoryBudget) -> Result<Secret, ProviderError> {
+        validate_secret_candidate(&mut self.bytes, memory)?;
+        Ok(Secret { bytes: std::mem::take(&mut self.bytes) })
+    }
+}
+
+fn validate_secret_candidate(
+    bytes: &mut Vec<u8>,
+    memory: &mut MemoryBudget,
+) -> Result<(), ProviderError> {
+    let valid = std::str::from_utf8(bytes).is_ok()
+        && !bytes.is_empty()
+        && bytes.len() <= MAX_SECRET_BYTES
+        && !bytes.iter().any(|byte| *byte <= 0x20 || *byte == 0x7f);
+    if !valid {
+        bytes.zeroize();
+        return Err(ProviderError::new(ProviderErrorCode::SecretInvalid));
+    }
+    if let Err(error) = memory.grow(bytes.capacity()) {
+        bytes.zeroize();
+        return Err(error);
+    }
+    Ok(())
 }
 
 struct MemoryBudget {
@@ -335,8 +363,10 @@ impl Drop for Secret {
     }
 }
 
-fn os_string_into_string(value: OsString) -> Result<String, ()> {
-    value.into_string().map_err(|_| ())
+impl Drop for SecretCandidate {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
 }
 
 trait Resolver: Send + Sync {
@@ -720,9 +750,8 @@ impl OpenAiCompatibleClient {
             match attempt {
                 Ok(response) => return Ok(response),
                 Err(failure)
-                    if ((!failure.progressed()
-                        && failure.error.code() == ProviderErrorCode::Connect)
-                        || (failure.progressed() && spec.idempotency_key.is_some()))
+                    if !failure.progressed()
+                        && failure.error.code() == ProviderErrorCode::Connect
                         && index + 1 < addresses.len() =>
                 {
                     memory.restore(attempt_checkpoint)?;
@@ -1445,9 +1474,6 @@ fn read_response(
     if status < 200 || status == 101 {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    if (200..=299).contains(&status) && !json {
-        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
-    }
     if saw_transfer_encoding && content_length.is_some() {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
@@ -1470,6 +1496,20 @@ fn read_response(
     } else {
         compressed
     };
+    let error_status = matches!(status, 401 | 403 | 404 | 408 | 409 | 429 | 500..=599);
+    let body_or_framing =
+        chunked || content_length.is_some() || saw_content_encoding || !body.is_empty();
+    if (200..=299).contains(&status) && body_or_framing && !json {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    if error_status && body_or_framing && !json {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    if matches!(status, 204 | 304)
+        && (chunked || content_length.is_some() || saw_content_encoding || !body.is_empty())
+    {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
     Ok(HttpResponse { status, retry_after, body })
 }
 
@@ -1481,11 +1521,16 @@ fn valid_json_content_type(value: &str) -> bool {
     {
         return false;
     }
+    let mut saw_charset = false;
     parts.all(|part| {
         let part = part.trim();
-        part.is_empty()
-            || part.eq_ignore_ascii_case("charset=utf-8")
-            || part.eq_ignore_ascii_case("charset=\"utf-8\"")
+        let charset = part.eq_ignore_ascii_case("charset=utf-8")
+            || part.eq_ignore_ascii_case("charset=\"utf-8\"");
+        if part.is_empty() || !charset || saw_charset {
+            return false;
+        }
+        saw_charset = true;
+        true
     })
 }
 
@@ -1839,7 +1884,9 @@ fn parse_models_response(
         let _ = model.created;
     }
     list.data.sort_unstable_by(|left, right| left.id.cmp(&right.id));
-    list.data.dedup_by(|left, right| left.id == right.id);
+    if list.data.windows(2).any(|models| models[0].id == models[1].id) {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
     let configured_model_available =
         list.data.binary_search_by(|model| model.id.as_str().cmp(config.model.as_str())).is_ok();
     let model_count = list.data.len();
@@ -1885,74 +1932,352 @@ fn parse_generation_response(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChatResponseWire {
-    choices: Vec<ChatChoiceWire>,
+    id: String,
+    object: String,
+    created: u64,
+    model: String,
+    choices: Option<Vec<ChatChoiceWire>>,
+    #[serde(default)]
+    error: Option<ApiErrorWire>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
+    #[serde(default)]
+    service_tier: Option<String>,
+    #[serde(default)]
+    system_fingerprint: Option<String>,
+    #[serde(default)]
+    moderation: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChatChoiceWire {
+    index: usize,
     message: ChatMessageWire,
+    finish_reason: String,
+    #[serde(default)]
+    logprobs: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ChatMessageWire {
     role: String,
-    content: String,
+    content: Option<String>,
+    #[serde(default)]
+    refusal: Option<String>,
+    #[serde(default)]
+    annotations: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    audio: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_calls: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    function_call: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiErrorWire {
+    message: String,
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    param: Option<String>,
+}
+
+impl ApiErrorWire {
+    fn is_well_formed(&self) -> bool {
+        !self.message.is_empty()
+            && self.message.len() <= MAX_JSON_STRING_BYTES
+            && self.r#type.as_ref().is_none_or(|value| !value.is_empty())
+            && self.code.as_ref().is_none_or(|value| !value.is_empty())
+            && self.param.as_ref().is_none_or(|value| !value.is_empty())
+    }
 }
 
 fn parse_chat_text(value: ChatResponseWire) -> Result<String, ProviderError> {
-    let mut choices = value.choices;
+    if value.object != "chat.completion" || value.id.is_empty() || value.model.is_empty() {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    if let Some(error) = value.error {
+        let _ = error.is_well_formed();
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    let _ = (
+        value.created,
+        value.usage,
+        value.service_tier,
+        value.system_fingerprint,
+        value.moderation,
+    );
+    let mut choices =
+        value.choices.ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
     if choices.len() != 1 {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let message =
+    let choice =
         choices.pop().ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
-    if message.message.role != "assistant"
-        || message.message.content.is_empty()
-        || message.message.content.len() > MAX_JSON_STRING_BYTES
+    if choice.index != 0 {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    match choice.finish_reason.as_str() {
+        "stop" => {}
+        "length" | "content_filter" => {
+            return Err(ProviderError::new(ProviderErrorCode::Incomplete));
+        }
+        _ => return Err(ProviderError::new(ProviderErrorCode::InvalidResponse)),
+    }
+    let _ = choice.logprobs;
+    let message = choice.message;
+    if message.role != "assistant"
+        || message.refusal.is_some()
+        || message.audio.is_some()
+        || message.tool_calls.is_some()
+        || message.function_call.is_some()
     {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    Ok(message.message.content)
+    let _ = message.annotations;
+    let content =
+        message.content.ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+    if content.is_empty() || content.len() > MAX_JSON_STRING_BYTES {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    Ok(content)
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResponsesResponseWire {
+    id: String,
+    object: String,
+    created_at: u64,
+    status: String,
+    #[serde(default)]
+    completed_at: Option<u64>,
+    #[serde(default)]
+    error: Option<ApiErrorWire>,
+    #[serde(default)]
+    incomplete_details: Option<ResponsesIncompleteDetailsWire>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    model: String,
     output: Vec<ResponsesOutputWire>,
+    #[serde(default)]
+    background: Option<bool>,
+    #[serde(default)]
+    conversation: Option<serde_json::Value>,
+    #[serde(default)]
+    instructions: Option<serde_json::Value>,
+    #[serde(default)]
+    max_output_tokens: Option<u64>,
+    #[serde(default)]
+    max_tool_calls: Option<u64>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    previous_response_id: Option<String>,
+    #[serde(default)]
+    prompt: Option<serde_json::Value>,
+    #[serde(default)]
+    prompt_cache_key: Option<String>,
+    #[serde(default)]
+    reasoning: Option<serde_json::Value>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    safety_identifier: Option<String>,
+    #[serde(default)]
+    service_tier: Option<String>,
+    #[serde(default)]
+    store: Option<bool>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    text: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(default)]
+    tools: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    top_logprobs: Option<u64>,
+    #[serde(default)]
+    top_p: Option<f64>,
+    #[serde(default)]
+    truncation: Option<String>,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
+    #[serde(default)]
+    user: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct ResponsesOutputWire {
-    r#type: String,
+#[serde(deny_unknown_fields)]
+struct ResponsesIncompleteDetailsWire {
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ResponsesOutputWire {
+    #[serde(rename = "message")]
+    Message(ResponsesMessageWire),
+    #[serde(rename = "function_call")]
+    FunctionCall(ResponsesFunctionCallWire),
+    #[serde(rename = "reasoning")]
+    Reasoning(ResponsesReasoningWire),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponsesMessageWire {
+    id: String,
+    status: String,
     role: String,
     content: Vec<ResponsesOutputPartWire>,
 }
 
 #[derive(Deserialize)]
-struct ResponsesOutputPartWire {
+#[serde(deny_unknown_fields)]
+struct ResponsesFunctionCallWire {
+    id: String,
+    call_id: String,
+    name: String,
+    arguments: String,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponsesReasoningWire {
+    id: String,
+    summary: Vec<ResponsesReasoningSummaryWire>,
+    #[serde(default)]
+    encrypted_content: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponsesReasoningSummaryWire {
     r#type: String,
     text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ResponsesOutputPartWire {
+    #[serde(rename = "output_text")]
+    OutputText(ResponsesOutputTextWire),
+    #[serde(rename = "refusal")]
+    Refusal(ResponsesRefusalWire),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponsesOutputTextWire {
+    text: String,
+    #[serde(default)]
+    annotations: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    logprobs: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResponsesRefusalWire {
+    refusal: String,
 }
 
 fn parse_responses_text(
     value: ResponsesResponseWire,
     memory: &mut MemoryBudget,
 ) -> Result<String, ProviderError> {
+    if value.object != "response" || value.id.is_empty() || value.model.is_empty() {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    if let Some(error) = value.error {
+        let _ = error.is_well_formed();
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    match value.status.as_str() {
+        "completed" if value.incomplete_details.is_none() => {}
+        "incomplete" => {
+            let details = value
+                .incomplete_details
+                .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+            if details.reason.is_empty()
+                || details.reason.len() > MAX_JSON_STRING_BYTES
+                || details.reason.chars().any(char::is_control)
+            {
+                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+            }
+            return Err(ProviderError::new(ProviderErrorCode::Incomplete));
+        }
+        _ => return Err(ProviderError::new(ProviderErrorCode::InvalidResponse)),
+    }
+    if let Some(truncation) = value.truncation.as_deref()
+        && !matches!(truncation, "auto" | "disabled")
+    {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    consume_responses_metadata(&value);
     if value.output.is_empty() || value.output.len() > 64 {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
     let mut result_bytes = 0_usize;
     for item in &value.output {
-        if item.r#type != "message" || item.role != "assistant" {
-            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
-        }
-        if item.content.is_empty() || item.content.len() > 64 {
+        let item = match item {
+            ResponsesOutputWire::Message(item) => item,
+            ResponsesOutputWire::FunctionCall(call) => {
+                let _ = (&call.id, &call.call_id, &call.name, &call.arguments, &call.status);
+                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+            }
+            ResponsesOutputWire::Reasoning(reasoning) => {
+                if reasoning.id.is_empty()
+                    || reasoning.status.as_deref().is_some_and(|status| status != "completed")
+                    || reasoning.summary.len() > 64
+                    || reasoning.summary.iter().any(|part| {
+                        part.r#type != "summary_text"
+                            || part.text.is_empty()
+                            || part.text.len() > MAX_JSON_STRING_BYTES
+                    })
+                    || reasoning
+                        .encrypted_content
+                        .as_ref()
+                        .is_some_and(|content| content.len() > MAX_JSON_STRING_BYTES)
+                {
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+                }
+                continue;
+            }
+        };
+        if item.id.is_empty()
+            || item.status != "completed"
+            || item.role != "assistant"
+            || item.content.is_empty()
+            || item.content.len() > 64
+        {
             return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
         }
         for part in &item.content {
-            if part.r#type != "output_text" {
-                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
-            }
+            let part = match part {
+                ResponsesOutputPartWire::OutputText(part) => part,
+                ResponsesOutputPartWire::Refusal(refusal) => {
+                    let _ = &refusal.refusal;
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+                }
+            };
+            let _ = (&part.annotations, &part.logprobs);
             result_bytes = result_bytes.saturating_add(part.text.len());
             if result_bytes > MAX_JSON_STRING_BYTES {
                 return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
@@ -1968,11 +2293,46 @@ fn parse_responses_text(
         memory.grow(result.capacity() - result_bytes)?;
     }
     for item in value.output {
-        for part in item.content {
-            result.push_str(&part.text);
+        if let ResponsesOutputWire::Message(item) = item {
+            for part in item.content {
+                if let ResponsesOutputPartWire::OutputText(part) = part {
+                    result.push_str(&part.text);
+                }
+            }
         }
     }
     Ok(result)
+}
+
+fn consume_responses_metadata(value: &ResponsesResponseWire) {
+    let _ = (
+        value.created_at,
+        &value.completed_at,
+        &value.input,
+        &value.background,
+        &value.conversation,
+        &value.instructions,
+        &value.max_output_tokens,
+        &value.max_tool_calls,
+        &value.metadata,
+        &value.parallel_tool_calls,
+        &value.previous_response_id,
+        &value.prompt,
+        &value.prompt_cache_key,
+        &value.reasoning,
+        &value.reasoning_effort,
+        &value.safety_identifier,
+        &value.service_tier,
+        &value.store,
+        &value.temperature,
+        &value.text,
+        &value.tool_choice,
+        &value.tools,
+        &value.top_logprobs,
+        &value.top_p,
+        &value.usage,
+        &value.user,
+    );
 }
 
 fn ensure_success_status(status: u16) -> Result<(), ProviderError> {
@@ -2234,6 +2594,23 @@ mod tests {
         )
     }
 
+    fn parse_generation_fixture(
+        body: &[u8],
+        endpoint: GenerationEndpoint,
+    ) -> Result<GenerationResult, ProviderError> {
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let body = body.to_vec();
+        memory.grow(body.capacity()).unwrap();
+        parse_generation_response(
+            HttpResponse { status: 200, retry_after: None, body },
+            endpoint,
+            &context,
+            Instant::now() + Duration::from_secs(1),
+            &mut memory,
+        )
+    }
+
     #[test]
     fn canonical_configuration_rejects_ambiguous_or_secret_bearing_urls() {
         for url in [
@@ -2332,6 +2709,8 @@ mod tests {
     fn parser_rejects_active_content_type_and_oversized_json_shape() {
         assert!(!valid_json_content_type("text/html"));
         assert!(!valid_json_content_type("application/json; charset=iso-8859-1"));
+        assert!(!valid_json_content_type("application/json;"));
+        assert!(!valid_json_content_type("application/json; charset=utf-8; charset=utf-8"));
         assert!(valid_json_content_type("application/json; charset=utf-8"));
         let mut nested = "null".to_owned();
         for _ in 0..=MAX_JSON_DEPTH {
@@ -2380,39 +2759,99 @@ mod tests {
     }
 
     #[test]
-    fn responses_parser_uses_only_nested_output_text_contract() {
-        let context = context();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        let mut memory = memory_budget(&context);
-        let body = br#"{"output_text":"untrusted convenience","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"trusted"}]}]}"#;
-        let body = body.to_vec();
-        memory.grow(body.capacity()).unwrap();
-        let result = parse_generation_response(
-            HttpResponse { status: 200, retry_after: None, body },
-            GenerationEndpoint::Responses,
-            &context,
-            deadline,
-            &mut memory,
-        )
-        .unwrap();
-        assert_eq!(result.text, "trusted");
-
-        let mut memory = memory_budget(&context);
-        let body = br#"{"output_text":"must not be accepted"}"#;
-        let body = body.to_vec();
-        memory.grow(body.capacity()).unwrap();
+    fn chat_and_responses_parsers_enforce_real_independent_wire_contracts() {
+        let chat = br#"{"id":"chatcmpl-test","object":"chat.completion","created":1720000000,"model":"configured","choices":[{"index":0,"message":{"role":"assistant","content":"trusted","refusal":null,"annotations":[]},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2},"service_tier":"default","system_fingerprint":null}"#;
         assert_eq!(
-            parse_generation_response(
-                HttpResponse { status: 200, retry_after: None, body },
-                GenerationEndpoint::Responses,
-                &context,
-                deadline,
-                &mut memory,
-            )
-            .unwrap_err()
-            .code(),
-            ProviderErrorCode::InvalidResponse
+            parse_generation_fixture(chat, GenerationEndpoint::ChatCompletions).unwrap().text,
+            "trusted"
         );
+
+        let responses = br#"{"id":"resp_test","object":"response","created_at":1720000000,"status":"completed","completed_at":1720000001,"error":null,"incomplete_details":null,"input":[],"model":"configured","output":[{"id":"rs_test","type":"reasoning","summary":[],"status":"completed"},{"id":"msg_test","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"trusted","annotations":[],"logprobs":[]}]}],"background":false,"instructions":null,"max_output_tokens":16,"metadata":{},"parallel_tool_calls":false,"previous_response_id":null,"reasoning":{},"reasoning_effort":null,"service_tier":"default","store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"user":null}"#;
+        assert_eq!(
+            parse_generation_fixture(responses, GenerationEndpoint::Responses).unwrap().text,
+            "trusted"
+        );
+
+        let invalid_cases: &[(&[u8], GenerationEndpoint, ProviderErrorCode)] = &[
+            (
+                br#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"configured","choices":[{"index":0,"message":{"role":"assistant","content":"must-not-win"},"finish_reason":"stop"}],"error":{"message":"failed","type":"server_error","code":"failed","param":null}}"#,
+                GenerationEndpoint::ChatCompletions,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"configured","choices":[{"index":0,"message":{"role":"assistant","content":"truncated"},"finish_reason":"length"}]}"#,
+                GenerationEndpoint::ChatCompletions,
+                ProviderErrorCode::Incomplete,
+            ),
+            (
+                br#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"configured","choices":[{"index":1,"message":{"role":"assistant","content":"wrong index"},"finish_reason":"stop"}]}"#,
+                GenerationEndpoint::ChatCompletions,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"configured","choices":[{"index":0,"message":{"role":"user","content":"wrong role"},"finish_reason":"stop"}]}"#,
+                GenerationEndpoint::ChatCompletions,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"configured","choices":[{"index":0,"message":{"role":"assistant","content":"tool instead"},"finish_reason":"tool_calls"}]}"#,
+                GenerationEndpoint::ChatCompletions,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"incomplete","error":null,"incomplete_details":{"reason":"max_output_tokens"},"model":"configured","output":[]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::Incomplete,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"incomplete","error":null,"incomplete_details":null,"model":"configured","output":[]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":{"message":"failed","type":"server_error","code":"failed","param":null},"incomplete_details":null,"model":"configured","output":[{"id":"msg_test","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"must-not-win","annotations":[]}]}]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[{"id":"msg_test","type":"message","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"denied"}]}]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[{"id":"msg_test","type":"message","status":"incomplete","role":"assistant","content":[{"type":"output_text","text":"partial","annotations":[]}]}]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[{"id":"unknown","type":"provider_magic","status":"completed"}]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[{"id":"call_test","type":"function_call","call_id":"call_1","name":"tool","arguments":"{}","status":"completed"}]}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[{"id":"msg_test","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[]}]}],"truncation":"provider_magic"}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+            (
+                br#"{"id":"resp_test","object":"response","created_at":1,"status":"completed","error":null,"incomplete_details":null,"model":"configured","output":[],"output_text":"sdk convenience must not be wire"}"#,
+                GenerationEndpoint::Responses,
+                ProviderErrorCode::InvalidResponse,
+            ),
+        ];
+        for (body, endpoint, expected) in invalid_cases {
+            assert_eq!(
+                parse_generation_fixture(body, *endpoint).unwrap_err().code(),
+                *expected,
+                "accepted invalid wire fixture: {}",
+                String::from_utf8_lossy(body)
+            );
+        }
     }
 
     #[test]
@@ -2433,6 +2872,11 @@ mod tests {
             b"HTTP/1.1 204 No Content\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n",
             b"HTTP/1.1 429 Slow Down\r\nRetry-After: tomorrow\r\nContent-Length: 2\r\n\r\n{}",
             b"HTTP/1.1 429 Slow Down\r\nRetry-After: 3\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 429 Slow Down\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+            b"HTTP/1.1 500 Server Error\r\nContent-Encoding: identity\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n",
         ];
         for raw in cases {
             assert_eq!(
@@ -2451,6 +2895,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.body, b"{}");
+        let no_body = parse_raw_response(b"HTTP/1.1 401 Unauthorized\r\n\r\n").unwrap();
+        assert_eq!(no_body.status, 401);
+        assert!(no_body.body.is_empty());
     }
 
     #[test]
@@ -2575,6 +3022,35 @@ mod tests {
             assert_eq!(error.code(), ProviderErrorCode::SecretInvalid);
             assert_eq!(error.to_string(), "providerSecretInvalid");
         }
+    }
+
+    #[test]
+    fn secret_candidate_buffer_is_zeroized_on_validation_and_memory_failures() {
+        let canary = b"SECRET-CANDIDATE-CANARY";
+        for mut candidate in [
+            canary.iter().copied().chain(*b" ").collect::<Vec<_>>(),
+            vec![b'x'; MAX_SECRET_BYTES + 1],
+            vec![0xff, 0xfe],
+        ] {
+            let context = context();
+            let mut memory = memory_budget(&context);
+            assert!(validate_secret_candidate(&mut candidate, &mut memory).is_err());
+            assert!(!candidate.windows(canary.len()).any(|window| window == canary));
+            assert!(candidate.iter().all(|byte| *byte == 0));
+        }
+
+        let limited = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 0, ..ResourceLimits::default() },
+        );
+        let mut memory = memory_budget(&limited);
+        let mut candidate = canary.to_vec();
+        assert_eq!(
+            validate_secret_candidate(&mut candidate, &mut memory).unwrap_err().code(),
+            ProviderErrorCode::ResourceLimit
+        );
+        assert!(!candidate.windows(canary.len()).any(|window| window == canary));
+        assert!(candidate.iter().all(|byte| *byte == 0));
     }
 
     #[test]
@@ -2769,6 +3245,33 @@ mod tests {
     }
 
     #[test]
+    fn models_duplicate_id_is_an_invalid_response() {
+        let config = ProviderConfig::parse(
+            "https://provider.example/v1",
+            "configured",
+            "PATH",
+            Duration::from_secs(1),
+            [],
+        )
+        .unwrap();
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let body = br#"{"object":"list","data":[{"id":"configured","object":"model","created":0,"owned_by":"one"},{"id":"configured","object":"model","created":1,"owned_by":"two"}],"has_more":false}"#;
+        assert_eq!(
+            parse_models_response(
+                HttpResponse { status: 200, retry_after: None, body: body.to_vec() },
+                &config,
+                &context,
+                Instant::now() + Duration::from_secs(1),
+                &mut memory,
+            )
+            .unwrap_err()
+            .code(),
+            ProviderErrorCode::InvalidResponse
+        );
+    }
+
+    #[test]
     fn post_without_idempotency_key_is_not_replayed_after_write_progress() {
         let first = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = first.local_addr().unwrap().port();
@@ -2812,6 +3315,75 @@ mod tests {
         first_worker.join().unwrap();
         second.set_nonblocking(true).unwrap();
         assert!(matches!(second.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn idempotency_key_does_not_replay_completed_post_after_malformed_response() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)).unwrap();
+        let first_count = Arc::new(AtomicUsize::new(0));
+        let first_worker_count = Arc::clone(&first_count);
+        let first_worker = std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            first_worker_count.fetch_add(1, Ordering::SeqCst);
+            let mut request = Vec::new();
+            let mut byte = [0_u8];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let header = std::str::from_utf8(&request).unwrap();
+            let content_length = header
+                .split("\r\n")
+                .find_map(|line| line.strip_prefix("Content-Length: ")?.parse::<usize>().ok())
+                .unwrap();
+            let mut body = vec![0_u8; content_length];
+            stream.read_exact(&mut body).unwrap();
+            assert!(header.contains("Idempotency-Key: request-1\r\n"));
+            assert!(!body.is_empty());
+            stream.write_all(b"HTTP/1.1 malformed\r\n\r\n").unwrap();
+        });
+        let config = ProviderConfig::parse(
+            &format!("http://provider.test:{port}/v1"),
+            "configured",
+            "PATH",
+            Duration::from_secs(2),
+            ["image-description".into()],
+        )
+        .unwrap();
+        let mut client = OpenAiCompatibleClient::new(
+            config,
+            ProviderNetworkPolicy {
+                allow_network: true,
+                allow_private_network: true,
+                allowed_hosts: vec!["provider.test".into()],
+            },
+        );
+        client.resolver = Arc::new(FixedResolver(vec![
+            SocketAddr::from(([127, 0, 0, 1], port)),
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+        ]));
+        let request = GenerationRequest {
+            endpoint: GenerationEndpoint::Responses,
+            capability: "image-description",
+            input: GenerationInput::Text("fixed test input"),
+            max_output_tokens: 16,
+            idempotency_key: Some("request-1"),
+        };
+        assert_eq!(
+            client.generate(request, &context()).unwrap_err().code(),
+            ProviderErrorCode::InvalidResponse
+        );
+        first_worker.join().unwrap();
+        second.set_nonblocking(true).unwrap();
+        let second_count = match second.accept() {
+            Ok(_) => 1,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => 0,
+            Err(error) => panic!("second listener failed: {error}"),
+        };
+        assert_eq!(first_count.load(Ordering::SeqCst), 1);
+        assert_eq!(second_count, 0, "completed POST was replayed on the second IP");
     }
 
     #[test]
