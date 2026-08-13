@@ -38,6 +38,7 @@ struct Inventory {
 #[serde(deny_unknown_fields)]
 struct OrtManifest {
     version: String,
+    api_version: u32,
     source: String,
     license: String,
     targets: BTreeMap<String, OrtTarget>,
@@ -47,6 +48,31 @@ struct OrtManifest {
 #[serde(deny_unknown_fields)]
 struct OrtTarget {
     asset: String,
+    sha256: String,
+    library: String,
+    library_bytes: u64,
+    worker_address_space_overhead_bytes: u64,
+    binary_format: String,
+    binary_architecture: String,
+    load_identity: String,
+    library_sha256: String,
+    rpaths: Vec<String>,
+    system_dependencies: Vec<OrtSystemDependency>,
+    companion_dependencies: Vec<OrtCompanionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtSystemDependency {
+    load_name: String,
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtCompanionDependency {
+    load_name: String,
+    path: String,
     sha256: String,
 }
 
@@ -503,6 +529,13 @@ fn is_safe_model_file_name(value: &str) -> bool {
         && matches!(path.components().next(), Some(std::path::Component::Normal(_)))
 }
 
+fn is_safe_relative_path(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
 fn is_canonical_https(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         url.scheme() == "https"
@@ -609,6 +642,7 @@ fn validate_ort_manifest(
     let expected_source =
         format!("https://github.com/microsoft/onnxruntime/releases/tag/v{}", manifest.version);
     if manifest.version.is_empty()
+        || manifest.api_version == 0
         || manifest.source != expected_source
         || !is_canonical_https(&manifest.source)
         || manifest.license != "MIT"
@@ -647,8 +681,8 @@ fn validate_ort_manifest(
         else {
             continue;
         };
-        if !is_safe_model_file_name(&asset.asset) || !is_sha256(&asset.sha256) {
-            errors.push(format!("ONNX Runtime target {target} lacks a valid SHA-256"));
+        if !ort_target_audit_is_valid(target, asset) {
+            errors.push(format!("ONNX Runtime target {target} has invalid audited fields"));
         }
         let expected_url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v{}/{}",
@@ -666,6 +700,68 @@ fn validate_ort_manifest(
             ));
         }
     }
+}
+
+fn ort_target_audit_is_valid(target: &str, asset: &OrtTarget) -> bool {
+    is_safe_model_file_name(&asset.asset)
+        && is_sha256(&asset.sha256)
+        && is_safe_relative_path(&asset.library)
+        && asset.library_bytes != 0
+        && asset.library_bytes <= 512 * 1024 * 1024
+        && (256 * 1024 * 1024..=2 * 1024 * 1024 * 1024 * 1024)
+            .contains(&asset.worker_address_space_overhead_bytes)
+        && matches!(asset.binary_format.as_str(), "elf" | "mach-o" | "pe")
+        && matches!(asset.binary_architecture.as_str(), "aarch64" | "x86_64")
+        && match asset.binary_format.as_str() {
+            "elf" | "pe" => is_safe_model_file_name(&asset.load_identity),
+            "mach-o" => {
+                asset.load_identity.strip_prefix("@rpath/").is_some_and(is_safe_model_file_name)
+            }
+            _ => false,
+        }
+        && is_sha256(&asset.library_sha256)
+        && asset.rpaths.len() <= 128
+        && !asset.system_dependencies.is_empty()
+        && !asset.system_dependencies.iter().any(|dependency| {
+            dependency.load_name.is_empty()
+                || dependency.path.as_ref().is_some_and(String::is_empty)
+        })
+        && asset.companion_dependencies.is_empty()
+        && !asset.companion_dependencies.iter().any(|dependency| {
+            dependency.load_name.is_empty()
+                || !is_safe_relative_path(&dependency.path)
+                || !is_sha256(&dependency.sha256)
+        })
+        && ort_dependencies_are_system_only(target, &asset.system_dependencies)
+}
+
+fn ort_dependencies_are_system_only(target: &str, dependencies: &[OrtSystemDependency]) -> bool {
+    let mut unique = BTreeSet::new();
+    dependencies.iter().all(|dependency| {
+        let normalized = if target == "x86_64-pc-windows-msvc" {
+            dependency.load_name.to_ascii_lowercase()
+        } else {
+            dependency.load_name.clone()
+        };
+        unique.insert(normalized)
+            && if target == "aarch64-apple-darwin" {
+                let Some(expected_path) = dependency.path.as_deref() else {
+                    return false;
+                };
+                let path = Path::new(expected_path);
+                expected_path == dependency.load_name
+                    && (expected_path.starts_with("/System/Library/")
+                        || expected_path.starts_with("/usr/lib/"))
+                    && path.components().all(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::RootDir | std::path::Component::Normal(_)
+                        )
+                    })
+            } else {
+                dependency.path.is_none() && is_safe_model_file_name(&dependency.load_name)
+            }
+    })
 }
 
 fn validate_model_manifest(
@@ -1172,6 +1268,10 @@ mod tests {
         (artifact, download)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "four-platform authority fixture is intentionally explicit"
+    )]
     fn ort_fixture() -> (OrtManifest, Inventory, DownloadManifest) {
         let version = "1.2.3";
         let target_repositories = [
@@ -1186,7 +1286,56 @@ mod tests {
             let sha256 = marker.to_string().repeat(64);
             targets.insert(
                 target.to_owned(),
-                OrtTarget { asset: asset.to_owned(), sha256: sha256.clone() },
+                OrtTarget {
+                    asset: asset.to_owned(),
+                    sha256: sha256.clone(),
+                    library: "lib/libonnxruntime.so".to_owned(),
+                    library_bytes: 1024,
+                    worker_address_space_overhead_bytes: 512 * 1024 * 1024,
+                    binary_format: if target == "aarch64-apple-darwin" {
+                        "mach-o"
+                    } else if target == "x86_64-pc-windows-msvc" {
+                        "pe"
+                    } else {
+                        "elf"
+                    }
+                    .to_owned(),
+                    binary_architecture: if target.starts_with("aarch64") {
+                        "aarch64"
+                    } else {
+                        "x86_64"
+                    }
+                    .to_owned(),
+                    load_identity: if target == "aarch64-apple-darwin" {
+                        "@rpath/libonnxruntime.1.dylib"
+                    } else if target == "x86_64-pc-windows-msvc" {
+                        "onnxruntime.dll"
+                    } else {
+                        "libonnxruntime.so.1"
+                    }
+                    .to_owned(),
+                    library_sha256: marker.to_string().repeat(64),
+                    rpaths: if target == "aarch64-apple-darwin" {
+                        vec!["@loader_path".to_owned()]
+                    } else if target.ends_with("linux-gnu") {
+                        vec!["$ORIGIN".to_owned()]
+                    } else {
+                        Vec::new()
+                    },
+                    system_dependencies: vec![OrtSystemDependency {
+                        load_name: if target == "aarch64-apple-darwin" {
+                            "/usr/lib/libSystem.B.dylib"
+                        } else if target == "x86_64-pc-windows-msvc" {
+                            "KERNEL32.dll"
+                        } else {
+                            "libc.so.6"
+                        }
+                        .to_owned(),
+                        path: (target == "aarch64-apple-darwin")
+                            .then(|| "/usr/lib/libSystem.B.dylib".to_owned()),
+                    }],
+                    companion_dependencies: Vec::new(),
+                },
             );
             native_archives.push(NativeDownload {
                 target: target.to_owned(),
@@ -1205,6 +1354,7 @@ mod tests {
         let source = format!("https://github.com/microsoft/onnxruntime/releases/tag/v{version}");
         let manifest = OrtManifest {
             version: version.to_owned(),
+            api_version: 29,
             source: source.clone(),
             license: "MIT".to_owned(),
             targets,
@@ -1326,6 +1476,7 @@ version = "9.9.9"
     fn missing_onnx_inventory_component_is_rejected() {
         let manifest = OrtManifest {
             version: "1.0.0".to_owned(),
+            api_version: 29,
             source: "https://github.com/microsoft/onnxruntime/releases/tag/v1.0.0".to_owned(),
             license: "MIT".to_owned(),
             targets: BTreeMap::new(),
@@ -1382,6 +1533,22 @@ version = "9.9.9"
                 "mutation {mutate}"
             );
         }
+
+        let (mut manifest, inventory, downloads) = ort_fixture();
+        manifest.targets.get_mut("aarch64-apple-darwin").unwrap().system_dependencies = vec![
+            OrtSystemDependency { load_name: "relative.dylib".into(), path: None },
+            OrtSystemDependency { load_name: "relative.dylib".into(), path: None },
+        ];
+        manifest.targets.get_mut("x86_64-pc-windows-msvc").unwrap().load_identity =
+            "../onnxruntime.dll".into();
+        let mut errors = Vec::new();
+        validate_ort_manifest(&inventory, &manifest, &downloads, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("aarch64-apple-darwin") && error.contains("invalid audited fields")
+        }));
+        assert!(errors.iter().any(|error| {
+            error.contains("x86_64-pc-windows-msvc") && error.contains("invalid audited fields")
+        }));
     }
 
     #[test]

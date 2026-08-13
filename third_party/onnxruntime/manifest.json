@@ -1,23 +1,101 @@
 {
   "version": "1.29.0",
+  "api_version": 29,
   "source": "https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0",
   "license": "MIT",
   "targets": {
     "aarch64-apple-darwin": {
       "asset": "onnxruntime-osx-arm64-1.29.0.tgz",
-      "sha256": "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92"
+      "sha256": "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92",
+      "library": "lib/libonnxruntime.dylib",
+      "library_bytes": 43184400,
+      "worker_address_space_overhead_bytes": 1099511627776,
+      "binary_format": "mach-o",
+      "binary_architecture": "aarch64",
+      "load_identity": "@rpath/libonnxruntime.1.dylib",
+      "library_sha256": "c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc",
+      "rpaths": ["@loader_path"],
+      "system_dependencies": [
+        { "load_name": "/System/Library/Frameworks/CoreML.framework/Versions/A/CoreML", "path": "/System/Library/Frameworks/CoreML.framework/Versions/A/CoreML" },
+        { "load_name": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa", "path": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa" },
+        { "load_name": "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore", "path": "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore" },
+        { "load_name": "/System/Library/Frameworks/Metal.framework/Versions/A/Metal", "path": "/System/Library/Frameworks/Metal.framework/Versions/A/Metal" },
+        { "load_name": "/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface", "path": "/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface" },
+        { "load_name": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation", "path": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation" },
+        { "load_name": "/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork", "path": "/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork" },
+        { "load_name": "/System/Library/Frameworks/Network.framework/Versions/A/Network", "path": "/System/Library/Frameworks/Network.framework/Versions/A/Network" },
+        { "load_name": "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration", "path": "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration" },
+        { "load_name": "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit", "path": "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit" },
+        { "load_name": "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation", "path": "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation" },
+        { "load_name": "/usr/lib/libiconv.2.dylib", "path": "/usr/lib/libiconv.2.dylib" },
+        { "load_name": "/usr/lib/libc++.1.dylib", "path": "/usr/lib/libc++.1.dylib" },
+        { "load_name": "/usr/lib/libSystem.B.dylib", "path": "/usr/lib/libSystem.B.dylib" },
+        { "load_name": "/usr/lib/libobjc.A.dylib", "path": "/usr/lib/libobjc.A.dylib" }
+      ],
+      "companion_dependencies": []
     },
     "x86_64-unknown-linux-gnu": {
       "asset": "onnxruntime-linux-x64-1.29.0.tgz",
-      "sha256": "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba"
+      "sha256": "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba",
+      "library": "lib/libonnxruntime.so.1.29.0",
+      "library_bytes": 28497752,
+      "worker_address_space_overhead_bytes": 536870912,
+      "binary_format": "elf",
+      "binary_architecture": "x86_64",
+      "load_identity": "libonnxruntime.so.1",
+      "library_sha256": "5715f06d8992ca8eeeddcce43df3a7d38f97d537052126f558e912cb312460ca",
+      "rpaths": ["$ORIGIN"],
+      "system_dependencies": [
+        { "load_name": "libdl.so.2" }, { "load_name": "librt.so.1" },
+        { "load_name": "libpthread.so.0" }, { "load_name": "libstdc++.so.6" },
+        { "load_name": "libm.so.6" }, { "load_name": "libgcc_s.so.1" },
+        { "load_name": "libc.so.6" }, { "load_name": "ld-linux-x86-64.so.2" }
+      ],
+      "companion_dependencies": []
     },
     "aarch64-unknown-linux-gnu": {
       "asset": "onnxruntime-linux-aarch64-1.29.0.tgz",
-      "sha256": "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f"
+      "sha256": "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f",
+      "library": "lib/libonnxruntime.so.1.29.0",
+      "library_bytes": 24538024,
+      "worker_address_space_overhead_bytes": 536870912,
+      "binary_format": "elf",
+      "binary_architecture": "aarch64",
+      "load_identity": "libonnxruntime.so.1",
+      "library_sha256": "a27d21126db312aa8f02f3d5eaebe466e991f51f469882e6d0407d5a8b64afda",
+      "rpaths": ["$ORIGIN"],
+      "system_dependencies": [
+        { "load_name": "libdl.so.2" }, { "load_name": "librt.so.1" },
+        { "load_name": "libpthread.so.0" }, { "load_name": "libstdc++.so.6" },
+        { "load_name": "libm.so.6" }, { "load_name": "libgcc_s.so.1" },
+        { "load_name": "libc.so.6" }, { "load_name": "ld-linux-aarch64.so.1" }
+      ],
+      "companion_dependencies": []
     },
     "x86_64-pc-windows-msvc": {
       "asset": "onnxruntime-win-x64-1.29.0.zip",
-      "sha256": "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2"
+      "sha256": "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
+      "library": "lib/onnxruntime.dll",
+      "library_bytes": 16149344,
+      "worker_address_space_overhead_bytes": 536870912,
+      "binary_format": "pe",
+      "binary_architecture": "x86_64",
+      "load_identity": "onnxruntime.dll",
+      "library_sha256": "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471",
+      "rpaths": [],
+      "system_dependencies": [
+        { "load_name": "KERNEL32.dll" }, { "load_name": "ADVAPI32.dll" },
+        { "load_name": "MSVCP140.dll" }, { "load_name": "MSVCP140_1.dll" },
+        { "load_name": "api-ms-win-core-path-l1-1-0.dll" }, { "load_name": "dbghelp.dll" },
+        { "load_name": "SETUPAPI.dll" }, { "load_name": "SHELL32.dll" }, { "load_name": "dxgi.dll" },
+        { "load_name": "VCRUNTIME140_1.dll" }, { "load_name": "VCRUNTIME140.dll" },
+        { "load_name": "api-ms-win-crt-heap-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-runtime-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-stdio-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-string-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-convert-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-time-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-filesystem-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-math-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-locale-l1-1-0.dll" }
+      ],
+      "companion_dependencies": []
     }
   }
 }

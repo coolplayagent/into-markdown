@@ -137,3 +137,21 @@ stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EP
 项目明确不支持 macOS x86_64。CPU 推理是跨平台基线；未来可通过独立 Bazel
 配置增加可选 GPU Execution Provider，而无需修改 `OcrEngine` 或
 `TensorRuntime` 接口。
+
+固定 CPU 运行层由两部分组成：`crates/ocr` 提供对象安全 `TensorRuntime`、模型契约、
+并发 single-flight 和 bounded LRU；`crates/onnxruntime` 负责隔离 worker、受控 ORT C ABI
+与真实 CPU session adapter。父进程只验证并持有 runtime 私有副本，不执行 `dlopen`；
+worker 在 OS hard memory limit 生效后才加载 ORT 和模型。缓存 key 包含 canonical model identity、模型 SHA-256、
+完整 `ModelContract` 的稳定 digest、全部 session options 和经验证的 runtime 版本；每次
+查询仍重新校验模型字节与 contract。创建前按 authority 声明的 session 上界预留 count/
+bytes，预算直到底层 session 的最后一个 `Arc` 完成析构才释放；因此在途 clone 不会因
+LRU eviction 被误算为空闲。加载失败、panic 或取消会同时移除 loading entry 和预留，
+不会污染缓存。GPU 仅保留独立构建 feature 名称，默认 CPU artifact 不包含 GPU provider。
+张量边界统一限制每侧 64 个名称、256 字节名称和 rank 16；run 预算覆盖输入值/shape
+副本、调用槽位、native 最大输出、返回值/shape 副本和 scratch。IPC 使用固定 header、
+protocol version、单调 request id 与有界消息/载荷。worker 通过 `ort-sys` API table 先把
+IO count 读入标量，名称读入固定 257-byte allocator，rank/dim 读入 `[i64; 16]`，通过检查
+后才 fallible 分配 Rust metadata。原生输出同样在 shape/元素/字节契约校验通过后才形成
+slice 并分配返回 `Vec`。GraphProto IO 经有界 wire preflight 和 checked-in prost 类型
+解析，与 authority/native metadata 三向核对，initializer graph input 按 IR 规则区分为
+固定值或 overridable input。

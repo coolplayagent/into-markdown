@@ -2,28 +2,65 @@ package(default_visibility = ["//visibility:private"])
 
 exports_files(["manifest.json"], visibility = ["//visibility:public"])
 
+config_setting(
+    name = "is_linux_arm64",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:linux"],
+)
+
+config_setting(
+    name = "is_linux_x86_64",
+    constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+config_setting(
+    name = "is_macos_arm64",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:osx"],
+)
+
+config_setting(
+    name = "is_windows_x86_64",
+    constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:windows"],
+)
+
 # These manual targets pin official CPU distributions. Future FFI targets will
 # select the matching package for the current supported platform.
 filegroup(
     name = "linux_arm64",
-    srcs = ["@onnxruntime_linux_arm64//:lib/libonnxruntime.so"],
+    srcs = ["@onnxruntime_linux_arm64//:lib/libonnxruntime.so.1.29.0"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
+)
+
+filegroup(
+    name = "cpu_runtime",
+    srcs = select({
+        ":is_linux_arm64": [":linux_arm64"],
+        ":is_linux_x86_64": [":linux_x86_64"],
+        ":is_macos_arm64": [":macos_arm64"],
+        ":is_windows_x86_64": [":windows_x86_64"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
     name = "linux_x86_64",
-    srcs = ["@onnxruntime_linux_x86_64//:lib/libonnxruntime.so"],
+    srcs = ["@onnxruntime_linux_x86_64//:lib/libonnxruntime.so.1.29.0"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
     name = "macos_arm64",
     srcs = ["@onnxruntime_macos_arm64//:lib/libonnxruntime.dylib"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )
 
 filegroup(
     name = "windows_x86_64",
     srcs = ["@onnxruntime_windows_x86_64//:lib/onnxruntime.dll"],
     tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
 )

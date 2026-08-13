@@ -58,7 +58,15 @@ ExecutionContext 的取消、总超时、内存与临时空间预算。每个文
 所有路径组件均来自严格 ID/文件名校验；查询、校验和清理拒绝符号链接及非普通
 对象。install/remove 共用同一锁，避免并发发布与清理发生 TOCTOU。
 
-`third_party/onnxruntime/manifest.json` 同样被运行时嵌入；其四个 target、asset、SHA-256
-必须与 `downloads.json` 的 URL、strip prefix 和固定 repository 名双向精确一致。
+`third_party/onnxruntime/manifest.json` 同样被运行时嵌入；其版本、C API level、四个
+target、asset、压缩包 SHA-256、解包后动态库路径与动态库 SHA-256 是运行时权威，
+`load_identity` 与固定二进制的系统依赖闭包也属于同一权威，
+并与 `downloads.json` 的 URL、strip prefix 和固定 repository 名双向精确一致。
+模型运行时文件进入清单时还必须绑定模型哈希、IR version、完整 opset imports、每个
+输入输出的精确 name/dtype/rank/固定或有界动态 shape，以及 session/run 保守内存上界。
+安全层从 hash-verified `ModelProto` 字节用有界 protobuf parser 独立读取 field 1 和
+field 8，规范化默认 domain 并拒绝重复 domain，再与 authority 精确比较；ORT 创建
+session 后还会核对图的输入输出元数据。当前 runtime artifacts 为空，因此产品 resolver
+稳定返回 `ModelUnavailable`。
 source 与 runtime artifacts 的角色只允许且必须完整包含 `detector` 和
 `recognizer-and-dictionary`，角色不能重复；空 runtime 列表只允许 planned 状态。

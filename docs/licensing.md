@@ -52,6 +52,23 @@ TXT 字符集实现使用 `chardetng 0.1.17` 与 `encoding_rs 0.8.35`。前者�
 cargo run --locked --offline -p license-check --bin release-audit
 ```
 
+ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包动态库 SHA-256
+及固定二进制的 load identity/系统动态依赖审计结果记录在
+`third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
+为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
+默认 feature、二进制下载和 build.rs 链接，仅启用 `std`、`alternative-backend` 与
+API 28 兼容绑定；worker 直接使用该预生成 C API table，运行时仍以 authority 的 API 29
+和精确 `GetVersionString` 做探针，父进程不加载 native library。
+`object` 固定为 `0.40.0`，从上游 Apache-2.0 OR MIT 中选择 Apache-2.0，关闭默认压缩 feature 且该 crate
+没有 build.rs；它只在加载前离线解析固定 ELF、Mach-O 与 PE 头，不下载或链接原生代码。
+`prost`/`prost-derive` 固定为 `0.14.4`，选择 Apache-2.0；仓库不运行 `protoc` 或 build.rs，
+只编译 checked-in 的安全边界消息类型。ONNX `onnx.proto3` 的来源、v1.20.0 tag、
+SHA-256、Apache-2.0 许可、生成器版本、未知字段策略和递归上限记录在
+`third_party/onnx/proto-authority.json`。
+当前默认
+发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
+发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。
+
 模型清单的每个 bundle 都是 OCR bundle，bundle ID 必须唯一，并且必须各自包含唯一
 `detector` 与 `recognizer-and-dictionary` 角色。`default_bundle` 必须非空、存在，且
 默认 bundle 自身必须包含受管的 detector 与 recognizer/dictionary 源产物；其他

@@ -1,0 +1,114 @@
+load("@crates//:defs.bzl", "all_crate_deps", "aliases")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "onnxruntime",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    crate_name = "into_markdown_onnxruntime",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/ocr",
+    ] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+# The worker contains no runtime/model archive. Its executable path is passed
+# explicitly by the product/runfiles owner; it never searches CWD, PATH, or an
+# environment variable for ORT.
+rust_binary(
+    name = "onnxruntime_worker",
+    srcs = ["src/bin/onnxruntime-worker.rs"],
+    crate_name = "onnxruntime_worker",
+    edition = "2024",
+    deps = [":onnxruntime"],
+)
+
+rust_test(
+    name = "onnxruntime_test",
+    crate = ":onnxruntime",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/ocr",
+    ] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+# Explicit supply-chain/native smoke test. Wildcard builds skip this manual
+# target, so resolving //... never needs an ONNX Runtime archive.
+rust_test(
+    name = "native_runtime_validation",
+    crate = ":onnxruntime",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    data = [
+        ":onnxruntime_worker",
+        "//third_party/onnxruntime:cpu_runtime",
+    ],
+    edition = "2024",
+    rustc_env = select({
+        "//third_party/onnxruntime:is_linux_arm64": {
+            "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_linux_arm64",
+            "ORT_TEST_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_linux_x86_64": {
+            "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_linux_x86_64",
+            "ORT_TEST_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_macos_arm64": {
+            "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_macos_arm64",
+            "ORT_TEST_LIBRARY": "lib/libonnxruntime.dylib",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_windows_x86_64": {
+            "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
+            "ORT_TEST_LIBRARY": "lib/onnxruntime.dll",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
+        },
+        "//conditions:default": {
+            "ORT_TEST_REPOSITORY": "unsupported",
+            "ORT_TEST_LIBRARY": "unsupported",
+            "ORT_TEST_WORKER": "unsupported",
+        },
+    }),
+    tags = ["manual"],
+    deps = [
+        "//crates/core",
+        "//crates/ocr",
+    ] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+# Explicit cross-package header audit. It parses every official CPU binary and
+# compares architecture, SONAME/install-name, imports, and rpaths with the
+# authority before any platform loader or constructor can run.
+rust_test(
+    name = "native_archive_binary_audit",
+    crate = ":onnxruntime",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    data = [
+        "//third_party/onnxruntime:linux_arm64",
+        "//third_party/onnxruntime:linux_x86_64",
+        "//third_party/onnxruntime:macos_arm64",
+        "//third_party/onnxruntime:windows_x86_64",
+    ],
+    edition = "2024",
+    rustc_env = {"ORT_AUDIT_ALL_ARCHIVES": "1"},
+    tags = ["manual"],
+    deps = [
+        "//crates/core",
+        "//crates/ocr",
+    ] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

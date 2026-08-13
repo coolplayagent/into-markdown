@@ -21,6 +21,16 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+mod onnx_proto;
+mod runtime;
+
+pub use runtime::{
+    CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,
+    ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime,
+    ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory, SessionOptions,
+    TensorElementType, TensorSpec,
+};
+
 const SUPPORTED_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
@@ -99,6 +109,7 @@ struct DownloadManifest {
 #[serde(deny_unknown_fields)]
 struct OrtManifest {
     version: String,
+    api_version: u32,
     source: String,
     license: String,
     targets: BTreeMap<String, OrtTarget>,
@@ -108,6 +119,31 @@ struct OrtManifest {
 #[serde(deny_unknown_fields)]
 struct OrtTarget {
     asset: String,
+    sha256: String,
+    library: String,
+    library_bytes: u64,
+    worker_address_space_overhead_bytes: u64,
+    binary_format: String,
+    binary_architecture: String,
+    load_identity: String,
+    library_sha256: String,
+    rpaths: Vec<String>,
+    system_dependencies: Vec<OrtSystemDependency>,
+    companion_dependencies: Vec<OrtCompanionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtSystemDependency {
+    load_name: String,
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrtCompanionDependency {
+    load_name: String,
+    path: String,
     sha256: String,
 }
 
@@ -384,6 +420,7 @@ fn validate_native_downloads(
 ) -> Result<(), ConversionError> {
     validate_https(&onnxruntime.source)?;
     if onnxruntime.version.is_empty()
+        || onnxruntime.api_version == 0
         || onnxruntime.license != "MIT"
         || onnxruntime.source
             != format!(
@@ -420,6 +457,40 @@ fn validate_native_downloads(
             .ok_or_else(|| invalid_manifest("native target absent from ONNX Runtime authority"))?;
         validate_file_name(&target.asset)?;
         validate_hash(&target.sha256)?;
+        validate_relative_path(&target.library)?;
+        if target.library_bytes == 0
+            || target.library_bytes > 512 * 1024 * 1024
+            || !(256 * 1024 * 1024..=2 * 1024 * 1024 * 1024 * 1024)
+                .contains(&target.worker_address_space_overhead_bytes)
+            || !matches!(target.binary_format.as_str(), "elf" | "mach-o" | "pe")
+            || !matches!(target.binary_architecture.as_str(), "aarch64" | "x86_64")
+            || !match target.binary_format.as_str() {
+                "elf" | "pe" => validate_file_name(&target.load_identity).is_ok(),
+                "mach-o" => target
+                    .load_identity
+                    .strip_prefix("@rpath/")
+                    .is_some_and(|name| validate_file_name(name).is_ok()),
+                _ => false,
+            }
+            || target.rpaths.len() > 128
+        {
+            return Err(invalid_manifest("invalid ONNX Runtime binary audit"));
+        }
+        validate_hash(&target.library_sha256)?;
+        if target.system_dependencies.is_empty()
+            || target.system_dependencies.iter().any(|dependency| {
+                dependency.load_name.is_empty()
+                    || dependency.path.as_ref().is_some_and(String::is_empty)
+            })
+            || target.companion_dependencies.iter().any(|dependency| {
+                dependency.load_name.is_empty()
+                    || validate_relative_path(&dependency.path).is_err()
+                    || validate_hash(&dependency.sha256).is_err()
+            })
+            || !target.companion_dependencies.is_empty()
+        {
+            return Err(invalid_manifest("invalid ONNX Runtime dependency audit"));
+        }
         let strip_prefix = target
             .asset
             .strip_suffix(".tgz")
@@ -517,6 +588,17 @@ fn validate_file_name(value: &str) -> Result<(), ConversionError> {
         || !matches!(path.components().next(), Some(Component::Normal(_)))
     {
         return Err(invalid_manifest(format!("unsafe file name {value:?}")));
+    }
+    Ok(())
+}
+
+fn validate_relative_path(value: &str) -> Result<(), ConversionError> {
+    let path = Path::new(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(invalid_manifest(format!("unsafe relative path {value:?}")));
     }
     Ok(())
 }

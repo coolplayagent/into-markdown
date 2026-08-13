@@ -1,0 +1,689 @@
+//! Isolated worker lifecycle, hard process limits, and bounded IPC.
+
+use super::native::{NativeError, NativeSession};
+use super::protocol::{
+    self, ERROR, ERROR_ABI, ERROR_INFERENCE, ERROR_PROTOCOL, ERROR_RESOURCE, ERROR_SESSION, Frame,
+    INIT, INIT_OK, MAX_MESSAGES, RUN, RUN_OK, SHUTDOWN,
+};
+use super::{RuntimeLibrary, authority, current_target, ort_error};
+use into_markdown_core::{ConversionError, ExecutionContext, Tensor};
+use into_markdown_ocr::{Dimension, ModelContract, ModelMetadata, SessionOptions, TensorSpec};
+use std::ffi::OsString;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
+use std::time::Duration;
+use tempfile::TempDir;
+
+const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
+const MAX_STDERR_BYTES: usize = 64 * 1024;
+const POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+pub(crate) struct WorkerClient {
+    process: WorkerProcess,
+    stdin: Option<ChildStdin>,
+    responses: mpsc::Receiver<Result<Frame, ()>>,
+    reader: Option<JoinHandle<()>>,
+    stderr_reader: Option<JoinHandle<()>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    request_id: u64,
+    stopped: bool,
+    _working_directory: TempDir,
+}
+
+impl WorkerClient {
+    pub(crate) fn start(
+        library: &RuntimeLibrary,
+        worker_executable: &Path,
+        model: &[u8],
+        contract: &ModelContract,
+        options: &SessionOptions,
+        context: &ExecutionContext,
+    ) -> Result<(Self, ModelMetadata), ConversionError> {
+        context.checkpoint()?;
+        let address_limit = address_space_limit(library, model, contract)?;
+        let working_directory = tempfile::Builder::new()
+            .prefix("into-md-ort-worker-cwd-")
+            .tempdir()
+            .map_err(|_| ort_error("workerLaunch"))?;
+        let mut process = spawn_worker(
+            worker_executable,
+            library.private_path(),
+            working_directory.path(),
+            address_limit,
+        )?;
+        let stdin = process.child.stdin.take().ok_or_else(|| ort_error("workerLaunch"))?;
+        let mut stdout = process.child.stdout.take().ok_or_else(|| ort_error("workerLaunch"))?;
+        let mut stderr_pipe =
+            process.child.stderr.take().ok_or_else(|| ort_error("workerLaunch"))?;
+        let (sender, responses) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut count = 0_u64;
+            loop {
+                count = match count.checked_add(1) {
+                    Some(value) if value <= MAX_MESSAGES => value,
+                    _ => {
+                        let _ = sender.send(Err(()));
+                        return;
+                    }
+                };
+                if let Ok(frame) = protocol::read_frame(&mut stdout, MAX_FRAME_BYTES) {
+                    if sender.send(Ok(frame)).is_err() {
+                        return;
+                    }
+                } else {
+                    let _ = sender.send(Err(()));
+                    return;
+                }
+            }
+        });
+        let stderr = Arc::new(Mutex::new(Vec::new()));
+        let stderr_copy = Arc::clone(&stderr);
+        let stderr_reader = std::thread::spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let Ok(count) = stderr_pipe.read(&mut buffer) else { return };
+                if count == 0 {
+                    return;
+                }
+                let mut captured =
+                    stderr_copy.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let remaining = MAX_STDERR_BYTES.saturating_sub(captured.len());
+                captured.extend_from_slice(&buffer[..count.min(remaining)]);
+            }
+        });
+        let mut client = Self {
+            process,
+            stdin: Some(stdin),
+            responses,
+            reader: Some(reader),
+            stderr_reader: Some(stderr_reader),
+            stderr,
+            request_id: 0,
+            stopped: false,
+            _working_directory: working_directory,
+        };
+        let payload = protocol::encode_init(model, contract, options)
+            .map_err(|()| resource_error("workerProtocol"))?;
+        if payload.len() > MAX_FRAME_BYTES {
+            client.terminate();
+            return Err(resource_error("workerProtocol"));
+        }
+        let frame = client.round_trip(INIT, &payload, context)?;
+        let metadata = match frame.kind {
+            INIT_OK => protocol::decode_metadata(&frame.payload)
+                .map_err(|()| ort_error("workerProtocol"))?,
+            ERROR => return Err(map_worker_error(&frame.payload)),
+            _ => return Err(ort_error("workerProtocol")),
+        };
+        Ok((client, metadata))
+    }
+
+    pub(crate) fn run(
+        &mut self,
+        inputs: &[Tensor],
+        outputs: &[TensorSpec],
+        context: &ExecutionContext,
+    ) -> Result<Vec<Tensor>, ConversionError> {
+        let payload =
+            protocol::encode_tensors(inputs).map_err(|()| resource_error("workerProtocol"))?;
+        if payload.len() > MAX_FRAME_BYTES {
+            return Err(resource_error("workerProtocol"));
+        }
+        let frame = self.round_trip(RUN, &payload, context)?;
+        match frame.kind {
+            RUN_OK => protocol::decode_tensors(&frame.payload, outputs)
+                .map_err(|()| ort_error("workerProtocol")),
+            ERROR => Err(map_worker_error(&frame.payload)),
+            _ => {
+                self.terminate();
+                Err(ort_error("workerProtocol"))
+            }
+        }
+    }
+
+    fn round_trip(
+        &mut self,
+        kind: u16,
+        payload: &[u8],
+        context: &ExecutionContext,
+    ) -> Result<Frame, ConversionError> {
+        context.checkpoint()?;
+        self.request_id = self
+            .request_id
+            .checked_add(1)
+            .filter(|value| *value <= MAX_MESSAGES)
+            .ok_or_else(|| resource_error("workerMessages"))?;
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(ort_error("workerTerminated"));
+        };
+        if protocol::write_frame(stdin, kind, self.request_id, payload).is_err() {
+            self.terminate();
+            return Err(ort_error("workerTerminated"));
+        }
+        loop {
+            match self.responses.recv_timeout(POLL_INTERVAL) {
+                Ok(Ok(frame)) => {
+                    if frame.request_id != self.request_id {
+                        self.terminate();
+                        return Err(ort_error("workerProtocol"));
+                    }
+                    return Ok(frame);
+                }
+                Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.terminate();
+                    return Err(resource_error("nativeWorkerMemory"));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if let Err(error) = context.checkpoint() {
+                        self.terminate();
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+
+    fn terminate(&mut self) {
+        if self.stopped {
+            return;
+        }
+        self.stopped = true;
+        self.stdin.take();
+        let _ = self.process.child.kill();
+        let _ = self.process.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = reader.join();
+        }
+        let _ = self.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
+    }
+}
+
+impl Drop for WorkerClient {
+    fn drop(&mut self) {
+        if !self.stopped {
+            if let Some(stdin) = self.stdin.as_mut() {
+                let request = self.request_id.saturating_add(1).min(MAX_MESSAGES);
+                let _ = protocol::write_frame(stdin, SHUTDOWN, request, &[]);
+            }
+            self.terminate();
+        }
+    }
+}
+
+struct WorkerProcess {
+    child: Child,
+    #[cfg(windows)]
+    _job: std::os::windows::io::OwnedHandle,
+}
+
+fn spawn_worker(
+    executable: &Path,
+    runtime: &Path,
+    working_directory: &Path,
+    address_limit: u64,
+) -> Result<WorkerProcess, ConversionError> {
+    validate_worker_path(executable)?;
+    if !runtime.is_absolute() || !working_directory.is_absolute() {
+        return Err(ort_error("workerLaunch"));
+    }
+    #[cfg(unix)]
+    {
+        let mut command = Command::new(executable);
+        command
+            .arg("--runtime")
+            .arg(runtime)
+            .arg("--address-limit")
+            .arg(address_limit.to_string())
+            .current_dir(working_directory)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // The worker installs and verifies RLIMIT_AS as its first operation.
+        // Doing so after exec avoids Darwin measuring Bazel's inherited parent
+        // mappings while remaining before authority parsing, ORT, or model IPC.
+        let child = command.spawn().map_err(|_| ort_error("workerLimitUnavailable"))?;
+        return Ok(WorkerProcess { child });
+    }
+    #[cfg(windows)]
+    {
+        return spawn_worker_windows(executable, runtime, working_directory, address_limit);
+    }
+    #[allow(unreachable_code)]
+    Err(ConversionError::ComponentUnavailable {
+        component: "onnxruntime-cpu".into(),
+        detail: "workerLimitUnavailable".into(),
+    })
+}
+
+#[cfg(windows)]
+fn spawn_worker_windows(
+    executable: &Path,
+    runtime: &Path,
+    working_directory: &Path,
+    address_limit: u64,
+) -> Result<WorkerProcess, ConversionError> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtResumeProcess(process: *mut core::ffi::c_void) -> i32;
+    }
+
+    let mut command = Command::new(executable);
+    command
+        .arg("--runtime")
+        .arg(runtime)
+        .arg("--address-limit")
+        .arg(address_limit.to_string())
+        .current_dir(working_directory)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    let mut child = command.spawn().map_err(|_| ort_error("workerLaunch"))?;
+    // SAFETY: null name/security creates a private job object.
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ort_error("workerLimitUnavailable"));
+    }
+    let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    information.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    information.ProcessMemoryLimit =
+        usize::try_from(address_limit).map_err(|_| resource_error("nativeWorkerMemory"))?;
+    // SAFETY: job/process handles are live and information has the exact API
+    // layout and size. The process is still suspended during both calls.
+    let configured = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&raw const information).cast(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap(),
+        ) != 0
+            && AssignProcessToJobObject(job, child.as_raw_handle()) != 0
+    };
+    if !configured {
+        // SAFETY: job is a live handle not yet wrapped.
+        unsafe { CloseHandle(job) };
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ort_error("workerLimitUnavailable"));
+    }
+    // SAFETY: the process was created suspended, assigned to its hard-limit job,
+    // and this call resumes it only after the limit is active.
+    if unsafe { NtResumeProcess(child.as_raw_handle()) } != 0 {
+        // SAFETY: job is a live handle not yet wrapped.
+        unsafe { CloseHandle(job) };
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ort_error("workerLimitUnavailable"));
+    }
+    // SAFETY: ownership of the unique live job handle transfers here.
+    let job = unsafe { OwnedHandle::from_raw_handle(job) };
+    Ok(WorkerProcess { child, _job: job })
+}
+
+fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
+    if !path.is_absolute() {
+        return Err(ort_error("workerLaunch"));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| ort_error("workerLaunch"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ort_error("workerLaunch"));
+    }
+    let canonical = path.canonicalize().map_err(|_| ort_error("workerLaunch"))?;
+    if canonical != path {
+        return Err(ort_error("workerLaunch"));
+    }
+    Ok(())
+}
+
+fn address_space_limit(
+    library: &RuntimeLibrary,
+    model: &[u8],
+    contract: &ModelContract,
+) -> Result<u64, ConversionError> {
+    let target_name = current_target().ok_or_else(|| ort_error("unsupportedTarget"))?;
+    let authority = authority().map_err(|_| ort_error("runtimeAuthority"))?;
+    let target =
+        authority.targets.get(target_name).ok_or_else(|| ort_error("unsupportedTarget"))?;
+    if library.version() != authority.version || library.api_version() != authority.api_version {
+        return Err(ort_error("runtimeAuthority"));
+    }
+    target
+        .worker_address_space_overhead_bytes
+        .checked_add(contract.session_memory_bytes)
+        .and_then(|value| value.checked_add(contract.run_memory_bytes))
+        .and_then(|value| value.checked_add(u64::try_from(model.len()).ok()?))
+        .ok_or_else(|| resource_error("nativeWorkerMemory"))
+}
+
+fn bind_native_metadata(
+    native: &ModelMetadata,
+    contract: &ModelContract,
+) -> Result<ModelMetadata, NativeError> {
+    Ok(ModelMetadata {
+        ir_version: native.ir_version,
+        opsets: native.opsets.clone(),
+        inputs: bind_specs(&native.inputs, &contract.inputs)?,
+        overridable_inputs: bind_specs(&native.overridable_inputs, &contract.overridable_inputs)?,
+        outputs: bind_specs(&native.outputs, &contract.outputs)?,
+    })
+}
+
+fn bind_specs(
+    native: &[TensorSpec],
+    contract: &[TensorSpec],
+) -> Result<Vec<TensorSpec>, NativeError> {
+    if native.len() != contract.len() {
+        return Err(NativeError::Metadata);
+    }
+    let mut bound = Vec::new();
+    bound.try_reserve_exact(native.len()).map_err(|_| NativeError::Resource)?;
+    for (native, contract) in native.iter().zip(contract) {
+        if native.name != contract.name
+            || native.element_type != contract.element_type
+            || native.dimensions.len() != contract.dimensions.len()
+        {
+            return Err(NativeError::Metadata);
+        }
+        for (native_dimension, contract_dimension) in
+            native.dimensions.iter().zip(&contract.dimensions)
+        {
+            let compatible = match (native_dimension, contract_dimension) {
+                (Dimension::Exact(native), Dimension::Exact(contract)) => native == contract,
+                (Dimension::Exact(native), Dimension::Dynamic { min, max }) => {
+                    native >= min && native <= max
+                }
+                (
+                    Dimension::Dynamic { min: 1, max },
+                    Dimension::Dynamic { min, max: contract_max },
+                ) => *max == usize::MAX && *min > 0 && min <= contract_max,
+                _ => false,
+            };
+            if !compatible {
+                return Err(NativeError::Metadata);
+            }
+        }
+        bound.push(contract.clone());
+    }
+    Ok(bound)
+}
+
+fn map_native_error(error: NativeError) -> u8 {
+    match error {
+        NativeError::Abi => ERROR_ABI,
+        NativeError::Session | NativeError::Metadata => ERROR_SESSION,
+        NativeError::Inference => ERROR_INFERENCE,
+        NativeError::Resource => ERROR_RESOURCE,
+    }
+}
+
+fn map_worker_error(payload: &[u8]) -> ConversionError {
+    match protocol::decode_error(payload) {
+        Ok(ERROR_RESOURCE) => resource_error("nativeWorkerMemory"),
+        Ok(ERROR_ABI) => ort_error("runtimeAbi"),
+        Ok(ERROR_SESSION) => ort_error("sessionLoad"),
+        Ok(ERROR_INFERENCE) => ort_error("inference"),
+        _ => ort_error("workerProtocol"),
+    }
+}
+
+fn resource_error(limit: &'static str) -> ConversionError {
+    ConversionError::ResourceLimit { limit, detail: "ONNX Runtime worker budget exceeded".into() }
+}
+
+pub(crate) fn worker_entry() -> ExitCode {
+    std::panic::set_hook(Box::new(|_| {}));
+    match std::panic::catch_unwind(worker_entry_inner) {
+        Ok(Ok(())) => ExitCode::SUCCESS,
+        _ => ExitCode::from(70),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the bounded worker protocol state machine is kept contiguous for auditability"
+)]
+fn worker_entry_inner() -> Result<(), ()> {
+    let mut args = std::env::args_os();
+    let _program = args.next().ok_or(())?;
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--runtime")) {
+        return Err(());
+    }
+    let runtime = PathBuf::from(args.next().ok_or(())?);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--address-limit")) {
+        return Err(());
+    }
+    let address_limit = parse_decimal(args.next().ok_or(())?)?;
+    if args.next().is_some() || !runtime.is_absolute() || !install_and_verify_limit(address_limit) {
+        return Err(());
+    }
+    let authority = authority().map_err(|_| ())?;
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    let init = protocol::read_frame(&mut input, MAX_FRAME_BYTES)?;
+    if init.kind != INIT || init.request_id != 1 {
+        return Err(());
+    }
+    let maximum_model =
+        usize::try_from(address_limit.min(MAX_FRAME_BYTES as u64)).map_err(|_| ())?;
+    let Ok((model, contract, options)) = protocol::decode_init(&init.payload, maximum_model) else {
+        protocol::write_frame(
+            &mut output,
+            ERROR,
+            init.request_id,
+            &protocol::error_payload(ERROR_PROTOCOL),
+        )?;
+        return Ok(());
+    };
+    let mut session = match NativeSession::new(
+        &runtime,
+        &authority.version,
+        authority.api_version,
+        model,
+        &contract,
+        &options,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            protocol::write_frame(
+                &mut output,
+                ERROR,
+                init.request_id,
+                &protocol::error_payload(map_native_error(error)),
+            )?;
+            return Ok(());
+        }
+    };
+    let metadata = match bind_native_metadata(session.metadata(), &contract) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            protocol::write_frame(
+                &mut output,
+                ERROR,
+                init.request_id,
+                &protocol::error_payload(map_native_error(error)),
+            )?;
+            return Ok(());
+        }
+    };
+    protocol::write_frame(
+        &mut output,
+        INIT_OK,
+        init.request_id,
+        &protocol::encode_metadata(&metadata)?,
+    )?;
+    let mut expected_request = 2_u64;
+    while expected_request <= MAX_MESSAGES {
+        let frame = protocol::read_frame(&mut input, MAX_FRAME_BYTES)?;
+        if frame.request_id != expected_request {
+            protocol::write_frame(
+                &mut output,
+                ERROR,
+                frame.request_id,
+                &protocol::error_payload(ERROR_PROTOCOL),
+            )?;
+            return Ok(());
+        }
+        match frame.kind {
+            RUN => {
+                let Ok(mut tensors) = protocol::decode_tensors(&frame.payload, &metadata.inputs)
+                else {
+                    protocol::write_frame(
+                        &mut output,
+                        ERROR,
+                        frame.request_id,
+                        &protocol::error_payload(ERROR_PROTOCOL),
+                    )?;
+                    return Ok(());
+                };
+                match session.run(&mut tensors) {
+                    Ok(outputs) => protocol::write_frame(
+                        &mut output,
+                        RUN_OK,
+                        frame.request_id,
+                        &protocol::encode_tensors(&outputs)?,
+                    )?,
+                    Err(error) => protocol::write_frame(
+                        &mut output,
+                        ERROR,
+                        frame.request_id,
+                        &protocol::error_payload(map_native_error(error)),
+                    )?,
+                }
+            }
+            SHUTDOWN if frame.payload.is_empty() => return Ok(()),
+            _ => {
+                protocol::write_frame(
+                    &mut output,
+                    ERROR,
+                    frame.request_id,
+                    &protocol::error_payload(ERROR_PROTOCOL),
+                )?;
+                return Ok(());
+            }
+        }
+        expected_request += 1;
+    }
+    Err(())
+}
+
+fn parse_decimal(value: OsString) -> Result<u64, ()> {
+    let value = value.into_string().map_err(|_| ())?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(());
+    }
+    value.parse().map_err(|_| ())
+}
+
+#[cfg(unix)]
+fn install_and_verify_limit(expected: u64) -> bool {
+    let limit: libc::rlim_t = expected;
+    let requested = libc::rlimit { rlim_cur: limit, rlim_max: limit };
+    // SAFETY: this is the worker's first operation after argument parsing and
+    // runs before authority parsing, ORT loading, model receipt, or threads.
+    if unsafe { libc::setrlimit(libc::RLIMIT_AS, &raw const requested) } != 0 {
+        return false;
+    }
+    let mut limits = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: points to writable storage of the exact platform structure.
+    let installed = unsafe { libc::getrlimit(libc::RLIMIT_AS, &raw mut limits) == 0 };
+    installed && limits.rlim_cur == expected && limits.rlim_max == expected
+}
+
+#[cfg(windows)]
+fn install_and_verify_limit(expected: u64) -> bool {
+    use windows_sys::Win32::System::JobObjects::{
+        IsProcessInJob, JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut in_job = 0;
+    // SAFETY: current process pseudo-handle and scalar out pointer are valid.
+    if unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &raw mut in_job) } == 0
+        || in_job == 0
+    {
+        return false;
+    }
+    let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: query buffer has the exact class layout and size.
+    let queried = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            (&raw mut information).cast(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap(),
+            std::ptr::null_mut(),
+        ) != 0
+    };
+    queried
+        && information.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0
+        && u64::try_from(information.ProcessMemoryLimit) == Ok(expected)
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn install_and_verify_limit(_expected: u64) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_limit_is_checked_arithmetically() {
+        let contract = ModelContract {
+            ir_version: 9,
+            opsets: [(String::new(), 18)].into_iter().collect(),
+            inputs: vec![TensorSpec {
+                name: "x".into(),
+                element_type: into_markdown_ocr::TensorElementType::Float32,
+                dimensions: vec![Dimension::Exact(1)],
+            }],
+            overridable_inputs: Vec::new(),
+            outputs: vec![TensorSpec {
+                name: "y".into(),
+                element_type: into_markdown_ocr::TensorElementType::Float32,
+                dimensions: vec![Dimension::Exact(1)],
+            }],
+            session_memory_bytes: u64::MAX,
+            run_memory_bytes: 1,
+        };
+        let authority = authority().unwrap();
+        let target = authority.targets.get(current_target().unwrap()).unwrap();
+        assert!(
+            target
+                .worker_address_space_overhead_bytes
+                .checked_add(contract.session_memory_bytes)
+                .and_then(|value| value.checked_add(contract.run_memory_bytes))
+                .is_none()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_flags_require_suspend_before_job_assignment() {
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+        assert_ne!(CREATE_SUSPENDED, 0);
+        assert_ne!(CREATE_NO_WINDOW, 0);
+    }
+}

@@ -24,6 +24,7 @@ DATA = [
     "//crates/core:Cargo.toml",
     "//crates/engine:Cargo.toml",
     "//crates/ocr:Cargo.toml",
+    "//crates/onnxruntime:Cargo.toml",
     "//crates/render-markdown:Cargo.toml",
     "//tests/contracts:Cargo.toml",
 ]

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "version": "1.20.0",
+  "source": "https://raw.githubusercontent.com/onnx/onnx/v1.20.0/onnx/onnx.proto3",
+  "sha256": "470e64dfc5338477d3adc1853f5875618f70cc698306d9bed1232305680b121f",
+  "license": "Apache-2.0",
+  "generator": "prost 0.14.4",
+  "generated_source": "crates/ocr/src/onnx_proto.rs",
+  "unknown_fields": "reject within ModelProto/GraphProto/ValueInfoProto/TypeProto/TensorShapeProto security boundary; skip only enumerated official non-boundary fields after bounded wire validation",
+  "maximum_recursion_depth": 8
+}

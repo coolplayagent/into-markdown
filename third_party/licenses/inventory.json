@@ -2,6 +2,16 @@
   "schema_version": 1,
   "components": [
     {
+      "id": "onnx-protobuf-schema",
+      "kind": "build-input",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "1.20.0",
+      "source": "https://raw.githubusercontent.com/onnx/onnx/v1.20.0/onnx/onnx.proto3",
+      "license": "Apache-2.0",
+      "obligations": "Checked-in generated Rust types retain source, version, digest, generator, and Apache-2.0 provenance; the upstream schema itself is not bundled."
+    },
+    {
       "id": "onnxruntime-cpu",
       "kind": "native-runtime",
       "status": "reviewed",

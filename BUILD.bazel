@@ -1,5 +1,25 @@
 package(default_visibility = ["//visibility:public"])
 
+platform(
+    name = "macos_arm64_platform",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:osx"],
+)
+
+platform(
+    name = "linux_x86_64_platform",
+    constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:linux"],
+)
+
+platform(
+    name = "linux_arm64_platform",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:linux"],
+)
+
+platform(
+    name = "windows_x86_64_platform",
+    constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:windows"],
+)
+
 exports_files([
     "Cargo.lock",
     "Cargo.toml",

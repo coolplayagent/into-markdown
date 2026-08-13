@@ -6,8 +6,10 @@
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
 command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, and
-contract
-tests. It does not yet contain OCR inference, network clients, or LLM calls.
+a pinned ONNX Runtime CPU safety layer, and contract tests. The model authority does not yet
+contain executable ONNX artifacts, so OCR reports model unavailability instead
+of treating Paddle source archives as models. Network clients and LLM calls are
+not implemented yet.
 
 The project is implemented independently of the neighbouring `anydoc` and
 `markitdown` projects. Documents from every source, including PDF, OCR, and
