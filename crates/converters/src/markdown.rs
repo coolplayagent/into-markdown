@@ -132,7 +132,7 @@ fn ordered_marker(value: &str) -> bool {
         && value.as_bytes().get(digits + 1) == Some(&b' ')
 }
 
-fn convert_markdown(
+pub(crate) fn convert_markdown(
     input: &ResolvedInput,
     options: &ConversionOptions,
     context: &ExecutionContext,
