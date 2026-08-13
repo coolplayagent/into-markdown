@@ -8,7 +8,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
@@ -44,7 +44,7 @@ const APP_JS: &str = r"(() => {
     status.textContent = 'Session handoff is missing or invalid. Restart into-md ui.';
     return;
   }
-  fetch('/api/status', {headers: {'X-Into-Md-Session': session}, credentials: 'omit', cache: 'no-store'})
+  fetch('/api/status', {method: 'POST', headers: {'X-Into-Md-Session': session}, credentials: 'omit', cache: 'no-store'})
     .then(response => response.ok ? response.json() : Promise.reject(new Error('authorization failed')))
     .then(value => { status.textContent = value.localApi.available
       ? 'The secure local API is available. The document console is not installed.'
@@ -208,7 +208,7 @@ where
     let origin: Arc<str> = format!("http://{authority}").into();
     let state = AppState { authority, origin, session: session.into() };
     let api = Router::new()
-        .route("/status", get(status).options(api_method_not_allowed))
+        .route("/status", post(status).fallback(api_method_not_allowed))
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(state.clone(), api_security));
     let app = Router::new()
@@ -217,6 +217,7 @@ where
         .nest("/api", api)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), host_security))
+        .layer(middleware::from_fn(response_security))
         .with_state(state);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
@@ -229,6 +230,10 @@ async fn host_security(State(state): State<AppState>, request: Request, next: Ne
         return rejection(StatusCode::BAD_REQUEST, "invalidHost");
     }
     next.run(request).await
+}
+
+async fn response_security(request: Request, next: Next) -> Response {
+    apply_security_headers(next.run(request).await)
 }
 
 async fn api_security(State(state): State<AppState>, request: Request, next: Next) -> Response {
@@ -264,15 +269,21 @@ fn session_matches(expected: &[u8], supplied: &[u8]) -> bool {
 }
 
 async fn index() -> impl IntoResponse {
-    secure_response(Html(INDEX_HTML))
+    Html(INDEX_HTML)
 }
 
 async fn script() -> impl IntoResponse {
-    secure_response(([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], APP_JS))
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], APP_JS)
 }
 
-async fn status() -> impl IntoResponse {
-    secure_response(Json(StatusDto {
+async fn status(headers: HeaderMap) -> Response {
+    if headers.contains_key(header::CONTENT_TYPE) {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unexpectedContentType");
+    }
+    if !request_body_is_empty(&headers) {
+        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    Json(StatusDto {
         schema_version: 1,
         local_api: ComponentDto {
             available: true,
@@ -284,7 +295,20 @@ async fn status() -> impl IntoResponse {
             code: "componentUnavailable",
             detail: "document console is not included in this command",
         },
-    }))
+    })
+    .into_response()
+}
+
+fn request_body_is_empty(headers: &HeaderMap) -> bool {
+    if headers.contains_key(header::TRANSFER_ENCODING) {
+        return false;
+    }
+    let mut lengths = headers.get_all(header::CONTENT_LENGTH).iter();
+    match (lengths.next(), lengths.next()) {
+        (None, None) => true,
+        (Some(value), None) => value.as_bytes() == b"0",
+        _ => false,
+    }
 }
 
 async fn not_found() -> Response {
@@ -300,11 +324,10 @@ async fn api_method_not_allowed() -> Response {
 }
 
 fn rejection(status: StatusCode, code: &'static str) -> Response {
-    secure_response((status, Json(serde_json::json!({"schemaVersion": 1, "code": code}))))
+    (status, Json(serde_json::json!({"schemaVersion": 1, "code": code}))).into_response()
 }
 
-fn secure_response(value: impl IntoResponse) -> Response {
-    let mut response = value.into_response();
+fn apply_security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
@@ -526,16 +549,44 @@ mod tests {
         (port, session, sender, task)
     }
 
+    fn assert_security_headers(response: &str) {
+        let lowercase = response.to_ascii_lowercase();
+        assert!(lowercase.contains("cache-control: no-store\r\n"), "{response}");
+        assert!(lowercase.contains("referrer-policy: no-referrer\r\n"), "{response}");
+        assert!(lowercase.contains("x-content-type-options: nosniff\r\n"), "{response}");
+        assert!(lowercase.contains("content-security-policy: default-src 'none';"), "{response}");
+    }
+
+    fn assert_schema_error(response: &str, status: &str, code: &str) {
+        assert!(response.starts_with(status), "{response}");
+        assert!(response.contains("\"schemaVersion\":1"), "{response}");
+        assert!(response.contains(&format!("\"code\":\"{code}\"")), "{response}");
+        assert_security_headers(response);
+    }
+
     #[tokio::test]
     async fn real_loopback_server_requires_exact_host_origin_and_session() {
         let (port, session, shutdown, task) = start().await;
         let host = format!("127.0.0.1:{port}");
         let origin = format!("http://{host}");
-        let valid = request(port, &format!("GET /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n")).await;
+        // Same-origin browser fetches naturally include Origin on non-GET
+        // methods. The script sends an empty POST and cannot set Origin itself.
+        let valid = request(port, &format!("POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).await;
         assert!(valid.starts_with("HTTP/1.1 200"), "{valid:?}");
         assert!(valid.contains("\"schemaVersion\":1"));
         assert!(valid.contains("\"available\":false"));
         assert!(!valid.contains(&session));
+        assert_security_headers(&valid);
+
+        let browser_get = request(
+            port,
+            &format!("GET /api/status HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert_schema_error(&browser_get, "HTTP/1.1 403", "invalidOrigin");
+
+        let authenticated_get = request(port, &format!("GET /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n")).await;
+        assert_schema_error(&authenticated_get, "HTTP/1.1 405", "methodNotAllowed");
 
         for bad_headers in [
             format!(
@@ -549,14 +600,16 @@ mod tests {
         ] {
             let response = request(
                 port,
-                &format!("GET /api/status HTTP/1.1\r\n{bad_headers}\r\nConnection: close\r\n\r\n"),
+                &format!("POST /api/status HTTP/1.1\r\n{bad_headers}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
             )
             .await;
             assert!(!response.starts_with("HTTP/1.1 200"), "{response}");
             assert!(!response.contains(&session));
+            assert_security_headers(&response);
         }
         let preflight = request(port, &format!("OPTIONS /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: http://evil.invalid\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: X-Into-Md-Session\r\nConnection: close\r\n\r\n")).await;
         assert!(preflight.starts_with("HTTP/1.1 403"), "{preflight}");
+        assert_security_headers(&preflight);
         assert!(!preflight.to_ascii_lowercase().contains("access-control-allow-origin"));
         let unknown_api = request(
             port,
@@ -564,6 +617,15 @@ mod tests {
         )
         .await;
         assert!(unknown_api.starts_with("HTTP/1.1 403"), "{unknown_api}");
+        assert_security_headers(&unknown_api);
+
+        let authenticated_unknown = request(port, &format!("POST /api/future HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).await;
+        assert_schema_error(&authenticated_unknown, "HTTP/1.1 404", "apiNotFound");
+
+        let unexpected_type = request(port, &format!("POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).await;
+        assert_schema_error(&unexpected_type, "HTTP/1.1 415", "unexpectedContentType");
+        let unexpected_body = request(port, &format!("POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")).await;
+        assert_schema_error(&unexpected_body, "HTTP/1.1 400", "requestBodyNotAllowed");
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
     }
@@ -577,8 +639,20 @@ mod tests {
                 .await;
         assert!(response.starts_with("HTTP/1.1 200"), "{response:?}");
         assert!(!response.contains(&session));
-        assert!(response.contains("referrer-policy: no-referrer"));
+        assert_security_headers(&response);
+
+        let missing = request(
+            port,
+            &format!("GET /missing HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert_schema_error(&missing, "HTTP/1.1 404", "notFound");
+
+        let bad_host =
+            request(port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
+        assert_schema_error(&bad_host, "HTTP/1.1 400", "invalidHost");
         assert!(APP_JS.find("history.replaceState").unwrap() < APP_JS.find("fetch(").unwrap());
+        assert!(APP_JS.contains("method: 'POST'"));
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
     }

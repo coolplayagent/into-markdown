@@ -60,5 +60,10 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 
 ## HTTP DTO
 
-`GET /api/status` 返回 JSON envelope，顶层 `schemaVersion` 固定为 `1`。未知路由和
-鉴权拒绝也返回带 `schemaVersion: 1` 的稳定错误 envelope；它们不复用内部 Rust 布局。
+`POST /api/status` 使用空请求体且不接受 `Content-Type`，浏览器会为该非安全方法自然
+携带 `Origin`；页面脚本不能也不尝试自行设置该浏览器受控 Header。响应 JSON envelope
+的顶层 `schemaVersion` 固定为 `1`。API 在分派 method 前先鉴权：缺少授权的 GET 等方法
+返回鉴权错误，授权正确但方法不符时返回 schema 1 的 `405 methodNotAllowed`。未知路由、
+鉴权拒绝和其他错误也返回带 `schemaVersion: 1` 的稳定 envelope；它们不复用内部 Rust
+布局。外层响应中间件为所有 method、fallback、2xx 和 4xx 统一添加安全 Header 与
+`no-store`，不依赖具体 handler 正常返回。
