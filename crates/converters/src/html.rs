@@ -1374,6 +1374,39 @@ fn convert_html(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
+    convert_html_with_images(input, &[], options, context)
+}
+
+/// A container-owned image that may replace one exact canonical `cid:` reference.
+pub(crate) struct EmbeddedImage {
+    pub(crate) cid: String,
+    pub(crate) asset: AssetId,
+}
+
+/// Convert isolated HTML while resolving only caller-audited embedded image references.
+pub(crate) fn convert_embedded_html_with_images(
+    bytes: &[u8],
+    images: &[EmbeddedImage],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    let input = ResolvedInput {
+        bytes: std::sync::Arc::from(bytes),
+        metadata: into_markdown_core::SourceMetadata {
+            media_type: Some("text/html".into()),
+            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            ..into_markdown_core::SourceMetadata::default()
+        },
+    };
+    convert_html_with_images(&input, images, options, context)
+}
+
+fn convert_html_with_images(
+    input: &ResolvedInput,
+    images: &[EmbeddedImage],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let input_size = u64::try_from(input.bytes.len()).unwrap_or(u64::MAX);
     if input_size > options.limits.max_input_bytes {
@@ -1388,7 +1421,6 @@ fn convert_html(
     let mut diagnostics = Vec::new();
     diagnostics.extend(decoded_diagnostics);
     diagnostics.extend(charset_diagnostics);
-
     // This reservation represents cooperative parser work, not html5ever's allocator or RSS.
     let event_units = decoded.text.len().saturating_mul(4).min(MAX_HTML_EVENTS);
     let parser_work = decoded
@@ -1397,7 +1429,6 @@ fn convert_html(
         .saturating_mul(2)
         .saturating_add(event_units.saturating_mul(size_of::<usize>()));
     decoded.memory.charge(parser_work)?;
-
     let sink = Dom::new(options, context)?;
     let dom = parse_html_dom(sink, decoded.text.as_str());
     finish_html_dom(
@@ -1405,6 +1436,7 @@ fn convert_html(
         input.bytes.len(),
         input.metadata.uri.as_deref(),
         Some(decoded),
+        images,
         options,
         context,
         diagnostics,
@@ -1429,6 +1461,7 @@ fn finish_html_dom(
     input_len: usize,
     source_uri: Option<&str>,
     decoded: Option<DecodedText>,
+    embedded_images: &[EmbeddedImage],
     options: &ConversionOptions,
     context: &ExecutionContext,
     mut diagnostics: Vec<Diagnostic>,
@@ -1479,6 +1512,7 @@ fn finish_html_dom(
         input_len,
         source_uri,
         decoded,
+        embedded_images,
         options,
         context,
         diagnostics,
@@ -1512,6 +1546,7 @@ pub(crate) fn convert_feed_html_fragment(
             fragment.len(),
             base_uri,
             None,
+            &[],
             options,
             context,
             Vec::new(),
@@ -1837,6 +1872,7 @@ struct Builder<'a, 'budget> {
     nodes: &'a [DomNode],
     input_len: usize,
     source_uri: Option<&'a str>,
+    embedded_images: &'a [EmbeddedImage],
     _decoded: Option<DecodedText>,
     context: &'a ExecutionContext,
     diagnostics: Vec<Diagnostic>,
@@ -1902,6 +1938,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         input_len: usize,
         source_uri: Option<&'a str>,
         decoded: Option<DecodedText>,
+        embedded_images: &'a [EmbeddedImage],
         options: &ConversionOptions,
         context: &'a ExecutionContext,
         diagnostics: Vec<Diagnostic>,
@@ -1911,6 +1948,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             nodes,
             input_len,
             source_uri,
+            embedded_images,
             _decoded: decoded,
             context,
             diagnostics,
@@ -2526,11 +2564,36 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     }
 
     fn build_image(&mut self, id: usize) -> Result<Option<Block>, ConversionError> {
+        let alt = self.normalized_attr(id, "alt")?.and_then(nonempty);
+        let Some(src) = self.attr(id, "src") else { return Ok(None) };
+        if let Some(cid) = src.strip_prefix("cid:") {
+            let asset = self
+                .embedded_images
+                .iter()
+                .find(|image| image.cid == cid)
+                .map(|image| image.asset.clone());
+            if let Some(asset) = asset {
+                return Ok(Some(Block::Image { asset, alt }));
+            }
+            self.push_warning(
+                "html.cidImageRejected",
+                "CID image was not an exact canonical audited attachment reference",
+            )?;
+            return match alt {
+                Some(value) => {
+                    self.reserve_inline()?;
+                    let mut content = Vec::new();
+                    self.reserve_vector(&mut content, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    content.push(Inline::Text { value, marks: Vec::new() });
+                    Ok(Some(Block::Paragraph(content)))
+                }
+                None => Ok(None),
+            };
+        }
         let resolved = {
-            let Some(src) = self.attr(id, "src") else { return Ok(None) };
             Url::parse(src).ok().or_else(|| self.base.as_ref().and_then(|base| base.join(src).ok()))
         };
-        let alt = self.normalized_attr(id, "alt")?.and_then(nonempty);
         let Some(resolved) = resolved else {
             self.push_warning(
                 "html.imageUriRejected",

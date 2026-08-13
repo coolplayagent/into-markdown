@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "99cacf7e268ea04a4c10e0e717cf262c175b6fbb28e580995a3cfc6f3b7bc69e",
+    "sha256": "dbe08944c168e08ab70655410c8e625b335755f255c685e5fb5aee18a6d3d39a",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -21,6 +21,7 @@
     "ipynb",
     "json",
     "markdown",
+    "outlook-msg",
     "pdf",
     "rtf",
     "text",
@@ -804,6 +805,237 @@
         "error_code": "",
         "semantic_sha256": "8b79086cc60edcac290c41c1984f8787626cdaef587fb39baf8cdf316fc7b691",
         "description": "heading and rich list"
+      }
+    },
+    {
+      "id": "msg-attachment-nested",
+      "format": "outlook-msg",
+      "scenario": "attachment",
+      "path": "small/msg/attachment-nested.msg",
+      "bytes": 6144,
+      "sha256": "cf045c0d06df7b2289ad36202eea5190d90435d0ca8bf0e13969887ec4483b32",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a",
+        "description": "by-value and embedded MSG attachments retain assets and source chains"
+      }
+    },
+    {
+      "id": "msg-cid",
+      "format": "outlook-msg",
+      "scenario": "cid",
+      "path": "small/msg/cid.msg",
+      "bytes": 5632,
+      "sha256": "bdef7184ee867bb40384b38dd7c05bac212fb89ee68baeac40d42e147668d0f3",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af",
+        "description": "canonical CID image is bound at its HTML reference"
+      }
+    },
+    {
+      "id": "msg-corrupt",
+      "format": "outlook-msg",
+      "scenario": "corrupt",
+      "path": "small/msg/corrupt.msg",
+      "bytes": 4079,
+      "sha256": "a675c539215e4894b53df165f7ff6d6abb42b4030f626b7b3b70a0633d3a7ce6",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated CFB sector"
+      }
+    },
+    {
+      "id": "msg-html",
+      "format": "outlook-msg",
+      "scenario": "html",
+      "path": "small/msg/html.msg",
+      "bytes": 4096,
+      "sha256": "562973f930d78a80b5557a0908401d2788525263e2945fb153351657b02848c4",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1",
+        "description": "HTML is selected ahead of the plain fallback"
+      }
+    },
+    {
+      "id": "msg-limit",
+      "format": "outlook-msg",
+      "scenario": "limit",
+      "path": "small/msg/limit.msg",
+      "bytes": 4096,
+      "sha256": "0a45cd84919cd3ed5998af2f6da48def1f1526c86c3dfbf464b9efef64a097e3",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "MSG crosses the exact input byte boundary",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 4095,
+          "passing_value": 4096,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3"
+        }
+      }
+    },
+    {
+      "id": "msg-malicious",
+      "format": "outlook-msg",
+      "scenario": "malicious",
+      "path": "small/msg/malicious.msg",
+      "bytes": 4096,
+      "sha256": "8c254d6789abe96dc02d555fd916fde35c2f7af0a60b40695bc3448f66e7b890",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "cyclic CFB directory FAT chain"
+      }
+    },
+    {
+      "id": "msg-normal",
+      "format": "outlook-msg",
+      "scenario": "normal",
+      "path": "small/msg/normal.msg",
+      "bytes": 4096,
+      "sha256": "0a45cd84919cd3ed5998af2f6da48def1f1526c86c3dfbf464b9efef64a097e3",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3",
+        "description": "headers, time, transport headers and plain body"
+      }
+    },
+    {
+      "id": "msg-rtf",
+      "format": "outlook-msg",
+      "scenario": "rtf",
+      "path": "small/msg/rtf.msg",
+      "bytes": 4096,
+      "sha256": "3583fdf2b511a8ec63603be2e3c5ba719e343af2919627b798a3ec137845bc13",
+      "media_type": "application/vnd.ms-outlook",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367",
+        "description": "LZFu is decoded and passed to the bounded RTF converter on the same request context"
       }
     },
     {

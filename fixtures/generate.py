@@ -115,6 +115,239 @@ def epub3(chapter_xhtml: bytes) -> bytes:
     )
 
 
+CFB_END = 0xFFFFFFFE
+CFB_FREE = 0xFFFFFFFF
+CFB_FAT = 0xFFFFFFFD
+
+
+def mapi_variable(property_id: int, property_type: int, data: bytes) -> tuple[int, int, bytes, bytes]:
+    return property_id, property_type, struct.pack("<I", len(data)) + b"\0" * 4, data
+
+
+def mapi_unicode(property_id: int, value: str) -> tuple[int, int, bytes, bytes]:
+    data = value.encode("utf-16le")
+    return property_id, 0x001F, struct.pack("<I", len(data) + 2) + b"\0" * 4, data
+
+
+def mapi_binary(property_id: int, value: bytes) -> tuple[int, int, bytes, bytes]:
+    return mapi_variable(property_id, 0x0102, value)
+
+
+def mapi_long(property_id: int, value: int) -> tuple[int, int, bytes, None]:
+    return property_id, 0x0003, struct.pack("<i", value) + b"\0" * 4, None
+
+
+def mapi_time(property_id: int, value: int) -> tuple[int, int, bytes, None]:
+    return property_id, 0x0040, struct.pack("<Q", value), None
+
+
+def mapi_object(property_id: int) -> tuple[int, int, bytes, None]:
+    return property_id, 0x000D, struct.pack("<II", 0xFFFFFFFF, 1), None
+
+
+def mapi_properties(records: list[tuple[int, int, bytes, bytes | None]], root: bool, recipients: int = 0, attachments: int = 0) -> bytes:
+    header = bytearray(32 if root else 8)
+    if root:
+        struct.pack_into("<II", header, 16, recipients, attachments)
+    output = bytearray(header)
+    for property_id, property_type, value, _ in records:
+        output.extend(struct.pack("<II", property_id << 16 | property_type, 0))
+        output.extend(value)
+    return bytes(output)
+
+
+def add_mapi_storage(
+    entries: list[tuple[tuple[str, ...], bytes | None]],
+    base: tuple[str, ...],
+    records: list[tuple[int, int, bytes, bytes | None]],
+    root: bool,
+    recipients: int = 0,
+    attachments: int = 0,
+) -> None:
+    if base:
+        entries.append((base, None))
+    for property_id, property_type, _, stream in records:
+        if stream is not None:
+            entries.append((base + (f"__substg1.0_{property_id:04X}{property_type:04X}",), stream))
+    entries.append((base + ("__properties_version1.0",), mapi_properties(records, root, recipients, attachments)))
+
+
+def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
+    paths: dict[tuple[str, ...], bytes | None] = {(): None}
+    for path, data in entries:
+        for length in range(1, len(path)):
+            paths.setdefault(path[:length], None)
+        if path in paths:
+            raise ValueError(f"duplicate CFB path: {path}")
+        paths[path] = data
+    directory = [
+        {"path": path, "data": data, "left": CFB_FREE, "right": CFB_FREE, "child": CFB_FREE, "start": CFB_END}
+        for path, data in sorted(paths.items(), key=lambda item: (len(item[0]), item[0]))
+    ]
+    for parent, entry in enumerate(directory):
+        if entry["data"] is not None:
+            continue
+        children = [
+            index for index, candidate in enumerate(directory)
+            if len(candidate["path"]) == len(entry["path"]) + 1 and candidate["path"][:-1] == entry["path"]
+        ]
+        children.sort(key=lambda index: directory[index]["path"][-1])
+        if children:
+            directory[parent]["child"] = children[0]
+        for left, right in zip(children, children[1:]):
+            directory[left]["right"] = right
+
+    mini_data = bytearray()
+    minifat: list[int] = []
+    for entry in directory:
+        data = entry["data"]
+        if data is None or not data:
+            continue
+        entry["start"] = len(minifat)
+        count = (len(data) + 63) // 64
+        for offset in range(count):
+            minifat.append(CFB_END if offset + 1 == count else len(minifat) + 1)
+        mini_data.extend(data)
+        mini_data.extend(b"\0" * (-len(mini_data) % 64))
+
+    directory_sectors = (len(directory) * 128 + 511) // 512
+    minifat_sectors = (len(minifat) * 4 + 511) // 512
+    root_sectors = (len(mini_data) + 511) // 512
+    minifat_start = directory_sectors
+    root_start = minifat_start + minifat_sectors
+    fat_sector = root_start + root_sectors
+    directory[0]["start"] = root_start if root_sectors else CFB_END
+
+    directory_bytes = bytearray()
+    for index, entry in enumerate(directory):
+        raw = bytearray(128)
+        name = "Root Entry" if index == 0 else entry["path"][-1]
+        encoded = name.encode("utf-16le") + b"\0\0"
+        if len(encoded) > 64:
+            raise ValueError(f"CFB name is too long: {name}")
+        raw[: len(encoded)] = encoded
+        struct.pack_into("<HBBIII", raw, 64, len(encoded), 5 if index == 0 else (2 if entry["data"] is not None else 1), 1, entry["left"], entry["right"], entry["child"])
+        size = len(mini_data) if index == 0 else len(entry["data"] or b"")
+        struct.pack_into("<IQ", raw, 116, entry["start"], size)
+        directory_bytes.extend(raw)
+    directory_bytes.extend(b"\0" * (directory_sectors * 512 - len(directory_bytes)))
+    minifat_bytes = bytearray().join(struct.pack("<I", value) for value in minifat)
+    minifat_bytes.extend(b"\xff" * (minifat_sectors * 512 - len(minifat_bytes)))
+    mini_data.extend(b"\0" * (root_sectors * 512 - len(mini_data)))
+
+    fat_entries = [CFB_FREE] * 128
+    def chain(start: int, count: int) -> None:
+        for offset in range(count):
+            fat_entries[start + offset] = CFB_END if offset + 1 == count else start + offset + 1
+    chain(0, directory_sectors)
+    chain(minifat_start, minifat_sectors)
+    chain(root_start, root_sectors)
+    fat_entries[fat_sector] = CFB_FAT
+    header = bytearray(512)
+    header[:8] = bytes.fromhex("d0cf11e0a1b11ae1")
+    struct.pack_into("<HHHH", header, 24, 0x003E, 3, 0xFFFE, 9)
+    struct.pack_into("<H", header, 32, 6)
+    struct.pack_into("<II", header, 44, 1, 0)
+    struct.pack_into("<I", header, 56, 4096)
+    struct.pack_into("<II", header, 60, minifat_start if minifat_sectors else CFB_END, minifat_sectors)
+    struct.pack_into("<II", header, 68, CFB_END, 0)
+    struct.pack_into("<I", header, 76, fat_sector)
+    for offset in range(80, 512, 4):
+        struct.pack_into("<I", header, offset, CFB_FREE)
+    fat_bytes = b"".join(struct.pack("<I", value) for value in fat_entries)
+    return bytes(header + directory_bytes + minifat_bytes + mini_data + fat_bytes)
+
+
+def lzfu_uncompressed(raw: bytes) -> bytes:
+    return struct.pack("<IIII", len(raw) + 12, len(raw), 0x414C454D, 0) + raw
+
+
+def embedded_msg_entries(body: str) -> list[tuple[tuple[str, ...], bytes | None]]:
+    entries: list[tuple[tuple[str, ...], bytes | None]] = []
+    add_mapi_storage(entries, (), [mapi_unicode(0x0037, "Nested fixture"), mapi_unicode(0x1000, body)], True)
+    return entries
+
+
+def outlook_msg(
+    body: str | None = None,
+    html: bytes | None = None,
+    rtf: bytes | None = None,
+    cid: bool = False,
+    attachment: bool = False,
+    nested: bool = False,
+) -> bytes:
+    entries: list[tuple[tuple[str, ...], bytes | None]] = []
+    root = [
+        mapi_unicode(0x0037, "Repository MSG"),
+        mapi_unicode(0x0C1A, "Alice"),
+        mapi_unicode(0x0C1F, "alice@example.test"),
+        mapi_long(0x3FFD, 1252),
+        mapi_time(0x0039, 116444736000000000),
+        mapi_unicode(0x007D, "Message-ID: <repository@example.test>\r\nX-Offline: true\r\n"),
+    ]
+    if body is not None:
+        root.append(mapi_unicode(0x1000, body))
+    if html is not None:
+        root.append(mapi_binary(0x1013, html))
+    if rtf is not None:
+        root.append(mapi_binary(0x1009, rtf))
+    attachment_count = int(cid) + int(attachment) + int(nested)
+    add_mapi_storage(entries, (), root, True, recipients=1, attachments=attachment_count)
+    add_mapi_storage(
+        entries,
+        ("__recip_version1.0_#00000000",),
+        [mapi_long(0x0C15, 1), mapi_unicode(0x3001, "Bob"), mapi_unicode(0x39FE, "bob@example.test")],
+        False,
+    )
+    attachment_index = 0
+    if cid:
+        base = (f"__attach_version1.0_#{attachment_index:08X}",)
+        add_mapi_storage(entries, base, [
+            mapi_long(0x3705, 1), mapi_unicode(0x3707, "logo.png"),
+            mapi_unicode(0x370E, "image/png"), mapi_unicode(0x3712, "logo@example.test"),
+            mapi_binary(0x3701, bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082")),
+        ], False)
+        attachment_index += 1
+    if attachment:
+        base = (f"__attach_version1.0_#{attachment_index:08X}",)
+        add_mapi_storage(entries, base, [
+            mapi_long(0x3705, 1), mapi_unicode(0x3707, "notes.txt"),
+            mapi_unicode(0x370E, "text/plain"), mapi_binary(0x3701, b"repository attachment"),
+        ], False)
+        attachment_index += 1
+    if nested:
+        base = (f"__attach_version1.0_#{attachment_index:08X}",)
+        add_mapi_storage(entries, base, [
+            mapi_long(0x3705, 5), mapi_unicode(0x3707, "forwarded.msg"), mapi_object(0x3701),
+        ], False)
+        object_base = base + ("__substg1.0_3701000D",)
+        entries.append((object_base, None))
+        for path, data in embedded_msg_entries("Nested fixture body"):
+            entries.append((object_base + path, data))
+    return cfb(entries)
+
+
+def msg_fixture_definitions() -> list[tuple[str, str, bytes, dict[str, object]]]:
+    plain = outlook_msg(body="Plain fixture body")
+    html = outlook_msg(body="fallback", html=b"<main><h2>HTML fixture</h2><p>semantic body</p></main>")
+    cid = outlook_msg(html=b"<main><p>CID fixture</p><img src='cid:logo@example.test' alt='logo'></main>", cid=True)
+    nested = outlook_msg(body="Outer fixture body", attachment=True, nested=True)
+    rtf = outlook_msg(rtf=lzfu_uncompressed(b"{\\rtf1\\ansi Repository RTF body}"))
+    malicious = bytearray(plain)
+    fat_sector = struct.unpack_from("<I", malicious, 76)[0]
+    struct.pack_into("<I", malicious, (fat_sector + 1) * 512, 0)
+    return [
+        ("msg-normal", "normal", plain, expected_hash("headers, time, transport headers and plain body", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
+        ("msg-html", "html", html, expected_hash("HTML is selected ahead of the plain fallback", "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1")),
+        ("msg-cid", "cid", cid, expected_hash("canonical CID image is bound at its HTML reference", "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af")),
+        ("msg-attachment-nested", "attachment", nested, expected_hash("by-value and embedded MSG attachments retain assets and source chains", "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a")),
+        ("msg-rtf", "rtf", rtf, expected_hash("LZFu is decoded and passed to the bounded RTF converter on the same request context", "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367")),
+        ("msg-corrupt", "corrupt", plain[:-17], expected("error", "truncated CFB sector", error_code="malformed")),
+        ("msg-malicious", "malicious", bytes(malicious), expected("error", "cyclic CFB directory FAT chain", error_code="malformed")),
+        ("msg-limit", "limit", plain, limit_expected("MSG crosses the exact input byte boundary", "max_input_bytes", len(plain) - 1, len(plain), "max_input_bytes", "", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
+    ]
+
+
 def expected(
     outcome: str,
     description: str,
@@ -131,6 +364,15 @@ def expected(
     if limit is not None:
         result["limit"] = limit
     return result
+
+
+def expected_hash(description: str, semantic_sha256: str) -> dict[str, object]:
+    return {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": semantic_sha256,
+        "description": description,
+    }
 
 
 def limit_expected(
@@ -188,6 +430,22 @@ def generated_fixture(
         },
         "expected": result,
     }
+
+
+def write_msg_fixtures(root: Path) -> list[dict[str, object]]:
+    return [
+        generated_fixture(
+            root,
+            fixture_id,
+            "outlook-msg",
+            scenario,
+            f"small/msg/{fixture_id.removeprefix('msg-')}.msg",
+            data,
+            "application/vnd.ms-outlook",
+            result,
+        )
+        for fixture_id, scenario, data, result in msg_fixture_definitions()
+    ]
 
 
 def patch_encrypted_flag(archive: bytes) -> bytes:
@@ -363,6 +621,7 @@ def build(root: Path, font_path: Path) -> None:
     add("rtf-limit", "rtf", "limit", "small/rtf/limit.rtf", rtf_limit, "application/rtf", limit_expected("RTF group stack crosses the exact configured depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "deep\n"))
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
+    fixtures.extend(write_msg_fixtures(root))
 
     epub_normal = epub3(
         b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Corpus chapter</title></head>'
@@ -388,7 +647,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "pdf", "rtf", "text", "tsv", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {
@@ -472,8 +731,13 @@ def build(root: Path, font_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--font", type=Path, required=True)
+    parser.add_argument("--font", type=Path)
     parser.add_argument("--output-root", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument(
+        "--msg-only",
+        action="store_true",
+        help="regenerate repository-authored MSG fixtures and update their manifest records",
+    )
     parser.add_argument(
         "--verify",
         action="store_true",
@@ -481,6 +745,25 @@ def main() -> None:
     )
     args = parser.parse_args()
     output_root = args.output_root.resolve()
+    if args.msg_only:
+        manifest_path = output_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["fixtures"] = [
+            fixture
+            for fixture in manifest["fixtures"]
+            if fixture["format"] not in {"msg", "outlook-msg"}
+        ] + write_msg_fixtures(output_root)
+        manifest["fixtures"].sort(key=lambda item: str(item["id"]))
+        manifest["available_formats"] = sorted(
+            (set(manifest["available_formats"]) - {"msg"}) | {"outlook-msg"}
+        )
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
+    if args.font is None:
+        parser.error("--font is required unless --msg-only is selected")
     if not args.verify:
         build(output_root, args.font.resolve())
         return

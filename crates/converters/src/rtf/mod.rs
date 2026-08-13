@@ -10,7 +10,7 @@ mod text;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
+    FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, ResourceReservation, Services,
 };
 
 const FORMATS: &[InputFormat] = &[InputFormat::Rtf];
@@ -86,6 +86,16 @@ pub(crate) fn convert_rtf_bytes(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     parser::parse_rtf(bytes, options, context)
+}
+
+pub(crate) fn audit_embedded_raster(
+    bytes: &[u8],
+    media_type: &str,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    memory: &mut ResourceReservation,
+) -> Result<(), ConversionError> {
+    image::audit_image(bytes, media_type, options, context, memory)
 }
 
 pub(super) fn strict_header(bytes: &[u8]) -> Option<usize> {
