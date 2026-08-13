@@ -154,11 +154,14 @@ fn retained_rasters_require_complete_payloads_and_bounded_pixels() {
 
 #[test]
 fn epub3_toc_requires_direct_children_and_one_label_per_item() {
-    let valid = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h2>Reader <em>contents</em></h2><ol><li><span>Part <u>One</u><img alt=" icon"/><a href="text/two.xhtml"> related</a></span><ol><li><a href="text/one.xhtml"><img alt="Cover "/>Read <math xmlns="http://www.w3.org/1998/Math/MathML" alttext=" equation"/><svg xmlns="http://www.w3.org/2000/svg"><title> diagram</title></svg></a></li><li><a href="text/two.xhtml" title="Canvas fallback"><canvas/></a></li></ol></li></ol></nav></body></html>"#;
+    let valid = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h2>Reader <em>contents</em></h2><ol><li><span>Part <u>One</u><img alt=" icon" title=" wrong image title"/><a href="text/two.xhtml"> related</a></span><ol><li><a href="text/one.xhtml">Read <math xmlns="http://www.w3.org/1998/Math/MathML" alt=" equation" alttext=" wrong math alttext" title=" wrong math title"><mrow><mi> wrong math body</mi></mrow></math><svg xmlns="http://www.w3.org/2000/svg" alt=" diagram" alttext=" wrong svg alttext" title=" wrong svg title"><title> wrong svg body</title></svg><math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mi> plus x</mi></mrow></math><svg xmlns="http://www.w3.org/2000/svg"><title> plus shape</title></svg><picture><source srcset="images/cover.png 1x, images/cover.png 2x"/><img alt=" picture" src="images/cover.png"/></picture><video title=" clip"><source src="images/cover.png"/></video></a></li><li><a href="text/two.xhtml" title="Canvas fallback"><canvas/></a></li></ol></li></ol></nav></body></html>"#;
     let result = convert(epub3_book(epub3_package(), Some(valid))).unwrap();
     assert!(result.markdown.contains("Part One icon related"));
-    assert!(result.markdown.contains("Cover Read equation diagram"));
+    assert!(result.markdown.contains("Read equation diagram plus x plus shape picture clip"));
     assert!(result.markdown.contains("Canvas fallback"));
+    assert!(!result.markdown.contains("wrong math"));
+    assert!(!result.markdown.contains("wrong svg"));
+    assert!(!result.markdown.contains("wrong image"));
     assert!(super::epub_tests::has_nested_list(&result.document.blocks));
 
     for invalid in [
@@ -173,6 +176,18 @@ fn epub3_toc_requires_direct_children_and_one_label_per_item() {
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Outer <span><a href="text/two.xhtml">nested</a></span></a></li></ol></nav></body></html>"#.as_slice(),
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Label<img/></a></li></ol></nav></body></html>"#.as_slice(),
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml">Label<img alt="safe" src="javascript:bad"/></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><picture><source srcset="https://example.invalid/image.png 1x"/><img alt="safe"/></picture></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><button formaction="https://example.invalid/submit">bad</button></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><input value="bad"/></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><select><option>bad</option></select></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><label>bad</label></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><audio controls="controls" title="bad"/></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><video autoplay="autoplay" title="bad"/></a></li></ol></nav></body></html>"#.as_slice(),
+        br##"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><img alt="bad" usemap="#map"/></a></li></ol></nav></body></html>"##.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><svg xmlns="http://www.w3.org/2000/svg"><a href="https://example.invalid">bad</a></svg></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><svg xmlns="http://www.w3.org/2000/svg"><rect xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="https://example.invalid/image.svg"/></svg></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><svg xmlns="http://www.w3.org/2000/svg"><unknown>bad</unknown></svg></a></li></ol></nav></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><math xmlns="http://www.w3.org/1998/Math/MathML"><unknown>bad</unknown></math></a></li></ol></nav></body></html>"#.as_slice(),
     ] {
         assert_eq!(
             convert(epub3_book(epub3_package(), Some(invalid))).unwrap_err().code(),
