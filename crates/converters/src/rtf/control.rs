@@ -3,7 +3,8 @@
 use super::budget::{limit, locator, malformed, parameter_i32, parameter_u16, reserve_vec};
 use super::destinations::{destination, is_known_non_destination_control};
 use super::parser::{
-    CellMerge, Destination, FontCharset, MAX_CONTROLS, MAX_NUMERIC_DIGITS, MAX_RTF_FONTS, Parser,
+    CellMerge, Destination, FontCharset, MAX_CONTROL_WORD_LEN, MAX_CONTROLS, MAX_NUMERIC_DIGITS,
+    MAX_RTF_FONTS, Parser,
 };
 use super::text::{encoding_for_codepage, font_charset_codepage};
 use into_markdown_core::{ConversionError, DiagnosticSeverity, Inline};
@@ -15,23 +16,17 @@ impl Parser<'_> {
         let Some(&next) = self.bytes.get(self.offset) else {
             return Err(malformed("trailing RTF escape"));
         };
-        self.control_count = self
-            .control_count
-            .checked_add(1)
-            .ok_or_else(|| limit("rtf_control_count", "control count overflow"))?;
-        if self.control_count.is_multiple_of(1024) {
-            self.context.checkpoint()?;
-        }
-        if self.control_count > MAX_CONTROLS {
-            return Err(limit(
-                "rtf_control_count",
-                format!("{} > {MAX_CONTROLS}", self.control_count),
-            ));
-        }
+        self.charge_control()?;
         if next.is_ascii_alphabetic() {
             let name_start = self.offset;
             while self.bytes.get(self.offset).is_some_and(u8::is_ascii_alphabetic) {
                 self.offset += 1;
+                if self.offset - name_start > MAX_CONTROL_WORD_LEN {
+                    return Err(limit(
+                        "rtf_control_word_length",
+                        format!("> {MAX_CONTROL_WORD_LEN}"),
+                    ));
+                }
             }
             let name = std::str::from_utf8(&self.bytes[name_start..self.offset])
                 .map_err(|_| malformed("control word is not ASCII"))?;
@@ -88,25 +83,32 @@ impl Parser<'_> {
         end: usize,
     ) -> Result<(), ConversionError> {
         let at_start = self.state().at_group_start;
-        if at_start && let Some(destination) = destination(name, self.state().ignorable) {
+        let inherited_destination = self.state().destination;
+        if at_start
+            && inherited_destination != Destination::Skip
+            && let Some(destination) = destination(name, self.state().ignorable)
+        {
             self.enter_destination(destination, start)?;
         }
         self.state_mut().at_group_start = false;
         let destination = self.state().destination;
+
+        if name == "bin" {
+            let count =
+                usize::try_from(parameter.ok_or_else(|| malformed("bin requires a byte count"))?)
+                    .map_err(|_| limit("rtf_binary_bytes", "bin byte count is invalid"))?;
+            return if destination == Destination::Pict {
+                self.picture_binary(count)
+            } else {
+                self.skip_binary(count)
+            };
+        }
 
         if destination == Destination::Pict {
             match name {
                 "pngblip" => self.picture.as_mut().map(|p| p.media_type = Some("image/png")),
                 "jpegblip" => self.picture.as_mut().map(|p| p.media_type = Some("image/jpeg")),
                 "emfblip" | "wmetafile" => self.picture.as_mut().map(|p| p.media_type = None),
-                "bin" => {
-                    let count = usize::try_from(
-                        parameter.ok_or_else(|| malformed("bin requires a byte count"))?,
-                    )
-                    .map_err(|_| limit("max_asset_bytes", "bin byte count is invalid"))?;
-                    self.picture_binary(count)?;
-                    None
-                }
                 _ => None,
             };
             return Ok(());
@@ -203,21 +205,43 @@ impl Parser<'_> {
                 if self.table.active {
                     self.finish_table(end)?;
                 }
+                self.pending_list_marker = None;
                 let state = self.state_mut();
                 state.in_table = false;
                 state.list_id = None;
+                state.list_level = None;
             }
             "intbl" => self.state_mut().in_table = parameter.unwrap_or(1) != 0,
             "ls" => self.state_mut().list_id = Some(parameter_i32(parameter, "list number")?),
+            "ilvl" => {
+                let level = parameter.ok_or_else(|| malformed("ilvl requires a parameter"))?;
+                self.state_mut().list_level = Some(
+                    u8::try_from(level)
+                        .map_err(|_| limit("rtf_list_level", "list level must be in 0..=255"))?,
+                );
+            }
+            "itap" => {
+                let depth = parameter.unwrap_or(1);
+                if depth > 1 {
+                    return Err(limit(
+                        "rtf_table_depth",
+                        "nested RTF tables cannot be represented within the bounded table state",
+                    ));
+                }
+            }
+            "nesttableprops" | "nestcell" | "nestrow" => {
+                return Err(limit(
+                    "rtf_table_depth",
+                    "nested RTF tables cannot be represented within the bounded table state",
+                ));
+            }
             "trowd" => self.start_table_row(end)?,
             "cell" => self.finish_cell(end)?,
             "row" => self.finish_row(end)?,
             "clmgf" => self.table.pending_cell_merge = CellMerge::Start,
             "clmrg" => self.table.pending_cell_merge = CellMerge::Continue,
             "cellx" => {
-                reserve_vec(&mut self.table.cell_definitions, 1, &mut self.memory)?;
-                self.table.cell_definitions.push(self.table.pending_cell_merge);
-                self.table.pending_cell_merge = CellMerge::Normal;
+                self.add_cell_definition()?;
             }
             "rtf" | "ansi" | "deff" | "viewkind" | "field" | "trgaph" | "trleft" | "li" | "ri"
             | "fi" | "sa" | "sb" | "fs" | "cf" | "highlight" | "lang" | "langfe" | "langnp"
@@ -245,6 +269,9 @@ impl Parser<'_> {
             return Ok(());
         }
         self.state_mut().at_group_start = false;
+        if matches!(symbol, 0x00..=0x1f | 0x7f..=0x9f) && !matches!(symbol, b'\n' | b'\r' | b'\t') {
+            return Err(malformed("RTF control symbol contains a forbidden control character"));
+        }
         if self.state().fallback_remaining > 0
             && matches!(symbol, b'\\' | b'{' | b'}' | b'~' | b'-' | b'_')
         {
@@ -268,5 +295,22 @@ impl Parser<'_> {
                 Ok(())
             }
         }
+    }
+
+    pub(super) fn charge_control(&mut self) -> Result<(), ConversionError> {
+        self.control_count = self
+            .control_count
+            .checked_add(1)
+            .ok_or_else(|| limit("rtf_control_count", "control count overflow"))?;
+        if self.control_count > MAX_CONTROLS {
+            return Err(limit(
+                "rtf_control_count",
+                format!("{} > {MAX_CONTROLS}", self.control_count),
+            ));
+        }
+        if self.control_count.is_multiple_of(1024) {
+            self.context.checkpoint()?;
+        }
+        Ok(())
     }
 }

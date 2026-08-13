@@ -57,6 +57,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn picture_binary(&mut self, count: usize) -> Result<(), ConversionError> {
+        self.context.checkpoint()?;
         let end = self
             .offset
             .checked_add(count)
@@ -84,7 +85,7 @@ impl Parser<'_> {
         picture.bytes.extend_from_slice(bytes);
         self.picture = Some(picture);
         self.offset = end;
-        Ok(())
+        self.context.checkpoint()
     }
 
     pub(super) fn finish_picture(&mut self, end: usize) -> Result<(), ConversionError> {

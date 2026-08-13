@@ -69,6 +69,224 @@ fn active_destinations_are_skipped() {
 }
 
 #[test]
+fn skipped_descendants_stay_skipped_and_bin_bytes_are_structurally_opaque() {
+    let output = convert(
+        b"{\\rtf1\\ansi before{\\object{\\title BAD}{\\pict\\pngblip 00}{\\fldrslt BAD}\\bin3 {}\\}after\\par}",
+    )
+    .unwrap();
+    assert_eq!(paragraph_text(&output), "beforeafter");
+    assert!(output.document.metadata.title.is_none());
+    assert!(output.assets.is_empty());
+
+    let metadata = convert(b"{\\rtf1\\ansi{\\title hi\\bin3 {}\\there}body\\par}").unwrap();
+    assert_eq!(metadata.document.metadata.title.as_deref(), Some("hithere"));
+    assert_eq!(paragraph_text(&metadata), "body");
+
+    let body = convert(b"{\\rtf1\\ansi before\\bin3 {}\\after\\par}").unwrap();
+    assert_eq!(paragraph_text(&body), "beforeafter");
+    for malformed in
+        [b"{\\rtf1\\ansi \\bin-1 x}".as_slice(), b"{\\rtf1\\ansi \\bin4 xx}".as_slice()]
+    {
+        assert!(matches!(
+            convert(malformed).unwrap_err(),
+            ConversionError::ResourceLimit { limit: "rtf_binary_bytes", .. }
+                | ConversionError::Malformed { .. }
+        ));
+    }
+}
+
+#[test]
+fn dbcs_trails_that_resemble_rtf_syntax_remain_atomic() {
+    for (codepage, pair, encoding) in [
+        (932_u16, [0x81_u8, b'\\'], encoding_rs::SHIFT_JIS),
+        (936_u16, [0x81_u8, b'{'], encoding_rs::GBK),
+        (950_u16, [0xa4_u8, b'}'], encoding_rs::BIG5),
+    ] {
+        let mut source = format!("{{\\rtf1\\ansi\\ansicpg{codepage} ").into_bytes();
+        source.extend_from_slice(&pair);
+        source.extend_from_slice(b"\\par}");
+        let output = convert(&source).unwrap();
+        let (expected, _, malformed) = encoding.decode(&pair);
+        assert!(!malformed);
+        assert_eq!(paragraph_text(&output), expected);
+    }
+
+    let mut fallback = b"{\\rtf1\\ansi\\ansicpg932\\uc1\\u65 ".to_vec();
+    fallback.extend_from_slice(&[0x81, b'\\']);
+    fallback.extend_from_slice(b"X}");
+    assert_eq!(paragraph_text(&convert(&fallback).unwrap()), "AX");
+}
+
+#[test]
+fn text_destinations_reject_controls_but_tab_and_line_are_structured() {
+    for mut source in [
+        b"{\\rtf1\\ansi raw".to_vec(),
+        b"{\\rtf1\\ansi\\ansicpg1252 raw".to_vec(),
+        b"{\\rtf1\\ansi raw".to_vec(),
+    ]
+    .into_iter()
+    .zip([0x00_u8, 0x81, 0x7f])
+    .map(|(mut source, byte)| {
+        source.push(byte);
+        source.extend_from_slice(b"text}");
+        source
+    }) {
+        assert_eq!(convert(&source).unwrap_err().code(), ErrorCode::Malformed);
+        source.clear();
+    }
+    for source in [
+        b"{\\rtf1\\ansi \\'00}".as_slice(),
+        b"{\\rtf1\\ansi \\'81}".as_slice(),
+        b"{\\rtf1\\ansi \\'7f}".as_slice(),
+        b"{\\rtf1\\ansi \\u0?}".as_slice(),
+        b"{\\rtf1\\ansi \\u127?}".as_slice(),
+        b"{\\rtf1\\ansi \\u128?}".as_slice(),
+        b"{\\rtf1\\ansi{\\title safe\\'00bad}}".as_slice(),
+        b"{\\rtf1\\ansi{\\field{\\*\\fldinst HYPERLINK \\u0?}{\\fldrslt x}}}".as_slice(),
+        b"{\\rtf1\\ansi{\\field{\\*\\fldinst HYPERLINK \\\"https://example.invalid\\\"}{\\fldrslt x\\'00}}}".as_slice(),
+    ] {
+        assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
+
+    let allowed = convert(b"{\\rtf1\\ansi a\tb\\tab c\\line d}").unwrap();
+    let Block::Paragraph(inlines) = &allowed.document.blocks[0].block else { panic!("paragraph") };
+    assert!(inlines.iter().any(|inline| matches!(inline, Inline::LineBreak)));
+    assert_eq!(paragraph_text(&allowed), "a\tb\tcd");
+}
+
+#[test]
+fn adjacent_lists_aggregate_only_for_exact_identity_and_sequence() {
+    let output = convert(
+        b"{\\rtf1\\ansi\\ls7\\ilvl0{\\listtext 3.\\tab}Third\\par{\\listtext 4.\\tab}Fourth\\par}",
+    )
+    .unwrap();
+    assert_eq!(output.document.blocks.len(), 1);
+    let Block::List { kind, start, items } = &output.document.blocks[0].block else {
+        panic!("list")
+    };
+    assert_eq!((*kind, *start, items.len()), (ListKind::Ordered, 3, 2));
+    assert_eq!(items[0].marker_label.as_deref(), Some("3."));
+    assert_eq!(items[1].marker_label.as_deref(), Some("4."));
+
+    let split = convert(b"{\\rtf1\\ansi\\ls7{\\listtext 1.\\tab}One\\par\\ls8{\\listtext 1.\\tab}Other\\par\\pard ordinary\\par\\ls8{\\listtext 2.\\tab}Two\\par}").unwrap();
+    assert_eq!(split.document.blocks.len(), 4);
+    assert!(matches!(split.document.blocks[0].block, Block::List { .. }));
+    assert!(matches!(split.document.blocks[1].block, Block::List { .. }));
+    assert!(matches!(split.document.blocks[2].block, Block::Paragraph(_)));
+    assert!(matches!(split.document.blocks[3].block, Block::List { .. }));
+
+    let kind_split = convert(
+        b"{\\rtf1\\ansi\\ls7{\\listtext 1.\\tab}One\\par{\\listtext\\bullet\\tab}Bullet\\par}",
+    )
+    .unwrap();
+    assert_eq!(kind_split.document.blocks.len(), 2);
+
+    for ambiguous in [
+        b"{\\rtf1\\ansi\\ls7 No marker\\par}".as_slice(),
+        b"{\\rtf1\\ansi\\ls7\\ilvl1{\\listtext 1.\\tab}Nested\\par}".as_slice(),
+        b"{\\rtf1\\ansi\\ls7{\\listtext 1.\\tab}One\\par{\\listtext 3.\\tab}Three\\par}".as_slice(),
+        b"{\\rtf1\\ansi\\ls7{\\listtext alpha\\tab}Ambiguous\\par}".as_slice(),
+    ] {
+        assert_eq!(convert(ambiguous).unwrap_err().code(), ErrorCode::Malformed);
+    }
+}
+
+#[test]
+fn table_shape_and_nested_structural_nodes_fail_at_parser_limits() {
+    let mut options = ConversionOptions::default();
+    options.limits.max_table_columns = 1;
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let error = convert_rtf_bytes(
+        b"{\\rtf1\\ansi\\trowd\\cellx100\\cellx200 A\\cell B\\cell\\row}",
+        &options,
+        &context,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_table_columns", .. }));
+
+    assert_eq!(
+        convert(b"{\\rtf1\\ansi\\trowd\\itap2 A\\cell\\row}").unwrap_err().code(),
+        ErrorCode::ResourceLimit
+    );
+    assert_eq!(
+        convert(b"{\\rtf1\\ansi\\trowd\\intbl\\ls1{\\listtext 1.\\tab}A\\cell\\row}")
+            .unwrap_err()
+            .code(),
+        ErrorCode::Malformed
+    );
+    assert_eq!(
+        convert(b"{\\rtf1\\ansi\\trowd A\\cell B\\cell\\row\\trowd C\\cell\\row}")
+            .unwrap_err()
+            .code(),
+        ErrorCode::Malformed
+    );
+
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut node = super::parser::Parser::new(b"{\\rtf1}", &options, &context).unwrap();
+    node.document_nodes = MAX_DOCUMENT_NODES;
+    assert!(matches!(
+        node.node(Block::Rule, 0, 1).unwrap_err(),
+        ConversionError::ResourceLimit { limit: "document_nodes", .. }
+    ));
+    assert_eq!(node.node_sequence, 0);
+
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut list = super::parser::Parser::new(b"{\\rtf1}", &options, &context).unwrap();
+    list.document_nodes = MAX_DOCUMENT_NODES - 1;
+    list.state_mut().list_id = Some(1);
+    list.pending_list_marker = Some("1.".into());
+    list.paragraph.inlines.push(Inline::Text { value: "x".into(), marks: Vec::new() });
+    assert!(matches!(
+        list.finish_paragraph(7).unwrap_err(),
+        ConversionError::ResourceLimit { limit: "document_nodes", .. }
+    ));
+    assert_eq!(list.node_sequence, 0);
+
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut table = super::parser::Parser::new(b"{\\rtf1}", &options, &context).unwrap();
+    table.document_nodes = MAX_DOCUMENT_NODES - 1;
+    table.table.active = true;
+    table.state_mut().in_table = true;
+    table.paragraph.inlines.push(Inline::Text { value: "x".into(), marks: Vec::new() });
+    assert!(matches!(
+        table.finish_cell(7).unwrap_err(),
+        ConversionError::ResourceLimit { limit: "document_nodes", .. }
+    ));
+    assert_eq!(table.node_sequence, 0);
+}
+
+#[test]
+fn control_word_and_hex_run_work_are_incrementally_bounded() {
+    let long = format!("{{\\rtf1\\{} 1}}", "a".repeat(33));
+    assert!(matches!(
+        convert(long.as_bytes()).unwrap_err(),
+        ConversionError::ResourceLimit { limit: "rtf_control_word_length", .. }
+    ));
+
+    let source = b"{\\rtf1\\'41\\'42}";
+    let options = ConversionOptions::default();
+    let cancellation = CancellationToken::new();
+    let context = ExecutionContext::new(
+        ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+        options.limits.clone(),
+    );
+    let mut parser = super::parser::Parser::new(source, &options, &context).unwrap();
+    parser.offset = source.windows(2).position(|value| value == b"\\'").unwrap();
+    parser.control_count = super::parser::MAX_CONTROLS - 1;
+    assert!(matches!(
+        parser.control().unwrap_err(),
+        ConversionError::ResourceLimit { limit: "rtf_control_count", .. }
+    ));
+
+    let mut parser = super::parser::Parser::new(source, &options, &context).unwrap();
+    parser.offset = source.windows(2).position(|value| value == b"\\'").unwrap();
+    parser.control_count = 1022;
+    cancellation.cancel();
+    assert_eq!(parser.control().unwrap_err().code(), ErrorCode::Cancelled);
+}
+
+#[test]
 fn malformed_and_limits_are_stable() {
     assert_eq!(convert(b"{\\rtf1\\ansi no close").unwrap_err().code(), ErrorCode::Malformed);
     assert_eq!(convert(b"{\\rtf1\\u99999999999?}").unwrap_err().code(), ErrorCode::ResourceLimit);
@@ -126,6 +344,18 @@ fn png_picture_is_decoded_and_retained_but_vector_is_not() {
     assert_eq!(output.assets.len(), 1);
     assert_eq!(output.assets[0].media_type, "image/png");
     assert!(matches!(output.document.blocks[0].block, Block::Image { .. }));
+
+    let mut binary_png = Vec::new();
+    for pair in png.as_bytes().chunks_exact(2) {
+        binary_png.push(u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap());
+    }
+    let mut binary_source =
+        format!("{{\\rtf1\\ansi{{\\pict\\pngblip\\bin{} ", binary_png.len()).into_bytes();
+    binary_source.extend_from_slice(&binary_png);
+    binary_source.extend_from_slice(b"}}");
+    let binary = convert(&binary_source).unwrap();
+    assert_eq!(binary.assets.len(), 1);
+    assert_eq!(&binary.assets[0].bytes[..], binary_png.as_slice());
 
     let vector = convert(b"{\\rtf1\\ansi{\\pict\\emfblip 0102}}").unwrap();
     assert!(vector.assets.is_empty());

@@ -6,6 +6,17 @@ use into_markdown_core::{ConversionError, DiagnosticSeverity, canonical_external
 use std::cmp::Reverse;
 
 impl Parser<'_> {
+    pub(super) fn skip_binary(&mut self, count: usize) -> Result<(), ConversionError> {
+        self.context.checkpoint()?;
+        let end = self
+            .offset
+            .checked_add(count)
+            .ok_or_else(|| limit("rtf_binary_bytes", "bin range overflow"))?;
+        self.bytes.get(self.offset..end).ok_or_else(|| malformed("truncated RTF bin data"))?;
+        self.offset = end;
+        self.context.checkpoint()
+    }
+
     pub(super) fn open_group(&mut self) -> Result<(), ConversionError> {
         let depth = self
             .frames

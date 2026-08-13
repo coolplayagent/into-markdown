@@ -1,7 +1,7 @@
 //! Codepage, Unicode, fallback, and inline text decoding.
 
 use super::budget::{hex, limit, locator, malformed, reserve_string, reserve_vec};
-use super::parser::{CHECKPOINT_INTERVAL, Destination, MAX_CONTROLS, MAX_METADATA_BYTES, Parser};
+use super::parser::{CHECKPOINT_INTERVAL, Destination, MAX_METADATA_BYTES, Parser};
 use encoding_rs::{BIG5, Encoding, GBK, SHIFT_JIS, WINDOWS_1252};
 use into_markdown_core::{
     ConversionError, DiagnosticSeverity, Inline, InlineMark, MAX_DOCUMENT_INLINES,
@@ -10,10 +10,22 @@ use into_markdown_core::{
 impl Parser<'_> {
     pub(super) fn plain_text(&mut self) -> Result<(), ConversionError> {
         let start = self.offset;
-        while self.offset < self.bytes.len()
-            && !matches!(self.bytes[self.offset], b'{' | b'}' | b'\\' | b'\r' | b'\n')
-        {
-            self.offset += 1;
+        let codepage = self.current_codepage();
+        while self.offset < self.bytes.len() {
+            let byte = self.bytes[self.offset];
+            if self.state().destination != Destination::Pict
+                && is_dbcs_lead(codepage, byte)
+                && self
+                    .bytes
+                    .get(self.offset + 1)
+                    .is_some_and(|trail| is_dbcs_trail(codepage, *trail))
+            {
+                self.offset += 2;
+            } else if matches!(byte, b'{' | b'}' | b'\\' | b'\r' | b'\n') {
+                break;
+            } else {
+                self.offset += 1;
+            }
             if self.offset.is_multiple_of(CHECKPOINT_INTERVAL) {
                 self.context.checkpoint()?;
             }
@@ -40,26 +52,19 @@ impl Parser<'_> {
                 .ok_or_else(|| limit("rtf_control_count", "hex escape run overflow"))?;
             cursor += 2;
             if self.bytes.get(cursor..cursor.saturating_add(2)) == Some(b"\\'") {
+                self.charge_control()?;
                 cursor += 2;
             } else {
                 break;
             }
         }
-        let additional = u64::try_from(count.saturating_sub(1)).unwrap_or(u64::MAX);
-        self.control_count = self
-            .control_count
-            .checked_add(additional)
-            .ok_or_else(|| limit("rtf_control_count", "control count overflow"))?;
-        if self.control_count > MAX_CONTROLS {
-            return Err(limit(
-                "rtf_control_count",
-                format!("{} > {MAX_CONTROLS}", self.control_count),
-            ));
-        }
         let mut decoded = Vec::new();
         reserve_vec(&mut decoded, count, &mut self.memory)?;
         let mut source = self.offset;
         for index in 0..count {
+            if index != 0 && index.is_multiple_of(1024) {
+                self.context.checkpoint()?;
+            }
             if index != 0 {
                 source += 2;
             }
@@ -89,21 +94,18 @@ impl Parser<'_> {
         ) {
             return Ok(());
         }
-        let skip = usize::from(self.state().fallback_remaining).min(bytes.len());
+        let codepage = self.current_codepage();
+        let (skip, skipped_units) =
+            skip_ansi_units(bytes, codepage, self.state().fallback_remaining);
         self.state_mut().fallback_remaining =
-            self.state().fallback_remaining.saturating_sub(u8::try_from(skip).unwrap_or(u8::MAX));
+            self.state().fallback_remaining.saturating_sub(skipped_units);
         let bytes = &bytes[skip..];
         if bytes.is_empty() {
             return Ok(());
         }
         self.flush_pending_surrogate()?;
-        let codepage = self
-            .font_charsets
-            .binary_search_by_key(&self.state().font, |entry| entry.font)
-            .ok()
-            .and_then(|index| self.font_charsets.get(index))
-            .map_or(self.state().ansi_codepage, |entry| entry.codepage);
         let encoding = encoding_for_codepage(codepage)?;
+        validate_ansi_units(bytes, codepage)?;
         if !bytes.is_ascii() {
             let decode_bound = u64::try_from(bytes.len())
                 .unwrap_or(u64::MAX)
@@ -175,6 +177,11 @@ impl Parser<'_> {
         if value.is_empty() {
             return Ok(());
         }
+        if value.chars().any(is_forbidden_text_control) {
+            return Err(malformed(
+                "RTF text contains a forbidden C0, C1, or DEL control character",
+            ));
+        }
         match self.state().destination {
             Destination::ListText
             | Destination::MetaTitle
@@ -233,6 +240,9 @@ impl Parser<'_> {
         if !matches!(self.state().destination, Destination::Body | Destination::FieldResult) {
             return Ok(());
         }
+        if self.paragraph.inlines.len() >= MAX_DOCUMENT_INLINES {
+            return Err(limit("document_inlines", format!(">= {MAX_DOCUMENT_INLINES}")));
+        }
         reserve_vec(&mut self.paragraph.inlines, 1, &mut self.memory)?;
         self.paragraph.inlines.push(inline);
         self.paragraph.start.get_or_insert(start);
@@ -260,6 +270,70 @@ impl Parser<'_> {
         }
         Ok(marks)
     }
+
+    pub(super) fn current_codepage(&self) -> u16 {
+        self.font_charsets
+            .binary_search_by_key(&self.state().font, |entry| entry.font)
+            .ok()
+            .and_then(|index| self.font_charsets.get(index))
+            .map_or(self.state().ansi_codepage, |entry| entry.codepage)
+    }
+}
+
+fn is_forbidden_text_control(value: char) -> bool {
+    let value = u32::from(value);
+    value <= 0x1f && value != u32::from(b'\t') || (0x7f..=0x9f).contains(&value)
+}
+
+fn is_dbcs_lead(codepage: u16, byte: u8) -> bool {
+    match codepage {
+        932 => matches!(byte, 0x81..=0x9f | 0xe0..=0xfc),
+        936 | 950 => matches!(byte, 0x81..=0xfe),
+        _ => false,
+    }
+}
+
+fn is_dbcs_trail(codepage: u16, byte: u8) -> bool {
+    match codepage {
+        932 => matches!(byte, 0x40..=0x7e | 0x80..=0xfc),
+        936 => matches!(byte, 0x40..=0xfe) && byte != 0x7f,
+        950 => matches!(byte, 0x40..=0x7e | 0xa1..=0xfe),
+        _ => false,
+    }
+}
+
+fn validate_ansi_units(bytes: &[u8], codepage: u16) -> Result<(), ConversionError> {
+    let mut offset = 0;
+    while let Some(&byte) = bytes.get(offset) {
+        if is_dbcs_lead(codepage, byte)
+            && bytes.get(offset + 1).is_some_and(|trail| is_dbcs_trail(codepage, *trail))
+        {
+            offset += 2;
+            continue;
+        }
+        if byte <= 0x1f && byte != b'\t' || (0x7f..=0x9f).contains(&byte) {
+            return Err(malformed("RTF ANSI text contains a forbidden C0, C1, or DEL byte"));
+        }
+        offset += 1;
+    }
+    Ok(())
+}
+
+fn skip_ansi_units(bytes: &[u8], codepage: u16, maximum: u8) -> (usize, u8) {
+    let mut offset = 0;
+    let mut units = 0;
+    while units < maximum && offset < bytes.len() {
+        let width = if is_dbcs_lead(codepage, bytes[offset])
+            && bytes.get(offset + 1).is_some_and(|trail| is_dbcs_trail(codepage, *trail))
+        {
+            2
+        } else {
+            1
+        };
+        offset += width;
+        units += 1;
+    }
+    (offset, units)
 }
 
 pub(super) fn encoding_for_codepage(codepage: u16) -> Result<&'static Encoding, ConversionError> {

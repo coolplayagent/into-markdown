@@ -10,6 +10,7 @@ use into_markdown_core::{
 
 pub(super) const MAX_CONTROLS: u64 = 1_000_000;
 pub(super) const MAX_NUMERIC_DIGITS: usize = 10;
+pub(super) const MAX_CONTROL_WORD_LEN: usize = 32;
 pub(super) const MAX_DIAGNOSTICS: usize = 4096;
 pub(super) const CHECKPOINT_INTERVAL: usize = 4096;
 pub(super) const MAX_METADATA_BYTES: usize = 64 * 1024;
@@ -46,6 +47,7 @@ pub(super) struct State {
     pub(super) at_group_start: bool,
     pub(super) in_table: bool,
     pub(super) list_id: Option<i32>,
+    pub(super) list_level: Option<u8>,
 }
 
 impl Default for State {
@@ -66,6 +68,7 @@ impl Default for State {
             at_group_start: true,
             in_table: false,
             list_id: None,
+            list_level: None,
         }
     }
 }
@@ -92,7 +95,17 @@ pub(super) struct TableBuilder {
     pub(super) cell_definitions: Vec<CellMerge>,
     pub(super) cell_definition_index: usize,
     pub(super) pending_cell_merge: CellMerge,
+    pub(super) row_width: u64,
+    pub(super) table_width: Option<u64>,
+    pub(super) node_reserved: bool,
     pub(super) active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ListKey {
+    pub(super) id: Option<i32>,
+    pub(super) level: u8,
+    pub(super) kind: into_markdown_core::ListKind,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -138,11 +151,13 @@ pub(super) struct Parser<'a> {
     pub(super) capture: String,
     pub(super) picture: Option<Picture>,
     pub(super) pending_list_marker: Option<String>,
+    pub(super) last_list_key: Option<ListKey>,
     pub(super) pending_link: Option<String>,
     pub(super) active_link: Option<String>,
     pub(super) field_inline_start: Option<usize>,
     pub(super) pending_high_surrogate: Option<(u16, usize, usize)>,
     pub(super) node_sequence: u64,
+    pub(super) document_nodes: usize,
     pub(super) control_count: u64,
     pub(super) decoded_bytes: u64,
     pub(super) total_asset_bytes: u64,
@@ -202,11 +217,13 @@ impl<'a> Parser<'a> {
             capture: String::new(),
             picture: None,
             pending_list_marker: None,
+            last_list_key: None,
             pending_link: None,
             active_link: None,
             field_inline_start: None,
             pending_high_surrogate: None,
             node_sequence: 0,
+            document_nodes: 0,
             control_count: 0,
             decoded_bytes: 0,
             total_asset_bytes: 0,
@@ -286,6 +303,16 @@ impl<'a> Parser<'a> {
         start: usize,
         end: usize,
     ) -> Result<BlockNode, ConversionError> {
+        self.consume_document_node()?;
+        self.node_reserved(block, start, end)
+    }
+
+    pub(super) fn node_reserved(
+        &mut self,
+        block: Block,
+        start: usize,
+        end: usize,
+    ) -> Result<BlockNode, ConversionError> {
         self.node_sequence = self
             .node_sequence
             .checked_add(1)
@@ -306,11 +333,26 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn push_block(&mut self, block: BlockNode) -> Result<(), ConversionError> {
-        if self.blocks.len() >= MAX_DOCUMENT_NODES {
-            return Err(limit("document_nodes", format!(">= {MAX_DOCUMENT_NODES}")));
-        }
         reserve_vec(&mut self.blocks, 1, &mut self.memory)?;
         self.blocks.push(block);
+        self.last_list_key = None;
+        Ok(())
+    }
+
+    pub(super) fn consume_document_node(&mut self) -> Result<(), ConversionError> {
+        self.ensure_document_nodes(1)?;
+        self.document_nodes = self.document_nodes.saturating_add(1);
+        Ok(())
+    }
+
+    pub(super) fn ensure_document_nodes(&self, additional: usize) -> Result<(), ConversionError> {
+        let needed = self
+            .document_nodes
+            .checked_add(additional)
+            .ok_or_else(|| limit("document_nodes", "structural node count overflow"))?;
+        if needed > MAX_DOCUMENT_NODES {
+            return Err(limit("document_nodes", format!("{needed} > {MAX_DOCUMENT_NODES}")));
+        }
         Ok(())
     }
 
