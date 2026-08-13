@@ -13,7 +13,7 @@ use into_markdown_core::{
 };
 use std::borrow::Cow;
 use std::cell::{Cell as MutCell, Ref, RefCell};
-use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::mem::size_of;
 use url::Url;
 
@@ -24,6 +24,7 @@ const PROVIDER_ID: &str = "builtin.converter.html";
 const MAX_HTML_EVENTS: usize = 1_000_000;
 const META_PRESCAN_BYTES: usize = 1024;
 const CHECKPOINT_EVENTS: usize = 1024;
+const SOURCE_LOCATION_MESSAGE: &str = "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span";
 
 /// Persistent-output budget shared by a feed and every nested HTML fragment.
 ///
@@ -130,36 +131,23 @@ impl FeedHtmlBudget {
     }
 
     pub(crate) fn node(&mut self) -> Result<(), ConversionError> {
-        Self::consume(&mut self.nodes, self.max_nodes, 1, "feed_nodes")?;
-        self.charge_memory(size_of::<BlockNode>())?;
-        record_feed_html_object(FeedHtmlObjectKind::Node);
-        Ok(())
+        Self::consume(&mut self.nodes, self.max_nodes, 1, "feed_nodes")
     }
 
     pub(crate) fn nodes(&mut self, count: usize) -> Result<(), ConversionError> {
-        Self::consume(&mut self.nodes, self.max_nodes, count, "feed_nodes")?;
-        self.charge_memory(count.saturating_mul(size_of::<BlockNode>()))?;
-        Ok(())
+        Self::consume(&mut self.nodes, self.max_nodes, count, "feed_nodes")
     }
 
     pub(crate) fn inline(&mut self) -> Result<(), ConversionError> {
-        Self::consume(&mut self.inlines, self.max_inlines, 1, "feed_inlines")?;
-        self.charge_memory(size_of::<Inline>())?;
-        record_feed_html_object(FeedHtmlObjectKind::Inline);
-        Ok(())
+        Self::consume(&mut self.inlines, self.max_inlines, 1, "feed_inlines")
     }
 
     pub(crate) fn inlines(&mut self, count: usize) -> Result<(), ConversionError> {
-        Self::consume(&mut self.inlines, self.max_inlines, count, "feed_inlines")?;
-        self.charge_memory(count.saturating_mul(size_of::<Inline>()))?;
-        Ok(())
+        Self::consume(&mut self.inlines, self.max_inlines, count, "feed_inlines")
     }
 
     pub(crate) fn asset(&mut self) -> Result<(), ConversionError> {
-        Self::consume(&mut self.assets, self.max_assets, 1, "feed_assets")?;
-        self.charge_memory(size_of::<Asset>())?;
-        record_feed_html_object(FeedHtmlObjectKind::Asset);
-        Ok(())
+        Self::consume(&mut self.assets, self.max_assets, 1, "feed_assets")
     }
 
     pub(crate) fn diagnostic(
@@ -170,8 +158,28 @@ impl FeedHtmlBudget {
         Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
         self.string(code_bytes)?;
         self.string(message_bytes)?;
-        self.charge_memory(size_of::<Diagnostic>())?;
-        record_feed_html_object(FeedHtmlObjectKind::Diagnostic);
+        Ok(())
+    }
+
+    fn html_diagnostic(
+        &mut self,
+        code_bytes: usize,
+        message_bytes: usize,
+    ) -> Result<(), ConversionError> {
+        Self::consume(&mut self.diagnostics, self.max_diagnostics, 1, "feed_diagnostics")?;
+        self.consume_strings(1, code_bytes)?;
+        self.consume_strings(1, message_bytes)
+    }
+
+    fn account_existing_diagnostic(
+        &mut self,
+        diagnostic: &Diagnostic,
+    ) -> Result<(), ConversionError> {
+        self.html_diagnostic(diagnostic.code.len(), diagnostic.message.len())?;
+        self.charge_memory(diagnostic.code.capacity())?;
+        self.charge_memory(diagnostic.message.capacity())?;
+        record_feed_html_object(FeedHtmlObjectKind::String);
+        record_feed_html_object(FeedHtmlObjectKind::String);
         Ok(())
     }
 
@@ -180,6 +188,11 @@ impl FeedHtmlBudget {
     }
 
     pub(crate) fn strings(&mut self, count: usize, bytes: usize) -> Result<(), ConversionError> {
+        self.consume_strings(count, bytes)?;
+        self.charge_memory(bytes)
+    }
+
+    fn consume_strings(&mut self, count: usize, bytes: usize) -> Result<(), ConversionError> {
         Self::consume(&mut self.strings, self.max_strings, count, "feed_output_strings")?;
         let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
         let next =
@@ -194,9 +207,109 @@ impl FeedHtmlBudget {
             });
         }
         self.output_bytes = next;
-        self.charge_memory(usize::try_from(bytes).unwrap_or(usize::MAX))?;
-        record_feed_html_objects(FeedHtmlObjectKind::String, count);
         Ok(())
+    }
+
+    fn new_output_string(&mut self, bytes: usize) -> Result<String, ConversionError> {
+        let strings_mark = self.strings;
+        let output_mark = self.output_bytes;
+        self.consume_strings(1, bytes)?;
+        let mut output = String::new();
+        if let Err(error) = self.reserve_string_capacity(&mut output, bytes) {
+            self.strings = strings_mark;
+            self.output_bytes = output_mark;
+            return Err(error);
+        }
+        record_feed_html_object(FeedHtmlObjectKind::String);
+        Ok(output)
+    }
+
+    fn new_precounted_string(&mut self, bytes: usize) -> Result<String, ConversionError> {
+        let mut output = String::new();
+        self.reserve_string_capacity(&mut output, bytes)?;
+        record_feed_html_object(FeedHtmlObjectKind::String);
+        Ok(output)
+    }
+
+    fn reserve_string_capacity(
+        &mut self,
+        string: &mut String,
+        additional: usize,
+    ) -> Result<(), ConversionError> {
+        let required =
+            string.len().checked_add(additional).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate HTML string capacity overflowed".into(),
+            })?;
+        if required <= string.capacity() {
+            return Ok(());
+        }
+        let target = required.max(string.capacity().saturating_mul(2)).max(64);
+        let bytes = target.checked_sub(string.capacity()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate HTML string capacity underflowed".into(),
+            }
+        })?;
+        let memory_mark = self.memory.mark();
+        let persistent_mark = self.persistent_memory_bytes;
+        self.charge_memory(bytes)?;
+        if let Err(error) = string.try_reserve_exact(target - string.len()) {
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!("aggregate HTML string allocation failed: {error}"),
+            });
+        }
+        record_feed_html_capacity_growth();
+        Ok(())
+    }
+
+    /// Reserve logical allocator capacity before a persistent helper vector grows.
+    ///
+    /// Object limits are deliberately separate from this capacity accounting:
+    /// the vector's slots account for the object representation, while owned
+    /// `String`/nested-vector payloads account for their own capacities. This
+    /// avoids charging `size_of::<T>()` once as an object and again as a slot.
+    fn reserve_vec<T>(
+        &mut self,
+        vector: &mut Vec<T>,
+        additional: usize,
+    ) -> Result<(), ConversionError> {
+        let required =
+            vector.len().checked_add(additional).ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate HTML vector capacity overflowed".into(),
+            })?;
+        if required <= vector.capacity() {
+            return Ok(());
+        }
+        let target = required.max(vector.capacity().saturating_mul(2)).max(4);
+        let bytes = target
+            .checked_sub(vector.capacity())
+            .and_then(|slots| slots.checked_mul(size_of::<T>()))
+            .ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "aggregate HTML vector byte capacity overflowed".into(),
+            })?;
+        let memory_mark = self.memory.mark();
+        let persistent_mark = self.persistent_memory_bytes;
+        self.charge_memory(bytes)?;
+        if let Err(error) = vector.try_reserve_exact(target - vector.len()) {
+            self.memory.rewind(memory_mark)?;
+            self.persistent_memory_bytes = persistent_mark;
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!("aggregate HTML vector allocation failed: {error}"),
+            });
+        }
+        record_feed_html_capacity_growth();
+        Ok(())
+    }
+
+    fn constructed(kind: FeedHtmlObjectKind) {
+        record_feed_html_object(kind);
     }
 
     /// Account for a replacement allocation without counting the replacement
@@ -235,6 +348,13 @@ impl FeedHtmlBudget {
         self.charge_memory(bytes)?;
         record_feed_html_object(FeedHtmlObjectKind::String);
         Ok(())
+    }
+
+    fn new_temporary_string(&mut self, value: &str) -> Result<String, ConversionError> {
+        let mut output = String::new();
+        self.reserve_string_capacity(&mut output, value.len())?;
+        output.push_str(value);
+        Ok(output)
     }
 
     pub(crate) const fn snapshot(&self) -> FeedHtmlBudgetSnapshot {
@@ -279,6 +399,7 @@ pub(crate) struct FeedHtmlObjectCounts {
     pub(crate) assets: usize,
     pub(crate) diagnostics: usize,
     pub(crate) strings: usize,
+    pub(crate) capacity_growths: usize,
 }
 
 #[cfg(test)]
@@ -290,17 +411,25 @@ thread_local! {
             assets: 0,
             diagnostics: 0,
             strings: 0,
+            capacity_growths: 0,
         })
     };
 }
 
 #[cfg(test)]
-fn record_feed_html_object(kind: FeedHtmlObjectKind) {
-    record_feed_html_objects(kind, 1);
+fn record_feed_html_capacity_growth() {
+    FEED_HTML_OBJECTS.with(|count| {
+        let mut current = count.get();
+        current.capacity_growths = current.capacity_growths.saturating_add(1);
+        count.set(current);
+    });
 }
 
+#[cfg(not(test))]
+fn record_feed_html_capacity_growth() {}
+
 #[cfg(test)]
-fn record_feed_html_objects(kind: FeedHtmlObjectKind, amount: usize) {
+fn record_feed_html_object(kind: FeedHtmlObjectKind) {
     FEED_HTML_OBJECTS.with(|count| {
         let mut current = count.get();
         let target = match kind {
@@ -310,16 +439,13 @@ fn record_feed_html_objects(kind: FeedHtmlObjectKind, amount: usize) {
             FeedHtmlObjectKind::Diagnostic => &mut current.diagnostics,
             FeedHtmlObjectKind::String => &mut current.strings,
         };
-        *target = target.saturating_add(amount);
+        *target = target.saturating_add(1);
         count.set(current);
     });
 }
 
 #[cfg(not(test))]
 fn record_feed_html_object(_: FeedHtmlObjectKind) {}
-
-#[cfg(not(test))]
-fn record_feed_html_objects(_: FeedHtmlObjectKind, _: usize) {}
 
 #[cfg(test)]
 pub(crate) fn reset_feed_html_object_count() {
@@ -419,26 +545,26 @@ impl Dom {
         context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
         let mut memory = LogicalMemory::new(context)?;
-        memory.charge(size_of::<DomNode>())?;
-        memory.charge(size_of::<DomNode>())?;
+        let mut nodes = Vec::new();
+        memory.reserve_vec(&mut nodes, 2)?;
+        nodes.push(DomNode {
+            parent: None,
+            children: Vec::new(),
+            depth: 0,
+            data: NodeData::Document,
+        });
+        nodes.push(DomNode {
+            parent: None,
+            children: Vec::new(),
+            depth: 0,
+            data: NodeData::Element {
+                name: QualName::new(None, html5ever::ns!(html), html5ever::local_name!("span")),
+                attrs: Vec::new(),
+                template: None,
+            },
+        });
         Ok(Self {
-            nodes: RefCell::new(vec![
-                DomNode { parent: None, children: Vec::new(), depth: 0, data: NodeData::Document },
-                DomNode {
-                    parent: None,
-                    children: Vec::new(),
-                    depth: 0,
-                    data: NodeData::Element {
-                        name: QualName::new(
-                            None,
-                            html5ever::ns!(html),
-                            html5ever::local_name!("span"),
-                        ),
-                        attrs: Vec::new(),
-                        template: None,
-                    },
-                },
-            ]),
+            nodes: RefCell::new(nodes),
             error: RefCell::new(None),
             parse_errors: MutCell::new(0),
             events: MutCell::new(0),
@@ -493,15 +619,22 @@ impl Dom {
             });
             return 1;
         }
-        let logical = size_of::<DomNode>()
-            + match &data {
-                NodeData::Element { attrs, .. } => {
-                    attrs.iter().map(|a| a.name.local.len() + a.value.len()).sum()
-                }
-                NodeData::Text(value) => value.len(),
-                _ => 0,
-            };
-        if let Err(error) = self.memory.borrow_mut().charge(logical) {
+        if let NodeData::Element { attrs, .. } = &data {
+            let attribute_storage =
+                attrs.capacity().saturating_mul(size_of::<Attribute>()).saturating_add(
+                    attrs
+                        .iter()
+                        .map(|attribute| {
+                            attribute.name.local.len().saturating_add(attribute.value.len())
+                        })
+                        .sum::<usize>(),
+                );
+            if let Err(error) = self.memory.borrow_mut().charge(attribute_storage) {
+                self.set_error_once(error);
+                return 1;
+            }
+        }
+        if let Err(error) = self.memory.borrow_mut().reserve_vec(&mut nodes, 1) {
             self.set_error_once(error);
             return 1;
         }
@@ -540,9 +673,22 @@ impl Dom {
             let nodes = self.nodes.borrow();
             let base = nodes[child].depth;
             let mut height = 0;
-            let mut stack = vec![child];
+            let mut stack = Vec::new();
+            if let Err(error) = self.memory.borrow_mut().reserve_vec(&mut stack, 1) {
+                drop(nodes);
+                self.set_error_once(error);
+                return;
+            }
+            stack.push(child);
             while let Some(id) = stack.pop() {
                 height = height.max(nodes[id].depth.saturating_sub(base));
+                if let Err(error) =
+                    self.memory.borrow_mut().reserve_vec(&mut stack, nodes[id].children.len())
+                {
+                    drop(nodes);
+                    self.set_error_once(error);
+                    return;
+                }
                 stack.extend(nodes[id].children.iter().copied());
             }
             height
@@ -560,11 +706,29 @@ impl Dom {
         let position = before
             .and_then(|id| nodes[parent].children.iter().position(|child| *child == id))
             .unwrap_or(nodes[parent].children.len());
+        if let Err(error) = self.memory.borrow_mut().reserve_vec(&mut nodes[parent].children, 1) {
+            drop(nodes);
+            self.set_error_once(error);
+            return;
+        }
         nodes[parent].children.insert(position, child);
-        let mut stack = vec![child];
+        let mut stack = Vec::new();
+        if let Err(error) = self.memory.borrow_mut().reserve_vec(&mut stack, 1) {
+            drop(nodes);
+            self.set_error_once(error);
+            return;
+        }
+        stack.push(child);
         while let Some(id) = stack.pop() {
             let relative = nodes[id].depth.saturating_sub(old_depth);
             nodes[id].depth = depth.saturating_add(relative);
+            if let Err(error) =
+                self.memory.borrow_mut().reserve_vec(&mut stack, nodes[id].children.len())
+            {
+                drop(nodes);
+                self.set_error_once(error);
+                return;
+            }
             stack.extend(nodes[id].children.iter().copied());
         }
     }
@@ -592,7 +756,9 @@ impl Dom {
                 if let Some(previous) = previous {
                     let mut nodes = self.nodes.borrow_mut();
                     if let NodeData::Text(value) = &mut nodes[previous].data {
-                        if let Err(error) = self.memory.borrow_mut().charge(text.len()) {
+                        if let Err(error) =
+                            self.memory.borrow_mut().reserve_string(value, text.len())
+                        {
                             self.set_error_once(error);
                         } else {
                             value.push_str(&text);
@@ -600,7 +766,14 @@ impl Dom {
                         return;
                     }
                 }
-                let child = self.add(NodeData::Text(text.to_string()));
+                let mut value = String::new();
+                if let Err(error) = self.memory.borrow_mut().reserve_string(&mut value, text.len())
+                {
+                    self.set_error_once(error);
+                    return;
+                }
+                value.push_str(&text);
+                let child = self.add(NodeData::Text(value));
                 self.insert(parent, child, before);
             }
         }
@@ -738,8 +911,20 @@ impl TreeSink for Dom {
         }
         let mut nodes = self.nodes.borrow_mut();
         if let NodeData::Element { attrs: existing, .. } = &mut nodes[*target].data {
-            let names = existing.iter().map(|attr| attr.name.clone()).collect::<BTreeSet<_>>();
-            existing.extend(attrs.into_iter().filter(|attr| !names.contains(&attr.name)));
+            let additional = attrs
+                .iter()
+                .filter(|attr| !existing.iter().any(|present| present.name == attr.name))
+                .count();
+            if let Err(error) = self.memory.borrow_mut().reserve_vec(existing, additional) {
+                drop(nodes);
+                self.set_error_once(error);
+                return;
+            }
+            for attr in attrs {
+                if !existing.iter().any(|present| present.name == attr.name) {
+                    existing.push(attr);
+                }
+            }
         }
     }
     fn associate_with_form(&self, _: &usize, _: &usize, _: (&usize, Option<&usize>)) {
@@ -755,7 +940,13 @@ impl TreeSink for Dom {
         if self.poisoned() {
             return;
         }
-        let children = self.nodes.borrow()[*node].children.clone();
+        let mut children = Vec::new();
+        let child_count = self.nodes.borrow()[*node].children.len();
+        if let Err(error) = self.memory.borrow_mut().reserve_vec(&mut children, child_count) {
+            self.set_error_once(error);
+            return;
+        }
+        children.extend_from_slice(&self.nodes.borrow()[*node].children);
         for child in children {
             self.insert(*new_parent, child, None);
         }
@@ -808,10 +999,26 @@ fn convert_html_with_budget(
             detail: format!("{input_size} > {}", options.limits.max_input_bytes),
         });
     }
-    let (charset, charset_diagnostics) =
+    let (charset, charset_diagnostics, charset_diagnostics_precharged) =
         html_charset(input, options, context, feed_budget.as_deref_mut())?;
-    let (mut decoded, mut diagnostics) =
+    let (mut decoded, decoded_diagnostics) =
         decode_source(&input.bytes, charset.as_deref(), options.text.decoding_mode, context)?;
+    let mut diagnostics = Vec::new();
+    if let Some(budget) = feed_budget.as_deref_mut() {
+        let count = decoded_diagnostics.len().saturating_add(charset_diagnostics.len());
+        budget.reserve_vec(&mut diagnostics, count)?;
+        for diagnostic in &decoded_diagnostics {
+            budget.account_existing_diagnostic(diagnostic)?;
+            FeedHtmlBudget::constructed(FeedHtmlObjectKind::Diagnostic);
+        }
+        if !charset_diagnostics_precharged {
+            for diagnostic in &charset_diagnostics {
+                budget.account_existing_diagnostic(diagnostic)?;
+                FeedHtmlBudget::constructed(FeedHtmlObjectKind::Diagnostic);
+            }
+        }
+    }
+    diagnostics.extend(decoded_diagnostics);
     diagnostics.extend(charset_diagnostics);
 
     // This reservation represents cooperative parser work, not html5ever's allocator or RSS.
@@ -836,21 +1043,40 @@ fn convert_html_with_budget(
         return Err(error);
     }
     if dom.parse_errors.get() > 0 {
-        if let Some(budget) = feed_budget.as_deref_mut() {
-            budget.diagnostic("html.parseRecovered".len(), 96)?;
-        }
-        diagnostics.push(warning(
-            "html.parseRecovered",
-            format!("HTML5 parser recovered from {} syntax error(s)", dom.parse_errors.get()),
-        ));
+        let count = dom.parse_errors.get();
+        let diagnostic = if let Some(budget) = feed_budget.as_deref_mut() {
+            let message_len = "HTML5 parser recovered from ".len()
+                + decimal_digits(count)
+                + " syntax error(s)".len();
+            budget.html_diagnostic("html.parseRecovered".len(), message_len)?;
+            budget.reserve_vec(&mut diagnostics, 1)?;
+            budgeted_warning(budget, "html.parseRecovered", message_len, |message| {
+                write!(message, "HTML5 parser recovered from {count} syntax error(s)")
+            })?
+        } else {
+            warning(
+                "html.parseRecovered",
+                format!("HTML5 parser recovered from {count} syntax error(s)"),
+            )
+        };
+        diagnostics.push(diagnostic);
     }
-    if let Some(budget) = feed_budget.as_deref_mut() {
-        budget.diagnostic("html.sourceLocationUnavailable".len(), 160)?;
-    }
-    diagnostics.push(warning(
-        "html.sourceLocationUnavailable",
-        "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span".into(),
-    ));
+    let source_diagnostic = if let Some(budget) = feed_budget.as_deref_mut() {
+        budget.html_diagnostic(
+            "html.sourceLocationUnavailable".len(),
+            SOURCE_LOCATION_MESSAGE.len(),
+        )?;
+        budget.reserve_vec(&mut diagnostics, 1)?;
+        budgeted_warning(
+            budget,
+            "html.sourceLocationUnavailable",
+            SOURCE_LOCATION_MESSAGE.len(),
+            |message| message.write_str(SOURCE_LOCATION_MESSAGE),
+        )?
+    } else {
+        warning("html.sourceLocationUnavailable", SOURCE_LOCATION_MESSAGE.into())
+    };
+    diagnostics.push(source_diagnostic);
 
     let nodes = dom.nodes.into_inner();
     let builder = Builder::new(&nodes, input, decoded, options, context, diagnostics, feed_budget);
@@ -866,11 +1092,14 @@ pub(crate) fn convert_feed_html_fragment(
     context: &ExecutionContext,
     budget: &mut FeedHtmlBudget,
 ) -> Result<ConverterOutput, ConversionError> {
+    budget.charge_memory(fragment.len())?;
+    let media_type = budget.new_temporary_string("text/html; charset=utf-8")?;
+    let uri = base_uri.map(|value| budget.new_temporary_string(value)).transpose()?;
     let input = ResolvedInput {
         bytes: std::sync::Arc::from(fragment.as_bytes()),
         metadata: into_markdown_core::SourceMetadata {
-            media_type: Some("text/html; charset=utf-8".into()),
-            uri: base_uri.map(str::to_owned),
+            media_type: Some(media_type),
+            uri,
             size: u64::try_from(fragment.len()).unwrap_or(u64::MAX),
             ..Default::default()
         },
@@ -882,36 +1111,52 @@ fn html_charset(
     input: &ResolvedInput,
     options: &ConversionOptions,
     context: &ExecutionContext,
-    feed_budget: Option<&mut FeedHtmlBudget>,
-) -> Result<(Option<String>, Vec<Diagnostic>), ConversionError> {
+    mut feed_budget: Option<&mut FeedHtmlBudget>,
+) -> Result<(Option<String>, Vec<Diagnostic>, bool), ConversionError> {
     let explicit = options
         .text
         .charset
-        .clone()
+        .as_deref()
         .or_else(|| input.metadata.media_type.as_deref().and_then(media_type_charset));
     if let Some(explicit) = explicit {
         let mut diagnostics = Vec::new();
+        let mut precharged = false;
         if let Some(meta) = prescan_meta_charset(&input.bytes, context)?
-            && !meta.eq_ignore_ascii_case(&explicit)
+            && !meta.eq_ignore_ascii_case(explicit)
         {
-            let message_len = "meta charset  conflicts with explicit charset "
-                .len()
-                .saturating_add(meta.len())
-                .saturating_add(explicit.len());
-            if let Some(budget) = feed_budget {
-                budget.diagnostic("html.metaCharsetIgnored".len(), message_len)?;
-            }
-            diagnostics.push(warning(
-                "html.metaCharsetIgnored",
-                format!("meta charset {meta} conflicts with explicit charset {explicit}"),
-            ));
+            let message_len = "meta charset ".len()
+                + meta.len()
+                + " conflicts with explicit charset ".len()
+                + explicit.len();
+            let diagnostic = if let Some(budget) = feed_budget.as_deref_mut() {
+                budget.html_diagnostic("html.metaCharsetIgnored".len(), message_len)?;
+                budget.reserve_vec(&mut diagnostics, 1)?;
+                precharged = true;
+                budgeted_warning(budget, "html.metaCharsetIgnored", message_len, |message| {
+                    write!(
+                        message,
+                        "meta charset {meta} conflicts with explicit charset {explicit}"
+                    )
+                })?
+            } else {
+                warning(
+                    "html.metaCharsetIgnored",
+                    format!("meta charset {meta} conflicts with explicit charset {explicit}"),
+                )
+            };
+            diagnostics.push(diagnostic);
         }
-        return Ok((Some(explicit), diagnostics));
+        let explicit = if let Some(budget) = feed_budget {
+            budget.new_temporary_string(explicit)?
+        } else {
+            explicit.to_owned()
+        };
+        return Ok((Some(explicit), diagnostics, precharged));
     }
-    Ok((prescan_meta_charset(&input.bytes, context)?, Vec::new()))
+    Ok((prescan_meta_charset(&input.bytes, context)?, Vec::new(), false))
 }
 
-fn media_type_charset(value: &str) -> Option<String> {
+fn media_type_charset(value: &str) -> Option<&str> {
     value
         .split(';')
         .skip(1)
@@ -919,7 +1164,7 @@ fn media_type_charset(value: &str) -> Option<String> {
             let (name, value) = parameter.split_once('=')?;
             name.trim()
                 .eq_ignore_ascii_case("charset")
-                .then(|| value.trim().trim_matches(['\'', '"']).to_string())
+                .then(|| value.trim().trim_matches(['\'', '"']))
         })
         .filter(|value| !value.is_empty())
 }
@@ -1273,11 +1518,120 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         }
     }
 
-    fn reserve_string(&mut self, bytes: usize) -> Result<(), ConversionError> {
+    fn output_string(&mut self, value: &str) -> Result<String, ConversionError> {
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(value.len())?
+        } else {
+            String::with_capacity(value.len())
+        };
+        output.push_str(value);
+        Ok(output)
+    }
+
+    fn normalized_attr(
+        &mut self,
+        id: usize,
+        name: &str,
+    ) -> Result<Option<String>, ConversionError> {
+        let Some(length) = self.attr(id, name).map(|value| normalized_len(value, self.context))
+        else {
+            return Ok(None);
+        };
+        let length = length?;
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(length)?
+        } else {
+            String::with_capacity(length)
+        };
+        normalize_into(self.attr(id, name).unwrap_or_default(), &mut output, self.context)?;
+        Ok(Some(output))
+    }
+
+    fn attr_output(&mut self, id: usize, name: &str) -> Result<String, ConversionError> {
+        let length = self.attr(id, name).map_or(0, str::len);
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(length)?
+        } else {
+            String::with_capacity(length)
+        };
+        output.push_str(self.attr(id, name).unwrap_or_default());
+        Ok(output)
+    }
+
+    fn name_output(&mut self, id: usize) -> Result<Option<String>, ConversionError> {
+        let Some(length) = self.name(id).map(str::len) else {
+            return Ok(None);
+        };
+        let mut output = String::new();
         if let Some(budget) = self.feed_budget.as_deref_mut() {
-            budget.string(bytes)?;
+            budget.reserve_string_capacity(&mut output, length)?;
+        } else {
+            output.try_reserve_exact(length).map_err(|error| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!("HTML tag-name allocation failed: {error}"),
+            })?;
+        }
+        output.push_str(self.name(id).unwrap_or_default());
+        Ok(Some(output))
+    }
+
+    fn normalized_node_text(&mut self, id: usize) -> Result<String, ConversionError> {
+        let length = match &self.nodes[id].data {
+            NodeData::Text(value) => normalized_len(value, self.context)?,
+            _ => 0,
+        };
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(length)?
+        } else {
+            String::with_capacity(length)
+        };
+        if let NodeData::Text(value) = &self.nodes[id].data {
+            normalize_into(value, &mut output, self.context)?;
+        }
+        Ok(output)
+    }
+
+    fn raw_visible_text_output(&mut self, id: usize) -> Result<String, ConversionError> {
+        let length = self.raw_visible_text_len(id);
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(length)?
+        } else {
+            String::with_capacity(length)
+        };
+        self.append_raw_visible_text(id, &mut output);
+        Ok(output)
+    }
+
+    fn append_raw_visible_text(&self, id: usize, output: &mut String) {
+        if self.node_context(id).excluded() {
+            return;
+        }
+        match &self.nodes[id].data {
+            NodeData::Text(value) => output.push_str(value),
+            NodeData::Element { .. } | NodeData::Document => {
+                for child in &self.nodes[id].children {
+                    self.append_raw_visible_text(*child, output);
+                }
+            }
+            NodeData::Other => {}
+        }
+    }
+
+    fn reserve_vector<T>(
+        &mut self,
+        vector: &mut Vec<T>,
+        additional: usize,
+    ) -> Result<(), ConversionError> {
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.reserve_vec(vector, additional)?;
         }
         Ok(())
+    }
+
+    fn constructed(&self, kind: FeedHtmlObjectKind) {
+        if self.feed_budget.is_some() {
+            FeedHtmlBudget::constructed(kind);
+        }
     }
 
     fn reserve_inline(&mut self) -> Result<(), ConversionError> {
@@ -1303,26 +1657,14 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     }
 
     fn push_warning(&mut self, code: &str, message: &str) -> Result<(), ConversionError> {
-        if let Some(budget) = self.feed_budget.as_deref_mut() {
-            budget.diagnostic(code.len(), message.len())?;
-        }
-        self.diagnostics.push(warning(code, message.into()));
-        Ok(())
-    }
-
-    fn push_warning_with<F>(
-        &mut self,
-        code: &str,
-        message_bytes: usize,
-        make_message: F,
-    ) -> Result<(), ConversionError>
-    where
-        F: FnOnce() -> String,
-    {
-        if let Some(budget) = self.feed_budget.as_deref_mut() {
-            budget.diagnostic(code.len(), message_bytes)?;
-        }
-        self.diagnostics.push(warning(code, make_message()));
+        let diagnostic = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.html_diagnostic(code.len(), message.len())?;
+            budget.reserve_vec(&mut self.diagnostics, 1)?;
+            budgeted_warning(budget, code, message.len(), |output| output.write_str(message))?
+        } else {
+            warning(code, message.into())
+        };
+        self.diagnostics.push(diagnostic);
         Ok(())
     }
 
@@ -1416,15 +1758,14 @@ impl<'a, 'budget> Builder<'a, 'budget> {
 
     fn choose_main(&mut self) -> Result<usize, ConversionError> {
         let body = (0..self.nodes.len()).find(|id| self.name(*id) == Some("body")).unwrap_or(0);
-        let explicit = (0..self.nodes.len())
+        let selected = (0..self.nodes.len())
             .filter(|id| {
                 self.is_html_element(*id)
                     && (matches!(self.name(*id), Some("main" | "article"))
                         || self.attr(*id, "role").is_some_and(|v| v.eq_ignore_ascii_case("main")))
             })
             .filter(|id| !self.node_context(*id).excluded())
-            .collect::<Vec<_>>();
-        let selected = explicit.into_iter().max_by_key(|id| (self.score(*id), usize::MAX - *id));
+            .max_by_key(|id| (self.score(*id), usize::MAX - *id));
         if let Some(id) = selected.filter(|id| self.visible_text_len(*id) > 0) {
             return Ok(id);
         }
@@ -1456,7 +1797,12 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         if depth > usize::from(u16::MAX) {
             return Self::limit("html_nesting_depth", "semantic extraction depth overflowed");
         }
-        let children = self.nodes.get(id).map(|node| node.children.clone()).unwrap_or_default();
+        let child_count = self.nodes.get(id).map_or(0, |node| node.children.len());
+        let mut children = Vec::new();
+        self.reserve_vector(&mut children, child_count)?;
+        if let Some(node) = self.nodes.get(id) {
+            children.extend_from_slice(&node.children);
+        }
         let mut blocks = Vec::new();
         let mut inline = Vec::new();
         for child in children {
@@ -1465,9 +1811,13 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             }
             if self.is_block_node(child) {
                 self.flush_paragraph(&mut blocks, &mut inline)?;
-                blocks.extend(self.build_block(child, depth.saturating_add(1))?);
+                let built = self.build_block(child, depth.saturating_add(1))?;
+                self.reserve_vector(&mut blocks, built.len())?;
+                blocks.extend(built);
             } else {
-                inline.extend(self.inline_node(child, Vec::new())?);
+                let built = self.inline_node(child, Vec::new())?;
+                self.reserve_vector(&mut inline, built.len())?;
+                inline.extend(built);
             }
         }
         self.flush_paragraph(&mut blocks, &mut inline)?;
@@ -1482,7 +1832,9 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         if inline.is_empty() {
             return Ok(());
         }
-        blocks.push(self.make_node(Block::Paragraph(std::mem::take(inline)))?);
+        self.reserve_vector(blocks, 1)?;
+        let node = self.make_node(Block::Paragraph(std::mem::take(inline)))?;
+        blocks.push(node);
         Ok(())
     }
 
@@ -1490,82 +1842,76 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         if self.node_context(id).excluded() && !self.is_foreign_root(id) {
             return Ok(Vec::new());
         }
-        let Some(name) = self.name(id).map(str::to_owned) else {
+        let Some(name) = self.name_output(id)? else {
             return Ok(Vec::new());
         };
-        let block = match name.as_str() {
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                let content = self.inline_children(id)?;
-                if content.is_empty() {
-                    None
-                } else {
-                    Some(
-                        self.make_node(Block::Heading {
+        let block =
+            match name.as_str() {
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    let content = self.inline_children(id)?;
+                    if content.is_empty() {
+                        None
+                    } else {
+                        Some(self.make_node(Block::Heading {
                             level: name.as_bytes()[1] - b'0',
                             content,
-                        })?,
-                    )
+                        })?)
+                    }
                 }
-            }
-            "p" | "address" | "figcaption" => {
-                let content = self.inline_children(id)?;
-                if content.is_empty() {
+                "p" | "address" | "figcaption" => {
+                    let content = self.inline_children(id)?;
+                    if content.is_empty() {
+                        None
+                    } else {
+                        Some(self.make_node(Block::Paragraph(content))?)
+                    }
+                }
+                "div" | "section" | "article" | "main" | "body" | "html" => {
+                    return self.collect_child_blocks(id, depth);
+                }
+                "ul" | "ol" => match self.build_list(id, name == "ol", depth)? {
+                    Some(value) => Some(self.make_node(value)?),
+                    None => None,
+                },
+                "table" => match self.build_table(id, depth)? {
+                    Some(value) => Some(self.make_node(value)?),
+                    None => None,
+                },
+                "pre" => {
+                    let code = self.first_visible_descendant(id, "code");
+                    let text_bytes = self.raw_visible_text_len(id);
+                    if text_bytes == 0 {
+                        None
+                    } else {
+                        let text = self.raw_visible_text_output(id)?;
+                        let language =
+                            code.map(|code| self.code_language_output(code)).transpose()?.flatten();
+                        Some(self.make_node(Block::Code { language, text })?)
+                    }
+                }
+                "img" => match self.build_image(id)? {
+                    Some(value) => Some(self.make_node(value)?),
+                    None => None,
+                },
+                "hr" => Some(self.make_node(Block::Rule)?),
+                "svg" | "math" => {
+                    let message = if name == "svg" {
+                        "svg content was not traversed as HTML resources"
+                    } else {
+                        "math content was not traversed as HTML resources"
+                    };
+                    self.push_warning("html.activeForeignContentOmitted", message)?;
                     None
-                } else {
-                    Some(self.make_node(Block::Paragraph(content))?)
                 }
-            }
-            "div" | "section" | "article" | "main" | "body" | "html" => {
-                return self.collect_child_blocks(id, depth);
-            }
-            "ul" | "ol" => match self.build_list(id, name == "ol", depth)? {
-                Some(value) => Some(self.make_node(value)?),
-                None => None,
-            },
-            "table" => match self.build_table(id, depth)? {
-                Some(value) => Some(self.make_node(value)?),
-                None => None,
-            },
-            "pre" => {
-                let code = self.first_visible_descendant(id, "code");
-                let language_bytes = code.and_then(|code| self.code_language_len(code));
-                let text_bytes = self.raw_visible_text_len(id);
-                if text_bytes == 0 {
-                    None
-                } else {
-                    self.reserve_string(text_bytes)?;
-                    language_bytes.map_or(Ok(()), |bytes| self.reserve_string(bytes))?;
-                    let text = self.raw_visible_text(id);
-                    let language = code.and_then(|code| self.code_language(code));
-                    Some(self.make_node(Block::Code { language, text })?)
-                }
-            }
-            "img" => match self.build_image(id)? {
-                Some(value) => Some(self.make_node(value)?),
-                None => None,
-            },
-            "hr" => Some(self.make_node(Block::Rule)?),
-            "svg" | "math" => {
-                let text_bytes = self.raw_text_unfiltered_len(id);
-                self.reserve_string(text_bytes)?;
-                self.reserve_string(name.len())?;
-                let text = normalize(&self.raw_text_unfiltered(id));
-                let message_bytes =
-                    name.len().saturating_add(" content was not traversed as HTML resources".len());
-                self.push_warning_with("html.activeForeignContentOmitted", message_bytes, || {
-                    format!("{name} content was not traversed as HTML resources")
-                })?;
-                if text.is_empty() {
-                    None
-                } else {
-                    let language = name.clone();
-                    Some(self.make_node(Block::Code { language: Some(language), text })?)
-                }
-            }
-            "li" | "tr" | "td" | "th" | "code" | "head" => None,
-            _ => return self.collect_child_blocks(id, depth),
-        };
-        Ok(block.into_iter().collect())
+                "li" | "tr" | "td" | "th" | "code" | "head" => None,
+                _ => return self.collect_child_blocks(id, depth),
+            };
+        let mut output = Vec::new();
+        if let Some(block) = block {
+            self.reserve_vector(&mut output, 1)?;
+            output.push(block);
+        }
+        Ok(output)
     }
 
     fn build_list(
@@ -1575,7 +1921,9 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         depth: usize,
     ) -> Result<Option<Block>, ConversionError> {
         let mut items = Vec::new();
-        let children = self.nodes[id].children.clone();
+        let mut children = Vec::new();
+        self.reserve_vector(&mut children, self.nodes[id].children.len())?;
+        children.extend_from_slice(&self.nodes[id].children);
         for child in children {
             if !self.is_html_element(child)
                 || self.name(child) != Some("li")
@@ -1586,6 +1934,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             let blocks = self.collect_child_blocks(child, depth.saturating_add(1))?;
             if !blocks.is_empty() {
                 self.reserve_structural()?;
+                self.reserve_vector(&mut items, 1)?;
+                self.constructed(FeedHtmlObjectKind::Node);
                 items.push(ListItem { checked: None, marker_label: None, blocks });
             }
         }
@@ -1601,7 +1951,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     }
 
     fn build_table(&mut self, id: usize, depth: usize) -> Result<Option<Block>, ConversionError> {
-        let source_rows = self.direct_table_rows(id);
+        let source_rows = self.direct_table_rows(id)?;
         let row_count = source_rows.len();
         if u64::try_from(row_count).unwrap_or(u64::MAX) > self.max_table_rows {
             return Self::limit("max_table_rows", "HTML table has too many rows");
@@ -1629,6 +1979,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
     ) -> Result<PlannedTable, ConversionError> {
         let mut occupancy = Vec::<u32>::new();
         let mut planned = Vec::<Vec<PlannedTableCell>>::new();
+        self.reserve_vector(&mut planned, source_rows.len())?;
         let mut width = 0_usize;
         for (row_index, source_row) in source_rows.iter().copied().enumerate() {
             let mut row_cells = Vec::new();
@@ -1637,7 +1988,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 .take_while(|row| row.group == source_row.group)
                 .count();
             let remaining_rows = u32::try_from(group_rows).unwrap_or(u32::MAX).max(1);
-            for cell in self.direct_table_cells(source_row.node) {
+            for cell in self.direct_table_cells(source_row.node)? {
                 let requested_row_span = table_span(self.attr(cell, "rowspan"));
                 let requested_row_span =
                     if requested_row_span == 0 { remaining_rows } else { requested_row_span };
@@ -1686,10 +2037,13 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                         continue;
                     }
                     if occupancy.len() < end {
+                        let additional = end - occupancy.len();
+                        self.reserve_vector(&mut occupancy, additional)?;
                         occupancy.resize(end, 0);
                     }
                     occupancy[column..end].fill(row_span);
                     width = width.max(end);
+                    self.reserve_vector(&mut row_cells, 1)?;
                     row_cells.push(PlannedTableCell { node: cell, column, row_span, column_span });
                     break;
                 }
@@ -1707,8 +2061,11 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         planned: PlannedTable,
         depth: usize,
     ) -> Result<Vec<TableRow>, ConversionError> {
-        let mut rows = Vec::with_capacity(planned.rows.len());
-        let mut active = vec![0_u32; planned.width];
+        let mut rows = Vec::new();
+        self.reserve_vector(&mut rows, planned.rows.len())?;
+        let mut active = Vec::new();
+        self.reserve_vector(&mut active, planned.width)?;
+        active.resize(planned.width, 0_u32);
         for row_cells in planned.rows {
             let mut cells = Vec::new();
             let mut planned_index = 0_usize;
@@ -1725,6 +2082,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                     active[column..end].fill(cell.row_span);
                     let blocks = self.collect_child_blocks(cell.node, depth.saturating_add(1))?;
                     self.reserve_structural()?;
+                    self.reserve_vector(&mut cells, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Node);
                     cells.push(Cell {
                         row_span: cell.row_span,
                         column_span: cell.column_span,
@@ -1736,6 +2095,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 } else {
                     active[column] = 1;
                     self.reserve_structural()?;
+                    self.reserve_vector(&mut cells, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Node);
                     cells.push(Cell {
                         row_span: 1,
                         column_span: 1,
@@ -1746,6 +2107,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 }
             }
             self.reserve_structural()?;
+            self.constructed(FeedHtmlObjectKind::Node);
             rows.push(TableRow { cells });
             for remaining in &mut active {
                 *remaining = remaining.saturating_sub(1);
@@ -1759,11 +2121,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             let Some(src) = self.attr(id, "src") else { return Ok(None) };
             Url::parse(src).ok().or_else(|| self.base.as_ref().and_then(|base| base.join(src).ok()))
         };
-        let alt_bytes = self.attr(id, "alt").map(str::len);
-        if let Some(bytes) = alt_bytes {
-            self.reserve_string(bytes)?;
-        }
-        let alt = self.attr(id, "alt").map(normalize).filter(|v| !v.is_empty());
+        let alt = self.normalized_attr(id, "alt")?.and_then(nonempty);
         let Some(resolved) = resolved else {
             self.push_warning(
                 "html.imageUriRejected",
@@ -1772,13 +2130,16 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             return match alt {
                 Some(value) => {
                     self.reserve_inline()?;
-                    Ok(Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }])))
+                    let mut content = Vec::new();
+                    self.reserve_vector(&mut content, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    content.push(Inline::Text { value, marks: Vec::new() });
+                    Ok(Some(Block::Paragraph(content)))
                 }
                 None => Ok(None),
             };
         };
-        self.reserve_string(resolved.as_str().len())?;
-        let uri = resolved.to_string();
+        let uri = self.output_string(resolved.as_str())?;
         if canonical_external_asset_uri(&uri).as_deref() != Some(uri.as_ref()) {
             self.push_warning(
                 "html.imageUriRejected",
@@ -1787,7 +2148,11 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             return match alt {
                 Some(value) => {
                     self.reserve_inline()?;
-                    Ok(Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }])))
+                    let mut content = Vec::new();
+                    self.reserve_vector(&mut content, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    content.push(Inline::Text { value, marks: Vec::new() });
+                    Ok(Some(Block::Paragraph(content)))
                 }
                 None => Ok(None),
             };
@@ -1795,32 +2160,51 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         if let Some(budget) = self.feed_budget.as_deref_mut() {
             budget.asset()?;
         }
-        self.reserve_string(26)?;
-        self.reserve_string(image_media_type(&uri).len())?;
-        let asset_id = AssetId(format!("html-external-image-{:06}", self.assets.len() + 1));
+        let mut asset_id_value = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(26)?
+        } else {
+            String::with_capacity(26)
+        };
+        write!(&mut asset_id_value, "html-external-image-{:06}", self.assets.len() + 1).map_err(
+            |_| ConversionError::Internal {
+                detail: "failed to format HTML asset identifier".into(),
+            },
+        )?;
+        let asset_id = AssetId(asset_id_value);
+        let media_type = self.output_string(image_media_type(&uri))?;
         // The image block owns a second AssetId string in addition to the
         // asset-registry key.
-        self.reserve_string(asset_id.0.len())?;
+        let block_asset_id = AssetId(self.output_string(&asset_id.0)?);
+        if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.reserve_vec(&mut self.assets, 1)?;
+            FeedHtmlBudget::constructed(FeedHtmlObjectKind::Asset);
+        }
         self.assets.push(Asset {
-            id: asset_id.clone(),
+            id: asset_id,
             filename: None,
-            media_type: image_media_type(&uri).into(),
+            media_type,
             bytes: Vec::new(),
             external_uri: Some(uri),
         });
-        Ok(Some(Block::Image { asset: asset_id, alt }))
+        Ok(Some(Block::Image { asset: block_asset_id, alt }))
     }
 
     fn inline_children(&mut self, id: usize) -> Result<Vec<Inline>, ConversionError> {
         let mut output = Vec::new();
-        for child in self.nodes[id].children.clone() {
+        let mut children = Vec::new();
+        self.reserve_vector(&mut children, self.nodes[id].children.len())?;
+        children.extend_from_slice(&self.nodes[id].children);
+        for child in children {
             if !self.is_block_node(child) {
-                output.extend(self.inline_node(child, Vec::new())?);
+                let built = self.inline_node(child, Vec::new())?;
+                self.reserve_vector(&mut output, built.len())?;
+                output.extend(built);
             }
         }
         Ok(output)
     }
 
+    #[allow(clippy::too_many_lines)] // Allocation boundaries stay next to every inline constructor.
     fn inline_node(
         &mut self,
         id: usize,
@@ -1834,10 +2218,11 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             if value.chars().all(char::is_whitespace) {
                 return Ok(output);
             }
-            self.reserve_string(value.len())?;
             self.reserve_inline()?;
-            let value = normalize(value);
+            let value = self.normalized_node_text(id)?;
             if !value.is_empty() {
+                self.reserve_vector(&mut output, 1)?;
+                self.constructed(FeedHtmlObjectKind::Inline);
                 output.push(Inline::Text { value, marks });
             }
             return Ok(output);
@@ -1853,14 +2238,18 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                     Url::parse(href).ok().or_else(|| self.base.as_ref()?.join(href).ok());
                 let target_bytes =
                     resolved.as_ref().map_or_else(|| href_bytes, |url| url.as_str().len());
-                self.reserve_string(target_bytes)?;
-                let target = resolved.map_or_else(
-                    || self.attr(id, "href").unwrap_or_default().to_owned(),
-                    |url| url.to_string(),
-                );
+                let target = if let Some(resolved) = resolved.as_ref() {
+                    self.output_string(resolved.as_str())?
+                } else {
+                    self.attr_output(id, "href")?
+                };
+                debug_assert_eq!(target.len(), target_bytes);
                 if safe_link_target(&target) && !content.is_empty() {
                     self.reserve_inline()?;
-                    return Ok(vec![Inline::Link { target, content }]);
+                    self.reserve_vector(&mut output, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    output.push(Inline::Link { target, content });
+                    return Ok(output);
                 }
                 if !content.is_empty() {
                     self.push_warning(
@@ -1871,27 +2260,50 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 return Ok(content);
             }
             match name {
-                "strong" | "b" => marks.push(InlineMark::Bold),
-                "em" | "i" => marks.push(InlineMark::Italic),
-                "del" | "s" | "strike" => marks.push(InlineMark::Strikethrough),
-                "u" => marks.push(InlineMark::Underline),
-                "sup" => marks.push(InlineMark::Superscript),
-                "sub" => marks.push(InlineMark::Subscript),
+                "strong" | "b" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Bold);
+                }
+                "em" | "i" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Italic);
+                }
+                "del" | "s" | "strike" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Strikethrough);
+                }
+                "u" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Underline);
+                }
+                "sup" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Superscript);
+                }
+                "sub" => {
+                    self.reserve_vector(&mut marks, 1)?;
+                    marks.push(InlineMark::Subscript);
+                }
                 "br" => {
                     self.reserve_inline()?;
-                    return Ok(vec![Inline::LineBreak]);
+                    self.reserve_vector(&mut output, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    output.push(Inline::LineBreak);
+                    return Ok(output);
                 }
                 "code" => {
                     let bound = self.visible_text_len(id);
                     if bound == 0 {
                         return Ok(Vec::new());
                     }
-                    self.reserve_string(bound)?;
-                    let Some(value) = nonempty(self.raw_visible_text(id)) else {
+                    let Some(value) = nonempty(self.raw_visible_text_output(id)?) else {
                         return Ok(Vec::new());
                     };
                     self.reserve_inline()?;
-                    return Ok(vec![Inline::Code(value)]);
+                    self.reserve_vector(&mut output, 1)?;
+                    self.constructed(FeedHtmlObjectKind::Inline);
+                    output.push(Inline::Code(value));
+                    return Ok(output);
                 }
                 "svg" | "math" | "script" | "style" | "template" | "noscript" | "img" => {
                     return Ok(output);
@@ -1899,8 +2311,16 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 _ => {}
             }
         }
-        for child in self.nodes[id].children.clone() {
-            output.extend(self.inline_node(child, marks.clone())?);
+        let mut children = Vec::new();
+        self.reserve_vector(&mut children, self.nodes[id].children.len())?;
+        children.extend_from_slice(&self.nodes[id].children);
+        for child in children {
+            let mut child_marks = Vec::new();
+            self.reserve_vector(&mut child_marks, marks.len())?;
+            child_marks.extend_from_slice(&marks);
+            let built = self.inline_node(child, child_marks)?;
+            self.reserve_vector(&mut output, built.len())?;
+            output.extend(built);
         }
         Ok(output)
     }
@@ -1911,23 +2331,39 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         marks: &[InlineMark],
     ) -> Result<Vec<Inline>, ConversionError> {
         let mut output = Vec::new();
-        for child in self.nodes[id].children.clone() {
-            output.extend(self.inline_node(child, marks.to_owned())?);
+        let mut children = Vec::new();
+        self.reserve_vector(&mut children, self.nodes[id].children.len())?;
+        children.extend_from_slice(&self.nodes[id].children);
+        for child in children {
+            let mut child_marks = Vec::new();
+            self.reserve_vector(&mut child_marks, marks.len())?;
+            child_marks.extend_from_slice(marks);
+            let built = self.inline_node(child, child_marks)?;
+            self.reserve_vector(&mut output, built.len())?;
+            output.extend(built);
         }
         Ok(output)
     }
 
     fn make_node(&mut self, block: Block) -> Result<BlockNode, ConversionError> {
         self.reserve_structural()?;
-        self.reserve_string(11)?;
-        self.reserve_string(PROVIDER_ID.len())?;
         self.next_node += 1;
+        let mut id = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(11)?
+        } else {
+            String::with_capacity(11)
+        };
+        write!(&mut id, "html-{:06}", self.next_node).map_err(|_| ConversionError::Internal {
+            detail: "failed to format HTML node identifier".into(),
+        })?;
+        let provider = self.output_string(PROVIDER_ID)?;
+        self.constructed(FeedHtmlObjectKind::Node);
         Ok(BlockNode {
-            id: NodeId(format!("html-{:06}", self.next_node)),
+            id: NodeId(id),
             block,
             provenance: Provenance {
                 kind: ProvenanceKind::NativeParser,
-                provider: PROVIDER_ID.into(),
+                provider,
                 locator: SourceLocator {
                     byte_start: Some(0),
                     byte_end: u64::try_from(self.input.bytes.len()).ok(),
@@ -2027,16 +2463,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         if self.node_context(id).excluded() {
             return String::new();
         }
-        let mut out = String::new();
-        match &self.nodes[id].data {
-            NodeData::Text(value) => out.push_str(value),
-            NodeData::Element { .. } | NodeData::Document => {
-                for child in &self.nodes[id].children {
-                    out.push_str(&self.raw_visible_text(*child));
-                }
-            }
-            NodeData::Other => {}
-        }
+        let mut out = String::with_capacity(self.raw_visible_text_len(id));
+        self.append_raw_visible_text(id, &mut out);
         out
     }
     fn raw_visible_text_len(&self, id: usize) -> usize {
@@ -2053,69 +2481,55 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             NodeData::Other => 0,
         }
     }
-    fn raw_text_unfiltered(&self, id: usize) -> String {
-        let mut out = String::new();
-        for child in &self.nodes[id].children {
-            match &self.nodes[*child].data {
-                NodeData::Text(value) => out.push_str(value),
-                NodeData::Element { .. } => {
-                    out.push_str(&self.raw_text_unfiltered(*child));
-                }
-                _ => {}
-            }
-        }
-        out
+    fn visible_text_len(&self, id: usize) -> usize {
+        self.raw_visible_text_len(id)
     }
-    fn raw_text_unfiltered_len(&self, id: usize) -> usize {
+    fn link_text_len(&self, id: usize) -> usize {
         self.nodes[id]
             .children
             .iter()
-            .map(|child| match &self.nodes[*child].data {
-                NodeData::Text(value) => value.len(),
-                NodeData::Element { .. } => self.raw_text_unfiltered_len(*child),
-                _ => 0,
+            .copied()
+            .map(|child| {
+                let here = if self.is_html_element(child)
+                    && self.name(child) == Some("a")
+                    && !self.node_context(child).excluded()
+                {
+                    self.raw_visible_text_len(child)
+                } else {
+                    0
+                };
+                here.saturating_add(self.link_text_len(child))
             })
             .fold(0_usize, usize::saturating_add)
     }
-    fn visible_text_len(&self, id: usize) -> usize {
-        self.visible_text(id).len()
-    }
-    fn link_text_len(&self, id: usize) -> usize {
-        self.descendants(id)
-            .into_iter()
-            .filter(|id| {
-                self.is_html_element(*id)
-                    && self.name(*id) == Some("a")
-                    && !self.node_context(*id).excluded()
+    fn descendants_named(&self, id: usize, names: &[&str]) -> usize {
+        self.nodes[id]
+            .children
+            .iter()
+            .copied()
+            .map(|child| {
+                usize::from(
+                    self.is_html_element(child)
+                        && !self.node_context(child).excluded()
+                        && self.name(child).is_some_and(|name| names.contains(&name)),
+                )
+                .saturating_add(self.descendants_named(child, names))
             })
-            .map(|id| self.visible_text(id).len())
             .sum()
     }
-    fn descendants_named(&self, id: usize, names: &[&str]) -> usize {
-        self.descendants(id)
-            .into_iter()
-            .filter(|id| {
-                self.is_html_element(*id)
-                    && !self.node_context(*id).excluded()
-                    && self.name(*id).is_some_and(|name| names.contains(&name))
-            })
-            .count()
-    }
-    fn descendants(&self, id: usize) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut stack = self.nodes[id].children.clone();
-        while let Some(next) = stack.pop() {
-            out.push(next);
-            stack.extend(self.nodes[next].children.iter().rev());
-        }
-        out
-    }
     fn first_visible_descendant(&self, id: usize, name: &str) -> Option<usize> {
-        self.descendants(id).into_iter().find(|id| {
-            self.is_html_element(*id)
-                && self.name(*id) == Some(name)
-                && !self.node_context(*id).excluded()
-        })
+        for child in self.nodes[id].children.iter().copied() {
+            if self.is_html_element(child)
+                && self.name(child) == Some(name)
+                && !self.node_context(child).excluded()
+            {
+                return Some(child);
+            }
+            if let Some(found) = self.first_visible_descendant(child, name) {
+                return Some(found);
+            }
+        }
+        None
     }
     fn is_block_node(&self, id: usize) -> bool {
         if !self.is_html_element(id) {
@@ -2155,49 +2569,58 @@ impl<'a, 'budget> Builder<'a, 'budget> {
         }
         self.nodes[id].parent.is_some_and(|parent| !self.node_context(parent).excluded())
     }
-    fn direct_table_rows(&self, table: usize) -> Vec<SourceTableRow> {
+    fn direct_table_rows(&mut self, table: usize) -> Result<Vec<SourceTableRow>, ConversionError> {
         let mut rows = Vec::new();
         for child in self.nodes[table].children.iter().copied() {
             if !self.is_html_element(child) || self.node_context(child).excluded() {
                 continue;
             }
             if self.name(child) == Some("tr") {
+                self.reserve_vector(&mut rows, 1)?;
                 rows.push(SourceTableRow { node: child, group: table });
             } else if matches!(self.name(child), Some("thead" | "tbody" | "tfoot")) {
-                rows.extend(self.nodes[child].children.iter().copied().filter_map(|row| {
-                    (self.is_html_element(row)
+                for row in self.nodes[child].children.iter().copied() {
+                    if self.is_html_element(row)
                         && self.name(row) == Some("tr")
-                        && !self.node_context(row).excluded())
-                    .then_some(SourceTableRow { node: row, group: child })
-                }));
+                        && !self.node_context(row).excluded()
+                    {
+                        self.reserve_vector(&mut rows, 1)?;
+                        rows.push(SourceTableRow { node: row, group: child });
+                    }
+                }
             }
         }
-        rows
+        Ok(rows)
     }
-    fn direct_table_cells(&self, row: usize) -> Vec<usize> {
-        self.nodes[row]
-            .children
-            .iter()
-            .copied()
-            .filter(|cell| {
-                self.is_html_element(*cell)
-                    && matches!(self.name(*cell), Some("td" | "th"))
-                    && !self.node_context(*cell).excluded()
-            })
-            .collect()
+    fn direct_table_cells(&mut self, row: usize) -> Result<Vec<usize>, ConversionError> {
+        let mut cells = Vec::new();
+        for cell in self.nodes[row].children.iter().copied() {
+            if self.is_html_element(cell)
+                && matches!(self.name(cell), Some("td" | "th"))
+                && !self.node_context(cell).excluded()
+            {
+                self.reserve_vector(&mut cells, 1)?;
+                cells.push(cell);
+            }
+        }
+        Ok(cells)
     }
-    fn code_language(&self, id: usize) -> Option<String> {
+    fn code_language_part(&self, id: usize) -> Option<&str> {
         self.attr(id, "class").and_then(|v| {
-            v.split_ascii_whitespace()
-                .find_map(|part| part.strip_prefix("language-").map(str::to_string))
+            v.split_ascii_whitespace().find_map(|part| part.strip_prefix("language-"))
         })
     }
-    fn code_language_len(&self, id: usize) -> Option<usize> {
-        self.attr(id, "class").and_then(|value| {
-            value
-                .split_ascii_whitespace()
-                .find_map(|part| part.strip_prefix("language-").map(str::len))
-        })
+    fn code_language_output(&mut self, id: usize) -> Result<Option<String>, ConversionError> {
+        let Some(length) = self.code_language_part(id).map(str::len) else {
+            return Ok(None);
+        };
+        let mut output = if let Some(budget) = self.feed_budget.as_deref_mut() {
+            budget.new_output_string(length)?
+        } else {
+            String::with_capacity(length)
+        };
+        output.push_str(self.code_language_part(id).unwrap_or_default());
+        Ok(Some(output))
     }
     fn limit<T>(limit: &'static str, detail: &str) -> Result<T, ConversionError> {
         Err(ConversionError::ResourceLimit { limit, detail: detail.into() })
@@ -2207,8 +2630,114 @@ impl<'a, 'budget> Builder<'a, 'budget> {
 fn warning(code: &str, message: String) -> Diagnostic {
     Diagnostic { code: code.into(), severity: DiagnosticSeverity::Warning, message, locator: None }
 }
+
+fn budgeted_warning<F>(
+    budget: &mut FeedHtmlBudget,
+    code: &str,
+    message_len: usize,
+    fill_message: F,
+) -> Result<Diagnostic, ConversionError>
+where
+    F: FnOnce(&mut String) -> std::fmt::Result,
+{
+    let memory_mark = budget.memory.mark();
+    let persistent_mark = budget.persistent_memory_bytes;
+    let mut owned_code = budget.new_precounted_string(code.len())?;
+    owned_code.push_str(code);
+    let mut message = match budget.new_precounted_string(message_len) {
+        Ok(message) => message,
+        Err(error) => {
+            budget.memory.rewind(memory_mark)?;
+            budget.persistent_memory_bytes = persistent_mark;
+            return Err(error);
+        }
+    };
+    if fill_message(&mut message).is_err() {
+        budget.memory.rewind(memory_mark)?;
+        budget.persistent_memory_bytes = persistent_mark;
+        return Err(ConversionError::Internal {
+            detail: "failed to construct budgeted HTML diagnostic".into(),
+        });
+    }
+    FeedHtmlBudget::constructed(FeedHtmlObjectKind::Diagnostic);
+    Ok(Diagnostic {
+        code: owned_code,
+        severity: DiagnosticSeverity::Warning,
+        message,
+        locator: None,
+    })
+}
+
+fn decimal_digits(mut value: usize) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
 fn normalize(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut output = String::with_capacity(value.len());
+    normalize_into_unchecked(value, &mut output);
+    output
+}
+
+fn normalized_len(value: &str, context: &ExecutionContext) -> Result<usize, ConversionError> {
+    let mut bytes = 0_usize;
+    let mut pending_space = false;
+    for (index, character) in value.chars().enumerate() {
+        if index.is_multiple_of(CHECKPOINT_EVENTS) {
+            context.checkpoint()?;
+        }
+        if character.is_whitespace() {
+            pending_space = bytes != 0;
+        } else {
+            if pending_space {
+                bytes = bytes.saturating_add(1);
+                pending_space = false;
+            }
+            bytes = bytes.saturating_add(character.len_utf8());
+        }
+    }
+    Ok(bytes)
+}
+
+fn normalize_into(
+    value: &str,
+    output: &mut String,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let mut pending_space = false;
+    for (index, character) in value.chars().enumerate() {
+        if index.is_multiple_of(CHECKPOINT_EVENTS) {
+            context.checkpoint()?;
+        }
+        if character.is_whitespace() {
+            pending_space = !output.is_empty();
+        } else {
+            if pending_space {
+                output.push(' ');
+                pending_space = false;
+            }
+            output.push(character);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_into_unchecked(value: &str, output: &mut String) {
+    let mut pending_space = false;
+    for character in value.chars() {
+        if character.is_whitespace() {
+            pending_space = !output.is_empty();
+        } else {
+            if pending_space {
+                output.push(' ');
+                pending_space = false;
+            }
+            output.push(character);
+        }
+    }
 }
 fn nonempty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
@@ -2324,6 +2853,84 @@ mod tests {
             &context(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn feed_capacity_budget_precedes_first_vector_growth_and_is_not_double_charged() {
+        let context = context();
+        let options = ConversionOptions::default();
+        let mut budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            options.limits.max_memory_bytes,
+            &context,
+        )
+        .unwrap();
+        budget.set_test_limits(FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: 0,
+        });
+        let mut blocks = Vec::<BlockNode>::new();
+        reset_feed_html_object_count();
+        let error = budget.reserve_vec(&mut blocks, 1).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(blocks.capacity(), 0);
+        assert_eq!(feed_html_object_count().capacity_growths, 0);
+
+        let exact_bytes = 4 * size_of::<BlockNode>();
+        budget.set_test_limits(FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: exact_bytes,
+        });
+        budget.reserve_vec(&mut blocks, 1).unwrap();
+        assert_eq!(blocks.capacity(), 4);
+        assert_eq!(budget.snapshot().persistent_memory_bytes, exact_bytes);
+        assert_eq!(feed_html_object_count().capacity_growths, 1);
+
+        let mut string_budget = FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            16,
+            options.limits.max_memory_bytes,
+            &context,
+        )
+        .unwrap();
+        string_budget.set_test_limits(FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: 0,
+        });
+        reset_feed_html_object_count();
+        string_budget.new_output_string(1).unwrap_err();
+        assert_eq!(string_budget.snapshot().strings, 0);
+        assert_eq!(feed_html_object_count(), FeedHtmlObjectCounts::default());
+        string_budget.set_test_limits(FeedHtmlBudgetSnapshot {
+            nodes: usize::MAX,
+            inlines: usize::MAX,
+            assets: usize::MAX,
+            diagnostics: usize::MAX,
+            strings: usize::MAX,
+            output_bytes: u64::MAX,
+            persistent_memory_bytes: 64,
+        });
+        let output = string_budget.new_output_string(1).unwrap();
+        assert_eq!(output.capacity(), 64);
+        assert_eq!(string_budget.snapshot().persistent_memory_bytes, 64);
+        assert_eq!(feed_html_object_count().capacity_growths, 1);
+        assert_eq!(feed_html_object_count().strings, 1);
     }
 
     #[test]

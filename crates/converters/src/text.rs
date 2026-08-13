@@ -655,18 +655,21 @@ impl LogicalMemory {
                 detail: "logical vector capacity underflowed".into(),
             }
         })?;
+        let mark = self.mark();
         self.charge(new_slots.checked_mul(size_of::<T>()).ok_or_else(|| {
             ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: "logical vector byte capacity overflowed".into(),
             }
         })?)?;
-        vector.try_reserve_exact(target - vector.len()).map_err(|error| {
-            ConversionError::ResourceLimit {
+        if let Err(error) = vector.try_reserve_exact(target - vector.len()) {
+            self.rewind(mark)?;
+            return Err(ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: format!("logical vector allocation failed: {error}"),
-            }
-        })
+            });
+        }
+        Ok(())
     }
 
     pub(crate) fn reserve_string(
@@ -683,13 +686,16 @@ impl LogicalMemory {
             return Ok(());
         }
         let target = required.max(string.capacity().saturating_mul(2)).max(64);
+        let mark = self.mark();
         self.charge(target - string.capacity())?;
-        string.try_reserve_exact(target - string.len()).map_err(|error| {
-            ConversionError::ResourceLimit {
+        if let Err(error) = string.try_reserve_exact(target - string.len()) {
+            self.rewind(mark)?;
+            return Err(ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
                 detail: format!("logical string allocation failed: {error}"),
-            }
-        })
+            });
+        }
+        Ok(())
     }
 }
 

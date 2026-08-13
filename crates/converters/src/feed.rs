@@ -1828,19 +1828,13 @@ fn verify_html_fragment_accounting(
     let charged_strings = after.strings.checked_sub(before.strings);
     let charged_bytes = after.output_bytes.checked_sub(before.output_bytes);
     let charged_memory = after.persistent_memory_bytes.checked_sub(before.persistent_memory_bytes);
-    let minimum_memory = nodes
-        .saturating_mul(std::mem::size_of::<BlockNode>())
-        .saturating_add(inlines.saturating_mul(std::mem::size_of::<Inline>()))
-        .saturating_add(output.assets.len().saturating_mul(std::mem::size_of::<Asset>()))
-        .saturating_add(output.diagnostics.len().saturating_mul(std::mem::size_of::<Diagnostic>()))
-        .saturating_add(usize::try_from(output_bytes).unwrap_or(usize::MAX));
     if charged_nodes.is_none_or(|count| count < nodes)
         || charged_inlines.is_none_or(|count| count < inlines)
         || charged_assets.is_none_or(|count| count < output.assets.len())
         || charged_diagnostics.is_none_or(|count| count < output.diagnostics.len())
         || charged_strings.is_none_or(|count| count < output_strings)
         || charged_bytes.is_none_or(|count| count < output_bytes)
-        || charged_memory.is_none_or(|count| count < minimum_memory)
+        || charged_memory.is_none()
     {
         return Err(ConversionError::Internal {
             detail: "nested HTML returned output that was not precharged to the feed budget".into(),
@@ -2747,7 +2741,47 @@ mod tests {
                     assert_eq!(allocated.diagnostics, 0);
                 }
             }
+            if matches!(dimension, Dimension::Memory) {
+                assert_eq!(allocated, super::super::html::FeedHtmlObjectCounts::default());
+            }
         }
+
+        // The measured successful capacity lease is sufficient on a fresh
+        // budget: container slots and object quotas are not double charged.
+        let context = context();
+        let options = ConversionOptions::default();
+        let mut measured = super::super::html::FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            MAX_FEED_DIAGNOSTICS,
+            options.limits.max_memory_bytes,
+            &context,
+        )
+        .unwrap();
+        super::super::html::convert_feed_html_fragment(
+            fragment,
+            Some("https://example.com/feed.xml"),
+            &options,
+            &context,
+            &mut measured,
+        )
+        .unwrap();
+        let exact = measured.snapshot();
+        let mut replay = super::super::html::FeedHtmlBudget::new(
+            options.limits.max_feed_text_bytes,
+            MAX_FEED_DIAGNOSTICS,
+            options.limits.max_memory_bytes,
+            &context,
+        )
+        .unwrap();
+        replay.set_test_limits(exact);
+        super::super::html::convert_feed_html_fragment(
+            fragment,
+            Some("https://example.com/feed.xml"),
+            &options,
+            &context,
+            &mut replay,
+        )
+        .unwrap();
     }
 
     #[test]
