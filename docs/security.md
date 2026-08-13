@@ -56,10 +56,10 @@
   环境变量，并以已加载对象的真实 SONAME/install name 和文件哈希审计冲突，而非按
   basename 推断；私有目录只含主库，Windows 使用
   `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`。主库 load identity
-  已在进程中出现时同样拒绝，防止 loader 复用任意同名对象。动态句柄、API table 与
-  ORT 环境固定为进程生命周期，只允许一个 authority identity；已有全局 ORT 配置、
-  不同 runtime 或无法显式提交禁用 telemetry 的环境都会 fail closed。所有 FFI unsafe
-  集中在 `into-markdown-onnxruntime` crate，并启用
+  已在 worker 中出现时同样拒绝，防止 loader 复用任意同名对象。父进程不执行 `dlopen`
+  或持有 ORT API；动态句柄、API table、禁用 telemetry 的环境、session 和 tensor 全部
+  由隔离 worker 按严格析构顺序持有。所有 FFI unsafe 集中在
+  `into-markdown-onnxruntime` crate，并启用
   `deny(unsafe_op_in_unsafe_fn)` 与逐块 SAFETY invariant。
 - 模型 source archives 与最终 runtime files 分开建模，缺少最终文件、字符表、大小、
   平台或许可证审核时禁止安装。运行时清单必须与权威下载清单逐项一致。
@@ -99,13 +99,23 @@
 ONNX session 固定使用 CPU provider、顺序图执行、显式 intra/inter-op 线程数和关闭的
 memory pattern；CPU arena 默认关闭并可经 C API 显式设置。模型 authority 必须给出
 保守的 session 与每次 run 上界；session 上界在 loading 前按 live count/bytes 计入缓存，
-不会因仍在使用的条目被移出 LRU 而提前释放。这里是保守的逻辑预算，不声称测量 ORT
-物理 RSS；arena 关闭、模型上界和 run 上界共同约束未直接暴露的 native 分配。
+不会因仍在使用的条目被移出 LRU 而提前释放。这些是请求/缓存的协作式逻辑预算，不声称
+测量 ORT 物理 RSS。除此之外，Linux/macOS worker 在任何 authority/model/ORT load 前安装
+并复核 `RLIMIT_AS`，Windows worker 在 suspended 状态加入 process-memory hard-limit、
+kill-on-close Job Object 后才 resume；任何无法证明限制已生效的平台稳定返回 component
+unavailable。平台 address-space ceiling 与模型 session/run、`max_session_bytes` 相互独立。
+macOS ARM64 的 1 TiB ceiling 用于容纳 dyld/shared-cache/allocator 的稀疏虚拟地址预留，
+不表示 RSS 或物理可用内存；约 8 TiB Expand fixture 验证攻击输出明显高于该硬边界。
 `ExecutionContext` 在克隆输入前预留输入值/shape 副本、输入槽位与 ORT backing，在执行前
 按输出 contract 的最大 shape 预留 native 输出、返回值/shape 副本，并全程持有 run scratch
 预算；contract metadata 的名称、shape 和结构容量计入 session 上界。输入/输出各最多 64
 个，名称最多 256 UTF-8 字节，rank 最多 16；所有元素数和字节数用 checked arithmetic。
-ORT 返回后先从 native view 读取有界 shape，并在任何 Rust 输出 `Vec` 分配或值复制前验证
-Exact/Dynamic 上界、元素数和字节数；越界时直接释放 native tensor 并返回稳定错误。无最大值
-的动态维度不是合法 contract。创建前后、等待 single-flight、推理前后均检查取消和
-deadline；推理期间监控线程把失败 checkpoint 连接到 ORT `RunOptions::terminate`。
+worker 直接经 `ort-sys` C API 先把 IO count 读入标量，名称读入固定 257-byte allocator，
+rank/dim 读入 `[i64; 16]`，检查后才分配 metadata。ORT 返回后同样先把输出 rank/dim 读入
+固定栈，在任何 `GetTensorMutableData`、Rust slice/`Vec` 或值复制前验证 Exact/Dynamic
+上界、元素数和字节数；越界时直接释放 native tensor。无最大值的动态维度不是合法
+contract。IPC 具有固定 header、version、单调 request id、消息数/载荷/模型/tensor 上限；
+stderr 最多保留 64 KiB。创建前后、等待 single-flight、IPC 等待和推理前后均检查取消和
+deadline；失败会 kill 并 wait/reap worker，不留下孤儿进程。GraphProto IO 在 prost decode
+前经字段数、长度、count、rank 和递归深度有界的 wire preflight，并与 authority/native
+metadata 三向精确核对。

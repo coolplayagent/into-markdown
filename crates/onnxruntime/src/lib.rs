@@ -4,22 +4,24 @@
 //! ABI require `unsafe`. All consumers see only the safe [`RuntimeLibrary`].
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod native;
+mod protocol;
+mod worker;
+
 use into_markdown_core::{ConversionError, ExecutionContext, Tensor};
 use into_markdown_ocr::{
-    Dimension, MAX_TENSOR_RANK, MAX_TENSORS, ModelMetadata, ResolvedModel, SessionAdapter,
-    SessionFactory, SessionOptions, TensorElementType as ContractElementType, TensorSpec,
+    ModelMetadata, ResolvedModel, SessionAdapter, SessionFactory, SessionOptions,
 };
 use libloading::Library;
 use object::{Object, read::elf::FileHeader as ElfFileHeader, read::macho::MachHeader};
 use ort::sys::OrtApiBase;
-use ort::{AsPointer, session::RunOptions, value::ValueType};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::ffi::CStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use thiserror::Error;
 
@@ -55,12 +57,6 @@ pub enum LoadError {
     /// The audited dependency closure or current process loader state is unsafe.
     #[error("ONNX Runtime dependency audit mismatch")]
     DependencyMismatch,
-    /// Another crate initialized ORT before the audited telemetry/runtime policy.
-    #[error("ONNX Runtime process-global state is incompatible")]
-    GlobalStateMismatch,
-    /// A different audited runtime was already fixed for this process.
-    #[error("a different ONNX Runtime is already fixed for this process")]
-    RuntimeConflict,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +76,7 @@ struct Target {
     sha256: String,
     library: String,
     library_bytes: u64,
+    worker_address_space_overhead_bytes: u64,
     binary_format: String,
     binary_architecture: String,
     load_identity: String,
@@ -114,17 +111,14 @@ struct BinaryMetadata {
     rpaths: Vec<String>,
 }
 
-/// Loaded exact CPU runtime. The private verified copy and dynamic handle live
-/// for at least as long as this value.
+/// Verified exact CPU runtime bytes retained without loading native code in the
+/// parent process.
 pub struct RuntimeLibrary {
     version: String,
     api_version: u32,
     private_path: PathBuf,
-    identity: String,
     _source: File,
-    library: Option<Library>,
-    private_dir: Option<TempDir>,
-    api: ort::sys::OrtApi,
+    _private_dir: TempDir,
 }
 
 impl std::fmt::Debug for RuntimeLibrary {
@@ -139,7 +133,8 @@ impl std::fmt::Debug for RuntimeLibrary {
 }
 
 impl RuntimeLibrary {
-    /// Verify and load one explicit library below `trusted_root`.
+    /// Verify one explicit library below `trusted_root` and retain a private
+    /// create-new copy for an isolated worker.
     ///
     /// No current-directory, `PATH`, loader variable, or process environment
     /// lookup is performed.
@@ -177,29 +172,12 @@ impl RuntimeLibrary {
         let binary = read_binary_metadata(&private_path, target.library_bytes)?;
         validate_binary_metadata(target, &binary)?;
 
-        ensure_loader_environment_clean()?;
-        audit_loaded_modules(target, None)?;
-        let library = load_verified_library(&private_path)?;
-        audit_loaded_modules(target, Some(&private_path))?;
-        let (version, api) = probe(&library, authority.api_version)?;
-        if version != authority.version {
-            return Err(LoadError::VersionMismatch);
-        }
         Ok(Self {
-            version,
+            version: authority.version,
             api_version: authority.api_version,
             private_path,
-            identity: format!(
-                "{target_name}:{}:{}:{}:{:x}",
-                authority.version,
-                authority.api_version,
-                target.library_sha256,
-                Sha256::digest(include_str!("../../../third_party/onnxruntime/manifest.json"))
-            ),
             _source: source,
-            library: Some(library),
-            private_dir: Some(private_dir),
-            api,
+            _private_dir: private_dir,
         })
     }
 
@@ -222,73 +200,29 @@ impl RuntimeLibrary {
     }
 }
 
-impl Drop for RuntimeLibrary {
-    fn drop(&mut self) {
-        // On Windows this guarantees FreeLibrary precedes removal of the
-        // private directory. Process-installed runtimes are retained by a
-        // static and reach neither operation during normal shutdown.
-        drop(self.library.take());
-        drop(self.private_dir.take());
-    }
-}
-
-enum ProcessRuntime {
-    Ready(Arc<RuntimeLibrary>),
-    RejectedWithLibrary(Arc<RuntimeLibrary>),
-    Rejected,
-}
-
-static PROCESS_RUNTIME: OnceLock<ProcessRuntime> = OnceLock::new();
-static PROCESS_RUNTIME_INIT: Mutex<()> = Mutex::new(());
-
 /// Real CPU session factory backed by the verified runtime library.
 #[derive(Debug)]
 pub struct OrtSessionFactory {
     library: Arc<RuntimeLibrary>,
+    worker_executable: PathBuf,
 }
 
 impl OrtSessionFactory {
-    /// Commit the process-global ORT environment from an explicit verified path.
+    /// Bind an explicit worker executable to the verified runtime.
     ///
     /// # Errors
     ///
-    /// Returns [`LoadError::GlobalStateMismatch`] if another caller configured
-    /// ORT first, or [`LoadError::RuntimeConflict`] if this process already
-    /// fixed a different authority identity.
-    pub fn new(library: Arc<RuntimeLibrary>) -> Result<Self, LoadError> {
-        let _guard = lock(&PROCESS_RUNTIME_INIT);
-        if let Some(state) = PROCESS_RUNTIME.get() {
-            return match state {
-                ProcessRuntime::Ready(installed) if installed.identity == library.identity => {
-                    Ok(Self { library: Arc::clone(installed) })
-                }
-                ProcessRuntime::Ready(_) => Err(LoadError::RuntimeConflict),
-                ProcessRuntime::RejectedWithLibrary(retained) => {
-                    let _ = retained.version();
-                    Err(LoadError::GlobalStateMismatch)
-                }
-                ProcessRuntime::Rejected => Err(LoadError::GlobalStateMismatch),
-            };
+    /// Returns a stable path error before any process is started.
+    pub fn new(
+        library: Arc<RuntimeLibrary>,
+        worker_executable: impl Into<PathBuf>,
+    ) -> Result<Self, LoadError> {
+        let worker_executable = worker_executable.into();
+        if !worker_executable.is_absolute() {
+            return Err(LoadError::UnsafePath);
         }
-        if !ort::set_api(library.api.clone()) {
-            let _ = PROCESS_RUNTIME.set(ProcessRuntime::Rejected);
-            return Err(LoadError::GlobalStateMismatch);
-        }
-        if !ort::init().with_telemetry(false).commit() {
-            // `set_api` retained function pointers from this library. Keep its
-            // handle for process lifetime even though environment policy lost.
-            let _ = PROCESS_RUNTIME.set(ProcessRuntime::RejectedWithLibrary(library));
-            return Err(LoadError::GlobalStateMismatch);
-        }
-        let installed = Arc::clone(&library);
-        let _ = PROCESS_RUNTIME.set(ProcessRuntime::Ready(installed));
-        Ok(Self { library })
+        Ok(Self { library, worker_executable })
     }
-}
-
-#[cfg(test)]
-fn commit_environment_policy(commit: impl FnOnce(bool) -> bool) -> bool {
-    commit(false)
 }
 
 impl SessionFactory for OrtSessionFactory {
@@ -314,34 +248,22 @@ impl SessionFactory for OrtSessionFactory {
         if self.library.version().is_empty() || model.bytes.is_empty() {
             return Err(ort_error("ModelUnavailable"));
         }
-        let mut builder =
-            ort::session::Session::builder().map_err(|_| ort_error("sessionCreate"))?;
-        builder = builder
-            .with_intra_threads(usize::from(options.intra_op_threads))
-            .map_err(|_| ort_error("invalidThreadOptions"))?
-            .with_inter_threads(usize::from(options.inter_op_threads))
-            .map_err(|_| ort_error("invalidThreadOptions"))?
-            .with_parallel_execution(false)
-            .map_err(|_| ort_error("invalidThreadOptions"))?
-            .with_memory_pattern(false)
-            .map_err(|_| ort_error("invalidMemoryOptions"))?;
-        configure_cpu_arena(&mut builder, options.cpu_arena)?;
-        context.checkpoint()?;
-        let session =
-            builder.commit_from_memory(&model.bytes).map_err(|_| ort_error("sessionLoad"))?;
-        let metadata = validate_outlets(&session, model)?;
+        let (worker, metadata) = worker::WorkerClient::start(
+            &self.library,
+            &self.worker_executable,
+            &model.bytes,
+            &model.contract,
+            options,
+            context,
+        )?;
         context.checkpoint()?;
         let estimate = self.estimate_bytes(model, options)?;
-        Ok(Arc::new(OrtSession {
-            session: Mutex::new(session),
-            metadata,
-            estimated_bytes: estimate,
-        }))
+        Ok(Arc::new(OrtSession { worker: Mutex::new(worker), metadata, estimated_bytes: estimate }))
     }
 }
 
 struct OrtSession {
-    session: Mutex<ort::session::Session>,
+    worker: Mutex<worker::WorkerClient>,
     metadata: ModelMetadata,
     estimated_bytes: u64,
 }
@@ -360,196 +282,22 @@ impl SessionAdapter for OrtSession {
         inputs: &[Tensor],
         context: &ExecutionContext,
     ) -> Result<Vec<Tensor>, ConversionError> {
-        context.checkpoint()?;
-        if inputs.len() > MAX_TENSORS || self.metadata.inputs.len() != inputs.len() {
-            return Err(ort_error("inputCountMismatch"));
-        }
-        let mut values = Vec::new();
-        values.try_reserve_exact(inputs.len()).map_err(|_| ort_error("tensorMemory"))?;
-        for (spec, tensor) in self.metadata.inputs.iter().zip(inputs) {
-            if tensor.shape.len() > MAX_TENSOR_RANK {
-                return Err(ort_error("inputShapeMismatch"));
-            }
-            let mut shape = Vec::new();
-            shape.try_reserve_exact(tensor.shape.len()).map_err(|_| ort_error("tensorMemory"))?;
-            shape.extend_from_slice(&tensor.shape);
-            let mut backing = Vec::new();
-            backing
-                .try_reserve_exact(tensor.values.len())
-                .map_err(|_| ort_error("tensorMemory"))?;
-            backing.extend_from_slice(&tensor.values);
-            let value = ort::value::Tensor::from_array((shape, backing))
-                .map_err(|_| ort_error("inputTensor"))?;
-            values.push((spec.name.as_str(), value));
-        }
-        let run_options = Arc::new(RunOptions::new().map_err(|_| ort_error("runOptions"))?);
-        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let monitor = {
-            let run_options = Arc::clone(&run_options);
-            let stopped = Arc::clone(&stopped);
-            let context = context.clone();
-            std::thread::spawn(move || {
-                while !stopped.load(std::sync::atomic::Ordering::Acquire) {
-                    if context.checkpoint().is_err() {
-                        let _ = run_options.terminate();
-                        return;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-            })
-        };
-        let result = lock(&self.session)
-            .run_with_options(values, &run_options)
-            .map_err(|_| ort_error("inference"))
-            .and_then(|outputs| {
-                if outputs.len() != self.metadata.outputs.len() || outputs.len() > MAX_TENSORS {
-                    return Err(ort_error("outputCountMismatch"));
-                }
-                let mut checked = Vec::new();
-                checked.try_reserve_exact(outputs.len()).map_err(|_| ort_error("tensorMemory"))?;
-                for ((_, value), expected) in outputs.iter().zip(&self.metadata.outputs) {
-                    let ValueType::Tensor { ty, shape, .. } = value.dtype() else {
-                        return Err(ort_error("outputTensor"));
-                    };
-                    if *ty != ort::value::TensorElementType::Float32 {
-                        return Err(ort_error("outputTensor"));
-                    }
-                    // This checked bound runs before `try_extract_tensor`, whose
-                    // wrapper forms a native slice from the shape element count.
-                    validated_output_elements(shape, expected)?;
-                    let (shape, values) =
-                        value.try_extract_tensor::<f32>().map_err(|_| ort_error("outputTensor"))?;
-                    checked.push(copy_checked_output(shape, values, expected, || {})?);
-                }
-                Ok(checked)
-            });
-        stopped.store(true, std::sync::atomic::Ordering::Release);
-        let _ = monitor.join();
-        context.checkpoint()?;
-        result
+        lock(&self.worker).run(inputs, &self.metadata.outputs, context)
     }
-}
-
-fn copy_checked_output(
-    native_shape: &[i64],
-    native_values: &[f32],
-    expected: &TensorSpec,
-    before_value_copy: impl FnOnce(),
-) -> Result<Tensor, ConversionError> {
-    let elements = validated_output_elements(native_shape, expected)?;
-    if elements != native_values.len() {
-        return Err(ort_error("outputElementCount"));
-    }
-    let mut shape = Vec::new();
-    shape.try_reserve_exact(native_shape.len()).map_err(|_| ort_error("tensorMemory"))?;
-    shape.extend(native_shape.iter().map(|dimension| usize::try_from(*dimension).unwrap()));
-    let mut values = Vec::new();
-    values.try_reserve_exact(native_values.len()).map_err(|_| ort_error("tensorMemory"))?;
-    before_value_copy();
-    values.extend_from_slice(native_values);
-    Ok(Tensor { shape, values })
-}
-
-fn validated_output_elements(
-    native_shape: &[i64],
-    expected: &TensorSpec,
-) -> Result<usize, ConversionError> {
-    if native_shape.is_empty()
-        || native_shape.len() > MAX_TENSOR_RANK
-        || native_shape.len() != expected.dimensions.len()
-    {
-        return Err(ort_error("outputShapeMismatch"));
-    }
-    let mut elements = 1_usize;
-    for (actual, bound) in native_shape.iter().zip(&expected.dimensions) {
-        let actual = usize::try_from(*actual).map_err(|_| ort_error("outputShapeMismatch"))?;
-        let in_contract = match bound {
-            Dimension::Exact(value) => actual == *value,
-            Dimension::Dynamic { min, max } => actual >= *min && actual <= *max,
-        };
-        if !in_contract {
-            return Err(ort_error("outputShapeMismatch"));
-        }
-        elements = elements.checked_mul(actual).ok_or_else(|| ort_error("outputElementCount"))?;
-    }
-    if elements.checked_mul(std::mem::size_of::<f32>()).is_none()
-        || native_shape.len().checked_mul(std::mem::size_of::<usize>()).is_none()
-    {
-        return Err(ort_error("outputElementCount"));
-    }
-    Ok(elements)
-}
-
-fn configure_cpu_arena(
-    builder: &mut ort::session::builder::SessionBuilder,
-    enabled: bool,
-) -> Result<(), ConversionError> {
-    let operation =
-        if enabled { ort::api().EnableCpuMemArena } else { ort::api().DisableCpuMemArena };
-    // SAFETY: `builder.ptr_mut()` is a live, uniquely borrowed ORT session
-    // options pointer. `operation` comes from the API table validated by ORT.
-    let status = unsafe { operation(builder.ptr_mut()) };
-    // SAFETY: the status pointer is returned by the matching ORT API and is
-    // consumed exactly once by ort's status conversion routine.
-    unsafe { ort::Error::result_from_status(status) }.map_err(|_| ort_error("invalidMemoryOptions"))
-}
-
-fn validate_outlets(
-    session: &ort::session::Session,
-    model: &ResolvedModel,
-) -> Result<ModelMetadata, ConversionError> {
-    if session.inputs().len() != model.contract.inputs.len()
-        || session.outputs().len() != model.contract.outputs.len()
-    {
-        return Err(ort_error("modelIoMismatch"));
-    }
-    for (outlet, expected) in session.inputs().iter().zip(&model.contract.inputs) {
-        validate_outlet(outlet, expected)?;
-    }
-    for (outlet, expected) in session.outputs().iter().zip(&model.contract.outputs) {
-        validate_outlet(outlet, expected)?;
-    }
-    Ok(ModelMetadata {
-        ir_version: model.contract.ir_version,
-        opsets: model.contract.opsets.clone(),
-        inputs: model.contract.inputs.clone(),
-        outputs: model.contract.outputs.clone(),
-    })
-}
-
-fn validate_outlet(
-    outlet: &ort::value::Outlet,
-    expected: &TensorSpec,
-) -> Result<(), ConversionError> {
-    if outlet.name() != expected.name || outlet.name().as_bytes().contains(&0) {
-        return Err(ort_error("modelIoMismatch"));
-    }
-    let ValueType::Tensor { ty, shape, .. } = outlet.dtype() else {
-        return Err(ort_error("modelDtypeMismatch"));
-    };
-    if expected.element_type != ContractElementType::Float32
-        || *ty != ort::value::TensorElementType::Float32
-        || shape.len() != expected.dimensions.len()
-    {
-        return Err(ort_error("modelDtypeMismatch"));
-    }
-    for (actual, expected) in shape.iter().zip(&expected.dimensions) {
-        let compatible = match expected {
-            Dimension::Exact(value) => i64::try_from(*value) == Ok(*actual),
-            Dimension::Dynamic { min, max } => {
-                *actual == -1
-                    || usize::try_from(*actual).is_ok_and(|value| value >= *min && value <= *max)
-            }
-        };
-        if !compatible {
-            return Err(ort_error("modelShapeMismatch"));
-        }
-    }
-    Ok(())
 }
 
 fn ort_error(detail: &'static str) -> ConversionError {
     ConversionError::Ocr { provider: "onnxruntime-cpu".into(), detail: detail.into() }
+}
+
+/// Run the isolated ONNX Runtime worker protocol on standard input/output.
+///
+/// This entry point is intended only for the repository's audited worker
+/// binary; callers create sessions through [`OrtSessionFactory`].
+#[doc(hidden)]
+#[must_use]
+pub fn worker_main() -> std::process::ExitCode {
+    worker::worker_entry()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -587,6 +335,8 @@ fn validate_authority(
         || !is_sha256(&target.library_sha256)
         || target.library_bytes == 0
         || target.library_bytes > MAX_RUNTIME_LIBRARY_BYTES
+        || !(256 * 1024 * 1024..=2 * 1024 * 1024 * 1024 * 1024)
+            .contains(&target.worker_address_space_overhead_bytes)
         || !matches!(target.binary_format.as_str(), "elf" | "mach-o" | "pe")
         || !load_identity_is_safe(&target.binary_format, &target.load_identity)
         || target.rpaths.len() > MAX_BINARY_DEPENDENCIES
@@ -1366,7 +1116,10 @@ fn parse_version_pointer(pointer: *const std::ffi::c_char) -> Result<String, Loa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use into_markdown_ocr::{ModelContract, ModelIdentity};
+    use into_markdown_ocr::{
+        Dimension, ModelContract, ModelIdentity, TensorElementType as ContractElementType,
+        TensorSpec,
+    };
 
     fn encode_varint(mut value: u64) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -1429,7 +1182,66 @@ mod tests {
                 ir_version: 9,
                 opsets: std::collections::BTreeMap::from([(String::new(), 18)]),
                 inputs: vec![tensor("x")],
+                overridable_inputs: Vec::new(),
                 outputs: vec![tensor("y")],
+                session_memory_bytes: 64 * 1024 * 1024,
+                run_memory_bytes: 1024 * 1024,
+            },
+            bytes,
+        }
+    }
+
+    fn expanding_model() -> ResolvedModel {
+        const ELEMENTS: u64 = 2_000_000_000_000;
+        let mut node = field_bytes(1, b"x");
+        node.extend(field_bytes(1, b"shape"));
+        node.extend(field_bytes(2, b"y"));
+        node.extend(field_bytes(4, b"Expand"));
+
+        let mut initializer = vec![0x08, 0x01, 0x10, 0x07];
+        initializer.extend(field_bytes(8, b"shape"));
+        initializer.extend(field_bytes(9, &i64::try_from(ELEMENTS).unwrap().to_le_bytes()));
+
+        let mut graph = field_bytes(1, &node);
+        graph.extend(field_bytes(2, b"expanding"));
+        graph.extend(field_bytes(5, &initializer));
+        graph.extend(field_bytes(11, &value_info("x")));
+        let symbolic_dimension = field_bytes(2, b"expanded");
+        let shape = field_bytes(1, &symbolic_dimension);
+        let mut tensor_type = vec![0x08, 0x01];
+        tensor_type.extend(field_bytes(2, &shape));
+        let type_proto = field_bytes(1, &tensor_type);
+        let mut output = field_bytes(1, b"y");
+        output.extend(field_bytes(2, &type_proto));
+        graph.extend(field_bytes(12, &output));
+        let mut model = vec![0x08, 0x09];
+        model.extend(field_bytes(7, &graph));
+        model.extend(field_bytes(8, &[0x10, 0x12]));
+        let bytes: Arc<[u8]> = Arc::from(model);
+        ResolvedModel {
+            identity: ModelIdentity {
+                canonical_path: PathBuf::from("/audited-test/expanding.onnx"),
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+                bytes: u64::try_from(bytes.len()).unwrap(),
+                file_identity: "native-expanding-fixture".into(),
+            },
+            contract: ModelContract {
+                ir_version: 9,
+                opsets: std::collections::BTreeMap::from([(String::new(), 18)]),
+                inputs: vec![TensorSpec {
+                    name: "x".into(),
+                    element_type: ContractElementType::Float32,
+                    dimensions: vec![Dimension::Exact(1)],
+                }],
+                overridable_inputs: Vec::new(),
+                outputs: vec![TensorSpec {
+                    name: "y".into(),
+                    element_type: ContractElementType::Float32,
+                    dimensions: vec![Dimension::Dynamic {
+                        min: 1,
+                        max: usize::try_from(ELEMENTS).unwrap(),
+                    }],
+                }],
                 session_memory_bytes: 64 * 1024 * 1024,
                 run_memory_bytes: 1024 * 1024,
             },
@@ -1527,39 +1339,6 @@ mod tests {
     }
 
     #[test]
-    fn environment_policy_explicitly_disables_telemetry() {
-        let observed = std::cell::Cell::new(true);
-        assert!(commit_environment_policy(|telemetry| {
-            observed.set(telemetry);
-            true
-        }));
-        assert!(!observed.get());
-    }
-
-    #[test]
-    fn oversized_native_output_is_rejected_before_value_copy() {
-        let copied = std::sync::atomic::AtomicUsize::new(0);
-        let expected = TensorSpec {
-            name: "y".into(),
-            element_type: ContractElementType::Float32,
-            dimensions: vec![Dimension::Dynamic { min: 1, max: 2 }],
-        };
-        let error = copy_checked_output(&[3], &[1.0, 2.0, 3.0], &expected, || {
-            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })
-        .unwrap_err();
-        assert_eq!(error.code().as_str(), "ocr");
-        assert_eq!(copied.load(std::sync::atomic::Ordering::SeqCst), 0);
-
-        let valid = copy_checked_output(&[2], &[1.0, 2.0], &expected, || {
-            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })
-        .unwrap();
-        assert_eq!(valid.values, [1.0, 2.0]);
-        assert_eq!(copied.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[test]
     fn explicit_archives_match_preload_binary_authority() {
         if option_env!("ORT_AUDIT_ALL_ARCHIVES").is_none() {
             return;
@@ -1595,33 +1374,13 @@ mod tests {
         let Some(library) = option_env!("ORT_TEST_LIBRARY") else {
             panic!("ORT_TEST_LIBRARY must accompany ORT_TEST_REPOSITORY");
         };
+        let Some(worker) = option_env!("ORT_TEST_WORKER") else {
+            panic!("ORT_TEST_WORKER must accompany native validation");
+        };
         assert_ne!(repository, "unsupported");
-        if std::env::var_os("ORT_NATIVE_CHILD").is_none() {
-            let executable = std::env::current_exe().unwrap();
-            for mode in ["normal", "preinitialized"] {
-                let mut child = std::process::Command::new(&executable);
-                child
-                    .arg("--exact")
-                    .arg("tests::explicit_native_runtime_matches_hash_version_and_api")
-                    .arg("--nocapture")
-                    .env("ORT_NATIVE_CHILD", mode);
-                for variable in [
-                    "LD_PRELOAD",
-                    "LD_LIBRARY_PATH",
-                    "LD_AUDIT",
-                    "DYLD_LIBRARY_PATH",
-                    "DYLD_FRAMEWORK_PATH",
-                    "DYLD_FALLBACK_LIBRARY_PATH",
-                    "DYLD_INSERT_LIBRARIES",
-                ] {
-                    child.env_remove(variable);
-                }
-                assert!(child.status().unwrap().success());
-            }
-            return;
-        }
         let runfiles = PathBuf::from(std::env::var_os("TEST_SRCDIR").unwrap());
         let runfile = runfiles.join(repository).join(library);
+        let worker = runfiles.join(worker).canonicalize().unwrap();
         let canonical_library = runfile.canonicalize().unwrap();
         let component_count = Path::new(library).components().count();
         let trusted_root =
@@ -1630,32 +1389,68 @@ mod tests {
         let authority = authority().unwrap();
         assert_eq!(loaded.version(), authority.version);
         assert_eq!(loaded.api_version(), authority.api_version);
-        if std::env::var_os("ORT_NATIVE_CHILD").as_deref()
-            == Some(std::ffi::OsStr::new("preinitialized"))
-        {
-            assert!(ort::init().with_telemetry(true).commit());
-            assert_eq!(OrtSessionFactory::new(loaded).unwrap_err(), LoadError::GlobalStateMismatch);
-            return;
-        }
-        let factory = OrtSessionFactory::new(Arc::clone(&loaded)).unwrap();
-        let environment = ort::environment::Environment::current().unwrap();
-        let builder = ort::session::Session::builder().unwrap();
-        drop(builder);
-        drop(factory);
-        drop(environment);
-        let second = OrtSessionFactory::new(loaded).unwrap();
-        let second_environment = ort::environment::Environment::current().unwrap();
         let model = tiny_identity_model();
         let context = ExecutionContext::new(
             into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits::default(),
         );
-        let session = second.create(&model, &SessionOptions::default(), &context).unwrap();
+        let factory = OrtSessionFactory::new(Arc::clone(&loaded), &worker).unwrap();
+        let session = factory.create(&model, &SessionOptions::default(), &context).unwrap();
+        drop(factory);
         let outputs =
             session.run(&[Tensor { shape: vec![1], values: vec![3.5] }], &context).unwrap();
         assert_eq!(outputs, [Tensor { shape: vec![1], values: vec![3.5] }]);
         drop(session);
-        drop(second_environment);
+
+        let expanding = expanding_model();
+        let limited = OrtSessionFactory::new(Arc::clone(&loaded), &worker).unwrap();
+        let session = limited.create(&expanding, &SessionOptions::default(), &context).unwrap();
+        let error =
+            session.run(&[Tensor { shape: vec![1], values: vec![1.0] }], &context).unwrap_err();
+        assert_eq!(error.code().as_str(), "resourceLimit");
+        drop(session);
+        drop(limited);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let fake = tempfile::tempdir().unwrap();
+            let fake_worker = fake.path().join("bounded-stall-worker");
+            fs::write(&fake_worker, b"#!/bin/sh\nwhile :; do :; done\n").unwrap();
+            fs::set_permissions(&fake_worker, fs::Permissions::from_mode(0o700)).unwrap();
+            let fake_worker = fake_worker.canonicalize().unwrap();
+            let cancellation = into_markdown_core::CancellationToken::new();
+            let cancelled_context = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions {
+                    cancellation: cancellation.clone(),
+                    ..into_markdown_core::ExecutionOptions::default()
+                },
+                into_markdown_core::ResourceLimits::default(),
+            );
+            let cancel = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                cancellation.cancel();
+            });
+            let error = worker::WorkerClient::start(
+                &loaded,
+                &fake_worker,
+                &model.bytes,
+                &model.contract,
+                &SessionOptions::default(),
+                &cancelled_context,
+            )
+            .err()
+            .unwrap();
+            cancel.join().unwrap();
+            assert_eq!(error.code().as_str(), "cancelled");
+        }
+
+        let second = OrtSessionFactory::new(loaded, worker).unwrap();
+        let session = second.create(&model, &SessionOptions::default(), &context).unwrap();
+        let outputs =
+            session.run(&[Tensor { shape: vec![1], values: vec![7.0] }], &context).unwrap();
+        assert_eq!(outputs, [Tensor { shape: vec![1], values: vec![7.0] }]);
+        drop(session);
         drop(second);
     }
 }

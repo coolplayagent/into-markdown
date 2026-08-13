@@ -1,6 +1,7 @@
 //! Safe ONNX Runtime policy, model validation, and bounded session caching.
 
 use into_markdown_core::{BoxFuture, ConversionError, ExecutionContext, Tensor, TensorRuntime};
+use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -12,6 +13,8 @@ const MAX_THREADS: u16 = 64;
 const MAX_PROTO_FIELDS: usize = 1_000_000;
 const MAX_OPSET_IMPORTS: usize = 64;
 const MAX_DOMAIN_BYTES: usize = 256;
+const MAX_GRAPH_INITIALIZERS: usize = 65_536;
+const MAX_PROTO_DEPTH: usize = 8;
 /// Maximum rank accepted for any runtime tensor or contract entry.
 pub const MAX_TENSOR_RANK: usize = 16;
 /// Maximum number of inputs or outputs accepted by one runtime session.
@@ -55,6 +58,8 @@ pub struct ModelMetadata {
     pub opsets: BTreeMap<String, u64>,
     /// Ordered input metadata.
     pub inputs: Vec<TensorSpec>,
+    /// Ordered graph inputs that are also initializers and may be overridden.
+    pub overridable_inputs: Vec<TensorSpec>,
     /// Ordered output metadata.
     pub outputs: Vec<TensorSpec>,
 }
@@ -68,6 +73,8 @@ pub struct ModelContract {
     pub opsets: BTreeMap<String, u64>,
     /// Ordered input contract.
     pub inputs: Vec<TensorSpec>,
+    /// Ordered graph inputs that are also initializers and may be overridden.
+    pub overridable_inputs: Vec<TensorSpec>,
     /// Ordered output contract.
     pub outputs: Vec<TensorSpec>,
     /// Conservative upper bound for one live native session.
@@ -610,7 +617,9 @@ fn validate_resolved_model(model: &ResolvedModel) -> Result<(), ConversionError>
         return Err(runtime_error("modelHashMismatch"));
     }
     validate_specs(&model.contract.inputs)?;
+    validate_specs_allow_empty(&model.contract.overridable_inputs)?;
     validate_specs(&model.contract.outputs)?;
+    validate_distinct_spec_names(&model.contract.inputs, &model.contract.overridable_inputs)?;
     if model.contract.ir_version == 0
         || i64::try_from(model.contract.ir_version).is_err()
         || model.contract.opsets.is_empty()
@@ -643,6 +652,9 @@ fn validate_resolved_model(model: &ResolvedModel) -> Result<(), ConversionError>
     if graph.opsets != model.contract.opsets {
         return Err(runtime_error("opsetMismatch"));
     }
+    validate_graph_specs(&graph.inputs, &model.contract.inputs)?;
+    validate_graph_specs(&graph.overridable_inputs, &model.contract.overridable_inputs)?;
+    validate_graph_specs(&graph.outputs, &model.contract.outputs)?;
     Ok(())
 }
 
@@ -651,13 +663,18 @@ fn validate_metadata(
     actual: &ModelMetadata,
 ) -> Result<(), ConversionError> {
     validate_specs(&expected.inputs)?;
+    validate_specs_allow_empty(&expected.overridable_inputs)?;
     validate_specs(&expected.outputs)?;
     validate_specs(&actual.inputs)?;
+    validate_specs_allow_empty(&actual.overridable_inputs)?;
     validate_specs(&actual.outputs)?;
     if expected.ir_version != actual.ir_version || expected.opsets != actual.opsets {
         return Err(runtime_error("opsetMismatch"));
     }
-    if expected.inputs != actual.inputs || expected.outputs != actual.outputs {
+    if expected.inputs != actual.inputs
+        || expected.overridable_inputs != actual.overridable_inputs
+        || expected.outputs != actual.outputs
+    {
         return Err(runtime_error("modelIoMismatch"));
     }
     Ok(())
@@ -667,6 +684,10 @@ fn validate_specs(specs: &[TensorSpec]) -> Result<(), ConversionError> {
     if specs.is_empty() {
         return Err(runtime_error("emptyTensorContract"));
     }
+    validate_specs_allow_empty(specs)
+}
+
+fn validate_specs_allow_empty(specs: &[TensorSpec]) -> Result<(), ConversionError> {
     if specs.len() > MAX_TENSORS {
         return Err(runtime_error("invalidTensorContract"));
     }
@@ -685,6 +706,18 @@ fn validate_specs(specs: &[TensorSpec]) -> Result<(), ConversionError> {
         {
             return Err(runtime_error("invalidTensorContract"));
         }
+    }
+    Ok(())
+}
+
+fn validate_distinct_spec_names(
+    left: &[TensorSpec],
+    right: &[TensorSpec],
+) -> Result<(), ConversionError> {
+    let left =
+        left.iter().map(|spec| spec.name.as_str()).collect::<std::collections::BTreeSet<_>>();
+    if right.iter().any(|spec| left.contains(spec.name.as_str())) {
+        return Err(runtime_error("invalidTensorContract"));
     }
     Ok(())
 }
@@ -799,9 +832,12 @@ fn contract_metadata_bytes(contract: &ModelContract) -> Result<u64, ConversionEr
             })
             .ok_or_else(|| resource_error("tensorMemory"))
     })?;
-    specs_bytes(&contract.inputs)?
-        .checked_add(specs_bytes(&contract.outputs)?)
-        .and_then(|bytes| bytes.checked_add(opsets))
+    let specs = specs_bytes(&contract.inputs)?
+        .checked_add(specs_bytes(&contract.overridable_inputs)?)
+        .and_then(|bytes| bytes.checked_add(specs_bytes(&contract.outputs).ok()?))
+        .ok_or_else(|| resource_error("tensorMemory"))?;
+    specs
+        .checked_add(opsets)
         .and_then(|bytes| {
             bytes.checked_add(u64::try_from(std::mem::size_of::<ModelMetadata>()).unwrap())
         })
@@ -896,6 +932,7 @@ fn contract_sha256(contract: &ModelContract) -> Result<String, ConversionError> 
         push_u64(&mut digest, *version);
     }
     push_specs(&mut digest, &contract.inputs)?;
+    push_specs(&mut digest, &contract.overridable_inputs)?;
     push_specs(&mut digest, &contract.outputs)?;
     push_u64(&mut digest, contract.session_memory_bytes);
     push_u64(&mut digest, contract.run_memory_bytes);
@@ -906,95 +943,523 @@ fn contract_sha256(contract: &ModelContract) -> Result<String, ConversionError> 
 struct ParsedModelProto {
     ir_version: u64,
     opsets: BTreeMap<String, u64>,
+    inputs: Vec<ParsedTensorSpec>,
+    overridable_inputs: Vec<ParsedTensorSpec>,
+    outputs: Vec<ParsedTensorSpec>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedTensorSpec {
+    name: String,
+    dimensions: Vec<ParsedDimension>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ParsedDimension {
+    Exact(usize),
+    Symbolic(String),
 }
 
 fn parse_model_proto(bytes: &[u8]) -> Result<ParsedModelProto, ConversionError> {
-    let mut cursor = 0;
-    let mut fields = 0;
-    let mut ir_version = None;
+    let mut field_budget = MAX_PROTO_FIELDS;
+    preflight_model(bytes, &mut field_budget, 0)?;
+    let model = crate::onnx_proto::ModelProto::decode(bytes)
+        .map_err(|_| runtime_error("invalidOnnxProtobuf"))?;
+    let ir_version = u64::try_from(model.ir_version)
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
     let mut opsets = BTreeMap::new();
-    while cursor < bytes.len() {
-        fields += 1;
-        if fields > MAX_PROTO_FIELDS {
+    for import in model.opset_import {
+        if import.domain.len() > MAX_DOMAIN_BYTES || import.domain.as_bytes().contains(&0) {
             return Err(runtime_error("invalidOnnxProtobuf"));
         }
-        let key = read_varint(bytes, &mut cursor)?;
-        let field = key >> 3;
-        let wire = u8::try_from(key & 7).map_err(|_| runtime_error("invalidOnnxProtobuf"))?;
-        if field == 0 {
-            return Err(runtime_error("invalidOnnxProtobuf"));
-        }
-        match (field, wire) {
-            (1, 0) => {
-                if ir_version.replace(read_varint(bytes, &mut cursor)?).is_some() {
-                    return Err(runtime_error("invalidOnnxProtobuf"));
-                }
-            }
-            (8, 2) => {
-                if opsets.len() >= MAX_OPSET_IMPORTS {
-                    return Err(runtime_error("invalidOnnxProtobuf"));
-                }
-                let payload = read_length_delimited(bytes, &mut cursor)?;
-                let (domain, version) = parse_opset_import(payload)?;
-                let canonical =
-                    if domain.is_empty() || domain == "ai.onnx" { String::new() } else { domain };
-                if opsets.insert(canonical, version).is_some() {
-                    return Err(runtime_error("duplicateOpsetDomain"));
-                }
-            }
-            _ => skip_field(bytes, &mut cursor, wire)?,
+        let version = u64::try_from(import.version)
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+        let domain = if import.domain.is_empty() || import.domain == "ai.onnx" {
+            String::new()
+        } else {
+            import.domain
+        };
+        if opsets.insert(domain, version).is_some() {
+            return Err(runtime_error("duplicateOpsetDomain"));
         }
     }
-    let ir_version = ir_version
-        .filter(|version| *version > 0 && i64::try_from(*version).is_ok())
-        .ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
     if opsets.is_empty() {
         return Err(runtime_error("invalidOnnxProtobuf"));
     }
-    Ok(ParsedModelProto { ir_version, opsets })
-}
-
-fn parse_opset_import(bytes: &[u8]) -> Result<(String, u64), ConversionError> {
-    let mut cursor = 0;
-    let mut domain = None;
-    let mut version = None;
-    let mut fields = 0;
-    while cursor < bytes.len() {
-        fields += 1;
-        if fields > 32 {
+    let graph = model.graph.ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+    let mut initializer_names = std::collections::BTreeSet::new();
+    for initializer in graph.initializer {
+        insert_initializer(&mut initializer_names, initializer.name)?;
+    }
+    for initializer in graph.sparse_initializer {
+        let values = initializer.values.ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+        insert_initializer(&mut initializer_names, values.name)?;
+    }
+    let mut inputs = Vec::new();
+    let mut overridable_inputs = Vec::new();
+    let mut input_names = std::collections::BTreeSet::new();
+    for input in graph.input {
+        let spec = parsed_tensor_spec(input)?;
+        if !input_names.insert(spec.name.clone()) {
             return Err(runtime_error("invalidOnnxProtobuf"));
         }
-        let key = read_varint(bytes, &mut cursor)?;
-        let field = key >> 3;
-        let wire = u8::try_from(key & 7).map_err(|_| runtime_error("invalidOnnxProtobuf"))?;
+        if initializer_names.contains(&spec.name) {
+            if ir_version >= 4 {
+                overridable_inputs.push(spec);
+            }
+        } else {
+            inputs.push(spec);
+        }
+    }
+    let mut outputs = Vec::new();
+    let mut output_names = std::collections::BTreeSet::new();
+    for output in graph.output {
+        let spec = parsed_tensor_spec(output)?;
+        if !output_names.insert(spec.name.clone()) {
+            return Err(runtime_error("invalidOnnxProtobuf"));
+        }
+        outputs.push(spec);
+    }
+    if inputs.is_empty() || outputs.is_empty() {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(ParsedModelProto { ir_version, opsets, inputs, overridable_inputs, outputs })
+}
+
+fn insert_initializer(
+    names: &mut std::collections::BTreeSet<String>,
+    name: String,
+) -> Result<(), ConversionError> {
+    if name.is_empty()
+        || name.len() > MAX_TENSOR_NAME_BYTES
+        || name.as_bytes().contains(&0)
+        || !names.insert(name)
+    {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn parsed_tensor_spec(
+    value: crate::onnx_proto::ValueInfoProto,
+) -> Result<ParsedTensorSpec, ConversionError> {
+    if value.name.is_empty()
+        || value.name.len() > MAX_TENSOR_NAME_BYTES
+        || value.name.as_bytes().contains(&0)
+    {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    let r#type = value.r#type.ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+    let crate::onnx_proto::type_proto::Value::TensorType(tensor) =
+        r#type.value.ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?
+    else {
+        return Err(runtime_error("modelDtypeMismatch"));
+    };
+    if tensor.elem_type != 1 {
+        return Err(runtime_error("modelDtypeMismatch"));
+    }
+    let shape = tensor.shape.ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+    if shape.dim.is_empty() || shape.dim.len() > MAX_TENSOR_RANK {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    let mut dimensions = Vec::new();
+    dimensions.try_reserve_exact(shape.dim.len()).map_err(|_| resource_error("tensorMemory"))?;
+    for dimension in shape.dim {
+        let parsed = match dimension.value {
+            Some(crate::onnx_proto::tensor_shape_proto::dimension::Value::DimValue(value)) => {
+                ParsedDimension::Exact(
+                    usize::try_from(value)
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?,
+                )
+            }
+            Some(crate::onnx_proto::tensor_shape_proto::dimension::Value::DimParam(value))
+                if !value.is_empty()
+                    && value.len() <= MAX_TENSOR_NAME_BYTES
+                    && !value.as_bytes().contains(&0) =>
+            {
+                ParsedDimension::Symbolic(value)
+            }
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        };
+        dimensions.push(parsed);
+    }
+    Ok(ParsedTensorSpec { name: value.name, dimensions })
+}
+
+fn validate_graph_specs(
+    parsed: &[ParsedTensorSpec],
+    expected: &[TensorSpec],
+) -> Result<(), ConversionError> {
+    if parsed.len() != expected.len() {
+        return Err(runtime_error("modelIoMismatch"));
+    }
+    for (parsed, expected) in parsed.iter().zip(expected) {
+        if parsed.name != expected.name
+            || expected.element_type != TensorElementType::Float32
+            || parsed.dimensions.len() != expected.dimensions.len()
+        {
+            return Err(runtime_error("modelIoMismatch"));
+        }
+        for (parsed, expected) in parsed.dimensions.iter().zip(&expected.dimensions) {
+            let compatible = matches!((parsed, expected),
+                (ParsedDimension::Exact(left), Dimension::Exact(right)) if left == right)
+                || matches!((parsed, expected),
+                    (ParsedDimension::Symbolic(_), Dimension::Dynamic { min, max })
+                        if *min > 0 && min <= max);
+            if !compatible {
+                return Err(runtime_error("modelShapeMismatch"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preflight_model(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut ir = false;
+    let mut graph = false;
+    let mut opsets = 0;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
         match (field, wire) {
-            (1, 2) => {
-                if domain.is_some() {
+            (1, 0) => {
+                if ir {
                     return Err(runtime_error("invalidOnnxProtobuf"));
                 }
-                let value = read_length_delimited(bytes, &mut cursor)?;
-                if value.len() > MAX_DOMAIN_BYTES || value.contains(&0) {
-                    return Err(runtime_error("invalidOnnxProtobuf"));
-                }
-                domain = Some(
-                    std::str::from_utf8(value)
-                        .map_err(|_| runtime_error("invalidOnnxProtobuf"))?
-                        .to_owned(),
-                );
+                ir = true;
+                read_varint(bytes, &mut cursor)?;
             }
-            (2, 0) => {
-                if version.replace(read_varint(bytes, &mut cursor)?).is_some() {
+            (7, 2) => {
+                if graph {
                     return Err(runtime_error("invalidOnnxProtobuf"));
                 }
+                graph = true;
+                preflight_graph(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
             }
-            _ if field != 0 => skip_field(bytes, &mut cursor, wire)?,
+            (8, 2) => {
+                opsets += 1;
+                if opsets > MAX_OPSET_IMPORTS {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+                preflight_opset(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+            }
+            (2 | 3 | 4 | 6 | 14 | 20 | 25 | 26, 2) | (5, 0) => {
+                skip_field(bytes, &mut cursor, wire)?;
+            }
             _ => return Err(runtime_error("invalidOnnxProtobuf")),
         }
     }
-    let version = version
-        .filter(|value| *value > 0 && i64::try_from(*value).is_ok())
-        .ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
-    Ok((domain.unwrap_or_default(), version))
+    if !ir || !graph || opsets == 0 {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_graph(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut inputs = 0;
+    let mut outputs = 0;
+    let mut initializers = 0;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (5, 2) => {
+                initializers += 1;
+                if initializers > MAX_GRAPH_INITIALIZERS {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+                preflight_tensor(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+            }
+            (15, 2) => {
+                initializers += 1;
+                if initializers > MAX_GRAPH_INITIALIZERS {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+                preflight_sparse_tensor(
+                    read_length_delimited(bytes, &mut cursor)?,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            (11, 2) => {
+                inputs += 1;
+                if inputs > MAX_TENSORS * 2 {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+                preflight_value_info(
+                    read_length_delimited(bytes, &mut cursor)?,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            (12, 2) => {
+                outputs += 1;
+                if outputs > MAX_TENSORS {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+                preflight_value_info(
+                    read_length_delimited(bytes, &mut cursor)?,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            (1 | 2 | 10 | 13 | 14 | 16, 2) => skip_field(bytes, &mut cursor, wire)?,
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if inputs == 0 || outputs == 0 {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_opset(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut domain = false;
+    let mut version = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 2) if !domain => {
+                domain = true;
+                if read_length_delimited(bytes, &mut cursor)?.len() > MAX_DOMAIN_BYTES {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+            }
+            (2, 0) if !version => {
+                version = true;
+                read_varint(bytes, &mut cursor)?;
+            }
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !version {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_value_info(
+    bytes: &[u8],
+    budget: &mut usize,
+    depth: usize,
+) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut name = false;
+    let mut r#type = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 2) if !name => {
+                name = true;
+                if read_length_delimited(bytes, &mut cursor)?.len() > MAX_TENSOR_NAME_BYTES {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+            }
+            (2, 2) if !r#type => {
+                r#type = true;
+                preflight_type(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+            }
+            (3 | 4, 2) => skip_field(bytes, &mut cursor, wire)?,
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !name || !r#type {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_type(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut tensor = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 2) if !tensor => {
+                tensor = true;
+                preflight_tensor_type(
+                    read_length_delimited(bytes, &mut cursor)?,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            (6, 2) => skip_field(bytes, &mut cursor, wire)?,
+            (4 | 5 | 8 | 9, 2) => return Err(runtime_error("modelDtypeMismatch")),
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !tensor {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_tensor_type(
+    bytes: &[u8],
+    budget: &mut usize,
+    depth: usize,
+) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut element = false;
+    let mut shape = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 0) if !element => {
+                element = true;
+                read_varint(bytes, &mut cursor)?;
+            }
+            (2, 2) if !shape => {
+                shape = true;
+                preflight_shape(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+            }
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !element || !shape {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_shape(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut rank = 0;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        if (field, wire) != (1, 2) {
+            return Err(runtime_error("invalidOnnxProtobuf"));
+        }
+        rank += 1;
+        if rank > MAX_TENSOR_RANK {
+            return Err(runtime_error("invalidOnnxProtobuf"));
+        }
+        preflight_dimension(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+    }
+    if rank == 0 {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_dimension(
+    bytes: &[u8],
+    budget: &mut usize,
+    depth: usize,
+) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut value = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 0) if !value => {
+                value = true;
+                read_varint(bytes, &mut cursor)?;
+            }
+            (2, 2) if !value => {
+                value = true;
+                if read_length_delimited(bytes, &mut cursor)?.len() > MAX_TENSOR_NAME_BYTES {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+            }
+            (3, 2) => skip_field(bytes, &mut cursor, wire)?,
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !value {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_tensor(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut name = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (8, 2) if !name => {
+                name = true;
+                if read_length_delimited(bytes, &mut cursor)?.len() > MAX_TENSOR_NAME_BYTES {
+                    return Err(runtime_error("invalidOnnxProtobuf"));
+                }
+            }
+            (1, 0 | 2)
+            | (2 | 5 | 7 | 11 | 14, 0)
+            | (3 | 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12 | 13 | 16, 2)
+            | (4 | 10, 1 | 5) => {
+                skip_field(bytes, &mut cursor, wire)?;
+            }
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !name {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn preflight_sparse_tensor(
+    bytes: &[u8],
+    budget: &mut usize,
+    depth: usize,
+) -> Result<(), ConversionError> {
+    checked_depth(depth)?;
+    let mut cursor = 0;
+    let mut values = false;
+    while cursor < bytes.len() {
+        let (field, wire) = read_key(bytes, &mut cursor, budget)?;
+        match (field, wire) {
+            (1, 2) if !values => {
+                values = true;
+                preflight_tensor(read_length_delimited(bytes, &mut cursor)?, budget, depth + 1)?;
+            }
+            (2 | 3, 2) | (3, 0) => skip_field(bytes, &mut cursor, wire)?,
+            _ => return Err(runtime_error("invalidOnnxProtobuf")),
+        }
+    }
+    if !values {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
+}
+
+fn read_key(
+    bytes: &[u8],
+    cursor: &mut usize,
+    budget: &mut usize,
+) -> Result<(u64, u8), ConversionError> {
+    *budget = budget.checked_sub(1).ok_or_else(|| runtime_error("invalidOnnxProtobuf"))?;
+    let key = read_varint(bytes, cursor)?;
+    let field = key >> 3;
+    let wire = u8::try_from(key & 7).map_err(|_| runtime_error("invalidOnnxProtobuf"))?;
+    if field == 0 {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok((field, wire))
+}
+
+fn checked_depth(depth: usize) -> Result<(), ConversionError> {
+    if depth > MAX_PROTO_DEPTH {
+        return Err(runtime_error("invalidOnnxProtobuf"));
+    }
+    Ok(())
 }
 
 fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, ConversionError> {
@@ -1084,6 +1549,7 @@ mod tests {
             ir_version: 9,
             opsets: BTreeMap::from([(String::new(), 18)]),
             inputs: vec![spec("image", vec![Dimension::Exact(1), Dimension::Exact(2)])],
+            overridable_inputs: Vec::new(),
             outputs: vec![spec("score", vec![Dimension::Exact(1)])],
             session_memory_bytes: 1024,
             run_memory_bytes: 8,
@@ -1112,9 +1578,13 @@ mod tests {
         bytes
     }
 
-    fn value_info(name: &str) -> Vec<u8> {
-        let dimension = [0x08, 0x01];
-        let shape = field_bytes(1, &dimension);
+    fn value_info(name: &str, dimensions: &[u64]) -> Vec<u8> {
+        let mut shape = Vec::new();
+        for dimension in dimensions {
+            let mut encoded = vec![0x08];
+            encoded.extend(encode_varint(*dimension));
+            shape.extend(field_bytes(1, &encoded));
+        }
         let mut tensor_type = vec![0x08, 0x01]; // FLOAT
         tensor_type.extend(field_bytes(2, &shape));
         let type_proto = field_bytes(1, &tensor_type);
@@ -1123,14 +1593,28 @@ mod tests {
         info
     }
 
+    fn symbolic_value_info(name: &str, dimensions: usize) -> Vec<u8> {
+        let mut shape = Vec::new();
+        for index in 0..dimensions {
+            let dimension = field_bytes(2, format!("d{index}").as_bytes());
+            shape.extend(field_bytes(1, &dimension));
+        }
+        let mut tensor_type = vec![0x08, 0x01];
+        tensor_type.extend(field_bytes(2, &shape));
+        let type_proto = field_bytes(1, &tensor_type);
+        let mut info = field_bytes(1, name.as_bytes());
+        info.extend(field_bytes(2, &type_proto));
+        info
+    }
+
     fn tiny_identity_model() -> Arc<[u8]> {
-        let mut node = field_bytes(1, b"x");
-        node.extend(field_bytes(2, b"y"));
+        let mut node = field_bytes(1, b"image");
+        node.extend(field_bytes(2, b"score"));
         node.extend(field_bytes(4, b"Identity"));
         let mut graph = field_bytes(1, &node);
         graph.extend(field_bytes(2, b"identity"));
-        graph.extend(field_bytes(11, &value_info("x")));
-        graph.extend(field_bytes(12, &value_info("y")));
+        graph.extend(field_bytes(11, &value_info("image", &[1, 2])));
+        graph.extend(field_bytes(12, &value_info("score", &[1])));
         let mut model = vec![0x08, 0x09];
         model.extend(field_bytes(2, b"into-markdown-test"));
         model.extend(field_bytes(7, &graph));
@@ -1215,6 +1699,7 @@ mod tests {
                     ir_version: model.contract.ir_version,
                     opsets: model.contract.opsets.clone(),
                     inputs: model.contract.inputs.clone(),
+                    overridable_inputs: model.contract.overridable_inputs.clone(),
                     outputs: model.contract.outputs.clone(),
                 },
                 bytes: self.bytes,
@@ -1259,6 +1744,7 @@ mod tests {
             ir_version: expected.ir_version,
             opsets: BTreeMap::from([(String::new(), 19)]),
             inputs: expected.inputs.clone(),
+            overridable_inputs: expected.overridable_inputs.clone(),
             outputs: expected.outputs.clone(),
         };
         assert!(
@@ -1312,27 +1798,104 @@ mod tests {
 
     #[test]
     fn onnx_protobuf_ir_and_opsets_are_parsed_with_bounds() {
-        let parsed = parse_model_proto(&[0x08, 0x09, 0x42, 0x02, 0x10, 0x12]).unwrap();
+        let model = tiny_identity_model();
+        let parsed = parse_model_proto(&model).unwrap();
         assert_eq!(parsed.ir_version, 9);
         assert_eq!(parsed.opsets, BTreeMap::from([(String::new(), 18)]));
+        assert_eq!(parsed.inputs[0].name, "image");
+        assert_eq!(parsed.outputs[0].name, "score");
 
-        // Unknown fixed-width fields are skipped, while truncation is rejected.
-        let with_unknown = [0x08, 0x09, 0x15, 1, 2, 3, 4, 0x42, 0x02, 0x10, 0x12];
-        assert_eq!(parse_model_proto(&with_unknown).unwrap().opsets[""], 18);
+        // Unsupported top-level fields and truncation are rejected before decode.
+        let mut with_unknown = model.to_vec();
+        with_unknown.extend([0xF8, 0x01, 0x01]);
         assert!(
-            format!("{}", parse_model_proto(&with_unknown[..6]).unwrap_err())
+            format!("{}", parse_model_proto(&with_unknown).unwrap_err())
+                .contains("invalidOnnxProtobuf")
+        );
+        assert!(
+            format!("{}", parse_model_proto(&model[..model.len() - 1]).unwrap_err())
                 .contains("invalidOnnxProtobuf")
         );
 
         // Empty and ai.onnx are the same canonical domain and cannot coexist.
-        let duplicate_default = [
-            0x08, 0x09, 0x42, 0x02, 0x10, 0x12, 0x42, 0x0b, 0x0a, 0x07, b'a', b'i', b'.', b'o',
-            b'n', b'n', b'x', 0x10, 0x12,
-        ];
+        let mut duplicate_default = model.to_vec();
+        duplicate_default.extend(field_bytes(
+            8,
+            &[0x0a, 0x07, b'a', b'i', b'.', b'o', b'n', b'n', b'x', 0x10, 0x12],
+        ));
         assert!(
             format!("{}", parse_model_proto(&duplicate_default).unwrap_err())
                 .contains("duplicateOpsetDomain")
         );
+    }
+
+    #[test]
+    fn graph_io_rejects_missing_duplicate_long_rank_and_unsupported_types() {
+        let model = tiny_identity_model();
+        let mut missing_graph = vec![0x08, 0x09];
+        missing_graph.extend(field_bytes(8, &[0x10, 0x12]));
+        assert!(parse_model_proto(&missing_graph).is_err());
+
+        let mut graph = field_bytes(11, &value_info("image", &[1, 2]));
+        graph.extend(field_bytes(11, &value_info("image", &[1, 2])));
+        graph.extend(field_bytes(12, &value_info("score", &[1])));
+        let mut duplicate = vec![0x08, 0x09];
+        duplicate.extend(field_bytes(7, &graph));
+        duplicate.extend(field_bytes(8, &[0x10, 0x12]));
+        assert!(parse_model_proto(&duplicate).is_err());
+
+        let mut graph = field_bytes(11, &value_info(&"n".repeat(257), &[1]));
+        graph.extend(field_bytes(12, &value_info("score", &[1])));
+        let mut long = vec![0x08, 0x09];
+        long.extend(field_bytes(7, &graph));
+        long.extend(field_bytes(8, &[0x10, 0x12]));
+        assert!(parse_model_proto(&long).is_err());
+
+        let mut graph = field_bytes(11, &symbolic_value_info("image", MAX_TENSOR_RANK + 1));
+        graph.extend(field_bytes(12, &value_info("score", &[1])));
+        let mut rank = vec![0x08, 0x09];
+        rank.extend(field_bytes(7, &graph));
+        rank.extend(field_bytes(8, &[0x10, 0x12]));
+        assert!(parse_model_proto(&rank).is_err());
+
+        let mut unknown = model.to_vec();
+        unknown.extend([0xa8, 0x06, 0x01]);
+        assert!(parse_model_proto(&unknown).is_err());
+    }
+
+    #[test]
+    fn graph_initializer_inputs_follow_ir_overridable_semantics() {
+        let mut initializer = vec![0x08, 0x01, 0x10, 0x01];
+        initializer.extend(field_bytes(8, b"weight"));
+        initializer.extend(field_bytes(9, &1_f32.to_le_bytes()));
+        let mut graph = field_bytes(5, &initializer);
+        graph.extend(field_bytes(11, &value_info("image", &[1])));
+        graph.extend(field_bytes(11, &value_info("weight", &[1])));
+        graph.extend(field_bytes(12, &value_info("score", &[1])));
+        let mut model = vec![0x08, 0x09];
+        model.extend(field_bytes(7, &graph));
+        model.extend(field_bytes(8, &[0x10, 0x12]));
+        let parsed = parse_model_proto(&model).unwrap();
+        assert_eq!(
+            parsed.inputs.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>(),
+            ["image"]
+        );
+        assert_eq!(
+            parsed.overridable_inputs.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>(),
+            ["weight"]
+        );
+
+        let duplicate_initializer = {
+            let mut graph = field_bytes(5, &initializer);
+            graph.extend(field_bytes(5, &initializer));
+            graph.extend(field_bytes(11, &value_info("image", &[1])));
+            graph.extend(field_bytes(12, &value_info("score", &[1])));
+            let mut model = vec![0x08, 0x09];
+            model.extend(field_bytes(7, &graph));
+            model.extend(field_bytes(8, &[0x10, 0x12]));
+            model
+        };
+        assert!(parse_model_proto(&duplicate_initializer).is_err());
     }
 
     #[test]
@@ -1570,6 +2133,7 @@ mod tests {
                         ir_version: model.contract.ir_version,
                         opsets: model.contract.opsets.clone(),
                         inputs: model.contract.inputs.clone(),
+                        overridable_inputs: model.contract.overridable_inputs.clone(),
                         outputs: model.contract.outputs.clone(),
                     },
                     bytes: 8,

@@ -51,6 +51,7 @@ struct OrtTarget {
     sha256: String,
     library: String,
     library_bytes: u64,
+    worker_address_space_overhead_bytes: u64,
     binary_format: String,
     binary_architecture: String,
     load_identity: String,
@@ -707,6 +708,8 @@ fn ort_target_audit_is_valid(target: &str, asset: &OrtTarget) -> bool {
         && is_safe_relative_path(&asset.library)
         && asset.library_bytes != 0
         && asset.library_bytes <= 512 * 1024 * 1024
+        && (256 * 1024 * 1024..=2 * 1024 * 1024 * 1024 * 1024)
+            .contains(&asset.worker_address_space_overhead_bytes)
         && matches!(asset.binary_format.as_str(), "elf" | "mach-o" | "pe")
         && matches!(asset.binary_architecture.as_str(), "aarch64" | "x86_64")
         && match asset.binary_format.as_str() {
@@ -1288,6 +1291,7 @@ mod tests {
                     sha256: sha256.clone(),
                     library: "lib/libonnxruntime.so".to_owned(),
                     library_bytes: 1024,
+                    worker_address_space_overhead_bytes: 512 * 1024 * 1024,
                     binary_format: if target == "aarch64-apple-darwin" {
                         "mach-o"
                     } else if target == "x86_64-pc-windows-msvc" {

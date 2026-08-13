@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "all_crate_deps", "aliases")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 package(default_visibility = ["//crates:__subpackages__"])
 
@@ -16,6 +16,17 @@ rust_library(
         "//crates/ocr",
     ] + all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+# The worker contains no runtime/model archive. Its executable path is passed
+# explicitly by the product/runfiles owner; it never searches CWD, PATH, or an
+# environment variable for ORT.
+rust_binary(
+    name = "onnxruntime_worker",
+    srcs = ["src/bin/onnxruntime-worker.rs"],
+    crate_name = "onnxruntime_worker",
+    edition = "2024",
+    deps = [":onnxruntime"],
 )
 
 rust_test(
@@ -38,28 +49,36 @@ rust_test(
     crate = ":onnxruntime",
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
     compile_data = ["//third_party/onnxruntime:manifest.json"],
-    data = ["//third_party/onnxruntime:cpu_runtime"],
+    data = [
+        ":onnxruntime_worker",
+        "//third_party/onnxruntime:cpu_runtime",
+    ],
     edition = "2024",
     rustc_env = select({
         "//third_party/onnxruntime:is_linux_arm64": {
             "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_linux_arm64",
             "ORT_TEST_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_linux_x86_64": {
             "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_linux_x86_64",
             "ORT_TEST_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_macos_arm64": {
             "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_macos_arm64",
             "ORT_TEST_LIBRARY": "lib/libonnxruntime.dylib",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
         },
         "//third_party/onnxruntime:is_windows_x86_64": {
             "ORT_TEST_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
             "ORT_TEST_LIBRARY": "lib/onnxruntime.dll",
+            "ORT_TEST_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
         },
         "//conditions:default": {
             "ORT_TEST_REPOSITORY": "unsupported",
             "ORT_TEST_LIBRARY": "unsupported",
+            "ORT_TEST_WORKER": "unsupported",
         },
     }),
     tags = ["manual"],

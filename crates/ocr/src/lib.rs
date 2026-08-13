@@ -21,6 +21,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+mod onnx_proto;
 mod runtime;
 
 pub use runtime::{
@@ -121,6 +122,7 @@ struct OrtTarget {
     sha256: String,
     library: String,
     library_bytes: u64,
+    worker_address_space_overhead_bytes: u64,
     binary_format: String,
     binary_architecture: String,
     load_identity: String,
@@ -458,6 +460,8 @@ fn validate_native_downloads(
         validate_relative_path(&target.library)?;
         if target.library_bytes == 0
             || target.library_bytes > 512 * 1024 * 1024
+            || !(256 * 1024 * 1024..=2 * 1024 * 1024 * 1024 * 1024)
+                .contains(&target.worker_address_space_overhead_bytes)
             || !matches!(target.binary_format.as_str(), "elf" | "mach-o" | "pe")
             || !matches!(target.binary_architecture.as_str(), "aarch64" | "x86_64")
             || !match target.binary_format.as_str() {

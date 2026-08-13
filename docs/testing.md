@@ -66,12 +66,13 @@ U+FFFE，以及 UTF-8/UTF-16 的独立属性 QName/value 原始 byte span。
 `internal`。
 
 ONNX 安全层测试使用 fake `SessionFactory`/`SessionAdapter`，离线覆盖 runtime 版本
-authority、ABI/API mismatch 策略、IR/opset protobuf 变异与重复 domain、输入输出
-name/dtype/rank/shape、非法 C 字符串、并发 single-flight、失败重试、按最终 `Arc` 析构
+authority、ABI/API mismatch 策略、IR/opset/GraphProto IO protobuf 变异、initializer/
+overridable input 与重复 domain、输入输出 name/dtype/rank/shape、非法 C 字符串、
+native huge count/name/rank 在分配前拒绝、并发 single-flight、失败重试、按最终 `Arc` 析构
 计费的 count/bytes LRU、完整 contract cache key、取消和复制前资源预留。普通
 `bazel build/test //...` 不获取 native archive；真正动态库的哈希、版本和 API
-探针只由显式 manual target 执行；该 target 再启动隔离子进程，覆盖 factory 释放后的
-环境/session API 重用、正常进程退出，以及预先提交不兼容全局环境时 fail closed：
+探针只由显式 manual target 执行；该 target 启动已安装 OS hard limit 的隔离 worker，
+覆盖 factory 释放后的 session 重建、正常退出、取消后的 kill/wait，以及父进程不加载 ORT：
 
 ```shell
 bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
@@ -80,13 +81,15 @@ bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
 其它三个配置分别为 `linux_x86_64`、`linux_arm64` 和 `windows_x86_64`。没有 macOS
 x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称完成真实模型推理；
 显式 native target 会用完整的极小 Identity `ModelProto` 创建真实 ORT session 并执行一次
-CPU 推理，以验证 adapter、factory 重建和退出析构顺序。该 fixture 不是产品 OCR 模型；
+CPU 推理，以验证 adapter、factory 重建和退出析构顺序；另一个真实 Expand fixture 请求约
+8 TiB float 输出，在 macOS ARM64 的 1 TiB `RLIMIT_AS` worker 中稳定失败为
+`resourceLimit`，父进程随后仍能创建 Identity session。该 ceiling 是虚拟地址空间而非
+RSS 声明，模型 session/run 和请求预算仍独立检查。fixture 不是产品 OCR 模型；
 当前模型 authority 没有 ONNX runtime artifact，因而没有产品模型推理验证。
 独立 `native_archive_binary_audit` 显式 target 会下载四个固定官方包，但不执行异平台
 代码；它有界解析并精确核对四个平台的格式、架构、SONAME/install name、imports 与
-RPATH。macOS ARM64 的独立 native smoke 还在子进程内验证加载、禁 telemetry、factory
-析构后的再次建 session/推理与退出析构顺序。普通 `//...` 不包含这些 manual targets。
-native adapter 的 oversized-output hook 断言 shape 超出 authority 时值复制计数保持为零。
+RPATH。普通 `//...` 不包含这些 manual targets。native adapter 的输出检查在任何
+`GetTensorMutableData`、slice 或 Rust 值复制前完成，超界输出直接释放 native value。
 
 常用定向命令如下：
 

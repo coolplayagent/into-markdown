@@ -57,10 +57,14 @@ ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包�
 `third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
 为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
 默认 feature、二进制下载和 build.rs 链接，仅启用 `std`、`alternative-backend` 与
-API 28 兼容绑定；安全 loader 将已验证的 API table 显式交给 wrapper，运行时仍以
-authority 的 API 29 和精确 `GetVersionString` 做探针。
+API 28 兼容绑定；worker 直接使用该预生成 C API table，运行时仍以 authority 的 API 29
+和精确 `GetVersionString` 做探针，父进程不加载 native library。
 `object` 固定为 `0.40.0`，从上游 Apache-2.0 OR MIT 中选择 Apache-2.0，关闭默认压缩 feature 且该 crate
 没有 build.rs；它只在加载前离线解析固定 ELF、Mach-O 与 PE 头，不下载或链接原生代码。
+`prost`/`prost-derive` 固定为 `0.14.4`，选择 Apache-2.0；仓库不运行 `protoc` 或 build.rs，
+只编译 checked-in 的安全边界消息类型。ONNX `onnx.proto3` 的来源、v1.20.0 tag、
+SHA-256、Apache-2.0 许可、生成器版本、未知字段策略和递归上限记录在
+`third_party/onnx/proto-authority.json`。
 当前默认
 发布边界不携带 native archive，因此 inventory 的 `included_in_release` 保持 `false`；
 发布目标若开始随包分发，必须先把上游 MIT 文本加入 release license set 与 SBOM。
