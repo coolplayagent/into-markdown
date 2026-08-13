@@ -232,16 +232,60 @@ fn validate_exact_image_envelope(
     }
 }
 
+type EnvelopeCheckpointHook<'a> = Option<&'a dyn Fn(usize)>;
+
+const ENVELOPE_CHECKPOINT_BYTES: usize = 4 * 1024;
+
+struct EnvelopeMeter<'a> {
+    context: &'a ExecutionContext,
+    bytes_until_checkpoint: usize,
+    checkpoints: usize,
+    hook: EnvelopeCheckpointHook<'a>,
+}
+
+impl<'a> EnvelopeMeter<'a> {
+    fn new(context: &'a ExecutionContext, hook: EnvelopeCheckpointHook<'a>) -> Self {
+        Self { context, bytes_until_checkpoint: ENVELOPE_CHECKPOINT_BYTES, checkpoints: 0, hook }
+    }
+
+    fn consume(&mut self, mut bytes: usize) -> Result<(), ConversionError> {
+        while bytes >= self.bytes_until_checkpoint {
+            bytes -= self.bytes_until_checkpoint;
+            self.bytes_until_checkpoint = ENVELOPE_CHECKPOINT_BYTES;
+            self.checkpoints = self.checkpoints.checked_add(1).ok_or_else(|| {
+                limit("max_asset_bytes", "image envelope checkpoint count overflowed")
+            })?;
+            if let Some(hook) = self.hook {
+                hook(self.checkpoints);
+            }
+            self.context.checkpoint()?;
+        }
+        self.bytes_until_checkpoint -= bytes;
+        Ok(())
+    }
+
+    fn next_batch_bytes(&self) -> usize {
+        self.bytes_until_checkpoint
+    }
+}
+
 fn exact_png_envelope(bytes: &[u8], context: &ExecutionContext) -> Result<(), ConversionError> {
+    exact_png_envelope_inner(bytes, context, None)
+}
+
+fn exact_png_envelope_inner(
+    bytes: &[u8],
+    context: &ExecutionContext,
+    hook: EnvelopeCheckpointHook<'_>,
+) -> Result<(), ConversionError> {
+    context.checkpoint()?;
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(malformed("pict bytes do not match the declared PNG signature"));
     }
+    let mut meter = EnvelopeMeter::new(context, hook);
+    meter.consume(8)?;
     let mut cursor = 8_usize;
-    let mut chunks = 0_usize;
     loop {
-        if chunks.is_multiple_of(CHECKPOINT_INTERVAL) {
-            context.checkpoint()?;
-        }
         let header = bytes
             .get(cursor..cursor.saturating_add(8))
             .ok_or_else(|| malformed("PNG chunk header is truncated"))?;
@@ -270,9 +314,11 @@ fn exact_png_envelope(bytes: &[u8], context: &ExecutionContext) -> Result<(), Co
         let stored_crc = u32::from_be_bytes(
             stored_crc.try_into().map_err(|_| malformed("PNG chunk CRC is truncated"))?,
         );
-        if png_crc(chunk_type, data) != stored_crc {
+        meter.consume(4)?;
+        if png_crc(chunk_type, data, &mut meter)? != stored_crc {
             return Err(malformed("PNG chunk CRC mismatch"));
         }
+        meter.consume(4)?;
         if chunk_type == b"IEND" {
             if length != 0 || end != bytes.len() {
                 return Err(malformed("PNG IEND must be unique and end exactly at EOF"));
@@ -280,41 +326,69 @@ fn exact_png_envelope(bytes: &[u8], context: &ExecutionContext) -> Result<(), Co
             return Ok(());
         }
         cursor = end;
-        chunks = chunks
-            .checked_add(1)
-            .ok_or_else(|| limit("max_asset_bytes", "PNG chunk count overflowed"))?;
     }
 }
 
-fn png_crc(chunk_type: &[u8], data: &[u8]) -> u32 {
+fn png_crc(
+    chunk_type: &[u8],
+    data: &[u8],
+    meter: &mut EnvelopeMeter<'_>,
+) -> Result<u32, ConversionError> {
     let mut crc = u32::MAX;
-    for byte in chunk_type.iter().chain(data) {
+    crc = png_crc_metered(crc, chunk_type, meter)?;
+    crc = png_crc_metered(crc, data, meter)?;
+    Ok(!crc)
+}
+
+fn png_crc_metered(
+    mut crc: u32,
+    bytes: &[u8],
+    meter: &mut EnvelopeMeter<'_>,
+) -> Result<u32, ConversionError> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let batch_length = remaining.len().min(meter.next_batch_bytes());
+        let (batch, rest) = remaining.split_at(batch_length);
+        crc = png_crc_update(crc, batch);
+        meter.consume(batch.len())?;
+        remaining = rest;
+    }
+    Ok(crc)
+}
+
+fn png_crc_update(mut crc: u32, bytes: &[u8]) -> u32 {
+    for byte in bytes {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
             crc = if crc & 1 == 0 { crc >> 1 } else { (crc >> 1) ^ 0xedb8_8320 };
         }
     }
-    !crc
+    crc
 }
 
 fn exact_jpeg_envelope(bytes: &[u8], context: &ExecutionContext) -> Result<(), ConversionError> {
+    exact_jpeg_envelope_inner(bytes, context, None)
+}
+
+fn exact_jpeg_envelope_inner(
+    bytes: &[u8],
+    context: &ExecutionContext,
+    hook: EnvelopeCheckpointHook<'_>,
+) -> Result<(), ConversionError> {
+    context.checkpoint()?;
     if !bytes.starts_with(&[0xff, 0xd8]) {
         return Err(malformed("pict bytes do not match the declared JPEG signature"));
     }
+    let mut meter = EnvelopeMeter::new(context, hook);
+    meter.consume(2)?;
     let mut cursor = 2_usize;
+    let mut pending_marker = None;
     loop {
-        if cursor.is_multiple_of(CHECKPOINT_INTERVAL) {
-            context.checkpoint()?;
-        }
-        let marker_start = cursor;
-        if bytes.get(cursor) != Some(&0xff) {
-            return Err(malformed("JPEG data appears outside a marker or entropy scan"));
-        }
-        while bytes.get(cursor) == Some(&0xff) {
-            cursor += 1;
-        }
-        let marker = *bytes.get(cursor).ok_or_else(|| malformed("JPEG marker is truncated"))?;
-        cursor += 1;
+        let marker = if let Some(marker) = pending_marker.take() {
+            marker
+        } else {
+            read_jpeg_marker(bytes, &mut cursor, &mut meter)?
+        };
         match marker {
             0xd9 => {
                 if cursor != bytes.len() {
@@ -325,49 +399,69 @@ fn exact_jpeg_envelope(bytes: &[u8], context: &ExecutionContext) -> Result<(), C
             0xd8 | 0x00 => return Err(malformed("JPEG contains an invalid structural marker")),
             0x01 | 0xd0..=0xd7 => {}
             0xda => {
-                cursor = jpeg_segment_end(bytes, cursor)?;
-                loop {
-                    if cursor.is_multiple_of(CHECKPOINT_INTERVAL) {
-                        context.checkpoint()?;
-                    }
-                    let byte = *bytes
-                        .get(cursor)
-                        .ok_or_else(|| malformed("JPEG entropy scan has no EOI"))?;
-                    if byte != 0xff {
-                        cursor = cursor.checked_add(1).ok_or_else(|| {
-                            limit("max_asset_bytes", "JPEG scan offset overflowed")
-                        })?;
-                        continue;
-                    }
-                    let next_marker_start = cursor;
-                    while bytes.get(cursor) == Some(&0xff) {
-                        cursor += 1;
-                    }
-                    let next = *bytes
-                        .get(cursor)
-                        .ok_or_else(|| malformed("JPEG entropy scan has no EOI"))?;
-                    cursor += 1;
-                    match next {
-                        0x00 | 0xd0..=0xd7 => {}
-                        0xd9 => {
-                            if cursor != bytes.len() {
-                                return Err(malformed(
-                                    "JPEG EOI must be the first real terminator and EOF",
-                                ));
-                            }
-                            return Ok(());
-                        }
-                        _ => {
-                            cursor = next_marker_start;
-                            break;
-                        }
-                    }
-                }
+                let end = jpeg_segment_end(bytes, cursor)?;
+                meter.consume(end - cursor)?;
+                cursor = end;
+                pending_marker = Some(read_jpeg_entropy_marker(bytes, &mut cursor, &mut meter)?);
             }
-            _ => cursor = jpeg_segment_end(bytes, cursor)?,
+            _ => {
+                let end = jpeg_segment_end(bytes, cursor)?;
+                meter.consume(end - cursor)?;
+                cursor = end;
+            }
         }
-        if cursor <= marker_start {
-            return Err(ConversionError::Internal { detail: "JPEG envelope scan stalled".into() });
+    }
+}
+
+fn read_jpeg_marker(
+    bytes: &[u8],
+    cursor: &mut usize,
+    meter: &mut EnvelopeMeter<'_>,
+) -> Result<u8, ConversionError> {
+    if bytes.get(*cursor) != Some(&0xff) {
+        return Err(malformed("JPEG data appears outside a marker or entropy scan"));
+    }
+    while bytes.get(*cursor) == Some(&0xff) {
+        let batch_start = *cursor;
+        let batch_end = batch_start.saturating_add(meter.next_batch_bytes());
+        while *cursor < batch_end && bytes.get(*cursor) == Some(&0xff) {
+            *cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| limit("max_asset_bytes", "JPEG marker offset overflowed"))?;
+        }
+        meter.consume(*cursor - batch_start)?;
+    }
+    let marker = *bytes.get(*cursor).ok_or_else(|| malformed("JPEG marker is truncated"))?;
+    *cursor = cursor
+        .checked_add(1)
+        .ok_or_else(|| limit("max_asset_bytes", "JPEG marker offset overflowed"))?;
+    meter.consume(1)?;
+    Ok(marker)
+}
+
+fn read_jpeg_entropy_marker(
+    bytes: &[u8],
+    cursor: &mut usize,
+    meter: &mut EnvelopeMeter<'_>,
+) -> Result<u8, ConversionError> {
+    loop {
+        let run_start = *cursor;
+        let batch_end = run_start.saturating_add(meter.next_batch_bytes());
+        while *cursor < batch_end && bytes.get(*cursor).is_some_and(|byte| *byte != 0xff) {
+            *cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| limit("max_asset_bytes", "JPEG scan offset overflowed"))?;
+        }
+        meter.consume(*cursor - run_start)?;
+        if *cursor < bytes.len() && bytes.get(*cursor) != Some(&0xff) {
+            continue;
+        }
+        if *cursor == bytes.len() {
+            return Err(malformed("JPEG entropy scan has no EOI"));
+        }
+        let marker = read_jpeg_marker(bytes, cursor, meter)?;
+        if !matches!(marker, 0x00 | 0xd0..=0xd7) {
+            return Ok(marker);
         }
     }
 }
@@ -420,7 +514,10 @@ pub(super) fn set_image_limits<D: image::ImageDecoder>(
 mod tests {
     use super::*;
     use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-    use into_markdown_core::{ConversionOptions, ErrorCode, ExecutionContext, ExecutionOptions};
+    use into_markdown_core::{
+        CancellationToken, ConversionOptions, ErrorCode, ExecutionContext, ExecutionOptions,
+    };
+    use std::time::Duration;
 
     #[test]
     fn png_envelope_requires_one_real_iend_at_eof() {
@@ -476,9 +573,85 @@ mod tests {
         }
     }
 
+    #[test]
+    fn large_png_chunk_crc_observes_mid_scan_cancellation_and_releases_lease() {
+        let cancellation = CancellationToken::new();
+        let context = controlled_context(ExecutionOptions {
+            cancellation: cancellation.clone(),
+            ..ExecutionOptions::default()
+        });
+        let mut png = tiny_png();
+        png.truncate(png.len() - 12);
+        append_png_chunk(&mut png, *b"ruSt", &vec![0x5a; ENVELOPE_CHECKPOINT_BYTES * 3 + 17]);
+        append_png_chunk(&mut png, *b"IEND", &[]);
+        let hook = |checkpoint| {
+            if checkpoint == 2 {
+                cancellation.cancel();
+            }
+        };
+        let lease = context.reserve_memory(128).unwrap();
+        let error = exact_png_envelope_inner(&png, &context, Some(&hook)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Cancelled, "{error}");
+        assert_eq!(context.reserved_memory_bytes(), 128);
+        drop(lease);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn non_aligned_jpeg_segment_jumps_observe_cumulative_cancellation() {
+        let cancellation = CancellationToken::new();
+        let context = controlled_context(ExecutionOptions {
+            cancellation: cancellation.clone(),
+            ..ExecutionOptions::default()
+        });
+        let mut jpeg = vec![0xff, 0xd8];
+        for _ in 0..48 {
+            jpeg.extend_from_slice(&[0xff, 0xe1, 0x01, 0x03]);
+            jpeg.extend_from_slice(&[0x41; 257]);
+        }
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+        let hook = |checkpoint| {
+            if checkpoint == 2 {
+                cancellation.cancel();
+            }
+        };
+        let lease = context.reserve_memory(96).unwrap();
+        let error = exact_jpeg_envelope_inner(&jpeg, &context, Some(&hook)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Cancelled, "{error}");
+        assert_eq!(context.reserved_memory_bytes(), 96);
+        drop(lease);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn long_jpeg_ff_fill_observes_mid_scan_timeout_and_releases_lease() {
+        let context = controlled_context(ExecutionOptions {
+            timeout: Some(Duration::from_millis(250)),
+            ..ExecutionOptions::default()
+        });
+        let mut jpeg = vec![0xff, 0xd8];
+        jpeg.extend(std::iter::repeat_n(0xff, ENVELOPE_CHECKPOINT_BYTES * 3 + 19));
+        jpeg.push(0xd9);
+        let hook = |checkpoint| {
+            if checkpoint == 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        };
+        let lease = context.reserve_memory(64).unwrap();
+        let error = exact_jpeg_envelope_inner(&jpeg, &context, Some(&hook)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Timeout, "{error}");
+        assert_eq!(context.reserved_memory_bytes(), 64);
+        drop(lease);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
     fn context() -> ExecutionContext {
+        controlled_context(ExecutionOptions::default())
+    }
+
+    fn controlled_context(execution: ExecutionOptions) -> ExecutionContext {
         let options = ConversionOptions::default();
-        ExecutionContext::new(ExecutionOptions::default(), options.limits)
+        ExecutionContext::new(execution, options.limits)
     }
 
     fn tiny_png() -> Vec<u8> {
@@ -498,7 +671,8 @@ mod tests {
         output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
         output.extend_from_slice(&chunk_type);
         output.extend_from_slice(data);
-        output.extend_from_slice(&png_crc(&chunk_type, data).to_be_bytes());
+        let crc = !png_crc_update(png_crc_update(u32::MAX, &chunk_type), data);
+        output.extend_from_slice(&crc.to_be_bytes());
     }
 
     fn assert_malformed(error: &ConversionError) {
