@@ -17,6 +17,36 @@
     }
   ],
   "model_runtime_files": [],
+  "pdfium_archives": [
+    {
+      "target": "aarch64-apple-darwin",
+      "repository": "pdfium_macos_arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-mac-arm64.tgz",
+      "sha256": "e214ee33f22b2204daa765a545aee1e425d88448e6154dac95c6a06206b7437f",
+      "strip_prefix": ""
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "repository": "pdfium_linux_arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-linux-arm64.tgz",
+      "sha256": "a19862a36e2b2da3c3fb43f0deef45fbbc331f58cd47943782ae4bd9db4c66d9",
+      "strip_prefix": ""
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "repository": "pdfium_windows_x86_64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-win-x64.tgz",
+      "sha256": "55329d5cb5de8a379a2fc563106492d7f385a1f795d18970922c71f708f9fbb4",
+      "strip_prefix": ""
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "repository": "pdfium_linux_x86_64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-linux-x64.tgz",
+      "sha256": "c3af580f9df0fef9545b44115bc5ea440f286956b5f231df69fb373b8efc4f69",
+      "strip_prefix": ""
+    }
+  ],
   "native_archives": [
     {
       "target": "aarch64-apple-darwin",

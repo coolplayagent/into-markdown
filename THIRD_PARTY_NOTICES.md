@@ -20,10 +20,14 @@ The audit and the local Bzlmod extension share
 `third_party/licenses/downloads.json`, so every managed artifact's URL and hash
 has one structured download source of truth.
 
-PDFium, FFmpeg, LibreOffice, Wasmtime, generated models, and fonts are not in
-current release outputs. They remain machine-readable `planned` entries. No
-version, build configuration, source, or compliance conclusion is asserted for
-them. In particular, a future FFmpeg entry must document a reproducible
+PDFium `153.0.7999.0` (`chromium/7999`) is reviewed and hash-pinned for four
+platforms, but remains a manual input and is not in current release outputs. Its
+redistribution archives include the upstream BSD license and a `licenses/` directory
+for bundled permissive dependencies; both must be preserved if distributed.
+
+FFmpeg, LibreOffice, Wasmtime, generated models, and fonts remain
+machine-readable `planned` entries. No version, build configuration, source, or
+compliance conclusion is asserted for them. In particular, a future FFmpeg entry must document a reproducible
 LGPL-compatible configuration and prove that GPL/nonfree components are off.
 
 ## Release obligation

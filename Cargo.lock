@@ -983,6 +983,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "into-markdown-pdfium"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "libloading",
+ "object 0.40.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "into-markdown-render-markdown"
 version = "0.0.0"
 dependencies = [

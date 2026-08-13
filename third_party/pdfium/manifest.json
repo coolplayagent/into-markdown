@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "version": "153.0.7999.0",
+  "chromium_build": 7999,
+  "source": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7999",
+  "release_download_base": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999",
+  "upstream_source": "https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/7999",
+  "license": "BSD-3-Clause",
+  "distribution_license_note": "Archives include PDFium BSD-3-Clause plus notices for bundled permissive dependencies; preserve LICENSE and licenses/ when redistributing.",
+  "required_exports": [
+    "FPDF_InitLibraryWithConfig", "FPDF_DestroyLibrary", "FPDF_LoadMemDocument64",
+    "FPDF_CloseDocument", "FPDF_GetPageCount", "FPDF_LoadPage", "FPDF_ClosePage",
+    "FPDFText_LoadPage", "FPDFText_ClosePage", "FPDFText_CountChars", "FPDFText_GetText",
+    "FPDFPage_CountObjects", "FPDFPage_GetObject", "FPDFPageObj_GetType",
+    "FPDFBitmap_CreateEx", "FPDFBitmap_Destroy", "FPDFBitmap_GetBuffer",
+    "FPDFBitmap_GetFormat", "FPDFBitmap_GetHeight", "FPDFBitmap_GetStride",
+    "FPDFBitmap_GetWidth", "FPDFImageObj_GetBitmap", "FPDF_RenderPageBitmap",
+    "FPDF_GetLastError"
+  ],
+  "targets": {
+    "aarch64-apple-darwin": {
+      "asset": "pdfium-mac-arm64.tgz",
+      "archive_size": 3453147,
+      "archive_sha256": "e214ee33f22b2204daa765a545aee1e425d88448e6154dac95c6a06206b7437f",
+      "library": "lib/libpdfium.dylib",
+      "library_size": 7191008,
+      "library_sha256": "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc601d52b0",
+      "format_pattern": "Mach-O 64-bit.*arm64",
+      "allowed_dependencies": [
+        "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+        "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "x86_64-unknown-linux-gnu": {
+      "asset": "pdfium-linux-x64.tgz",
+      "archive_size": 3675613,
+      "archive_sha256": "c3af580f9df0fef9545b44115bc5ea440f286956b5f231df69fb373b8efc4f69",
+      "library": "lib/libpdfium.so",
+      "library_size": 7669256,
+      "library_sha256": "224f8ece41f7e35891f11c10073b7b7062d7a18e9ef870586162a85c46130f7d",
+      "format_pattern": "ELF 64-bit.*x86-64",
+      "allowed_dependencies": ["libpthread.so.0", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-x86-64.so.2"]
+    },
+    "aarch64-unknown-linux-gnu": {
+      "asset": "pdfium-linux-arm64.tgz",
+      "archive_size": 3618464,
+      "archive_sha256": "a19862a36e2b2da3c3fb43f0deef45fbbc331f58cd47943782ae4bd9db4c66d9",
+      "library": "lib/libpdfium.so",
+      "library_size": 7867192,
+      "library_sha256": "95a4d8cde3500f57f486478d27795d411b531a14712df08379f4793538a24a88",
+      "format_pattern": "ELF 64-bit.*ARM aarch64",
+      "allowed_dependencies": ["libpthread.so.0", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-aarch64.so.1"]
+    },
+    "x86_64-pc-windows-msvc": {
+      "asset": "pdfium-win-x64.tgz",
+      "archive_size": 3762593,
+      "archive_sha256": "55329d5cb5de8a379a2fc563106492d7f385a1f795d18970922c71f708f9fbb4",
+      "library": "bin/pdfium.dll",
+      "library_size": 7260672,
+      "library_sha256": "fb898a1f5ace57805834f390407500bdb6ef93eff326a252ad334a8aae809d8e",
+      "format_pattern": "PE32+.*x86-64|coff-x86-64",
+      "allowed_dependencies": ["KERNEL32.dll", "ADVAPI32.dll", "GDI32.dll", "USER32.dll"]
+    }
+  }
+}
