@@ -120,8 +120,16 @@ pub trait ModelResolver: Send + Sync {
 /// Product resolver backed by the embedded model authority.
 ///
 /// Source archives are deliberately not interpreted as ONNX model files.
-#[derive(Debug, Default)]
-pub struct ManifestModelResolver;
+pub struct ManifestModelResolver {
+    manager: Arc<super::ModelManager>,
+}
+
+impl ManifestModelResolver {
+    #[must_use]
+    pub fn new(manager: Arc<super::ModelManager>) -> Self {
+        Self { manager }
+    }
+}
 
 impl ModelResolver for ManifestModelResolver {
     fn resolve(
@@ -130,12 +138,61 @@ impl ModelResolver for ManifestModelResolver {
         context: &ExecutionContext,
     ) -> Result<ResolvedModel, ConversionError> {
         context.checkpoint()?;
-        let manifest = super::ModelManifest::embedded()?;
-        let known = manifest.bundles.iter().any(|bundle| bundle.id == model_id);
-        Err(ConversionError::ComponentUnavailable {
-            component: "onnx-model".into(),
-            detail: if known { "ModelUnavailable" } else { "UnknownModel" }.into(),
+        if model_id != "pp-ocrv6-tiny-recognizer-onnx" {
+            return Err(ConversionError::ComponentUnavailable {
+                component: "onnx-model".into(),
+                detail: "UnknownModel".into(),
+            });
+        }
+        let artifact = self
+            .manager
+            .verified_runtime_artifact(model_id, "recognizer", context)
+            .map_err(|_| ConversionError::ComponentUnavailable {
+                component: "onnx-model".into(),
+                detail: "ModelUnavailable".into(),
+            })?;
+        let bytes_len =
+            u64::try_from(artifact.bytes.len()).map_err(|_| resource_error("modelBytes"))?;
+        Ok(ResolvedModel {
+            identity: ModelIdentity {
+                canonical_path: artifact.path,
+                sha256: artifact.sha256,
+                bytes: bytes_len,
+                file_identity: artifact.file_identity,
+            },
+            contract: ppocrv6_recognizer_contract(),
+            bytes: artifact.bytes,
         })
+    }
+}
+
+#[must_use]
+pub fn ppocrv6_recognizer_contract() -> ModelContract {
+    ModelContract {
+        ir_version: 6,
+        opsets: BTreeMap::from([(String::new(), 11)]),
+        inputs: vec![TensorSpec {
+            name: "x".into(),
+            element_type: TensorElementType::Float32,
+            dimensions: vec![
+                Dimension::Dynamic { min: 1, max: 8 },
+                Dimension::Exact(3),
+                Dimension::Exact(48),
+                Dimension::Dynamic { min: 1, max: 3200 },
+            ],
+        }],
+        overridable_inputs: Vec::new(),
+        outputs: vec![TensorSpec {
+            name: "fetch_name_0".into(),
+            element_type: TensorElementType::Float32,
+            dimensions: vec![
+                Dimension::Dynamic { min: 1, max: 8 },
+                Dimension::Dynamic { min: 1, max: 1024 },
+                Dimension::Exact(6906),
+            ],
+        }],
+        session_memory_bytes: 256 * 1024 * 1024,
+        run_memory_bytes: 128 * 1024 * 1024,
     }
 }
 
@@ -2242,7 +2299,13 @@ mod tests {
 
     #[test]
     fn current_manifest_is_stably_unavailable() {
-        let error = ManifestModelResolver.resolve("pp-ocrv6-tiny-zh-en", &context()).unwrap_err();
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            super::super::ModelManager::embedded(temporary.path().to_path_buf(), None).unwrap(),
+        );
+        let error = ManifestModelResolver::new(manager)
+            .resolve("pp-ocrv6-tiny-recognizer-onnx", &context())
+            .unwrap_err();
         assert_eq!(error.code().as_str(), "componentUnavailable");
         assert!(format!("{error}").contains("ModelUnavailable"));
     }

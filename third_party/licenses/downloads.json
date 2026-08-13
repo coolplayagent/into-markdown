@@ -14,9 +14,36 @@
       "downloaded_file_path": "PP-OCRv6_tiny_rec_infer.tar",
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_infer.tar",
       "sha256": "54403af57bc53981d3dce091c6c80dfc5ae30d58495541777126a54bac450604"
+    },
+    {
+      "artifact_id": "ppocrv6-tiny-recognizer-onnx-source",
+      "repository": "ppocrv6_tiny_recognizer_onnx_source",
+      "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
     }
   ],
-  "model_runtime_files": [],
+  "model_runtime_files": [
+    {
+      "artifact_id": "ppocrv6-tiny-recognizer-onnx-model",
+      "repository": "ppocrv6_tiny_recognizer_onnx_model",
+      "downloaded_file_path": "inference.onnx",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "archive_sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+      "archive_size": 4526080,
+      "archive_member": "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+      "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+      "size": 4462639
+    },
+    {
+      "artifact_id": "ppocrv6-tiny-recognizer-character-table",
+      "repository": "ppocrv6_tiny_recognizer_character_table",
+      "downloaded_file_path": "ppocrv6_tiny_dict.txt",
+      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
+      "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+      "size": 27156
+    }
+  ],
   "pdfium_archives": [
     {
       "target": "aarch64-apple-darwin",

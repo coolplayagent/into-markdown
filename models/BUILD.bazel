@@ -3,6 +3,8 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "manifest.json",
     "ppocrv6-tiny-detector-authority.json",
+    "ppocrv6-tiny-recognizer-authority.json",
+    "ppocrv6_tiny_dict.txt",
 ])
 
 # Explicit/manual target: ordinary builds and tests never download models.
@@ -11,6 +13,15 @@ filegroup(
     srcs = [
         "@ppocrv6_tiny_detector_source//file",
         "@ppocrv6_tiny_recognizer_source//file",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "recognizer_runtime_files",
+    srcs = [
+        "@ppocrv6_tiny_recognizer_onnx_model//:PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
+        "@ppocrv6_tiny_recognizer_character_table//file",
     ],
     tags = ["manual"],
 )

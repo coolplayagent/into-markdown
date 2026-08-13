@@ -20,9 +20,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 mod detection;
 mod onnx_proto;
+mod recognition;
 mod runtime;
 
 pub use detection::{
@@ -30,11 +32,13 @@ pub use detection::{
     PixelFormat, PixelView, PpOcrTextDetector,
 };
 
+pub use recognition::{PpOcrTextRecognizer, RecognitionConfig, RecognitionResult, RecognizedText};
+
 pub use runtime::{
     CacheLimits, Dimension, MAX_TENSOR_NAME_BYTES, MAX_TENSOR_RANK, MAX_TENSORS,
     ManifestModelResolver, ModelContract, ModelIdentity, ModelMetadata, ModelResolver, OnnxRuntime,
     ResolvedModel, RuntimeConfig, SessionAdapter, SessionFactory, SessionOptions,
-    TensorElementType, TensorSpec,
+    TensorElementType, TensorSpec, ppocrv6_recognizer_contract,
 };
 
 const SUPPORTED_TARGETS: [&str; 4] = [
@@ -72,6 +76,9 @@ pub struct RuntimeArtifact {
     pub role: String,
     pub file_name: String,
     pub url: String,
+    pub archive_sha256: Option<String>,
+    pub archive_size: Option<u64>,
+    pub archive_member: Option<String>,
     pub sha256: String,
     pub size: u64,
     pub platforms: Vec<String>,
@@ -83,6 +90,8 @@ pub struct RuntimeArtifact {
 #[serde(deny_unknown_fields)]
 pub struct ModelBundle {
     pub id: String,
+    #[serde(default = "pipeline_bundle_kind")]
+    pub kind: String,
     pub availability: String,
     pub upstream_version: String,
     pub languages: Vec<String>,
@@ -91,6 +100,10 @@ pub struct ModelBundle {
     pub character_set: CharacterSet,
     pub runtime_artifacts: Vec<RuntimeArtifact>,
     pub source_artifacts: Vec<ModelArtifact>,
+}
+
+fn pipeline_bundle_kind() -> String {
+    "ocr-pipeline".to_owned()
 }
 
 /// Versioned model manifest.
@@ -172,6 +185,9 @@ struct RuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    archive_sha256: Option<String>,
+    archive_size: Option<u64>,
+    archive_member: Option<String>,
     sha256: String,
     size: u64,
 }
@@ -245,8 +261,18 @@ impl ModelManifest {
         downloads: &str,
         onnxruntime: &str,
     ) -> Result<Self, ConversionError> {
-        let manifest: Self = serde_json::from_str(models)
+        let raw: serde_json::Value = serde_json::from_str(models)
             .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
+        let manifest: Self = serde_json::from_value(raw.clone())
+            .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
+        if manifest.schema_version == 2
+            && raw
+                .get("bundles")
+                .and_then(serde_json::Value::as_array)
+                .is_none_or(|bundles| bundles.iter().any(|bundle| bundle.get("kind").is_none()))
+        {
+            return Err(invalid_manifest("schema 2 bundles require explicit kind"));
+        }
         let downloads: DownloadManifest = serde_json::from_str(downloads)
             .map_err(|error| invalid_manifest(format!("invalid download JSON: {error}")))?;
         let onnxruntime: OrtManifest = serde_json::from_str(onnxruntime)
@@ -260,8 +286,17 @@ impl ModelManifest {
         downloads: &DownloadManifest,
         onnxruntime: &OrtManifest,
     ) -> Result<(), ConversionError> {
-        if self.schema_version != 1 || downloads.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) || downloads.schema_version != 1 {
             return Err(invalid_manifest("unsupported schema version"));
+        }
+        if self.schema_version == 1
+            && self.bundles.iter().any(|bundle| {
+                bundle.availability != "planned" || !bundle.runtime_artifacts.is_empty()
+            })
+        {
+            return Err(invalid_manifest(
+                "schema 1 is accepted only for planned source-only bundles",
+            ));
         }
         let mut bundle_ids = BTreeSet::new();
         let mut source_ids = BTreeSet::new();
@@ -274,7 +309,9 @@ impl ModelManifest {
             if !bundle_ids.insert(bundle.id.as_str()) {
                 return Err(invalid_manifest(format!("duplicate bundle ID {}", bundle.id)));
             }
-            if !matches!(bundle.availability.as_str(), "planned" | "available") {
+            if !matches!(bundle.kind.as_str(), "ocr-pipeline" | "recognizer-component")
+                || !matches!(bundle.availability.as_str(), "planned" | "available")
+            {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
             }
             let targets: BTreeSet<_> = bundle.platforms.iter().map(String::as_str).collect();
@@ -350,7 +387,10 @@ impl ModelManifest {
                         if item.url == artifact.url
                             && item.sha256 == artifact.sha256
                             && item.downloaded_file_path == artifact.file_name
-                            && item.size == artifact.size => {}
+                            && item.size == artifact.size
+                            && item.archive_sha256 == artifact.archive_sha256
+                            && item.archive_size == artifact.archive_size
+                            && item.archive_member == artifact.archive_member => {}
                     _ => {
                         return Err(invalid_manifest(format!(
                             "runtime artifact {} disagrees with downloads.json",
@@ -529,11 +569,14 @@ fn validate_native_downloads(
 }
 
 fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
-    const REQUIRED_ROLES: [&str; 2] = ["detector", "recognizer-and-dictionary"];
+    let required_source_roles = match bundle.kind.as_str() {
+        "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+        "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+        _ => return Err(invalid_manifest(format!("{} has invalid kind", bundle.id))),
+    };
     let source_roles: BTreeSet<_> =
         bundle.source_artifacts.iter().map(|artifact| artifact.role.as_str()).collect();
-    if source_roles.len() != bundle.source_artifacts.len()
-        || source_roles != BTreeSet::from(REQUIRED_ROLES)
+    if source_roles.len() != bundle.source_artifacts.len() || source_roles != required_source_roles
     {
         return Err(invalid_manifest(format!(
             "{} source artifacts must have exactly the required unique roles",
@@ -541,10 +584,15 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
         )));
     }
     if !bundle.runtime_artifacts.is_empty() {
+        let required_runtime_roles = match bundle.kind.as_str() {
+            "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+            "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+            _ => unreachable!(),
+        };
         let runtime_roles: BTreeSet<_> =
             bundle.runtime_artifacts.iter().map(|artifact| artifact.role.as_str()).collect();
         if runtime_roles.len() != bundle.runtime_artifacts.len()
-            || runtime_roles != BTreeSet::from(REQUIRED_ROLES)
+            || runtime_roles != required_runtime_roles
         {
             return Err(invalid_manifest(format!(
                 "{} runtime artifacts must have exactly the required unique roles",
@@ -562,6 +610,14 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
     validate_hash(&artifact.sha256)?;
     if artifact.size == 0 || artifact.role.is_empty() || artifact.license.is_empty() {
         return Err(invalid_manifest(format!("runtime artifact {} is incomplete", artifact.id)));
+    }
+    match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
+        (None, None, None) => {}
+        (Some(hash), Some(size), Some(member))
+            if size > artifact.size
+                && validate_hash(hash).is_ok()
+                && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx" => {}
+        _ => return Err(invalid_manifest(format!("runtime artifact {} has invalid archive acquisition", artifact.id))),
     }
     let platforms: BTreeSet<_> = artifact.platforms.iter().map(String::as_str).collect();
     if platforms.is_empty()
@@ -740,6 +796,13 @@ pub struct ModelManager {
     bundled_root: Option<PathBuf>,
 }
 
+pub(crate) struct VerifiedRuntimeArtifact {
+    pub path: PathBuf,
+    pub sha256: String,
+    pub bytes: Arc<[u8]>,
+    pub file_identity: String,
+}
+
 impl ModelManager {
     /// Creates a manager from the cross-validated embedded authorities.
     pub fn embedded(
@@ -846,6 +909,86 @@ impl ModelManager {
     /// Returns the path only for a complete installed bundle.
     pub fn path(&self, id: &str) -> Result<PathBuf, ModelManagerError> {
         self.verify(id)?.path.ok_or(ModelManagerError::NotInstalled)
+    }
+
+    pub(crate) fn verified_runtime_artifact(
+        &self,
+        id: &str,
+        role: &str,
+        context: &ExecutionContext,
+    ) -> Result<VerifiedRuntimeArtifact, ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        let artifact = bundle
+            .runtime_artifacts
+            .iter()
+            .find(|artifact| artifact.role == role)
+            .ok_or(ModelManagerError::ComponentUnavailable)?;
+        let status = self.verify_with_context(id, context)?;
+        let directory = status.path.ok_or(ModelManagerError::NotInstalled)?;
+        #[cfg(unix)]
+        let mut file = {
+            use rustix::fs::{Mode, OFlags};
+            let directory_fd = rustix::fs::open(
+                &directory,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| ModelManagerError::Io(std::io::Error::from(error)))?;
+            let fd = rustix::fs::openat(
+                &directory_fd,
+                &artifact.file_name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| ModelManagerError::Io(std::io::Error::from(error)))?;
+            File::from(fd)
+        };
+        #[cfg(not(unix))]
+        let mut file =
+            required_regular_file(&directory.join(&artifact.file_name), "artifact missing")?;
+        let metadata = file.metadata()?;
+        if metadata.len() != artifact.size {
+            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+        }
+        let reservation = context.reserve_memory(artifact.size)?;
+        let capacity = usize::try_from(artifact.size)
+            .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| ModelManagerError::Corrupt(artifact.file_name.clone()))?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            context.checkpoint()?;
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len().checked_add(count).is_none_or(|length| length > capacity) {
+                return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+            }
+            digest.update(&buffer[..count]);
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        if bytes.len() != capacity || format!("{:x}", digest.finalize()) != artifact.sha256 {
+            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+        }
+        #[cfg(unix)]
+        let file_identity = {
+            use std::os::unix::fs::MetadataExt as _;
+            format!("unix-dev-ino:{}:{}", metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let file_identity = format!("verified:{}:{}", artifact.sha256, artifact.size);
+        let bytes: Arc<[u8]> = Arc::from(bytes);
+        drop(reservation);
+        Ok(VerifiedRuntimeArtifact {
+            path: directory.join(&artifact.file_name),
+            sha256: artifact.sha256.clone(),
+            bytes,
+            file_identity,
+        })
     }
 
     /// Removes only a user-owned directory while holding an interprocess lock.
@@ -1806,8 +1949,8 @@ mod tests {
         let models = include_str!("../../../models/manifest.json");
         let downloads = include_str!("../../../third_party/licenses/downloads.json");
         let unknown = models.replacen(
-            "\"schema_version\": 1",
-            "\"schema_version\": 1, \"surprise\": true",
+            "\"schema_version\": 2",
+            "\"schema_version\": 2, \"surprise\": true",
             1,
         );
         assert!(ModelManifest::from_authorities(&unknown, downloads).is_err());
@@ -1849,6 +1992,9 @@ mod tests {
             role: "detector".into(),
             file_name: "detector.onnx".into(),
             url: "https://example.invalid/detector.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
             sha256: "a".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -1860,6 +2006,9 @@ mod tests {
             role: "recognizer-and-dictionary".into(),
             file_name: "recognizer.onnx".into(),
             url: "https://example.invalid/recognizer.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
             sha256: "b".repeat(64),
             size: 1,
             platforms: vec!["aarch64-apple-darwin".into()],
@@ -1930,7 +2079,10 @@ mod tests {
         assert_eq!(status.state, "unavailable");
         assert_eq!(status.ownership, "none");
         assert!(status.path.is_none());
-        assert_eq!(manager.list().unwrap(), vec![status]);
+        let listed = manager.list().unwrap();
+        assert_eq!(listed[0], status);
+        assert_eq!(listed[1].id, "pp-ocrv6-tiny-recognizer-onnx");
+        assert_eq!(listed[1].state, "not-installed");
         assert!(matches!(manager.verify(id), Err(ModelManagerError::ComponentUnavailable)));
         assert!(matches!(manager.path(id), Err(ModelManagerError::ComponentUnavailable)));
         assert!(matches!(manager.remove(id), Err(ModelManagerError::ComponentUnavailable)));
@@ -1972,6 +2124,9 @@ mod tests {
             role: "detector".into(),
             file_name: "model.onnx".into(),
             url: "https://example.invalid/model.onnx".into(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
             sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
             size: 5,
             platforms: vec!["aarch64-apple-darwin".into()],

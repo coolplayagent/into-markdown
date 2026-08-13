@@ -288,6 +288,8 @@ struct ModelManifest {
 #[serde(deny_unknown_fields)]
 struct ModelBundle {
     id: String,
+    #[serde(default = "pipeline_model_kind")]
+    kind: String,
     availability: String,
     upstream_version: String,
     languages: Vec<String>,
@@ -296,6 +298,10 @@ struct ModelBundle {
     character_set: ModelCharacterSet,
     runtime_artifacts: Vec<ModelRuntimeArtifact>,
     source_artifacts: Vec<ModelArtifact>,
+}
+
+fn pipeline_model_kind() -> String {
+    "ocr-pipeline".to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -312,6 +318,9 @@ struct ModelRuntimeArtifact {
     role: String,
     file_name: String,
     url: String,
+    archive_sha256: Option<String>,
+    archive_size: Option<u64>,
+    archive_member: Option<String>,
     sha256: String,
     size: u64,
     platforms: Vec<String>,
@@ -529,6 +538,9 @@ struct ModelRuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    archive_sha256: Option<String>,
+    archive_size: Option<u64>,
+    archive_member: Option<String>,
     sha256: String,
     size: u64,
 }
@@ -2423,7 +2435,7 @@ fn validate_model_manifest(
     downloads: &DownloadManifest,
     errors: &mut Vec<String>,
 ) {
-    if manifest.schema_version != 1 {
+    if !matches!(manifest.schema_version, 1 | 2) {
         errors.push("unsupported model manifest schema_version".to_owned());
     }
     let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
@@ -2513,7 +2525,11 @@ fn collect_model_artifacts<'a>(
                 errors.push(format!("duplicate model artifact {} across bundles", artifact.id));
             }
         }
-        let required_roles = BTreeSet::from(["detector", "recognizer-and-dictionary"]);
+        let required_roles = match bundle.kind.as_str() {
+            "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+            "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+            _ => BTreeSet::new(),
+        };
         if roles.keys().copied().collect::<BTreeSet<_>>() != required_roles {
             errors.push(format!(
                 "OCR model bundle {} must have exactly the required source roles",
@@ -2543,7 +2559,9 @@ fn validate_runtime_bundle<'a>(
     runtime_ids: &mut BTreeSet<&'a str>,
     errors: &mut Vec<String>,
 ) {
-    if !is_safe_model_id(&bundle.id) {
+    if !is_safe_model_id(&bundle.id)
+        || !matches!(bundle.kind.as_str(), "ocr-pipeline" | "recognizer-component")
+    {
         errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
     }
     if !matches!(bundle.availability.as_str(), "planned" | "available") {
@@ -2600,6 +2618,15 @@ fn validate_runtime_bundle<'a>(
             || platforms.len() != artifact.platforms.len()
             || !platforms.iter().all(|target| SUPPORTED_MODEL_TARGETS.contains(target))
             || artifact.license.is_empty()
+            || match (&artifact.archive_sha256, artifact.archive_size, &artifact.archive_member) {
+                (None, None, None) => false,
+                (Some(hash), Some(size), Some(member)) => {
+                    !is_sha256(hash)
+                        || size <= artifact.size
+                        || member != "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                }
+                _ => true,
+            }
         {
             errors.push(format!("runtime model artifact {} is incomplete", artifact.id));
         }
@@ -2608,16 +2635,22 @@ fn validate_runtime_bundle<'a>(
                 if download.downloaded_file_path == artifact.file_name
                     && download.url == artifact.url
                     && download.sha256 == artifact.sha256
-                    && download.size == artifact.size => {}
+                    && download.size == artifact.size
+                    && download.archive_sha256 == artifact.archive_sha256
+                    && download.archive_size == artifact.archive_size
+                    && download.archive_member == artifact.archive_member => {}
             _ => errors.push(format!(
                 "runtime model artifact {} disagrees with authoritative download",
                 artifact.id
             )),
         }
     }
-    if !bundle.runtime_artifacts.is_empty()
-        && runtime_roles != BTreeSet::from(["detector", "recognizer-and-dictionary"])
-    {
+    let expected_runtime_roles = match bundle.kind.as_str() {
+        "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+        "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+        _ => BTreeSet::new(),
+    };
+    if !bundle.runtime_artifacts.is_empty() && runtime_roles != expected_runtime_roles {
         errors.push(format!(
             "model bundle {} must have exactly the required runtime roles",
             bundle.id
@@ -2879,6 +2912,7 @@ mod tests {
     fn bundle(id: &str, version: &str, source_artifacts: Vec<ModelArtifact>) -> ModelBundle {
         ModelBundle {
             id: id.to_owned(),
+            kind: "ocr-pipeline".to_owned(),
             availability: "planned".to_owned(),
             upstream_version: version.to_owned(),
             languages: vec!["zh".to_owned(), "en".to_owned()],
@@ -2948,6 +2982,9 @@ mod tests {
             role: "detector".to_owned(),
             file_name: "model.onnx".to_owned(),
             url: "https://example.invalid/model.onnx".to_owned(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
             sha256: "a".repeat(64),
             size: 5,
             platforms: vec!["aarch64-apple-darwin".to_owned()],
@@ -2958,6 +2995,9 @@ mod tests {
             repository: "reviewed_runtime".to_owned(),
             downloaded_file_path: artifact.file_name.clone(),
             url: artifact.url.clone(),
+            archive_sha256: None,
+            archive_size: None,
+            archive_member: None,
             sha256: artifact.sha256.clone(),
             size: artifact.size,
         };

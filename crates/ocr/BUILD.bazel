@@ -11,6 +11,8 @@ rust_library(
     compile_data = [
         "//models:manifest.json",
         "//models:ppocrv6-tiny-detector-authority.json",
+        "//models:ppocrv6-tiny-recognizer-authority.json",
+        "//models:ppocrv6_tiny_dict.txt",
         "//third_party/licenses:downloads.json",
         "//third_party/onnxruntime:manifest.json",
     ],
@@ -27,6 +29,8 @@ rust_test(
     compile_data = [
         "//models:manifest.json",
         "//models:ppocrv6-tiny-detector-authority.json",
+        "//models:ppocrv6-tiny-recognizer-authority.json",
+        "//models:ppocrv6_tiny_dict.txt",
         "//third_party/licenses:downloads.json",
         "//third_party/onnxruntime:manifest.json",
     ],

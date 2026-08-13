@@ -89,4 +89,6 @@ use_repo(
     "pdfium_windows_x86_64",
     "ppocrv6_tiny_detector_source",
     "ppocrv6_tiny_recognizer_source",
+    "ppocrv6_tiny_recognizer_onnx_model",
+    "ppocrv6_tiny_recognizer_character_table",
 )
