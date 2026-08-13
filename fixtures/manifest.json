@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "8f4fb6286346651f4458f0f3066196186204b0cc54215a67407cdb7d1cbb6551",
+    "sha256": "69414117a437dd914926a1c3629b7e8010a432ebdb2127b5766c5fdf9ac185f1",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -15,6 +15,7 @@
   "available_formats": [
     "csv",
     "docx",
+    "feed",
     "html",
     "ipynb",
     "json",
@@ -260,6 +261,97 @@
         "error_code": "",
         "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
         "description": "one WordprocessingML paragraph"
+      }
+    },
+    {
+      "id": "feed-corrupt",
+      "format": "feed",
+      "scenario": "corrupt",
+      "path": "small/feed/corrupt.xml",
+      "bytes": 111,
+      "sha256": "52baefe86a86bbf5cf24307f0262dac5c27a2ffeb01d1b2ef680237e89868e78",
+      "media_type": "application/rss+xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "DTD and custom entity are rejected"
+      }
+    },
+    {
+      "id": "feed-limit",
+      "format": "feed",
+      "scenario": "limit",
+      "path": "small/feed/limit.xml",
+      "bytes": 185,
+      "sha256": "576c8ec9cb26cab47ecc0eb044ad9913f30b009e04d82752fb7c5fe0edb715a7",
+      "media_type": "application/rss+xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "feed input exceeds the exact configured byte budget",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 184,
+          "passing_value": 185,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "f6d6668e4b78299ae7b951b186b9c338b0c935f8aa4423122ba3199e77dfac06"
+        }
+      }
+    },
+    {
+      "id": "feed-normal",
+      "format": "feed",
+      "scenario": "normal",
+      "path": "small/feed/normal.xml",
+      "bytes": 160,
+      "sha256": "6e340e91164090c5a9c78649a55b44f84a91e3a01f44374fbafeb4a45c8a5462",
+      "media_type": "application/rss+xml",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "238b84fc15fa5e4a3b8c50153479a72f115c603eaf003485e9c9dd865836dbfd",
+        "description": "RSS item title and safe description"
       }
     },
     {

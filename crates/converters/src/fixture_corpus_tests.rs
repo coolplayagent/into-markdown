@@ -131,6 +131,7 @@ fn format(value: &str) -> InputFormat {
     match value {
         "csv" => InputFormat::Csv,
         "docx" => InputFormat::Docx,
+        "feed" => InputFormat::Feed,
         "html" => InputFormat::Html,
         "ipynb" => InputFormat::Ipynb,
         "json" => InputFormat::Json,
@@ -151,6 +152,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Json | InputFormat::Xml => Box::new(StructuredDataConverter),
         InputFormat::Ipynb => Box::new(NotebookConverter),
         InputFormat::Docx => Box::new(DocxConverter),
+        InputFormat::Feed => Box::new(FeedConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }

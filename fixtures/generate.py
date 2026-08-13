@@ -275,6 +275,12 @@ def build(root: Path, font_path: Path) -> None:
     add("html-limit", "html", "limit", "small/html/limit.html", html_limit, "text/html", limit_expected("DOM crosses the exact configured depth boundary", "max_nesting_depth", 10, 11, "html_nesting_depth", "", "64896f89fd11190013b70103e603a1c5826e56b7fb7d2197ab279b0690043599"))
     add("html-malicious", "html", "malicious", "small/html/malicious.html", b"<!doctype html><main><script>secret()</script><a href='javascript:alert(1)'>unsafe</a><p>safe</p></main>", "text/html", expected("success", "active content and unsafe URL are omitted", "unsafe\n\nsafe\n"))
 
+    feed_normal = b'<rss version="2.0"><channel><title>Corpus Feed</title><item><guid>entry-1</guid><title>Alpha</title><description>Safe text</description></item></channel></rss>\n'
+    add("feed-normal", "feed", "normal", "small/feed/normal.xml", feed_normal, "application/rss+xml", expected("success", "RSS item title and safe description", "## Alpha\n\n### Summary\n\nSafe text\n"))
+    add("feed-corrupt", "feed", "corrupt", "small/feed/corrupt.xml", b'<!DOCTYPE rss [<!ENTITY secret "payload">]><rss version="2.0"><channel><title>&secret;</title></channel></rss>\n', "application/rss+xml", expected("error", "DTD and custom entity are rejected", error_code="malformed"))
+    feed_limit = b'<rss version="2.0"><channel><title>Boundary Feed</title><item><guid>entry-limit</guid><title>Boundary</title><description>Exact input byte boundary</description></item></channel></rss>\n'
+    add("feed-limit", "feed", "limit", "small/feed/limit.xml", feed_limit, "application/rss+xml", limit_expected("feed input exceeds the exact configured byte budget", "max_input_bytes", len(feed_limit) - 1, len(feed_limit), "max_input_bytes", "", "f6d6668e4b78299ae7b951b186b9c338b0c935f8aa4423122ba3199e77dfac06"))
+
     add("csv-normal", "csv", "normal", "small/csv/normal.csv", "name,value\nalpha,1\n中文,2\n".encode(), "text/csv", expected("success", "header and two rows", "| <strong>name</strong> | <strong>value</strong> |\n| --- | --- |\n| alpha | 1 |\n| 中文 | 2 |\n"))
     add("csv-corrupt", "csv", "corrupt", "small/csv/corrupt.csv", b'name,value\n"unterminated,1\n', "text/csv", expected("error", "unterminated quoted field", error_code="malformed"))
     csv_limit = ((",".join(f"c{i}" for i in range(33))) + "\n").encode()
@@ -332,7 +338,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "html", "ipynb", "json", "markdown", "text", "tsv", "xml"],
+        "available_formats": ["csv", "docx", "feed", "html", "ipynb", "json", "markdown", "text", "tsv", "xml"],
         "fixtures": fixtures,
         "large_artifacts": [
             {
