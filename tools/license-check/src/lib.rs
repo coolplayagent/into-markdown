@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use toml::Value as TomlValue;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Policy {
     schema_version: u64,
@@ -32,6 +32,25 @@ struct Component {
 struct Inventory {
     schema_version: u64,
     components: Vec<Component>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NpmInventory {
+    schema_version: u64,
+    packages: Vec<NpmPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NpmPackage {
+    name: String,
+    version: String,
+    integrity: String,
+    license: String,
+    source: String,
+    scope: String,
+    included_in_release: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -321,21 +340,100 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
     let policy_text = read(&root.join("third_party/licenses/policy.json"), &mut errors);
     let inventory_text = read(&root.join("third_party/licenses/inventory.json"), &mut errors);
     let approvals_text = read(&root.join("third_party/licenses/rust-lock.tsv"), &mut errors);
+    let npm_inventory_text =
+        read(&root.join("third_party/licenses/npm-inventory.json"), &mut errors);
     let lock_text = read(&root.join("Cargo.lock"), &mut errors);
+    let pnpm_lock_text = read(&root.join("pnpm-lock.yaml"), &mut errors);
     let workspace_packages = validate_workspace_metadata(root, &mut errors);
 
     let policy: Option<Policy> = parse_json("policy.json", &policy_text, &mut errors);
     let inventory: Option<Inventory> = parse_json("inventory.json", &inventory_text, &mut errors);
+    let npm_inventory: Option<NpmInventory> =
+        parse_json("npm-inventory.json", &npm_inventory_text, &mut errors);
 
     if let Some(policy) = &policy {
         validate_policy(policy, &mut errors);
         validate_rust_lock(&lock_text, &approvals_text, &workspace_packages, policy, &mut errors);
+        if let Some(npm_inventory) = &npm_inventory {
+            validate_npm_lock(&pnpm_lock_text, npm_inventory, policy, release, &mut errors);
+        }
     }
     if let (Some(policy), Some(inventory)) = (&policy, &inventory) {
         validate_inventory(inventory, policy, release, &mut errors);
         validate_existing_manifests(root, inventory, &mut errors);
     }
     if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
+fn validate_npm_lock(
+    lock: &str,
+    inventory: &NpmInventory,
+    policy: &Policy,
+    release: bool,
+    errors: &mut Vec<String>,
+) {
+    if inventory.schema_version != 1 {
+        errors.push("unsupported npm inventory schema_version".to_owned());
+    }
+    let mut locked = BTreeMap::new();
+    let mut in_packages = false;
+    let mut current: Option<String> = None;
+    for line in lock.lines() {
+        if line == "packages:" {
+            in_packages = true;
+            continue;
+        }
+        if line == "snapshots:" {
+            break;
+        }
+        if !in_packages {
+            continue;
+        }
+        if line.starts_with("  ") && !line.starts_with("    ") && line.ends_with(':') {
+            current = Some(line.trim().trim_end_matches(':').trim_matches('\'').to_owned());
+        } else if let (Some(key), Some(start)) = (&current, line.find("integrity: ")) {
+            let value = line[start + "integrity: ".len()..].trim_end_matches('}').trim().to_owned();
+            if locked.insert(key.clone(), value).is_some() {
+                errors.push(format!("pnpm lock package {key} is duplicated"));
+            }
+            current = None;
+        }
+    }
+    let mut reviewed = BTreeSet::new();
+    for package in &inventory.packages {
+        let key = format!("{}@{}", package.name, package.version);
+        if !reviewed.insert(key.clone()) {
+            errors.push(format!("npm inventory package {key} is duplicated"));
+        }
+        match locked.get(&key) {
+            Some(integrity) if integrity == &package.integrity => {}
+            Some(_) => {
+                errors.push(format!("npm package {key} integrity differs from pnpm-lock.yaml"))
+            }
+            None => errors.push(format!("npm inventory package {key} is orphaned")),
+        }
+        validate_license_conclusion(&key, &package.license, policy, errors);
+        if !package.integrity.starts_with("sha512-") {
+            errors.push(format!("npm package {key} must use sha512 integrity"));
+        }
+        if !package.source.starts_with("https://") {
+            errors.push(format!("npm package {key} has no HTTPS source"));
+        }
+        if !matches!(package.scope.as_str(), "runtime" | "build" | "test") {
+            errors.push(format!("npm package {key} has invalid scope"));
+        }
+        if package.included_in_release != (package.scope == "runtime") {
+            errors.push(format!("npm package {key} release flag disagrees with its scope"));
+        }
+        if release && package.included_in_release && package.license != "MIT" {
+            errors.push(format!("released npm package {key} needs an audited notice conclusion"));
+        }
+    }
+    for key in locked.keys() {
+        if !reviewed.contains(key) {
+            errors.push(format!("pnpm lock package {key} has no npm inventory entry"));
+        }
+    }
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(
@@ -360,6 +458,7 @@ fn validate_project_files(root: &Path, errors: &mut Vec<String>) {
     }
     let notices = read(&root.join("THIRD_PARTY_NOTICES.md"), errors);
     if !notices.contains("third_party/licenses/rust-lock.tsv")
+        || !notices.contains("third_party/licenses/npm-inventory.json")
         || !notices.contains("bazel run //tools/license-check:release_audit")
     {
         errors.push(
@@ -2230,5 +2329,41 @@ version = "9.9.9"
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(!errors.iter().any(|error| error.contains("runtime roles")));
+    }
+
+    fn npm_package(license: &str) -> NpmPackage {
+        NpmPackage {
+            name: "example".into(),
+            version: "1.0.0".into(),
+            integrity: "sha512-abc".into(),
+            license: license.into(),
+            source: "https://example.invalid/source".into(),
+            scope: "test".into(),
+            included_in_release: false,
+        }
+    }
+
+    #[test]
+    fn npm_lock_addition_and_inventory_orphan_are_rejected() {
+        let inventory = NpmInventory { schema_version: 1, packages: vec![] };
+        let lock = "packages:\n\n  example@1.0.0:\n    resolution: {integrity: sha512-abc}\n\nsnapshots:\n";
+        let mut errors = Vec::new();
+        validate_npm_lock(lock, &inventory, &policy(), false, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("has no npm inventory")));
+
+        let inventory = NpmInventory { schema_version: 1, packages: vec![npm_package("MIT")] };
+        let mut errors = Vec::new();
+        validate_npm_lock("packages:\n\nsnapshots:\n", &inventory, &policy(), false, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("is orphaned")));
+    }
+
+    #[test]
+    fn npm_denied_license_is_rejected() {
+        let inventory =
+            NpmInventory { schema_version: 1, packages: vec![npm_package("GPL-3.0-only")] };
+        let lock = "packages:\n\n  example@1.0.0:\n    resolution: {integrity: sha512-abc}\n\nsnapshots:\n";
+        let mut errors = Vec::new();
+        validate_npm_lock(lock, &inventory, &policy(), true, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("denied concluded license")));
     }
 }

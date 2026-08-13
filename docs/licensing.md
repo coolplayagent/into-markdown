@@ -17,6 +17,9 @@ LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务�
   结论。`AND` 的每一项都必须保留并分别通过 allow/deny 策略；例如
   `unicode-ident` 的结论是 `MIT AND Unicode-3.0`，不能简化为 `MIT`。
 - `third_party/licenses/inventory.json` 记录原生运行时、模型和未来组件。
+- `pnpm-lock.yaml` 固定前端依赖的完整 registry integrity；
+  `third_party/licenses/npm-inventory.json` 必须与每个 lock package 精确双向覆盖，并记录
+  runtime/build/test 范围、SPDX 结论、HTTPS 来源与是否进入发布物。
 - `reviewed` 表示清单字段已经核对，不表示组件一定进入发布物；
   `planned` 表示版本、来源、构建选项或义务仍待确定，不能用于发布。
 - `included_in_release` 是发布边界。改为 `true` 前必须补齐版本、来源、SPDX
@@ -39,6 +42,12 @@ bazel run //tools/license-check:release_audit
 deny 列表命中、清单重复、缺字段，或被纳入发布但仍为 `planned` 的组件都会失败。
 严格发布规则不能通过策略配置降级。依赖升级必须同时核对上游许可表达式、选择
 完整的兼容义务结论并更新精确版本清单。
+
+npm 审计同样拒绝锁新增而未审核、清单孤儿、integrity 漂移、范围与发布标记冲突。
+React、React DOM 与 Scheduler 的 MIT 代码进入嵌入式控制台生产资产；发布归档必须保留
+其版权与 MIT 许可声明。TypeScript、esbuild-wasm 与类型包只用于构建，happy-dom 与
+axe-core 只用于测试。axe-core 采用 MPL-2.0：npm 源包和可能分发的 CI/cache 测试产物
+保留其文件级声明与对应源代码可获得性义务，但 axe-core 不进入 CLI 或控制台生产资产。
 
 ## 当前覆盖与后续义务
 

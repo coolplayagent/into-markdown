@@ -1,0 +1,100 @@
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+package(default_visibility = ["//visibility:public"])
+
+npm_link_all_packages(name = "node_modules")
+
+ts_project(
+    name = "typecheck",
+    srcs = glob(["src/**/*.ts", "src/**/*.tsx"]),
+    declaration = False,
+    deps = [
+        ":node_modules/@types/react",
+        ":node_modules/@types/react-dom",
+        ":node_modules/react",
+        ":node_modules/react-dom",
+    ],
+    transpiler = "tsc",
+    tsconfig = "tsconfig.json",
+)
+
+filegroup(
+    name = "checked_assets",
+    srcs = glob(["dist/**"]),
+)
+
+js_binary(
+    name = "asset_builder",
+    data = glob(["src/**"]) + [
+        ":node_modules/esbuild-wasm",
+        ":node_modules/react",
+        ":node_modules/react-dom",
+    ],
+    entry_point = "build.mjs",
+)
+
+js_binary(
+    name = "test_builder",
+    data = glob(["src/**", "tests/**"]) + [":node_modules/esbuild-wasm"],
+    entry_point = "build-tests.mjs",
+)
+
+js_run_binary(
+    name = "unit_test_bundle",
+    outs = ["unit_test_bundle.mjs"],
+    args = ["web/console/unit_test_bundle.mjs"],
+    tool = ":test_builder",
+)
+
+js_test(
+    name = "unit_test",
+    data = [
+        ":node_modules/happy-dom",
+        ":node_modules/axe-core",
+        ":unit_test_bundle",
+    ],
+    entry_point = "unit_test_bundle.mjs",
+)
+
+js_run_binary(
+    name = "generated_assets",
+    out_dirs = ["generated_assets"],
+    args = ["web/console/generated_assets"],
+    tool = ":asset_builder",
+)
+
+js_run_binary(
+    name = "generated_assets_repeat",
+    out_dirs = ["generated_assets_repeat"],
+    args = ["web/console/generated_assets_repeat"],
+    tool = ":asset_builder",
+)
+
+genrule(
+    name = "determinism_test",
+    srcs = [
+        ":generated_assets",
+        ":generated_assets_repeat",
+    ],
+    outs = ["determinism.ok"],
+    cmd = "diff -rq $(location :generated_assets) $(location :generated_assets_repeat) && touch $@",
+)
+
+js_run_binary(
+    name = "assets",
+    srcs = [":checked_assets"],
+    out_dirs = ["verified_assets"],
+    args = [
+        "web/console/verified_assets",
+        "--verify",
+        "web/console/dist",
+    ],
+    tool = ":asset_builder",
+)
+
+exports_files([
+    "package.json",
+    "tsconfig.json",
+])

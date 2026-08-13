@@ -44,10 +44,11 @@ CLI 采用直接输入形式，不提供 `convert` 子命令。支持多文件�
 URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider、模型与插件管理。
 联网与 AI 默认关闭，远程输入和 Provider 每次都需要显式 `--allow-network`。
 
-`into-md ui` 启动固定监听 `127.0.0.1` 的本地 Web 安全入口，默认使用系统分配端口并
+`into-md ui` 启动固定监听 `127.0.0.1` 的本地 Web 安全入口和嵌入式 React 控制台壳，默认使用系统分配端口并
 打开浏览器。它生成独立的高熵会话值，通过 URL fragment 交给嵌入页面；API 同时校验
-精确 Host、Origin 和会话 Header。当前页面明确报告文档控制台不可用，不包含任务、
-数据库或完整前端功能。用法和威胁边界见[本地 Web 服务](docs/ui.md)。
+精确 Host、Origin 和会话 Header。当前状态页包含响应式布局、主题、简体中文/英文、键盘与焦点支持，并明确报告尚不可用的
+文档业务能力；它不包含任务、数据库、工作台、预览或管理功能。所有 content-hash 资产由
+Bazel 离线构建并直接嵌入 Rust 发布物，不依赖 CDN。用法和威胁边界见[本地 Web 服务](docs/ui.md)。
 
 转换结果和批量报告使用 CLI 与未来 HTTP 服务共享的公共 DTO schema 1。例如
 `--emit result-json` 返回 `markdown`、版本化

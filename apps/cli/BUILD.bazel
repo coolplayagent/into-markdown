@@ -11,6 +11,7 @@ rust_binary(
     crate_name = "into_md",
     edition = "2024",
     deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True),
+    compile_data = ["//web/console:checked_assets"],
 )
 
 rust_test(
@@ -22,6 +23,7 @@ rust_test(
     edition = "2024",
     deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
+    compile_data = ["//web/console:checked_assets"],
 )
 
 rust_test(
