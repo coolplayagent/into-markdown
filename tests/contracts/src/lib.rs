@@ -60,6 +60,7 @@ mod tests {
             vec![
                 InputFormat::Text,
                 InputFormat::Markdown,
+                InputFormat::Html,
                 InputFormat::Csv,
                 InputFormat::Tsv,
                 InputFormat::Json,

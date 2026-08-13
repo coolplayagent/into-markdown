@@ -20,6 +20,14 @@ IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受�
   该 URI 只进入 IR/Markdown，转换过程不会访问网络。远程 SVG 额外产生 active-content
   诊断，因为后续 Markdown 消费者主动打开链接时适用消费者自身的网络与 SVG 安全模型。
   raw HTML 与 blockquote 只进入不可执行代码降级节点，危险标签不会作为 HTML 执行。
+- HTML 使用 HTML5 容错树构造，但转换器从不执行脚本、事件处理器、CSS、SVG/MathML 或表单
+  控件，也不调用网络。`script`、`style`、`template`、`noscript`、隐藏/inert/aria-hidden 内容
+  在语义遍历边界整体丢弃；SVG/MathML 内部链接和图片不能穿透为资源。`base` 只解析引用，
+  不代表网络授权；外部图片仅作为 canonical HTTP(S) audit Asset，bytes 为空且不会自动 fetch。
+  HTML 输入、tree event、DOM node、nesting、IR inline/node、table 与自有逻辑内存分别受硬限制
+  并定期 checkpoint。parser logical work 是协作式预算，不声称覆盖 html5ever 内部 allocator、
+  metadata 或进程 RSS。预算错误后 TreeSink 进入 poisoned 状态，后续回调保持 O(1)、不分配且
+  不改变树，最初的 limit/cancel/deadline 错误保持权威。
 - TXT 自动探测按候选字符集增量解码完整输入；除 TAB、LF、CR 外，NUL、C0、DEL 或 C1
   都会拒绝自动候选，多字节编码不能借原始字节形态绕过规则。BOM 仅决定候选编码，
   不能绕过完整控制字符扫描、有界严格解码与文本安全阈值。结构化文本、具备三行及

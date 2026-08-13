@@ -39,6 +39,11 @@ converter 再以显式容器栈施加重复键和 decoded string 策略，不建
 converter 交给 quick-xml 的只是解码文本，公开 provenance 始终回映到原始输入。XML 属性
 由有界 start-tag scanner 与 quick-xml 属性顺序交叉校验，QName/value 各自保留精确原始 span。
 
+HTML 转换器同样复用文本 decoder、compact byte mapping 与 `ExecutionContext`。HTML5 容错树
+构造的节点位置无法唯一证明时，`SourceLocator` 使用整份输入的可靠包含范围而不猜测精确 span，
+同时输出诊断。转换器不调用 `Services` 或 `SourceResolver`；relative URI 与已验证 base 的 join
+仅产生引用数据，不能作为远程获取授权。
+
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 

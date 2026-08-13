@@ -9,10 +9,12 @@ license.workspace = true
 [dependencies]
 chardetng.workspace = true
 encoding_rs.workspace = true
+html5ever.workspace = true
 into-markdown-core = { path = "../core" }
 pulldown-cmark.workspace = true
 quick-xml.workspace = true
 serde_json.workspace = true
+url.workspace = true
 zip.workspace = true
 
 [target.'cfg(unix)'.dependencies]

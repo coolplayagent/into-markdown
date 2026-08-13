@@ -3,11 +3,13 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod delimited;
+mod html;
 mod markdown;
 mod structured;
 mod text;
 
 pub use delimited::DelimitedTextConverter;
+pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
@@ -155,7 +157,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Html,
         family: "text",
         extensions: &["html", "htm"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Csv,
@@ -1211,6 +1213,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
 }
 
+#[allow(clippy::too_many_lines)]
 fn structured_text_candidate(
     bytes: &[u8],
     context: &ExecutionContext,
@@ -1265,18 +1268,56 @@ fn structured_text_candidate(
     let Some((prefix, _)) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT) else {
         return Ok(None);
     };
-    let text = prefix.trim_start_matches('\u{feff}').trim_start();
+    let text = prefix.trim_start_matches('\u{feff}');
+    if markdown_indented_code_prefix(text, context)? {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Markdown,
+            0.91,
+            "Markdown indented code containing markup",
+        )));
+    }
+    let text = text.trim_start();
     if html_prelude_identifies_html(text) {
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML root markup")));
     }
-    if let Some(root) = xml_root_name(text) {
-        return Ok(if root.eq_ignore_ascii_case("html") {
-            Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element"))
-        } else if root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed") {
-            Some(FormatCandidate::new(InputFormat::Feed, 0.98, format!("XML {root} root element")))
-        } else {
-            Some(FormatCandidate::new(InputFormat::Xml, 0.92, format!("XML {root} root element")))
-        });
+    let root = xml_root_name(text);
+    if root.is_some_and(|root| root.eq_ignore_ascii_case("html")) {
+        return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element")));
+    }
+    if let Some(root) =
+        root.filter(|root| root.eq_ignore_ascii_case("rss") || root.eq_ignore_ascii_case("feed"))
+    {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Feed,
+            0.98,
+            format!("XML {root} root element"),
+        )));
+    }
+    if text.starts_with("<?xml") {
+        return Ok(Some(FormatCandidate::new(InputFormat::Xml, 0.92, "XML declaration")));
+    }
+    let markdown = markdown::strong_markdown_evidence(text, context)?;
+    let html = html_document_evidence(text, context)?;
+    if html && (markdown || markdown_prefix_evidence(text, context)?) {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Markdown,
+            0.91,
+            "Markdown structure containing raw HTML",
+        )));
+    }
+    if html {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Html,
+            0.94,
+            "complete HTML semantic structure",
+        )));
+    }
+    if let Some(root) = root {
+        return Ok(Some(FormatCandidate::new(
+            InputFormat::Xml,
+            0.92,
+            format!("XML {root} root element"),
+        )));
     }
     if strong_xml_prefix(text) {
         return Ok(Some(FormatCandidate::new(
@@ -1285,7 +1326,7 @@ fn structured_text_candidate(
             "XML declaration or paired markup with invalid structure",
         )));
     }
-    if markdown::strong_markdown_evidence(text, context)? {
+    if markdown {
         return Ok(Some(FormatCandidate::new(
             InputFormat::Markdown,
             0.91,
@@ -1312,6 +1353,170 @@ fn strong_json_prefix(json: &[u8]) -> bool {
 fn strong_xml_prefix(text: &str) -> bool {
     text.starts_with("<?xml")
         || (text.starts_with('<') && (text.contains("</") || text.contains("/>")))
+}
+
+pub(crate) fn html_document_evidence(
+    text: &str,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    if html_prelude_identifies_html(text.trim_start()) {
+        return Ok(true);
+    }
+    let bytes = text.as_bytes();
+    let mut starts = 0_u16;
+    let mut ends = 0_u16;
+    let mut paragraph = (false, false);
+    let mut offset = 0_usize;
+    let mut fence = None;
+    let mut line_start = true;
+    let mut indented_code = false;
+    while offset < bytes.len() {
+        if offset.is_multiple_of(4096) {
+            context.checkpoint()?;
+        }
+        if line_start {
+            let mut marker = offset;
+            while bytes.get(marker) == Some(&b' ') {
+                marker += 1;
+            }
+            let spaces = marker.saturating_sub(offset);
+            indented_code = spaces >= 4 || bytes.get(marker) == Some(&b'\t');
+            if !indented_code && spaces <= 3 {
+                let found = if bytes.get(marker..marker.saturating_add(3)) == Some(b"```") {
+                    Some(b'`')
+                } else if bytes.get(marker..marker.saturating_add(3)) == Some(b"~~~") {
+                    Some(b'~')
+                } else {
+                    None
+                };
+                if let Some(found) = found {
+                    fence = if fence == Some(found) {
+                        None
+                    } else if fence.is_none() {
+                        Some(found)
+                    } else {
+                        fence
+                    };
+                }
+            }
+        }
+        if bytes[offset] == b'\n' || bytes[offset] == b'\r' {
+            line_start = true;
+            indented_code = false;
+            offset += 1;
+            continue;
+        }
+        if fence.is_some() || indented_code {
+            line_start = false;
+            offset += 1;
+            continue;
+        }
+        line_start = false;
+        if bytes.get(offset..offset.saturating_add(4)) == Some(b"<!--") {
+            offset = find_bounded_ascii(bytes, offset.saturating_add(4), b"-->", context)?
+                .map_or(bytes.len(), |end| end.saturating_add(3));
+            continue;
+        }
+        if bytes[offset] != b'<' {
+            offset += 1;
+            continue;
+        }
+        let closing = bytes.get(offset.saturating_add(1)) == Some(&b'/');
+        let name_start = offset.saturating_add(if closing { 2 } else { 1 });
+        let mut name_end = name_start;
+        while bytes.get(name_end).is_some_and(u8::is_ascii_alphabetic) {
+            name_end += 1;
+        }
+        let Some(name) = bytes.get(name_start..name_end).filter(|name| !name.is_empty()) else {
+            offset += 1;
+            continue;
+        };
+        if !bytes
+            .get(name_end)
+            .is_some_and(|byte| matches!(byte, b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n' | 0x0c))
+        {
+            offset += 1;
+            continue;
+        }
+        if name.eq_ignore_ascii_case(b"p") {
+            if closing { paragraph.1 = true } else { paragraph.0 = true }
+        } else if let Some(bit) = html_evidence_bit(name) {
+            if closing { ends |= bit } else { starts |= bit }
+        }
+        offset = find_bounded_ascii(bytes, name_end, b">", context)?
+            .map_or(bytes.len(), |end| end.saturating_add(1));
+    }
+    let pairs = (starts & ends).count_ones();
+    Ok(pairs >= 2 || (pairs >= 1 && paragraph.0 && paragraph.1))
+}
+
+fn html_evidence_bit(name: &[u8]) -> Option<u16> {
+    [b"main".as_slice(), b"article", b"section", b"nav", b"table", b"ul", b"ol", b"pre", b"title"]
+        .iter()
+        .position(|candidate| name.eq_ignore_ascii_case(candidate))
+        .map(|index| 1_u16 << index)
+}
+
+fn find_bounded_ascii(
+    bytes: &[u8],
+    mut offset: usize,
+    needle: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<usize>, ConversionError> {
+    while offset.saturating_add(needle.len()) <= bytes.len() {
+        if offset.is_multiple_of(4096) {
+            context.checkpoint()?;
+        }
+        if bytes
+            .get(offset..offset.saturating_add(needle.len()))
+            .is_some_and(|value| value.eq_ignore_ascii_case(needle))
+        {
+            return Ok(Some(offset));
+        }
+        offset += 1;
+    }
+    Ok(None)
+}
+
+fn markdown_prefix_evidence(
+    text: &str,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    for (index, line) in text.lines().take(4096).enumerate() {
+        if index.is_multiple_of(128) {
+            context.checkpoint()?;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        return Ok(trimmed.starts_with("# ")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("> ")
+            || trimmed.starts_with("```")
+            || trimmed.starts_with("~~~"));
+    }
+    Ok(false)
+}
+
+fn markdown_indented_code_prefix(
+    text: &str,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    for (index, line) in text.lines().take(4096).enumerate() {
+        if index.is_multiple_of(128) {
+            context.checkpoint()?;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let spaces = line.as_bytes().iter().take_while(|byte| **byte == b' ').count();
+        let indented = spaces >= 4 || line.as_bytes().get(spaces) == Some(&b'\t');
+        return Ok(indented && line.trim_start().starts_with('<'));
+    }
+    Ok(false)
 }
 
 fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {
