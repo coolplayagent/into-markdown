@@ -17,6 +17,15 @@ LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务�
   结论。`AND` 的每一项都必须保留并分别通过 allow/deny 策略；例如
   `unicode-ident` 的结论是 `MIT AND Unicode-3.0`，不能简化为 `MIT`。
 - `third_party/licenses/inventory.json` 记录原生运行时、模型和未来组件。
+- `pnpm-lock.yaml` 固定前端依赖的完整 registry integrity；
+  `third_party/licenses/npm-inventory.json` 必须与每个 lock package 精确双向覆盖，并记录
+  runtime/build/test 范围、SPDX 结论、HTTPS 来源与是否进入发布物。
+- `third_party/licenses/npm-release.spdx.json` 是嵌入式控制台生产 JavaScript 的确定性
+  SPDX 2.3 SBOM。document namespace 绑定实际资产完整 SHA-256，creationInfo 固定且不含
+  时间漂移、本机路径或随机值；包、文件与 relationship ID 必须唯一且不能悬空。
+- 根 `//:release_license_files` 是发布归档必须携带的许可证与 SBOM 权威集合。它必须
+  精确包含项目 LICENSE/NOTICE、第三方声明、所有实际 runtime npm 许可文本以及上述 SPDX
+  SBOM；审计对 inventory 推导出的集合双向比较，缺项与未管理的额外项都失败。
 - `reviewed` 表示清单字段已经核对，不表示组件一定进入发布物；
   `planned` 表示版本、来源、构建选项或义务仍待确定，不能用于发布。
 - `included_in_release` 是发布边界。改为 `true` 前必须补齐版本、来源、SPDX
@@ -39,6 +48,16 @@ bazel run //tools/license-check:release_audit
 deny 列表命中、清单重复、缺字段，或被纳入发布但仍为 `planned` 的组件都会失败。
 严格发布规则不能通过策略配置降级。依赖升级必须同时核对上游许可表达式、选择
 完整的兼容义务结论并更新精确版本清单。
+
+npm 审计同样拒绝锁新增而未审核、清单孤儿、integrity 漂移、范围与发布标记冲突。
+React、React DOM 与 Scheduler 的 MIT 代码进入嵌入式控制台生产资产；发布归档必须保留
+其版权与 MIT 许可声明。三者 exact npm tarball 的 `LICENSE` 内容相同，仓库逐字节保存为
+`third_party/licenses/npm/react-MIT.txt`；清单记录各自 tarball 来源、完整文件 SHA-256 与
+版权文本。发布审计重新计算许可文件和生产 app 的 SHA-256，并要求 release inventory、
+SPDX packages、asset-manifest 与 app bytes 双向完全一致；许可文件删除/漂移、SBOM 包删除/
+新增、重复 SPDXID、悬空 relationship 与资产漂移均失败。TypeScript、esbuild-wasm 与类型包只用于构建，happy-dom 与
+axe-core 只用于测试。axe-core 采用 MPL-2.0：npm 源包和可能分发的 CI/cache 测试产物
+保留其文件级声明与对应源代码可获得性义务，但 axe-core 不进入 CLI 或控制台生产资产。
 
 ## 当前覆盖与后续义务
 
@@ -105,6 +124,8 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 
 所有源码和二进制归档都必须包含项目的 `LICENSE`、`NOTICE`、
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
+控制台进入归档时，还必须从 `//:release_license_files` 复制 React 系列完整 MIT 文本与
+`npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
 当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
 都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
 

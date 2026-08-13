@@ -4,10 +4,11 @@ use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
 use axum::Json;
 use axum::Router;
+use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -24,33 +25,6 @@ const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
 const SESSION_FRAGMENT: &str = "into-md-session";
 const SESSION_BYTES: usize = 32;
 const SESSION_ENCODED_LEN: usize = 43;
-
-const INDEX_HTML: &str = r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>into-md local service</title><script src="/app.js" defer></script></head>
-<body><main><h1>into-md local service</h1><p id="status">Checking the local API…</p>
-<p>This page is a secure service entry point. The document control console is not included in this command.</p></main></body></html>"#;
-
-const APP_JS: &str = r"(() => {
-  'use strict';
-  const fragment = location.hash.startsWith('#') ? location.hash.slice(1) : '';
-  const prefix = 'into-md-session=';
-  const valid = fragment.startsWith(prefix) && fragment.indexOf('&') === -1;
-  const session = valid ? fragment.slice(prefix.length) : '';
-  const encoded = /^[A-Za-z0-9_-]{43}$/;
-  history.replaceState(null, '', location.pathname + location.search);
-  const status = document.getElementById('status');
-  if (!valid || !encoded.test(session)) {
-    status.textContent = 'Session handoff is missing or invalid. Restart into-md ui.';
-    return;
-  }
-  fetch('/api/status', {method: 'POST', headers: {'X-Into-Md-Session': session}, credentials: 'omit', cache: 'no-store'})
-    .then(response => response.ok ? response.json() : Promise.reject(new Error('authorization failed')))
-    .then(value => { status.textContent = value.localApi.available
-      ? 'The secure local API is available. The document console is not installed.'
-      : 'The local API is unavailable.'; })
-    .catch(() => { status.textContent = 'The secure local API could not be reached.'; });
-})();";
 
 #[derive(Clone)]
 struct AppState {
@@ -213,9 +187,10 @@ where
         .layer(middleware::from_fn_with_state(state.clone(), api_security));
     let app = Router::new()
         .route("/", get(index))
-        .route("/app.js", get(script))
+        .route("/status", get(index))
+        .route("/assets/{*path}", get(asset))
         .nest("/api", api)
-        .fallback(not_found)
+        .fallback(static_fallback)
         .layer(middleware::from_fn_with_state(state.clone(), host_security))
         .layer(middleware::from_fn(response_security))
         .with_state(state);
@@ -269,11 +244,51 @@ fn session_matches(expected: &[u8], supplied: &[u8]) -> bool {
 }
 
 async fn index() -> impl IntoResponse {
-    Html(INDEX_HTML)
+    asset_response(&crate::ui_assets::INDEX)
 }
 
-async fn script() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], APP_JS)
+async fn asset(uri: Uri) -> Response {
+    match crate::ui_assets::by_path(uri.path()) {
+        Some(asset) => asset_response(asset),
+        None => rejection(StatusCode::NOT_FOUND, "notFound"),
+    }
+}
+
+fn asset_response(asset: &crate::ui_assets::Asset) -> Response {
+    let mut response = Response::new(Body::from(asset.bytes));
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(asset.mime));
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&format!("\"{}\"", asset.sha256))
+            .expect("checked-in SHA-256 is a valid header value"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if asset.immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        }),
+    );
+    response
+}
+
+async fn static_fallback(method: Method, uri: Uri, headers: HeaderMap) -> Response {
+    let accepts_html =
+        headers.get_all(header::ACCEPT).iter().filter_map(|value| value.to_str().ok()).any(
+            |value| {
+                value.split(',').any(|media| media.trim().split(';').next() == Some("text/html"))
+            },
+        );
+    if matches!(method, Method::GET | Method::HEAD)
+        && accepts_html
+        && !uri.path().starts_with("/api/")
+        && !uri.path().starts_with("/assets/")
+    {
+        asset_response(&crate::ui_assets::INDEX)
+    } else {
+        rejection(StatusCode::NOT_FOUND, "notFound")
+    }
 }
 
 async fn status(headers: HeaderMap) -> Response {
@@ -311,10 +326,6 @@ fn request_body_is_empty(headers: &HeaderMap) -> bool {
     }
 }
 
-async fn not_found() -> Response {
-    rejection(StatusCode::NOT_FOUND, "notFound")
-}
-
 async fn api_not_found() -> Response {
     rejection(StatusCode::NOT_FOUND, "apiNotFound")
 }
@@ -329,12 +340,14 @@ fn rejection(status: StatusCode, code: &'static str) -> Response {
 
 fn apply_security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if !headers.contains_key(header::CACHE_CONTROL) {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
+        HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
     );
     response
 }
@@ -641,6 +654,34 @@ mod tests {
         assert!(!response.contains(&session));
         assert_security_headers(&response);
 
+        let css = request(
+            port,
+            &format!("GET /assets/app.f205ee673998c673.css HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(css.starts_with("HTTP/1.1 200"), "{css}");
+        assert!(css.to_ascii_lowercase().contains("content-type: text/css; charset=utf-8"));
+        assert!(
+            css.to_ascii_lowercase().contains("cache-control: public, max-age=31536000, immutable")
+        );
+        assert!(
+            css.contains(
+                "ETag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
+            ) || css.contains(
+                "etag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
+            )
+        );
+        assert!(css.to_ascii_lowercase().contains("x-content-type-options: nosniff"));
+        assert!(css.to_ascii_lowercase().contains("content-security-policy: default-src 'none';"));
+
+        let spa = request(
+            port,
+            &format!("GET /future-route HTTP/1.1\r\nHost: {host}\r\nAccept: text/html\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(spa.starts_with("HTTP/1.1 200"), "{spa}");
+        assert!(spa.contains("<div id=\"app\">"));
+
         let missing = request(
             port,
             &format!("GET /missing HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
@@ -651,8 +692,11 @@ mod tests {
         let bad_host =
             request(port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
         assert_schema_error(&bad_host, "HTTP/1.1 400", "invalidHost");
-        assert!(APP_JS.find("history.replaceState").unwrap() < APP_JS.find("fetch(").unwrap());
-        assert!(APP_JS.contains("method: 'POST'"));
+        let bootstrap = std::str::from_utf8(
+            crate::ui_assets::by_path("/assets/bootstrap.63383b893163f97a.js").unwrap().bytes,
+        )
+        .unwrap();
+        assert!(bootstrap.find("replaceState").unwrap() < bootstrap.find("import(").unwrap());
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
     }

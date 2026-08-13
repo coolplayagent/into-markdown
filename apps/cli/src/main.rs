@@ -8,6 +8,7 @@ mod i18n;
 mod output;
 mod transaction;
 mod ui;
+mod ui_assets;
 
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};

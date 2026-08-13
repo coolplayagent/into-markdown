@@ -61,12 +61,17 @@ JSON, portable bundles, layered configuration, providers, models, and plugins.
 Network and AI access are disabled by default; remote sources and providers
 require an explicit `--allow-network` on every invocation.
 
-`into-md ui` starts a local Web security entry point fixed to `127.0.0.1`, using
+`into-md ui` starts a local Web security entry point and embedded React console
+shell fixed to `127.0.0.1`, using
 an operating-system-assigned port by default and opening the browser. A fresh
 high-entropy session value is handed to the embedded page in the URL fragment;
-the API also requires the exact Host, Origin, and session header. The page
-truthfully reports that the document console is unavailable and does not include
-job, database, or full frontend functionality. See the Chinese authoritative
+the API also requires the exact Host, Origin, and session header. The responsive
+status page includes themes, Simplified Chinese and English, keyboard and focus
+support, and truthfully reports unavailable document capabilities. It does not
+include jobs, a database, workbench, preview, or administration. Bazel builds
+content-addressed assets offline and embeds them in the Rust binary; no CDN is
+used. The checked release inputs include the complete React-family MIT notice
+and a deterministic SPDX 2.3 SBOM tied to the exact production app hash. See the Chinese authoritative
 [local Web service contract](docs/ui.md).
 
 Conversion results and batch reports use public DTO schema 1 shared by the CLI

@@ -1,0 +1,11 @@
+packages:
+  - web/console
+
+hoist: false
+
+strictPeerDependencies: true
+
+onlyBuiltDependencies: []
+
+allowBuilds:
+  esbuild: set this to true or false
