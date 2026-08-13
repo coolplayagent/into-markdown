@@ -34,9 +34,10 @@ byte-range 查询对 run 起点做二分，TXT 的顺序分行则使用单调游
 
 JSON/XML 共用 `max_input_bytes`、`max_nesting_depth`、`max_field_bytes`、IR node/inline
 上限及 ExecutionContext 内存预算。JSON detector 与 converter 先通过同一完整结构扫描器，
-converter 再施加重复键和 decoded string 策略。XML 的 UTF-16 decoder 维护 decoded UTF-8
-boundary 到原始 byte boundary 的映射；converter 交给 quick-xml 的只是解码文本，公开
-provenance 始终回映到原始输入。
+converter 再以显式容器栈施加重复键和 decoded string 策略，不建立递归 AST。XML 复用文本
+转换器的 compact run decoder，维护 decoded UTF-8 boundary 到原始 byte boundary 的映射；
+converter 交给 quick-xml 的只是解码文本，公开 provenance 始终回映到原始输入。XML 属性
+由有界 start-tag scanner 与 quick-xml 属性顺序交叉校验，QName/value 各自保留精确原始 span。
 
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。

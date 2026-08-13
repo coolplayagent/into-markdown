@@ -1228,21 +1228,32 @@ fn structured_text_candidate(
         }
     }
 
-    if let Some(decoded) = structured::decode_xml_for_detection(bytes) {
-        let text = decoded.trim_start();
-        if let Some(root) = xml_root_name(text) {
-            return Ok(Some(FormatCandidate::new(
-                InputFormat::Xml,
-                0.92,
-                format!("UTF-16 XML {root} root element"),
-            )));
-        }
-        if strong_xml_prefix(text) {
-            return Ok(Some(FormatCandidate::new(
-                InputFormat::Xml,
-                0.90,
-                "UTF-16 XML declaration or paired markup",
-            )));
+    if let Some(decoded) = structured::decode_xml_for_detection(bytes, context)? {
+        match decoded {
+            structured::XmlDetectionText::Decoded(decoded) => {
+                let text = decoded.trim_start();
+                if let Some(root) = xml_root_name(text) {
+                    return Ok(Some(FormatCandidate::new(
+                        InputFormat::Xml,
+                        0.92,
+                        format!("UTF-16 XML {root} root element"),
+                    )));
+                }
+                if strong_xml_prefix(text) {
+                    return Ok(Some(FormatCandidate::new(
+                        InputFormat::Xml,
+                        0.90,
+                        "UTF-16 XML declaration or paired markup",
+                    )));
+                }
+            }
+            structured::XmlDetectionText::InvalidUtf16 => {
+                return Ok(Some(FormatCandidate::new(
+                    InputFormat::Xml,
+                    0.90,
+                    "UTF-16 XML signature with invalid encoded content",
+                )));
+            }
         }
     }
 
@@ -1296,7 +1307,7 @@ fn json_payload(mut bytes: &[u8]) -> Option<&[u8]> {
         bytes = rest;
     }
     let start = bytes.iter().position(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))?;
-    matches!(bytes[start], b'{' | b'[').then_some(&bytes[start..])
+    Some(&bytes[start..])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1356,24 +1367,25 @@ enum JsonFrame {
     Object { state: JsonObjectState, pending_key: Option<JsonTopKey> },
 }
 
-#[derive(Debug)]
 struct JsonParser {
     root: JsonRootState,
     frames: Vec<JsonFrame>,
     nbformat_number: bool,
     cells_array: bool,
     metadata_object: bool,
+    memory: text::LogicalMemory,
 }
 
 impl JsonParser {
-    fn new() -> Self {
-        Self {
+    fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
+        Ok(Self {
             root: JsonRootState::Value,
-            frames: Vec::with_capacity(32),
+            frames: Vec::new(),
             nbformat_number: false,
             cells_array: false,
             metadata_object: false,
-        }
+            memory: text::LogicalMemory::new(context)?,
+        })
     }
 
     fn consume_value(&mut self, kind: JsonValueKind) -> bool {
@@ -1430,6 +1442,7 @@ impl JsonParser {
                 detail: format!("JSON detector exceeds {JSON_SCAN_DEPTH_LIMIT} nested containers"),
             });
         }
+        self.memory.reserve_vec(&mut self.frames, 1)?;
         self.frames.push(match kind {
             JsonValueKind::Object => {
                 JsonFrame::Object { state: JsonObjectState::FirstKeyOrEnd, pending_key: None }
@@ -1539,7 +1552,7 @@ enum JsonLexeme {
 }
 
 fn scan_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonScanSummary, ConversionError> {
-    let mut parser = JsonParser::new();
+    let mut parser = JsonParser::new(context)?;
     let mut budget = JsonScanBudget { context, next_checkpoint: 0 };
     let mut offset = 0_usize;
     while offset < bytes.len() {

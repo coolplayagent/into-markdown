@@ -77,7 +77,9 @@ duplicate keys, and preserves source object order and number lexemes. XML accept
 UTF-8 and UTF-16LE/BE, retains QName/namespace information, source-ordered
 attributes, mixed text, CDATA, and processing instructions, and records comments
 in document metadata. DTDs and custom or external entities are rejected. Both
-converters report provenance in original-source byte offsets.
+converters report provenance in original-source byte offsets. Complete top-level
+JSON scalars are auto-detected. Every XML attribute exposes independent QName and
+value spans, and UTF-16 provenance reuses the compact run decoder.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
 implemented. The authoritative manifests currently contain upstream source

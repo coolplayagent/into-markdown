@@ -112,6 +112,29 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
 }
 
 #[test]
+fn json_depth_4096_never_uses_the_process_stack() {
+    let mut deepest_allowed = "[".repeat(4096);
+    deepest_allowed.push('0');
+    deepest_allowed.push_str(&"]".repeat(4096));
+    let output = run_with_stdin(
+        &["--no-config", "--format", "json", "--max-depth", "4096", "-"],
+        deepest_allowed.as_bytes(),
+    );
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
+
+    let mut excessive = "[".repeat(4097);
+    excessive.push('0');
+    excessive.push_str(&"]".repeat(4097));
+    let output = run_with_stdin(
+        &["--no-config", "--format", "json", "--max-depth", "4096", "-"],
+        excessive.as_bytes(),
+    );
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
+}
+
+#[test]
 fn full_input_unicode_controls_never_auto_detect_as_text() {
     let directory = tempfile::tempdir().unwrap();
     for (name, suffix) in [("del", b"\x7f".as_slice()), ("c1", b"\xc2\x80".as_slice())] {

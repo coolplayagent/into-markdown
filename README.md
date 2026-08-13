@@ -61,7 +61,8 @@ BOM，并复用 TXT 的安全字符集解码。`--table-header auto|always|never
 JSON 与 XML 转换可用。JSON 严格校验 RFC 8259、拒绝重复键、保留对象源顺序与数字
 lexeme；XML 支持 UTF-8 和 UTF-16LE/BE，保留 QName、namespace、属性源顺序、mixed text、
 CDATA 与 PI，并把注释记录在文档 metadata。XML 的 DTD、自定义/外部实体稳定拒绝，
-两种格式的 provenance 都使用原始输入字节范围。
+两种格式的 provenance 都使用原始输入字节范围。完整 JSON 顶层标量也会自动识别；XML 每个
+属性的 QName/value 具有独立原始 byte span，UTF-16 映射复用 compact run decoder。
 
 模型查询、离线校验、路径和安全清理后端已实现；当前权威清单只有上游 source
 archives，没有可安装的最终 ONNX/字符表产物，因此安装返回稳定

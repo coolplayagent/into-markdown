@@ -57,6 +57,11 @@ UTF-8/UTF-16 BOM、显式传统字符集、表头三种策略、strict/pad 不�
 literal、有效开放状态、错误尾部、括号不匹配、trailing comma 与 nesting 资源上限。
 JSON string 测试还要覆盖合法 surrogate pair、多个 pair、BMP escape、lone low、
 high 后接非 low、EOF high，以及不应被解释为 Unicode escape 的转义反斜杠。
+真实子进程还覆盖 4096 层 JSON 在显式 4096 深度预算下成功、4097 层返回 `resourceLimit`，
+确保 parser、IR emitter 和析构均不依赖用户深度的调用栈。自动检测回归固定 `true`、`123`、
+`"x"` 为 JSON；500 KiB JSON string 在 128 KiB 逻辑内存预算下须在大分配前失败。XML 回归
+覆盖普通 text、CDATA、attribute 与 numeric GeneralRef 中的 raw control、`&#1;`、surrogate、
+U+FFFE，以及 UTF-8/UTF-16 的独立属性 QName/value 原始 byte span。
 500001 行输入必须在创建 IR 节点前以 `resourceLimit` 和退出码 5 失败，不得退化为
 `internal`。
 
