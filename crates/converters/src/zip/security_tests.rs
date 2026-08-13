@@ -1,4 +1,4 @@
-use super::archive::Archive;
+use super::archive::{Archive, constructor_calls, reset_constructor_calls};
 use super::budget::ArchiveBudget;
 use super::merge::rewrite_nodes;
 use into_markdown_core::{
@@ -111,6 +111,82 @@ fn entry_tree_and_single_member_limits_are_preflighted() {
         open(&large, &memory_options),
         Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
     ));
+}
+
+#[test]
+fn duplicate_raw_records_are_rejected_before_the_zip_constructor() {
+    let mut duplicate = stored(&[("a.txt", b"FIRST"), ("b.txt", b"SECOND")]);
+    let central = central_offsets(&duplicate)[1];
+    let local = local_offset(&duplicate, central);
+    duplicate[central + 46] = b'a';
+    duplicate[local + 30] = b'a';
+    reset_constructor_calls();
+    assert_eq!(
+        open(&duplicate, &ConversionOptions::default()).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+    assert_eq!(constructor_calls(), 0);
+}
+
+#[test]
+fn raw_aliases_and_file_prefixes_are_rejected_before_the_zip_constructor() {
+    let aliases = stored(&[("A.txt", b"one"), ("a.TXT", b"two")]);
+    reset_constructor_calls();
+    assert_eq!(
+        open(&aliases, &ConversionOptions::default()).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+    assert_eq!(constructor_calls(), 0);
+
+    let prefixes = stored(&[("root", b"file"), ("root/child.txt", b"child")]);
+    reset_constructor_calls();
+    assert_eq!(
+        open(&prefixes, &ConversionOptions::default()).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+    assert_eq!(constructor_calls(), 0);
+}
+
+#[test]
+fn large_central_directory_is_budgeted_before_the_zip_constructor() {
+    let large = many_empty_entries(50_000);
+
+    let mut entry_options = ConversionOptions::default();
+    entry_options.limits.max_archive_entries = 49_999;
+    reset_constructor_calls();
+    assert!(matches!(
+        open(&large, &entry_options),
+        Err(ConversionError::ResourceLimit { limit: "max_archive_entries", .. })
+    ));
+    assert_eq!(constructor_calls(), 0);
+
+    let mut memory_options = ConversionOptions::default();
+    memory_options.limits.max_memory_bytes = 16 * 1024 * 1024;
+    reset_constructor_calls();
+    assert!(matches!(
+        open(&large, &memory_options),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(constructor_calls(), 0);
+}
+
+#[test]
+fn exact_raw_metadata_budget_allows_a_small_archive_constructor() {
+    let small = stored(&[("small.txt", b"small")]);
+    let exact = super::raw_central::planned_memory(&small).unwrap();
+    let mut options = ConversionOptions::default();
+    options.limits.max_memory_bytes = exact;
+    reset_constructor_calls();
+    open(&small, &options).unwrap();
+    assert_eq!(constructor_calls(), 1);
+
+    options.limits.max_memory_bytes = exact - 1;
+    reset_constructor_calls();
+    assert!(matches!(
+        open(&small, &options),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(constructor_calls(), 0);
 }
 
 #[test]
@@ -230,6 +306,17 @@ fn descriptor_archive(name: &str, payload: &[u8]) -> Vec<u8> {
     le32(&mut output, central_start);
     le16(&mut output, 0);
     output
+}
+
+fn many_empty_entries(count: u16) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .unix_permissions(0o644);
+    for index in 0..count {
+        writer.start_file(format!("f{index:05}.txt"), options).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
 }
 
 fn crc32(bytes: &[u8]) -> u32 {

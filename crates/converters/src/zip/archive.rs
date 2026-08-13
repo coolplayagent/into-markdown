@@ -1,8 +1,16 @@
 use super::budget::ArchiveBudget;
-use super::entry_policy::{EntryKind, EntryPolicy};
-use super::headers::{find_central_start, validate_headers};
+use super::entry_policy::EntryKind;
+use super::raw_central::RawInventory;
 use into_markdown_core::{ConversionError, ResourceReservation};
 use std::io::{Cursor, Read};
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static CONSTRUCTOR_CALLS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct EntryMeta {
@@ -11,7 +19,7 @@ pub(super) struct EntryMeta {
     pub(super) kind: EntryKind,
     pub(super) compressed_size: u64,
     pub(super) expanded_size: u64,
-    deflated: bool,
+    pub(super) deflated: bool,
 }
 
 pub(super) struct EntryData {
@@ -32,73 +40,16 @@ impl<'a> Archive<'a> {
         budget: &mut ArchiveBudget<'_>,
     ) -> Result<Self, ConversionError> {
         budget.context().checkpoint()?;
-        let mut inner = zip::ZipArchive::new(Cursor::new(bytes))
+        let RawInventory { entries, memory } = super::raw_central::preflight(bytes, depth, budget)?;
+        #[cfg(test)]
+        CONSTRUCTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let inner = zip::ZipArchive::new(Cursor::new(bytes))
             .map_err(|error| malformed(format!("invalid ZIP structure: {error}")))?;
-        budget.enter_archive(depth, inner.len())?;
-        let fixed = u64::try_from(inner.len())
-            .unwrap_or(u64::MAX)
-            .checked_mul(256)
-            .ok_or_else(|| memory_limit("ZIP metadata size overflowed"))?;
-        let mut memory = budget.context().reserve_memory(fixed)?;
-        let mut policy = EntryPolicy::default();
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(inner.len())
-            .map_err(|error| memory_limit(format!("reserve ZIP metadata: {error}")))?;
-        let central_start = find_central_start(&mut inner)?;
-        let mut occupied = Vec::new();
-        occupied
-            .try_reserve_exact(inner.len())
-            .map_err(|error| memory_limit(format!("reserve ZIP intervals: {error}")))?;
-
-        for index in 0..inner.len() {
-            budget.context().checkpoint()?;
-            let entry = inner
-                .by_index_raw(index)
-                .map_err(|error| malformed(format!("cannot inspect entry {index}: {error}")))?;
-            if entry.encrypted() {
-                return Err(ConversionError::Encrypted);
-            }
-            if !matches!(
-                entry.compression(),
-                zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
-            ) {
-                return Err(malformed(format!(
-                    "entry {:?} uses unsupported compression {}",
-                    entry.name(),
-                    entry.compression()
-                )));
-            }
-            budget.validate_member(entry.name(), entry.compressed_size(), entry.size())?;
-            // Canonical name, stable-sort copy, alias/prefix sets, component
-            // inventory, and validation scratch coexist at policy peak.
-            let name_charge =
-                u64::try_from(entry.name_raw().len()).unwrap_or(u64::MAX).saturating_mul(16);
-            memory.grow(name_charge)?;
-            let (name, kind) =
-                policy.accept(entry.name_raw(), entry.name(), entry.unix_mode(), entry.is_dir())?;
-            let range = validate_headers(bytes, &entry, central_start)?;
-            occupied.push((range.0, range.1, name.clone()));
-            entries.push(EntryMeta {
-                index,
-                name,
-                kind,
-                compressed_size: entry.compressed_size(),
-                expanded_size: entry.size(),
-                deflated: entry.compression() == zip::CompressionMethod::Deflated,
-            });
+        if inner.len() != entries.len() {
+            return Err(malformed(
+                "third-party ZIP inventory disagrees with the validated raw central directory",
+            ));
         }
-        occupied.sort_by_key(|interval| interval.0);
-        for pair in occupied.windows(2) {
-            if pair[0].1 > pair[1].0 {
-                return Err(malformed(format!(
-                    "entry data ranges overlap: {:?} and {:?}",
-                    pair[0].2, pair[1].2
-                )));
-            }
-        }
-        entries
-            .sort_by(|left, right| left.name.cmp(&right.name).then(left.index.cmp(&right.index)));
         Ok(Self { inner, entries, _metadata_memory: memory })
     }
 
@@ -162,6 +113,16 @@ impl<'a> Archive<'a> {
         }
         Ok(EntryData { bytes, _memory: memory })
     }
+}
+
+#[cfg(test)]
+pub(super) fn reset_constructor_calls() {
+    CONSTRUCTOR_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn constructor_calls() -> usize {
+    CONSTRUCTOR_CALLS.with(Cell::get)
 }
 
 fn malformed(detail: impl Into<String>) -> ConversionError {
