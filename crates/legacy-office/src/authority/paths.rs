@@ -1,4 +1,4 @@
-use super::{MAX_PATH_BYTES, unavailable};
+use super::{MAX_PATH_BYTES, SystemLibraryAuthority, unavailable};
 use into_markdown_core::ConversionError;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -47,49 +47,92 @@ pub(super) fn checked_join(root: &Path, relative: &str) -> Result<PathBuf, Conve
     Ok(joined)
 }
 
-pub(super) fn explicit_system_directory(
-    value: &str,
+pub(super) fn system_library_path(
+    library: &SystemLibraryAuthority,
     target: &str,
 ) -> Result<PathBuf, ConversionError> {
-    let path = Path::new(value);
-    if value.len() > MAX_PATH_BYTES || !path.is_absolute() || !allowed_system_path(value, target) {
+    if library.identity.is_empty()
+        || library.identity.len() > MAX_PATH_BYTES
+        || library.path.is_empty()
+        || library.path.len() > MAX_PATH_BYTES
+        || !library.identity.is_ascii()
+        || !library.path.is_ascii()
+        || library
+            .identity
+            .bytes()
+            .chain(library.path.bytes())
+            .any(|byte| byte.is_ascii_control() || byte == 0x7f)
+    {
         return Err(unavailable("sandboxAuthority"));
     }
-    system_directory(path).map_err(|_| unavailable("sandboxAuthority"))
-}
-
-#[cfg(not(windows))]
-fn system_directory(path: &Path) -> Result<PathBuf, ConversionError> {
-    explicit_directory(path)
-}
-
-#[cfg(windows)]
-fn system_directory(path: &Path) -> Result<PathBuf, ConversionError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| unavailable("sandboxAuthority"))?;
-    if !metadata.is_dir() || is_reparse(&metadata) {
-        return Err(unavailable("sandboxAuthority"));
-    }
-    path.canonicalize().map_err(|_| unavailable("sandboxAuthority"))
-}
-
-pub(super) fn allowed_system_path(value: &str, target: &str) -> bool {
-    let allowed: &[&str] = match target {
+    match target {
         "aarch64-apple-darwin" => {
-            &["/System/Library", "/usr/lib", "/Library/Fonts", "/System/Library/Fonts"]
+            // These identities are provided by the dyld shared cache and do not
+            // necessarily have a standalone inode on current macOS releases.
+            const SYSTEM_DYLIBS: &[&str] = &[
+                "/usr/lib/libSystem.B.dylib",
+                "/usr/lib/libc++.1.dylib",
+                "/usr/lib/libiconv.2.dylib",
+                "/usr/lib/libobjc.A.dylib",
+                "/usr/lib/libsandbox.1.dylib",
+                "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+                "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+                "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+            ];
+            if library.identity != library.path
+                || !SYSTEM_DYLIBS.contains(&library.identity.as_str())
+            {
+                return Err(unavailable("sandboxAuthority"));
+            }
+            Ok(PathBuf::from(&library.path))
         }
-        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => &[
-            "/lib",
-            "/lib64",
-            "/usr/lib",
-            "/usr/lib64",
-            "/usr/share/fonts",
-            "/usr/share/zoneinfo",
-            "/etc/fonts",
-        ],
-        "x86_64-pc-windows-msvc" => &[r"C:\Windows\System32", r"C:\Windows\Fonts"],
-        _ => &[],
-    };
-    allowed.contains(&value)
+        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
+            const SYSTEM_SONAMES: &[&str] = &[
+                "ld-linux-aarch64.so.1",
+                "ld-linux-x86-64.so.2",
+                "libc.so.6",
+                "libdl.so.2",
+                "libgcc_s.so.1",
+                "libm.so.6",
+                "libpthread.so.0",
+                "librt.so.1",
+                "libstdc++.so.6",
+            ];
+            if !SYSTEM_SONAMES.contains(&library.identity.as_str())
+                || Path::new(&library.path).file_name().and_then(|value| value.to_str())
+                    != Some(library.identity.as_str())
+            {
+                return Err(unavailable("sandboxAuthority"));
+            }
+            explicit_regular_file(Path::new(&library.path), None)
+                .map_err(|_| unavailable("sandboxAuthority"))
+        }
+        "x86_64-pc-windows-msvc" => {
+            const SYSTEM_DLLS: &[&str] = &[
+                "advapi32.dll",
+                "bcrypt.dll",
+                "kernel32.dll",
+                "ntdll.dll",
+                "ole32.dll",
+                "oleaut32.dll",
+                "rpcrt4.dll",
+                "secur32.dll",
+                "shell32.dll",
+                "user32.dll",
+                "ucrtbase.dll",
+                "ws2_32.dll",
+            ];
+            let identity = library.identity.to_ascii_lowercase();
+            let expected = format!(r"C:\Windows\System32\{identity}");
+            if !SYSTEM_DLLS.contains(&identity.as_str())
+                || !library.path.eq_ignore_ascii_case(&expected)
+            {
+                return Err(unavailable("sandboxAuthority"));
+            }
+            Ok(PathBuf::from(&library.path))
+        }
+        _ => Err(unavailable("sandboxAuthority")),
+    }
 }
 
 pub(super) fn safe_relative(value: &str) -> bool {

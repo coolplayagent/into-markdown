@@ -85,7 +85,7 @@ fn install_landlock(policy: &Policy) -> Result<(), ()> {
     let ruleset = unsafe { std::os::fd::OwnedFd::from_raw_fd(i32::try_from(fd).map_err(|_| ())?) };
     add_path(&ruleset, &policy.runtime_root, READ_ACCESS)?;
     for path in &policy.system_read_paths {
-        add_path(&ruleset, path, READ_ACCESS)?;
+        add_path(&ruleset, path, LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE)?;
     }
     add_path(&ruleset, &policy.temporary_root, READ_ACCESS | WRITE_ACCESS)?;
     // SAFETY: live ruleset descriptor and zero flags follow the Landlock ABI.

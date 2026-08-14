@@ -1,37 +1,37 @@
 use super::{FileRole, RuntimeFile, Target, VerifiedRuntimeFile, unavailable};
-use crate::authority::paths::safe_relative;
+use crate::authority::paths::{safe_relative, system_library_path};
 use into_markdown_core::{ConversionError, ExecutionContext};
-use object::Object as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 const MAX_DEPENDENCY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_DEPENDENCIES: usize = 4_096;
 
-pub(super) struct DependencyAudit {
-    pub worker_files: Vec<VerifiedRuntimeFile>,
-    pub native_files: Vec<VerifiedRuntimeFile>,
-    pub worker_bytes: u64,
-    pub native_bytes: u64,
-}
+mod macho;
+mod pe;
 
 pub(super) fn validate(
     target: &Target,
     target_name: &str,
     root: &Path,
     context: &ExecutionContext,
-) -> Result<DependencyAudit, ConversionError> {
+) -> Result<(), ConversionError> {
     let inventory =
         target.files.iter().map(|entry| (entry.path.as_str(), entry)).collect::<BTreeMap<_, _>>();
-    let declared_system = target.sandbox.system_libraries.iter().cloned().collect::<BTreeSet<_>>();
-    if declared_system.iter().any(|identity| !allowed_system_library(identity, target_name)) {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    if !system_paths_cover(&declared_system, &target.sandbox.system_read_paths, target_name) {
+    let declared_system = target
+        .sandbox
+        .system_libraries
+        .iter()
+        .map(|library| {
+            system_library_path(library, target_name)?;
+            Ok(library.identity.clone())
+        })
+        .collect::<Result<BTreeSet<_>, ConversionError>>()?;
+    if declared_system.len() != target.sandbox.system_libraries.len() {
         return Err(unavailable("dependencyAuthority"));
     }
     let mut used_system = BTreeSet::new();
-    let worker_files = closure(
+    let _worker_files = closure(
         &target.worker,
         target,
         target_name,
@@ -41,7 +41,7 @@ pub(super) fn validate(
         &mut used_system,
         context,
     )?;
-    let native_files = closure(
+    let _native_files = closure(
         &target.kit_library,
         target,
         target_name,
@@ -54,13 +54,7 @@ pub(super) fn validate(
     if used_system != declared_system {
         return Err(unavailable("dependencyAuthority"));
     }
-    let worker_bytes = worker_files.iter().try_fold(0_u64, |total, file| {
-        total.checked_add(file.bytes).ok_or_else(|| unavailable("dependencyAuthority"))
-    })?;
-    let native_bytes = native_files.iter().try_fold(0_u64, |total, file| {
-        total.checked_add(file.bytes).ok_or_else(|| unavailable("dependencyAuthority"))
-    })?;
-    Ok(DependencyAudit { worker_files, native_files, worker_bytes, native_bytes })
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -101,7 +95,7 @@ fn closure(
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != entry.bytes {
             return Err(unavailable("dependencyIo"));
         }
-        let specification = parse(&bytes, &target.abi.binary_format)?;
+        let specification = parse(&bytes, &target.abi.binary_format, target_name)?;
         for needed in specification.needed {
             context.checkpoint()?;
             if declared_system.contains(needed.as_str()) {
@@ -133,86 +127,17 @@ struct Specification {
     search: Vec<String>,
 }
 
-fn parse(bytes: &[u8], format: &str) -> Result<Specification, ConversionError> {
+fn parse(bytes: &[u8], format: &str, target: &str) -> Result<Specification, ConversionError> {
     match format {
         "elf" => parse_elf(bytes),
-        "mach-o" => parse_macho(bytes),
-        "pe" => parse_pe(bytes),
+        "mach-o" => macho::parse(bytes, target),
+        "pe" => pe::parse(bytes),
         _ => Err(unavailable("dependencyAuthority")),
     }
 }
 
-fn parse_pe(bytes: &[u8]) -> Result<Specification, ConversionError> {
-    let object = object::File::parse(bytes).map_err(|_| unavailable("dependencyAuthority"))?;
-    let mut needed = BTreeSet::new();
-    for import in object.imports().map_err(|_| unavailable("dependencyAuthority"))? {
-        let import = import.map_err(|_| unavailable("dependencyAuthority"))?;
-        let library = std::str::from_utf8(import.library())
-            .map_err(|_| unavailable("dependencyAuthority"))?;
-        needed.insert(library.to_owned());
-    }
-    Ok(Specification { needed, search: Vec::new() })
-}
-
-fn parse_macho(bytes: &[u8]) -> Result<Specification, ConversionError> {
-    if bytes.get(..4) != Some(&[0xcf, 0xfa, 0xed, 0xfe]) {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    let commands =
-        usize::try_from(le32(bytes, 16)?).map_err(|_| unavailable("dependencyAuthority"))?;
-    let command_bytes =
-        usize::try_from(le32(bytes, 20)?).map_err(|_| unavailable("dependencyAuthority"))?;
-    let end =
-        32_usize.checked_add(command_bytes).ok_or_else(|| unavailable("dependencyAuthority"))?;
-    if end > bytes.len() || commands > MAX_DEPENDENCIES {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    let mut needed = BTreeSet::new();
-    let mut search = Vec::new();
-    let mut cursor = 32_usize;
-    for _ in 0..commands {
-        let command = le32(bytes, cursor)?;
-        let size = usize::try_from(le32(bytes, cursor + 4)?)
-            .map_err(|_| unavailable("dependencyAuthority"))?;
-        let next = cursor.checked_add(size).ok_or_else(|| unavailable("dependencyAuthority"))?;
-        if size < 8 || next > end {
-            return Err(unavailable("dependencyAuthority"));
-        }
-        if matches!(command, 0x0c | 0x8000_0018 | 0x8000_001f | 0x8000_0023) {
-            needed.insert(command_string(bytes, cursor, next, 8)?);
-        } else if command == 0x8000_001c {
-            search.push(command_string(bytes, cursor, next, 8)?);
-        }
-        cursor = next;
-    }
-    if cursor != end {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    Ok(Specification { needed, search })
-}
-
-fn command_string(
-    bytes: &[u8],
-    command: usize,
-    end: usize,
-    offset_field: usize,
-) -> Result<String, ConversionError> {
-    let offset = usize::try_from(le32(bytes, command + offset_field)?)
-        .map_err(|_| unavailable("dependencyAuthority"))?;
-    let start = command.checked_add(offset).ok_or_else(|| unavailable("dependencyAuthority"))?;
-    if start >= end {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    let nul = bytes[start..end]
-        .iter()
-        .position(|byte| *byte == 0)
-        .ok_or_else(|| unavailable("dependencyAuthority"))?;
-    let value = std::str::from_utf8(&bytes[start..start + nul])
-        .map_err(|_| unavailable("dependencyAuthority"))?;
-    if value.is_empty() || value.bytes().any(|byte| byte.is_ascii_control()) {
-        return Err(unavailable("dependencyAuthority"));
-    }
-    Ok(value.to_owned())
+fn malformed() -> ConversionError {
+    unavailable("dependencyAuthority")
 }
 
 fn parse_elf(bytes: &[u8]) -> Result<Specification, ConversionError> {
@@ -401,54 +326,6 @@ fn normalize(path: std::path::PathBuf) -> Result<std::path::PathBuf, ConversionE
     Ok(path)
 }
 
-fn allowed_system_library(identity: &str, target: &str) -> bool {
-    if identity.is_empty()
-        || identity.len() > 1_024
-        || !identity.is_ascii()
-        || identity.bytes().any(|byte| byte.is_ascii_control() || byte == b'\\')
-        || identity.split('/').any(|part| matches!(part, "." | ".."))
-    {
-        return false;
-    }
-    match target {
-        "aarch64-apple-darwin" => {
-            (identity.starts_with("/usr/lib/")
-                || identity.starts_with("/System/Library/Frameworks/"))
-                && identity.ends_with(|character: char| character.is_ascii_alphanumeric())
-        }
-        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
-            !identity.contains('/')
-                && (identity.starts_with("lib") && identity.contains(".so")
-                    || identity.starts_with("ld-linux"))
-        }
-        "x86_64-pc-windows-msvc" => {
-            !identity.contains('/') && identity.to_ascii_lowercase().ends_with(".dll")
-        }
-        _ => false,
-    }
-}
-
-fn system_paths_cover(libraries: &BTreeSet<String>, paths: &[String], target: &str) -> bool {
-    if libraries.is_empty() {
-        return true;
-    }
-    match target {
-        "aarch64-apple-darwin" => libraries.iter().all(|library| {
-            paths.iter().any(|path| {
-                Path::new(library).starts_with(Path::new(path))
-                    && Path::new(library) != Path::new(path)
-            })
-        }),
-        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => paths
-            .iter()
-            .any(|path| matches!(path.as_str(), "/lib" | "/lib64" | "/usr/lib" | "/usr/lib64")),
-        "x86_64-pc-windows-msvc" => {
-            paths.iter().any(|path| path.eq_ignore_ascii_case(r"C:\Windows\System32"))
-        }
-        _ => false,
-    }
-}
-
 fn le16(bytes: &[u8], offset: usize) -> Result<u16, ConversionError> {
     let value = bytes.get(offset..offset + 2).ok_or_else(|| unavailable("dependencyAuthority"))?;
     Ok(u16::from_le_bytes([value[0], value[1]]))
@@ -467,6 +344,7 @@ fn le64(bytes: &[u8], offset: usize) -> Result<u64, ConversionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object::Object as _;
 
     #[test]
     fn platform_dependency_parser_matches_object_import_inventory() {
@@ -479,7 +357,16 @@ mod tests {
         } else {
             "pe"
         };
-        let parsed = parse(&bytes, format).unwrap().needed;
+        let target = if cfg!(target_os = "macos") {
+            "aarch64-apple-darwin"
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            "aarch64-unknown-linux-gnu"
+        } else if cfg!(target_os = "linux") {
+            "x86_64-unknown-linux-gnu"
+        } else {
+            "x86_64-pc-windows-msvc"
+        };
+        let parsed = parse(&bytes, format, target).unwrap().needed;
         let object = object::File::parse(bytes.as_slice()).unwrap();
         let imported = object
             .imports()
@@ -542,11 +429,16 @@ mod tests {
     }
 
     #[test]
-    fn system_library_identities_require_exact_platform_read_authority() {
-        let mac = BTreeSet::from(["/usr/lib/libSystem.B.dylib".to_owned()]);
-        assert!(system_paths_cover(&mac, &["/usr/lib".into()], "aarch64-apple-darwin"));
-        assert!(!system_paths_cover(&mac, &["/System/Library".into()], "aarch64-apple-darwin"));
-        assert!(!allowed_system_library("/tmp/libSystem.B.dylib", "aarch64-apple-darwin"));
-        assert!(!allowed_system_library("../libc.so.6", "x86_64-unknown-linux-gnu"));
+    fn arbitrary_system_named_library_is_not_authorized() {
+        let fake = super::super::SystemLibraryAuthority {
+            identity: "/tmp/libSystem.B.dylib".into(),
+            path: "/tmp/libSystem.B.dylib".into(),
+        };
+        assert!(system_library_path(&fake, "aarch64-apple-darwin").is_err());
+        let fake = super::super::SystemLibraryAuthority {
+            identity: "libconstructor-canary.so.6".into(),
+            path: "/usr/lib/libconstructor-canary.so.6".into(),
+        };
+        assert!(system_library_path(&fake, "x86_64-unknown-linux-gnu").is_err());
     }
 }

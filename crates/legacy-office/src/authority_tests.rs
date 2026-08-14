@@ -42,7 +42,6 @@ fn target() -> Target {
             process_limit: 1,
         },
         sandbox: SandboxAuthority {
-            system_read_paths: Vec::new(),
             system_libraries: Vec::new(),
             network: "deny".into(),
             child_processes: "deny".into(),
@@ -77,7 +76,18 @@ fn target_policy_rejects_network_children_and_abi_confusion() {
     candidate.abi.architecture = "wrong".into();
     assert!(validate_target(&candidate, name).is_err());
     let mut candidate = target();
-    candidate.sandbox.system_read_paths = vec!["/usr/lib".into(), "/usr/lib".into()];
+    candidate.sandbox.system_libraries = vec![
+        SystemLibraryAuthority { identity: "duplicate".into(), path: "/one".into() },
+        SystemLibraryAuthority { identity: "duplicate".into(), path: "/two".into() },
+    ];
+    assert!(validate_target(&candidate, name).is_err());
+    let mut candidate = target();
+    candidate.sandbox.system_libraries = (0..129)
+        .map(|index| SystemLibraryAuthority {
+            identity: format!("identity-{index}"),
+            path: format!("/system/library-{index}"),
+        })
+        .collect();
     assert!(validate_target(&candidate, name).is_err());
     let mut candidate = target();
     candidate.kit_library = "../kit".into();
@@ -113,7 +123,11 @@ fn url_hash_path_and_system_allowlists_are_strict() {
     assert!(!safe_relative("runtime/lib.so/"));
     assert!(!safe_relative("runtime/new\nline"));
     assert!(!safe_relative("/absolute"));
-    assert!(!allowed_system_path("/", current_target().unwrap()));
+    let fake = SystemLibraryAuthority {
+        identity: "libconstructor-canary.so.6".into(),
+        path: "/usr/lib/libconstructor-canary.so.6".into(),
+    };
+    assert!(system_library_path(&fake, current_target().unwrap()).is_err());
 }
 
 #[test]

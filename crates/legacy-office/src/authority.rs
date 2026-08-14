@@ -1,6 +1,5 @@
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
 use object::{Architecture, BinaryFormat, Object as _};
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -9,10 +8,18 @@ use std::path::{Path, PathBuf};
 
 mod dependencies;
 mod paths;
+mod schema;
 use paths::{
-    allowed_system_path, checked_join, explicit_directory, explicit_regular_file,
-    explicit_system_directory, is_reparse, safe_relative,
+    checked_join, explicit_directory, explicit_regular_file, is_reparse, safe_relative,
+    system_library_path,
 };
+#[cfg(windows)]
+pub(crate) use schema::AppContainerAuthority;
+#[cfg(all(test, not(windows)))]
+use schema::AppContainerAuthority;
+use schema::{Abi, Authority, FileRole, RuntimeFile, SystemLibraryAuthority, Target};
+#[cfg(test)]
+use schema::{RuntimeLicense, SandboxAuthority, WorkerLimits};
 
 const MAX_AUTHORITY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RUNTIME_FILES: usize = 100_000;
@@ -83,10 +90,8 @@ pub(crate) struct VerifiedBundle {
     pub root: PathBuf,
     pub worker: PathBuf,
     pub worker_sha256: String,
-    pub worker_load_files: Vec<VerifiedRuntimeFile>,
-    pub native_load_files: Vec<VerifiedRuntimeFile>,
-    pub worker_snapshot_bytes: u64,
-    pub native_snapshot_bytes: u64,
+    pub runtime_files: Vec<VerifiedRuntimeFile>,
+    pub runtime_snapshot_bytes: u64,
     pub install_root: PathBuf,
     pub kit_library: PathBuf,
     pub kit_sha256: String,
@@ -108,97 +113,6 @@ pub(crate) struct VerifiedRuntimeFile {
     pub bytes: u64,
     pub sha256: String,
     pub executable: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Authority {
-    schema_version: u32,
-    product: String,
-    version: String,
-    source_url: String,
-    targets: std::collections::BTreeMap<String, Target>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Target {
-    artifact_url: String,
-    artifact_bytes: u64,
-    artifact_sha256: String,
-    install_root: String,
-    kit_library: String,
-    worker: String,
-    files: Vec<RuntimeFile>,
-    licenses: Vec<RuntimeLicense>,
-    abi: Abi,
-    limits: WorkerLimits,
-    sandbox: SandboxAuthority,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RuntimeFile {
-    path: String,
-    bytes: u64,
-    sha256: String,
-    role: FileRole,
-}
-
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-enum FileRole {
-    Worker,
-    KitLibrary,
-    Runtime,
-    Configuration,
-    License,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RuntimeLicense {
-    id: String,
-    spdx: Option<String>,
-    notice_path: String,
-    notice_sha256: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Abi {
-    binary_format: String,
-    architecture: String,
-    library_identity: String,
-    required_export: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct WorkerLimits {
-    address_space_overhead_bytes: u64,
-    file_size_limit_bytes: u64,
-    open_file_limit: u32,
-    process_limit: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SandboxAuthority {
-    system_read_paths: Vec<String>,
-    system_libraries: Vec<String>,
-    network: String,
-    child_processes: String,
-    app_container: Option<AppContainerAuthority>,
-}
-
-#[derive(Deserialize, Clone)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct AppContainerAuthority {
-    pub profile_name: String,
-    pub sid: String,
-    pub capabilities: Vec<String>,
-    pub forbidden_capabilities: Vec<String>,
 }
 
 pub(crate) fn verify(
@@ -232,26 +146,37 @@ pub(crate) fn verify(
         return Err(unavailable("workerAuthority"));
     }
     validate_target(target, target_name)?;
-    let inventory = validate_files(target, &root, &authority_path, context)?;
+    let mut inventory = validate_files(target, &root, &authority_path, context)?;
     let kit_library = checked_join(&root, &target.kit_library)?;
     validate_abi(&kit_library, &target.abi, context)?;
-    let dependencies = dependencies::validate(target, target_name, &root, context)?;
+    dependencies::validate(target, target_name, &root, context)?;
     let install_root = checked_join(&root, &target.install_root)?;
     let install_root = explicit_directory(&install_root).map_err(|_| unavailable("installRoot"))?;
     let system_read_paths = target
         .sandbox
-        .system_read_paths
+        .system_libraries
         .iter()
-        .map(|path| explicit_system_directory(path, target_name))
+        .map(|library| system_library_path(library, target_name))
         .collect::<Result<Vec<_>, _>>()?;
+    let authority_bytes = u64::try_from(bytes.len()).map_err(|_| unavailable("authoritySize"))?;
+    inventory.files.try_reserve(1).map_err(|_| unavailable("fileInventory"))?;
+    inventory.files.push(VerifiedRuntimeFile {
+        relative: "authority.json".into(),
+        path: authority_path,
+        bytes: authority_bytes,
+        sha256: authority_sha256.clone(),
+        executable: false,
+    });
+    let runtime_snapshot_bytes = inventory
+        .total_bytes
+        .checked_add(authority_bytes)
+        .ok_or_else(|| unavailable("fileInventory"))?;
     Ok(VerifiedBundle {
         root,
         worker,
         worker_sha256: inventory.worker_sha256,
-        worker_load_files: dependencies.worker_files,
-        native_load_files: dependencies.native_files,
-        worker_snapshot_bytes: dependencies.worker_bytes,
-        native_snapshot_bytes: dependencies.native_bytes,
+        runtime_files: inventory.files,
+        runtime_snapshot_bytes,
         install_root,
         kit_library,
         kit_sha256: inventory.kit_sha256,
@@ -278,6 +203,8 @@ pub(crate) fn verify(
 struct ValidatedInventory {
     kit_sha256: String,
     worker_sha256: String,
+    files: Vec<VerifiedRuntimeFile>,
+    total_bytes: u64,
 }
 
 fn validate_files(
@@ -291,6 +218,8 @@ fn validate_files(
     let mut worker_roles = 0_usize;
     let mut kit_roles = 0_usize;
     let mut license_files = BTreeSet::new();
+    let mut files = Vec::new();
+    files.try_reserve_exact(target.files.len()).map_err(|_| unavailable("fileInventory"))?;
     for entry in &target.files {
         context.checkpoint()?;
         if !paths.insert(entry.path.as_str()) || !is_sha256(&entry.sha256) {
@@ -305,6 +234,13 @@ fn validate_files(
         if actual != path || !file_matches(&actual, entry, context)? {
             return Err(unavailable("runtimeHash"));
         }
+        files.push(VerifiedRuntimeFile {
+            relative: entry.path.clone(),
+            path: actual,
+            bytes: entry.bytes,
+            sha256: entry.sha256.clone(),
+            executable: entry.path == target.worker,
+        });
         match entry.role {
             FileRole::Worker => {
                 worker_roles += 1;
@@ -357,7 +293,13 @@ fn validate_files(
         .iter()
         .find(|entry| entry.path == target.worker)
         .ok_or_else(|| unavailable("fileInventory"))?;
-    Ok(ValidatedInventory { kit_sha256: kit_hash, worker_sha256: worker.sha256.clone() })
+    files.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(ValidatedInventory {
+        kit_sha256: kit_hash,
+        worker_sha256: worker.sha256.clone(),
+        files,
+        total_bytes: total,
+    })
 }
 
 fn validate_authority(authority: &Authority, target: &str) -> Result<(), ConversionError> {
@@ -380,8 +322,18 @@ fn validate_authority(authority: &Authority, target: &str) -> Result<(), Convers
 }
 
 fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionError> {
-    let unique_system_paths =
-        target.sandbox.system_read_paths.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let unique_system_identities = target
+        .sandbox
+        .system_libraries
+        .iter()
+        .map(|library| library.identity.as_str())
+        .collect::<BTreeSet<_>>();
+    let unique_system_paths = target
+        .sandbox
+        .system_libraries
+        .iter()
+        .map(|library| library.path.as_str())
+        .collect::<BTreeSet<_>>();
     if !https_url(&target.artifact_url)
         || target.artifact_bytes == 0
         || !is_sha256(&target.artifact_sha256)
@@ -400,16 +352,11 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         || target.sandbox.network != "deny"
         || target.sandbox.child_processes != "deny"
         || !valid_app_container_authority(target, target_name)
-        || target.sandbox.system_read_paths.len() > 128
-        || target.sandbox.system_libraries.len() > 256
+        || target.sandbox.system_libraries.len() > 128
         || target.sandbox.system_libraries.iter().collect::<BTreeSet<_>>().len()
             != target.sandbox.system_libraries.len()
-        || unique_system_paths.len() != target.sandbox.system_read_paths.len()
-        || target
-            .sandbox
-            .system_read_paths
-            .iter()
-            .any(|path| !allowed_system_path(path, target_name))
+        || unique_system_identities.len() != target.sandbox.system_libraries.len()
+        || unique_system_paths.len() != target.sandbox.system_libraries.len()
         || target.abi.library_identity.is_empty()
         || target.abi.library_identity.len() > MAX_PATH_BYTES
         || target.abi.required_export != "libreofficekit_hook_2"

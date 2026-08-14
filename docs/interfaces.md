@@ -56,8 +56,8 @@ Engine 的外层 preflight 最终认证。`LegacyOfficeRuntime::new(RuntimeConfi
 机器可读包装契约位于 `third_party/legacy-office/authority.schema.json`。Windows target 还必须
 声明预置 AppContainer 的 profile name、派生 SID、空 capability 集及固定 forbidden capability
 清单；缺 profile、SID 漂移或 storage/ACL 不可用均为 `componentUnavailable`，不会动态创建 profile。
-每个平台 target 的 `systemLibraries` 是实际二进制 load command/import 的精确集合；它与
-`systemReadPaths` 一起约束系统 loader 读取面。所有其余递归依赖必须是 `files` inventory 中的
+每个平台 target 的 `systemLibraries` 是实际二进制 load command/import 的精确
+identity/path 集合，并逐文件约束系统 loader 读取面。所有其余递归依赖必须是 `files` inventory 中的
 `runtime`/`kitLibrary` 项，且相对 loader/rpath 只能唯一解析到 authority tree。
 
 ## 可选服务

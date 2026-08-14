@@ -40,9 +40,15 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
             object::read::NameOrOrdinal::Name(b"libreofficekit_hook_2" | b"_libreofficekit_hook_2")
         )
     }));
-    let system_libraries = fixture_system_libraries(&kit_object);
-    let system_read_paths =
-        if cfg!(windows) { vec![r"C:\Windows\System32"] } else { vec!["/usr/lib"] };
+    let system_libraries = fixture_system_libraries(&kit_object)
+        .into_iter()
+        .map(|identity| {
+            json!({
+                "path": fixture_system_library_path(&identity),
+                "identity": identity,
+            })
+        })
+        .collect::<Vec<_>>();
     std::fs::write(root_path.join("LICENSE"), b"Apache-2.0 fixture only\n").unwrap();
     let target = target();
     let worker_entry = file_entry(&worker, worker_name, "worker");
@@ -82,7 +88,6 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
                     "processLimit": 1
                 },
                 "sandbox": {
-                    "systemReadPaths": system_read_paths,
                     "systemLibraries": system_libraries,
                     "network": "deny",
                     "childProcesses": "deny"
@@ -94,6 +99,36 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
     std::fs::write(&authority_path, serde_json::to_vec_pretty(&authority).unwrap()).unwrap();
     let runtime = LegacyOfficeRuntime::new(RuntimeConfig::new(authority_path, root_path, worker));
     (root, runtime)
+}
+
+#[cfg(target_os = "macos")]
+fn fixture_system_library_path(identity: &str) -> String {
+    identity.to_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn fixture_system_library_path(identity: &str) -> String {
+    for root in [
+        "/lib/aarch64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+        "/lib64",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib64",
+    ] {
+        let candidate = Path::new(root).join(identity);
+        if let Ok(path) = candidate.canonicalize()
+            && path.is_file()
+        {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    panic!("fixture system library {identity} is not installed")
+}
+
+#[cfg(windows)]
+fn fixture_system_library_path(identity: &str) -> String {
+    format!(r"C:\Windows\System32\{}", identity.to_ascii_lowercase())
 }
 
 #[cfg(target_os = "macos")]
@@ -363,6 +398,14 @@ fn atomic_worker_path_swaps_never_execute_unverified_inode() {
     }
     stopped.store(true, Ordering::Relaxed);
     swapper.join().unwrap();
+    if successes == 0 {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        let package =
+            runtime.convert(b"fixture:normal", InputFormat::Doc, 16 * 1024, &context).unwrap();
+        assert_eq!(package.format, NormalizedFormat::Docx);
+        successes += 1;
+    }
     assert!(successes > 0);
     assert!(!marker.exists());
 }

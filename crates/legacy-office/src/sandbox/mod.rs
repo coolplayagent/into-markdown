@@ -95,7 +95,7 @@ impl Policy {
             || self.address_limit < 256 * 1024 * 1024
             || self.file_limit == 0
             || !(16..=4_096).contains(&self.open_file_limit)
-            || self.system_read_paths.iter().any(|path| canonical_directory(path).is_err())
+            || self.system_read_paths.iter().any(|path| system_file(path).is_err())
             || self.kit_sha256.len() != 64
             || self.worker_sha256.len() != 64
             || self.authority_sha256.len() != 64
@@ -175,6 +175,27 @@ fn canonical_file(path: &Path) -> Result<(), ()> {
         return Err(());
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn system_file(path: &Path) -> Result<(), ()> {
+    const DYLD_CACHE_IDENTITIES: &[&str] = &[
+        "/usr/lib/libSystem.B.dylib",
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libobjc.A.dylib",
+        "/usr/lib/libsandbox.1.dylib",
+        "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+    ];
+    let value = path.to_str().ok_or(())?;
+    DYLD_CACHE_IDENTITIES.contains(&value).then_some(()).ok_or(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_file(path: &Path) -> Result<(), ()> {
+    canonical_file(path)
 }
 
 #[cfg(target_os = "linux")]

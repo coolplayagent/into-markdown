@@ -8,8 +8,9 @@ license and third-party notice files. Empty directories are not authoritative.
 `systemLibraries` must be the exact recursive operating-system dependency set
 observed in ELF dynamic tags, Mach-O load commands, or PE imports. Every other
 dependency must appear in `files` and resolve uniquely through a safe relative
-loader path. `systemReadPaths` must cover the declared system identities; it is
-not a substitute for inventorying package-owned libraries.
+loader path. Each system dependency records both its exact loader `identity`
+and the exact OS-owned `path`; generic library-name patterns and directory-wide
+read grants are not authority.
 
 No platform artifact is recorded here until its URL, compressed size and hash,
 complete extracted inventory, ABI, and installation-specific license set have

@@ -40,11 +40,11 @@ fn profile(policy: &Policy) -> Result<String, ()> {
          (allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n\
          (allow signal (target self))\n",
     );
-    for path in std::iter::once(&policy.runtime_root)
-        .chain(std::iter::once(&policy.temporary_root))
-        .chain(policy.system_read_paths.iter())
-    {
+    for path in [&policy.runtime_root, &policy.temporary_root] {
         writeln!(profile, "(allow file-read* (subpath \"{}\"))", escape(path)?).map_err(|_| ())?;
+    }
+    for path in &policy.system_read_paths {
+        writeln!(profile, "(allow file-read* (literal \"{}\"))", escape(path)?).map_err(|_| ())?;
     }
     writeln!(profile, "(allow file-write* (subpath \"{}\"))", escape(&policy.temporary_root)?)
         .map_err(|_| ())?;

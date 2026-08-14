@@ -11,7 +11,7 @@ use std::time::Duration;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt as _;
 #[cfg(unix)]
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
+mod unix;
 
 #[cfg(windows)]
 mod windows;
@@ -55,28 +55,28 @@ pub(crate) fn working_directory(
 
 pub(crate) struct WorkerChild {
     #[cfg(unix)]
-    child: Child,
+    child: unix::Child,
     #[cfg(windows)]
     child: windows::Child,
-    _load_files: Vec<std::fs::File>,
+    _runtime_tree: Option<crate::snapshot::VerifiedTree>,
     status: Option<WorkerStatus>,
 }
 
 #[cfg(unix)]
-type WorkerStatus = std::process::ExitStatus;
+type WorkerStatus = i32;
 #[cfg(windows)]
 type WorkerStatus = u32;
 
 #[cfg(unix)]
-type WorkerStdin = ChildStdin;
+type WorkerStdin = std::fs::File;
 #[cfg(windows)]
 type WorkerStdin = std::fs::File;
 #[cfg(unix)]
-type WorkerStdout = ChildStdout;
+type WorkerStdout = std::fs::File;
 #[cfg(windows)]
 type WorkerStdout = std::fs::File;
 #[cfg(unix)]
-type WorkerStderr = ChildStderr;
+type WorkerStderr = std::fs::File;
 #[cfg(windows)]
 type WorkerStderr = std::fs::File;
 
@@ -85,6 +85,7 @@ impl WorkerChild {
         bundle: &VerifiedBundle,
         working_directory: &Path,
         address_limit: u64,
+        context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
         if !working_directory.is_absolute() || !working_directory.is_dir() {
             return Err(unavailable("workerTemporaryDirectory"));
@@ -92,34 +93,55 @@ impl WorkerChild {
         let working_directory = working_directory
             .canonicalize()
             .map_err(|_| unavailable("workerTemporaryDirectory"))?;
-        let executable_tree = crate::snapshot::copy_tree(
-            &bundle.worker_load_files,
-            &working_directory.join(".worker-runtime"),
-        )
-        .map_err(|()| unavailable("workerIdentity"))?;
-        let executable_path = executable_tree
-            .path(
-                bundle
-                    .worker
-                    .strip_prefix(&bundle.root)
-                    .ok()
-                    .and_then(Path::to_str)
-                    .ok_or_else(|| unavailable("workerIdentity"))?,
-            )
+        let runtime_tree = crate::snapshot::copy_tree(
+            &bundle.runtime_files,
+            &working_directory.join(".runtime"),
+            context,
+        )?;
+        let worker_relative = bundle
+            .worker
+            .strip_prefix(&bundle.root)
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or_else(|| unavailable("workerIdentity"))?;
+        let kit_relative = bundle
+            .kit_library
+            .strip_prefix(&bundle.root)
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or_else(|| unavailable("workerIdentity"))?;
+        let install_relative = bundle
+            .install_root
+            .strip_prefix(&bundle.root)
+            .map_err(|_| unavailable("workerIdentity"))?;
+        let executable_path = runtime_tree
+            .path(worker_relative)
             .ok_or_else(|| unavailable("workerIdentity"))?
             .to_owned();
-        let load_files = executable_tree.into_files();
+        let runtime_root = runtime_tree.root().to_owned();
+        let worker_original = runtime_tree
+            .path(worker_relative)
+            .ok_or_else(|| unavailable("workerIdentity"))?
+            .to_owned();
+        let kit_library = runtime_tree
+            .path(kit_relative)
+            .ok_or_else(|| unavailable("workerIdentity"))?
+            .to_owned();
+        let install_root = runtime_root.join(install_relative);
+        if !install_root.is_dir() {
+            return Err(unavailable("workerIdentity"));
+        }
         let mut arguments = vec![
             OsString::from("--runtime-root"),
-            bundle.root.as_os_str().to_owned(),
+            runtime_root.as_os_str().to_owned(),
             OsString::from("--worker-original"),
-            bundle.worker.as_os_str().to_owned(),
+            worker_original.as_os_str().to_owned(),
             OsString::from("--worker-sha256"),
             OsString::from(&bundle.worker_sha256),
             OsString::from("--install-root"),
-            bundle.install_root.as_os_str().to_owned(),
+            install_root.as_os_str().to_owned(),
             OsString::from("--kit-library"),
-            bundle.kit_library.as_os_str().to_owned(),
+            kit_library.as_os_str().to_owned(),
             OsString::from("--kit-sha256"),
             OsString::from(&bundle.kit_sha256),
             OsString::from("--authority-sha256"),
@@ -143,17 +165,13 @@ impl WorkerChild {
             arguments.push(OsString::from(&bundle.app_container.sid));
         }
         #[cfg(unix)]
-        let mut command = std::process::Command::new(&executable_path);
-        #[cfg(unix)]
-        command
-            .args(&arguments)
-            .current_dir(&working_directory)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(unix)]
-        return spawn_platform(command, address_limit, load_files);
+        return spawn_platform(
+            &executable_path,
+            &arguments,
+            &working_directory,
+            address_limit,
+            Some(runtime_tree),
+        );
         #[cfg(windows)]
         return windows::spawn(
             &executable_path,
@@ -162,7 +180,7 @@ impl WorkerChild {
             address_limit,
             &bundle.app_container,
         )
-        .map(|child| Self { child, _load_files: load_files, status: None });
+        .map(|child| Self { child, _runtime_tree: Some(runtime_tree), status: None });
         #[allow(unreachable_code)]
         Err(unavailable("unsupportedTarget"))
     }
@@ -226,70 +244,25 @@ impl Drop for WorkerChild {
 
 #[cfg(unix)]
 fn spawn_platform(
-    mut command: std::process::Command,
+    executable: &Path,
+    arguments: &[OsString],
+    working_directory: &Path,
     _address_limit: u64,
-    load_files: Vec<std::fs::File>,
+    runtime_tree: Option<crate::snapshot::VerifiedTree>,
 ) -> Result<WorkerChild, ConversionError> {
-    use std::os::unix::process::CommandExt as _;
-    command.process_group(0);
-    let descriptor_ceiling = descriptor_ceiling()?;
-    // SAFETY: the closure invokes only raw async-signal-safe syscalls between
-    // fork and exec. Stdio has already been duplicated to 0/1/2 by Command.
-    unsafe {
-        command.pre_exec(move || close_inherited_descriptors(descriptor_ceiling));
-    }
-    let child = command.spawn().map_err(|_| unavailable("workerLaunch"))?;
-    Ok(WorkerChild { child, _load_files: load_files, status: None })
-}
-
-#[cfg(target_os = "linux")]
-fn close_inherited_descriptors(_: i32) -> std::io::Result<()> {
-    // SAFETY: close_range takes scalar arguments and is async-signal-safe as a
-    // direct system call. The worker contract inherits only stdin/out/err.
-    let result = unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 0_u32) };
-    if result == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
-}
-
-#[cfg(target_os = "macos")]
-fn close_inherited_descriptors(ceiling: i32) -> std::io::Result<()> {
-    if ceiling < 3 {
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-    }
-    // SAFETY: close(2) is async-signal-safe. The upper bound was captured from
-    // getrlimit before fork, so this loop performs no allocation or lookup.
-    for descriptor in 3..ceiling {
-        unsafe {
-            libc::close(descriptor);
-        }
-    }
-    Ok(())
+    let child = unix::Child::spawn(executable, arguments, working_directory)
+        .map_err(|_| unavailable("workerLaunch"))?;
+    Ok(WorkerChild { child, _runtime_tree: runtime_tree, status: None })
 }
 
 #[cfg(unix)]
-fn descriptor_ceiling() -> Result<i32, ConversionError> {
-    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-    // SAFETY: limit is a live out-parameter with the exact libc layout.
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
-        return Err(unavailable("workerLaunch"));
-    }
-    i32::try_from(limit.rlim_cur).map_err(|_| unavailable("workerLaunch"))
+fn terminate_platform(child: &mut unix::Child) {
+    child.terminate_group();
 }
 
 #[cfg(unix)]
-fn terminate_platform(child: &mut Child) {
-    if let Ok(pid) = i32::try_from(child.id()) {
-        // SAFETY: a negative, validated child PID addresses only the process
-        // group created for this worker. SIGKILL cannot be handled or ignored.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
-    let _ = child.kill();
-}
-
-#[cfg(unix)]
-fn take_stdin(child: &mut Child) -> Result<WorkerStdin, ConversionError> {
-    child.stdin.take().ok_or_else(|| unavailable("workerLaunch"))
+fn take_stdin(child: &mut unix::Child) -> Result<WorkerStdin, ConversionError> {
+    child.take_stdin().ok_or_else(|| unavailable("workerLaunch"))
 }
 
 #[cfg(windows)]
@@ -298,8 +271,8 @@ fn take_stdin(child: &mut windows::Child) -> Result<WorkerStdin, ConversionError
 }
 
 #[cfg(unix)]
-fn take_stdout(child: &mut Child) -> Result<WorkerStdout, ConversionError> {
-    child.stdout.take().ok_or_else(|| unavailable("workerLaunch"))
+fn take_stdout(child: &mut unix::Child) -> Result<WorkerStdout, ConversionError> {
+    child.take_stdout().ok_or_else(|| unavailable("workerLaunch"))
 }
 
 #[cfg(windows)]
@@ -308,8 +281,8 @@ fn take_stdout(child: &mut windows::Child) -> Result<WorkerStdout, ConversionErr
 }
 
 #[cfg(unix)]
-fn take_stderr(child: &mut Child) -> Result<WorkerStderr, ConversionError> {
-    child.stderr.take().ok_or_else(|| unavailable("workerLaunch"))
+fn take_stderr(child: &mut unix::Child) -> Result<WorkerStderr, ConversionError> {
+    child.take_stderr().ok_or_else(|| unavailable("workerLaunch"))
 }
 
 #[cfg(windows)]
@@ -318,7 +291,7 @@ fn take_stderr(child: &mut windows::Child) -> Result<WorkerStderr, ConversionErr
 }
 
 #[cfg(unix)]
-fn try_wait(child: &mut Child) -> Result<Option<WorkerStatus>, ConversionError> {
+fn try_wait(child: &mut unix::Child) -> Result<Option<WorkerStatus>, ConversionError> {
     child.try_wait().map_err(|_| unavailable("workerWait"))
 }
 
@@ -328,7 +301,7 @@ fn try_wait(child: &mut windows::Child) -> Result<Option<WorkerStatus>, Conversi
 }
 
 #[cfg(unix)]
-fn wait_platform(child: &mut Child) -> Result<WorkerStatus, ()> {
+fn wait_platform(child: &mut unix::Child) -> Result<WorkerStatus, ()> {
     child.wait().map_err(|_| ())
 }
 
@@ -344,7 +317,7 @@ fn terminate_platform(child: &mut windows::Child) {
 
 #[cfg(unix)]
 fn status_success(status: WorkerStatus) -> bool {
-    status.success()
+    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
 }
 
 #[cfg(windows)]
@@ -354,7 +327,7 @@ const fn status_success(status: WorkerStatus) -> bool {
 
 #[cfg(unix)]
 fn status_code(status: WorkerStatus) -> Option<i32> {
-    status.code()
+    libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status))
 }
 
 #[cfg(windows)]
@@ -553,17 +526,15 @@ mod tests {
     use std::os::fd::AsRawFd as _;
 
     fn shell(script: &str, directory: &Path) -> WorkerChild {
-        let mut command = std::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg(script)
-            .current_dir(directory)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let executable = std::fs::File::open("/bin/sh").unwrap();
-        spawn_platform(command, 512 * 1024 * 1024, vec![executable]).unwrap()
+        let _ = directory;
+        spawn_platform(
+            Path::new("/bin/sh"),
+            &[OsString::from("-c"), OsString::from(script)],
+            directory,
+            512 * 1024 * 1024,
+            None,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -629,6 +600,25 @@ mod tests {
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         worker.wait(&context).unwrap();
         assert_eq!(stdout, "stdio-preserved");
+    }
+
+    #[test]
+    fn posix_spawn_reports_exec_errors_without_hanging_or_leaking_children() {
+        for index in 0..32 {
+            let missing = std::path::PathBuf::from(format!(
+                "/definitely/not/installed/legacy-worker-{index}"
+            ));
+            let root = tempfile::tempdir().unwrap();
+            let Err(error) = spawn_platform(&missing, &[], root.path(), 512 * 1024 * 1024, None)
+            else {
+                panic!("missing executable unexpectedly launched");
+            };
+            assert!(matches!(
+                error,
+                ConversionError::ComponentUnavailable { ref detail, .. }
+                    if detail == "workerLaunch"
+            ));
+        }
     }
 
     fn clear_cloexec(descriptor: i32) {

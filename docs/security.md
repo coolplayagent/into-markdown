@@ -28,15 +28,15 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - 旧 Office 的 native 兼容解析只在单请求 `legacy-office-worker` 中发生。父进程先双向校验
   `authority.json` 与完整 runtime tree，拒绝额外文件、symlink/reparse、许可或 ABI/export
   漂移；ELF `DT_NEEDED/RPATH/RUNPATH`、Mach-O load command/rpath 与 PE imports 递归解析，
-  非系统依赖必须唯一解析到 inventory，系统依赖必须出现在平台精确 `systemLibraries` 与
-  `systemReadPaths` allowlist。绝对逃逸、未列出或歧义依赖在任何 constructor 执行前拒绝。
-  父进程和 worker 分别把已验证 worker、kit 与依赖复制到请求私有只读 inode tree，实际
+  非系统依赖必须唯一解析到 inventory，系统依赖必须出现在平台精确 `systemLibraries`
+  identity/path allowlist。绝对逃逸、未列出或歧义依赖在任何 constructor 执行前拒绝。
+  父进程把完整 authority runtime inventory 复制到请求私有只读 inode tree，实际
   exec/load 只引用该 tree；worker 在 sandbox 安装后才加载 kit。环境从
   空集合启动，参数均为 canonical absolute path，不读取 `PATH`、HOME、代理、loader 或当前目录
   authority。协议具有固定 magic/version/kind/request-id、checked 64-bit payload length、完整
   SHA-256 和 EOF exhaustion；格式混淆、尾随帧与超限输出 fail closed。
   worker 在读取敌意正文前安装 hard address/file/descriptor limits 与平台 sandbox：macOS seatbelt
-  固定 deny network/fork/exec 且只开放受审 bundle/temp/system-read roots，Linux 使用 Landlock 加
+  固定 deny network/fork/exec 且只开放 snapshot/temp 与逐文件 system library，Linux 使用 Landlock 加
   seccomp（网络、非线程 clone、exec、ptrace、mount、跨进程 kill/pidfd/process_vm 与 io_uring
   等拒绝），Windows 要求使用预置 profile 的
   零 capability AppContainer：`CreateProcessW` 只继承 stdin/stdout/stderr，suspended process 先

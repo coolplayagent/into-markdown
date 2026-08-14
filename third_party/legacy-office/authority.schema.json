@@ -93,22 +93,25 @@
     "unixSandbox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["systemReadPaths", "systemLibraries", "network", "childProcesses"],
+      "required": ["systemLibraries", "network", "childProcesses"],
       "properties": {
-        "systemReadPaths": {
+        "systemLibraries": {
           "type": "array",
           "maxItems": 128,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
-        },
-        "systemLibraries": {
-          "type": "array",
-          "maxItems": 256,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "items": { "$ref": "#/$defs/systemLibrary" }
         },
         "network": { "const": "deny" },
         "childProcesses": { "const": "deny" }
+      }
+    },
+    "systemLibrary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "path"],
+      "properties": {
+        "identity": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1024 }
       }
     },
     "appContainer": {
@@ -147,19 +150,13 @@
     "windowsSandbox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["systemReadPaths", "systemLibraries", "network", "childProcesses", "appContainer"],
+      "required": ["systemLibraries", "network", "childProcesses", "appContainer"],
       "properties": {
-        "systemReadPaths": {
+        "systemLibraries": {
           "type": "array",
           "maxItems": 128,
           "uniqueItems": true,
-          "items": { "enum": ["C:\\Windows\\System32", "C:\\Windows\\Fonts"] }
-        },
-        "systemLibraries": {
-          "type": "array",
-          "maxItems": 256,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "items": { "$ref": "#/$defs/systemLibrary" }
         },
         "network": { "const": "deny" },
         "childProcesses": { "const": "deny" },

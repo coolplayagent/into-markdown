@@ -53,8 +53,7 @@ fn convert_verified(
     }
     let temporary_plan = input_bytes
         .checked_add(maximum_output_bytes)
-        .and_then(|value| value.checked_add(bundle.worker_snapshot_bytes))
-        .and_then(|value| value.checked_add(bundle.native_snapshot_bytes))
+        .and_then(|value| value.checked_add(bundle.runtime_snapshot_bytes))
         .and_then(|value| value.checked_add(WORKER_TEMP_OVERHEAD))
         .ok_or_else(|| resource("max_temporary_bytes", "worker temporary plan overflowed"))?;
     let temporary = context.reserve_temporary(temporary_plan)?;
@@ -66,7 +65,7 @@ fn convert_verified(
         .and_then(|value| value.checked_add(input_bytes))
         .and_then(|value| value.checked_add(maximum_output_bytes))
         .ok_or_else(|| resource("legacy_office_worker_memory", "address limit overflowed"))?;
-    let mut worker = WorkerChild::spawn(bundle, working_directory.path(), address_limit)?;
+    let mut worker = WorkerChild::spawn(bundle, working_directory.path(), address_limit, context)?;
     let input: Arc<[u8]> = Arc::from(bytes);
     let io = WorkerIo::spawn(&mut worker, input, source_format, maximum_output_bytes)?;
     let result = wait_for_reply(
@@ -86,8 +85,11 @@ fn convert_verified(
     if status.is_err() {
         worker.terminate();
     }
-    io.join();
+    let joined = io.join();
     drop(input_memory);
+    if joined.panicked || (joined.failed && result.is_ok() && status.is_ok()) {
+        return Err(unavailable("workerProtocol"));
+    }
     status?;
     let reply = result?;
     let WorkerReply::Output(response) = reply else {
@@ -275,9 +277,9 @@ fn scan_temporary(
 struct WorkerIo {
     writes: mpsc::Receiver<Result<(), ()>>,
     replies: mpsc::Receiver<Result<ReplyEvent, ()>>,
-    input_thread: JoinHandle<()>,
-    output_thread: JoinHandle<()>,
-    stderr_reader: JoinHandle<()>,
+    input_thread: JoinHandle<Result<(), ()>>,
+    output_thread: JoinHandle<Result<(), ()>>,
+    stderr_reader: JoinHandle<Result<(), ()>>,
     _stderr_bytes: Arc<Mutex<Vec<u8>>>,
 }
 
@@ -308,7 +310,8 @@ impl WorkerIo {
                     maximum_output_bytes,
                 );
                 drop(stdin);
-                let _ = write_sender.send(result);
+                write_sender.send(result).map_err(|_| ())?;
+                result
             })
             .map_err(|_| unavailable("workerLaunch"))?;
         let (read_sender, replies) = mpsc::sync_channel(2);
@@ -319,17 +322,18 @@ impl WorkerIo {
                 let Ok(reply) = protocol::read_reply_frame(&mut stdout, maximum_output_bytes)
                 else {
                     let _ = read_sender.send(Err(()));
-                    return;
+                    return Err(());
                 };
                 if read_sender.send(Ok(ReplyEvent::Frame(reply))).is_err() {
-                    return;
+                    return Err(());
                 }
-                let _ =
-                    read_sender.send(protocol::require_eof(&mut stdout).map(|()| ReplyEvent::Eof));
+                let result = protocol::require_eof(&mut stdout);
+                read_sender.send(result.map(|()| ReplyEvent::Eof)).map_err(|_| ())?;
+                result
             })
         else {
             worker.terminate();
-            join(input_thread);
+            let _ = join_one(input_thread);
             return Err(unavailable("workerLaunch"));
         };
         let stderr_bytes = Arc::new(Mutex::new(Vec::new()));
@@ -337,8 +341,8 @@ impl WorkerIo {
             Ok(stderr_reader) => stderr_reader,
             Err(error) => {
                 worker.terminate();
-                join(input_thread);
-                join(output_thread);
+                let _ = join_one(input_thread);
+                let _ = join_one(output_thread);
                 return Err(error);
             }
         };
@@ -352,25 +356,40 @@ impl WorkerIo {
         })
     }
 
-    fn join(self) {
-        join(self.input_thread);
-        join(self.output_thread);
-        join(self.stderr_reader);
+    fn join(self) -> JoinOutcome {
+        join_all([self.input_thread, self.output_thread, self.stderr_reader])
     }
 }
 
+#[derive(Default)]
+struct JoinOutcome {
+    failed: bool,
+    panicked: bool,
+}
+
 fn spawn_stderr_reader(
+    stderr: impl Read + Send + 'static,
+    captured: Arc<Mutex<Vec<u8>>>,
+) -> Result<JoinHandle<Result<(), ()>>, ConversionError> {
+    spawn_stderr_reader_with_hook(stderr, captured, None)
+}
+
+fn spawn_stderr_reader_with_hook(
     mut stderr: impl Read + Send + 'static,
     captured: Arc<Mutex<Vec<u8>>>,
-) -> Result<JoinHandle<()>, ConversionError> {
+    hook: Option<fn(&[u8])>,
+) -> Result<JoinHandle<Result<(), ()>>, ConversionError> {
     std::thread::Builder::new()
         .name("into-md-legacy-office-stderr".into())
         .spawn(move || {
             let mut buffer = [0_u8; 4 * 1024];
             loop {
-                let Ok(count) = stderr.read(&mut buffer) else { return };
+                let count = stderr.read(&mut buffer).map_err(|_| ())?;
                 if count == 0 {
-                    return;
+                    return Ok(());
+                }
+                if let Some(hook) = hook {
+                    hook(&buffer[..count]);
                 }
                 let mut bytes = captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let remaining = MAX_STDERR_BYTES.saturating_sub(bytes.len());
@@ -405,8 +424,19 @@ fn map_worker_error(code: u8) -> ConversionError {
     }
 }
 
-fn join(handle: JoinHandle<()>) {
-    let _ = handle.join();
+fn join_one(handle: JoinHandle<Result<(), ()>>) -> std::thread::Result<Result<(), ()>> {
+    handle.join()
+}
+
+fn join_all<const N: usize>(handles: [JoinHandle<Result<(), ()>>; N]) -> JoinOutcome {
+    handles.into_iter().map(join_one).fold(JoinOutcome::default(), |mut outcome, result| {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(())) => outcome.failed = true,
+            Err(_) => outcome.panicked = true,
+        }
+        outcome
+    })
 }
 
 fn unavailable(detail: &'static str) -> ConversionError {
@@ -418,4 +448,42 @@ fn unavailable(detail: &'static str) -> ConversionError {
 
 fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
     ConversionError::ResourceLimit { limit, detail: detail.into() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct BrokenReader;
+
+    impl Read for BrokenReader {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("directed read failure"))
+        }
+    }
+
+    #[test]
+    fn input_output_and_stderr_thread_failures_are_not_dropped() {
+        let failed = std::thread::spawn(|| Err(()));
+        let successful = std::thread::spawn(|| Ok(()));
+        let stderr = spawn_stderr_reader(BrokenReader, Arc::new(Mutex::new(Vec::new()))).unwrap();
+        let outcome = join_all([failed, successful, stderr]);
+        assert!(outcome.failed);
+        assert!(!outcome.panicked);
+    }
+
+    #[test]
+    fn stderr_reader_panic_is_reported_by_join() {
+        fn panic_hook(_: &[u8]) {
+            panic!("directed stderr hook panic");
+        }
+        let stderr = spawn_stderr_reader_with_hook(
+            std::io::Cursor::new(b"worker stderr".to_vec()),
+            Arc::new(Mutex::new(Vec::new())),
+            Some(panic_hook),
+        )
+        .unwrap();
+        let outcome = join_all([stderr]);
+        assert!(outcome.panicked);
+    }
 }

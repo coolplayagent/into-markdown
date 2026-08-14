@@ -148,39 +148,30 @@ fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
 
 struct NativeRuntime {
     _library: Library,
-    _load_files: Vec<File>,
+    _authority: crate::authority::VerifiedBundle,
     hook: unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit,
     install_root: CString,
 }
 
 struct PreparedRuntime {
-    load_tree: crate::snapshot::VerifiedTree,
-    kit_relative: String,
+    authority: crate::authority::VerifiedBundle,
     install_root: CString,
 }
 
 impl PreparedRuntime {
     fn new(policy: &Policy) -> Result<Self, ()> {
         let authority = reverify_authority(policy)?;
-        let kit_relative = authority
-            .kit_library
-            .strip_prefix(&authority.root)
-            .ok()
-            .and_then(Path::to_str)
-            .ok_or(())?
-            .to_owned();
-        let load_tree = crate::snapshot::copy_tree(
-            &authority.native_load_files,
-            &policy.temporary_root.join(".native-runtime"),
-        )?;
-        if load_tree.path(&kit_relative).is_none() {
+        if authority.root != policy.runtime_root
+            || authority.install_root != policy.install_root
+            || authority.kit_library != policy.kit_library
+        {
             return Err(());
         }
-        Ok(Self { load_tree, kit_relative, install_root: path_c_string(&policy.install_root)? })
+        Ok(Self { authority, install_root: path_c_string(&policy.install_root)? })
     }
 
     fn load(self) -> Result<NativeRuntime, ()> {
-        let library_path = self.load_tree.path(&self.kit_relative).ok_or(())?.to_owned();
+        let library_path = self.authority.kit_library.clone();
         // SAFETY: every package-owned dependency was copied from an
         // authority-hashed no-follow handle into this private immutable tree;
         // sandbox installation completed before the loader can run a constructor.
@@ -195,7 +186,7 @@ impl PreparedRuntime {
         };
         Ok(NativeRuntime {
             _library: library,
-            _load_files: self.load_tree.into_files(),
+            _authority: self.authority,
             hook,
             install_root: self.install_root,
         })
