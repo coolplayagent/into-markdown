@@ -30,7 +30,7 @@ fn assemble_at(
     if loaded.options.ocr.policy != OcrPolicy::Off {
         match assemble_ocr(loaded, &context, executable) {
             Ok(engine) => services.ocr = Some(engine),
-            Err(_) if loaded.options.ocr.policy == OcrPolicy::Auto => {}
+            Err(error) if can_degrade_ocr(loaded.options.ocr.policy, &error) => {}
             Err(error) => return Err(CliError::from(error)),
         }
     }
@@ -38,6 +38,11 @@ fn assemble_at(
         services.ai = assemble_image_description(loaded)?;
     }
     Ok(services)
+}
+
+fn can_degrade_ocr(policy: OcrPolicy, error: &into_markdown::ConversionError) -> bool {
+    policy == OcrPolicy::Auto
+        && matches!(error, into_markdown::ConversionError::ComponentUnavailable { .. })
 }
 
 fn assemble_ocr(
@@ -117,4 +122,28 @@ fn bundled_model_root(directory: &Path) -> Option<PathBuf> {
 
 const fn worker_name() -> &'static str {
     if cfg!(windows) { "onnxruntime-worker.exe" } else { "onnxruntime-worker" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_degrades_only_component_absence_and_preserves_execution_failures() {
+        let unavailable = into_markdown::ConversionError::ComponentUnavailable {
+            component: "ocr".into(),
+            detail: "missing".into(),
+        };
+        assert!(can_degrade_ocr(OcrPolicy::Auto, &unavailable));
+        assert!(!can_degrade_ocr(OcrPolicy::Always, &unavailable));
+        assert!(!can_degrade_ocr(OcrPolicy::Auto, &into_markdown::ConversionError::Cancelled));
+        assert!(!can_degrade_ocr(OcrPolicy::Auto, &into_markdown::ConversionError::Timeout));
+        assert!(!can_degrade_ocr(
+            OcrPolicy::Auto,
+            &into_markdown::ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "low memory".into(),
+            },
+        ));
+    }
 }
