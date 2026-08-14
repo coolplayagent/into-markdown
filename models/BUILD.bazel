@@ -13,6 +13,7 @@ filegroup(
     name = "license_authority_files",
     srcs = [
         "manifest.json",
+        "ppocrv6-tiny-detector-onnx-authority.json",
         "ppocrv6-tiny-recognizer-authority.json",
     ],
 )

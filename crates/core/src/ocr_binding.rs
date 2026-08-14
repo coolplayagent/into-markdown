@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 /// consumes it; callers reserve it before invoking the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OcrOutputPlan {
-    max_retained_bytes: u64,
-    max_regions: u32,
-    max_text_bytes: u64,
+    retained_budget: u64,
+    region_limit: u32,
+    text_bytes_cap: u64,
 }
 
 impl OcrOutputPlan {
@@ -38,25 +38,29 @@ impl OcrOutputPlan {
         {
             return Err(plan_error("OCR output plan is zero or smaller than its declared payload"));
         }
-        Ok(Self { max_retained_bytes, max_regions, max_text_bytes })
+        Ok(Self {
+            retained_budget: max_retained_bytes,
+            region_limit: max_regions,
+            text_bytes_cap: max_text_bytes,
+        })
     }
 
     /// Maximum bytes retained by the bound result and emitted OCR IR.
     #[must_use]
     pub const fn max_retained_bytes(self) -> u64 {
-        self.max_retained_bytes
+        self.retained_budget
     }
 
     /// Maximum recognized regions returned by the provider.
     #[must_use]
     pub const fn max_regions(self) -> u32 {
-        self.max_regions
+        self.region_limit
     }
 
     /// Maximum total UTF-8 text bytes across all regions.
     #[must_use]
     pub const fn max_text_bytes(self) -> u64 {
-        self.max_text_bytes
+        self.text_bytes_cap
     }
 }
 

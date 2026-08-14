@@ -1321,11 +1321,15 @@ fn apply_ai_provider_overrides(
         loaded.ai_model = Some(model.clone());
     }
     if ai_is_enabled(&loaded.options) {
-        let provider_name = loaded.ai_provider.as_deref().ok_or_else(|| {
-            CliError::usage(
-                "an enabled AI capability requires --ai-provider or a configured default provider",
-            )
-        })?;
+        let Some(provider_name) = loaded.ai_provider.as_deref() else {
+            if ai_capability_other_than_image_description_is_enabled(&loaded.options) {
+                return Err(CliError::usage(
+                    "an enabled AI capability requires --ai-provider or a configured default \
+                     provider",
+                ));
+            }
+            return Ok(());
+        };
         let provider = loaded
             .effective
             .providers
@@ -1334,6 +1338,19 @@ fn apply_ai_provider_overrides(
         validate_network_url(&provider.base_url, &loaded.options, "AI provider")?;
     }
     Ok(())
+}
+
+fn ai_capability_other_than_image_description_is_enabled(options: &ConversionOptions) -> bool {
+    [
+        options.ai.vision_ocr,
+        options.ai.layout_repair,
+        options.ai.table_repair,
+        options.ai.formula_repair,
+        options.ai.audio_transcription,
+        options.ai.markdown_postprocess,
+    ]
+    .iter()
+    .any(|mode| *mode != AiMode::Off)
 }
 
 fn apply_delimited_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
@@ -2801,10 +2818,9 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_management_backend_has_exit_nine() {
-        let error = invoke(&["models", "install"], true).unwrap_err();
-        assert_eq!(error.exit_code(), 9);
-        assert_eq!(error.code(), "componentUnavailable");
+    fn default_model_pipeline_is_explicitly_installable() {
+        let manager = model_manager().unwrap();
+        manager.require_installable(&manager.manifest().default_bundle).unwrap();
     }
 
     #[test]
@@ -2812,25 +2828,25 @@ mod tests {
         let (listed, _) = invoke(&["models", "--json"], true).unwrap();
         let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
         assert_eq!(listed["schemaVersion"], 1);
-        assert_eq!(listed["models"][0]["availability"], "planned");
-        assert_eq!(listed["models"][0]["state"], "unavailable");
-        assert_eq!(listed["models"][0]["ownership"], "none");
+        assert_eq!(listed["models"][0]["availability"], "available");
+        assert_eq!(listed["models"][0]["state"], "not-installed");
+        assert_eq!(listed["models"][0]["ownership"], "component-set");
 
         let (shown, _) =
             invoke(&["models", "show", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap();
         let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
         assert_eq!(shown["schemaVersion"], 1);
-        assert_eq!(shown["status"]["state"], "unavailable");
+        assert_eq!(shown["status"]["state"], "not-installed");
         assert!(shown["model"]["source_artifacts"].is_array());
         assert!(shown["model"]["runtime_artifacts"].as_array().unwrap().is_empty());
 
         let verify =
             invoke(&["models", "verify", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap_err();
-        assert_eq!(verify.exit_code(), 9);
-        assert_eq!(verify.code(), "componentUnavailable");
+        assert_eq!(verify.exit_code(), 6);
+        assert_eq!(verify.code(), "modelInvalid");
         let path = invoke(&["models", "path", "pp-ocrv6-tiny-zh-en"], true).unwrap_err();
-        assert_eq!(path.exit_code(), 9);
-        assert_eq!(path.code(), "componentUnavailable");
+        assert_eq!(path.exit_code(), 6);
+        assert_eq!(path.code(), "modelInvalid");
         let unknown = invoke(&["models", "show", "../escape"], true).unwrap_err();
         assert_eq!(unknown.exit_code(), 2);
     }

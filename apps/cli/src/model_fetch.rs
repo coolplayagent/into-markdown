@@ -10,14 +10,9 @@ use into_markdown_http_transport::{
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
+#[derive(Default)]
 pub(crate) struct PinnedModelFetcher {
     client: HttpClient,
-}
-
-impl Default for PinnedModelFetcher {
-    fn default() -> Self {
-        Self { client: HttpClient::default() }
-    }
 }
 
 impl ModelFetcher for PinnedModelFetcher {

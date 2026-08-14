@@ -18,6 +18,10 @@ rust_library(
         "@crates//:url",
         "@crates//:webpki-roots",
     ],
+    visibility = [
+        "//apps/cli:__pkg__",
+        "//crates:__subpackages__",
+    ],
 )
 
 rust_test(

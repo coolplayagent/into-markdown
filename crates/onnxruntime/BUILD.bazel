@@ -27,6 +27,10 @@ rust_binary(
     crate_name = "onnxruntime_worker",
     edition = "2024",
     deps = [":onnxruntime"],
+    visibility = [
+        "//apps/cli:__pkg__",
+        "//crates:__subpackages__",
+    ],
 )
 
 rust_test(

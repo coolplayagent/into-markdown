@@ -6,11 +6,12 @@
 with Bazel. The repository currently contains the architecture, public service
 provider interfaces, registry and pipeline, a deterministic GFM renderer,
 command-line shell, production TXT/Markdown/CSV/TSV/JSON/XML and character-set converters, a
-pinned ONNX Runtime CPU safety layer, an installable PP-OCRv6 tiny recognition component, and
-contract tests. The complete detection-and-recognition bundle remains unavailable; a controlled
-library transport can install the hash-pinned official recognizer TAR and character table. The
-OpenAI-compatible transport is available only
-under explicit per-invocation network authorization; AI-to-IR routing remains a separate concern.
+pinned ONNX Runtime CPU safety layer, PNG/JPEG/TIFF/WebP/BMP image converters, an installable
+PP-OCRv6 tiny detection-and-recognition pipeline, and contract tests. A controlled library
+transport installs only hash-pinned official ONNX archives, the character table, and reviewed
+runtime artifacts. The OpenAI-compatible image-description adapter is available only when
+explicitly configured and authorized for the current invocation; network and AI remain off by
+default.
 
 The project is implemented independently of the neighbouring `anydoc` and
 `markitdown` projects. Documents from every source, including PDF, OCR, and
@@ -24,11 +25,11 @@ produces scored quadrilaterals, angles, and raw-source recognition crop descript
 and performs no decoding or I/O. Image decoding remains the responsibility of
 the separately audited image-conversion work. The recognition module performs bounded official
 perspective cropping, BGR/NCHW preprocessing, stable dynamic batching, strict tensor validation,
-and deterministic CTC decoding, returning structured region results; IR merging remains a separate
-pipeline concern. Since no executable detector ONNX artifact is currently approved, the detector
-runtime still returns `ModelUnavailable`. Ordinary builds and tests stay offline; the explicit
-manual quality target installs and runs the official recognizer through the product resolver and
-native worker.
+and deterministic CTC decoding. The product image engine binds the reviewed official detector and
+recognizer artifacts, detector/recognizer identities, geometry, and confidence into structured IR
+evidence. Ordinary builds and tests stay offline; explicit manual API and CLI quality targets
+install and run both components through the product resolver and native worker over the hash-bound
+12-image Simplified Chinese, Traditional Chinese, English, and mixed-language corpus.
 
 ## Build
 
@@ -148,15 +149,14 @@ produce explicit diagnostics and safe fallbacks. Raw HTML and blockquotes use ex
 non-executable IR fallbacks; see the [format matrix](docs/formats.md) for the full policy.
 
 Model discovery, offline verification, path lookup, and guarded cleanup are
-implemented. The complete OCR pipeline remains planned/source-only. The separate
-`pp-ocrv6-tiny-recognizer-onnx` component contains reviewed ONNX, character-table, archive-structure,
-and transaction authority; a library transport can install it and the product resolver accepts only
-the same hash-verified install state. The CLI has no model network transport, so `models install`
-still fails closed with `componentUnavailable` instead of pretending success.
+implemented. The `pp-ocrv6-tiny-zh-en` product pipeline binds separately reviewed detector and
+recognizer components, official ONNX archive structure, the character table, and transactional
+install authority. Only `models install` uses the fixed-host, fixed-size, hash-pinned library
+transport; conversion never downloads models automatically. CLI and API conversion assemble OCR
+only after both components and the packaged ONNX Runtime worker verify successfully.
 Windows model installation remains fail-closed until durable, reparse-safe
 directory-handle flushing is implemented; path resolution and offline metadata remain available.
-Other unavailable format conversion, OCR inference,
-provider requests, and plugin execution remain unavailable.
+Other unavailable format conversion and plugin execution remain unavailable.
 
 The detailed design documents are maintained in Chinese. See the
 [architecture](docs/architecture.md), [interface contract](docs/interfaces.md),

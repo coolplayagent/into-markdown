@@ -82,6 +82,16 @@
       "obligations": "If acquired, verify the official archive and exact ONNX/config members; preserve Apache-2.0, fixed-commit dictionary provenance, and exclude model bytes from release artifacts."
     },
     {
+      "id": "ppocrv6-tiny-detector-onnx-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+      "license": "Apache-2.0",
+      "obligations": "If acquired, verify the official archive and exact ONNX/config members; preserve Apache-2.0 and exclude model bytes from release artifacts."
+    },
+    {
       "id": "ppocrv6-tiny-recognizer-onnx-quality",
       "kind": "fixture-input",
       "status": "reviewed",

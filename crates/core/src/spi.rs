@@ -1138,6 +1138,11 @@ pub trait OcrEngine: Send + Sync {
     /// The safe default refuses bound execution. Existing implementations remain
     /// source compatible, while consumers never execute an unplanned provider
     /// under a structured-evidence policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ComponentUnavailable`] unless the provider
+    /// opts into bounded execution with an explicit retained-output plan.
     fn planned_bound_output(
         &self,
         request: OcrRequest<'_>,

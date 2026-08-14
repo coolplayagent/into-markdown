@@ -14,10 +14,25 @@ pub(crate) fn assemble(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
 ) -> Result<Services, CliError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        CliError::component(format!("cannot resolve the current executable: {error}"))
+    })?;
+    assemble_at(loaded, execution, &executable)
+}
+
+fn assemble_at(
+    loaded: &LoadedConfig,
+    execution: &ExecutionOptions,
+    executable: &Path,
+) -> Result<Services, CliError> {
     let mut services = Services::default();
     let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     if loaded.options.ocr.policy != OcrPolicy::Off {
-        services.ocr = assemble_ocr(loaded, &context).ok();
+        match assemble_ocr(loaded, &context, executable) {
+            Ok(engine) => services.ocr = Some(engine),
+            Err(_) if loaded.options.ocr.policy == OcrPolicy::Auto => {}
+            Err(error) => return Err(CliError::from(error)),
+        }
     }
     if loaded.options.ai.image_description != AiMode::Off {
         services.ai = assemble_image_description(loaded)?;
@@ -28,13 +43,8 @@ pub(crate) fn assemble(
 fn assemble_ocr(
     loaded: &LoadedConfig,
     context: &ExecutionContext,
+    executable: &Path,
 ) -> Result<Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
-    let executable = std::env::current_exe().map_err(|error| {
-        into_markdown::ConversionError::ComponentUnavailable {
-            component: "onnxruntime-worker".into(),
-            detail: format!("cannot resolve the current executable: {error}"),
-        }
-    })?;
     let directory = executable.parent().ok_or_else(|| {
         into_markdown::ConversionError::ComponentUnavailable {
             component: "onnxruntime-worker".into(),

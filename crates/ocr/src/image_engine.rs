@@ -30,6 +30,32 @@ pub struct PpOcrImageEngine {
 }
 
 impl PpOcrImageEngine {
+    /// Validate that the fixed product pipeline can retain its bounded output
+    /// within one invocation before loading the native runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation or timeout from `context`, or a resource error when
+    /// the configured region, text, decompression, or memory envelope cannot
+    /// support a bounded OCR invocation.
+    pub fn validate_service_limits(
+        limits: &ResourceLimits,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        context.checkpoint()?;
+        validate_engine_limits(limits)?;
+        let plan = output_plan(limits)?;
+        if plan.max_retained_bytes() > limits.max_memory_bytes
+            || plan.max_retained_bytes() > context.available_memory_bytes()
+        {
+            return Err(resource(
+                "max_memory_bytes",
+                "OCR output plan exceeds the service memory envelope",
+            ));
+        }
+        Ok(())
+    }
+
     /// Construct only after both exact pipeline components are locally installed and verified.
     pub fn from_installed(
         runtime: Arc<dyn TensorRuntime>,
@@ -37,11 +63,10 @@ impl PpOcrImageEngine {
         limits: ResourceLimits,
         context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
-        context.checkpoint()?;
+        Self::validate_service_limits(&limits, context)?;
         manager
             .verify_with_context(crate::detector_model::PIPELINE_ID, context)
             .map_err(map_manager_error)?;
-        validate_engine_limits(&limits)?;
         Ok(Self { runtime, manager, limits })
     }
 
@@ -93,9 +118,10 @@ impl PpOcrImageEngine {
         };
         let detected = detector.detect_page(1, image, context).await?;
         let language = language_hint(request.languages)?;
-        let recognized = recognizer.recognize_page(image, &detected, language, context).await?;
+        let recognition_result =
+            recognizer.recognize_page(image, &detected, language, context).await?;
         context.checkpoint()?;
-        bind_result(&detected, recognized.result(), context)
+        bind_result(&detected, recognition_result.result(), context)
     }
 }
 
@@ -122,14 +148,7 @@ impl OcrEngine for PpOcrImageEngine {
     ) -> Result<OcrOutputPlan, ConversionError> {
         context.checkpoint()?;
         validate_png_header(request, &self.limits)?;
-        let max_regions = options.limits.max_archive_entries.min(MAX_REGIONS);
-        let max_text = options.limits.max_field_bytes.min(MAX_TEXT_BYTES);
-        let retained = u64::from(max_regions)
-            .checked_mul(OUTPUT_BYTES_PER_REGION)
-            .and_then(|bytes| bytes.checked_add(max_text.checked_mul(2)?))
-            .and_then(|bytes| bytes.checked_add(OUTPUT_FIXED_BYTES))
-            .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
-        OcrOutputPlan::try_new(retained, max_regions, max_text)
+        output_plan(&options.limits)
     }
 
     fn recognize_bound<'a>(
@@ -159,7 +178,7 @@ fn decode_normalized_png(
     decoder_limits.max_image_height = Some(MAX_DIMENSION);
     decoder_limits.max_alloc = Some(limits.max_decompressed_bytes.min(limits.max_memory_bytes));
     reader.limits(decoder_limits);
-    let decoded = reader.decode().map_err(map_image_error)?;
+    let decoded = reader.decode().map_err(|error| map_image_error(&error))?;
     if decoded.width() != width || decoded.height() != height {
         return Err(malformed("PNG decoder dimensions disagree with IHDR"));
     }
@@ -284,6 +303,17 @@ fn validate_engine_limits(limits: &ResourceLimits) -> Result<(), ConversionError
     source_pixel_limit(limits).map(|_| ())
 }
 
+fn output_plan(limits: &ResourceLimits) -> Result<OcrOutputPlan, ConversionError> {
+    let max_regions = limits.max_archive_entries.min(MAX_REGIONS);
+    let max_text = limits.max_field_bytes.min(MAX_TEXT_BYTES);
+    let retained = u64::from(max_regions)
+        .checked_mul(OUTPUT_BYTES_PER_REGION)
+        .and_then(|bytes| bytes.checked_add(max_text.checked_mul(2)?))
+        .and_then(|bytes| bytes.checked_add(OUTPUT_FIXED_BYTES))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
+    OcrOutputPlan::try_new(retained, max_regions, max_text)
+}
+
 fn map_manager_error(error: crate::ModelManagerError) -> ConversionError {
     match error {
         crate::ModelManagerError::Execution(error) => error,
@@ -297,7 +327,7 @@ fn map_manager_error(error: crate::ModelManagerError) -> ConversionError {
     }
 }
 
-fn map_image_error(error: image::ImageError) -> ConversionError {
+fn map_image_error(error: &image::ImageError) -> ConversionError {
     match error {
         image::ImageError::Limits(_) => resource("max_decompressed_bytes", error.to_string()),
         _ => malformed(format!("PNG decoder rejected normalized OCR input: {error}")),

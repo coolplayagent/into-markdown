@@ -2,18 +2,17 @@
 
 ## 本地 OCR
 
-完整 `pp-ocrv6-tiny-zh-en` 检测加识别包仍是 source-only 的 `planned` pipeline。
-独立 `pp-ocrv6-tiny-recognizer-onnx` 则是可安装 recognition component：它精确绑定
+完整 `pp-ocrv6-tiny-zh-en` 是可安装的 detector + recognizer pipeline。两个组件精确绑定
 PaddleOCR commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、官方 ONNX TAR、
-归档内 ONNX/config、同一 commit 的字符表及 Apache-2.0。模型产物不提交到 Git，
-也不进入当前发布物。library transport 可把原始 TAR 和字符表交给 `ModelManager`；
-CLI 没有模型网络 transport，因此安装命令稳定返回 `componentUnavailable`。
+归档内 ONNX/config 及 Apache-2.0；recognizer 另绑定同一 commit 的字符表。模型产物不提交
+到 Git。`ModelManager` 只有在两个组件均安装并逐文件校验后才把 pipeline 报为 installed；
+CLI 的 `models install` 使用固定来源/大小/hash transport，普通转换不下载模型。
 查询、校验、平台目录、原子安装与清理契约见[本地模型管理](models.md)。
 
-普通 Cargo/Bazel 构建和测试既不下载模型，也不加载推理运行时。显式 manual target
-`//crates/onnxruntime:ppocrv6_recognizer_quality` 才取得固定模型与平台 ORT，经过与产品
-相同的安装事务、resolver、worker 和识别器执行真实推理；未选择该目标时 Cargo 中对应
-integration test 明确显示为 ignored，不以 fake 或 skip 冒充质量通过。
+普通 Cargo/Bazel 构建和测试既不下载模型，也不加载推理运行时。显式 manual targets
+`//crates/api:ppocrv6_image_quality` 与 `//apps/cli:ppocrv6_cli_quality` 才取得固定 detector、
+recognizer 与平台 ORT，经过产品安装事务、resolver、worker、公开 API/CLI 和统一 IR 执行
+完整真实推理；未选择这些目标时对应 Cargo integration tests 明确显示为 ignored。
 
 检测模块只接收调用方已解码且明确描述的 `PixelView`：宽、高、row stride、
 `Gray8`/`RGB8`/`BGR8`/`RGBA8`/`BGRA8`、八种 EXIF 方向和借用的像素字节。
@@ -65,12 +64,13 @@ checkpoint。第三方单次调用不支持中途轮询，其输入与工作上�
 region/text/provider/hint 的实际 capacity 租约随共享 RecognitionResult 存活；clone 共享数据与
 租约，最后一个 owner 释放后才归还同一 ExecutionContext 的预算。
 
-真实 12 图语料的机器权威位于 `models/ppocrv6-tiny-recognizer-authority.json` 和
+真实 12 图语料的机器权威位于 detector/recognizer authority 和
 `fixtures/manifest.json#ocr_quality`：简体 0/65（上限 5%）、繁体 6/65（上限 10%）、
 英文 1/185（上限 5%）、混排 1/116（上限 8%）。manual target 同时断言字符数、错误数、
-阈值和 CER，任一漂移都会失败。普通测试使用 fake runtime 覆盖恶意 tensor、CTC、预算、
-取消、稳定 batch 顺序，并以八种 EXIF 方向的 detection→recognition 回归防止重复变换；
-detector ONNX 尚未进入可安装 pipeline，因此检测产品 resolver 仍返回 `ModelUnavailable`。
+阈值、真实 boxes、detector→recognizer→merge evidence 和 model identity；完整产品链路允许
+相对识别器权威减少错误，但不允许增加错误。普通测试使用 fake runtime 覆盖恶意 tensor、
+CTC、预算、取消、稳定 batch 顺序，并以八种 EXIF 方向的 detection→recognition 回归防止
+重复变换。
 
 OCR 结果进入统一 IR 时由 `ocr::merge` 单向编排 policy、geometry、line、paragraph、dedup、
 provenance 与 budget 模块。调用方必须同时传入同页 `DetectionResult`、`RecognitionResult`
@@ -95,10 +95,9 @@ Markdown。
 `models/ocr-merge-quality-authority.json` 把 #55 的 Apache-2.0、自主生成 12 图 manifest hash、
 recognizer authority hash、固定内存退化算法和 seed、NFC+去 whitespace 规范化、431 个评价
 字符及 aggregate CER `≤ 0.15` 锁成机器权威。显式 manual target
-`//crates/onnxruntime:ppocrv6_merge_quality` 执行官方 recognizer 与真实 merge/IR pipeline；
-其 detector 输入是 authority 明示的整图 polygon，并不伪称 detector 模型推理。当前没有
-可安装 detector ONNX，因此完整 detector quality 仍不能被这个目标冒充。普通 Cargo/Bazel
-构建不会请求模型或 ORT 下载。
+`//crates/onnxruntime:ppocrv6_merge_quality` 仍执行官方 recognizer 与 merge/IR 的独立权威；
+完整 detector→recognizer 产品质量由上述 API/CLI targets 单独覆盖。普通 Cargo/Bazel 构建
+不会请求模型或 ORT 下载。
 
 `OcrPolicy` 可取 `off`、`auto` 或 `always`，默认值为 `auto`。自动模式下，
 只有图片输入、纯图片页面、可能含文字的内嵌图片，或原生文本提取不足的页面才应
@@ -110,6 +109,9 @@ AI 必须显式启用，并按能力路由。提供者可以分别支持视觉 O
 修复、表格修复、公式修复、音频转写或 Markdown 后处理。提供者输出只能以带
 溯源信息的节点，或经过验证且带版本的补丁形式进入 IR。
 
-OpenAI-compatible HTTP 是规划中的适配器，不是 `core` 的强依赖。秘密信息只以
-环境变量名引用，不得被序列化、写入日志、加入溯源信息或在普通配置文件中直接
-接收。
+OpenAI-compatible `ImageDescription` 是显式配置的受控适配器，不是 `core` 的强依赖。
+它只发送固定图片描述指令和当前页的规范 PNG；不接受用户文档 prompt。`off` 零调用，
+`fallback` 仅在本地 OCR 无有效文字时调用，`prefer` 失败后保留本地结果，`only` 在缺 provider
+或 capability 时稳定返回 `ComponentUnavailable`。请求继承 invocation network、host、资源、
+取消与 deadline；返回节点、diagnostic、provider/page provenance 和内存 plan 全部验证后才
+事务发布。秘密信息只以环境变量名引用，不序列化、不写日志、不加入 provenance。

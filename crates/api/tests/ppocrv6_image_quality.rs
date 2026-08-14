@@ -10,10 +10,10 @@ fn explicit_quality_target_requires_pinned_artifacts() {}
 #[cfg(ppocrv6_image_quality)]
 mod quality {
     use into_markdown::{
-        AcquiredModelArtifact, Block, ConversionOptions, ConversionRequest, ExecutionContext,
-        ExecutionOptions, Inline, InputRef, InstalledOcrConfig, ModelAcquisition, ModelFetcher,
-        ModelManager, ModelManagerError, OcrEvidenceStage, OcrPolicy, ResourceLimits,
-        RuntimeArtifact, Services,
+        AcquiredModelArtifact, Block, ConversionError, ConversionOptions, ConversionRequest,
+        ErrorCode, ExecutionContext, ExecutionOptions, Inline, InputRef, InstalledOcrConfig,
+        ModelAcquisition, ModelFetcher, ModelManager, ModelManagerError, OcrEvidenceStage,
+        OcrPolicy, ResourceLimits, RuntimeArtifact, Services,
     };
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -76,13 +76,8 @@ mod quality {
         let model_root = tempfile::tempdir().unwrap();
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let manager = ModelManager::embedded(model_root.path().to_path_buf(), None).unwrap();
-        let status = manager
-            .install(
-                "pp-ocrv6-tiny-zh-en",
-                &QualityFetcher { detector, recognizer, dictionary },
-                &context,
-            )
-            .unwrap();
+        let fetcher = QualityFetcher { detector, recognizer, dictionary };
+        let status = manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &context).unwrap();
         assert_eq!(status.state, "installed");
 
         let runtime_relative = env!("OCR_QUALITY_ORT_LIBRARY");
@@ -100,19 +95,37 @@ mod quality {
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
         options.ocr.minimum_confidence = 0.0;
-        let ocr = into_markdown::installed_ocr_service(
-            &InstalledOcrConfig {
-                writable_model_root: model_root.path().to_path_buf(),
-                bundled_model_root: None,
-                runtime_trusted_root: runtime_root,
-                runtime_library,
-                worker_executable: worker,
-                model_bundle: "pp-ocrv6-tiny-zh-en".into(),
-            },
-            &options,
-            &context,
-        )
-        .unwrap();
+        let service_config = InstalledOcrConfig {
+            writable_model_root: model_root.path().to_path_buf(),
+            bundled_model_root: None,
+            runtime_trusted_root: runtime_root,
+            runtime_library,
+            worker_executable: worker,
+            model_bundle: "pp-ocrv6-tiny-zh-en".into(),
+        };
+        for component in ["pp-ocrv6-tiny-detector-onnx", "pp-ocrv6-tiny-recognizer-onnx"] {
+            let artifact = manager.path(component).unwrap().join("inference.onnx");
+            let exact = fs::read(&artifact).unwrap();
+            let mut corrupt = exact.clone();
+            corrupt[0] ^= 0xff;
+            fs::write(&artifact, corrupt).unwrap();
+            let error = service_error(&service_config, &options, &context);
+            assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
+            assert!(error.to_string().contains("models install pp-ocrv6-tiny-zh-en"));
+            assert_eq!(context.reserved_memory_bytes(), 0);
+            fs::write(&artifact, exact).unwrap();
+            manager.verify("pp-ocrv6-tiny-zh-en").unwrap();
+        }
+        let low_limits = ResourceLimits { max_memory_bytes: 1024, ..ResourceLimits::default() };
+        let low_context = ExecutionContext::new(ExecutionOptions::default(), low_limits.clone());
+        let mut low_options = options.clone();
+        low_options.limits = low_limits;
+        let error = service_error(&service_config, &low_options, &low_context);
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(low_context.reserved_memory_bytes(), 0);
+
+        let ocr =
+            into_markdown::installed_ocr_service(&service_config, &options, &context).unwrap();
         let engine = into_markdown::default_engine_with_services(Services {
             ocr: Some(ocr),
             ..Services::default()
@@ -235,5 +248,16 @@ mod quality {
     fn read_archive(runfiles: &Path, repository: &str) -> Vec<u8> {
         assert_ne!(repository, "unsupported", "quality target requires an audited platform");
         fs::read(runfiles.join(repository).join("file/runtime-model.tar")).unwrap()
+    }
+
+    fn service_error(
+        config: &InstalledOcrConfig,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> ConversionError {
+        match into_markdown::installed_ocr_service(config, options, context) {
+            Ok(_) => panic!("corrupt or resource-starved OCR service unexpectedly assembled"),
+            Err(error) => error,
+        }
     }
 }

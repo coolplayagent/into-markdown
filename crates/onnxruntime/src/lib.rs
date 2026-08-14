@@ -137,6 +137,12 @@ impl RuntimeLibrary {
     ///
     /// This consults only the embedded target authority and does not touch the
     /// filesystem or search process state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadError::UnsafePath`] for a non-absolute root or unsafe
+    /// authority member, [`LoadError::UnsupportedTarget`] when the current
+    /// target is not pinned, and an authority error for invalid embedded data.
     pub fn expected_path(trusted_root: &Path) -> Result<PathBuf, LoadError> {
         if !trusted_root.is_absolute() {
             return Err(LoadError::UnsafePath);

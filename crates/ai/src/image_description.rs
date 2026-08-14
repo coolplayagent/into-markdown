@@ -94,7 +94,7 @@ impl AiProvider for OpenAiImageDescriptionProvider {
                     },
                     context,
                 )
-                .map_err(map_provider_error)?;
+                .map_err(|error| map_provider_error(&error))?;
             let text = result.text.trim();
             if text.is_empty() || text.len() as u64 > options.limits.max_field_bytes {
                 return Err(ConversionError::Ai {
@@ -177,7 +177,7 @@ fn validate_request(
     Ok(())
 }
 
-fn map_provider_error(error: ProviderError) -> ConversionError {
+fn map_provider_error(error: &ProviderError) -> ConversionError {
     match error.code() {
         ProviderErrorCode::Cancelled => ConversionError::Cancelled,
         ProviderErrorCode::Timeout => ConversionError::Timeout,

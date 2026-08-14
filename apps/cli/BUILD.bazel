@@ -10,7 +10,10 @@ rust_binary(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "into_md",
     edition = "2024",
-    deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True),
+    deps = [
+        "//crates/api:into_markdown",
+        "//crates/http-transport:http_transport",
+    ] + all_crate_deps(normal = True),
     compile_data = ["//web/console:checked_assets"],
 )
 
@@ -21,7 +24,10 @@ rust_test(
     crate_name = "into_md_test",
     aliases = aliases(normal = True, normal_dev = True, proc_macro = True, proc_macro_dev = True),
     edition = "2024",
-    deps = ["//crates/api:into_markdown"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        "//crates/api:into_markdown",
+        "//crates/http-transport:http_transport",
+    ] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
     compile_data = ["//web/console:checked_assets"],
 )
@@ -31,7 +37,10 @@ rust_test(
     srcs = ["tests/exit_contract.rs"],
     crate_name = "into_md_exit_contract",
     crate_root = "tests/exit_contract.rs",
-    data = [":into-md"],
+    data = [
+        ":into-md",
+        "//fixtures:corpus",
+    ],
     deps = [
         "@crates//:serde_json",
         "@crates//:tempfile",
@@ -39,4 +48,72 @@ rust_test(
     ],
     edition = "2024",
     env = {"INTO_MD_BIN": "$(location :into-md)"},
+)
+
+# Explicit packaged-binary detector -> recognizer -> CLI quality gate.
+rust_test(
+    name = "ppocrv6_cli_quality",
+    srcs = ["tests/ppocrv6_cli_quality.rs"],
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    crate_name = "ppocrv6_cli_quality",
+    data = [
+        ":into-md",
+        "//crates/onnxruntime:onnxruntime_worker",
+        "//fixtures:corpus",
+        "//models:ppocrv6_tiny_dict.txt",
+        "//third_party/onnxruntime:cpu_runtime",
+        "@ppocrv6_tiny_detector_onnx_model_archive//file",
+        "@ppocrv6_tiny_recognizer_onnx_model_archive//file",
+    ],
+    edition = "2024",
+    rustc_flags = ["--cfg=ppocrv6_cli_quality"],
+    rustc_env = select({
+        "//third_party/onnxruntime:is_linux_arm64": {
+            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
+            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
+            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_linux_arm64",
+            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
+            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_linux_x86_64": {
+            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
+            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
+            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
+            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_linux_x86_64",
+            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
+            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_macos_arm64": {
+            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
+            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
+            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.dylib",
+            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_macos_arm64",
+            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
+            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
+        },
+        "//third_party/onnxruntime:is_windows_x86_64": {
+            "OCR_CLI_BINARY": "_main/apps/cli/into-md.exe",
+            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
+            "OCR_CLI_ORT_LIBRARY": "lib/onnxruntime.dll",
+            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
+            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
+            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
+        },
+        "//conditions:default": {
+            "OCR_CLI_BINARY": "unsupported",
+            "OCR_CLI_DETECTOR_REPOSITORY": "unsupported",
+            "OCR_CLI_ORT_LIBRARY": "unsupported",
+            "OCR_CLI_ORT_REPOSITORY": "unsupported",
+            "OCR_CLI_RECOGNIZER_REPOSITORY": "unsupported",
+            "OCR_CLI_WORKER": "unsupported",
+        },
+    }),
+    tags = ["manual"],
+    deps = [
+        "//crates/api:into_markdown",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:unicode-normalization",
+    ],
 )

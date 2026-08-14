@@ -42,6 +42,7 @@ filegroup(
     }),
     tags = ["manual"],
     visibility = [
+        "//apps/cli:__pkg__",
         "//crates/api:__pkg__",
         "//crates/onnxruntime:__pkg__",
     ],

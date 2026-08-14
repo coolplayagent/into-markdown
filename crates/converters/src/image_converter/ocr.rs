@@ -3,7 +3,7 @@
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity,
     Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
-    OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrSourceRegion, Provenance,
+    OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrResult, OcrSourceRegion, Provenance,
     ProvenanceKind, ResourceReservation, Services, SourceLocator, SourcePoint,
     estimate_retained_output,
 };
@@ -86,66 +86,16 @@ pub(super) async fn recognize(
         provider: MERGE_PROVIDER.into(),
         model: None,
     });
-
-    let mut nodes = Vec::new();
-    let mut diagnostics = Vec::new();
-    for (index, (region, detection_confidence)) in
-        result.regions.into_iter().zip(detection_confidences).enumerate()
-    {
-        if index % 256 == 0 {
-            context.checkpoint()?;
-        }
-        validate_region(&region.polygon, width, height, engine.id())?;
-        if !region.confidence.is_finite() || !(0.0..=1.0).contains(&region.confidence) {
-            return Err(ConversionError::Ocr {
-                provider: engine.id().into(),
-                detail: "recognition confidence must be finite and between zero and one".into(),
-            });
-        }
-        let confidence = region.confidence.min(detection_confidence);
-        if region.text.trim().is_empty() || confidence < options.ocr.minimum_confidence {
-            diagnostics.push(Diagnostic {
-                code: "image.ocrLowConfidence".into(),
-                severity: DiagnosticSeverity::Info,
-                message: format!("OCR region {index} was omitted below the configured confidence"),
-                locator: Some(page_locator(page, width, height, None)),
-            });
-            continue;
-        }
-        let polygon = region.polygon.map(|(x, y)| SourcePoint { x, y });
-        let bounds = polygon_bounds(&polygon);
-        let locator = page_locator(page, width, height, Some(bounds));
-        let evidence = OcrEvidence {
-            page,
-            regions: vec![OcrSourceRegion {
-                source_index: u32::try_from(index).map_err(|_| ConversionError::ResourceLimit {
-                    limit: "documentInlines",
-                    detail: "OCR region index exceeds u32".into(),
-                })?,
-                polygon,
-                detection_confidence,
-                recognition_confidence: region.confidence,
-            }],
-            chain: chain.clone(),
-        };
-        let provenance = Provenance {
-            kind: ProvenanceKind::LocalOcr,
-            provider: result.provider.clone(),
-            locator,
-            confidence: Some(confidence),
-        };
-        nodes.push(BlockNode {
-            id: NodeId(format!("image-page-{page}-ocr-{}", index + 1)),
-            block: Block::Paragraph(vec![Inline::OcrText {
-                value: region.text,
-                marks: vec![],
-                provenance: Box::new(provenance.clone()),
-                evidence: Box::new(evidence),
-            }]),
-            provenance,
-        });
-    }
-    let document = Document { blocks: nodes, ..Document::default() };
+    let materialize = MaterializeContext {
+        chain: &chain,
+        page,
+        width,
+        height,
+        options,
+        engine_id: engine.id(),
+        execution: context,
+    };
+    let (document, diagnostics) = materialize_nodes(result, detection_confidences, &materialize)?;
     let assets = Vec::<Asset>::new();
     let retained = estimate_retained_output(&document, &assets, &diagnostics)?;
     if retained > planned_bytes {
@@ -163,6 +113,95 @@ pub(super) async fn recognize(
         diagnostics,
         memory: Some(memory),
     })
+}
+
+struct MaterializeContext<'a> {
+    chain: &'a [OcrEvidenceStep],
+    page: u32,
+    width: u32,
+    height: u32,
+    options: &'a ConversionOptions,
+    engine_id: &'a str,
+    execution: &'a ExecutionContext,
+}
+
+fn materialize_nodes(
+    result: OcrResult,
+    detection_confidences: Vec<f32>,
+    materialize: &MaterializeContext<'_>,
+) -> Result<(Document, Vec<Diagnostic>), ConversionError> {
+    let mut nodes = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, (region, detection_confidence)) in
+        result.regions.into_iter().zip(detection_confidences).enumerate()
+    {
+        if index % 256 == 0 {
+            materialize.execution.checkpoint()?;
+        }
+        validate_region(
+            &region.polygon,
+            materialize.width,
+            materialize.height,
+            materialize.engine_id,
+        )?;
+        if !region.confidence.is_finite() || !(0.0..=1.0).contains(&region.confidence) {
+            return Err(ConversionError::Ocr {
+                provider: materialize.engine_id.into(),
+                detail: "recognition confidence must be finite and between zero and one".into(),
+            });
+        }
+        let confidence = region.confidence.min(detection_confidence);
+        if region.text.trim().is_empty() || confidence < materialize.options.ocr.minimum_confidence
+        {
+            diagnostics.push(Diagnostic {
+                code: "image.ocrLowConfidence".into(),
+                severity: DiagnosticSeverity::Info,
+                message: format!("OCR region {index} was omitted below the configured confidence"),
+                locator: Some(page_locator(
+                    materialize.page,
+                    materialize.width,
+                    materialize.height,
+                    None,
+                )),
+            });
+            continue;
+        }
+        let polygon = region.polygon.map(|(x, y)| SourcePoint { x, y });
+        let bounds = polygon_bounds(&polygon);
+        let locator =
+            page_locator(materialize.page, materialize.width, materialize.height, Some(bounds));
+        let evidence = OcrEvidence {
+            page: materialize.page,
+            regions: vec![OcrSourceRegion {
+                source_index: u32::try_from(index).map_err(|_| ConversionError::ResourceLimit {
+                    limit: "documentInlines",
+                    detail: "OCR region index exceeds u32".into(),
+                })?,
+                polygon,
+                detection_confidence,
+                recognition_confidence: region.confidence,
+            }],
+            chain: materialize.chain.to_vec(),
+        };
+        let provenance = Provenance {
+            kind: ProvenanceKind::LocalOcr,
+            provider: result.provider.clone(),
+            locator,
+            confidence: Some(confidence),
+        };
+        nodes.push(BlockNode {
+            id: NodeId(format!("image-page-{}-ocr-{}", materialize.page, index + 1)),
+            block: Block::Paragraph(vec![Inline::OcrText {
+                value: region.text,
+                marks: vec![],
+                provenance: Box::new(provenance.clone()),
+                evidence: Box::new(evidence),
+            }]),
+            provenance,
+        });
+    }
+    let document = Document { blocks: nodes, ..Document::default() };
+    Ok((document, diagnostics))
 }
 
 fn validate_plan(

@@ -290,6 +290,8 @@ struct ModelBundle {
     id: String,
     #[serde(default = "pipeline_model_kind")]
     kind: String,
+    #[serde(default)]
+    components: Vec<String>,
     availability: String,
     upstream_version: String,
     languages: Vec<String>,
@@ -396,6 +398,48 @@ struct RecognizerAuthority {
     maximum_width: usize,
     quality_corpus: String,
     quality_groups: Vec<RecognizerQualityGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetectorOnnxAuthority {
+    schema_version: u64,
+    model_id: String,
+    pipeline_id: String,
+    upstream_repository: String,
+    upstream_commit: String,
+    preprocess_reference: String,
+    postprocess_reference: String,
+    runtime_archive_url: String,
+    runtime_archive_size: u64,
+    runtime_archive_sha256: String,
+    runtime_model_member: String,
+    runtime_model_size: u64,
+    runtime_model_sha256: String,
+    runtime_config_member: String,
+    runtime_config_size: u64,
+    runtime_config_sha256: String,
+    license: String,
+    ir_version: u64,
+    opset_domain: String,
+    opset_version: u64,
+    input_name: String,
+    input_dtype: String,
+    input_shape: [String; 4],
+    output_name: String,
+    output_dtype: String,
+    output_shape: [String; 4],
+    input_color: String,
+    minimum_side: usize,
+    maximum_side: usize,
+    resize_stride: usize,
+    normalization_scale: f64,
+    normalization_mean: [f32; 3],
+    normalization_standard_deviation: [f32; 3],
+    bitmap_threshold: f32,
+    box_threshold: f32,
+    maximum_candidates: usize,
+    unclip_ratio: f64,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -1371,6 +1415,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ort_text = read(&root.join("third_party/onnxruntime/manifest.json"), errors);
     let models_text = read(&root.join("models/manifest.json"), errors);
     let recognizer_text = read(&root.join("models/ppocrv6-tiny-recognizer-authority.json"), errors);
+    let detector_text =
+        read(&root.join("models/ppocrv6-tiny-detector-onnx-authority.json"), errors);
     let downloads_text = read(&root.join("third_party/licenses/downloads.json"), errors);
     let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
     let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
@@ -1381,6 +1427,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let recognizer: Option<RecognizerAuthority> =
         parse_json("recognizer authority", &recognizer_text, errors);
+    let detector: Option<DetectorOnnxAuthority> =
+        parse_json("detector ONNX authority", &detector_text, errors);
     let downloads: Option<DownloadManifest> =
         parse_json("download manifest", &downloads_text, errors);
     let pdfium: Option<PdfiumManifest> = parse_json("PDFium manifest", &pdfium_text, errors);
@@ -1405,6 +1453,9 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
         validate_model_manifest(inventory, models, downloads, errors);
         if let Some(recognizer) = &recognizer {
             validate_recognizer_authority(inventory, models, downloads, recognizer, errors);
+        }
+        if let Some(detector) = &detector {
+            validate_detector_authority(inventory, models, downloads, detector, errors);
         }
     }
     validate_schema2_kind_presence(&models_text, errors);
@@ -2657,6 +2708,9 @@ fn validate_model_manifest(
     }
     let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
     validate_default_model_bundle(manifest, &bundles, errors);
+    if manifest.schema_version == 2 {
+        validate_model_components(manifest, &bundles, errors);
+    }
 
     let mut inventory_sources = BTreeMap::new();
     for component in inventory.components.iter().filter(|item| item.kind == "model-source") {
@@ -2701,6 +2755,39 @@ fn validate_model_manifest(
     }
 }
 
+fn validate_model_components(
+    manifest: &ModelManifest,
+    bundles: &BTreeMap<&str, &ModelBundle>,
+    errors: &mut Vec<String>,
+) {
+    for bundle in &manifest.bundles {
+        match bundle.kind.as_str() {
+            "ocr-pipeline" => {
+                let expected = ["pp-ocrv6-tiny-detector-onnx", "pp-ocrv6-tiny-recognizer-onnx"];
+                if bundle.id != "pp-ocrv6-tiny-zh-en"
+                    || bundle.components.iter().map(String::as_str).collect::<Vec<_>>() != expected
+                {
+                    errors.push(format!(
+                        "OCR pipeline {} has an invalid exact component binding",
+                        bundle.id
+                    ));
+                }
+                for (id, kind) in
+                    [(expected[0], "detector-component"), (expected[1], "recognizer-component")]
+                {
+                    if bundles.get(id).is_none_or(|component| component.kind != kind) {
+                        errors.push(format!("OCR pipeline {} lacks bound {kind} {id}", bundle.id));
+                    }
+                }
+            }
+            "detector-component" | "recognizer-component" if !bundle.components.is_empty() => {
+                errors.push(format!("OCR component {} cannot bind child components", bundle.id));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn validate_schema2_kind_presence(models: &str, errors: &mut Vec<String>) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(models) else { return };
     if value.get("schema_version").and_then(serde_json::Value::as_u64) == Some(2)
@@ -2733,6 +2820,164 @@ fn validate_recognizer_authority(
     if !recognizer_inventory_binding_is_exact(inventory, authority) {
         errors.push("inventory disagrees with official recognizer authority".to_owned());
     }
+}
+
+fn validate_detector_authority(
+    inventory: &Inventory,
+    manifest: &ModelManifest,
+    downloads: &DownloadManifest,
+    authority: &DetectorOnnxAuthority,
+    errors: &mut Vec<String>,
+) {
+    if !detector_authority_is_exact(authority) {
+        errors.push("official PP-OCRv6 detector ONNX authority has drifted".to_owned());
+        return;
+    }
+    if !detector_model_binding_is_exact(manifest, authority) {
+        errors.push("model manifest disagrees with official detector ONNX authority".to_owned());
+    }
+    if !detector_download_binding_is_exact(downloads, authority) {
+        errors.push("download manifest disagrees with official detector ONNX authority".to_owned());
+    }
+    if !detector_inventory_binding_is_exact(inventory, authority) {
+        errors.push("inventory disagrees with official detector ONNX authority".to_owned());
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn detector_authority_is_exact(authority: &DetectorOnnxAuthority) -> bool {
+    authority.schema_version == 1
+        && authority.model_id == "pp-ocrv6-tiny-detector-onnx"
+        && authority.pipeline_id == "pp-ocrv6-tiny-zh-en"
+        && authority.upstream_repository == "https://github.com/PaddlePaddle/PaddleOCR"
+        && authority.upstream_commit == "2661c7c0ef5c613e8f93c6e93b2e052399f0f854"
+        && authority.preprocess_reference == "tools/infer/predict_det.py"
+        && authority.postprocess_reference == "ppocr/postprocess/db_postprocess.py"
+        && authority.runtime_archive_url
+            == "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
+        && authority.runtime_archive_size == 1_792_000
+        && authority.runtime_archive_sha256
+            == "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d"
+        && authority.runtime_model_member == "PP-OCRv6_tiny_det_onnx_infer/inference.onnx"
+        && authority.runtime_model_size == 1_780_590
+        && authority.runtime_model_sha256
+            == "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8"
+        && authority.runtime_config_member == "PP-OCRv6_tiny_det_onnx_infer/inference.yml"
+        && authority.runtime_config_size == 883
+        && authority.runtime_config_sha256
+            == "3ac018be6f97499a08faa3bbdeb33640968d9307f6736d152902747a9f259593"
+        && authority.license == "Apache-2.0"
+        && authority.ir_version == 10
+        && authority.opset_domain.is_empty()
+        && authority.opset_version == 14
+        && authority.input_name == "x"
+        && authority.input_dtype == "float32"
+        && authority.input_shape == ["N", "3", "H", "W"]
+        && authority.output_name == "fetch_name_0"
+        && authority.output_dtype == "float32"
+        && authority.output_shape == ["N", "1", "H", "W"]
+        && authority.input_color == "BGR"
+        && authority.minimum_side == 736
+        && authority.maximum_side == 4000
+        && authority.resize_stride == 32
+        && authority.normalization_scale.to_bits() == (1.0_f64 / 255.0).to_bits()
+        && authority.normalization_mean.map(f32::to_bits)
+            == [0.485_f32, 0.456, 0.406].map(f32::to_bits)
+        && authority.normalization_standard_deviation.map(f32::to_bits)
+            == [0.229_f32, 0.224, 0.225].map(f32::to_bits)
+        && authority.bitmap_threshold.to_bits() == 0.2_f32.to_bits()
+        && authority.box_threshold.to_bits() == 0.4_f32.to_bits()
+        && authority.maximum_candidates == 3000
+        && authority.unclip_ratio.to_bits() == 1.4_f64.to_bits()
+}
+
+fn detector_model_binding_is_exact(
+    manifest: &ModelManifest,
+    authority: &DetectorOnnxAuthority,
+) -> bool {
+    let pipeline = manifest.bundles.iter().find(|bundle| bundle.id == authority.pipeline_id);
+    let component = manifest.bundles.iter().find(|bundle| bundle.id == authority.model_id);
+    !pipeline.is_none_or(|bundle| {
+        bundle.kind != "ocr-pipeline"
+            || bundle.components.iter().map(String::as_str).collect::<Vec<_>>()
+                != ["pp-ocrv6-tiny-detector-onnx", "pp-ocrv6-tiny-recognizer-onnx"]
+    }) && !component.is_none_or(|bundle| {
+        let source = bundle
+            .source_artifacts
+            .iter()
+            .find(|artifact| artifact.id == "ppocrv6-tiny-detector-onnx-source");
+        let model = bundle.runtime_artifacts.iter().find(|artifact| artifact.role == "detector");
+        bundle.kind != "detector-component"
+            || !bundle.components.is_empty()
+            || source.is_none_or(|artifact| {
+                artifact.url != authority.runtime_archive_url
+                    || artifact.sha256 != authority.runtime_archive_sha256
+                    || artifact.license != authority.license
+            })
+            || model.is_none_or(|artifact| {
+                artifact.url != authority.runtime_archive_url
+                    || artifact.archive_sha256.as_deref()
+                        != Some(authority.runtime_archive_sha256.as_str())
+                    || artifact.archive_size != Some(authority.runtime_archive_size)
+                    || artifact.archive_member.as_deref()
+                        != Some(authority.runtime_model_member.as_str())
+                    || artifact.sha256 != authority.runtime_model_sha256
+                    || artifact.size != authority.runtime_model_size
+                    || artifact.archive_members.as_deref().is_none_or(|members| {
+                        members.get(2).is_none_or(|member| {
+                            member.path != authority.runtime_config_member
+                                || member.size != authority.runtime_config_size
+                                || member.sha256.as_deref()
+                                    != Some(authority.runtime_config_sha256.as_str())
+                        })
+                    })
+            })
+    })
+}
+
+fn detector_download_binding_is_exact(
+    downloads: &DownloadManifest,
+    authority: &DetectorOnnxAuthority,
+) -> bool {
+    let source = downloads
+        .model_files
+        .iter()
+        .find(|item| item.artifact_id == "ppocrv6-tiny-detector-onnx-source");
+    let model = downloads
+        .model_runtime_files
+        .iter()
+        .find(|item| item.artifact_id == "ppocrv6-tiny-detector-onnx-model");
+    !source.is_none_or(|item| {
+        item.url != authority.runtime_archive_url || item.sha256 != authority.runtime_archive_sha256
+    }) && !model.is_none_or(|item| {
+        item.url != authority.runtime_archive_url
+            || item.archive_sha256.as_deref() != Some(authority.runtime_archive_sha256.as_str())
+            || item.archive_size != Some(authority.runtime_archive_size)
+            || item.archive_member.as_deref() != Some(authority.runtime_model_member.as_str())
+            || item.sha256 != authority.runtime_model_sha256
+            || item.size != authority.runtime_model_size
+    })
+}
+
+fn detector_inventory_binding_is_exact(
+    inventory: &Inventory,
+    authority: &DetectorOnnxAuthority,
+) -> bool {
+    inventory
+        .components
+        .iter()
+        .find(|component| component.id == "ppocrv6-tiny-detector-onnx-source")
+        .is_some_and(|component| {
+            component.kind == "model-source"
+                && component.status == "reviewed"
+                && !component.included_in_release
+                && component.source.as_deref() == Some(authority.runtime_archive_url.as_str())
+                && component.license.as_deref() == Some(authority.license.as_str())
+                && component.version.as_deref()
+                    == Some(
+                        format!("PP-OCRv6 tiny / PaddleOCR {}", authority.upstream_commit).as_str(),
+                    )
+        })
 }
 
 fn recognizer_authority_is_exact(authority: &RecognizerAuthority) -> bool {
@@ -2937,6 +3182,7 @@ fn collect_model_artifacts<'a>(
         }
         let required_roles = match bundle.kind.as_str() {
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+            "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
             _ => BTreeSet::new(),
         };
@@ -2970,7 +3216,10 @@ fn validate_runtime_bundle<'a>(
     errors: &mut Vec<String>,
 ) {
     if !is_safe_model_id(&bundle.id)
-        || !matches!(bundle.kind.as_str(), "ocr-pipeline" | "recognizer-component")
+        || !matches!(
+            bundle.kind.as_str(),
+            "ocr-pipeline" | "detector-component" | "recognizer-component"
+        )
     {
         errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
     }
@@ -2990,16 +3239,17 @@ fn validate_runtime_bundle<'a>(
         errors.push(format!("model bundle {} has incomplete metadata", bundle.id));
     }
     if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
-        || !bundle.source_artifacts.iter().any(|item| {
-            item.id == bundle.character_set.source_artifact_id
-                && item.role == "recognizer-and-dictionary"
-        })
+        || bundle.kind != "detector-component"
+            && !bundle.source_artifacts.iter().any(|item| {
+                item.id == bundle.character_set.source_artifact_id
+                    && item.role == "recognizer-and-dictionary"
+            })
     {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
     let installable = bundle.availability == "available"
         && bundle.character_set.status == "available"
-        && !bundle.runtime_artifacts.is_empty();
+        && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline");
     if (bundle.availability == "available") != installable {
         errors.push(format!(
             "model bundle {} is available without complete runtime files",
@@ -3038,6 +3288,7 @@ fn validate_runtime_bundle<'a>(
     }
     let expected_runtime_roles = match bundle.kind.as_str() {
         "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+        "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
         _ => BTreeSet::new(),
     };
@@ -3073,7 +3324,7 @@ fn runtime_artifact_is_incomplete(
             (Some(hash), Some(size), Some(member), Some(members)) => {
                 !is_sha256(hash)
                     || size <= artifact.size
-                    || member != "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                    || !member.ends_with("/inference.onnx")
                     || !valid_model_archive_members(artifact, members)
             }
             _ => true,
@@ -3084,20 +3335,25 @@ fn valid_model_archive_members(
     artifact: &ModelRuntimeArtifact,
     members: &[ModelArchiveMember],
 ) -> bool {
-    let expected = [
-        ("PP-OCRv6_tiny_rec_onnx_infer/", "directory", 0, None),
-        (
-            "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
-            "file",
-            artifact.size,
-            Some(artifact.sha256.as_str()),
+    let (prefix, config_size, config_sha256) = match artifact.id.as_str() {
+        "ppocrv6-tiny-detector-onnx-model" => (
+            "PP-OCRv6_tiny_det_onnx_infer/",
+            883,
+            "3ac018be6f97499a08faa3bbdeb33640968d9307f6736d152902747a9f259593",
         ),
-        (
-            "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
-            "file",
+        "ppocrv6-tiny-recognizer-onnx-model" => (
+            "PP-OCRv6_tiny_rec_onnx_infer/",
             55_571,
-            Some("66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"),
+            "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
         ),
+        _ => return false,
+    };
+    let model = format!("{prefix}inference.onnx");
+    let config = format!("{prefix}inference.yml");
+    let expected = [
+        (prefix, "directory", 0, None),
+        (model.as_str(), "file", artifact.size, Some(artifact.sha256.as_str())),
+        (config.as_str(), "file", config_size, Some(config_sha256)),
     ];
     members.len() == expected.len()
         && members.iter().zip(expected).all(|(actual, expected)| {
@@ -3376,6 +3632,7 @@ mod tests {
         ModelBundle {
             id: id.to_owned(),
             kind: "ocr-pipeline".to_owned(),
+            components: vec![],
             availability: "planned".to_owned(),
             upstream_version: version.to_owned(),
             languages: vec!["zh".to_owned(), "en".to_owned()],
@@ -4022,6 +4279,28 @@ version = "9.9.9"
             &mut inventory_errors,
         );
         assert!(inventory_errors.iter().any(|error| error.contains("inventory disagrees")));
+    }
+
+    #[test]
+    fn official_detector_authority_rejects_synchronized_manifest_and_download_drift() {
+        let root = repository_root().unwrap();
+        let parse = |path: &str| fs::read_to_string(root.join(path)).unwrap();
+        let manifest: ModelManifest = serde_json::from_str(&parse("models/manifest.json")).unwrap();
+        let downloads: DownloadManifest =
+            serde_json::from_str(&parse("third_party/licenses/downloads.json")).unwrap();
+        let inventory: Inventory =
+            serde_json::from_str(&parse("third_party/licenses/inventory.json")).unwrap();
+        let mut authority: DetectorOnnxAuthority =
+            serde_json::from_str(&parse("models/ppocrv6-tiny-detector-onnx-authority.json"))
+                .unwrap();
+        let mut baseline = Vec::new();
+        validate_detector_authority(&inventory, &manifest, &downloads, &authority, &mut baseline);
+        assert!(baseline.is_empty(), "detector authority baseline: {baseline:?}");
+
+        authority.runtime_model_sha256 = "0".repeat(64);
+        let mut errors = Vec::new();
+        validate_detector_authority(&inventory, &manifest, &downloads, &authority, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("detector ONNX authority")));
     }
 
     #[test]

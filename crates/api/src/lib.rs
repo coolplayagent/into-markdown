@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 mod ocr_service;
 
+#[cfg(test)]
+mod image_ai_tests;
+
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,

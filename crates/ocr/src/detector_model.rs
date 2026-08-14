@@ -73,7 +73,7 @@ fn authority() -> Result<Authority, ConversionError> {
         || value.postprocess_reference != "ppocr/postprocess/db_postprocess.py"
         || value.license != "Apache-2.0"
         || value.ir_version != 10
-        || value.opset_domain != ""
+        || !value.opset_domain.is_empty()
         || value.opset_version != 14
         || value.input_name != "x"
         || value.output_name != "fetch_name_0"

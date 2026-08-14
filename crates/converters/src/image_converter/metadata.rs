@@ -168,7 +168,7 @@ fn tiff(bytes: &[u8], context: &ExecutionContext) -> Result<Density, ConversionE
             282 => set_once(&mut x, rational(bytes, entry, little, big)?, "XResolution")?,
             283 => set_once(&mut y, rational(bytes, entry, little, big)?, "YResolution")?,
             296 => {
-                set_once(&mut unit, resolution_unit(bytes, entry, little, big)?, "ResolutionUnit")?
+                set_once(&mut unit, resolution_unit(bytes, entry, little, big)?, "ResolutionUnit")?;
             }
             _ => {}
         }
