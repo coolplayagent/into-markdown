@@ -3,6 +3,7 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod core_catalog;
+mod core_catalog_authority;
 mod delimited;
 mod docx;
 mod epub;
@@ -30,9 +31,10 @@ mod fixture_corpus_tests;
 
 pub use core_catalog::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
-    CatalogFormatDescriptor, FormatDescriptor, FormatStatus, RuntimeRequirement, core_capabilities,
-    core_format_catalog, core_formats, register_core_components, validate_core_capabilities,
-    verify_packaged_legacy_office_runtime,
+    CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
+    CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, RuntimeRequirement,
+    core_capabilities, core_catalog_authority, core_format_catalog, core_formats,
+    register_core_components, validate_core_capabilities, verify_packaged_legacy_office_runtime,
 };
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;

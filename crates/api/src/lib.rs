@@ -14,9 +14,11 @@ pub use into_markdown_ai::{
 };
 pub use into_markdown_converters::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
-    CatalogFormatDescriptor, FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits,
-    RuntimeRequirement, core_capabilities, core_format_catalog, core_formats, merge_pdf_ocr,
-    reconstruct_pdf_layout, verify_packaged_legacy_office_runtime, verify_pdfium_runtime,
+    CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
+    CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits,
+    RuntimeRequirement, core_capabilities, core_catalog_authority, core_format_catalog,
+    core_formats, merge_pdf_ocr, reconstruct_pdf_layout, verify_packaged_legacy_office_runtime,
+    verify_pdfium_runtime,
 };
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{

@@ -1057,6 +1057,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "installed-smoke"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "into-markdown-converters",
+ "libc",
+ "license-check",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "zip 2.4.2",
+]
+
+[[package]]
 name = "into-markdown"
 version = "0.0.0"
 dependencies = [

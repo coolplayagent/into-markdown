@@ -1,5 +1,10 @@
 //! Authoritative inventory and assembly of the offline core conversion surface.
 
+pub use super::core_catalog_authority::{
+    CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
+    CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
+    CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, RuntimeRequirement,
+};
 use super::{
     ContentFormatDetector, DelimitedTextConverter, DocxConverter, EpubConverter, FeedConverter,
     HintFormatDetector, HtmlConverter, HttpSourceResolver, ImageConverter, LegacyOfficeConverter,
@@ -9,153 +14,9 @@ use super::{
 };
 use into_markdown_core::{ConversionError, Converter, FormatDetector, InputFormat, SourceResolver};
 use into_markdown_engine::RegistryBuilder;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-
-/// Provenance boundary for a capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilitySource {
-    /// Shipped and statically assembled by the core package.
-    Core,
-    /// Separately installed native runtime or model bundle.
-    OptionalRuntime,
-    /// Explicitly installed plugin package.
-    Plugin,
-}
-
-impl CapabilitySource {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Core => "core",
-            Self::OptionalRuntime => "optional_runtime",
-            Self::Plugin => "plugin",
-        }
-    }
-}
-
-/// Component role in the catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityKind {
-    /// Authenticated input acquisition.
-    SourceResolver,
-    /// Bounded format detection.
-    FormatDetector,
-    /// Input-to-IR conversion.
-    Converter,
-    /// Separately distributed native/model dependency.
-    Runtime,
-}
-
-impl CapabilityKind {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SourceResolver => "source_resolver",
-            Self::FormatDetector => "format_detector",
-            Self::Converter => "converter",
-            Self::Runtime => "runtime",
-        }
-    }
-}
-
-/// Whether a catalog entry is self-contained or supplied separately.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityAvailability {
-    /// Present in the core package.
-    Available,
-    /// Installed and verified separately.
-    OptionalRuntime,
-}
-
-impl CapabilityAvailability {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::OptionalRuntime => "optional_runtime",
-        }
-    }
-}
-
-/// Stable installation guidance for a separately distributed runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeRequirement {
-    /// Stable component name used by conversion errors.
-    pub component: &'static str,
-    /// Stable actionable installation guidance.
-    pub install_hint: &'static str,
-}
-
-/// One registered component or optional runtime in the core inventory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityDescriptor {
-    /// Stable globally unique component ID.
-    pub id: &'static str,
-    /// Component role.
-    pub kind: CapabilityKind,
-    /// Package provenance boundary.
-    pub source: CapabilitySource,
-    /// Static distribution availability.
-    pub availability: CapabilityAvailability,
-    /// Deterministic detector/converter precedence, or zero when inapplicable.
-    pub priority: i32,
-    /// Formats routed by this converter.
-    pub formats: &'static [InputFormat],
-    /// Separately installed dependency, when required.
-    pub runtime: Option<RuntimeRequirement>,
-}
-
-/// Converter implementation status exposed by `into-md formats`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatStatus {
-    /// A real converter is registered in the default engine.
-    Available,
-    /// Compatibility value for extension catalogs; never emitted by the core catalog.
-    Planned,
-}
-
-impl FormatStatus {
-    /// Stable lowercase display value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::Planned => "planned",
-        }
-    }
-}
-
-/// User-facing core format descriptor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FormatDescriptor {
-    /// Stable format identifier.
-    pub format: InputFormat,
-    /// User-facing format family.
-    pub family: &'static str,
-    /// Recognized filename extensions.
-    pub extensions: &'static [&'static str],
-    /// Converter registration status.
-    pub status: FormatStatus,
-}
-
-/// Catalog metadata for one public format descriptor.
-///
-/// Provenance and runtime distribution details live here so extending the
-/// catalog does not add required fields to the long-standing public
-/// [`FormatDescriptor`] struct-literal contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CatalogFormatDescriptor {
-    /// Backward-compatible public format description.
-    pub descriptor: &'static FormatDescriptor,
-    /// Package provenance boundary.
-    pub source: CapabilitySource,
-    /// Separately installed dependency, when required.
-    pub runtime: Option<RuntimeRequirement>,
-}
 
 pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
     component: "pdfium",
@@ -360,6 +221,52 @@ pub const fn core_formats() -> &'static [FormatDescriptor] {
 #[must_use]
 pub const fn core_format_catalog() -> &'static [CatalogFormatDescriptor] {
     FORMAT_CATALOG
+}
+
+/// Materialize the release authority directly from the production catalog.
+///
+/// # Errors
+///
+/// Returns an error only if the canonical entry encoding cannot be serialized.
+pub fn core_catalog_authority() -> Result<CoreCatalogAuthority, serde_json::Error> {
+    let entries = FORMAT_CATALOG
+        .iter()
+        .map(|entry| CoreCatalogAuthorityEntry {
+            format: entry.descriptor.format.as_str().to_owned(),
+            family: entry.descriptor.family.to_owned(),
+            extensions: entry
+                .descriptor
+                .extensions
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            status: entry.descriptor.status.as_str().to_owned(),
+            source: entry.source.as_str().to_owned(),
+            runtime_component: entry.runtime.map(|runtime| runtime.component.to_owned()),
+            install_hint: entry.runtime.map(|runtime| runtime.install_hint.to_owned()),
+        })
+        .collect::<Vec<_>>();
+    let entries_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&entries)?));
+    let optional_runtimes = CAPABILITIES
+        .iter()
+        .filter(|entry| entry.kind == CapabilityKind::Runtime)
+        .filter_map(|entry| {
+            entry.runtime.map(|runtime| CoreRuntimeAuthorityEntry {
+                id: entry.id.to_owned(),
+                component: runtime.component.to_owned(),
+                install_hint: runtime.install_hint.to_owned(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let optional_runtimes_sha256 =
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&optional_runtimes)?));
+    Ok(CoreCatalogAuthority {
+        schema_version: 1,
+        entries_sha256,
+        entries,
+        optional_runtimes_sha256,
+        optional_runtimes,
+    })
 }
 
 /// Components actually shipped or consumed by the core package.
@@ -677,6 +584,18 @@ mod tests {
         let index = runtime.iter().position(|entry| entry.kind == CapabilityKind::Runtime).unwrap();
         runtime[index].availability = CapabilityAvailability::Available;
         assert!(validate_core_capabilities(&runtime).is_err());
+
+        let mut omitted_requirement = CAPABILITIES.to_vec();
+        let index = omitted_requirement
+            .iter()
+            .position(|entry| entry.availability == CapabilityAvailability::OptionalRuntime)
+            .unwrap();
+        omitted_requirement[index].runtime = None;
+        assert!(validate_core_capabilities(&omitted_requirement).is_err());
+
+        let mut changed_hint = CAPABILITIES.to_vec();
+        changed_hint[index].runtime.as_mut().unwrap().install_hint = "forged hint";
+        assert!(validate_core_capabilities(&changed_hint).is_err());
     }
 
     #[test]
@@ -688,5 +607,30 @@ mod tests {
         assert!(CAPABILITIES.iter().all(
             |entry| !entry.id.contains("mediawiki") && entry.source != CapabilitySource::Plugin
         ));
+    }
+
+    #[test]
+    fn release_authority_hash_rejects_entry_mutation() {
+        let authority = core_catalog_authority().unwrap();
+        assert_eq!(authority.schema_version, 1);
+        assert_eq!(authority.entries.len(), FORMAT_CATALOG.len());
+        assert_eq!(
+            authority.entries_sha256,
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&authority.entries).unwrap()))
+        );
+        assert_eq!(authority.optional_runtimes.len(), 3);
+        assert_eq!(
+            authority.optional_runtimes_sha256,
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&authority.optional_runtimes).unwrap())
+            )
+        );
+        let mut mutated = authority.entries;
+        mutated[0].status = "planned".into();
+        assert_ne!(
+            authority.entries_sha256,
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&mutated).unwrap()))
+        );
     }
 }

@@ -1,0 +1,38 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "installed_smoke_lib",
+    srcs = glob(["src/*.rs"], exclude = ["src/main.rs"]),
+    crate_name = "installed_smoke",
+    edition = "2024",
+    deps = [
+        "//crates/converters",
+        "//tools/license-check:license_check_lib",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "installed-smoke",
+    srcs = ["src/main.rs"],
+    crate_name = "installed_smoke_bin",
+    edition = "2024",
+    deps = [
+        ":installed_smoke_lib",
+        "@crates//:clap",
+    ],
+)
+
+rust_test(
+    name = "installed_smoke_test",
+    crate = ":installed_smoke_lib",
+    edition = "2024",
+    deps = [
+        "//crates/converters",
+        "//tools/license-check:license_check_lib",
+    ] + all_crate_deps(normal = True),
+)

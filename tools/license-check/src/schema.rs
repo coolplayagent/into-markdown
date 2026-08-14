@@ -154,6 +154,7 @@ pub struct ReleaseInputs {
     pub notice: GeneratedFile,
     pub third_party_notices: GeneratedFile,
     pub sbom_input: GeneratedFile,
+    pub core_catalog: GeneratedFile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

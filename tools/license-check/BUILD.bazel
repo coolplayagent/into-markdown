@@ -66,6 +66,7 @@ DATA = [
     "//crates/task-store:BUILD.bazel",
     "//tests/contracts:Cargo.toml",
     "//tools/asset-update:Cargo.toml",
+    "//tools/installed-smoke:Cargo.toml",
     ":projection_fixtures",
 ]
 
