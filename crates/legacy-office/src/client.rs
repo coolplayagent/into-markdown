@@ -127,6 +127,9 @@ fn convert_verified(
         .map_err(|_| resource("max_memory_bytes", "normalized package size overflowed"))?;
     output_memory.shrink(maximum_output_bytes.saturating_sub(used))?;
     drop(audit_memory);
+    // The worker owns the immutable runtime snapshot. Reap it and let the
+    // snapshot restore directory owner-write before TempDir removal.
+    drop(worker);
     drop(temporary);
     drop(working_directory);
     Ok(NormalizedPackage {

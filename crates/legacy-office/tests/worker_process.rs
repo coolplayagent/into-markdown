@@ -216,6 +216,15 @@ fn limits() -> ResourceLimits {
     }
 }
 
+fn worker_temporary_roots() -> std::collections::BTreeSet<PathBuf> {
+    std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("into-md-legacy-office-"))
+        .map(|entry| entry.path())
+        .collect()
+}
+
 #[test]
 #[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
 fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
@@ -226,9 +235,11 @@ fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
         (InputFormat::Ppt, NormalizedFormat::Pptx),
         (InputFormat::Xls, NormalizedFormat::Xlsx),
     ] {
+        let temporary_before = worker_temporary_roots();
         let context =
             into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
         let package = runtime.convert(b"fixture:normal", source, 1024, &context).unwrap();
+        assert_eq!(worker_temporary_roots(), temporary_before);
         assert_eq!(package.format, expected);
         assert!(package.bytes.starts_with(b"PK\x03\x04"));
         assert_eq!(package.runtime.version(), "26.2.4.2-fixture");
