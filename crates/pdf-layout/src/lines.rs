@@ -112,65 +112,6 @@ fn append_text(line: &Line, output: &mut String) {
     }
 }
 
-pub(crate) fn split_page_gutters(
-    lines: Vec<Line>,
-    page_width: f32,
-    budget: &mut LayoutBudget<'_>,
-) -> Result<Vec<Line>, ConversionError> {
-    let mut output = Vec::new();
-    output.try_reserve_exact(lines.len()).map_err(|_| memory("layout gutter lines"))?;
-    for line in lines {
-        if line.orientation != 0 || line.atoms.len() < 2 {
-            output.push(line);
-            continue;
-        }
-        let mut cuts = Vec::new();
-        cuts.try_reserve_exact(line.atoms.len()).map_err(|_| memory("layout gutter cuts"))?;
-        for index in 1..line.atoms.len() {
-            budget.compare()?;
-            let left = major_end(line.atoms[index - 1].bounds, 0);
-            let right = major_start(line.atoms[index].bounds, 0);
-            let gap = right - left;
-            if gap > page_width * 0.12 && left < page_width * 0.55 && right > page_width * 0.45 {
-                cuts.push(index);
-            }
-        }
-        if cuts.is_empty() {
-            output.push(line);
-            continue;
-        }
-        cuts.push(line.atoms.len());
-        let mut atoms = line.atoms.into_iter();
-        let mut consumed = 0_usize;
-        for end in cuts {
-            let take = end - consumed;
-            let mut segment_atoms = Vec::new();
-            segment_atoms.try_reserve_exact(take).map_err(|_| memory("layout gutter segment"))?;
-            segment_atoms.extend(atoms.by_ref().take(take));
-            consumed = end;
-            let bounds = segment_atoms
-                .iter()
-                .map(|atom| atom.bounds)
-                .reduce(union)
-                .ok_or_else(|| memory("layout empty gutter segment"))?;
-            let font_size =
-                segment_atoms.iter().filter_map(|atom| atom.font_size).reduce(f32::midpoint);
-            let source_index = segment_atoms[0].source_index;
-            let source_kind = segment_atoms[0].source_kind;
-            budget.consume_line()?;
-            output.push(Line {
-                atoms: segment_atoms,
-                bounds,
-                font_size,
-                orientation: line.orientation,
-                source_index,
-                source_kind,
-            });
-        }
-    }
-    Ok(output)
-}
-
 pub(crate) fn inline_text(inline: &Inline) -> &str {
     match inline {
         Inline::Text { value, .. }

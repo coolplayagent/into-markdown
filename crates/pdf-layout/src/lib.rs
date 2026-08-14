@@ -11,6 +11,7 @@ mod collect;
 mod dedup;
 mod footnotes;
 mod geometry;
+mod gutters;
 mod lines;
 mod materialize;
 mod model;

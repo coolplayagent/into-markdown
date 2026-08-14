@@ -145,13 +145,16 @@ fn row_candidate(
     page_width: f32,
     config: &LayoutConfig,
 ) -> bool {
+    let compact_repeated_cells =
+        segments.iter().all(|segment| segment.right - segment.x <= page_width * 0.15);
     segments.len() >= 2
         && segments.len() <= config.limits.max_table_columns
         && segments.iter().all(|segment| {
             segment.right - segment.x <= page_width * 0.42
                 && segment.end.saturating_sub(segment.start) <= 256
         })
-        && segments.windows(2).all(|pair| pair[1].x - pair[0].right <= page_width * 0.18)
+        && (compact_repeated_cells
+            || segments.windows(2).all(|pair| pair[1].x - pair[0].right <= page_width * 0.18))
         && line.bounds.width >= page_width * 0.20
 }
 

@@ -2,7 +2,8 @@ use crate::budget::LayoutBudget;
 use crate::collect;
 use crate::model::RebuiltBlock;
 use crate::{
-    LayoutConfig, dedup, footnotes, lines, malformed, memory, reading_order, semantics, tables,
+    LayoutConfig, dedup, footnotes, gutters, lines, malformed, memory, reading_order, semantics,
+    tables,
 };
 use into_markdown_core::{BlockNode, ConversionError, Provenance};
 
@@ -36,7 +37,7 @@ pub(crate) fn reconstruct_page(
     // A page-wide gutter is stronger layout evidence than repeated baselines.
     // Split columns before table inference so two flowing columns cannot be
     // promoted to a table merely because their rows happen to align.
-    let split = lines::split_page_gutters(deduplicated, width, budget)?;
+    let split = gutters::split(deduplicated, width, budget)?;
     let (mut table_blocks, remaining) =
         tables::recover(split, page, width, height, config, budget)?;
     let ordered = reading_order::lines(remaining, width, height, budget)?;

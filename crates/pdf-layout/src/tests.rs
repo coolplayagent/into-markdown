@@ -264,6 +264,67 @@ fn headings_lists_and_two_by_two_tables_use_conservative_geometry() {
 }
 
 #[test]
+fn repeated_compact_cells_across_a_wide_gap_remain_a_table() {
+    let input = document(
+        [
+            source_text("Key", Rect { x: 40.0, y: 180.0, width: 40.0, height: 13.0 }, 13.0),
+            source_text("Value", Rect { x: 360.0, y: 180.0, width: 40.0, height: 13.0 }, 13.0),
+            source_text("A", Rect { x: 40.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 360.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let table = page_blocks(&actual)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("wide-gap table");
+    assert_eq!((table.len(), table[0].cells.len()), (2, 2));
+    assert_eq!(
+        table
+            .iter()
+            .flat_map(|row| &row.cells)
+            .map(|cell| block_text(&cell.blocks[0].block))
+            .collect::<Vec<_>>(),
+        ["Key", "Value", "A", "1"]
+    );
+}
+
+#[test]
+fn one_row_and_non_aligned_wide_gaps_do_not_invent_tables() {
+    let one_row = document(
+        [
+            source_text("Left", Rect { x: 40.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("Right", Rect { x: 360.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    assert!(
+        !page_blocks(&rebuild(one_row))
+            .iter()
+            .any(|node| matches!(node.block, Block::Table { .. }))
+    );
+
+    let non_aligned = document(
+        [
+            source_text("A", Rect { x: 40.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 360.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("B", Rect { x: 40.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("2", Rect { x: 460.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    assert!(
+        !page_blocks(&rebuild(non_aligned))
+            .iter()
+            .any(|node| matches!(node.block, Block::Table { .. }))
+    );
+}
+
+#[test]
 fn recovered_tables_obey_the_document_wide_cell_limit_without_a_lease() {
     let input = document(
         [

@@ -888,6 +888,8 @@ def presentation_fixtures(root: Path) -> list[dict[str, object]]:
         ),
     ])
     return fixtures
+
+
 def pdf_document(content: bytes, *, rotation: int = 0) -> bytes:
     """Build one deterministic, uncompressed PDF with repository-authored text."""
     rotation_entry = f" /Rotate {rotation}" if rotation else ""
@@ -963,6 +965,17 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
             ),
             "heading, two-item list, two-by-two table, and bottom footnote",
             "heading:Section|list:Alpha,Beta|table:Name,Value;A,1|footnote:Repository footnote",
+        ),
+        (
+            "pdf-layout-wide-gap-table",
+            pdf_document(
+                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+            ),
+            "two repeated compact columns across a page-wide gap remain a table",
+            "table:Key,Value;A,1",
         ),
         (
             "pdf-layout-rotated",

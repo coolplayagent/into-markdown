@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "508302a32ee3ef57715be8d71ce21564e0d0305137461ce430a0f0efb33fa5e9",
+  "fixture_manifest_sha256": "26221b9ef9852a5f59c2cd72ae475c457540320648fad161461f091a518a2b99",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "63dc7194e4d33c2df1aa5535899f3a5fef329406b7bad9a63061736732464ca0",
+  "ocr_merge_authority_sha256": "20d8cd002b0fab74c26fb16502518b6c029b6ccc6215b790714d4f493322b233",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -40,6 +40,13 @@
         "list:Alpha|Beta",
         "table:Name|Value;A|1",
         "footnote:Repository footnote"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-wide-gap-table",
+      "fixture_sha256": "103fa821131e857a360f30c336502d5cbe2a7613421a476a2a8373b2035734e1",
+      "expected_sequence": [
+        "table:Key|Value;A|1"
       ]
     },
     {
