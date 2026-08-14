@@ -1,6 +1,7 @@
 use crate::{
     Backend, Character, CharacterAllocationPlan, Error, ImageAllocationPlan, ImageBitmap,
-    ImageObject, Limits, Link, LinkAllocationPlan, LinkTarget, PageInfo, PdfRect, PixelFormat,
+    ImageObject, Limits, Link, LinkAllocationPlan, LinkTarget, PageInfo, PathBoundsAllocationPlan,
+    PdfRect, PixelFormat,
 };
 use libloading::Library;
 use object::{Architecture, BinaryFormat, NameOrOrdinal, Object as _};
@@ -702,6 +703,21 @@ fn finite_rect(
     Ok(PdfRect { left: left as f32, bottom: bottom as f32, right: right as f32, top: top as f32 })
 }
 
+fn object_bounds(
+    native: &Native,
+    object: Handle,
+    operation: &'static str,
+) -> Result<PdfRect, Error> {
+    let (mut left, mut bottom, mut right, mut top) = (0.0, 0.0, 0.0, 0.0);
+    if unsafe {
+        (native.object_bounds)(object, &raw mut left, &raw mut bottom, &raw mut right, &raw mut top)
+    } == 0
+    {
+        return Err(native.error(operation));
+    }
+    finite_rect(operation, left, bottom, right, top)
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn f64_to_f32(value: f64) -> f32 {
     value as f32
@@ -1107,6 +1123,87 @@ impl Backend for Native {
             _ => return Err(invalid("page_info", "invalid page rotation")),
         };
         Ok(PageInfo { width_points: width, height_points: height, rotation_degrees })
+    }
+
+    fn path_bounds(
+        &self,
+        page: usize,
+        max_objects: u32,
+        plan: PathBoundsAllocationPlan,
+    ) -> Result<Vec<PdfRect>, Error> {
+        let count = nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })?;
+        if count > max_objects {
+            return Err(Error::ResourceLimit {
+                limit: "max_page_objects",
+                actual: u64::from(count),
+                maximum: u64::from(max_objects),
+            });
+        }
+        let mut bounds =
+            FixedOutput::new(usize::try_from(plan.count).unwrap_or(usize::MAX), "path_bounds")?;
+        for index in 0..count {
+            let object = unsafe {
+                (self.get_object)(
+                    page as Handle,
+                    c_int::try_from(index)
+                        .map_err(|_| invalid("path_bounds", "index exceeds C int"))?,
+                )
+            };
+            if object.is_null() {
+                return Err(self.error("get_object"));
+            }
+            if unsafe { (self.object_type)(object) } != 2 {
+                continue;
+            }
+            if bounds.len() >= usize::try_from(plan.count).unwrap_or(usize::MAX) {
+                return Err(invalid("path_bounds", "materialized count exceeded preflight plan"));
+            }
+            bounds.push(object_bounds(self, object, "path_bounds")?, "path_bounds")?;
+        }
+        if bounds.len() != usize::try_from(plan.count).unwrap_or(usize::MAX) {
+            return Err(invalid("path_bounds", "materialized count changed after preflight"));
+        }
+        bounds.into_vec("path_bounds")
+    }
+
+    fn path_bounds_allocation_bytes(
+        &self,
+        page: usize,
+        max_objects: u32,
+    ) -> Result<PathBoundsAllocationPlan, Error> {
+        let count = nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })?;
+        if count > max_objects {
+            return Err(Error::ResourceLimit {
+                limit: "max_page_objects",
+                actual: u64::from(count),
+                maximum: u64::from(max_objects),
+            });
+        }
+        let mut paths = 0_u32;
+        for index in 0..count {
+            let object = unsafe {
+                (self.get_object)(
+                    page as Handle,
+                    c_int::try_from(index)
+                        .map_err(|_| invalid("path_bounds_plan", "index exceeds C int"))?,
+                )
+            };
+            if object.is_null() {
+                return Err(self.error("get_object"));
+            }
+            if unsafe { (self.object_type)(object) } == 2 {
+                // Validate the same bounds during preflight so allocation is
+                // never authorized by a malformed or non-finite PATH object.
+                object_bounds(self, object, "path_bounds_plan")?;
+                paths = paths
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("path_bounds_plan", "count overflow"))?;
+            }
+        }
+        let bytes = u64::from(paths)
+            .checked_mul(u64::try_from(std::mem::size_of::<PdfRect>()).unwrap_or(u64::MAX))
+            .ok_or_else(|| invalid("path_bounds_plan", "allocation overflow"))?;
+        Ok(PathBoundsAllocationPlan { bytes, count: paths })
     }
     fn page_object_count(&self, page: usize) -> Result<u32, Error> {
         nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })

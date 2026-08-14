@@ -926,6 +926,19 @@ def pdf_document(content: bytes, *, rotation: int = 0) -> bytes:
     return bytes(output)
 
 
+def pdf_cell_grid(x_edges: tuple[int, ...], y_edges: tuple[int, ...]) -> bytes:
+    """Draw each table cell as a distinct, deterministic PDF PATH object."""
+    output = bytearray()
+    for bottom, top in zip(y_edges[:-1], y_edges[1:], strict=True):
+        for left, right in zip(x_edges[:-1], x_edges[1:], strict=True):
+            output.extend(
+                f"q 0.6 w {left} {bottom} {right - left} {top - bottom} re S Q\n".encode(
+                    "ascii"
+                )
+            )
+    return bytes(output)
+
+
 def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
     fixtures = [
         (
@@ -954,7 +967,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-structures",
             pdf_document(
-                b"BT /F1 24 Tf 40 750 Td (Section) Tj ET\n"
+                pdf_cell_grid((40, 140, 240), (550, 580, 610))
+                + b"BT /F1 24 Tf 40 750 Td (Section) Tj ET\n"
                 b"BT /F1 12 Tf 50 690 Td (- Alpha) Tj ET\n"
                 b"BT /F1 12 Tf 50 665 Td (- Beta) Tj ET\n"
                 b"BT /F1 13 Tf 50 590 Td (Name) Tj ET\n"
@@ -969,7 +983,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-wide-gap-table",
             pdf_document(
-                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
                 b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
                 b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
@@ -980,7 +995,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-long-wide-table",
             pdf_document(
-                b"BT /F1 13 Tf 40 690 Td (Long left heading) Tj ET\n"
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Long left heading) Tj ET\n"
                 b"BT /F1 13 Tf 360 690 Td (Long right heading) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (Long left value) Tj ET\n"
                 b"BT /F1 12 Tf 360 660 Td (Long right value) Tj ET\n"
@@ -991,7 +1007,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-titled-table",
             pdf_document(
-                b"BT /F1 20 Tf 40 750 Td (Table title) Tj ET\n"
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 20 Tf 40 750 Td (Table title) Tj ET\n"
                 b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
                 b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
@@ -1014,6 +1031,7 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-equal-dual-column",
             pdf_document(
+                b"q 0.6 w 20 610 560 110 re S Q\n"
                 b"BT /F1 12 Tf 40 690 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
                 b"BT /F1 12 Tf 350 690 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
@@ -1027,7 +1045,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-table-followed-by-columns",
             pdf_document(
-                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                pdf_cell_grid((30, 140, 240), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
                 b"BT /F1 13 Tf 160 690 Td (Value) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
                 b"BT /F1 12 Tf 160 660 Td (1) Tj ET\n"
@@ -1044,7 +1063,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-header-body-table",
             pdf_document(
-                b"BT /F1 14 Tf 40 690 Td (MMMMMMMMMMMMMMMMMM) Tj ET\n"
+                pdf_cell_grid((30, 250, 570), (620, 650, 680, 710))
+                + b"BT /F1 14 Tf 40 690 Td (MMMMMMMMMMMMMMMMMM) Tj ET\n"
                 b"BT /F1 14 Tf 360 690 Td (NNNNNNNNNNNNNNNNNN) Tj ET\n"
                 b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
                 b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
@@ -1057,7 +1077,8 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
         (
             "pdf-layout-columns-then-table",
             pdf_document(
-                b"BT /F1 12 Tf 40 710 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                pdf_cell_grid((30, 250, 570), (580, 610, 640))
+                + b"BT /F1 12 Tf 40 710 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
                 b"BT /F1 12 Tf 350 710 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
                 b"BT /F1 12 Tf 40 680 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
                 b"BT /F1 12 Tf 350 680 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"

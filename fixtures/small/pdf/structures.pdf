@@ -10,8 +10,12 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
 endobj
 4 0 obj
-<< /Length 308 >>
+<< /Length 426 >>
 stream
+q 0.6 w 40 550 100 30 re S Q
+q 0.6 w 140 550 100 30 re S Q
+q 0.6 w 40 580 100 30 re S Q
+q 0.6 w 140 580 100 30 re S Q
 BT /F1 24 Tf 40 750 Td (Section) Tj ET
 BT /F1 12 Tf 50 690 Td (- Alpha) Tj ET
 BT /F1 12 Tf 50 665 Td (- Beta) Tj ET
@@ -33,9 +37,9 @@ xref
 0000000064 00000 n 
 0000000121 00000 n 
 0000000247 00000 n 
-0000000606 00000 n 
+0000000724 00000 n 
 trailer
 << /Size 6 /Root 1 0 R >>
 startxref
-703
+821
 %%EOF

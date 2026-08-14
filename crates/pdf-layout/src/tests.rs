@@ -153,6 +153,20 @@ fn rebuild(document: Document) -> Document {
     document
 }
 
+fn rebuild_with_paths(document: Document, bounds: Vec<Rect>) -> Document {
+    let evidence = [PagePathEvidence { page: 1, bounds }];
+    let output = reconstruct_document_with_path_evidence(
+        document,
+        &LayoutConfig::default(),
+        &evidence,
+        &context(),
+    )
+    .unwrap();
+    let (document, reservation) = output.into_parts();
+    drop(reservation);
+    document
+}
+
 fn page_blocks(document: &Document) -> &[BlockNode] {
     let Block::Page { blocks, .. } = &document.blocks[0].block else { panic!("page") };
     blocks
@@ -258,8 +272,8 @@ fn headings_lists_and_two_by_two_tables_use_conservative_geometry() {
             source_text("Section", Rect { x: 40.0, y: 20.0, width: 140.0, height: 24.0 }, 24.0),
             source_text("- Alpha", Rect { x: 50.0, y: 80.0, width: 90.0, height: 12.0 }, 12.0),
             source_text("- Beta", Rect { x: 50.0, y: 105.0, width: 80.0, height: 12.0 }, 12.0),
-            source_text("Name", Rect { x: 50.0, y: 180.0, width: 50.0, height: 13.0 }, 13.0),
-            source_text("Value", Rect { x: 150.0, y: 180.0, width: 50.0, height: 13.0 }, 13.0),
+            source_text("Name", Rect { x: 50.0, y: 180.0, width: 20.0, height: 13.0 }, 13.0),
+            source_text("Value", Rect { x: 150.0, y: 180.0, width: 20.0, height: 13.0 }, 13.0),
             source_text("A", Rect { x: 50.0, y: 205.0, width: 20.0, height: 12.0 }, 12.0),
             source_text("1", Rect { x: 150.0, y: 205.0, width: 20.0, height: 12.0 }, 12.0),
         ]
@@ -463,11 +477,11 @@ fn larger_first_row_does_not_turn_broad_dual_columns_into_a_table() {
 }
 
 #[test]
-fn two_compact_column_rows_need_repeated_edges_or_a_confirmed_header() {
+fn two_compact_column_rows_need_repeated_edges_even_with_header_style() {
     let input = document(
         [
-            source_text("L1", Rect { x: 40.0, y: 90.0, width: 40.0, height: 12.0 }, 12.0),
-            source_text("R1", Rect { x: 350.0, y: 90.0, width: 50.0, height: 12.0 }, 12.0),
+            source_text("L1", Rect { x: 40.0, y: 90.0, width: 40.0, height: 12.0 }, 14.0),
+            source_text("R1", Rect { x: 350.0, y: 90.0, width: 50.0, height: 12.0 }, 14.0),
             source_text("L2", Rect { x: 40.0, y: 120.0, width: 45.0, height: 12.0 }, 12.0),
             source_text("R2", Rect { x: 350.0, y: 120.0, width: 55.0, height: 12.0 }, 12.0),
         ]
@@ -478,6 +492,73 @@ fn two_compact_column_rows_need_repeated_edges_or_a_confirmed_header() {
     assert!(!blocks.iter().any(|node| matches!(node.block, Block::Table { .. })));
     assert_eq!(block_text(&blocks[0].block), "L1 L2");
     assert_eq!(block_text(&blocks[1].block), "R1 R2");
+}
+
+#[test]
+fn four_path_cells_prove_a_two_row_grid_but_a_diagram_box_does_not() {
+    let input = document(
+        [
+            source_text("L1", Rect { x: 40.0, y: 90.0, width: 40.0, height: 12.0 }, 14.0),
+            source_text("R1", Rect { x: 350.0, y: 90.0, width: 50.0, height: 12.0 }, 14.0),
+            source_text("L2", Rect { x: 40.0, y: 120.0, width: 45.0, height: 12.0 }, 12.0),
+            source_text("R2", Rect { x: 350.0, y: 120.0, width: 55.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let cells = vec![
+        Rect { x: 30.0, y: 80.0, width: 200.0, height: 30.0 },
+        Rect { x: 230.0, y: 80.0, width: 340.0, height: 30.0 },
+        Rect { x: 30.0, y: 110.0, width: 200.0, height: 30.0 },
+        Rect { x: 230.0, y: 110.0, width: 340.0, height: 30.0 },
+    ];
+    let table = rebuild_with_paths(input.clone(), cells);
+    assert!(page_blocks(&table).iter().any(|node| matches!(node.block, Block::Table { .. })));
+    let reflowed = rebuild(table);
+    assert!(
+        page_blocks(&reflowed).iter().any(|node| matches!(node.block, Block::Table { .. })),
+        "a later OCR/layout pass must retain the already proven grid without the transient paths"
+    );
+
+    let diagram =
+        rebuild_with_paths(input, vec![Rect { x: 20.0, y: 70.0, width: 560.0, height: 90.0 }]);
+    assert!(!page_blocks(&diagram).iter().any(|node| matches!(node.block, Block::Table { .. })));
+}
+
+#[test]
+fn path_evidence_is_page_scoped_and_preflight_bounded_without_a_lease() {
+    let input =
+        document(source_text("Text", Rect { x: 40.0, y: 90.0, width: 40.0, height: 12.0 }, 12.0));
+    let execution = context();
+    let mismatched = [PagePathEvidence {
+        page: 2,
+        bounds: vec![Rect { x: 30.0, y: 80.0, width: 80.0, height: 30.0 }],
+    }];
+    assert!(matches!(
+        reconstruct_document_with_path_evidence(
+            input.clone(),
+            &LayoutConfig::default(),
+            &mismatched,
+            &execution,
+        ),
+        Err(ConversionError::Malformed { detail, .. })
+            if detail == "pdfLayoutPathEvidencePageMismatch"
+    ));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+
+    let mut config = LayoutConfig::default();
+    config.limits.max_lines = 1;
+    let over_limit = [PagePathEvidence {
+        page: 1,
+        bounds: vec![
+            Rect { x: 30.0, y: 80.0, width: 80.0, height: 30.0 },
+            Rect { x: 110.0, y: 80.0, width: 80.0, height: 30.0 },
+        ],
+    }];
+    assert!(matches!(
+        reconstruct_document_with_path_evidence(input, &config, &over_limit, &execution),
+        Err(ConversionError::ResourceLimit { limit: "pdfLayoutPathBounds", .. })
+    ));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
 }
 
 #[test]
@@ -494,10 +575,10 @@ fn broad_column_prefix_does_not_poison_following_same_profile_header_table() {
                 Rect { x: 350.0, y: 150.0, width: 210.0, height: 12.0 },
                 12.0,
             ),
-            source_text("Table key", Rect { x: 40.0, y: 180.0, width: 210.0, height: 14.0 }, 14.0),
+            source_text("Table key", Rect { x: 40.0, y: 180.0, width: 40.0, height: 14.0 }, 14.0),
             source_text(
                 "Table value",
-                Rect { x: 350.0, y: 180.0, width: 210.0, height: 14.0 },
+                Rect { x: 350.0, y: 180.0, width: 40.0, height: 14.0 },
                 14.0,
             ),
             source_text("A", Rect { x: 40.0, y: 210.0, width: 40.0, height: 12.0 }, 12.0),
@@ -651,8 +732,8 @@ fn one_row_and_non_aligned_wide_gaps_do_not_invent_tables() {
 fn recovered_tables_obey_the_document_wide_cell_limit_without_a_lease() {
     let input = document(
         [
-            source_text("Name", Rect { x: 50.0, y: 180.0, width: 50.0, height: 13.0 }, 13.0),
-            source_text("Value", Rect { x: 150.0, y: 180.0, width: 50.0, height: 13.0 }, 13.0),
+            source_text("Name", Rect { x: 50.0, y: 180.0, width: 20.0, height: 13.0 }, 13.0),
+            source_text("Value", Rect { x: 150.0, y: 180.0, width: 20.0, height: 13.0 }, 13.0),
             source_text("A", Rect { x: 50.0, y: 205.0, width: 20.0, height: 12.0 }, 12.0),
             source_text("1", Rect { x: 150.0, y: 205.0, width: 20.0, height: 12.0 }, 12.0),
         ]
@@ -736,7 +817,7 @@ fn budgeted_sort_has_an_exact_comparison_boundary() {
     config.limits.max_comparisons = required;
     let execution = context();
     let mut budget =
-        budget::LayoutBudget::preflight(&Document::default(), &config, &execution).unwrap();
+        budget::LayoutBudget::preflight(&Document::default(), &[], &config, &execution).unwrap();
     let mut values = (0..32).rev().collect::<Vec<_>>();
     ordering::by(&mut values, &mut budget, Ord::cmp).unwrap();
     assert!(values.windows(2).all(|pair| pair[0] <= pair[1]));
@@ -746,7 +827,7 @@ fn budgeted_sort_has_an_exact_comparison_boundary() {
     config.limits.max_comparisons = required - 1;
     let execution = context();
     let mut budget =
-        budget::LayoutBudget::preflight(&Document::default(), &config, &execution).unwrap();
+        budget::LayoutBudget::preflight(&Document::default(), &[], &config, &execution).unwrap();
     let mut values = (0..32).rev().collect::<Vec<_>>();
     assert!(matches!(
         ordering::by(&mut values, &mut budget, Ord::cmp),
@@ -763,9 +844,13 @@ fn cancellation_before_sort_prevents_comparisons_and_releases_lease() {
         ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
         ResourceLimits::default(),
     );
-    let mut budget =
-        budget::LayoutBudget::preflight(&Document::default(), &LayoutConfig::default(), &execution)
-            .unwrap();
+    let mut budget = budget::LayoutBudget::preflight(
+        &Document::default(),
+        &[],
+        &LayoutConfig::default(),
+        &execution,
+    )
+    .unwrap();
     let compared = Arc::new(AtomicBool::new(false));
     ordering::set_before_sort_hook(Some(Box::new(move || cancellation.cancel())));
     let mut values = (0..1_024).rev().collect::<Vec<_>>();
@@ -787,9 +872,13 @@ fn timeout_before_sort_prevents_comparisons_and_releases_lease() {
         ExecutionOptions { timeout: Some(Duration::from_millis(5)), ..ExecutionOptions::default() },
         ResourceLimits::default(),
     );
-    let mut budget =
-        budget::LayoutBudget::preflight(&Document::default(), &LayoutConfig::default(), &execution)
-            .unwrap();
+    let mut budget = budget::LayoutBudget::preflight(
+        &Document::default(),
+        &[],
+        &LayoutConfig::default(),
+        &execution,
+    )
+    .unwrap();
     let compared = Arc::new(AtomicBool::new(false));
     ordering::set_before_sort_hook(Some(Box::new(|| {
         std::thread::sleep(Duration::from_millis(10));

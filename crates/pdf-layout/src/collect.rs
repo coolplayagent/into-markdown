@@ -37,7 +37,10 @@ fn block_is_collectable(
     width: f32,
     height: f32,
 ) -> Result<bool, ConversionError> {
-    if matches!(node.block, Block::Footnote { .. }) {
+    if matches!(node.block, Block::Footnote { .. })
+        || (matches!(node.block, Block::Table { .. })
+            && node.provenance.provider == crate::LAYOUT_PROVIDER)
+    {
         return Ok(false);
     }
     let mut saw_source = false;

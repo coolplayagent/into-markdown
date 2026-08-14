@@ -5,12 +5,13 @@ use crate::{
     LayoutConfig, dedup, footnotes, gutters, lines, malformed, memory, reading_order, semantics,
     tables,
 };
-use into_markdown_core::{BlockNode, ConversionError, Provenance};
+use into_markdown_core::{BlockNode, ConversionError, Provenance, Rect};
 
 pub(crate) fn reconstruct_page(
     page: u32,
     mut blocks: Vec<BlockNode>,
     page_provenance: &Provenance,
+    path_bounds: &[Rect],
     config: &LayoutConfig,
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Vec<BlockNode>, ConversionError> {
@@ -39,7 +40,7 @@ pub(crate) fn reconstruct_page(
     // repeated page-wide gaps as flowing columns. Weak grids remain text and
     // are eligible for column splitting.
     let (mut table_blocks, remaining) =
-        tables::recover(deduplicated, page, width, height, config, budget)?;
+        tables::recover(deduplicated, path_bounds, page, width, height, config, budget)?;
     let split = gutters::split(remaining, width, budget)?;
     let ordered = reading_order::lines(split, width, height, budget)?;
     let mut rebuilt = semantics::blocks(page, ordered, width, height, median_font, budget)?;

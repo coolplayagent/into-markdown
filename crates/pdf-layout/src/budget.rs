@@ -1,4 +1,4 @@
-use crate::{LayoutConfig, limit, memory};
+use crate::{LayoutConfig, PagePathEvidence, limit, memory};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, Document, ExecutionContext, Inline, ResourceReservation,
 };
@@ -7,6 +7,7 @@ const CHECKPOINT_ITEMS: usize = 256;
 const CHECKPOINT_BYTES: usize = 4 * 1024;
 const ATOM_HIGH_WATER: u64 = 1_536;
 const NODE_HIGH_WATER: u64 = 2_048;
+const PATH_BOUND_HIGH_WATER: u64 = 128;
 
 #[cfg(test)]
 type CheckpointHook = Option<Box<dyn FnMut()>>;
@@ -32,6 +33,7 @@ pub(crate) struct LayoutBudget<'a> {
 impl<'a> LayoutBudget<'a> {
     pub(crate) fn preflight(
         document: &Document,
+        path_evidence: &[PagePathEvidence],
         config: &LayoutConfig,
         context: &'a ExecutionContext,
     ) -> Result<Self, ConversionError> {
@@ -55,6 +57,19 @@ impl<'a> LayoutBudget<'a> {
                 format!("{} > {}", counts.atoms, config.limits.max_atoms),
             ));
         }
+        let mut path_bounds = 0_usize;
+        for page in path_evidence {
+            path_bounds = add(path_bounds, page.bounds.len(), "path bounds count")?;
+            if path_bounds.is_multiple_of(CHECKPOINT_ITEMS) {
+                context.checkpoint()?;
+            }
+        }
+        if path_bounds > config.limits.max_lines {
+            return Err(limit(
+                "pdfLayoutPathBounds",
+                format!("{path_bounds} > {}", config.limits.max_lines),
+            ));
+        }
         let bytes = u64::try_from(counts.text_bytes)
             .map_err(|_| memory("layout text byte count"))?
             .checked_mul(4)
@@ -63,6 +78,11 @@ impl<'a> LayoutBudget<'a> {
             })
             .and_then(|value| {
                 value.checked_add(u64::try_from(counts.nodes).ok()?.checked_mul(NODE_HIGH_WATER)?)
+            })
+            .and_then(|value| {
+                value.checked_add(
+                    u64::try_from(path_bounds).ok()?.checked_mul(PATH_BOUND_HIGH_WATER)?,
+                )
             })
             .and_then(|value| value.checked_add(64 * 1024))
             .ok_or_else(|| memory("layout working-set overflow"))?;

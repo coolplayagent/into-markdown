@@ -143,7 +143,7 @@ RPATH。普通 `//...` 不包含这些 manual targets。native adapter 的输出
 `GetTensorMutableData`、slice 或 Rust 值复制前完成，超界输出直接释放 native value。
 
 PDF 页面布局质量由独立 authority 绑定 fixture manifest、PDFium runtime manifest 和 OCR
-merge quality authority。显式 target 通过 production `PdfConverter` 读取三个真实 PDF，精确
+merge quality authority。显式 target 通过 production `PdfConverter` 读取 12 个真实 PDF，精确
 核对多栏、旋转、标题、列表与表格语义序列，并要求语义 precision/recall 均不低于 90%；同一
 输入重复转换必须得到 byte-identical IR。四个受支持配置分别执行：
 

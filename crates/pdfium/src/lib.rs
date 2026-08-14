@@ -135,6 +135,17 @@ trait Backend: Send + Sync {
     ) -> Result<CharacterAllocationPlan, Error>;
     fn page_info(&self, page: usize) -> Result<PageInfo, Error>;
     fn page_object_count(&self, page: usize) -> Result<u32, Error>;
+    fn path_bounds(
+        &self,
+        page: usize,
+        max_objects: u32,
+        plan: PathBoundsAllocationPlan,
+    ) -> Result<Vec<PdfRect>, Error>;
+    fn path_bounds_allocation_bytes(
+        &self,
+        page: usize,
+        max_objects: u32,
+    ) -> Result<PathBoundsAllocationPlan, Error>;
     fn links(
         &self,
         document: usize,
@@ -322,6 +333,36 @@ impl Page<'_> {
     pub fn text_page(&self) -> Result<TextPage<'_>, Error> {
         let _guard = self.document.runtime.0.lock()?;
         Ok(TextPage { page: self, raw: self.document.runtime.0.backend.load_text_page(self.raw)? })
+    }
+
+    /// Plan a bounded snapshot of finite PDF PATH object bounds on this page.
+    pub fn plan_path_bounds(&self) -> Result<PlannedPathBounds<'_, '_>, Error> {
+        let limits = self.document.runtime.0.limits;
+        let _guard = self.document.runtime.0.lock()?;
+        let plan = self
+            .document
+            .runtime
+            .0
+            .backend
+            .path_bounds_allocation_bytes(self.raw, limits.max_page_objects)?;
+        Ok(PlannedPathBounds { page: self, plan })
+    }
+
+    fn materialize_path_bounds(
+        &self,
+        plan: PathBoundsAllocationPlan,
+    ) -> Result<Vec<PdfRect>, Error> {
+        let limits = self.document.runtime.0.limits;
+        let _guard = self.document.runtime.0.lock()?;
+        let bounds =
+            self.document.runtime.0.backend.path_bounds(self.raw, limits.max_page_objects, plan)?;
+        if bounds.len() != usize::try_from(plan.count).unwrap_or(usize::MAX) {
+            return Err(Error::InvalidResult {
+                operation: "path_bounds",
+                detail: "materialized count changed after preflight".into(),
+            });
+        }
+        Ok(bounds)
     }
     pub fn images(&self) -> Result<Vec<Image<'_>>, Error> {
         self.plan_images()?.materialize()
@@ -595,6 +636,20 @@ pub struct PlannedImages<'plan, 'document> {
     page: &'plan Page<'document>,
     plan: ImageAllocationPlan,
 }
+
+pub struct PlannedPathBounds<'plan, 'document> {
+    page: &'plan Page<'document>,
+    plan: PathBoundsAllocationPlan,
+}
+impl PlannedPathBounds<'_, '_> {
+    #[must_use]
+    pub const fn allocation_bytes(&self) -> u64 {
+        self.plan.bytes
+    }
+    pub fn materialize(self) -> Result<Vec<PdfRect>, Error> {
+        self.page.materialize_path_bounds(self.plan)
+    }
+}
 impl<'plan> PlannedImages<'plan, '_> {
     #[must_use]
     pub const fn allocation_bytes(&self) -> u64 {
@@ -727,6 +782,12 @@ struct ImageAllocationPlan {
     count: u32,
 }
 
+#[derive(Clone, Copy)]
+struct PathBoundsAllocationPlan {
+    bytes: u64,
+    count: u32,
+}
+
 fn try_uninit_boxed_slice<T>(
     length: usize,
     operation: &'static str,
@@ -806,6 +867,9 @@ mod tests {
         max_active: AtomicUsize,
         image_plan_count: AtomicUsize,
         image_allocations: AtomicUsize,
+        path_plan_count: AtomicUsize,
+        path_materialized_count: AtomicUsize,
+        path_allocations: AtomicUsize,
         character_plan_count: AtomicUsize,
         character_materialized_count: AtomicUsize,
         character_plan_font_bytes: AtomicUsize,
@@ -914,6 +978,35 @@ mod tests {
         }
         fn page_object_count(&self, _: usize) -> Result<u32, Error> {
             Ok(2)
+        }
+        fn path_bounds(
+            &self,
+            _: usize,
+            _: u32,
+            plan: PathBoundsAllocationPlan,
+        ) -> Result<Vec<PdfRect>, Error> {
+            let actual = u32::try_from(self.path_materialized_count.load(Ordering::SeqCst))
+                .unwrap_or(u32::MAX);
+            if plan.count != actual {
+                return Err(Error::InvalidResult {
+                    operation: "path_bounds",
+                    detail: "materialized count exceeded preflight plan".into(),
+                });
+            }
+            self.path_allocations.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![PdfRect::default(); usize::try_from(actual).unwrap_or(usize::MAX)])
+        }
+        fn path_bounds_allocation_bytes(
+            &self,
+            _: usize,
+            _: u32,
+        ) -> Result<PathBoundsAllocationPlan, Error> {
+            let count =
+                u32::try_from(self.path_plan_count.load(Ordering::SeqCst)).unwrap_or(u32::MAX);
+            Ok(PathBoundsAllocationPlan {
+                bytes: u64::from(count) * u64::try_from(std::mem::size_of::<PdfRect>()).unwrap(),
+                count,
+            })
         }
         fn links(
             &self,
@@ -1107,6 +1200,21 @@ mod tests {
             Err(Error::InvalidResult { operation: "image_objects", .. })
         ));
         assert_eq!(mock.image_allocations.load(Ordering::SeqCst), 0);
+
+        mock.path_plan_count.store(1, Ordering::SeqCst);
+        let path_plan = page.plan_path_bounds().unwrap();
+        assert_eq!(
+            path_plan.allocation_bytes(),
+            u64::try_from(std::mem::size_of::<PdfRect>()).unwrap()
+        );
+        mock.path_materialized_count.store(2, Ordering::SeqCst);
+        assert!(matches!(
+            path_plan.materialize(),
+            Err(Error::InvalidResult { operation: "path_bounds", .. })
+        ));
+        assert_eq!(mock.path_allocations.load(Ordering::SeqCst), 0);
+        mock.path_materialized_count.store(1, Ordering::SeqCst);
+        assert_eq!(page.plan_path_bounds().unwrap().materialize().unwrap().len(), 1);
 
         mock.image_plan_count.store(2, Ordering::SeqCst);
         let images = page.plan_images().unwrap().materialize().unwrap();

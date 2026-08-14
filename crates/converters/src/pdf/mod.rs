@@ -177,6 +177,25 @@ fn convert_pdf(
     let mut total_inlines = 0_usize;
     let mut total_page_objects = 0_usize;
     let mut retained_memory = Vec::new();
+    let path_page_capacity =
+        allocation_capacity_bound(usize::try_from(pdf.page_count()).unwrap_or(usize::MAX))?;
+    let path_page_bytes = path_page_capacity
+        .checked_mul(std::mem::size_of::<into_markdown_pdf_layout::PagePathEvidence>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| resource("max_memory_bytes", "PDF path page inventory overflow"))?;
+    let path_page_memory = context.reserve_memory(path_page_bytes)?;
+    let mut path_evidence = Vec::new();
+    path_evidence
+        .try_reserve_exact(path_page_capacity)
+        .map_err(|_| resource("max_memory_bytes", "PDF path page inventory allocation failed"))?;
+    if path_evidence.capacity() > path_page_capacity {
+        return Err(resource(
+            "max_memory_bytes",
+            "PDF path page inventory capacity exceeded its plan",
+        ));
+    }
+    let mut path_memory = Vec::new();
+    retain_existing_reservation(context, &mut path_memory, path_page_memory)?;
 
     for page_index in 0..pdf.page_count() {
         context.checkpoint()?;
@@ -189,6 +208,38 @@ fn convert_pdf(
             "pdfPageObjects",
         )?;
         let info = page.info().map_err(map_pdfium_error)?;
+        let path_plan = page.plan_path_bounds().map_err(map_pdfium_error)?;
+        let (raw_path_bounds, raw_path_memory) =
+            materialize_after_reserve(context, path_plan.allocation_bytes(), || {
+                path_plan.materialize().map_err(map_pdfium_error)
+            })?;
+        let path_capacity = allocation_capacity_bound(raw_path_bounds.len())?;
+        let normalized_path_bytes = path_capacity
+            .checked_mul(std::mem::size_of::<Rect>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| resource("max_memory_bytes", "PDF path bounds allocation overflow"))?;
+        let normalized_path_memory = context.reserve_memory(normalized_path_bytes)?;
+        let mut normalized_paths = Vec::new();
+        normalized_paths
+            .try_reserve_exact(path_capacity)
+            .map_err(|_| resource("max_memory_bytes", "PDF path bounds allocation failed"))?;
+        if normalized_paths.capacity() > path_capacity {
+            return Err(resource("max_memory_bytes", "PDF path bounds capacity exceeded its plan"));
+        }
+        for bounds in raw_path_bounds {
+            context.checkpoint()?;
+            normalized_paths.push(normalize_rect(bounds, &info)?);
+        }
+        drop(raw_path_memory);
+        if normalized_paths.is_empty() {
+            drop(normalized_path_memory);
+        } else {
+            retain_existing_reservation(context, &mut path_memory, normalized_path_memory)?;
+            path_evidence.push(into_markdown_pdf_layout::PagePathEvidence {
+                page: page_number,
+                bounds: normalized_paths,
+            });
+        }
         let text_page = page.text_page().map_err(map_pdfium_error)?;
         let character_plan = text_page.plan_characters().map_err(map_pdfium_error)?;
         let character_count = character_plan.count();
@@ -421,8 +472,15 @@ fn convert_pdf(
                 .min(into_markdown_core::MAX_DOCUMENT_NODES),
         },
     };
-    let layout = into_markdown_pdf_layout::reconstruct_document(document, &layout_config, context)?;
+    let layout = into_markdown_pdf_layout::reconstruct_document_with_path_evidence(
+        document,
+        &layout_config,
+        &path_evidence,
+        context,
+    )?;
     let (rebuilt_document, layout_reservation) = layout.into_parts();
+    drop(path_evidence);
+    drop(path_memory);
     document = rebuilt_document;
     if let Some(reservation) = layout_reservation {
         retain_existing_reservation(context, &mut retained_memory, reservation)?;

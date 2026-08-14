@@ -4,7 +4,7 @@ use crate::model::{Line, RebuiltBlock, block_provenance};
 use crate::ordering;
 use crate::semantics::take_line_inlines;
 use crate::{LayoutConfig, memory};
-use into_markdown_core::{Block, BlockNode, Cell, ConversionError, Inline, NodeId, TableRow};
+use into_markdown_core::{Block, BlockNode, Cell, ConversionError, Inline, NodeId, Rect, TableRow};
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -13,6 +13,7 @@ const REPEATED_START_TOLERANCE_HEIGHTS: f32 = 0.16;
 
 pub(crate) fn recover(
     mut lines: Vec<Line>,
+    path_bounds: &[Rect],
     page: u32,
     width: f32,
     height: f32,
@@ -38,7 +39,7 @@ pub(crate) fn recover(
     while let Some(first) = pending.pop_front() {
         budget.checkpoint_item()?;
         let run = candidate_run(first, &mut pending, config, budget)?;
-        let decisions = evidence_windows(&run, budget)?;
+        let decisions = evidence_windows(&run, path_bounds, budget)?;
         let mut cursor = 0_usize;
         let mut owned = run.into_iter();
         for decision in decisions {
@@ -153,6 +154,7 @@ struct WindowDecision {
 /// paragraph window and is never reconsidered as overlapping two-row slices.
 fn evidence_windows(
     rows: &[RowEvidence],
+    path_bounds: &[Rect],
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Vec<WindowDecision>, ConversionError> {
     let mut windows = Vec::new();
@@ -174,14 +176,25 @@ fn evidence_windows(
             index += 1;
         }
         let body_end = index;
-        let absorb_header = body_start > plain_start
-            && !rows[body_start - 1].compact
-            && repeated_starts(&rows[body_start - 1], &rows[body_start], budget)?
-            && confirms_header(&rows[body_start - 1], &rows[body_start]);
-        let body_evidence = compact_body_evidence(&rows[body_start..body_end], budget)?;
-        if body_evidence.is_none() && !absorb_header {
+        let body_evidence =
+            compact_body_evidence(&rows[body_start..body_end], path_bounds, budget)?;
+        let preceding_path_grid = if body_evidence.is_none()
+            && body_end == body_start + 1
+            && body_start > plain_start
+            && path_grid_covers(&rows[body_start - 1..body_end], path_bounds, budget)?
+        {
+            Some(GridEvidence::PathGrid)
+        } else {
+            None
+        };
+        if body_evidence.is_none() && preceding_path_grid.is_none() {
             continue;
         }
+        let absorb_header = preceding_path_grid.is_some()
+            || (body_start > plain_start
+                && !rows[body_start - 1].compact
+                && repeated_starts(&rows[body_start - 1], &rows[body_start], budget)?
+                && confirms_header(&rows[body_start - 1], &rows[body_start]));
         let table_start = if absorb_header { body_start - 1 } else { body_start };
         push_plain_window(&mut windows, plain_start..table_start)?;
         let table_range = table_start..body_end;
@@ -189,16 +202,20 @@ fn evidence_windows(
         windows.push(WindowDecision {
             header: absorb_header || header_likely(&rows[table_range.clone()]),
             range: table_range,
-            evidence: body_evidence.or(Some(GridEvidence::AlignedCompactBody)),
+            evidence: body_evidence.or(preceding_path_grid),
         });
         plain_start = body_end;
     }
     if plain_start < rows.len() {
         let range = plain_start..rows.len();
-        let evidence = if range.len() == 2
-            && repeated_boundaries(&rows[range.start], &rows[range.start + 1], budget)?
-        {
-            Some(GridEvidence::RepeatedBoundaries)
+        let evidence = if range.len() == 2 {
+            if repeated_boundaries(&rows[range.start], &rows[range.start + 1], budget)? {
+                Some(GridEvidence::RepeatedBoundaries)
+            } else if path_grid_covers(&rows[range.clone()], path_bounds, budget)? {
+                Some(GridEvidence::PathGrid)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -232,14 +249,17 @@ fn confirms_header(previous: &RowEvidence, next: &RowEvidence) -> bool {
 
 fn compact_body_evidence(
     rows: &[RowEvidence],
+    path_bounds: &[Rect],
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Option<GridEvidence>, ConversionError> {
     if rows.len() >= 3 {
         return Ok(Some(GridEvidence::AlignedCompactBody));
     }
-    if rows.len() == 2 && (header_likely(rows) || repeated_boundaries(&rows[0], &rows[1], budget)?)
-    {
+    if rows.len() == 2 && repeated_boundaries(&rows[0], &rows[1], budget)? {
         return Ok(Some(GridEvidence::AlignedCompactBody));
+    }
+    if rows.len() == 2 && path_grid_covers(rows, path_bounds, budget)? {
+        return Ok(Some(GridEvidence::PathGrid));
     }
     Ok(None)
 }
@@ -284,6 +304,7 @@ fn row_candidate(segments: &[Segment], config: &LayoutConfig) -> bool {
 enum GridEvidence {
     RepeatedBoundaries,
     AlignedCompactBody,
+    PathGrid,
 }
 
 fn compatible_rows(
@@ -327,6 +348,120 @@ fn repeated_boundaries(
         }
     }
     Ok(true)
+}
+
+/// Require one distinct rectangular PATH cell around every text cell, then
+/// verify those rectangles share row and column edges. A lone box or unrelated
+/// diagram paths cannot establish a table. Every search comparison is charged
+/// to the page-layout work budget.
+fn path_grid_covers(
+    rows: &[RowEvidence],
+    path_bounds: &[Rect],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<bool, ConversionError> {
+    if rows.len() < 2 || path_bounds.is_empty() {
+        return Ok(false);
+    }
+    let columns = rows[0].segments.len();
+    if columns < 2 || rows.iter().any(|row| row.segments.len() != columns) {
+        return Ok(false);
+    }
+    let cell_count =
+        rows.len().checked_mul(columns).ok_or_else(|| memory("layout path grid cells"))?;
+    let mut matches = Vec::new();
+    matches.try_reserve_exact(cell_count).map_err(|_| memory("layout path grid matches"))?;
+    let mut used = Vec::new();
+    used.try_reserve_exact(cell_count).map_err(|_| memory("layout path grid indexes"))?;
+    for row in rows {
+        for segment in &row.segments {
+            budget.checkpoint_item()?;
+            let mut best: Option<(usize, Rect)> = None;
+            for (index, bounds) in path_bounds.iter().copied().enumerate() {
+                budget.compare()?;
+                if !rect_contains_cell(bounds, row, *segment) {
+                    continue;
+                }
+                let mut already_used = false;
+                for used_index in &used {
+                    budget.compare()?;
+                    if *used_index == index {
+                        already_used = true;
+                        break;
+                    }
+                }
+                if already_used {
+                    continue;
+                }
+                if best.is_none_or(|(_, current)| rect_precedes(bounds, current)) {
+                    best = Some((index, bounds));
+                }
+            }
+            let Some((index, bounds)) = best else { return Ok(false) };
+            used.push(index);
+            matches.push(bounds);
+        }
+    }
+    let tolerance = rows.iter().map(|row| row.line.bounds.height).fold(1.0_f32, f32::max) * 0.18;
+    for row in 0..rows.len() {
+        let first = matches[row * columns];
+        for column in 0..columns {
+            budget.compare()?;
+            let cell = matches[row * columns + column];
+            if (cell.y - first.y).abs() > tolerance
+                || (major_end(cell, 90) - major_end(first, 90)).abs() > tolerance
+            {
+                return Ok(false);
+            }
+            if column + 1 < columns {
+                budget.compare()?;
+                let next = matches[row * columns + column + 1];
+                if ((cell.x + cell.width) - next.x).abs() > tolerance {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    for row in 1..rows.len() {
+        for column in 0..columns {
+            budget.compare()?;
+            let previous = matches[(row - 1) * columns + column];
+            let current = matches[row * columns + column];
+            if (previous.x - current.x).abs() > tolerance
+                || ((previous.x + previous.width) - (current.x + current.width)).abs() > tolerance
+                || ((previous.y + previous.height) - current.y).abs() > tolerance
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn rect_contains_cell(bounds: Rect, row: &RowEvidence, segment: Segment) -> bool {
+    if !bounds.x.is_finite()
+        || !bounds.y.is_finite()
+        || !bounds.width.is_finite()
+        || !bounds.height.is_finite()
+        || bounds.width <= 0.0
+        || bounds.height <= 0.0
+    {
+        return false;
+    }
+    let tolerance = row.line.bounds.height.max(1.0) * 0.18;
+    bounds.x <= segment.x + tolerance
+        && bounds.x + bounds.width >= segment.right - tolerance
+        && bounds.y <= row.line.bounds.y + tolerance
+        && bounds.y + bounds.height >= row.line.bounds.y + row.line.bounds.height - tolerance
+}
+
+fn rect_precedes(candidate: Rect, current: Rect) -> bool {
+    let candidate_area = candidate.width * candidate.height;
+    let current_area = current.width * current.height;
+    candidate_area
+        .total_cmp(&current_area)
+        .then_with(|| candidate.y.total_cmp(&current.y))
+        .then_with(|| candidate.x.total_cmp(&current.x))
+        .is_lt()
 }
 
 fn repeated_starts(

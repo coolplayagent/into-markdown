@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "438a1d8e6c91ef45a88534de0109cd70531dbfb2432007fec15c05e02086f185",
+  "fixture_manifest_sha256": "1f7129df6792f4f05246ad51bd21ad0f47f5b42c51099e4f8c4a2cb0417b7e30",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "7cd9f91844519b4a9d221fa0c8570b397527bf31d8083dace154760b039f65bb",
+  "ocr_merge_authority_sha256": "9e592e51dd852881cdedcd9b5ae283b630af0073cbac0db863f0b605176106f0",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -34,7 +34,7 @@
     },
     {
       "fixture_id": "pdf-layout-structures",
-      "fixture_sha256": "0264ab4b63ba13a3fe91b13d154be8dcc3f1eab26b97bf45ac7213d78d99472d",
+      "fixture_sha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
       "expected_sequence": [
         "heading:Section",
         "list:Alpha|Beta",
@@ -44,21 +44,21 @@
     },
     {
       "fixture_id": "pdf-layout-wide-gap-table",
-      "fixture_sha256": "103fa821131e857a360f30c336502d5cbe2a7613421a476a2a8373b2035734e1",
+      "fixture_sha256": "35c6bc154ff7fcae02460df6377bf4e303685adcdc6de027293814dd7047de35",
       "expected_sequence": [
         "table:Key|Value;A|1"
       ]
     },
     {
       "fixture_id": "pdf-layout-long-wide-table",
-      "fixture_sha256": "f9b76884bf9bd06e2c04397a76f4e490710456730e570391c5a1a9f1d32d7b57",
+      "fixture_sha256": "644bd4e4c8114d9a19f79f2b520b4b8022adb1a68dcc6b3e2d88c4cc183746d8",
       "expected_sequence": [
         "table:Long left heading|Long right heading;Long left value|Long right value"
       ]
     },
     {
       "fixture_id": "pdf-layout-titled-table",
-      "fixture_sha256": "7dfa2c21c6b6e14c6eab76ef582e0c0e02f6cde7c2f3dae12a3754dd0092dc08",
+      "fixture_sha256": "205dd2a3e0149be1c718482abbf9404fc735da17b8bc79c61ded4ecf0f636b52",
       "expected_sequence": [
         "heading:Table title",
         "table:Key|Value;A|1"
@@ -73,7 +73,7 @@
     },
     {
       "fixture_id": "pdf-layout-columns-then-table",
-      "fixture_sha256": "2add643fe34b2d2a44b4d0e849d2cdc0c041fcf49d0750a42f4043f547881b66",
+      "fixture_sha256": "dc5cce981be73c883698cc493671128c808eeb1cdf102a5fa72df93870937ca4",
       "expected_sequence": [
         "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -82,7 +82,7 @@
     },
     {
       "fixture_id": "pdf-layout-equal-dual-column",
-      "fixture_sha256": "9a95f2a7093bd58cd5a0bc832434efff5419f3aab8e064334b559160764da5bd",
+      "fixture_sha256": "7b7fc0b9861e199c12b80feb94e7afb8df873d005702b38db08253bfe1e5659c",
       "expected_sequence": [
         "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB"
@@ -90,14 +90,14 @@
     },
     {
       "fixture_id": "pdf-layout-header-body-table",
-      "fixture_sha256": "227aaa9448b01fcf51fd7fb266bb6885e6ad63b7547933e66b1db87a10cb4dcc",
+      "fixture_sha256": "fb076a168ba6027fa0666f800367aac785a190f4d9ea226144d17143cbc34c62",
       "expected_sequence": [
         "table:MMMMMMMMMMMMMMMMMM|NNNNNNNNNNNNNNNNNN;A|1;B|2"
       ]
     },
     {
       "fixture_id": "pdf-layout-table-followed-by-columns",
-      "fixture_sha256": "9cee0f7baa35f0d7851591f2130f745902951cae64a3ba97a0c6fa6b77c4e487",
+      "fixture_sha256": "b5c1703179183c546fbb37be042a23f981e29642b8aa4ab14e7df1344b762f3b",
       "expected_sequence": [
         "table:Key|Value;A|1",
         "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
