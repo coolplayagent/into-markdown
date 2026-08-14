@@ -6,6 +6,10 @@ use into_markdown_core::{
     OcrEvidenceStage, OcrEvidenceStep, OcrSourceRegion, Provenance, ProvenanceKind, Rect,
     ResourceLimits, SourceLocator, SourcePoint,
 };
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
 use std::time::Duration;
 
 fn context() -> ExecutionContext {
@@ -223,8 +227,8 @@ fn spanning_heading_and_two_columns_have_stable_geometric_order() {
             ),
             source_text("Left one", Rect { x: 40.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
             source_text("Right one", Rect { x: 350.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
-            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
-            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 196.0, height: 12.0 }, 12.0),
+            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 194.0, height: 12.0 }, 12.0),
         ]
         .concat(),
     );
@@ -291,6 +295,93 @@ fn repeated_compact_cells_across_a_wide_gap_remain_a_table() {
             .collect::<Vec<_>>(),
         ["Key", "Value", "A", "1"]
     );
+}
+
+#[test]
+fn repeated_long_cell_boundaries_lock_a_wide_two_by_two_table() {
+    let input = document(
+        [
+            source_text(
+                "Long left cell",
+                Rect { x: 40.0, y: 180.0, width: 130.0, height: 12.0 },
+                12.0,
+            ),
+            source_text(
+                "Long right cell",
+                Rect { x: 360.0, y: 180.0, width: 130.0, height: 12.0 },
+                12.0,
+            ),
+            source_text(
+                "Another value",
+                Rect { x: 40.0, y: 205.0, width: 130.0, height: 12.0 },
+                12.0,
+            ),
+            source_text(
+                "Second value",
+                Rect { x: 360.0, y: 205.0, width: 130.0, height: 12.0 },
+                12.0,
+            ),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let tables = page_blocks(&actual)
+        .iter()
+        .filter(|node| matches!(node.block, Block::Table { .. }))
+        .count();
+    assert_eq!(tables, 1);
+}
+
+#[test]
+fn repeated_three_by_three_grid_survives_wide_gutters() {
+    let mut inlines = Vec::new();
+    inlines.try_reserve_exact(9).unwrap();
+    for row in 0..3 {
+        for column in 0..3 {
+            inlines.extend(source_text(
+                ["A", "B", "C"][column],
+                Rect {
+                    x: 40.0 + column as f32 * 210.0,
+                    y: 180.0 + row as f32 * 25.0,
+                    width: 40.0,
+                    height: 12.0,
+                },
+                12.0,
+            ));
+        }
+    }
+    let actual = rebuild(document(inlines));
+    let table = page_blocks(&actual)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("three-column grid");
+    assert_eq!((table.len(), table[0].cells.len()), (3, 3));
+}
+
+#[test]
+fn table_title_remains_a_heading_and_does_not_split_its_table() {
+    let input = document(
+        [
+            source_text(
+                "Table title",
+                Rect { x: 40.0, y: 100.0, width: 180.0, height: 20.0 },
+                20.0,
+            ),
+            source_text("Key", Rect { x: 40.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("Value", Rect { x: 360.0, y: 180.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("A", Rect { x: 40.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 360.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let blocks = page_blocks(&actual);
+    assert!(matches!(&blocks[0].block, Block::Heading { .. }));
+    assert_eq!(block_text(&blocks[0].block), "Table title");
+    assert!(matches!(&blocks[1].block, Block::Table { rows, .. } if rows.len() == 2));
 }
 
 #[test]
@@ -403,6 +494,84 @@ fn table_comparison_limit_has_an_exact_adjacent_boundary() {
         reconstruct_document(input, &below, &execution),
         Err(ConversionError::ResourceLimit { limit: "pdfLayoutComparisons", .. })
     ));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn budgeted_sort_has_an_exact_comparison_boundary() {
+    let required = ordering::comparison_charge(32).unwrap() as u64;
+    let mut config = LayoutConfig::default();
+    config.limits.max_comparisons = required;
+    let execution = context();
+    let mut budget =
+        budget::LayoutBudget::preflight(&Document::default(), &config, &execution).unwrap();
+    let mut values = (0..32).rev().collect::<Vec<_>>();
+    ordering::by(&mut values, &mut budget, Ord::cmp).unwrap();
+    assert!(values.windows(2).all(|pair| pair[0] <= pair[1]));
+    drop(budget);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+
+    config.limits.max_comparisons = required - 1;
+    let execution = context();
+    let mut budget =
+        budget::LayoutBudget::preflight(&Document::default(), &config, &execution).unwrap();
+    let mut values = (0..32).rev().collect::<Vec<_>>();
+    assert!(matches!(
+        ordering::by(&mut values, &mut budget, Ord::cmp),
+        Err(ConversionError::ResourceLimit { limit: "pdfLayoutComparisons", .. })
+    ));
+    drop(budget);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn cancellation_before_sort_prevents_comparisons_and_releases_lease() {
+    let cancellation = CancellationToken::new();
+    let execution = ExecutionContext::new(
+        ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+        ResourceLimits::default(),
+    );
+    let mut budget =
+        budget::LayoutBudget::preflight(&Document::default(), &LayoutConfig::default(), &execution)
+            .unwrap();
+    let compared = Arc::new(AtomicBool::new(false));
+    ordering::set_before_sort_hook(Some(Box::new(move || cancellation.cancel())));
+    let mut values = (0..1_024).rev().collect::<Vec<_>>();
+    let compared_in_sort = Arc::clone(&compared);
+    let result = ordering::by(&mut values, &mut budget, move |left, right| {
+        compared_in_sort.store(true, AtomicOrdering::Relaxed);
+        left.cmp(right)
+    });
+    ordering::set_before_sort_hook(None);
+    assert!(matches!(result, Err(ConversionError::Cancelled)));
+    assert!(!compared.load(AtomicOrdering::Relaxed));
+    drop(budget);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn timeout_before_sort_prevents_comparisons_and_releases_lease() {
+    let execution = ExecutionContext::new(
+        ExecutionOptions { timeout: Some(Duration::from_millis(5)), ..ExecutionOptions::default() },
+        ResourceLimits::default(),
+    );
+    let mut budget =
+        budget::LayoutBudget::preflight(&Document::default(), &LayoutConfig::default(), &execution)
+            .unwrap();
+    let compared = Arc::new(AtomicBool::new(false));
+    ordering::set_before_sort_hook(Some(Box::new(|| {
+        std::thread::sleep(Duration::from_millis(10));
+    })));
+    let mut values = (0..1_024).rev().collect::<Vec<_>>();
+    let compared_in_sort = Arc::clone(&compared);
+    let result = ordering::by(&mut values, &mut budget, move |left, right| {
+        compared_in_sort.store(true, AtomicOrdering::Relaxed);
+        left.cmp(right)
+    });
+    ordering::set_before_sort_hook(None);
+    assert!(matches!(result, Err(ConversionError::Timeout)));
+    assert!(!compared.load(AtomicOrdering::Relaxed));
+    drop(budget);
     assert_eq!(execution.reserved_memory_bytes(), 0);
 }
 

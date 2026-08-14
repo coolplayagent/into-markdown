@@ -2,13 +2,14 @@ use crate::budget::LayoutBudget;
 use crate::geometry::{major_end, major_start, minor_center, minor_extent, union};
 use crate::memory;
 use crate::model::{Atom, Line, SourceKind};
+use crate::ordering;
 use into_markdown_core::{ConversionError, Inline};
 
 pub(crate) fn cluster(
     mut atoms: Vec<Atom>,
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Vec<Line>, ConversionError> {
-    atoms.sort_by(|left, right| {
+    ordering::by(&mut atoms, budget, |left, right| {
         left.orientation
             .cmp(&right.orientation)
             .then_with(|| source_rank(left.source_kind).cmp(&source_rank(right.source_kind)))
@@ -21,7 +22,7 @@ pub(crate) fn cluster(
                     .total_cmp(&major_start(right.bounds, right.orientation))
             })
             .then_with(|| left.source_index.cmp(&right.source_index))
-    });
+    })?;
     let mut lines: Vec<Line> = Vec::new();
     lines.try_reserve_exact(atoms.len()).map_err(|_| memory("layout line allocation"))?;
     for atom in atoms {
@@ -66,11 +67,11 @@ pub(crate) fn cluster(
         }
     }
     for line in &mut lines {
-        line.atoms.sort_by(|left, right| {
+        ordering::by(&mut line.atoms, budget, |left, right| {
             major_start(left.bounds, left.orientation)
                 .total_cmp(&major_start(right.bounds, right.orientation))
                 .then_with(|| left.source_index.cmp(&right.source_index))
-        });
+        })?;
     }
     Ok(lines)
 }

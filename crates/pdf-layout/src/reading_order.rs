@@ -2,6 +2,7 @@ use crate::budget::LayoutBudget;
 use crate::geometry::reading_cmp;
 use crate::memory;
 use crate::model::{Line, RebuiltBlock};
+use crate::ordering;
 use into_markdown_core::{ConversionError, Rect};
 
 const MAX_PARTITION_DEPTH: usize = 24;
@@ -50,7 +51,7 @@ fn partition<T>(
     key: impl Copy + Fn(&T) -> (u16, Rect, usize),
 ) -> Result<Vec<T>, ConversionError> {
     if values.len() < 3 || depth >= MAX_PARTITION_DEPTH {
-        values.sort_by(|left, right| reading_cmp(key(left), key(right)));
+        ordering::by(&mut values, budget, |left, right| reading_cmp(key(left), key(right)))?;
         return Ok(values);
     }
     if let Some((axis, cut)) = best_cut(&values, width, height, budget, bounds)? {
@@ -80,7 +81,7 @@ fn partition<T>(
         values.append(&mut before);
         values.append(&mut after);
     }
-    values.sort_by(|left, right| reading_cmp(key(left), key(right)));
+    ordering::by(&mut values, budget, |left, right| reading_cmp(key(left), key(right)))?;
     Ok(values)
 }
 
@@ -103,11 +104,11 @@ fn best_cut<T>(
     if rectangles.len() < 3 {
         return Ok(None);
     }
+    let median_height = median_extent(&rectangles, Axis::Horizontal, budget)?;
     let horizontal = gap(&rectangles, Axis::Horizontal, height, budget)?
-        .filter(|(_, size)| *size >= median_extent(&rectangles, Axis::Horizontal) * 1.25);
-    let vertical = gap(&rectangles, Axis::Vertical, width, budget)?.filter(|(_, size)| {
-        *size >= (width * 0.035).max(median_extent(&rectangles, Axis::Horizontal) * 2.0)
-    });
+        .filter(|(_, size)| *size >= median_height * 1.25);
+    let vertical = gap(&rectangles, Axis::Vertical, width, budget)?
+        .filter(|(_, size)| *size >= (width * 0.035).max(median_height * 2.0));
     Ok(match (horizontal, vertical) {
         (Some((horizontal_cut, horizontal_gap)), Some((vertical_cut, vertical_gap))) => {
             if vertical_gap / width >= horizontal_gap / height {
@@ -129,7 +130,9 @@ fn gap(
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Option<(f32, f32)>, ConversionError> {
     let mut edges = Vec::new();
-    edges.try_reserve_exact(rectangles.len() * 2).map_err(|_| memory("layout gap edges"))?;
+    let edge_count =
+        rectangles.len().checked_mul(2).ok_or_else(|| memory("layout gap edge count"))?;
+    edges.try_reserve_exact(edge_count).map_err(|_| memory("layout gap edges"))?;
     for rect in rectangles {
         let (start, end) = if axis == Axis::Horizontal {
             (rect.y, rect.y + rect.height)
@@ -139,7 +142,9 @@ fn gap(
         edges.push((start, true));
         edges.push((end, false));
     }
-    edges.sort_by(|left, right| left.0.total_cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    ordering::by(&mut edges, budget, |left, right| {
+        left.0.total_cmp(&right.0).then_with(|| left.1.cmp(&right.1))
+    })?;
     let mut active = 0_i64;
     let mut previous_end = 0.0_f32;
     let mut best = None;
@@ -168,11 +173,20 @@ fn gap(
     Ok(best)
 }
 
-fn median_extent(rectangles: &[Rect], axis: Axis) -> f32 {
-    let mut extents = rectangles
-        .iter()
-        .map(|rect| if axis == Axis::Horizontal { rect.height } else { rect.width })
-        .collect::<Vec<_>>();
-    extents.sort_by(f32::total_cmp);
-    extents[extents.len() / 2].max(1.0)
+fn median_extent(
+    rectangles: &[Rect],
+    axis: Axis,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<f32, ConversionError> {
+    let mut extents = Vec::new();
+    extents.try_reserve_exact(rectangles.len()).map_err(|_| memory("layout median extents"))?;
+    extents.extend(
+        rectangles.iter().map(
+            |rect| {
+                if axis == Axis::Horizontal { rect.height } else { rect.width }
+            },
+        ),
+    );
+    ordering::by(&mut extents, budget, f32::total_cmp)?;
+    Ok(extents[extents.len() / 2].max(1.0))
 }

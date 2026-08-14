@@ -4,6 +4,7 @@ use crate::geometry::{major_end, major_start, minor_center, minor_extent, union}
 use crate::lines;
 use crate::memory;
 use crate::model::{Atom, Line, RebuiltBlock, block_provenance};
+use crate::ordering;
 use into_markdown_core::{
     Block, BlockNode, ConversionError, Inline, ListItem, ListKind, NodeId, Rect,
 };
@@ -18,9 +19,9 @@ pub(crate) fn blocks(
     lines: Vec<Line>,
     width: f32,
     height: f32,
+    median_font: Option<f32>,
     budget: &mut LayoutBudget<'_>,
 ) -> Result<Vec<RebuiltBlock>, ConversionError> {
-    let median_font = median_font_size(&lines);
     let mut pending = VecDeque::new();
     pending.try_reserve_exact(lines.len()).map_err(|_| memory("layout semantic queue"))?;
     pending.extend(lines);
@@ -356,10 +357,15 @@ fn strip_prefix(inlines: &mut Vec<Inline>, mut characters: usize) {
     }
 }
 
-fn median_font_size(lines: &[Line]) -> Option<f32> {
-    let mut fonts = lines.iter().filter_map(|line| line.font_size).collect::<Vec<_>>();
-    fonts.sort_by(f32::total_cmp);
-    fonts.get(fonts.len() / 2).copied()
+pub(crate) fn font_baseline(
+    lines: &[Line],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<Option<f32>, ConversionError> {
+    let mut fonts = Vec::new();
+    fonts.try_reserve_exact(lines.len()).map_err(|_| memory("layout font baseline"))?;
+    fonts.extend(lines.iter().filter_map(|line| line.font_size));
+    ordering::by(&mut fonts, budget, f32::total_cmp)?;
+    Ok(fonts.get(fonts.len() / 2).copied())
 }
 
 fn line_confidence(line: &Line) -> Option<f32> {

@@ -16,7 +16,7 @@ fn layout_quality_authority_is_hash_license_and_pipeline_bound() {
     assert_eq!(authority["fixture_manifest_sha256"], hex(manifest));
     assert_eq!(authority["pdfium_manifest_sha256"], hex(pdfium));
     assert_eq!(authority["ocr_merge_authority_sha256"], hex(ocr_merge));
-    assert_eq!(authority["fixtures"].as_array().unwrap().len(), 5);
+    assert_eq!(authority["fixtures"].as_array().unwrap().len(), 7);
     let manifest: serde_json::Value = serde_json::from_slice(manifest).unwrap();
     for fixture in authority["fixtures"].as_array().unwrap() {
         let id = fixture["fixture_id"].as_str().unwrap();

@@ -34,14 +34,15 @@ pub(crate) fn reconstruct_page(
     }
     let clustered = lines::cluster(content.atoms, budget)?;
     let deduplicated = dedup::suppress(clustered, budget)?;
-    // A page-wide gutter is stronger layout evidence than repeated baselines.
-    // Split columns before table inference so two flowing columns cannot be
-    // promoted to a table merely because their rows happen to align.
-    let split = gutters::split(deduplicated, width, budget)?;
+    let median_font = semantics::font_baseline(&deduplicated, budget)?;
+    // Lock locally corroborated two-dimensional grids before interpreting
+    // repeated page-wide gaps as flowing columns. Weak grids remain text and
+    // are eligible for column splitting.
     let (mut table_blocks, remaining) =
-        tables::recover(split, page, width, height, config, budget)?;
-    let ordered = reading_order::lines(remaining, width, height, budget)?;
-    let mut rebuilt = semantics::blocks(page, ordered, width, height, budget)?;
+        tables::recover(deduplicated, page, width, height, config, budget)?;
+    let split = gutters::split(remaining, width, budget)?;
+    let ordered = reading_order::lines(split, width, height, budget)?;
+    let mut rebuilt = semantics::blocks(page, ordered, width, height, median_font, budget)?;
     rebuilt
         .try_reserve_exact(table_blocks.len() + content.passthrough.len())
         .map_err(|_| memory("layout rebuilt page"))?;

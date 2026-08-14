@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "4b6bcba9a8cb7e5de20ff6741c6976f0810e905c2cf1551e48a1383ed1d759d4",
+    "sha256": "ac2a79a2162c1bd2c3a201feba611cc86fd2dc2931007eb541130aea6cfadf0f",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -2053,6 +2053,34 @@
       }
     },
     {
+      "id": "pdf-layout-long-wide-table",
+      "format": "pdf",
+      "scenario": "normal",
+      "path": "small/pdf/long-wide-table.pdf",
+      "bytes": 774,
+      "sha256": "f9b76884bf9bd06e2c04397a76f4e490710456730e570391c5a1a9f1d32d7b57",
+      "media_type": "application/pdf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "044099f20d592b4433c257945d0aeabe215e5f12bcaa84d3b4f8feb63ec75775",
+        "description": "two non-compact columns with a repeated local grid remain a table"
+      }
+    },
+    {
       "id": "pdf-layout-multicolumn",
       "format": "pdf",
       "scenario": "normal",
@@ -2162,6 +2190,34 @@
         "error_code": "",
         "semantic_sha256": "25101b637d98cf198e5cb8f76a2fd5e7af076c674e5732758094f562b9d270de",
         "description": "heading, two-item list, two-by-two table, and bottom footnote"
+      }
+    },
+    {
+      "id": "pdf-layout-titled-table",
+      "format": "pdf",
+      "scenario": "normal",
+      "path": "small/pdf/titled-table.pdf",
+      "bytes": 761,
+      "sha256": "7dfa2c21c6b6e14c6eab76ef582e0c0e02f6cde7c2f3dae12a3754dd0092dc08",
+      "media_type": "application/pdf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "b294cb39fd1a246997bfa4369bc3a2cb08d93594e6a244d5f9e48dd4e0410b7a",
+        "description": "a heading above a repeated grid remains a heading followed by a table"
       }
     },
     {

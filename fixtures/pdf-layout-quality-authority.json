@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "26221b9ef9852a5f59c2cd72ae475c457540320648fad161461f091a518a2b99",
+  "fixture_manifest_sha256": "844edb81a0c7a8c58908eee9d3ad94f074bf6231e30e3775c50fc70a5ac666a3",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "20d8cd002b0fab74c26fb16502518b6c029b6ccc6215b790714d4f493322b233",
+  "ocr_merge_authority_sha256": "6105b38bd0e8cf5e869aa662b5c647208a0b578b8ae5c611988164e0a9a645d8",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -46,6 +46,21 @@
       "fixture_id": "pdf-layout-wide-gap-table",
       "fixture_sha256": "103fa821131e857a360f30c336502d5cbe2a7613421a476a2a8373b2035734e1",
       "expected_sequence": [
+        "table:Key|Value;A|1"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-long-wide-table",
+      "fixture_sha256": "f9b76884bf9bd06e2c04397a76f4e490710456730e570391c5a1a9f1d32d7b57",
+      "expected_sequence": [
+        "table:Long left heading|Long right heading;Long left value|Long right value"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-titled-table",
+      "fixture_sha256": "7dfa2c21c6b6e14c6eab76ef582e0c0e02f6cde7c2f3dae12a3754dd0092dc08",
+      "expected_sequence": [
+        "heading:Table title",
         "table:Key|Value;A|1"
       ]
     },

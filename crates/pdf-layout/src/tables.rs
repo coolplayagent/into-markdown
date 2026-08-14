@@ -1,6 +1,7 @@
 use crate::budget::LayoutBudget;
 use crate::geometry::{major_end, major_start, union};
 use crate::model::{Line, RebuiltBlock, block_provenance};
+use crate::ordering;
 use crate::semantics::take_line_inlines;
 use crate::{LayoutConfig, memory};
 use into_markdown_core::{Block, BlockNode, Cell, ConversionError, Inline, NodeId, TableRow};
@@ -15,13 +16,13 @@ pub(crate) fn recover(
     config: &LayoutConfig,
     budget: &mut LayoutBudget<'_>,
 ) -> Result<(Vec<RebuiltBlock>, Vec<Line>), ConversionError> {
-    lines.sort_by(|left, right| {
+    ordering::by(&mut lines, budget, |left, right| {
         left.bounds
             .y
             .total_cmp(&right.bounds.y)
             .then_with(|| left.bounds.x.total_cmp(&right.bounds.x))
             .then_with(|| left.source_index.cmp(&right.source_index))
-    });
+    })?;
     let mut pending = VecDeque::new();
     pending.try_reserve_exact(lines.len()).map_err(|_| memory("layout table queue"))?;
     pending.extend(lines);
@@ -52,6 +53,14 @@ pub(crate) fn recover(
             remaining.push(first);
             continue;
         }
+        let mut source_rows = Vec::new();
+        source_rows.try_reserve_exact(run).map_err(|_| memory("layout source row evidence"))?;
+        source_rows.push(&first);
+        source_rows.extend(pending.iter().take(run - 1));
+        if !strong_grid(&source_rows, &first_segments, budget)? {
+            remaining.push(first);
+            continue;
+        }
         let columns = first_segments.len();
         let cells = run.checked_mul(columns).ok_or_else(|| memory("layout table cells"))?;
         total_cells = total_cells.checked_add(cells).ok_or_else(|| memory("layout table cells"))?;
@@ -63,17 +72,17 @@ pub(crate) fn recover(
         }
         let mut rows = Vec::new();
         rows.try_reserve_exact(run).map_err(|_| memory("layout table rows"))?;
-        let mut source_rows = Vec::new();
-        source_rows.try_reserve_exact(run).map_err(|_| memory("layout source rows"))?;
-        source_rows.push(first);
-        for _ in 1..run {
-            source_rows.push(pending.pop_front().ok_or_else(|| memory("layout table run"))?);
-        }
         let header = header_likely(&source_rows);
-        let mut table_bounds = source_rows[0].bounds;
-        let source_index = source_rows[0].source_index;
+        let mut owned_rows = Vec::new();
+        owned_rows.try_reserve_exact(run).map_err(|_| memory("layout source rows"))?;
+        owned_rows.push(first);
+        for _ in 1..run {
+            owned_rows.push(pending.pop_front().ok_or_else(|| memory("layout table run"))?);
+        }
+        let mut table_bounds = owned_rows[0].bounds;
+        let source_index = owned_rows[0].source_index;
         let mut confidence = None;
-        for (row_index, row) in source_rows.into_iter().enumerate() {
+        for (row_index, row) in owned_rows.into_iter().enumerate() {
             table_bounds = union(table_bounds, row.bounds);
             confidence = min_confidence(confidence, confidence_of(&row));
             let ranges = segments(&row, budget)?;
@@ -145,17 +154,46 @@ fn row_candidate(
     page_width: f32,
     config: &LayoutConfig,
 ) -> bool {
-    let compact_repeated_cells =
-        segments.iter().all(|segment| segment.right - segment.x <= page_width * 0.15);
     segments.len() >= 2
         && segments.len() <= config.limits.max_table_columns
         && segments.iter().all(|segment| {
             segment.right - segment.x <= page_width * 0.42
                 && segment.end.saturating_sub(segment.start) <= 256
         })
-        && (compact_repeated_cells
-            || segments.windows(2).all(|pair| pair[1].x - pair[0].right <= page_width * 0.18))
         && line.bounds.width >= page_width * 0.20
+}
+
+/// Require independent two-dimensional evidence before claiming a table.
+/// Three or more repeated columns across three rows form a grid. A two-row
+/// grid instead needs a typographic header or repeated left and right cell
+/// boundaries; coincidentally aligned flowing columns normally lack both.
+fn strong_grid(
+    rows: &[&Line],
+    first_segments: &[Segment],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<bool, ConversionError> {
+    if rows.len() >= 3 && first_segments.len() >= 3 {
+        return Ok(true);
+    }
+    if header_likely(rows) {
+        return Ok(true);
+    }
+    for row in rows.iter().skip(1) {
+        let actual = segments(row, budget)?;
+        if actual.len() != first_segments.len() {
+            return Ok(false);
+        }
+        let tolerance = row.bounds.height.max(rows[0].bounds.height).max(1.0) * 0.08;
+        for (expected, actual) in first_segments.iter().zip(actual) {
+            budget.compare()?;
+            if (expected.x - actual.x).abs() > tolerance.max(0.5)
+                || (expected.right - actual.right).abs() > tolerance.max(0.5)
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn compatible_rows(
@@ -259,7 +297,7 @@ fn table_id(
     Ok(NodeId(value))
 }
 
-fn header_likely(rows: &[Line]) -> bool {
+fn header_likely(rows: &[&Line]) -> bool {
     let Some(first) = rows.first().and_then(|row| row.font_size) else { return false };
     let Some(body) = rows.iter().skip(1).filter_map(|row| row.font_size).reduce(f32::midpoint)
     else {

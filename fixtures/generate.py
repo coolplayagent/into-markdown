@@ -978,6 +978,29 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
             "table:Key,Value;A,1",
         ),
         (
+            "pdf-layout-long-wide-table",
+            pdf_document(
+                b"BT /F1 13 Tf 40 690 Td (Long left heading) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Long right heading) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Long left value) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (Long right value) Tj ET\n"
+            ),
+            "two non-compact columns with a repeated local grid remain a table",
+            "table:Long left heading,Long right heading;Long left value,Long right value",
+        ),
+        (
+            "pdf-layout-titled-table",
+            pdf_document(
+                b"BT /F1 20 Tf 40 750 Td (Table title) Tj ET\n"
+                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+            ),
+            "a heading above a repeated grid remains a heading followed by a table",
+            "heading:Table title|table:Key,Value;A,1",
+        ),
+        (
             "pdf-layout-rotated",
             pdf_document(
                 b"BT /F1 12 Tf 80 700 Td (Rotated first) Tj ET\n"

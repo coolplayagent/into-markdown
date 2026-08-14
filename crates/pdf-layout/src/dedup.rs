@@ -3,6 +3,7 @@ use crate::geometry::overlap_ratio;
 use crate::lines;
 use crate::memory;
 use crate::model::{Line, SourceKind};
+use crate::ordering;
 use into_markdown_core::ConversionError;
 use unicode_normalization::UnicodeNormalization;
 
@@ -18,7 +19,7 @@ pub(crate) fn suppress(
         let normalized = canonical(&text, budget)?;
         candidates.push(Candidate { line, normalized, sequence });
     }
-    candidates.sort_unstable_by(|left, right| {
+    ordering::by(&mut candidates, budget, |left, right| {
         left.line
             .orientation
             .cmp(&right.line.orientation)
@@ -29,7 +30,7 @@ pub(crate) fn suppress(
             })
             .then_with(|| left.line.source_index.cmp(&right.line.source_index))
             .then_with(|| left.sequence.cmp(&right.sequence))
-    });
+    })?;
 
     let mut kept: Vec<Candidate> = Vec::new();
     kept.try_reserve_exact(candidates.len()).map_err(|_| memory("layout dedup output"))?;

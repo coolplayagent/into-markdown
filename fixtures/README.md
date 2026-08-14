@@ -28,7 +28,7 @@ bind duplicate physical-sheet authority, truncated OPC/BIFF12 structure, and row
 
 PDF is the one native-runtime format. Most text, mixed, scanned, encrypted, damaged,
 over-page-limit, link, and four-rotation samples remain deterministic in-memory Rust fixtures for
-the explicit pinned-PDFium smoke. Five repository-generated Apache-2.0 layout PDFs are also bound
+the explicit pinned-PDFium smoke. Seven repository-generated Apache-2.0 layout PDFs are also bound
 to this manifest and `pdf-layout-quality-authority.json`: they exercise multiple columns, rotated
 text, headings, lists, and tables through the production converter. Ordinary Cargo/Bazel tests only
 audit those bytes and remain offline; the explicit PDF layout quality target maps the pinned PDFium

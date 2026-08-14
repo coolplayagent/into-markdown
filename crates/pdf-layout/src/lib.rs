@@ -15,6 +15,7 @@ mod gutters;
 mod lines;
 mod materialize;
 mod model;
+mod ordering;
 mod reading_order;
 mod running_matter;
 mod semantics;

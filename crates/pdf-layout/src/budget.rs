@@ -126,6 +126,10 @@ impl<'a> LayoutBudget<'a> {
         Ok(())
     }
 
+    pub(crate) fn checkpoint_now(&self) -> Result<(), ConversionError> {
+        self.context.checkpoint()
+    }
+
     pub(crate) fn checkpoint_bytes(&mut self, bytes: usize) -> Result<(), ConversionError> {
         self.bytes_since_checkpoint = add(self.bytes_since_checkpoint, bytes, "checkpoint bytes")?;
         while self.bytes_since_checkpoint >= CHECKPOINT_BYTES {
