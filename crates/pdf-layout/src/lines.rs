@@ -77,14 +77,39 @@ pub(crate) fn cluster(
 
 pub(crate) fn text(line: &Line) -> String {
     let mut output = String::new();
+    append_text(line, &mut output);
+    output
+}
+
+pub(crate) fn fallible_text(
+    line: &Line,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<String, ConversionError> {
+    let capacity = line.atoms.iter().try_fold(line.atoms.len(), |total, atom| {
+        total
+            .checked_add(inline_text(&atom.inline).len())
+            .ok_or_else(|| memory("layout line text length"))
+    })?;
+    budget.checkpoint_bytes(capacity)?;
+    for _ in &line.atoms {
+        budget.checkpoint_item()?;
+    }
+    let mut output = String::new();
+    output.try_reserve_exact(capacity).map_err(|_| memory("layout line text allocation"))?;
+    append_text(line, &mut output);
+    Ok(output)
+}
+
+fn append_text(line: &Line, output: &mut String) {
+    let mut previous = None;
     for atom in &line.atoms {
         let value = inline_text(&atom.inline);
-        if should_insert_space(&output, value, atom, line) {
+        if should_insert_space(output, value, previous, atom) {
             output.push(' ');
         }
         output.push_str(value);
+        previous = Some(atom);
     }
-    output
 }
 
 pub(crate) fn split_page_gutters(
@@ -100,11 +125,13 @@ pub(crate) fn split_page_gutters(
             continue;
         }
         let mut cuts = Vec::new();
+        cuts.try_reserve_exact(line.atoms.len()).map_err(|_| memory("layout gutter cuts"))?;
         for index in 1..line.atoms.len() {
             budget.compare()?;
-            let gap = major_start(line.atoms[index].bounds, 0)
-                - major_end(line.atoms[index - 1].bounds, 0);
-            if gap > page_width * 0.12 {
+            let left = major_end(line.atoms[index - 1].bounds, 0);
+            let right = major_start(line.atoms[index].bounds, 0);
+            let gap = right - left;
+            if gap > page_width * 0.12 && left < page_width * 0.55 && right > page_width * 0.45 {
                 cuts.push(index);
             }
         }
@@ -117,7 +144,9 @@ pub(crate) fn split_page_gutters(
         let mut consumed = 0_usize;
         for end in cuts {
             let take = end - consumed;
-            let segment_atoms = atoms.by_ref().take(take).collect::<Vec<_>>();
+            let mut segment_atoms = Vec::new();
+            segment_atoms.try_reserve_exact(take).map_err(|_| memory("layout gutter segment"))?;
+            segment_atoms.extend(atoms.by_ref().take(take));
             consumed = end;
             let bounds = segment_atoms
                 .iter()
@@ -154,15 +183,13 @@ pub(crate) fn inline_text(inline: &Inline) -> &str {
     }
 }
 
-fn should_insert_space(output: &str, value: &str, atom: &Atom, line: &Line) -> bool {
+fn should_insert_space(output: &str, value: &str, previous: Option<&Atom>, atom: &Atom) -> bool {
     let Some(left) = output.chars().next_back() else { return false };
     let Some(right) = value.chars().next() else { return false };
     if left.is_whitespace() || right.is_whitespace() {
         return false;
     }
-    let Some(previous) =
-        line.atoms.iter().rev().find(|candidate| candidate.source_index < atom.source_index)
-    else {
+    let Some(previous) = previous else {
         return false;
     };
     let gap = major_start(atom.bounds, atom.orientation)

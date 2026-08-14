@@ -9,6 +9,7 @@
 mod budget;
 mod collect;
 mod dedup;
+mod footnotes;
 mod geometry;
 mod lines;
 mod materialize;

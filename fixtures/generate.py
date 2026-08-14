@@ -939,6 +939,17 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
             "heading:Layout title|paragraph:Left one Left two|paragraph:Right one Right two",
         ),
         (
+            "pdf-layout-narrow-gutter",
+            pdf_document(
+                b"BT /F1 12 Tf 40 690 Td (Left alpha has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (Right alpha has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Left beta has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (Right beta has a wide measure) Tj ET\n"
+            ),
+            "aligned wide column rows remain paragraphs across a narrow page gutter",
+            "paragraph:Left alpha has a wide measure Left beta has a wide measure|paragraph:Right alpha has a wide measure Right beta has a wide measure",
+        ),
+        (
             "pdf-layout-structures",
             pdf_document(
                 b"BT /F1 24 Tf 40 750 Td (Section) Tj ET\n"

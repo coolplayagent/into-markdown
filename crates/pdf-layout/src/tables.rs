@@ -5,6 +5,7 @@ use crate::semantics::take_line_inlines;
 use crate::{LayoutConfig, memory};
 use into_markdown_core::{Block, BlockNode, Cell, ConversionError, Inline, NodeId, TableRow};
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 
 pub(crate) fn recover(
     mut lines: Vec<Line>,
@@ -25,13 +26,14 @@ pub(crate) fn recover(
     pending.try_reserve_exact(lines.len()).map_err(|_| memory("layout table queue"))?;
     pending.extend(lines);
     let mut tables = Vec::new();
+    tables.try_reserve_exact(pending.len() / 2).map_err(|_| memory("layout table output"))?;
     let mut remaining = Vec::new();
     remaining.try_reserve_exact(pending.len()).map_err(|_| memory("layout table remainder"))?;
     let mut sequence = 0_usize;
     let mut total_cells = 0_usize;
     while let Some(first) = pending.pop_front() {
         budget.checkpoint_item()?;
-        let first_segments = segments(&first)?;
+        let first_segments = segments(&first, budget)?;
         if !row_candidate(&first, &first_segments, width, config) {
             remaining.push(first);
             continue;
@@ -39,7 +41,7 @@ pub(crate) fn recover(
         let mut run = 1_usize;
         let mut prior = &first;
         for next in &pending {
-            let next_segments = segments(next)?;
+            let next_segments = segments(next, budget)?;
             if !compatible_rows(prior, &first_segments, next, &next_segments, width, budget)? {
                 break;
             }
@@ -74,7 +76,7 @@ pub(crate) fn recover(
         for (row_index, row) in source_rows.into_iter().enumerate() {
             table_bounds = union(table_bounds, row.bounds);
             confidence = min_confidence(confidence, confidence_of(&row));
-            let ranges = segments(&row)?;
+            let ranges = segments(&row, budget)?;
             rows.push(materialize_row(
                 row,
                 &ranges,
@@ -84,11 +86,12 @@ pub(crate) fn recover(
                 sequence,
                 row_index,
                 header && row_index == 0,
+                budget,
             )?);
         }
         tables.push(RebuiltBlock {
             node: BlockNode {
-                id: NodeId(format!("pdf-page-{page}-layout-table-{sequence}")),
+                id: table_id(page, sequence, None, None)?,
                 block: Block::Table { rows, alignments: Vec::new() },
                 provenance: block_provenance(page, table_bounds, width, height, confidence),
             },
@@ -109,7 +112,7 @@ struct Segment {
     right: f32,
 }
 
-fn segments(line: &Line) -> Result<Vec<Segment>, ConversionError> {
+fn segments(line: &Line, budget: &mut LayoutBudget<'_>) -> Result<Vec<Segment>, ConversionError> {
     if line.orientation != 0 || line.atoms.is_empty() {
         return Ok(Vec::new());
     }
@@ -118,6 +121,7 @@ fn segments(line: &Line) -> Result<Vec<Segment>, ConversionError> {
     output.try_reserve_exact(line.atoms.len()).map_err(|_| memory("layout table segments"))?;
     let mut start = 0;
     for index in 1..line.atoms.len() {
+        budget.compare()?;
         let gap =
             major_start(line.atoms[index].bounds, 0) - major_end(line.atoms[index - 1].bounds, 0);
         if gap > threshold {
@@ -188,18 +192,28 @@ fn materialize_row(
     table_sequence: usize,
     row_index: usize,
     header: bool,
+    budget: &mut LayoutBudget<'_>,
 ) -> Result<TableRow, ConversionError> {
-    let mut buckets = (0..ranges.len()).map(|_| Vec::new()).collect::<Vec<_>>();
-    for (index, atom) in line.atoms.into_iter().enumerate() {
-        let cell = ranges
-            .iter()
-            .position(|range| index >= range.start && index < range.end)
-            .ok_or_else(|| memory("layout table atom range"))?;
-        buckets[cell].push(atom);
-    }
     let mut cells = Vec::new();
     cells.try_reserve_exact(ranges.len()).map_err(|_| memory("layout table cells"))?;
-    for (column, atoms) in buckets.into_iter().enumerate() {
+    let mut indexed = line.atoms.into_iter().enumerate().peekable();
+    for (column, range) in ranges.iter().enumerate() {
+        budget.checkpoint_item()?;
+        let capacity =
+            range.end.checked_sub(range.start).ok_or_else(|| memory("layout table range"))?;
+        let mut atoms = Vec::new();
+        atoms.try_reserve_exact(capacity).map_err(|_| memory("layout table cell atoms"))?;
+        while indexed.peek().is_some_and(|(index, _)| *index < range.end) {
+            budget.checkpoint_item()?;
+            let (index, atom) = indexed.next().ok_or_else(|| memory("layout table atom"))?;
+            if index < range.start {
+                return Err(memory("layout table atom range"));
+            }
+            atoms.push(atom);
+        }
+        if atoms.len() != capacity {
+            return Err(memory("layout table atom range"));
+        }
         let bounds = atoms
             .iter()
             .map(|atom| atom.bounds)
@@ -211,20 +225,35 @@ fn materialize_row(
         let cell_line =
             Line { atoms, bounds, font_size, orientation: 0, source_index, source_kind };
         let confidence = confidence_of(&cell_line);
-        cells.push(Cell {
-            row_span: 1,
-            column_span: 1,
-            header,
-            blocks: vec![BlockNode {
-                id: NodeId(format!(
-                    "pdf-page-{page}-layout-table-{table_sequence}-r{row_index}-c{column}"
-                )),
-                block: Block::Paragraph(take_line_inlines(cell_line)?),
-                provenance: block_provenance(page, bounds, width, height, confidence),
-            }],
+        let mut blocks = Vec::new();
+        blocks.try_reserve_exact(1).map_err(|_| memory("layout table cell blocks"))?;
+        blocks.push(BlockNode {
+            id: table_id(page, table_sequence, Some(row_index), Some(column))?,
+            block: Block::Paragraph(take_line_inlines(cell_line)?),
+            provenance: block_provenance(page, bounds, width, height, confidence),
         });
+        cells.push(Cell { row_span: 1, column_span: 1, header, blocks });
+    }
+    if indexed.next().is_some() {
+        return Err(memory("layout table trailing atom"));
     }
     Ok(TableRow { cells })
+}
+
+fn table_id(
+    page: u32,
+    sequence: usize,
+    row: Option<usize>,
+    column: Option<usize>,
+) -> Result<NodeId, ConversionError> {
+    let mut value = String::new();
+    value.try_reserve_exact(96).map_err(|_| memory("layout table node id"))?;
+    write!(value, "pdf-page-{page}-layout-table-{sequence}")
+        .map_err(|_| memory("layout table node id"))?;
+    if let (Some(row), Some(column)) = (row, column) {
+        write!(value, "-r{row}-c{column}").map_err(|_| memory("layout table cell id"))?;
+    }
+    Ok(NodeId(value))
 }
 
 fn header_likely(rows: &[Line]) -> bool {

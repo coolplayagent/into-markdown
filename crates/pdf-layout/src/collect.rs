@@ -37,9 +37,12 @@ fn block_is_collectable(
     width: f32,
     height: f32,
 ) -> Result<bool, ConversionError> {
+    if matches!(node.block, Block::Footnote { .. }) {
+        return Ok(false);
+    }
     let mut saw_source = false;
     let mut valid = true;
-    inspect_block(&node.block, &mut |inline| {
+    let contains_footnote = inspect_block(&node.block, &mut |inline| {
         let (provenance, native_separator, ocr_evidence) = match inline {
             Inline::SourceText { value, provenance, .. } => {
                 saw_source = true;
@@ -49,7 +52,7 @@ fn block_is_collectable(
                 saw_source = true;
                 (provenance, false, true)
             }
-            Inline::Link { .. } => {
+            Inline::Link { .. } | Inline::FootnoteReference(_) => {
                 valid = false;
                 return Ok(());
             }
@@ -74,7 +77,7 @@ fn block_is_collectable(
         }
         Ok(())
     })?;
-    Ok(saw_source && valid)
+    Ok(saw_source && valid && !contains_footnote)
 }
 
 fn collect_node(
@@ -190,9 +193,10 @@ fn collect_inlines(
 fn inspect_block(
     block: &Block,
     visit: &mut impl FnMut(&Inline) -> Result<(), ConversionError>,
-) -> Result<(), ConversionError> {
+) -> Result<bool, ConversionError> {
     let mut block_stack = Vec::new();
     let mut inline_stack = Vec::new();
+    let mut contains_footnote = false;
     block_stack.try_reserve_exact(1).map_err(|_| memory("layout inspect stack"))?;
     block_stack.push(block);
     while let Some(block) = block_stack.pop() {
@@ -208,8 +212,11 @@ fn inspect_block(
                     .flat_map(|cell| &cell.blocks)
                     .map(|node| &node.block),
             ),
-            Block::Footnote { blocks, .. }
-            | Block::Page { blocks, .. }
+            Block::Footnote { blocks, .. } => {
+                contains_footnote = true;
+                block_stack.extend(blocks.iter().map(|node| &node.block));
+            }
+            Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
                 block_stack.extend(blocks.iter().map(|node| &node.block));
@@ -225,7 +232,7 @@ fn inspect_block(
             }
         }
     }
-    Ok(())
+    Ok(contains_footnote)
 }
 
 fn count_source_inlines(nodes: &[BlockNode]) -> usize {

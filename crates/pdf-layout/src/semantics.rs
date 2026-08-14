@@ -1,4 +1,5 @@
 use crate::budget::LayoutBudget;
+use crate::footnotes;
 use crate::geometry::{major_end, major_start, minor_center, minor_extent, union};
 use crate::lines;
 use crate::memory;
@@ -71,7 +72,7 @@ pub(crate) fn blocks(
                 continue;
             }
         }
-        if let Some((prefix_chars, label)) = footnote_marker(&line, median_font, height) {
+        if let Some((prefix_chars, digits)) = footnote_marker(&line, median_font, height) {
             let bounds = line.bounds;
             let orientation = line.orientation;
             let source_index = line.source_index;
@@ -86,7 +87,10 @@ pub(crate) fn blocks(
             output.push(RebuiltBlock {
                 node: BlockNode {
                     id: id(page, "footnote", sequence),
-                    block: Block::Footnote { label, blocks: vec![paragraph] },
+                    block: Block::Footnote {
+                        label: footnotes::label(page, &digits)?,
+                        blocks: vec![paragraph],
+                    },
                     provenance: block_provenance(page, bounds, width, height, confidence),
                 },
                 bounds: Some(bounds),
@@ -327,7 +331,7 @@ fn footnote_marker(line: &Line, median: Option<f32>, page_height: f32) -> Option
     if !(rest.starts_with(' ') || rest.starts_with('.') || rest.starts_with(')')) {
         return None;
     }
-    Some((digits.chars().count() + 1, format!("pdf-{digits}")))
+    Some((digits.chars().count() + 1, digits))
 }
 
 fn strip_prefix(inlines: &mut Vec<Inline>, mut characters: usize) {

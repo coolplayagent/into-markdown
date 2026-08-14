@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "de6cd49bec55a7306852748c0fd69dc18a645cfc660224ed8d34a4af2ba333ec",
+  "fixture_manifest_sha256": "508302a32ee3ef57715be8d71ce21564e0d0305137461ce430a0f0efb33fa5e9",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "5579d098cf382c86353c1045ede6816f033edb92bf6518e9a802eb3fa0aa6df7",
+  "ocr_merge_authority_sha256": "63dc7194e4d33c2df1aa5535899f3a5fef329406b7bad9a63061736732464ca0",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -22,6 +22,14 @@
         "heading:Layout title",
         "paragraph:Left one Left two",
         "paragraph:Right one Right two"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-narrow-gutter",
+      "fixture_sha256": "13b92a1f91af6c84c6c5c77ff0b34659ce97e1ff244bee4da7876c8433b8de0b",
+      "expected_sequence": [
+        "paragraph:Left alpha has a wide measure Left beta has a wide measure",
+        "paragraph:Right alpha has a wide measure Right beta has a wide measure"
       ]
     },
     {

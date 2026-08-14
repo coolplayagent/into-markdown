@@ -1,12 +1,14 @@
 use crate::budget::LayoutBudget;
 use crate::collect;
 use crate::model::RebuiltBlock;
-use crate::{LayoutConfig, dedup, lines, malformed, memory, reading_order, semantics, tables};
+use crate::{
+    LayoutConfig, dedup, footnotes, lines, malformed, memory, reading_order, semantics, tables,
+};
 use into_markdown_core::{BlockNode, ConversionError, Provenance};
 
 pub(crate) fn reconstruct_page(
     page: u32,
-    blocks: Vec<BlockNode>,
+    mut blocks: Vec<BlockNode>,
     page_provenance: &Provenance,
     config: &LayoutConfig,
     budget: &mut LayoutBudget<'_>,
@@ -24,15 +26,19 @@ pub(crate) fn reconstruct_page(
         .page_height
         .filter(|value| value.is_finite() && *value > 0.0)
         .ok_or_else(|| malformed("pdfLayoutMissingPageHeight"))?;
+    footnotes::namespace_existing(&mut blocks, page, budget)?;
     let content = collect::page_content(page, width, height, blocks, budget)?;
     if content.atoms.is_empty() {
         return Ok(content.passthrough);
     }
     let clustered = lines::cluster(content.atoms, budget)?;
     let deduplicated = dedup::suppress(clustered, budget)?;
+    // A page-wide gutter is stronger layout evidence than repeated baselines.
+    // Split columns before table inference so two flowing columns cannot be
+    // promoted to a table merely because their rows happen to align.
+    let split = lines::split_page_gutters(deduplicated, width, budget)?;
     let (mut table_blocks, remaining) =
-        tables::recover(deduplicated, page, width, height, config, budget)?;
-    let remaining = lines::split_page_gutters(remaining, width, budget)?;
+        tables::recover(split, page, width, height, config, budget)?;
     let ordered = reading_order::lines(remaining, width, height, budget)?;
     let mut rebuilt = semantics::blocks(page, ordered, width, height, budget)?;
     rebuilt

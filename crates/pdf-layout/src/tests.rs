@@ -221,10 +221,10 @@ fn spanning_heading_and_two_columns_have_stable_geometric_order() {
                 Rect { x: 60.0, y: 20.0, width: 420.0, height: 24.0 },
                 24.0,
             ),
-            source_text("Left one", Rect { x: 40.0, y: 90.0, width: 150.0, height: 12.0 }, 12.0),
-            source_text("Right one", Rect { x: 350.0, y: 90.0, width: 150.0, height: 12.0 }, 12.0),
-            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 150.0, height: 12.0 }, 12.0),
-            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 150.0, height: 12.0 }, 12.0),
+            source_text("Left one", Rect { x: 40.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right one", Rect { x: 350.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
         ]
         .concat(),
     );
@@ -234,6 +234,7 @@ fn spanning_heading_and_two_columns_have_stable_geometric_order() {
     assert_eq!(block_text(&blocks[0].block), "Layout title");
     assert_eq!(block_text(&blocks[1].block), "Left one Left two");
     assert_eq!(block_text(&blocks[2].block), "Right one Right two");
+    assert!(!blocks.iter().any(|node| matches!(node.block, Block::Table { .. })));
     let second = rebuild(actual.clone());
     assert_eq!(actual, second, "relayout after OCR merge must be idempotent");
 }
@@ -283,6 +284,111 @@ fn recovered_tables_obey_the_document_wide_cell_limit_without_a_lease() {
     assert_eq!(execution.reserved_memory_bytes(), 0);
 }
 
+fn wide_table_document(columns: usize) -> Document {
+    let page_width = 40.0 + columns as f32 * 3.0;
+    let mut inlines = Vec::with_capacity(columns * 2);
+    for row in 0..2 {
+        for column in 0..columns {
+            inlines.push(source(
+                "x",
+                Rect {
+                    x: 20.0 + column as f32 * 3.0,
+                    y: 100.0 + row as f32 * 3.0,
+                    width: 0.5,
+                    height: 1.0,
+                },
+                1.0,
+            ));
+        }
+    }
+    let mut document = document(inlines);
+    let page = &mut document.blocks[0];
+    page.provenance.locator.page_width = Some(page_width);
+    let Block::Page { blocks, .. } = &mut page.block else { unreachable!() };
+    for block in blocks {
+        block.provenance.locator.page_width = Some(page_width);
+        let Block::Paragraph(inlines) = &mut block.block else { unreachable!() };
+        for inline in inlines {
+            let Inline::SourceText { provenance, .. } = inline else { unreachable!() };
+            provenance.locator.page_width = Some(page_width);
+        }
+    }
+    document
+}
+
+#[test]
+fn table_comparison_limit_has_an_exact_adjacent_boundary() {
+    let input = wide_table_document(128);
+    let succeeds = |limit| {
+        let mut config = LayoutConfig::default();
+        config.limits.max_comparisons = limit;
+        reconstruct_document(input.clone(), &config, &context()).is_ok()
+    };
+    let mut low = 1_u64;
+    let mut high = LayoutConfig::default().limits.max_comparisons;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if succeeds(middle) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    assert!(low > 1 && succeeds(low));
+    let mut below = LayoutConfig::default();
+    below.limits.max_comparisons = low - 1;
+    let execution = context();
+    assert!(matches!(
+        reconstruct_document(input, &below, &execution),
+        Err(ConversionError::ResourceLimit { limit: "pdfLayoutComparisons", .. })
+    ));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn large_table_materialization_observes_in_flight_cancel_and_releases_lease() {
+    let cancellation = CancellationToken::new();
+    let execution = ExecutionContext::new(
+        ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+        ResourceLimits::default(),
+    );
+    let mut checkpoints = 0_usize;
+    budget::set_checkpoint_hook(Some(Box::new(move || {
+        checkpoints += 1;
+        if checkpoints == 170 {
+            cancellation.cancel();
+        }
+    })));
+    let result =
+        reconstruct_document(wide_table_document(3_000), &LayoutConfig::default(), &execution);
+    budget::set_checkpoint_hook(None);
+    assert!(matches!(result, Err(ConversionError::Cancelled)));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn large_table_materialization_observes_timeout_and_releases_lease() {
+    let execution = ExecutionContext::new(
+        ExecutionOptions {
+            timeout: Some(Duration::from_millis(250)),
+            ..ExecutionOptions::default()
+        },
+        ResourceLimits::default(),
+    );
+    let mut checkpoints = 0_usize;
+    budget::set_checkpoint_hook(Some(Box::new(move || {
+        checkpoints += 1;
+        if checkpoints == 170 {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    })));
+    let result =
+        reconstruct_document(wide_table_document(3_000), &LayoutConfig::default(), &execution);
+    budget::set_checkpoint_hook(None);
+    assert!(matches!(result, Err(ConversionError::Timeout)));
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
 #[test]
 fn native_and_ocr_overlap_is_deduplicated_without_losing_evidence_source() {
     let bounds = Rect { x: 40.0, y: 80.0, width: 100.0, height: 16.0 };
@@ -294,6 +400,57 @@ fn native_and_ocr_overlap_is_deduplicated_without_losing_evidence_source() {
     let Block::Paragraph(inlines) = &blocks[0].block else { panic!("paragraph") };
     assert_eq!(inline_text(inlines), "same");
     assert!(matches!(inlines[0], Inline::SourceText { .. }));
+}
+
+#[test]
+fn page_wide_spatial_dedup_finds_old_overlap_and_preserves_distant_equal_text() {
+    let top = Rect { x: 40.0, y: 20.0, width: 40.0, height: 6.0 };
+    let mut inlines = source_text("same", top, 12.0);
+    for index in 0..80 {
+        inlines.extend(source_text(
+            &format!("row{index}"),
+            Rect { x: 40.0, y: 35.0 + index as f32 * 8.0, width: 45.0, height: 6.0 },
+            12.0,
+        ));
+    }
+    inlines.push(ocr("same", top));
+    let actual = rebuild(document(inlines));
+    let text = page_blocks(&actual)
+        .iter()
+        .map(|node| block_text(&node.block))
+        .collect::<Vec<_>>()
+        .join("|");
+    assert_eq!(text.matches("same").count(), 1);
+
+    let mut distant = source_text("same", top, 12.0);
+    distant.push(ocr("same", Rect { x: 450.0, y: 700.0, width: 40.0, height: 6.0 }));
+    let actual = rebuild(document(distant));
+    let text = page_blocks(&actual)
+        .iter()
+        .map(|node| block_text(&node.block))
+        .collect::<Vec<_>>()
+        .join("|");
+    assert_eq!(text.matches("same").count(), 2);
+
+    let across_pages = rebuild(Document {
+        blocks: vec![
+            page_node(1, source_text("same", top, 12.0)),
+            page_node(2, vec![ocr("same", top)]),
+        ],
+        ..Document::default()
+    });
+    assert_eq!(
+        across_pages
+            .blocks
+            .iter()
+            .map(|page| {
+                let Block::Page { blocks, .. } = &page.block else { unreachable!() };
+                blocks.iter().map(|node| block_text(&node.block)).collect::<String>()
+            })
+            .collect::<Vec<_>>(),
+        ["same", "same"],
+        "deduplication never crosses the page scope"
+    );
 }
 
 #[test]
@@ -407,6 +564,103 @@ fn repeated_page_edge_matter_is_annotated_without_dropping_source_text() {
         assert_eq!(footer.provenance.locator.part.as_deref(), Some("pdf/running-footer"));
         assert_eq!(body.provenance.locator.part, None);
     }
+}
+
+fn page_with_legacy_reference_and_footnote(page: u32, note: &str) -> BlockNode {
+    let mut inlines = source_text(
+        &format!("Body {page}"),
+        Rect { x: 40.0, y: 150.0, width: 80.0, height: 12.0 },
+        12.0,
+    );
+    inlines.extend(source_text(
+        &format!("1 {note}"),
+        Rect { x: 40.0, y: 740.0, width: 120.0, height: 9.0 },
+        9.0,
+    ));
+    let mut output = page_node(page, inlines);
+    let Block::Page { blocks, .. } = &mut output.block else { unreachable!() };
+    blocks.push(BlockNode {
+        id: NodeId(format!("pdf-page-{page}-reference")),
+        block: Block::Paragraph(vec![
+            Inline::Text { value: "See".into(), marks: Vec::new() },
+            Inline::FootnoteReference("pdf-1".into()),
+        ]),
+        provenance: provenance(
+            page,
+            Some(Rect { x: 40.0, y: 100.0, width: 30.0, height: 12.0 }),
+            12.0,
+            0.0,
+        ),
+    });
+    output
+}
+
+#[test]
+fn repeated_footnote_numbers_are_page_scoped_and_references_remain_valid() {
+    let input = Document {
+        blocks: vec![
+            page_with_legacy_reference_and_footnote(1, "First note"),
+            page_with_legacy_reference_and_footnote(2, "Second note"),
+        ],
+        ..Document::default()
+    };
+    let actual = rebuild(input);
+    let mut labels = Vec::new();
+    let mut references = Vec::new();
+    let mut definitions = Vec::new();
+    for page in &actual.blocks {
+        let Block::Page { blocks, .. } = &page.block else { unreachable!() };
+        for node in blocks {
+            match &node.block {
+                Block::Footnote { label, blocks } => {
+                    labels.push(label.clone());
+                    definitions.push(block_text(&blocks[0].block));
+                }
+                Block::Paragraph(inlines) => {
+                    references.extend(inlines.iter().filter_map(|inline| match inline {
+                        Inline::FootnoteReference(label) => Some(label.clone()),
+                        _ => None,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(labels, ["pdf-page-1-1", "pdf-page-2-1"]);
+    assert_eq!(references, labels);
+    assert_eq!(definitions, ["First note", "Second note"]);
+    assert_eq!(rebuild(actual.clone()), actual, "single-page labels stay stable on relayout");
+}
+
+#[test]
+fn a_single_page_footnote_label_is_exact_and_stable() {
+    let actual = rebuild(Document {
+        blocks: vec![page_with_legacy_reference_and_footnote(1, "Only note")],
+        ..Document::default()
+    });
+    let blocks = page_blocks(&actual);
+    let definition = blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Footnote { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    let reference = blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Paragraph(inlines) => Some(inlines),
+            _ => None,
+        })
+        .flatten()
+        .find_map(|inline| match inline {
+            Inline::FootnoteReference(label) => Some(label.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(definition, "pdf-page-1-1");
+    assert_eq!(reference, definition);
+    assert_eq!(rebuild(actual.clone()), actual);
 }
 
 #[test]
