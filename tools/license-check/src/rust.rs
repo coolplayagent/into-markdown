@@ -194,7 +194,7 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
         };
         if package == "apps/cli" {
             if !attribute(body, "deps")
-                .is_some_and(|value| value.contains("all_crate_deps(normal = True)"))
+                .is_some_and(|value| contains_unquoted(value, "all_crate_deps(normal = True)"))
                 || attribute(body, "compile_data").map(str::trim)
                     != Some("[\"//web/console:checked_assets\"]")
             {
@@ -279,7 +279,7 @@ fn validate_direct_external_deps(
         .into_iter()
         .filter_map(|value| value.strip_prefix("@crates//:"))
         .collect();
-    let uses_macro = bazel_deps.contains("all_crate_deps(normal = True)");
+    let uses_macro = contains_unquoted(bazel_deps, "all_crate_deps(normal = True)");
     if (uses_macro && !explicit.is_subset(&expected)) || (!uses_macro && explicit != expected) {
         errors.push(format!(
             "Cargo/Bazel direct external runtime dependencies differ for {label}: Cargo={expected:?}, Bazel={explicit:?}, macro={uses_macro}"
@@ -426,6 +426,27 @@ fn strip_comments(text: &str) -> String {
     output
 }
 
+fn contains_unquoted(text: &str, needle: &str) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else if character == '"' {
+            quoted = true;
+        } else if text[index..].starts_with(needle) {
+            return true;
+        }
+    }
+    false
+}
+
 fn balanced_end_attribute(text: &str, start: usize) -> usize {
     let mut depth = 0usize;
     let mut quoted = false;
@@ -457,7 +478,9 @@ fn cargo_package_name(path: &std::path::Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{attribute, named_rule_body, strip_comments, validate_bazel_runtime_graph};
+    use super::{
+        attribute, contains_unquoted, named_rule_body, strip_comments, validate_bazel_runtime_graph,
+    };
     use std::fs;
 
     #[test]
@@ -478,6 +501,10 @@ rust_test(name = "decoy", deps = all_crate_deps(normal = True), compile_data = [
             attribute("crate_name = \"wrong\", name = \"right\"", "name"),
             Some("\"right\"")
         );
+        assert!(!contains_unquoted(
+            "[\"all_crate_deps(normal = True)\"]",
+            "all_crate_deps(normal = True)"
+        ));
     }
 
     #[test]
