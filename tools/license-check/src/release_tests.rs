@@ -142,6 +142,22 @@ fn projection_rejects_unknown_or_orphaned_components_and_missing_declarations() 
 }
 
 #[test]
+fn orphan_binary_cannot_claim_project_ownership() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.push(ArchiveFile {
+        path: "lib/unreviewed.dylib".into(),
+        bytes: 10,
+        sha256: "e".repeat(64),
+        kind: ArchiveFileKind::Project,
+        component_id: None,
+        embedded_components: vec![],
+    });
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("cannot be classified as project-owned")));
+}
+
+#[test]
 fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     projection.components.push("ffmpeg".into());

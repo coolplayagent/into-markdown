@@ -306,6 +306,12 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
     if file.bytes == 0 || !is_sha256(&file.sha256) {
         errors.push(format!("archive file {} lacks fixed size or SHA-256", file.path));
     }
+    if file.kind == ArchiveFileKind::Project && requires_component_classification(&file.path) {
+        errors.push(format!(
+            "archive binary/model/font {} cannot be classified as project-owned",
+            file.path
+        ));
+    }
     match (file.kind, file.component_id.as_deref()) {
         (ArchiveFileKind::Component, Some(id)) if selected.contains(id) => {}
         (ArchiveFileKind::Component, Some(id)) => {
@@ -339,6 +345,18 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
             ));
         }
     }
+}
+
+fn requires_component_classification(path: &str) -> bool {
+    if path.starts_with("bin/") {
+        return !matches!(path, "bin/into-md" | "bin/into-md.exe");
+    }
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("lib/")
+        || [".dll", ".dylib", ".onnx", ".otf", ".so", ".ttf", ".wasm", ".woff", ".woff2"]
+            .iter()
+            .any(|suffix| lower.ends_with(suffix))
+        || lower.contains(".so.")
 }
 
 fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
