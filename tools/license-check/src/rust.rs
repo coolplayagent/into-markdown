@@ -209,7 +209,14 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
         } else {
             errors.push(format!("Bazel runtime package {package} lacks a Cargo package name"));
         }
-        for dependency in quoted_values(attribute(body, "deps").unwrap_or_default()) {
+        let deps = attribute(body, "deps").unwrap_or_default();
+        validate_direct_external_deps(
+            &repository.join(package).join("Cargo.toml"),
+            &label,
+            deps,
+            errors,
+        );
+        for dependency in quoted_values(deps) {
             if let Some(rest) = dependency.strip_prefix("//crates/") {
                 let normalized = if rest.contains(':') {
                     format!("//crates/{rest}")
@@ -226,6 +233,56 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
     if cargo_packages != bazel_packages {
         errors.push(format!(
             "Cargo/Bazel workspace runtime closure differs: Cargo={cargo_packages:?}, Bazel={bazel_packages:?}"
+        ));
+    }
+}
+
+fn validate_direct_external_deps(
+    manifest_path: &std::path::Path,
+    label: &str,
+    bazel_deps: &str,
+    errors: &mut Vec<String>,
+) {
+    let manifest: toml::Value = match std::fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+    {
+        Some(value) => value,
+        None => return,
+    };
+    let mut expected: BTreeSet<_> = manifest
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .filter(|(_, value)| value.as_table().is_none_or(|table| !table.contains_key("path")))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    for dependencies in manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|targets| targets.values())
+        .filter_map(|target| target.get("dependencies"))
+        .filter_map(toml::Value::as_table)
+    {
+        expected.extend(
+            dependencies
+                .iter()
+                .filter(|(_, value)| {
+                    value.as_table().is_none_or(|table| !table.contains_key("path"))
+                })
+                .map(|(name, _)| name.as_str()),
+        );
+    }
+    let explicit: BTreeSet<_> = quoted_values(bazel_deps)
+        .into_iter()
+        .filter_map(|value| value.strip_prefix("@crates//:"))
+        .collect();
+    let uses_macro = bazel_deps.contains("all_crate_deps(normal = True)");
+    if (uses_macro && !explicit.is_subset(&expected)) || (!uses_macro && explicit != expected) {
+        errors.push(format!(
+            "Cargo/Bazel direct external runtime dependencies differ for {label}: Cargo={expected:?}, Bazel={explicit:?}, macro={uses_macro}"
         ));
     }
 }
@@ -442,10 +499,15 @@ dependencies = ["a"]
 [[package]]
 name = "a"
 version = "0.0.0"
-dependencies = ["b"]
+dependencies = ["b", "serde 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)"]
 [[package]]
 name = "b"
 version = "0.0.0"
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#,
         )
         .unwrap();
@@ -454,16 +516,19 @@ version = "0.0.0"
             r#"rust_binary(name = "into-md", deps = ["//crates/a"] + all_crate_deps(normal = True), compile_data = ["//web/console:checked_assets"])"#,
         )
         .unwrap();
-        for package in ["a", "b"] {
-            fs::write(
-                root.join(format!("crates/{package}/Cargo.toml")),
-                format!("[package]\nname = \"{package}\"\nversion = \"0.0.0\"\n"),
-            )
-            .unwrap();
-        }
+        fs::write(
+            root.join("crates/a/Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.0.0\"\n[dependencies]\nb = { path = \"../b\" }\nserde = \"1\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/b/Cargo.toml"),
+            "[package]\nname = \"b\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
         fs::write(
             root.join("crates/a/BUILD.bazel"),
-            r#"rust_library(name = "a", deps = ["//crates/b"] + all_crate_deps(normal = True))"#,
+            r#"rust_library(name = "a", deps = ["//crates/b", "@crates//:serde"])"#,
         )
         .unwrap();
         fs::write(
@@ -476,7 +541,15 @@ version = "0.0.0"
         assert!(errors.is_empty(), "{errors:?}");
         fs::write(
             root.join("crates/a/BUILD.bazel"),
-            r#"rust_library(name = "a", deps = all_crate_deps(normal = True))"#,
+            r#"rust_library(name = "a", deps = ["//crates/b"])"#,
+        )
+        .unwrap();
+        validate_bazel_runtime_graph(&root, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("direct external")));
+        errors.clear();
+        fs::write(
+            root.join("crates/a/BUILD.bazel"),
+            r#"rust_library(name = "a", deps = ["@crates//:serde"])"#,
         )
         .unwrap();
         validate_bazel_runtime_graph(&root, &mut errors);
