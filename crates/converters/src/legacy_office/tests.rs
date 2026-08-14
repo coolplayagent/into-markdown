@@ -179,3 +179,107 @@ fn nested_service_is_required_before_worker_invocation() {
     assert!(matches!(error, ConversionError::ComponentUnavailable { .. }));
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
+
+#[derive(Default)]
+struct NativeNested {
+    requests: Mutex<Vec<InputFormat>>,
+}
+
+impl into_markdown_core::NestedConversionService for NativeNested {
+    fn convert<'a>(
+        &'a self,
+        request: NestedConversionRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+        Box::pin(async move {
+            let format = request.hint.format.ok_or_else(|| ConversionError::Malformed {
+                part: None,
+                detail: "manual nested conversion lacks format".into(),
+            })?;
+            self.requests.lock().unwrap().push(format);
+            let candidate = FormatCandidate::explicit(format);
+            match format {
+                InputFormat::Docx => {
+                    crate::DocxConverter
+                        .convert(
+                            request.input,
+                            &candidate,
+                            request.options,
+                            &Services::default(),
+                            context,
+                        )
+                        .await
+                }
+                InputFormat::Pptx => {
+                    crate::PresentationConverter
+                        .convert(
+                            request.input,
+                            &candidate,
+                            request.options,
+                            &Services::default(),
+                            context,
+                        )
+                        .await
+                }
+                InputFormat::Xlsx => {
+                    crate::WorkbookConverter
+                        .convert(
+                            request.input,
+                            &candidate,
+                            request.options,
+                            &Services::default(),
+                            context,
+                        )
+                        .await
+                }
+                _ => Err(ConversionError::Unsupported {
+                    detail: "manual nested conversion received wrong family".into(),
+                }),
+            }
+        })
+    }
+}
+
+#[test]
+#[ignore = "requires an explicitly audited local LibreOffice runtime and DOC/PPT/XLS fixtures"]
+fn manual_native_three_families_enter_real_nested_converters() {
+    let path = |name: &str| {
+        std::path::PathBuf::from(std::env::var_os(name).expect(name)).canonicalize().unwrap()
+    };
+    let root = path("INTO_MD_LEGACY_OFFICE_ROOT");
+    let runtime = LegacyOfficeRuntime::new(into_markdown_legacy_office::RuntimeConfig::new(
+        path("INTO_MD_LEGACY_OFFICE_AUTHORITY"),
+        root,
+        path("INTO_MD_LEGACY_OFFICE_WORKER"),
+    ));
+    let nested = Arc::new(NativeNested::default());
+    for (variable, format) in [
+        ("INTO_MD_LEGACY_OFFICE_DOC_FIXTURE", InputFormat::Doc),
+        ("INTO_MD_LEGACY_OFFICE_PPT_FIXTURE", InputFormat::Ppt),
+        ("INTO_MD_LEGACY_OFFICE_XLS_FIXTURE", InputFormat::Xls),
+    ] {
+        let bytes = std::fs::read(path(variable)).unwrap();
+        let input = ResolvedInput { bytes: Arc::from(bytes), metadata: SourceMetadata::default() };
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::from_mins(1)),
+                ..ExecutionOptions::default()
+            },
+            options.limits.clone(),
+        );
+        let services = Services { nested: Some(nested.clone()), ..Services::default() };
+        futures::executor::block_on(LegacyOfficeConverter::with_runtime(runtime.clone()).convert(
+            &input,
+            &FormatCandidate::explicit(format),
+            &options,
+            &services,
+            &context,
+        ))
+        .unwrap();
+    }
+    assert_eq!(
+        *nested.requests.lock().unwrap(),
+        [InputFormat::Docx, InputFormat::Pptx, InputFormat::Xlsx]
+    );
+}

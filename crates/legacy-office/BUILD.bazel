@@ -56,6 +56,7 @@ rust_test(
     deps = [
         ":legacy_office",
         "//crates/core",
+        "@crates//:libc",
         "@crates//:serde_json",
         "@crates//:object",
         "@crates//:sha2",

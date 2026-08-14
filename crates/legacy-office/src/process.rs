@@ -17,6 +17,9 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
 mod windows;
 
 const WAIT_INTERVAL: Duration = Duration::from_millis(2);
+const EARLY_RESPONSE_INPUT_BYTES: u64 = 4 * 1024 * 1024 + 17;
+const PARTIAL_RESPONSE_INPUT_BYTES: u64 = 4 * 1024 * 1024 + 18;
+const EARLY_HANG_INPUT_BYTES: u64 = 4 * 1024 * 1024 + 19;
 
 pub(crate) fn working_directory(
     bundle: &VerifiedBundle,
@@ -55,6 +58,7 @@ pub(crate) struct WorkerChild {
     child: Child,
     #[cfg(windows)]
     child: windows::Child,
+    _load_files: Vec<std::fs::File>,
     status: Option<WorkerStatus>,
 }
 
@@ -85,9 +89,33 @@ impl WorkerChild {
         if !working_directory.is_absolute() || !working_directory.is_dir() {
             return Err(unavailable("workerTemporaryDirectory"));
         }
+        let working_directory = working_directory
+            .canonicalize()
+            .map_err(|_| unavailable("workerTemporaryDirectory"))?;
+        let executable_tree = crate::snapshot::copy_tree(
+            &bundle.worker_load_files,
+            &working_directory.join(".worker-runtime"),
+        )
+        .map_err(|()| unavailable("workerIdentity"))?;
+        let executable_path = executable_tree
+            .path(
+                bundle
+                    .worker
+                    .strip_prefix(&bundle.root)
+                    .ok()
+                    .and_then(Path::to_str)
+                    .ok_or_else(|| unavailable("workerIdentity"))?,
+            )
+            .ok_or_else(|| unavailable("workerIdentity"))?
+            .to_owned();
+        let load_files = executable_tree.into_files();
         let mut arguments = vec![
             OsString::from("--runtime-root"),
             bundle.root.as_os_str().to_owned(),
+            OsString::from("--worker-original"),
+            bundle.worker.as_os_str().to_owned(),
+            OsString::from("--worker-sha256"),
+            OsString::from(&bundle.worker_sha256),
             OsString::from("--install-root"),
             bundle.install_root.as_os_str().to_owned(),
             OsString::from("--kit-library"),
@@ -115,26 +143,26 @@ impl WorkerChild {
             arguments.push(OsString::from(&bundle.app_container.sid));
         }
         #[cfg(unix)]
-        let mut command = std::process::Command::new(&bundle.worker);
+        let mut command = std::process::Command::new(&executable_path);
         #[cfg(unix)]
         command
             .args(&arguments)
-            .current_dir(working_directory)
+            .current_dir(&working_directory)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
-        return spawn_platform(command, address_limit);
+        return spawn_platform(command, address_limit, load_files);
         #[cfg(windows)]
         return windows::spawn(
-            &bundle.worker,
+            &executable_path,
             &arguments,
-            working_directory,
+            &working_directory,
             address_limit,
             &bundle.app_container,
         )
-        .map(|child| Self { child, status: None });
+        .map(|child| Self { child, _load_files: load_files, status: None });
         #[allow(unreachable_code)]
         Err(unavailable("unsupportedTarget"))
     }
@@ -200,11 +228,51 @@ impl Drop for WorkerChild {
 fn spawn_platform(
     mut command: std::process::Command,
     _address_limit: u64,
+    load_files: Vec<std::fs::File>,
 ) -> Result<WorkerChild, ConversionError> {
     use std::os::unix::process::CommandExt as _;
     command.process_group(0);
+    let descriptor_ceiling = descriptor_ceiling()?;
+    // SAFETY: the closure invokes only raw async-signal-safe syscalls between
+    // fork and exec. Stdio has already been duplicated to 0/1/2 by Command.
+    unsafe {
+        command.pre_exec(move || close_inherited_descriptors(descriptor_ceiling));
+    }
     let child = command.spawn().map_err(|_| unavailable("workerLaunch"))?;
-    Ok(WorkerChild { child, status: None })
+    Ok(WorkerChild { child, _load_files: load_files, status: None })
+}
+
+#[cfg(target_os = "linux")]
+fn close_inherited_descriptors(_: i32) -> std::io::Result<()> {
+    // SAFETY: close_range takes scalar arguments and is async-signal-safe as a
+    // direct system call. The worker contract inherits only stdin/out/err.
+    let result = unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 0_u32) };
+    if result == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+#[cfg(target_os = "macos")]
+fn close_inherited_descriptors(ceiling: i32) -> std::io::Result<()> {
+    if ceiling < 3 {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    // SAFETY: close(2) is async-signal-safe. The upper bound was captured from
+    // getrlimit before fork, so this loop performs no allocation or lookup.
+    for descriptor in 3..ceiling {
+        unsafe {
+            libc::close(descriptor);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn descriptor_ceiling() -> Result<i32, ConversionError> {
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: limit is a live out-parameter with the exact libc layout.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return Err(unavailable("workerLaunch"));
+    }
+    i32::try_from(limit.rlim_cur).map_err(|_| unavailable("workerLaunch"))
 }
 
 #[cfg(unix)]
@@ -302,19 +370,21 @@ pub(crate) fn worker_main() -> ExitCode {
 }
 
 pub(crate) fn test_worker_main() -> ExitCode {
-    let temporary_root = worker_argument("--temporary-root");
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let temporary_root = worker_argument(&arguments, "--temporary-root");
     match run_test_worker(
         std::io::stdin().lock(),
         std::io::stdout().lock(),
         temporary_root.as_deref(),
+        &arguments,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(()) => ExitCode::from(71),
     }
 }
 
-fn worker_argument(flag: &str) -> Option<std::path::PathBuf> {
-    let mut arguments = std::env::args_os().skip(1);
+fn worker_argument(arguments: &[OsString], flag: &str) -> Option<std::path::PathBuf> {
+    let mut arguments = arguments.iter();
     while let Some(candidate) = arguments.next() {
         let value = arguments.next()?;
         if candidate == flag {
@@ -328,11 +398,30 @@ fn run_test_worker(
     mut input: impl Read,
     mut output: impl Write,
     temporary_root: Option<&Path>,
+    arguments: &[OsString],
 ) -> Result<(), ()> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = arguments;
     let metadata = protocol::read_request_meta(&mut input)?;
     if metadata.input_bytes > 8 * 1024 * 1024 {
         protocol::write_error(&mut output, protocol::ERROR_RESOURCE)?;
         return Ok(());
+    }
+    if metadata.input_bytes == EARLY_RESPONSE_INPUT_BYTES {
+        let bytes = crate::package::fixture_package(NormalizedFormat::Docx)?;
+        protocol::write_response(&mut output, NormalizedFormat::Docx, &bytes)?;
+        return Ok(());
+    }
+    if metadata.input_bytes == PARTIAL_RESPONSE_INPUT_BYTES {
+        output.write_all(b"IMOW").map_err(|_| ())?;
+        return Ok(());
+    }
+    if metadata.input_bytes == EARLY_HANG_INPUT_BYTES {
+        let bytes = crate::package::fixture_package(NormalizedFormat::Docx)?;
+        protocol::write_response(&mut output, NormalizedFormat::Docx, &bytes)?;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
     }
     let mut source = Vec::new();
     source
@@ -351,7 +440,7 @@ fn run_test_worker(
     if source.starts_with(b"fixture:temporary-limit") {
         let path = temporary_root.ok_or(())?.join("fixture-temporary-exhaustion");
         let file = std::fs::File::create(path).map_err(|_| ())?;
-        file.set_len(32 * 1024 * 1024).map_err(|_| ())?;
+        file.set_len(128 * 1024 * 1024).map_err(|_| ())?;
         loop {
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -360,22 +449,93 @@ fn run_test_worker(
         protocol::write_error(&mut output, protocol::ERROR_ENCRYPTED)?;
         return Ok(());
     }
+    if source.starts_with(b"fixture:response-then-nonzero") {
+        let bytes = crate::package::fixture_package(NormalizedFormat::Docx)?;
+        protocol::write_response(&mut output, NormalizedFormat::Docx, &bytes)?;
+        return Err(());
+    }
+    #[cfg(target_os = "linux")]
+    if source.starts_with(b"fixture:sandbox-syscalls") {
+        crate::sandbox::install(&crate::sandbox::Policy::parse(arguments.iter().cloned())?)?;
+        linux_sandbox_probe()?;
+    }
     let format = match metadata.source {
         InputFormat::Doc => NormalizedFormat::Docx,
         InputFormat::Ppt => NormalizedFormat::Pptx,
         InputFormat::Xls => NormalizedFormat::Xlsx,
         _ => return Err(()),
     };
-    let bytes = match format {
-        NormalizedFormat::Docx => b"PK\x03\x04fixture-docx".as_slice(),
-        NormalizedFormat::Pptx => b"PK\x03\x04fixture-pptx".as_slice(),
-        NormalizedFormat::Xlsx => b"PK\x03\x04fixture-xlsx".as_slice(),
-    };
+    if source.starts_with(b"fixture:pk-garbage") {
+        return protocol::write_response(&mut output, format, b"PKgarbage");
+    }
+    if source.starts_with(b"fixture:wrong-family") {
+        let wrong = match format {
+            NormalizedFormat::Docx => NormalizedFormat::Pptx,
+            NormalizedFormat::Pptx | NormalizedFormat::Xlsx => NormalizedFormat::Docx,
+        };
+        let bytes = crate::package::fixture_package(wrong)?;
+        return protocol::write_response(&mut output, format, &bytes);
+    }
+    let bytes = crate::package::fixture_package(format)?;
     if u64::try_from(bytes.len()).map_err(|_| ())? > metadata.maximum_output_bytes {
         protocol::write_error(&mut output, protocol::ERROR_RESOURCE)
     } else {
-        protocol::write_response(&mut output, format, bytes)
+        protocol::write_response(&mut output, format, &bytes)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_sandbox_probe() -> Result<(), ()> {
+    fn denied(result: libc::c_long) -> Result<(), ()> {
+        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    // SAFETY: signal zero is non-mutating; seccomp must reject the syscall
+    // before the kernel considers the live parent PID.
+    denied(unsafe { libc::syscall(libc::SYS_kill, libc::getppid(), 0) })?;
+    // SAFETY: signal zero is non-mutating; a parent tgkill must be denied while
+    // the same-process form remains available to the threading runtime.
+    denied(unsafe { libc::syscall(libc::SYS_tgkill, libc::getppid(), libc::getppid(), 0) })?;
+    if unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), libc::gettid(), 0) } != 0 {
+        return Err(());
+    }
+    // SAFETY: all pointer/count arguments are intentionally inert. The filter
+    // must return EPERM before any descriptor or address validation.
+    denied(unsafe {
+        libc::syscall(libc::SYS_pidfd_send_signal, -1, 0, std::ptr::null::<libc::siginfo_t>(), 0)
+    })?;
+    denied(unsafe {
+        libc::syscall(
+            libc::SYS_process_vm_readv,
+            libc::getppid(),
+            std::ptr::null::<libc::iovec>(),
+            0,
+            std::ptr::null::<libc::iovec>(),
+            0,
+            0,
+        )
+    })?;
+    denied(unsafe {
+        libc::syscall(
+            libc::SYS_process_vm_writev,
+            libc::getppid(),
+            std::ptr::null::<libc::iovec>(),
+            0,
+            std::ptr::null::<libc::iovec>(),
+            0,
+            0,
+        )
+    })?;
+    denied(unsafe { libc::syscall(libc::SYS_io_uring_setup, 1, std::ptr::null::<u8>()) })?;
+    denied(unsafe {
+        libc::syscall(libc::SYS_io_uring_enter, -1, 0, 0, 0, std::ptr::null::<u8>(), 0)
+    })?;
+    denied(unsafe { libc::syscall(libc::SYS_io_uring_register, -1, 0, 0, 0) })?;
+    Ok(())
 }
 
 fn unavailable(detail: &'static str) -> ConversionError {
@@ -390,6 +550,7 @@ mod tests {
     use super::*;
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::io::BufRead as _;
+    use std::os::fd::AsRawFd as _;
 
     fn shell(script: &str, directory: &Path) -> WorkerChild {
         let mut command = std::process::Command::new("/bin/sh");
@@ -401,7 +562,8 @@ mod tests {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        spawn_platform(command, 512 * 1024 * 1024).unwrap()
+        let executable = std::fs::File::open("/bin/sh").unwrap();
+        spawn_platform(command, 512 * 1024 * 1024, vec![executable]).unwrap()
     }
 
     #[test]
@@ -444,5 +606,34 @@ mod tests {
         assert!(matches!(worker.wait(&context), Err(ConversionError::Cancelled)));
         worker.terminate();
         assert!(worker.has_exited().unwrap());
+    }
+
+    #[test]
+    fn spawn_closes_non_cloexec_files_and_sockets_but_preserves_stdio() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = std::fs::File::create(root.path().join("secret")).unwrap();
+        let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        clear_cloexec(secret.as_raw_fd());
+        clear_cloexec(socket.as_raw_fd());
+        let script = format!(
+            "if (: <&{}) 2>/dev/null || (: <&{}) 2>/dev/null; then exit 41; fi; IFS= read -r line; printf '%s' \"$line\"",
+            secret.as_raw_fd(),
+            socket.as_raw_fd()
+        );
+        let mut worker = shell(&script, root.path());
+        let mut stdin = worker.take_stdin().unwrap();
+        stdin.write_all(b"stdio-preserved\n").unwrap();
+        drop(stdin);
+        let mut stdout = String::new();
+        worker.take_stdout().unwrap().read_to_string(&mut stdout).unwrap();
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        worker.wait(&context).unwrap();
+        assert_eq!(stdout, "stdio-preserved");
+    }
+
+    fn clear_cloexec(descriptor: i32) {
+        // SAFETY: the descriptors are live test-owned file/socket handles and
+        // F_SETFD mutates only their inheritance flag.
+        assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_SETFD, 0) }, 0);
     }
 }

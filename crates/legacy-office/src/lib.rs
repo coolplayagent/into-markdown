@@ -8,9 +8,11 @@
 mod authority;
 mod client;
 mod native;
+mod package;
 mod process;
 mod protocol;
 mod sandbox;
+mod snapshot;
 #[cfg(windows)]
 mod windows_support;
 
@@ -21,6 +23,9 @@ pub use authority::{RuntimeConfig, RuntimeIdentity};
 
 /// Maximum wire-format output supported by this protocol revision.
 pub const MAX_NORMALIZED_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Fixed transient metadata allowance for normalized-package validation.
+pub const NORMALIZED_PACKAGE_AUDIT_MEMORY_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Normalized package kind returned by the compatibility worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +58,25 @@ impl NormalizedFormat {
             Self::Xlsx => "xlsx",
         }
     }
+}
+
+/// Validate a normalized OOXML package's exact ZIP envelope and family.
+///
+/// This is the common parent/worker audit boundary. It validates every local
+/// and central record, member CRC, canonical path, content-type declaration,
+/// and root office-document relationship before nested dispatch.
+///
+/// # Errors
+///
+/// Returns `Malformed`, `Encrypted`, `ResourceLimit`, cancellation, or timeout
+/// without attempting to interpret document content.
+pub fn audit_normalized_package(
+    bytes: &[u8],
+    expected: NormalizedFormat,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let _memory = context.reserve_memory(NORMALIZED_PACKAGE_AUDIT_MEMORY_BYTES)?;
+    package::audit(bytes, expected, context)
 }
 
 /// Verified worker result and its compatibility-runtime identity.

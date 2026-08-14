@@ -117,7 +117,8 @@ DOC、PPT/PPS/POT 与 XLS 通过固定随包路径中的 `legacy-office-worker` 
 LibreOffice、`PATH`、代理或 loader 环境；未安装当前平台的精确 authority/runtime 时稳定返回
 `componentUnavailable`。Windows 只消费安装器预置且 SID 精确匹配、零 capability 的
 AppContainer，不在转换路径创建或删除持久 profile。运行时制品的组装和发布许可清单由平台包装
-任务独立交付。
+任务独立交付。worker/kit 与非系统依赖只从 authority 校验后的请求私有只读快照 exec/load，
+输出必须通过 exact ZIP、CRC、内容类型与根 relationship 的 DOCX/PPTX/XLSX family 审计。
 
 模型查询、显式安装、离线校验、路径和安全清理后端已实现。完整
 `pp-ocrv6-tiny-zh-en` pipeline 绑定可安装的 detector 与 recognizer 组件；两者分别固定官方

@@ -333,7 +333,10 @@ compatibility，不能替代 Windows reparse/DACL 或 Linux filesystem runtime �
 PPT→PPTX、XLS→XLSX、格式混淆、尾随帧、低内存 fail-before、额外文件/symlink、worker crash、
 encrypted、精确输出上限、取消/timeout、process-group descendant reap、temporary/lease 释放、
 temporary sparse-file 超限时的 watchdog terminate/reap，以及 nested 服务只收到根
-context/options。它不代表 LibreOffice 质量或许可验证。
+context/options。恶意图还覆盖非 CLOEXEC secret file/socket 不继承、原子 worker/kit path swap、
+未授权 loader dependency/rpath、Linux cross-process/io_uring syscall、请求写入 broken pipe、提前/
+部分响应、非零退出，以及 ZIP duplicate/path/encryption/overlap/CRC/family/root-relationship 混淆。
+它不代表 LibreOffice 质量或许可验证。
 
 Windows 的普通图以可注入 suspended-launch contract 覆盖 assign Job、token mismatch/error、resume
 失败后的 terminate+wait 顺序，以及命令行 quoting 和收窄 DLL flags；这些只作为 Windows target
@@ -349,8 +352,13 @@ INTO_MD_LEGACY_OFFICE_ROOT=/absolute/runtime-bundle \
 INTO_MD_LEGACY_OFFICE_AUTHORITY=/absolute/runtime-bundle/authority.json \
 INTO_MD_LEGACY_OFFICE_WORKER=/absolute/runtime-bundle/worker \
 INTO_MD_LEGACY_OFFICE_DOC_FIXTURE=/absolute/repository-owned.doc \
+INTO_MD_LEGACY_OFFICE_PPT_FIXTURE=/absolute/repository-owned.ppt \
+INTO_MD_LEGACY_OFFICE_XLS_FIXTURE=/absolute/repository-owned.xls \
 cargo test -p into-markdown-legacy-office --test worker_process manual_native_runtime_conversion -- --ignored
 ```
+
+同一组变量可运行 converters 内 ignored manual test，实际进入 DOCX、PresentationML 与 XLSX 三个
+nested converter，而不是只检查 worker 返回包头。
 
 ## 全格式 fixture 语料库
 

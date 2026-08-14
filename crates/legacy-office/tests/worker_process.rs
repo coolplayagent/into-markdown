@@ -6,6 +6,7 @@ use object::Object as _;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 fn fixture_worker() -> PathBuf {
@@ -39,6 +40,21 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
             object::read::NameOrOrdinal::Name(b"libreofficekit_hook_2" | b"_libreofficekit_hook_2")
         )
     }));
+    let mut system_libraries = kit_object
+        .imports()
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|import| std::str::from_utf8(import.library()).unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    if cfg!(target_os = "macos") {
+        system_libraries.extend([
+            "/usr/lib/libSystem.B.dylib".to_owned(),
+            "/usr/lib/libiconv.2.dylib".to_owned(),
+            "/usr/lib/libsandbox.1.dylib".to_owned(),
+        ]);
+    }
+    let system_read_paths =
+        if cfg!(windows) { vec![r"C:\Windows\System32"] } else { vec!["/usr/lib"] };
     std::fs::write(root_path.join("LICENSE"), b"Apache-2.0 fixture only\n").unwrap();
     let target = target();
     let worker_entry = file_entry(&worker, worker_name, "worker");
@@ -78,7 +94,8 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
                     "processLimit": 1
                 },
                 "sandbox": {
-                    "systemReadPaths": [],
+                    "systemReadPaths": system_read_paths,
+                    "systemLibraries": system_libraries,
                     "network": "deny",
                     "childProcesses": "deny"
                 }
@@ -89,6 +106,11 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
     std::fs::write(&authority_path, serde_json::to_vec_pretty(&authority).unwrap()).unwrap();
     let runtime = LegacyOfficeRuntime::new(RuntimeConfig::new(authority_path, root_path, worker));
     (root, runtime)
+}
+
+fn process_test_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn file_entry(path: &Path, relative: &str, role: &str) -> serde_json::Value {
@@ -147,6 +169,7 @@ fn limits() -> ResourceLimits {
 #[test]
 #[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
 fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
+    let _guard = process_test_guard();
     let (_root, runtime) = configured_runtime();
     for (source, expected) in [
         (InputFormat::Doc, NormalizedFormat::Docx),
@@ -157,7 +180,7 @@ fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
             into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
         let package = runtime.convert(b"fixture:normal", source, 1024, &context).unwrap();
         assert_eq!(package.format, expected);
-        assert!(package.bytes.starts_with(b"PK\x03\x04fixture-"));
+        assert!(package.bytes.starts_with(b"PK\x03\x04"));
         assert_eq!(package.runtime.version(), "26.2.4.2-fixture");
         assert_eq!(package.runtime.target(), target().name);
         assert_temporary_released(&context);
@@ -169,6 +192,7 @@ fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
 #[test]
 #[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
 fn crash_encryption_limit_and_timeout_are_stable_and_reaped() {
+    let _guard = process_test_guard();
     let (_root, runtime) = configured_runtime();
     for (source, expected) in [
         (b"fixture:crash".as_slice(), "componentUnavailable"),
@@ -177,7 +201,7 @@ fn crash_encryption_limit_and_timeout_are_stable_and_reaped() {
         let context =
             into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
         let error = runtime.convert(source, InputFormat::Doc, 1024, &context).unwrap_err();
-        assert_eq!(error.code().as_str(), expected);
+        assert_eq!(error.code().as_str(), expected, "{error:?}");
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_temporary_released(&context);
     }
@@ -210,6 +234,136 @@ fn crash_encryption_limit_and_timeout_are_stable_and_reaped() {
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
+#[test]
+#[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
+fn early_partial_and_nonzero_responses_are_protocol_failures_and_reaped() {
+    let _guard = process_test_guard();
+    let (_root, runtime) = configured_runtime();
+    for source in [
+        vec![0_u8; 4 * 1024 * 1024 + 17],
+        vec![0_u8; 4 * 1024 * 1024 + 18],
+        vec![0_u8; 4 * 1024 * 1024 + 19],
+        b"fixture:response-then-nonzero".to_vec(),
+    ] {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        let error = runtime.convert(&source, InputFormat::Doc, 1024, &context).unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ComponentUnavailable { ref detail, .. } if detail == "workerProtocol"
+        ));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_temporary_released(&context);
+    }
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
+fn pk_garbage_and_claimed_family_confusion_are_protocol_failures() {
+    let _guard = process_test_guard();
+    let (_root, runtime) = configured_runtime();
+    for source in [b"fixture:pk-garbage".as_slice(), b"fixture:wrong-family".as_slice()] {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        let error = runtime.convert(source, InputFormat::Doc, 16 * 1024, &context).unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ComponentUnavailable { ref detail, .. } if detail == "workerProtocol"
+        ));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn native_linux_sandbox_blocks_cross_process_and_io_uring_syscalls() {
+    let _guard = process_test_guard();
+    let (_root, runtime) = configured_runtime();
+    let context = into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+    let package = runtime
+        .convert(b"fixture:sandbox-syscalls", InputFormat::Doc, 16 * 1024, &context)
+        .unwrap();
+    assert_eq!(package.format, NormalizedFormat::Docx);
+    assert!(package.bytes.starts_with(b"PK\x03\x04"));
+}
+
+#[test]
+#[cfg(unix)]
+fn atomic_worker_path_swaps_never_execute_unverified_inode() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let _guard = process_test_guard();
+    let (root, runtime) = configured_runtime();
+    let swap = tempfile::tempdir().unwrap();
+    let marker = swap.path().join("canary-executed");
+    let canary = swap.path().join("canary-worker");
+    std::fs::write(
+        &canary,
+        format!("#!/bin/sh\nprintf canary > '{}'\nexit 99\n", marker.display()),
+    )
+    .unwrap();
+    executable(&canary);
+    let worker_name = if cfg!(windows) { "worker.exe" } else { "worker" };
+    let worker = root.path().join(worker_name).canonicalize().unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let swap_stopped = Arc::clone(&stopped);
+    let swap_worker = worker.clone();
+    let swap_canary = canary.clone();
+    let swapper = std::thread::spawn(move || {
+        while !swap_stopped.load(Ordering::Relaxed) {
+            atomic_swap(&swap_worker, &swap_canary);
+            std::thread::sleep(Duration::from_micros(100));
+            atomic_swap(&swap_worker, &swap_canary);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let mut successes = 0_usize;
+    for _ in 0..8 {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        match runtime.convert(b"fixture:normal", InputFormat::Doc, 16 * 1024, &context) {
+            Ok(package) => {
+                successes += 1;
+                assert_eq!(package.format, NormalizedFormat::Docx);
+            }
+            Err(ConversionError::ComponentUnavailable { .. }) => {}
+            Err(error) => panic!("unexpected swap result: {error:?}"),
+        }
+        assert!(!marker.exists());
+        if successes >= 2 {
+            break;
+        }
+    }
+    stopped.store(true, Ordering::Relaxed);
+    swapper.join().unwrap();
+    assert!(successes > 0);
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_swap(left: &Path, right: &Path) {
+    use std::os::unix::ffi::OsStrExt as _;
+    let left = std::ffi::CString::new(left.as_os_str().as_bytes()).unwrap();
+    let right = std::ffi::CString::new(right.as_os_str().as_bytes()).unwrap();
+    // SAFETY: both C strings name live regular-file fixtures on one filesystem.
+    assert_eq!(unsafe { libc::renamex_np(left.as_ptr(), right.as_ptr(), libc::RENAME_SWAP) }, 0);
+}
+
+#[cfg(target_os = "linux")]
+fn atomic_swap(left: &Path, right: &Path) {
+    use std::os::unix::ffi::OsStrExt as _;
+    let left = std::ffi::CString::new(left.as_os_str().as_bytes()).unwrap();
+    let right = std::ffi::CString::new(right.as_os_str().as_bytes()).unwrap();
+    // SAFETY: both C strings name live regular-file fixtures on one filesystem.
+    assert_eq!(
+        unsafe {
+            libc::renameat2(libc::AT_FDCWD, left.as_ptr(), libc::AT_FDCWD, right.as_ptr(), 2)
+        },
+        0
+    );
+}
+
 fn assert_temporary_released(context: &into_markdown_core::ExecutionContext) {
     let reservation = context.reserve_temporary(64 * 1024 * 1024).unwrap();
     drop(reservation);
@@ -218,6 +372,7 @@ fn assert_temporary_released(context: &into_markdown_core::ExecutionContext) {
 #[test]
 #[ignore = "requires an explicitly audited local LibreOffice runtime bundle"]
 fn manual_native_runtime_conversion() {
+    let _guard = process_test_guard();
     let value = |name: &str| PathBuf::from(std::env::var_os(name).expect(name));
     let root = value("INTO_MD_LEGACY_OFFICE_ROOT").canonicalize().unwrap();
     let runtime = LegacyOfficeRuntime::new(RuntimeConfig::new(
@@ -225,12 +380,21 @@ fn manual_native_runtime_conversion() {
         root,
         value("INTO_MD_LEGACY_OFFICE_WORKER"),
     ));
-    let input = std::fs::read(value("INTO_MD_LEGACY_OFFICE_DOC_FIXTURE")).unwrap();
-    let context = into_markdown_core::ExecutionContext::new(
-        ExecutionOptions { timeout: Some(Duration::from_mins(1)), ..ExecutionOptions::default() },
-        ResourceLimits::default(),
-    );
-    let package = runtime.convert(&input, InputFormat::Doc, 256 * 1024 * 1024, &context).unwrap();
-    assert_eq!(package.format, NormalizedFormat::Docx);
-    assert!(package.bytes.starts_with(b"PK"));
+    for (variable, source, expected) in [
+        ("INTO_MD_LEGACY_OFFICE_DOC_FIXTURE", InputFormat::Doc, NormalizedFormat::Docx),
+        ("INTO_MD_LEGACY_OFFICE_PPT_FIXTURE", InputFormat::Ppt, NormalizedFormat::Pptx),
+        ("INTO_MD_LEGACY_OFFICE_XLS_FIXTURE", InputFormat::Xls, NormalizedFormat::Xlsx),
+    ] {
+        let input = std::fs::read(value(variable)).unwrap();
+        let context = into_markdown_core::ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(Duration::from_mins(1)),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits::default(),
+        );
+        let package = runtime.convert(&input, source, 256 * 1024 * 1024, &context).unwrap();
+        assert_eq!(package.format, expected);
+        assert!(package.bytes.starts_with(b"PK\x03\x04"));
+    }
 }

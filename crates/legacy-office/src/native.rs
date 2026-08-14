@@ -10,8 +10,9 @@ use std::path::Path;
 
 pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), u8> {
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
-    let runtime = NativeRuntime::load(&policy).map_err(|()| 72)?;
+    let runtime = PreparedRuntime::new(&policy).map_err(|()| 72)?;
     sandbox::install(&policy).map_err(|()| 70)?;
+    let runtime = runtime.load().map_err(|()| 72)?;
     match run_request(&policy, &runtime) {
         Ok(()) => Ok(()),
         Err(code) => {
@@ -50,8 +51,28 @@ fn run_request(policy: &Policy, runtime: &NativeRuntime) -> Result<(), u8> {
     runtime.convert(&source_path, &output_path, &profile, format)?;
     let bytes =
         read_bounded_output(&output_path, request_root.path(), metadata.maximum_output_bytes)?;
+    let audit_context = into_markdown_core::ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits {
+            max_memory_bytes: policy.address_limit,
+            max_temporary_bytes: policy.file_limit,
+            ..into_markdown_core::ResourceLimits::default()
+        },
+    );
+    let _audit_memory = audit_context
+        .reserve_memory(crate::NORMALIZED_PACKAGE_AUDIT_MEMORY_BYTES)
+        .map_err(|_| ERROR_RESOURCE)?;
+    crate::package::audit(&bytes, format, &audit_context).map_err(|error| package_error(&error))?;
     protocol::write_response(&mut std::io::stdout().lock(), format, &bytes)
         .map_err(|()| ERROR_RUNTIME)
+}
+
+fn package_error(error: &into_markdown_core::ConversionError) -> u8 {
+    match error {
+        into_markdown_core::ConversionError::Encrypted => ERROR_ENCRYPTED,
+        into_markdown_core::ConversionError::ResourceLimit { .. } => ERROR_RESOURCE,
+        _ => ERROR_MALFORMED,
+    }
 }
 
 fn create_private(path: &Path) -> std::io::Result<File> {
@@ -127,19 +148,43 @@ fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
 
 struct NativeRuntime {
     _library: Library,
+    _load_files: Vec<File>,
     hook: unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit,
     install_root: CString,
 }
 
-impl NativeRuntime {
-    fn load(policy: &Policy) -> Result<Self, ()> {
+struct PreparedRuntime {
+    load_tree: crate::snapshot::VerifiedTree,
+    kit_relative: String,
+    install_root: CString,
+}
+
+impl PreparedRuntime {
+    fn new(policy: &Policy) -> Result<Self, ()> {
         let authority = reverify_authority(policy)?;
-        if file_sha256(&policy.kit_library)? != policy.kit_sha256 {
+        let kit_relative = authority
+            .kit_library
+            .strip_prefix(&authority.root)
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or(())?
+            .to_owned();
+        let load_tree = crate::snapshot::copy_tree(
+            &authority.native_load_files,
+            &policy.temporary_root.join(".native-runtime"),
+        )?;
+        if load_tree.path(&kit_relative).is_none() {
             return Err(());
         }
-        // SAFETY: the absolute, canonical, authority-hashed library is loaded
-        // before the sandbox closes the dynamic loader's dependency paths.
-        let library = load_library(&authority.kit_library)?;
+        Ok(Self { load_tree, kit_relative, install_root: path_c_string(&policy.install_root)? })
+    }
+
+    fn load(self) -> Result<NativeRuntime, ()> {
+        let library_path = self.load_tree.path(&self.kit_relative).ok_or(())?.to_owned();
+        // SAFETY: every package-owned dependency was copied from an
+        // authority-hashed no-follow handle into this private immutable tree;
+        // sandbox installation completed before the loader can run a constructor.
+        let library = load_library(&library_path)?;
         // SAFETY: authority ABI validation requires this exact C export.
         let hook = unsafe {
             *library
@@ -148,9 +193,16 @@ impl NativeRuntime {
                 )
                 .map_err(|_| ())?
         };
-        Ok(Self { _library: library, hook, install_root: path_c_string(&policy.install_root)? })
+        Ok(NativeRuntime {
+            _library: library,
+            _load_files: self.load_tree.into_files(),
+            hook,
+            install_root: self.install_root,
+        })
     }
+}
 
+impl NativeRuntime {
     fn convert(
         &self,
         source: &Path,
@@ -175,7 +227,9 @@ impl NativeRuntime {
 fn reverify_authority(policy: &Policy) -> Result<crate::authority::VerifiedBundle, ()> {
     use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
 
-    let worker = std::env::current_exe().map_err(|_| ())?.canonicalize().map_err(|_| ())?;
+    if running_executable_sha256()? != policy.worker_sha256 {
+        return Err(());
+    }
     let context = ExecutionContext::new(
         ExecutionOptions::default(),
         ResourceLimits {
@@ -188,13 +242,15 @@ fn reverify_authority(policy: &Policy) -> Result<crate::authority::VerifiedBundl
         &RuntimeConfig::new(
             policy.runtime_root.join("authority.json"),
             policy.runtime_root.clone(),
-            worker,
+            policy.worker_original.clone(),
         ),
         &context,
     )
     .map_err(|_| ())?;
     if bundle.root != policy.runtime_root
         || bundle.install_root != policy.install_root
+        || bundle.worker != policy.worker_original
+        || bundle.worker_sha256 != policy.worker_sha256
         || bundle.kit_library != policy.kit_library
         || bundle.kit_sha256 != policy.kit_sha256
         || bundle.authority_sha256 != policy.authority_sha256
@@ -209,6 +265,16 @@ fn reverify_authority(policy: &Policy) -> Result<crate::authority::VerifiedBundl
         return Err(());
     }
     Ok(bundle)
+}
+
+fn running_executable_sha256() -> Result<String, ()> {
+    #[cfg(target_os = "linux")]
+    let path = Path::new("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let executable = std::env::current_exe().map_err(|_| ())?;
+    #[cfg(not(target_os = "linux"))]
+    let path = executable.as_path();
+    file_sha256(path)
 }
 
 #[cfg(not(windows))]

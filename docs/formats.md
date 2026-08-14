@@ -49,6 +49,9 @@ size/hash/role 清单、许可证文本清单、ABI/export、worker hard limits 
 稳定返回 `componentUnavailable`；绝不回退到系统 LibreOffice、UNO service、COM 或 PATH。
 平台 runtime 安装包及其随版本变化的完整第三方许可证由独立包装任务提供，本仓库不会捏造
 未审计制品 hash。
+worker 输出不是凭 `PK` 前缀判定：worker 与父进程都对 ZIP local/central 范围、flag、路径、重复、
+CRC、内容类型和根 officeDocument relationship 做有界完整审计，并要求声明 family 与
+DOCX/PPTX/XLSX 主部件一致，错误包不会进入 nested converter。
 Windows authority 额外绑定由平台安装事务预置的 AppContainer profile name 与精确派生 SID；
 capability 集必须为空，网络/身份/库/可移动存储 capability 以固定 forbidden 清单明确拒绝。
 converter 不创建、删除或修复 profile/ACL，任何缺失或漂移都 fail closed。

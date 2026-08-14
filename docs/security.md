@@ -27,13 +27,18 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   CID 按普通附件处理；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
 - 旧 Office 的 native 兼容解析只在单请求 `legacy-office-worker` 中发生。父进程先双向校验
   `authority.json` 与完整 runtime tree，拒绝额外文件、symlink/reparse、许可或 ABI/export
-  漂移；worker 在加载 native library 前再次核对 authority hash、完整 tree 与 kit hash。环境从
+  漂移；ELF `DT_NEEDED/RPATH/RUNPATH`、Mach-O load command/rpath 与 PE imports 递归解析，
+  非系统依赖必须唯一解析到 inventory，系统依赖必须出现在平台精确 `systemLibraries` 与
+  `systemReadPaths` allowlist。绝对逃逸、未列出或歧义依赖在任何 constructor 执行前拒绝。
+  父进程和 worker 分别把已验证 worker、kit 与依赖复制到请求私有只读 inode tree，实际
+  exec/load 只引用该 tree；worker 在 sandbox 安装后才加载 kit。环境从
   空集合启动，参数均为 canonical absolute path，不读取 `PATH`、HOME、代理、loader 或当前目录
   authority。协议具有固定 magic/version/kind/request-id、checked 64-bit payload length、完整
   SHA-256 和 EOF exhaustion；格式混淆、尾随帧与超限输出 fail closed。
   worker 在读取敌意正文前安装 hard address/file/descriptor limits 与平台 sandbox：macOS seatbelt
   固定 deny network/fork/exec 且只开放受审 bundle/temp/system-read roots，Linux 使用 Landlock 加
-  seccomp（网络、非线程 clone、exec、ptrace、mount 等拒绝），Windows 要求使用预置 profile 的
+  seccomp（网络、非线程 clone、exec、ptrace、mount、跨进程 kill/pidfd/process_vm 与 io_uring
+  等拒绝），Windows 要求使用预置 profile 的
   零 capability AppContainer：`CreateProcessW` 只继承 stdin/stdout/stderr，suspended process 先
   进入 process-memory/active-process=1/kill-on-close Job，复核 token SID 后才 resume；runtime DLL
   搜索仅允许 authority kit directory 与 System32。profile/ACL 的创建、原子替换和删除属于平台
@@ -41,8 +46,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   父进程对取消、deadline、崩溃、协议错误均终止独立 process group/job 并 wait/reap；私有
   temporary root 在 worker 运行与退出前持续扫描 entry/depth/declared bytes，超过同一请求已预留
   上限或出现 symlink/special file 会立即终止 worker；input/output/profile 在成功或失败后共同释放。
-  宏以最高 security level 禁用，sandbox 同时阻止外链、任意文件读取与子进程；normalized package
-  受 memory/temporary/file size 和 SHA-256 约束后才进入 nested converter。
+  宏以最高 security level 禁用，sandbox 同时阻止外链、任意文件读取与子进程；worker 与父进程
+  使用同一 OOXML audit：完整消费 exact ZIP envelope/central/local/descriptor、拒绝加密、重复、
+  path escape、overlap 与 CRC 错误，并以 `[Content_Types].xml` 和根 relationship 唯一绑定
+  DOCX/PPTX/XLSX family，之后才进入 nested converter。
 - PresentationML 只沿 root officeDocument 与 slide order 可达的受授权关系图按需解压；未知或
   未引用 payload 不进入内存。VBA、ActiveX、OLE 与 embedded package 目标同时按 content type
   和关系 type 在解压前隔离，即使目标重命名或伪装为 octet-stream 也不能绕过。所有外部关系

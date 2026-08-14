@@ -6,6 +6,8 @@ const MAX_SYSTEM_PATHS: usize = 128;
 #[derive(Debug)]
 pub(crate) struct Policy {
     pub runtime_root: PathBuf,
+    pub worker_original: PathBuf,
+    pub worker_sha256: String,
     pub install_root: PathBuf,
     pub kit_library: PathBuf,
     pub kit_sha256: String,
@@ -22,6 +24,8 @@ pub(crate) struct Policy {
 impl Policy {
     pub(crate) fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Self, ()> {
         let mut runtime_root = None;
+        let mut worker_original = None;
+        let mut worker_sha256 = None;
         let mut install_root = None;
         let mut kit_library = None;
         let mut kit_sha256 = None;
@@ -38,6 +42,8 @@ impl Policy {
             let value = arguments.next().ok_or(())?;
             match flag.to_str().ok_or(())? {
                 "--runtime-root" => set_path(&mut runtime_root, value)?,
+                "--worker-original" => set_path(&mut worker_original, value)?,
+                "--worker-sha256" => set_text(&mut worker_sha256, value)?,
                 "--install-root" => set_path(&mut install_root, value)?,
                 "--kit-library" => set_path(&mut kit_library, value)?,
                 "--kit-sha256" => set_text(&mut kit_sha256, value)?,
@@ -56,6 +62,8 @@ impl Policy {
         }
         let policy = Self {
             runtime_root: runtime_root.ok_or(())?,
+            worker_original: worker_original.ok_or(())?,
+            worker_sha256: worker_sha256.ok_or(())?,
             install_root: install_root.ok_or(())?,
             kit_library: kit_library.ok_or(())?,
             kit_sha256: kit_sha256.ok_or(())?,
@@ -79,17 +87,24 @@ impl Policy {
             self.temporary_root.as_path(),
         ];
         if roots.iter().any(|path| canonical_directory(path).is_err())
+            || canonical_file(&self.worker_original).is_err()
             || canonical_file(&self.kit_library).is_err()
             || !self.install_root.starts_with(&self.runtime_root)
+            || !self.worker_original.starts_with(&self.runtime_root)
             || !self.kit_library.starts_with(&self.runtime_root)
             || self.address_limit < 256 * 1024 * 1024
             || self.file_limit == 0
             || !(16..=4_096).contains(&self.open_file_limit)
             || self.system_read_paths.iter().any(|path| canonical_directory(path).is_err())
             || self.kit_sha256.len() != 64
+            || self.worker_sha256.len() != 64
             || self.authority_sha256.len() != 64
             || !self
                 .kit_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !self
+                .worker_sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             || !self

@@ -43,6 +43,7 @@ fn target() -> Target {
         },
         sandbox: SandboxAuthority {
             system_read_paths: Vec::new(),
+            system_libraries: Vec::new(),
             network: "deny".into(),
             child_processes: "deny".into(),
             app_container: if name == "x86_64-pc-windows-msvc" {

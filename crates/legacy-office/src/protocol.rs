@@ -143,7 +143,17 @@ pub(crate) fn write_error(writer: &mut impl Write, code: u8) -> Result<(), ()> {
     writer.flush().map_err(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) fn read_reply(
+    reader: &mut impl Read,
+    maximum_output_bytes: u64,
+) -> Result<WorkerReply, ()> {
+    let reply = read_reply_frame(reader, maximum_output_bytes)?;
+    require_eof(reader)?;
+    Ok(reply)
+}
+
+pub(crate) fn read_reply_frame(
     reader: &mut impl Read,
     maximum_output_bytes: u64,
 ) -> Result<WorkerReply, ()> {
@@ -157,7 +167,6 @@ pub(crate) fn read_reply(
         }
         let mut code = [0_u8; 1];
         reader.read_exact(&mut code).map_err(|_| ())?;
-        require_eof(reader)?;
         return Ok(WorkerReply::Error(code[0]));
     }
     if header.kind != RESPONSE || header.payload_bytes < RESPONSE_META_BYTES as u64 {
@@ -183,7 +192,6 @@ pub(crate) fn read_reply(
     if Sha256::digest(&bytes)[..] != metadata[16..48] {
         return Err(());
     }
-    require_eof(reader)?;
     Ok(WorkerReply::Output(Response { format: decode_output(metadata[0])?, bytes }))
 }
 

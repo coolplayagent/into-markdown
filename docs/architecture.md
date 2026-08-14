@@ -109,6 +109,11 @@ length-prefixed protocol、父进程生命周期、平台 sandbox 与窄 LibreOf
 和 provenance remap。worker 不依赖 converter、engine 或 renderer；converter 不接触 native ABI，
 也不能给 worker 传 `Services`。一份源文件对应一个新进程和一个 request/response，终态前必须
 kill/wait 或正常 wait，因此 native global state、崩溃与临时 profile 不跨请求复用。
+父进程从 no-follow、hash 匹配的 worker/dependency 文件建立请求私有只读 inode tree，再从该
+tree 启动；Unix fork/exec 间原子关闭除 0/1/2 外的所有 descriptor。worker 重新验证完整
+authority 后，以同样方式复制 kit 与递归依赖闭包，安装 sandbox 后才调用动态加载器，因而路径
+rename/swap 与 library constructor 都不能越过已验证 identity。成功协议状态同时要求请求完整写入、
+单一响应完整读到 EOF 且 worker 正常退出，任一半关闭或提前响应均 terminate/wait。
 Windows 启动器使用显式 `CreateProcessW` attribute list，把三个标准流列为唯一可继承 handle，
 在 suspended 状态下先绑定单进程 Job、复核 AppContainer token SID，再恢复主线程；失败路径统一
 terminate/wait。AppContainer profile 与 runtime ACL 是平台安装事务的输入，不由请求动态修改。

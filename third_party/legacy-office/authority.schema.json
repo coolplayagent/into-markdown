@@ -93,11 +93,17 @@
     "unixSandbox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["systemReadPaths", "network", "childProcesses"],
+      "required": ["systemReadPaths", "systemLibraries", "network", "childProcesses"],
       "properties": {
         "systemReadPaths": {
           "type": "array",
           "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "systemLibraries": {
+          "type": "array",
+          "maxItems": 256,
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
         },
@@ -141,13 +147,19 @@
     "windowsSandbox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["systemReadPaths", "network", "childProcesses", "appContainer"],
+      "required": ["systemReadPaths", "systemLibraries", "network", "childProcesses", "appContainer"],
       "properties": {
         "systemReadPaths": {
           "type": "array",
           "maxItems": 128,
           "uniqueItems": true,
           "items": { "enum": ["C:\\Windows\\System32", "C:\\Windows\\Fonts"] }
+        },
+        "systemLibraries": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
         },
         "network": { "const": "deny" },
         "childProcesses": { "const": "deny" },

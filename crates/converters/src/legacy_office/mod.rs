@@ -153,9 +153,7 @@ impl Converter for LegacyOfficeConverter {
                 .min(into_markdown_legacy_office::MAX_NORMALIZED_PACKAGE_BYTES);
             let normalized =
                 self.adapter.normalize(&input.bytes, candidate.format, maximum_output, context)?;
-            if normalized.format != expected_output(candidate.format)?
-                || !normalized.bytes.starts_with(b"PK")
-            {
+            if normalized.format != expected_output(candidate.format)? {
                 return Err(ConversionError::ComponentUnavailable {
                     component: "legacy-office-worker".into(),
                     detail: "workerProtocol".into(),

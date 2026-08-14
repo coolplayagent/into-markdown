@@ -133,6 +133,10 @@ fn install_seccomp() -> Result<(), ()> {
     const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
     const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
     const AUDIT_ARCH: u32 = if cfg!(target_arch = "x86_64") { 0xc000_003e } else { 0xc000_00b7 };
+    #[cfg(target_arch = "x86_64")]
+    const LEGACY_FORK_SYSCALLS: &[libc::c_long] = &[libc::SYS_fork, libc::SYS_vfork];
+    #[cfg(not(target_arch = "x86_64"))]
+    const LEGACY_FORK_SYSCALLS: &[libc::c_long] = &[];
     let statement = |code, k| libc::sock_filter { code, jt: 0, jf: 0, k };
     let jump = |code, k, jt, jf| libc::sock_filter { code, jt, jf, k };
     let denied = [
@@ -154,27 +158,39 @@ fn install_seccomp() -> Result<(), ()> {
         libc::SYS_perf_event_open,
         libc::SYS_keyctl,
         libc::SYS_open_by_handle_at,
+        libc::SYS_kill,
+        libc::SYS_tkill,
+        libc::SYS_pidfd_send_signal,
+        libc::SYS_process_vm_readv,
+        libc::SYS_process_vm_writev,
+        libc::SYS_io_uring_setup,
+        libc::SYS_io_uring_enter,
+        libc::SYS_io_uring_register,
     ];
-    #[cfg(target_arch = "x86_64")]
-    const LEGACY_FORK_SYSCALLS: &[libc::c_long] = &[libc::SYS_fork, libc::SYS_vfork];
-    #[cfg(not(target_arch = "x86_64"))]
-    const LEGACY_FORK_SYSCALLS: &[libc::c_long] = &[];
-    let mut filters = Vec::with_capacity(10 + (denied.len() + LEGACY_FORK_SYSCALLS.len()) * 2);
+    let mut filters = Vec::with_capacity(16 + (denied.len() + LEGACY_FORK_SYSCALLS.len()) * 2);
     filters.push(statement(BPF_LD_W_ABS, 4));
     filters.push(jump(BPF_JMP_JEQ_K, AUDIT_ARCH, 1, 0));
     filters.push(statement(BPF_RET_K, SECCOMP_RET_KILL_PROCESS));
     filters.push(statement(BPF_LD_W_ABS, 0));
     // clone is allowed only for threads in the existing process.
-    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_clone as u32, 0, 4));
+    filters.push(jump(BPF_JMP_JEQ_K, u32::try_from(libc::SYS_clone).map_err(|_| ())?, 0, 4));
     filters.push(statement(BPF_LD_W_ABS, 16));
     filters.push(jump(BPF_JMP_JSET_K, libc::CLONE_THREAD as u32, 1, 0));
     filters.push(statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
     filters.push(statement(BPF_RET_K, SECCOMP_RET_ALLOW));
     // Returning ENOSYS makes modern libc fall back from clone3 for pthreads.
-    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_clone3 as u32, 0, 1));
+    filters.push(jump(BPF_JMP_JEQ_K, u32::try_from(libc::SYS_clone3).map_err(|_| ())?, 0, 1));
     filters.push(statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32));
+    // pthreads use tgkill internally; constrain it to this process so a
+    // worker thread cannot signal the parent or another process.
+    let process = std::process::id();
+    filters.push(jump(BPF_JMP_JEQ_K, u32::try_from(libc::SYS_tgkill).map_err(|_| ())?, 0, 4));
+    filters.push(statement(BPF_LD_W_ABS, 16));
+    filters.push(jump(BPF_JMP_JEQ_K, process, 1, 0));
+    filters.push(statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
+    filters.push(statement(BPF_RET_K, SECCOMP_RET_ALLOW));
     for syscall in denied.into_iter().chain(LEGACY_FORK_SYSCALLS.iter().copied()) {
-        filters.push(jump(BPF_JMP_JEQ_K, syscall as u32, 0, 1));
+        filters.push(jump(BPF_JMP_JEQ_K, u32::try_from(syscall).map_err(|_| ())?, 0, 1));
         filters.push(statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
     }
     filters.push(statement(BPF_RET_K, SECCOMP_RET_ALLOW));

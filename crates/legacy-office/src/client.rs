@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+const EARLY_REPLY_GRACE: Duration = Duration::from_secs(10);
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const WORKER_TEMP_OVERHEAD: u64 = 16 * 1024 * 1024;
 const MAX_WORKER_TEMP_ENTRIES: u32 = 16_384;
@@ -43,6 +44,7 @@ fn convert_verified(
         .checked_add(u64::try_from(std::mem::size_of::<usize>() * 2).unwrap_or(u64::MAX))
         .ok_or_else(|| resource("max_memory_bytes", "worker input allocation plan overflowed"))?;
     let input_memory = context.reserve_memory(input_plan)?;
+    let audit_memory = context.reserve_memory(crate::NORMALIZED_PACKAGE_AUDIT_MEMORY_BYTES)?;
     let maximum_output_bytes = maximum_output_bytes
         .min(MAX_NORMALIZED_PACKAGE_BYTES)
         .min(context.available_memory_bytes());
@@ -51,6 +53,8 @@ fn convert_verified(
     }
     let temporary_plan = input_bytes
         .checked_add(maximum_output_bytes)
+        .and_then(|value| value.checked_add(bundle.worker_snapshot_bytes))
+        .and_then(|value| value.checked_add(bundle.native_snapshot_bytes))
         .and_then(|value| value.checked_add(WORKER_TEMP_OVERHEAD))
         .ok_or_else(|| resource("max_temporary_bytes", "worker temporary plan overflowed"))?;
     let temporary = context.reserve_temporary(temporary_plan)?;
@@ -93,6 +97,12 @@ fn convert_verified(
     if response.format != expected {
         return Err(unavailable("workerProtocol"));
     }
+    crate::package::audit(&response.bytes, expected, context).map_err(|error| match error {
+        ConversionError::Cancelled
+        | ConversionError::Timeout
+        | ConversionError::ResourceLimit { .. } => error,
+        _ => unavailable("workerProtocol"),
+    })?;
     if response.bytes.capacity() > usize::try_from(maximum_output_bytes).unwrap_or(usize::MAX) {
         return Err(resource(
             "max_memory_bytes",
@@ -103,6 +113,7 @@ fn convert_verified(
     let used = u64::try_from(bytes.len())
         .map_err(|_| resource("max_memory_bytes", "normalized package size overflowed"))?;
     output_memory.shrink(maximum_output_bytes.saturating_sub(used))?;
+    drop(audit_memory);
     drop(temporary);
     drop(working_directory);
     Ok(NormalizedPackage {
@@ -116,38 +127,63 @@ fn convert_verified(
 fn wait_for_reply(
     worker: &mut WorkerChild,
     writes: &mpsc::Receiver<Result<(), ()>>,
-    replies: &mpsc::Receiver<Result<WorkerReply, ()>>,
+    replies: &mpsc::Receiver<Result<ReplyEvent, ()>>,
     temporary_root: &std::path::Path,
     maximum_temporary_bytes: u64,
     context: &ExecutionContext,
 ) -> Result<WorkerReply, ConversionError> {
     let mut write_finished = false;
+    let mut reply = None;
+    let mut response_eof = false;
+    let mut reply_received_at = None;
     loop {
         if !write_finished {
             match writes.try_recv() {
                 Ok(Ok(())) => write_finished = true,
                 Ok(Err(())) | Err(mpsc::TryRecvError::Disconnected) => {
-                    return Err(unavailable("workerTerminated"));
+                    return Err(unavailable("workerProtocol"));
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        match replies.recv_timeout(POLL_INTERVAL) {
-            Ok(Ok(reply)) => return Ok(reply),
-            Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(unavailable(worker.failure_detail()));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                check_worker_temporary(temporary_root, maximum_temporary_bytes, context)?;
-                if let Err(error) = context.checkpoint() {
-                    worker.terminate();
-                    return Err(error);
+        if !response_eof {
+            match replies.recv_timeout(POLL_INTERVAL) {
+                Ok(Ok(ReplyEvent::Frame(value))) => {
+                    if reply.replace(value).is_some() {
+                        return Err(unavailable("workerProtocol"));
+                    }
+                    reply_received_at = Some(std::time::Instant::now());
                 }
-                if worker.has_exited()? {
-                    return Err(unavailable(worker.failure_detail()));
+                Ok(Ok(ReplyEvent::Eof)) if reply.is_some() && !response_eof => {
+                    response_eof = true;
                 }
+                Ok(Ok(ReplyEvent::Eof)) => return Err(unavailable("workerProtocol")),
+                Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(unavailable("workerProtocol"));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
+        if write_finished
+            && response_eof
+            && let Some(reply) = reply
+        {
+            return Ok(reply);
+        }
+        if (!write_finished || !response_eof)
+            && reply_received_at.is_some_and(|received| received.elapsed() >= EARLY_REPLY_GRACE)
+        {
+            return Err(unavailable("workerProtocol"));
+        }
+        check_worker_temporary(temporary_root, maximum_temporary_bytes, context)?;
+        if let Err(error) = context.checkpoint() {
+            worker.terminate();
+            return Err(error);
+        }
+        // Exit may race the two pipe-reader threads. Polling status here
+        // records it, but the channel results remain the protocol authority;
+        // EOF guarantees both threads finish without an unbounded wait.
+        let _ = worker.has_exited()?;
     }
 }
 
@@ -238,11 +274,16 @@ fn scan_temporary(
 
 struct WorkerIo {
     writes: mpsc::Receiver<Result<(), ()>>,
-    replies: mpsc::Receiver<Result<WorkerReply, ()>>,
+    replies: mpsc::Receiver<Result<ReplyEvent, ()>>,
     input_thread: JoinHandle<()>,
     output_thread: JoinHandle<()>,
     stderr_reader: JoinHandle<()>,
     _stderr_bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+enum ReplyEvent {
+    Frame(WorkerReply),
+    Eof,
 }
 
 impl WorkerIo {
@@ -270,12 +311,21 @@ impl WorkerIo {
                 let _ = write_sender.send(result);
             })
             .map_err(|_| unavailable("workerLaunch"))?;
-        let (read_sender, replies) = mpsc::sync_channel(1);
+        let (read_sender, replies) = mpsc::sync_channel(2);
         let Ok(output_thread) = std::thread::Builder::new()
             .name("into-md-legacy-office-output".into())
             .spawn(move || {
                 let mut stdout = stdout;
-                let _ = read_sender.send(protocol::read_reply(&mut stdout, maximum_output_bytes));
+                let Ok(reply) = protocol::read_reply_frame(&mut stdout, maximum_output_bytes)
+                else {
+                    let _ = read_sender.send(Err(()));
+                    return;
+                };
+                if read_sender.send(Ok(ReplyEvent::Frame(reply))).is_err() {
+                    return;
+                }
+                let _ =
+                    read_sender.send(protocol::require_eof(&mut stdout).map(|()| ReplyEvent::Eof));
             })
         else {
             worker.terminate();

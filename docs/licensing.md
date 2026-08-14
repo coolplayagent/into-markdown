@@ -122,6 +122,7 @@ PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输
 LibreOffice runtime 当前不进入仓库、普通测试或 release inventory；机器契约
 `third_party/legacy-office/authority.schema.json` 与隔离 worker 已实现，但平台制品只能由包装任务
 在核对该安装内 `LICENSE`、完整 third-party notice、文件清单、ABI、size 与 SHA-256 后发布。
+ELF/Mach-O/PE 递归依赖也必须分别进入 package inventory 或平台精确 `systemLibraries`；
 LibreOffice core 的 MPL-2.0 不能替代随具体版本变化的所有 bundled component 许可。
 
 FFmpeg、Wasmtime、字体和生成模型只是占位项。未来纳入时

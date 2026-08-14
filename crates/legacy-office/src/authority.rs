@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+mod dependencies;
 mod paths;
 use paths::{
     allowed_system_path, checked_join, explicit_directory, explicit_regular_file,
@@ -81,6 +82,11 @@ impl RuntimeIdentity {
 pub(crate) struct VerifiedBundle {
     pub root: PathBuf,
     pub worker: PathBuf,
+    pub worker_sha256: String,
+    pub worker_load_files: Vec<VerifiedRuntimeFile>,
+    pub native_load_files: Vec<VerifiedRuntimeFile>,
+    pub worker_snapshot_bytes: u64,
+    pub native_snapshot_bytes: u64,
     pub install_root: PathBuf,
     pub kit_library: PathBuf,
     pub kit_sha256: String,
@@ -93,6 +99,15 @@ pub(crate) struct VerifiedBundle {
     #[cfg(windows)]
     pub app_container: AppContainerAuthority,
     pub _memory: ResourceReservation,
+}
+
+#[derive(Clone)]
+pub(crate) struct VerifiedRuntimeFile {
+    pub relative: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
+    pub executable: bool,
 }
 
 #[derive(Deserialize)]
@@ -121,7 +136,7 @@ struct Target {
     sandbox: SandboxAuthority,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RuntimeFile {
     path: String,
@@ -171,6 +186,7 @@ struct WorkerLimits {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SandboxAuthority {
     system_read_paths: Vec<String>,
+    system_libraries: Vec<String>,
     network: String,
     child_processes: String,
     app_container: Option<AppContainerAuthority>,
@@ -219,6 +235,7 @@ pub(crate) fn verify(
     let inventory = validate_files(target, &root, &authority_path, context)?;
     let kit_library = checked_join(&root, &target.kit_library)?;
     validate_abi(&kit_library, &target.abi, context)?;
+    let dependencies = dependencies::validate(target, target_name, &root, context)?;
     let install_root = checked_join(&root, &target.install_root)?;
     let install_root = explicit_directory(&install_root).map_err(|_| unavailable("installRoot"))?;
     let system_read_paths = target
@@ -230,6 +247,11 @@ pub(crate) fn verify(
     Ok(VerifiedBundle {
         root,
         worker,
+        worker_sha256: inventory.worker_sha256,
+        worker_load_files: dependencies.worker_files,
+        native_load_files: dependencies.native_files,
+        worker_snapshot_bytes: dependencies.worker_bytes,
+        native_snapshot_bytes: dependencies.native_bytes,
         install_root,
         kit_library,
         kit_sha256: inventory.kit_sha256,
@@ -255,6 +277,7 @@ pub(crate) fn verify(
 
 struct ValidatedInventory {
     kit_sha256: String,
+    worker_sha256: String,
 }
 
 fn validate_files(
@@ -329,7 +352,12 @@ fn validate_files(
         .ok_or_else(|| unavailable("fileInventory"))?
         .sha256
         .clone();
-    Ok(ValidatedInventory { kit_sha256: kit_hash })
+    let worker = target
+        .files
+        .iter()
+        .find(|entry| entry.path == target.worker)
+        .ok_or_else(|| unavailable("fileInventory"))?;
+    Ok(ValidatedInventory { kit_sha256: kit_hash, worker_sha256: worker.sha256.clone() })
 }
 
 fn validate_authority(authority: &Authority, target: &str) -> Result<(), ConversionError> {
@@ -373,6 +401,9 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         || target.sandbox.child_processes != "deny"
         || !valid_app_container_authority(target, target_name)
         || target.sandbox.system_read_paths.len() > 128
+        || target.sandbox.system_libraries.len() > 256
+        || target.sandbox.system_libraries.iter().collect::<BTreeSet<_>>().len()
+            != target.sandbox.system_libraries.len()
         || unique_system_paths.len() != target.sandbox.system_read_paths.len()
         || target
             .sandbox
