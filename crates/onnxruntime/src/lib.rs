@@ -133,6 +133,29 @@ impl std::fmt::Debug for RuntimeLibrary {
 }
 
 impl RuntimeLibrary {
+    /// Return the exact native-library path expected below one distribution root.
+    ///
+    /// This consults only the embedded target authority and does not touch the
+    /// filesystem or search process state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadError::UnsafePath`] for a non-absolute root or unsafe
+    /// authority member, [`LoadError::UnsupportedTarget`] when the current
+    /// target is not pinned, and an authority error for invalid embedded data.
+    pub fn expected_path(trusted_root: &Path) -> Result<PathBuf, LoadError> {
+        if !trusted_root.is_absolute() {
+            return Err(LoadError::UnsafePath);
+        }
+        let target_name = current_target().ok_or(LoadError::UnsupportedTarget)?;
+        let authority = authority()?;
+        let target = authority.targets.get(target_name).ok_or(LoadError::UnsupportedTarget)?;
+        if !is_safe_relative(Path::new(&target.library)) {
+            return Err(LoadError::UnsafePath);
+        }
+        Ok(trusted_root.join(&target.library))
+    }
+
     /// Verify one explicit library below `trusted_root` and retain a private
     /// create-new copy for an isolated worker.
     ///

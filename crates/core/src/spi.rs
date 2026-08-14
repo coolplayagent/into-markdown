@@ -1,7 +1,7 @@
 use crate::{
     Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, ExecutionContext,
-    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, Provenance,
-    ResolvedInput, ResolvedSource, ResourceReservation,
+    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, OcrOutputPlan,
+    OcrRecognition, OcrResult, Provenance, ResolvedInput, ResolvedSource, ResourceReservation,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1123,26 +1123,6 @@ pub struct OcrRequest<'a> {
     pub languages: &'a [&'a str],
 }
 
-/// One spatial OCR result.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OcrRegion {
-    /// Recognized text.
-    pub text: String,
-    /// Quadrilateral corners in clockwise source coordinates.
-    pub polygon: [(f32, f32); 4],
-    /// Recognition confidence.
-    pub confidence: f32,
-}
-
-/// OCR output before merging into the document IR.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct OcrResult {
-    /// Ordered recognized regions.
-    pub regions: Vec<OcrRegion>,
-    /// Provider/model ID.
-    pub provider: String,
-}
-
 /// Native or remote OCR implementation.
 pub trait OcrEngine: Send + Sync {
     /// Stable provider ID.
@@ -1153,6 +1133,41 @@ pub trait OcrEngine: Send + Sync {
         request: OcrRequest<'a>,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>>;
+    /// Plan one identity-bound result before any provider allocation or inference.
+    ///
+    /// The safe default refuses bound execution. Existing implementations remain
+    /// source compatible, while consumers never execute an unplanned provider
+    /// under a structured-evidence policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ComponentUnavailable`] unless the provider
+    /// opts into bounded execution with an explicit retained-output plan.
+    fn planned_bound_output(
+        &self,
+        request: OcrRequest<'_>,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        let _ = (request, options, context);
+        Err(ConversionError::ComponentUnavailable {
+            component: self.id().into(),
+            detail: "OCR engine does not declare a bound output plan".into(),
+        })
+    }
+    /// Recognize text with additive, identity-bound structured evidence.
+    ///
+    /// Existing providers remain source compatible and explicitly produce an
+    /// unbound result. A consumer that emits structured OCR provenance must
+    /// reject or visibly degrade [`OcrRecognition::Unbound`]; it must never
+    /// invent detector confidence or model identity.
+    fn recognize_bound<'a>(
+        &'a self,
+        request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move { self.recognize(request, context).await.map(OcrRecognition::Unbound) })
+    }
 }
 
 /// Audio transcription request.
@@ -1217,6 +1232,15 @@ pub enum AiInput<'a> {
         bytes: &'a [u8],
         /// MIME media type.
         media_type: &'a str,
+    },
+    /// Encoded image whose output must retain a page/frame identity.
+    PageImage {
+        /// Encoded image bytes.
+        bytes: &'a [u8],
+        /// MIME media type.
+        media_type: &'a str,
+        /// One-based image frame identity.
+        page: u32,
     },
     /// Structured document.
     Document(&'a Document),
@@ -1304,6 +1328,48 @@ pub trait AiProvider: Send + Sync {
     fn id(&self) -> &'static str;
     /// Capabilities available under current configuration.
     fn capabilities(&self) -> BTreeSet<AiCapability>;
+    /// Declare a conservative allocation peak for one policy-bound operation.
+    ///
+    /// The safe default refuses policy-bound execution. Existing providers keep
+    /// their source compatibility, while callers never infer a bound for an
+    /// implementation which has not declared one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ComponentUnavailable`] by default. An opted-in
+    /// provider may also reject the request policy or resource plan.
+    fn planned_output_bytes(
+        &self,
+        request: AiRequest<'_>,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        let _ = (request, options, context);
+        Err(ConversionError::ComponentUnavailable {
+            component: self.id().into(),
+            detail: "AI provider does not declare a policy-bound allocation plan".into(),
+        })
+    }
+    /// Execute while receiving the complete request policy that authorized the operation.
+    ///
+    /// The safe default rejects the request instead of delegating to the legacy
+    /// `execute` method, because that method cannot observe network or resource
+    /// policy. Providers opt in only after auditing this boundary.
+    fn execute_with_options<'a>(
+        &'a self,
+        request: AiRequest<'a>,
+        options: &'a ConversionOptions,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
+        let _ = (request, options);
+        Box::pin(async move {
+            context.checkpoint()?;
+            Err(ConversionError::ComponentUnavailable {
+                component: self.id().into(),
+                detail: "AI provider does not implement policy-bound execution".into(),
+            })
+        })
+    }
     /// Execute one explicitly enabled capability.
     fn execute<'a>(
         &'a self,

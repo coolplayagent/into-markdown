@@ -34,6 +34,160 @@ fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
 }
 
 #[test]
+fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network_policy() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("provider.toml");
+    let image = directory.path().join("image.png");
+    std::fs::copy(fixture("small/ocr/ocr-english-clear-1.png"), &image).unwrap();
+    let image = image.canonicalize().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\n\
+             base_url = \"http://{address}/v1\"\nmodel = \"controlled-vision\"\n\
+             api_key_env = \"IMAGE_DESCRIPTION_TEST_KEY\"\n\
+             capabilities = [\"image-description\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let off = run_image_description(&config, &image, "off", true);
+    assert!(off.status.success(), "{}", String::from_utf8_lossy(&off.stderr));
+    assert!(!String::from_utf8_lossy(&off.stdout).contains("A controlled CLI image."));
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+
+    listener.set_nonblocking(false).unwrap();
+    let server = std::thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream);
+            assert!(request.starts_with(b"POST /v1/responses HTTP/1.1\r\n"));
+            let split = request.windows(4).position(|part| part == b"\r\n\r\n").unwrap() + 4;
+            let body: serde_json::Value = serde_json::from_slice(&request[split..]).unwrap();
+            assert_eq!(body["model"], "controlled-vision");
+            assert_eq!(body["max_output_tokens"], 512);
+            assert_eq!(
+                body["input"][0]["content"][0]["text"],
+                "Describe the visible content of this image accurately and concisely. \
+                 Do not infer hidden text or metadata."
+            );
+            assert!(
+                body["input"][0]["content"][1]["image_url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("data:image/png;base64,")
+            );
+            let body = image_description_response();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        }
+    });
+    for mode in ["fallback", "prefer", "only"] {
+        let output = run_image_description(&config, &image, mode, true);
+        assert!(
+            output.status.success(),
+            "mode {mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("A controlled CLI image."));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("pdf-page"));
+    }
+    server.join().unwrap();
+
+    let absent = Command::new(binary())
+        .args([
+            "--no-config",
+            image.to_str().unwrap(),
+            "--ai",
+            "image-description=only",
+            "--asset-mode",
+            "embed",
+            "--emit",
+            "ir-json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(absent.status.code(), Some(9));
+    assert!(String::from_utf8_lossy(&absent.stderr).contains("componentUnavailable"));
+}
+
+fn run_image_description(
+    config: &std::path::Path,
+    image: &std::path::Path,
+    mode: &str,
+    allow_network: bool,
+) -> std::process::Output {
+    let mut command = Command::new(binary());
+    command.args([
+        "--config",
+        config.to_str().unwrap(),
+        image.to_str().unwrap(),
+        "--ai",
+        &format!("image-description={mode}"),
+        "--ai-provider",
+        "local",
+        "--asset-mode",
+        "embed",
+        "--emit",
+        "ir-json",
+    ]);
+    if allow_network {
+        command.args(["--allow-network", "--allow-private-network", "--allow-host", "127.0.0.1"]);
+    }
+    command.env("IMAGE_DESCRIPTION_TEST_KEY", "fixed-test-secret").output().unwrap()
+}
+
+fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    let mut request = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !request.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        request.push(byte[0]);
+    }
+    let header = std::str::from_utf8(&request).unwrap();
+    let content_length = header
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: "))
+        })
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let start = request.len();
+    request.resize(start + content_length, 0);
+    stream.read_exact(&mut request[start..]).unwrap();
+    request
+}
+
+fn image_description_response() -> &'static [u8] {
+    br#"{"id":"resp_cli_image","object":"response","created_at":1720000000,"status":"completed","completed_at":1720000001,"error":null,"incomplete_details":null,"input":[],"model":"controlled-vision","output":[{"id":"msg_cli_image","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"A controlled CLI image.","annotations":[],"logprobs":[]}]}],"background":false,"instructions":null,"max_output_tokens":512,"metadata":{},"parallel_tool_calls":false,"previous_response_id":null,"reasoning":{},"reasoning_effort":null,"service_tier":"default","store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"user":null}"#
+}
+
+fn fixture(relative: &str) -> PathBuf {
+    std::env::var_os("TEST_SRCDIR").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(relative),
+        |runfiles| {
+            PathBuf::from(runfiles)
+                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()))
+                .join("fixtures")
+                .join(relative)
+        },
+    )
+}
+
+#[test]
 fn provider_test_requires_double_authorization_and_never_emits_secret() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -110,8 +264,8 @@ fn real_cli_preserves_stable_policy_component_and_usage_exits() {
     assert!(stderr.contains("networkDenied"));
 
     let (exit, stderr) = run(&["--no-config", "models", "install", "missing"]);
-    assert_eq!(exit, 9);
-    assert!(stderr.contains("componentUnavailable"));
+    assert_eq!(exit, 2);
+    assert!(stderr.contains("unknown") || stderr.contains("usage"));
 
     let (exit, _) = run(&["--definitely-unknown-option"]);
     assert_eq!(exit, 2);

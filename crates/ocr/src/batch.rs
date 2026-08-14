@@ -2,7 +2,7 @@ use crate::{CropDescriptor, DetectionResult, RecognitionResult};
 use into_markdown_core::{ConversionError, ExecutionContext};
 use sha2::{Digest, Sha256};
 
-pub(crate) const DETECTOR_MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
+pub(crate) const DETECTOR_MODEL_ID: &str = crate::detector_model::DETECTOR_MODEL_ID;
 pub(crate) const RECOGNIZER_MODEL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
 const FINGERPRINT_CHECKPOINT_BYTES: usize = 4 * 1024;
 

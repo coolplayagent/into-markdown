@@ -1,9 +1,9 @@
 # 规划格式矩阵
 
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、ODT/ODS/ODP、
-PPTX/PPTM/PPSX/PPSM/POTX、TXT、Markdown、HTML、CSV、TSV、JSON、XML、
-RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
-实现的条目保持 `planned`。
+PPTX/PPTM/PPSX/PPSM/POTX、XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、Markdown、HTML、
+CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及 PNG/JPEG/TIFF/WebP/BMP
+图片状态为 `available`，其余尚未实现的条目保持 `planned`。
 
 | 类别 | 格式 |
 | --- | --- |
@@ -14,6 +14,23 @@ RSS/Atom、IPYNB、RTF、Outlook MSG 状态为 `available`，其余尚未
 | 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
 | 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+
+## 图片
+
+图片转换器只按完整 magic 与 container envelope 接受 PNG、JPEG、Classic TIFF/BigTIFF、
+WebP 和 BMP，不信任扩展名或 MIME。进入 decoder 前会验证 PNG chunk 顺序与 CRC、JPEG
+marker/segment/entropy、WebP RIFF/chunk/frame、BMP DIB/pixel range，以及 TIFF IFD 链和
+strip/tile range；文件尾必须由格式声明精确覆盖。尺寸、累计像素、帧数、结构项、解压、
+asset、内存、取消与 deadline 均受同一请求预算约束。TIFF 和动画 WebP 的每帧映射为独立
+Page；方向在受界像素上应用，DPI 只读取有限数字字段，ICC/Exif/XMP 自由文本与 active
+payload 不执行。
+
+原始文件作为离线 Asset 保留；多帧或需要方向归一化时，页面另生成受界 PNG Asset。
+OCR `off` 零调用，`auto` 缺模型或缺少 detector/model 绑定证据时保留图片并给出明确诊断，
+`always` 则稳定失败；只有 identity-bound detection/recognition evidence 可以生成
+`Inline::OcrText`。`image_description` 按 `off`/`fallback`/`prefer`/`only` 路由固定
+`ImageDescription` 请求，不接受文档 prompt；AI 节点、诊断、provider/page provenance 和
+内存 plan 全部验证成功后才事务发布。
 
 ## Outlook MSG
 

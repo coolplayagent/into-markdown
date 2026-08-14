@@ -12,10 +12,12 @@ into-markdown-converters = { path = "../converters" }
 into-markdown-core = { path = "../core" }
 into-markdown-engine = { path = "../engine" }
 into-markdown-ocr = { path = "../ocr" }
+into-markdown-onnxruntime = { path = "../onnxruntime" }
 into-markdown-render-markdown = { path = "../render-markdown" }
 into-markdown-task-store = { path = "../task-store" }
 
 [dev-dependencies]
+serde_json.workspace = true
 zip.workspace = true
 
 [lints]

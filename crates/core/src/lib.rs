@@ -12,6 +12,7 @@ mod format;
 mod input;
 mod ir;
 mod nested;
+mod ocr_binding;
 mod options;
 mod spi;
 
@@ -42,6 +43,7 @@ pub use ir::{
     TableRow, TimeRange, ValidationLimits,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
+pub use ocr_binding::{BoundOcrResult, OcrOutputPlan, OcrRecognition, OcrRegion, OcrResult};
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, DelimitedTextOptions, NetworkOptions,
     OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode,
@@ -50,9 +52,9 @@ pub use options::{
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, DocumentPatch,
-    FormatDetector, MarkdownRenderer, OcrEngine, OcrRegion, OcrRequest, OcrResult, PatchOperation,
-    ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
-    TranscriptionRequest, TranscriptionResult,
+    FormatDetector, MarkdownRenderer, OcrEngine, OcrRequest, PatchOperation, ProbeOutcome,
+    Services, SourceResolver, Tensor, TensorRuntime, Transcriber, TranscriptionRequest,
+    TranscriptionResult,
 };
 #[doc(hidden)]
 pub use spi::{

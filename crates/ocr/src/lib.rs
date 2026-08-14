@@ -24,6 +24,8 @@ use std::sync::Arc;
 
 mod batch;
 mod detection;
+mod detector_model;
+mod image_engine;
 mod merge;
 mod model_acquisition;
 mod model_archive;
@@ -38,6 +40,8 @@ pub use detection::{
     CropDescriptor, DetectedTextRegion, DetectionConfig, DetectionResult, ImageOrientation,
     PageDetection, PixelFormat, PixelView, PpOcrTextDetector,
 };
+pub use detector_model::ppocrv6_detector_contract;
+pub use image_engine::PpOcrImageEngine;
 
 pub use model_acquisition::{AcquiredModelArtifact, ModelAcquisition};
 
@@ -284,8 +288,9 @@ impl ModelManifest {
         downloads: &str,
         onnxruntime: &str,
     ) -> Result<Self, ConversionError> {
-        let raw: serde_json::Value = serde_json::from_str(models)
+        let mut raw: serde_json::Value = serde_json::from_str(models)
             .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
+        let components = take_component_bindings(&mut raw)?;
         let manifest: Self = serde_json::from_value(raw.clone())
             .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
         if manifest.schema_version == 2
@@ -302,6 +307,7 @@ impl ModelManifest {
             .map_err(|error| invalid_manifest(format!("invalid ONNX Runtime JSON: {error}")))?;
         manifest.validate_against(&downloads, &onnxruntime)?;
         if manifest.schema_version == 2 {
+            detector_model::validate_manifest_authority(&manifest, &components)?;
             recognition::model_authority::validate_manifest_authority(&manifest)?;
         }
         Ok(manifest)
@@ -335,8 +341,10 @@ impl ModelManifest {
             if !bundle_ids.insert(bundle.id.as_str()) {
                 return Err(invalid_manifest(format!("duplicate bundle ID {}", bundle.id)));
             }
-            if !matches!(bundle.kind.as_str(), "ocr-pipeline" | "recognizer-component")
-                || !matches!(bundle.availability.as_str(), "planned" | "available")
+            if !matches!(
+                bundle.kind.as_str(),
+                "ocr-pipeline" | "detector-component" | "recognizer-component"
+            ) || !matches!(bundle.availability.as_str(), "planned" | "available")
             {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
             }
@@ -391,10 +399,12 @@ impl ModelManifest {
                     }
                 }
             }
-            if !bundle.source_artifacts.iter().any(|item| {
-                item.id == bundle.character_set.source_artifact_id
-                    && item.role == "recognizer-and-dictionary"
-            }) {
+            if bundle.kind != "detector-component"
+                && !bundle.source_artifacts.iter().any(|item| {
+                    item.id == bundle.character_set.source_artifact_id
+                        && item.role == "recognizer-and-dictionary"
+                })
+            {
                 return Err(invalid_manifest(format!(
                     "{} character set source is absent",
                     bundle.id
@@ -427,7 +437,7 @@ impl ModelManifest {
             }
             let installable = bundle.availability == "available"
                 && bundle.character_set.status == "available"
-                && !bundle.runtime_artifacts.is_empty();
+                && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline");
             if (bundle.availability == "available") != installable {
                 return Err(invalid_manifest(format!(
                     "{} claims availability without complete runtime artifacts",
@@ -462,6 +472,33 @@ fn unique_sources(
             || !repositories.insert(item.repository.as_str())
         {
             return Err(invalid_manifest("duplicate source download ID or repository"));
+        }
+    }
+    Ok(result)
+}
+
+fn take_component_bindings(
+    raw: &mut serde_json::Value,
+) -> Result<BTreeMap<String, Vec<String>>, ConversionError> {
+    let bundles = raw
+        .get_mut("bundles")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| invalid_manifest("model bundles are absent"))?;
+    let mut result = BTreeMap::new();
+    for bundle in bundles {
+        let object = bundle
+            .as_object_mut()
+            .ok_or_else(|| invalid_manifest("model bundle must be an object"))?;
+        let id = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_manifest("model bundle ID is absent"))?
+            .to_owned();
+        let value = object.remove("components").unwrap_or_else(|| serde_json::json!([]));
+        let components = serde_json::from_value::<Vec<String>>(value)
+            .map_err(|_| invalid_manifest("model component binding is invalid"))?;
+        if result.insert(id, components).is_some() {
+            return Err(invalid_manifest("duplicate component binding"));
         }
     }
     Ok(result)
@@ -597,6 +634,7 @@ fn validate_native_downloads(
 fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
     let required_source_roles = match bundle.kind.as_str() {
         "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+        "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
         _ => return Err(invalid_manifest(format!("{} has invalid kind", bundle.id))),
     };
@@ -612,6 +650,7 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
     if !bundle.runtime_artifacts.is_empty() {
         let required_runtime_roles = match bundle.kind.as_str() {
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
+            "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
             _ => unreachable!(),
         };
@@ -647,7 +686,7 @@ fn validate_runtime(artifact: &RuntimeArtifact) -> Result<(), ConversionError> {
         (Some(hash), Some(size), Some(member), Some(members))
             if size > artifact.size
                 && validate_hash(hash).is_ok()
-                && member == "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx"
+                && member.ends_with("/inference.onnx")
                 && validate_archive_members(artifact, members).is_ok() => {}
         _ => {
             return Err(invalid_manifest(format!(
@@ -673,20 +712,25 @@ fn validate_archive_members(
     artifact: &RuntimeArtifact,
     members: &[ArchiveMember],
 ) -> Result<(), ConversionError> {
-    let expected = [
-        ("PP-OCRv6_tiny_rec_onnx_infer/", "directory", 0, None),
-        (
-            "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",
-            "file",
-            artifact.size,
-            Some(artifact.sha256.as_str()),
+    let (prefix, config_size, config_sha256) = match artifact.id.as_str() {
+        "ppocrv6-tiny-detector-onnx-model" => (
+            "PP-OCRv6_tiny_det_onnx_infer/",
+            883,
+            "3ac018be6f97499a08faa3bbdeb33640968d9307f6736d152902747a9f259593",
         ),
-        (
-            "PP-OCRv6_tiny_rec_onnx_infer/inference.yml",
-            "file",
+        "ppocrv6-tiny-recognizer-onnx-model" => (
+            "PP-OCRv6_tiny_rec_onnx_infer/",
             55_571,
-            Some("66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1"),
+            "66170210bad538e83fff3c4a3867e547d6bf20b50d64b20347c4b913f3034ea1",
         ),
+        _ => return Err(invalid_manifest("unknown archived model authority")),
+    };
+    let model = format!("{prefix}inference.onnx");
+    let config = format!("{prefix}inference.yml");
+    let expected = [
+        (prefix, "directory", 0, None),
+        (model.as_str(), "file", artifact.size, Some(artifact.sha256.as_str())),
+        (config.as_str(), "file", config_size, Some(config_sha256)),
     ];
     if members.len() != expected.len()
         || members.iter().zip(expected).any(|(actual, expected)| {
@@ -917,6 +961,31 @@ impl ModelManager {
         if !is_installable(bundle) {
             return Ok(unavailable_status(bundle));
         }
+        if let Some(components) = detector_model::pipeline_components(id) {
+            let mut states = Vec::new();
+            states.try_reserve_exact(components.len()).map_err(|_| {
+                ModelManagerError::Corrupt("component status allocation failed".into())
+            })?;
+            for component in components {
+                context.checkpoint()?;
+                states.push(self.status_with_context(component, context)?);
+            }
+            let state = if states.iter().all(|status| status.state == "installed") {
+                "installed"
+            } else if states.iter().any(|status| status.state == "corrupt") {
+                "corrupt"
+            } else {
+                "not-installed"
+            };
+            return Ok(ModelStatus {
+                schema_version: 1,
+                id: id.to_owned(),
+                availability: bundle.availability.clone(),
+                state: state.into(),
+                ownership: "component-set".into(),
+                path: None,
+            });
+        }
         self.reject_pending_transaction(bundle)?;
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
@@ -977,6 +1046,16 @@ impl ModelManager {
     ) -> Result<ModelStatus, ModelManagerError> {
         self.require_installable(id)?;
         let status = self.status_with_context(id, context)?;
+        if let Some(components) = detector_model::pipeline_components(id) {
+            for component in components {
+                self.verify_with_context(component, context)?;
+            }
+            return if status.state == "installed" {
+                Ok(status)
+            } else {
+                Err(ModelManagerError::NotInstalled)
+            };
+        }
         let path = status.path.as_ref().ok_or(ModelManagerError::NotInstalled)?;
         verify_directory_with_context(self.bundle(id)?, path, context)?;
         Ok(status)
@@ -993,6 +1072,12 @@ impl ModelManager {
         context: &ExecutionContext,
     ) -> Result<(), ModelManagerError> {
         let bundle = self.require_installable(id)?;
+        if let Some(components) = detector_model::pipeline_components(id) {
+            for component in components {
+                self.recover_with_context(component, context)?;
+            }
+            return Ok(());
+        }
         ensure_durable_transactions_supported()?;
         context.checkpoint()?;
         if !safe_existing_directory(&self.writable_root)? {
@@ -1006,6 +1091,10 @@ impl ModelManager {
 
     /// Returns the path only for a complete installed bundle.
     pub fn path(&self, id: &str) -> Result<PathBuf, ModelManagerError> {
+        if detector_model::pipeline_components(id).is_some() {
+            self.verify(id)?;
+            return Err(ModelManagerError::ComponentUnavailable);
+        }
         self.verify(id)?.path.ok_or(ModelManagerError::NotInstalled)
     }
 
@@ -1118,6 +1207,15 @@ impl ModelManager {
     ) -> Result<(), ModelManagerError> {
         context.checkpoint()?;
         let bundle = self.require_installable(id)?;
+        if let Some(components) = detector_model::pipeline_components(id) {
+            for component in components {
+                match self.remove_with_context(component, context) {
+                    Ok(()) | Err(ModelManagerError::NotInstalled) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            return Ok(());
+        }
         ensure_durable_transactions_supported()?;
         if let Some(root) = &self.bundled_root
             && safe_existing_directory(&root.join(id))?
@@ -1165,6 +1263,12 @@ impl ModelManager {
         fetcher: &dyn ModelFetcher,
         context: &ExecutionContext,
     ) -> Result<ModelStatus, ModelManagerError> {
+        if let Some(components) = detector_model::pipeline_components(id) {
+            for component in components {
+                self.install_inner(component, fetcher, context, InstallFault::None, false)?;
+            }
+            return self.verify_with_context(id, context);
+        }
         self.install_inner(id, fetcher, context, InstallFault::None, false)
     }
 
@@ -1177,6 +1281,9 @@ impl ModelManager {
         force_publish: bool,
     ) -> Result<ModelStatus, ModelManagerError> {
         let bundle = self.require_installable(id)?;
+        if detector_model::pipeline_components(id).is_some() {
+            return Err(ModelManagerError::ComponentUnavailable);
+        }
         ensure_durable_transactions_supported()?;
         context.checkpoint()?;
         let total_size = bundle.runtime_artifacts.iter().try_fold(0_u64, |total, artifact| {
@@ -1609,7 +1716,7 @@ enum InstallFault {
 fn is_installable(bundle: &ModelBundle) -> bool {
     bundle.availability == "available"
         && bundle.character_set.status == "available"
-        && !bundle.runtime_artifacts.is_empty()
+        && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline")
 }
 
 fn unavailable_status(bundle: &ModelBundle) -> ModelStatus {
@@ -2048,12 +2155,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_manifest_is_fail_closed_and_source_archives_are_not_installable() {
+    fn embedded_manifest_declares_only_the_bound_available_pipeline() {
         let manifest = ModelManifest::embedded().unwrap();
-        let bundle = &manifest.bundles[0];
-        assert_eq!(bundle.availability, "planned");
-        assert!(bundle.runtime_artifacts.is_empty());
-        assert_eq!(bundle.platforms.len(), 4);
+        assert_eq!(manifest.default_bundle, detector_model::PIPELINE_ID);
+        assert_eq!(manifest.bundles.len(), 3);
+        let pipeline = &manifest.bundles[0];
+        assert_eq!(pipeline.kind, "ocr-pipeline");
+        assert_eq!(pipeline.availability, "available");
+        assert!(pipeline.runtime_artifacts.is_empty());
+        assert_eq!(pipeline.platforms.len(), 4);
+        assert_eq!(manifest.bundles[1].id, detector_model::DETECTOR_MODEL_ID);
+        assert_eq!(manifest.bundles[2].id, "pp-ocrv6-tiny-recognizer-onnx");
+        assert!(manifest.bundles[1..].iter().all(
+            |bundle| bundle.availability == "available" && !bundle.runtime_artifacts.is_empty()
+        ));
     }
 
     #[test]
@@ -2197,21 +2312,19 @@ mod tests {
     }
 
     #[test]
-    fn manager_reports_unavailable_without_network_or_filesystem_mutation() {
+    fn pipeline_reports_missing_components_without_network_or_filesystem_mutation() {
         let temp = tempfile::tempdir().unwrap();
         let manager =
             ModelManager::new(ModelManifest::embedded().unwrap(), temp.path().join("models"), None);
         let status = manager.status("pp-ocrv6-tiny-zh-en").unwrap();
-        assert_eq!(status.state, "unavailable");
+        assert_eq!(status.state, "not-installed");
+        assert_eq!(status.ownership, "component-set");
         assert!(!temp.path().join("models").exists());
-        assert!(matches!(
-            manager.require_installable(&status.id),
-            Err(ModelManagerError::ComponentUnavailable)
-        ));
+        assert!(manager.require_installable(&status.id).is_ok());
     }
 
     #[test]
-    fn planned_bundle_ignores_fake_bundled_and_user_install_state() {
+    fn component_pipeline_ignores_fake_pipeline_directories() {
         let temp = tempfile::tempdir().unwrap();
         let bundled = temp.path().join("bundled");
         let writable = temp.path().join("writable");
@@ -2230,21 +2343,22 @@ mod tests {
             Some(bundled.clone()),
         );
         let status = manager.status(id).unwrap();
-        assert_eq!(status.state, "unavailable");
-        assert_eq!(status.ownership, "none");
+        assert_eq!(status.state, "not-installed");
+        assert_eq!(status.ownership, "component-set");
         assert!(status.path.is_none());
         let listed = manager.list().unwrap();
         assert_eq!(listed[0], status);
-        assert_eq!(listed[1].id, "pp-ocrv6-tiny-recognizer-onnx");
+        assert_eq!(listed[1].id, "pp-ocrv6-tiny-detector-onnx");
         assert_eq!(listed[1].state, "not-installed");
-        assert!(matches!(manager.verify(id), Err(ModelManagerError::ComponentUnavailable)));
-        assert!(matches!(manager.path(id), Err(ModelManagerError::ComponentUnavailable)));
-        assert!(matches!(manager.remove(id), Err(ModelManagerError::ComponentUnavailable)));
+        assert_eq!(listed[2].id, "pp-ocrv6-tiny-recognizer-onnx");
+        assert_eq!(listed[2].state, "not-installed");
+        assert!(matches!(manager.verify(id), Err(ModelManagerError::NotInstalled)));
+        assert!(matches!(manager.path(id), Err(ModelManagerError::NotInstalled)));
         let fetcher =
             BytesFetcher { bytes: Vec::new(), opens: std::sync::atomic::AtomicUsize::new(0) };
         assert!(matches!(
             manager.install(id, &fetcher, &execution(0)),
-            Err(ModelManagerError::ComponentUnavailable)
+            Err(ModelManagerError::Execution(ConversionError::ResourceLimit { .. }))
         ));
         assert!(bundled.join(id).exists());
         assert!(writable.join(id).exists());
@@ -2282,10 +2396,11 @@ mod tests {
 
     fn installable_manager(root: &Path) -> ModelManager {
         let mut manifest = ModelManifest::embedded().unwrap();
-        let bundle = &mut manifest.bundles[0];
+        let bundle =
+            manifest.bundles.iter_mut().find(|bundle| bundle.id == TEST_INSTALL_ID).unwrap();
         bundle.availability = "available".into();
         bundle.character_set.status = "available".into();
-        bundle.runtime_artifacts.push(RuntimeArtifact {
+        bundle.runtime_artifacts = vec![RuntimeArtifact {
             id: "test-runtime".into(),
             role: "detector".into(),
             file_name: "model.onnx".into(),
@@ -2298,9 +2413,11 @@ mod tests {
             size: 5,
             platforms: vec!["aarch64-apple-darwin".into()],
             license: "MIT".into(),
-        });
+        }];
         ModelManager::new(manifest, root.to_path_buf(), None)
     }
+
+    const TEST_INSTALL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
 
     fn execution(max_temporary_bytes: u64) -> ExecutionContext {
         ExecutionContext::new(
@@ -2350,7 +2467,7 @@ mod tests {
             bytes: b"hello".to_vec(),
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         let status = manager.install(id, &fetcher, &execution(5)).unwrap();
         assert_eq!(status.state, "installed");
         assert_eq!(fs::read(manager.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
@@ -2366,7 +2483,7 @@ mod tests {
             bytes: b"hello".to_vec(),
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         manager.install(id, &fetcher, &execution(5)).unwrap();
 
         let insufficient = memory_execution(9);
@@ -2393,7 +2510,7 @@ mod tests {
                 bytes: b"hello".to_vec(),
                 opens: std::sync::atomic::AtomicUsize::new(0),
             };
-            let id = "pp-ocrv6-tiny-zh-en";
+            let id = TEST_INSTALL_ID;
             manager.install(id, &fetcher, &execution(5)).unwrap();
             assert!(matches!(
                 manager.install_inner(id, &fetcher, &execution(5), fault, true),
@@ -2413,7 +2530,7 @@ mod tests {
     fn every_truncated_journal_temp_is_recovered_without_partial_state() {
         let temp = tempfile::tempdir().unwrap();
         let manager = installable_manager(temp.path());
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         fs::create_dir_all(temp.path()).unwrap();
         write_complete_test_bundle(&temp.path().join(id), id);
         let (journal, bytes) = test_journal(&manager, id, "7-7");
@@ -2436,7 +2553,7 @@ mod tests {
     fn every_truncated_final_journal_fails_closed() {
         let temp = tempfile::tempdir().unwrap();
         let manager = installable_manager(temp.path());
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         fs::create_dir_all(temp.path()).unwrap();
         write_complete_test_bundle(&temp.path().join(id), id);
         let (journal, bytes) = test_journal(&manager, id, "8-8");
@@ -2467,7 +2584,7 @@ mod tests {
             bytes: b"hello".to_vec(),
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         source_manager.install(id, &fetcher, &execution(5)).unwrap();
         assert!(
             source_manager
@@ -2500,7 +2617,7 @@ mod tests {
     fn installable_component_status_is_a_read_only_cross_platform_operation() {
         let temp = tempfile::tempdir().unwrap();
         let manager = installable_manager(temp.path());
-        let status = manager.status("pp-ocrv6-tiny-zh-en").unwrap();
+        let status = manager.status(TEST_INSTALL_ID).unwrap();
         assert_eq!(status.state, "not-installed");
         assert!(!temp.path().join(".models-root.json").exists());
         assert!(!temp.path().join(".models.lock").exists());
@@ -2508,7 +2625,7 @@ mod tests {
 
     #[test]
     fn corrupt_or_ambiguous_journal_fails_closed_without_cleanup() {
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         let temp = tempfile::tempdir().unwrap();
         let manager = installable_manager(temp.path());
         let fetcher = BytesFetcher {
@@ -2540,7 +2657,7 @@ mod tests {
 
     #[test]
     fn journal_path_binding_rejects_traversal_without_touching_outside() {
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("models");
         fs::create_dir(&root).unwrap();
@@ -2566,7 +2683,7 @@ mod tests {
                 bytes: b"hello".to_vec(),
                 opens: std::sync::atomic::AtomicUsize::new(0),
             };
-            let id = "pp-ocrv6-tiny-zh-en";
+            let id = TEST_INSTALL_ID;
             manager.install(id, &fetcher, &execution(5)).unwrap();
             let bundle = temp.path().join(id);
             match case {
@@ -2595,7 +2712,7 @@ mod tests {
             bytes: b"hello".to_vec(),
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         manager.install(id, &fetcher, &execution(5)).unwrap();
         let state = temp.path().join(id).join("install-state.json");
         fs::set_permissions(&state, fs::Permissions::from_mode(0o0)).unwrap();
@@ -2612,8 +2729,8 @@ mod tests {
                 bytes: bytes.to_vec(),
                 opens: std::sync::atomic::AtomicUsize::new(0),
             };
-            assert!(manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &execution(budget)).is_err());
-            assert!(!temp.path().join("pp-ocrv6-tiny-zh-en").exists());
+            assert!(manager.install(TEST_INSTALL_ID, &fetcher, &execution(budget)).is_err());
+            assert!(!temp.path().join(TEST_INSTALL_ID).exists());
             assert!(
                 fs::read_dir(temp.path())
                     .unwrap()
@@ -2634,7 +2751,7 @@ mod tests {
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
         assert!(matches!(
-            manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &execution(5)),
+            manager.install(TEST_INSTALL_ID, &fetcher, &execution(5)),
             Err(ModelManagerError::Busy)
         ));
         drop(held);
@@ -2645,7 +2762,7 @@ mod tests {
             into_markdown_core::ResourceLimits::default(),
         );
         assert!(matches!(
-            manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &cancelled),
+            manager.install(TEST_INSTALL_ID, &fetcher, &cancelled),
             Err(ModelManagerError::Execution(ConversionError::Cancelled))
         ));
         assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -2660,16 +2777,10 @@ mod tests {
         fs::create_dir(&outside).unwrap();
         let root = temp.path().join("models");
         fs::create_dir(&root).unwrap();
-        symlink(&outside, root.join("pp-ocrv6-tiny-zh-en")).unwrap();
+        symlink(&outside, root.join(TEST_INSTALL_ID)).unwrap();
         let manager = installable_manager(&root);
-        assert!(matches!(
-            manager.status("pp-ocrv6-tiny-zh-en"),
-            Err(ModelManagerError::UnsafePath)
-        ));
-        assert!(matches!(
-            manager.remove("pp-ocrv6-tiny-zh-en"),
-            Err(ModelManagerError::UnsafePath)
-        ));
+        assert!(matches!(manager.status(TEST_INSTALL_ID), Err(ModelManagerError::UnsafePath)));
+        assert!(matches!(manager.remove(TEST_INSTALL_ID), Err(ModelManagerError::UnsafePath)));
         assert!(outside.exists());
     }
 
@@ -2682,7 +2793,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let outside = temp.path().join("outside.json");
         fs::write(&outside, b"outside").unwrap();
-        let id = "pp-ocrv6-tiny-zh-en";
+        let id = TEST_INSTALL_ID;
         symlink(&outside, journal_path(&root, id)).unwrap();
         let manager = installable_manager(&root);
         assert!(matches!(manager.status(id), Err(ModelManagerError::UnsafePath)));

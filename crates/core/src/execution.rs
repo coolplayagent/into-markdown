@@ -441,6 +441,13 @@ impl ExecutionContext {
         }
     }
 
+    /// Whether this context already spends from an enclosing preflight credit.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn has_memory_credit(&self) -> bool {
+        self.memory_credit.is_some()
+    }
+
     /// Borrow a same-context memory reservation as an SPI credit while
     /// cancellation, deadline, progress, and temporary storage remain
     /// request-scoped. The derived context cannot outlive or detach from the

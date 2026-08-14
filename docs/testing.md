@@ -112,9 +112,10 @@ CPU 推理，以验证 adapter、factory 重建和退出析构顺序；另一个
 8 TiB float 输出，在 macOS ARM64 的 1 TiB `RLIMIT_AS` worker 中稳定失败为
 `resourceLimit`，父进程随后仍能创建 Identity session。该 ceiling 是虚拟地址空间而非
 RSS 声明，模型 session/run 和请求预算仍独立检查。Identity/Expand fixture 不是产品 OCR
-模型。独立 recognizer component 的真实产品模型验证由显式
-`//crates/onnxruntime:ppocrv6_recognizer_quality` 执行；完整 detector pipeline 仍因缺少
-detector runtime artifact 而不可用。
+模型。独立 recognizer component 的回归验证仍由显式
+`//crates/onnxruntime:ppocrv6_recognizer_quality` 执行；完整产品 pipeline 另外固定官方
+detector/recognizer artifact，并由 `//crates/api:ppocrv6_image_quality` 与
+`//apps/cli:ppocrv6_cli_quality` 从真实产品装配路径执行。
 
 OCR-to-IR merge 另有显式
 `//crates/onnxruntime:ppocrv6_merge_quality`：它先核对 #55 manifest、12 图和 merge quality
@@ -122,7 +123,10 @@ authority 的 hash，在内存施加固定 contrast/speckle 退化，执行官�
 source-index 0 与 authority 整图 polygon 送入真实 policy/geometry/dedup/IR merge，并经过
 PDF 页面级最终布局重建，按
 NFC+去 Unicode whitespace 计算 431 字符 aggregate CER 并要求不高于 15%。该目标明确不
-声称运行 detector 模型；缺少 detector runtime artifact 时也不会用 fake tensor 冒充。
+声称运行 detector 模型；缺少 detector runtime artifact 时也不会用 fake tensor 冒充。该目标是
+recognizer 与 merge 的隔离回归；上述 API/CLI 产品 targets 则执行真实
+detector crop、recognizer、identity-bound evidence 与最终 IR，并按 hash-bound 语言组
+authority 验证 12 图输出。
 
 PDF 普通 Cargo/Bazel 测试使用纯 Rust mock、生成式小型数据和缺 runtime 的稳定错误，不下载
 或加载 native 库。单元测试覆盖 UTF-16 surrogate、负 count、极端 limit、损坏 bitmap 长度、

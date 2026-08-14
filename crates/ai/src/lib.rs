@@ -1,6 +1,9 @@
 //! AI provider contracts, bounded direct transport, and placeholder implementations.
 
+mod image_description;
 mod openai;
+
+pub use image_description::OpenAiImageDescriptionProvider;
 
 pub use openai::{
     GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,

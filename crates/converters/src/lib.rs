@@ -7,6 +7,7 @@ mod docx;
 mod epub;
 mod feed;
 mod html;
+mod image_converter;
 mod markdown;
 mod msg;
 mod notebook;
@@ -30,6 +31,7 @@ pub use docx::DocxConverter;
 pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;
+pub use image_converter::ImageConverter;
 pub use into_markdown_pdf_layout::{
     LayoutConfig as PdfLayoutConfig, LayoutLimits as PdfLayoutLimits,
     reconstruct_document as reconstruct_pdf_layout,
@@ -235,7 +237,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Image,
         family: "media",
         extensions: &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Audio,
@@ -1068,6 +1070,8 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         || bytes.starts_with(&[0xff, 0xd8, 0xff])
         || bytes.starts_with(b"II*\0")
         || bytes.starts_with(b"MM\0*")
+        || bytes.starts_with(b"II+\0")
+        || bytes.starts_with(b"MM\0+")
         || bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
     {
         (InputFormat::Image, 0.98, "image magic bytes")

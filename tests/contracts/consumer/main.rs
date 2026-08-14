@@ -1,13 +1,60 @@
 //! An independently compiled downstream consumer of the public API.
 
 use into_markdown::{
-    BoxFuture, ConversionError, ConversionOptions, ConversionRequest, DetectionRequest,
-    ExecutionContext, ExecutionOptions, FormatHint, InputRef, ResolvedInput, ResourceLimits,
-    SourceMetadata, SourceResolver,
+    AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError,
+    ConversionOptions, ConversionRequest, DetectionRequest, ExecutionContext, ExecutionOptions,
+    FormatHint, InputRef, OcrEngine, OcrRegion, OcrRequest, OcrResult, ResolvedInput,
+    ResourceLimits, SourceMetadata, SourceResolver,
 };
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 struct LegacyResolver;
+
+struct LegacyOcr;
+
+struct LegacyAi;
+
+impl AiProvider for LegacyAi {
+    fn id(&self) -> &'static str {
+        "contract.legacy-ai"
+    }
+
+    fn capabilities(&self) -> BTreeSet<AiCapability> {
+        BTreeSet::from([AiCapability::MarkdownPostprocess])
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _: AiRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
+        Box::pin(async { Ok(AiOutput::default()) })
+    }
+}
+
+impl OcrEngine for LegacyOcr {
+    fn id(&self) -> &'static str {
+        "contract.legacy-ocr"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async {
+            Ok(OcrResult {
+                regions: vec![OcrRegion {
+                    text: "legacy".into(),
+                    polygon: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    confidence: 1.0,
+                }],
+                provider: "contract.legacy-ocr".into(),
+            })
+        })
+    }
+}
 
 impl SourceResolver for LegacyResolver {
     fn id(&self) -> &'static str {
@@ -50,4 +97,18 @@ fn main() {
     let source = InputRef::bytes(b"x".as_slice(), None::<String>);
     // Calling the additive default method is part of the compatibility contract.
     let _future = resolver.resolve_accounted(&source, &options, &context);
+    let ocr = LegacyOcr;
+    let request = OcrRequest { image: b"image", media_type: "image/png", languages: &[] };
+    // Exact legacy literals and the new default method must both remain valid
+    // in an independently compiled downstream crate.
+    let _future = ocr.recognize_bound(request, &context);
+    let ai = LegacyAi;
+    let request = AiRequest {
+        capability: AiCapability::MarkdownPostprocess,
+        input: AiInput::Markdown("legacy"),
+        prompt: None,
+    };
+    // A legacy provider that implements only `execute` remains source-compatible,
+    // while the new policy-bound default deterministically refuses unsafe opt-in.
+    let _plan = ai.planned_output_bytes(request, &options, &context);
 }

@@ -288,12 +288,9 @@ fn run_models(
     command: Option<ModelsCommand>,
     json: bool,
     loaded: &LoadedConfig,
-    catalog: Catalog,
+    _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
-    if let Some(ModelsCommand::Install { id }) = &command {
-        preflight_model_install(id.as_deref(), catalog)?;
-    }
     let manager = model_manager()?;
     let execution = into_markdown::ExecutionContext::new(
         into_markdown::ExecutionOptions {
@@ -368,7 +365,11 @@ fn run_models(
         Some(ModelsCommand::Install { id }) => {
             let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
             manager.require_installable(id).map_err(model_error)?;
-            Err(CliError::component(format!("models install {id}: {}", catalog.unavailable())))
+            let status = manager
+                .install(id, &crate::model_fetch::PinnedModelFetcher::default(), &execution)
+                .map_err(model_error)?;
+            writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
+            Ok(())
         }
         Some(ModelsCommand::Verify { id, json }) => {
             let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
@@ -389,20 +390,6 @@ fn run_models(
             writeln!(context.stdout, "{}", manager.path(&id).map_err(model_error)?.display())?;
             Ok(())
         }
-    }
-}
-
-fn preflight_model_install(id: Option<&str>, catalog: Catalog) -> Result<(), CliError> {
-    let manifest = into_markdown::model_manifest().map_err(CliError::from)?;
-    let selected = id.unwrap_or(&manifest.default_bundle);
-    let installable =
-        manifest.bundles.iter().find(|bundle| bundle.id == selected).is_some_and(|bundle| {
-            bundle.availability == "available" && !bundle.runtime_artifacts.is_empty()
-        });
-    if installable {
-        Ok(())
-    } else {
-        Err(CliError::component(format!("models install {selected}: {}", catalog.unavailable())))
     }
 }
 
@@ -1030,6 +1017,7 @@ struct ExecutionPolicy {
     options: ConversionOptions,
     execution: into_markdown::ExecutionOptions,
     output_context: into_markdown::ExecutionContext,
+    services: into_markdown::Services,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -1095,11 +1083,13 @@ fn run_conversion(
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
         ..into_markdown::ExecutionOptions::default()
     };
+    let services = crate::services::assemble(&loaded, &execution)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
         execution,
         output_context,
+        services,
         options: loaded.options,
         hint: FormatHint {
             format: arguments.format.as_deref().map(parse_format).transpose()?,
@@ -1331,11 +1321,15 @@ fn apply_ai_provider_overrides(
         loaded.ai_model = Some(model.clone());
     }
     if ai_is_enabled(&loaded.options) {
-        let provider_name = loaded.ai_provider.as_deref().ok_or_else(|| {
-            CliError::usage(
-                "an enabled AI capability requires --ai-provider or a configured default provider",
-            )
-        })?;
+        let Some(provider_name) = loaded.ai_provider.as_deref() else {
+            if ai_capability_other_than_image_description_is_enabled(&loaded.options) {
+                return Err(CliError::usage(
+                    "an enabled AI capability requires --ai-provider or a configured default \
+                     provider",
+                ));
+            }
+            return Ok(());
+        };
         let provider = loaded
             .effective
             .providers
@@ -1344,6 +1338,19 @@ fn apply_ai_provider_overrides(
         validate_network_url(&provider.base_url, &loaded.options, "AI provider")?;
     }
     Ok(())
+}
+
+fn ai_capability_other_than_image_description_is_enabled(options: &ConversionOptions) -> bool {
+    [
+        options.ai.vision_ocr,
+        options.ai.layout_repair,
+        options.ai.table_repair,
+        options.ai.formula_repair,
+        options.ai.audio_transcription,
+        options.ai.markdown_postprocess,
+    ]
+    .iter()
+    .any(|mode| *mode != AiMode::Off)
 }
 
 fn apply_delimited_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
@@ -1830,7 +1837,8 @@ fn convert_item(
     }
     request.execution = policy.execution.clone();
     request.hint = policy.hint.clone();
-    let engine = into_markdown::default_engine().map_err(CliError::from)?;
+    let engine = into_markdown::default_engine_with_services(policy.services.clone())
+        .map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
 }
 
@@ -2810,10 +2818,9 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_management_backend_has_exit_nine() {
-        let error = invoke(&["models", "install"], true).unwrap_err();
-        assert_eq!(error.exit_code(), 9);
-        assert_eq!(error.code(), "componentUnavailable");
+    fn default_model_pipeline_is_explicitly_installable() {
+        let manager = model_manager().unwrap();
+        manager.require_installable(&manager.manifest().default_bundle).unwrap();
     }
 
     #[test]
@@ -2821,25 +2828,25 @@ mod tests {
         let (listed, _) = invoke(&["models", "--json"], true).unwrap();
         let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
         assert_eq!(listed["schemaVersion"], 1);
-        assert_eq!(listed["models"][0]["availability"], "planned");
-        assert_eq!(listed["models"][0]["state"], "unavailable");
-        assert_eq!(listed["models"][0]["ownership"], "none");
+        assert_eq!(listed["models"][0]["availability"], "available");
+        assert_eq!(listed["models"][0]["state"], "not-installed");
+        assert_eq!(listed["models"][0]["ownership"], "component-set");
 
         let (shown, _) =
             invoke(&["models", "show", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap();
         let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
         assert_eq!(shown["schemaVersion"], 1);
-        assert_eq!(shown["status"]["state"], "unavailable");
+        assert_eq!(shown["status"]["state"], "not-installed");
         assert!(shown["model"]["source_artifacts"].is_array());
         assert!(shown["model"]["runtime_artifacts"].as_array().unwrap().is_empty());
 
         let verify =
             invoke(&["models", "verify", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap_err();
-        assert_eq!(verify.exit_code(), 9);
-        assert_eq!(verify.code(), "componentUnavailable");
+        assert_eq!(verify.exit_code(), 6);
+        assert_eq!(verify.code(), "modelInvalid");
         let path = invoke(&["models", "path", "pp-ocrv6-tiny-zh-en"], true).unwrap_err();
-        assert_eq!(path.exit_code(), 9);
-        assert_eq!(path.code(), "componentUnavailable");
+        assert_eq!(path.exit_code(), 6);
+        assert_eq!(path.code(), "modelInvalid");
         let unknown = invoke(&["models", "show", "../escape"], true).unwrap_err();
         assert_eq!(unknown.exit_code(), 2);
     }

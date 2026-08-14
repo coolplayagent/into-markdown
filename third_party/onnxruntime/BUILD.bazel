@@ -41,7 +41,11 @@ filegroup(
         "//conditions:default": [],
     }),
     tags = ["manual"],
-    visibility = ["//crates/onnxruntime:__pkg__"],
+    visibility = [
+        "//apps/cli:__pkg__",
+        "//crates/api:__pkg__",
+        "//crates/onnxruntime:__pkg__",
+    ],
 )
 
 filegroup(
