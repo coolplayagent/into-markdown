@@ -697,6 +697,25 @@ fn xml_booleans_and_list_levels_are_strict_for_all_interpreted_shapes() {
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
     assert!(markdown.contains("Boolean text"));
 
+    let field = slide.replace(
+        r#"<a:r><a:rPr b="true" i="false" u="sng" strike="noStrike"/><a:t>Boolean text</a:t></a:r>"#,
+        r#"<a:fld id="{00000000-0000-0000-0000-000000000001}" type="slidenum"><a:rPr b="true" i="false" u="sng" strike="noStrike"/><a:t>Boolean text</a:t></a:fld>"#,
+    );
+    let output =
+        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", field.as_bytes())).unwrap();
+    let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+    assert!(markdown.contains("Boolean text"));
+
+    let inherited_list_style = slide.replace(
+        "<a:lstStyle/>",
+        r#"<a:lstStyle><a:lvl1pPr><a:buNone/><a:defRPr b="false"/></a:lvl1pPr></a:lstStyle>"#,
+    );
+    let output =
+        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", inherited_list_style.as_bytes()))
+            .unwrap();
+    let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+    assert!(markdown.contains("Boolean text"));
+
     let hidden = slide.replace("hidden=\"false\"", "hidden=\"true\"");
     let output =
         convert(&rewrite_part(&original, "ppt/slides/slide1.xml", hidden.as_bytes())).unwrap();

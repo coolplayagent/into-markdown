@@ -1,0 +1,84 @@
+name: macOS ARM64 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Archive profile
+        required: true
+        type: choice
+        options:
+          - core
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Build fixed macOS archive
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          for sample in a b; do
+            PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+              --profile "$PROFILE" \
+              --output "$RUNNER_TEMP/stage-$PROFILE-$sample" \
+              --cache "$RUNNER_TEMP/release-cache" \
+              --build-root "$RUNNER_TEMP/build-$PROFILE-$sample" \
+              --archive "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-$sample.tar.gz"
+          done
+          cmp "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-a.tar.gz" \
+            "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-b.tar.gz"
+          mv "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-a.tar.gz" \
+            "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE.tar.gz"
+          archive_sha=$(shasum -a 256 \
+            "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE.tar.gz" | awk '{print $1}')
+          printf '%s  %s\n' "$archive_sha" \
+            "into-md-macos-arm64-$PROFILE.tar.gz" \
+            > "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE.tar.gz.sha256"
+      - name: Verify extracted and installed archive
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          archive="$RUNNER_TEMP/into-md-macos-arm64-$PROFILE.tar.gz"
+          distribution="$RUNNER_TEMP/distribution-$PROFILE"
+          PYTHONPATH=tools/macos-release python3 tools/macos-release/archive.py \
+            extract "$archive" "$distribution"
+          "$distribution/bin/archive-check" "$distribution"
+          installed=$("$distribution/install" \
+            "$RUNNER_TEMP/install-$PROFILE" "$RUNNER_TEMP/bin-$PROFILE" | tail -1)
+          mkdir "$RUNNER_TEMP/smoke-$PROFILE"
+          archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
+          "$installed/bin/installed-smoke" \
+            --install-root "$installed" \
+            --into-md "$installed/bin/into-md" \
+            --rust-library "$installed/lib/into-markdown-rust" \
+            --manifest "$installed/archive-manifest.json" \
+            --fixtures "$installed/share/into-markdown/smoke/fixtures" \
+            --temp-root "$RUNNER_TEMP/smoke-$PROFILE" \
+            --report "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-smoke.json" \
+            --archive-sha256 "$archive_sha" \
+            --cargo "$(rustup which cargo)" \
+            --rustc "$(rustup which rustc)" \
+            --pdfium-library "$installed/lib/pdfium/libpdfium.dylib" \
+            --timeout-seconds 90
+          "$distribution/install" \
+            "$RUNNER_TEMP/install-$PROFILE" "$RUNNER_TEMP/bin-$PROFILE"
+          "$distribution/uninstall" \
+            "$RUNNER_TEMP/install-$PROFILE" "$RUNNER_TEMP/bin-$PROFILE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: into-md-macos-arm64-${{ inputs.profile }}
+          path: |
+            ${{ runner.temp }}/into-md-macos-arm64-${{ inputs.profile }}.tar.gz
+            ${{ runner.temp }}/into-md-macos-arm64-${{ inputs.profile }}.tar.gz.sha256
+            ${{ runner.temp }}/into-md-macos-arm64-${{ inputs.profile }}-smoke.json
+          if-no-files-found: error

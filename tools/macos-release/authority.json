@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "target": "aarch64-apple-darwin",
+  "minimumMacos": "14.0",
+  "rust": "1.97.1",
+  "bazel": "9.2.0",
+  "sourceDateEpoch": 1767225600,
+  "downloads": [
+    {
+      "id": "pdfium",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-mac-arm64.tgz",
+      "bytes": 3453147,
+      "sha256": "e214ee33f22b2204daa765a545aee1e425d88448e6154dac95c6a06206b7437f"
+    },
+    {
+      "id": "onnxruntime",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
+      "bytes": 41578864,
+      "sha256": "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92"
+    },
+    {
+      "id": "ocr-detector",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+      "bytes": 1792000,
+      "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d"
+    },
+    {
+      "id": "ocr-recognizer",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "bytes": 4526080,
+      "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
+    },
+    {
+      "id": "ocr-dictionary",
+      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
+      "bytes": 27156,
+      "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd"
+    },
+    {
+      "id": "libreoffice",
+      "url": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
+      "bytes": 297407265,
+      "sha256": "c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad"
+    }
+  ]
+}

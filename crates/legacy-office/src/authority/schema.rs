@@ -24,6 +24,18 @@ pub(super) struct Target {
     pub abi: Abi,
     pub limits: WorkerLimits,
     pub sandbox: SandboxAuthority,
+    pub container: Option<ContainerAuthority>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct ContainerAuthority {
+    pub format: String,
+    pub image_path: String,
+    pub image_bytes: u64,
+    pub image_sha256: String,
+    pub mount_path: String,
+    pub kit_sha256: String,
 }
 
 #[derive(Deserialize, Clone)]

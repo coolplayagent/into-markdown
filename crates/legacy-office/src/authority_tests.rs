@@ -11,6 +11,7 @@ fn target() -> Target {
         _ => unreachable!(),
     };
     Target {
+        container: None,
         artifact_url: "https://example.invalid/runtime".into(),
         artifact_bytes: 1,
         artifact_sha256: "a".repeat(64),

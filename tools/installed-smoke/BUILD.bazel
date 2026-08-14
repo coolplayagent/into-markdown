@@ -27,6 +27,18 @@ rust_binary(
     ],
 )
 
+rust_binary(
+    name = "archive-check",
+    srcs = ["src/bin/archive-check.rs"],
+    crate_name = "archive_check_bin",
+    edition = "2024",
+    deps = [
+        "//tools/license-check:license_check_lib",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)
+
 rust_test(
     name = "installed_smoke_test",
     crate = ":installed_smoke_lib",

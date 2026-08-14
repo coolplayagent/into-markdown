@@ -179,7 +179,17 @@
       "license": "Apache-2.0",
       "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed character table to its exact commit, size, SHA-256, and recognizer authority."
     },
-    {"id": "libreoffice", "kind": "native-runtime", "status": "planned", "included_in_release": false, "release_eligible": false},
+    {
+      "id": "libreoffice-macos-arm64",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "26.2.5",
+      "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
+      "license": "MPL-2.0",
+      "obligations": "Full macOS ARM64 profile only. Preserve the complete official DMG as the immutable license/source bundle, extracted LibreOffice.app license materials, and generated full-file/runtime dependency authority."
+    },
     {"id": "wasmtime", "kind": "native-runtime", "status": "planned", "included_in_release": false, "release_eligible": false},
     {"id": "generated-onnx-models", "kind": "model", "status": "planned", "included_in_release": false, "release_eligible": false},
     {"id": "distribution-fonts", "kind": "font", "status": "planned", "included_in_release": false, "release_eligible": false}

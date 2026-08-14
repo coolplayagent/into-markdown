@@ -176,12 +176,12 @@ pub(super) fn parse_shapes(
                     }
                     paragraph_depth = paragraph_depth.saturating_add(1);
                 }
-                "r" if shape.is_some() => {
+                "r" | "fld" if shape.is_some() && paragraph_depth > 0 => {
                     run_properties_seen = false;
                     run_style = RichStyle::default();
                     marks = marks_for_style(run_style.with_lower(paragraph_default_style))?;
                 }
-                "rPr" if shape.is_some() => {
+                "rPr" if shape.is_some() && paragraph_depth > 0 => {
                     if run_properties_seen {
                         return Err(malformed(Some(part), "run has multiple rPr elements"));
                     }
@@ -190,7 +190,7 @@ pub(super) fn parse_shapes(
                     marks = marks_for_style(run_style.with_lower(paragraph_default_style))?;
                     record_language(&element, part, shape.as_mut().expect("present"))?;
                 }
-                "defRPr" if shape.is_some() => {
+                "defRPr" if shape.is_some() && paragraph_depth > 0 => {
                     if paragraph_default_properties_seen {
                         return Err(malformed(
                             Some(part),
@@ -265,14 +265,16 @@ pub(super) fn parse_shapes(
                         ));
                     }
                 }
-                "pPr" if shape.is_some() => {
+                "pPr" if shape.is_some() && paragraph_depth > 0 => {
                     if paragraph_properties_seen {
                         return Err(malformed(Some(part), "paragraph has multiple pPr elements"));
                     }
                     paragraph_properties_seen = true;
                     apply_shape_element(&reader, &element, part, &mut shape)?;
                 }
-                "buChar" | "buAutoNum" | "buNone" | "buBlip" if shape.is_some() => {
+                "buChar" | "buAutoNum" | "buNone" | "buBlip"
+                    if shape.is_some() && paragraph_depth > 0 =>
+                {
                     if paragraph_bullet_seen {
                         return Err(malformed(
                             Some(part),
@@ -300,7 +302,7 @@ pub(super) fn parse_shapes(
                 "txBody" if cell.is_some() => {
                     return Err(malformed(Some(part), "empty table-cell text body is invalid"));
                 }
-                "rPr" if shape.is_some() => {
+                "rPr" if shape.is_some() && paragraph_depth > 0 => {
                     if run_properties_seen {
                         return Err(malformed(Some(part), "run has multiple rPr elements"));
                     }
@@ -309,7 +311,7 @@ pub(super) fn parse_shapes(
                     marks = marks_for_style(run_style.with_lower(paragraph_default_style))?;
                     record_language(&element, part, shape.as_mut().expect("present"))?;
                 }
-                "defRPr" if shape.is_some() => {
+                "defRPr" if shape.is_some() && paragraph_depth > 0 => {
                     if paragraph_default_properties_seen {
                         return Err(malformed(
                             Some(part),
@@ -355,14 +357,16 @@ pub(super) fn parse_shapes(
                 _ if shape.is_none() && !groups.is_empty() => {
                     apply_group_element(&element, part, groups.last_mut().expect("present"))?;
                 }
-                "pPr" if shape.is_some() => {
+                "pPr" if shape.is_some() && paragraph_depth > 0 => {
                     if paragraph_properties_seen {
                         return Err(malformed(Some(part), "paragraph has multiple pPr elements"));
                     }
                     paragraph_properties_seen = true;
                     apply_shape_element(&reader, &element, part, &mut shape)?;
                 }
-                "buChar" | "buAutoNum" | "buNone" | "buBlip" if shape.is_some() => {
+                "buChar" | "buAutoNum" | "buNone" | "buBlip"
+                    if shape.is_some() && paragraph_depth > 0 =>
+                {
                     if paragraph_bullet_seen {
                         return Err(malformed(
                             Some(part),

@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const GOLDENS: [(&str, &str, &str); 5] = [
+const GOLDENS: [(&str, &str, &str); 11] = [
     (
         "text-file",
         "text/normal.txt",
@@ -34,6 +34,24 @@ const GOLDENS: [(&str, &str, &str); 5] = [
         "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3",
     ),
     ("rtf", "rtf/normal.rtf", "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a"),
+    (
+        "pptx",
+        "pptx/normal.pptx",
+        "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+    ),
+    (
+        "xlsx",
+        "xlsx/normal.xlsx",
+        "d3872577eb79d4d2812e4a7b1c14f64e3241ba729aa4105be0d2d47c7ffe32a8",
+    ),
+    (
+        "xlsb",
+        "xlsb/normal.xlsb",
+        "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee",
+    ),
+    ("odt", "odt/normal.odt", "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769"),
+    ("ods", "ods/normal.ods", "34087e4a175f614e604a67f9755063363d4dda096fccf68f9bd92b7589b93864"),
+    ("odp", "odp/normal.odp", "33364d2a5a9a9f1cb93e22c57d6d54d31badb3247327641cfce39ca9ac180adf"),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -95,10 +113,89 @@ pub(crate) fn run(
             executor,
         ),
     );
+    for (id, fixture, golden) in [
+        (
+            "legacy-doc-runtime",
+            "legacy/normal.doc",
+            "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+        ),
+        (
+            "legacy-ppt-runtime",
+            "legacy/normal.ppt",
+            "ee775c9996e8c0f02a4f8fb94644da6310ff9e503abcc76cc1f7526076c6d917",
+        ),
+        (
+            "legacy-xls-runtime",
+            "legacy/normal.xls",
+            "84ac1de9422a2b206a15e1a4f52bf1a3f5466100d930f4cc47f30d50005276d0",
+        ),
+    ] {
+        record(
+            cases,
+            id,
+            legacy_conversion(request, root, authority, &doctor, fixture, golden, executor),
+        );
+    }
     if request.cancelled() {
         return Err("smoke run cancelled".into());
     }
     Ok(())
+}
+
+fn legacy_conversion(
+    request: &ValidatedRequest,
+    root: &Path,
+    authority: &CoreCatalogAuthority,
+    doctor: &BTreeMap<String, DoctorEntry>,
+    fixture: &str,
+    golden: &str,
+    executor: &dyn Executor,
+) -> Result<(), String> {
+    let runtime = authority
+        .optional_runtimes
+        .iter()
+        .find(|entry| entry.component == "legacy-office")
+        .ok_or_else(|| "legacy runtime is absent from catalog authority".to_owned())?;
+    let path = fixture_path(request, fixture)?;
+    let output = cli(
+        request,
+        root,
+        &[
+            &path.display().to_string(),
+            "--no-config",
+            "--log-format",
+            "json",
+            "--max-temporary-size",
+            "2GiB",
+            "--asset-mode",
+            "embed",
+        ],
+        &[],
+        executor,
+    )?;
+    let available = doctor.get("runtime.legacy-office").is_some_and(|entry| entry.status == "ok");
+    if available {
+        if output.exit_code == Some(0)
+            && output.stderr.is_empty()
+            && format!("{:x}", Sha256::digest(&output.stdout)) == golden
+        {
+            return Ok(());
+        }
+        return Err("available legacy runtime output differs from golden".into());
+    }
+    let event: serde_json::Value = serde_json::from_slice(&output.stderr)
+        .map_err(|_| "missing legacy runtime error is not JSON")?;
+    let message = event["message"].as_str().unwrap_or_default();
+    if output.exit_code == Some(9)
+        && output.stdout.is_empty()
+        && event["code"] == "componentUnavailable"
+        && event["exitCode"] == 9
+        && message.contains(runtime.install_hint.as_str())
+    {
+        Ok(())
+    } else {
+        Err("missing legacy runtime did not return its exact contract".into())
+    }
 }
 
 fn record(cases: &mut Vec<CaseResult>, id: &str, result: Result<(), String>) {
@@ -160,7 +257,8 @@ fn markdown_fixture(
 ) -> Result<(), String> {
     let path = fixture_path(request, fixture)?;
     let path_string = path.display().to_string();
-    let output = cli(request, root, &[&path_string, "--no-config"], &[], executor)?;
+    let output =
+        cli(request, root, &[&path_string, "--no-config", "--asset-mode", "embed"], &[], executor)?;
     if output.exit_code != Some(0) || !output.stderr.is_empty() {
         return Err("fixture conversion failed".into());
     }
@@ -288,6 +386,9 @@ fn optional_conversion(
         "--log-format".into(),
         "json".into(),
     ];
+    if format == "image" {
+        args.extend(["--assets-dir".into(), root.join("image-assets").display().to_string()]);
+    }
     args.extend(extra.iter().map(|value| (*value).to_owned()));
     let references = args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = cli(request, root, &references, &[], executor)?;

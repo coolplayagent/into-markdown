@@ -32,6 +32,7 @@ DATA = [
     "//third_party/ffmpeg:source.json",
     "//third_party/ffmpeg:build-policy.json",
     "//third_party/pdfium:manifest.json",
+    "//third_party/legacy-office:macos-arm64-manifest.json",
     "//fixtures:corpus",
     ":Cargo.toml",
     "//apps/cli:Cargo.toml",

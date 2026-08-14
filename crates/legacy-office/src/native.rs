@@ -2,11 +2,20 @@ use crate::NormalizedFormat;
 use crate::authority::{RuntimeConfig, verify};
 use crate::protocol::{self, ERROR_ENCRYPTED, ERROR_MALFORMED, ERROR_RESOURCE, ERROR_RUNTIME};
 use crate::sandbox::{self, Policy};
+#[cfg(not(target_os = "macos"))]
 use libloading::Library;
+#[cfg(not(target_os = "macos"))]
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::fs::{File, OpenOptions};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "macos")]
+const MACOS_OFFLINE_PROFILE: &str = "(version 1)(allow default)(deny network*)\
+    (allow network* (local unix-socket))(allow network* (remote unix-socket))\
+    (allow network-bind (local ip \"localhost:*\"))\
+    (allow network-inbound (local ip \"localhost:*\"))\
+    (allow network-outbound (remote ip \"localhost:*\"))";
 
 pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), u8> {
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
@@ -37,14 +46,16 @@ fn run_request(policy: &Policy, runtime: &NativeRuntime) -> Result<(), u8> {
         .prefix("request-")
         .tempdir_in(&policy.temporary_root)
         .map_err(|_| ERROR_RUNTIME)?;
-    let source_path = request_root.path().join("source.bin");
+    let format = expected_output(metadata.source).ok_or(ERROR_MALFORMED)?;
+    let source_path = request_root
+        .path()
+        .join(format!("normalized.{}", source_extension(metadata.source).ok_or(ERROR_MALFORMED)?));
     let mut source = create_private(&source_path).map_err(|_| ERROR_RUNTIME)?;
     protocol::copy_request_body(&mut input, &mut source, &metadata)
         .map_err(|()| ERROR_MALFORMED)?;
     protocol::require_eof(&mut input).map_err(|()| ERROR_MALFORMED)?;
     source.sync_all().map_err(|_| ERROR_RUNTIME)?;
     drop(source);
-    let format = expected_output(metadata.source).ok_or(ERROR_MALFORMED)?;
     let output_path = request_root.path().join(format!("normalized.{}", format.extension()));
     let profile = request_root.path().join("profile");
     std::fs::create_dir(&profile).map_err(|_| ERROR_RUNTIME)?;
@@ -91,6 +102,15 @@ fn expected_output(source: into_markdown_core::InputFormat) -> Option<Normalized
         into_markdown_core::InputFormat::Doc => Some(NormalizedFormat::Docx),
         into_markdown_core::InputFormat::Ppt => Some(NormalizedFormat::Pptx),
         into_markdown_core::InputFormat::Xls => Some(NormalizedFormat::Xlsx),
+        _ => None,
+    }
+}
+
+fn source_extension(source: into_markdown_core::InputFormat) -> Option<&'static str> {
+    match source {
+        into_markdown_core::InputFormat::Doc => Some("doc"),
+        into_markdown_core::InputFormat::Ppt => Some("ppt"),
+        into_markdown_core::InputFormat::Xls => Some("xls"),
         _ => None,
     }
 }
@@ -147,49 +167,87 @@ fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
 }
 
 struct NativeRuntime {
+    #[cfg(not(target_os = "macos"))]
     _library: Library,
     _authority: crate::authority::VerifiedBundle,
+    #[cfg(not(target_os = "macos"))]
     hook: unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit,
+    #[cfg(not(target_os = "macos"))]
     install_root: CString,
+    #[cfg(target_os = "macos")]
+    soffice: PathBuf,
 }
 
 struct PreparedRuntime {
     authority: crate::authority::VerifiedBundle,
+    #[cfg(not(target_os = "macos"))]
     install_root: CString,
 }
 
 impl PreparedRuntime {
     fn new(policy: &Policy) -> Result<Self, ()> {
         let authority = reverify_authority(policy)?;
+        #[cfg(target_os = "macos")]
+        crate::authority::validate_mounted(
+            &authority,
+            &policy.runtime_root,
+            &policy.kit_library,
+            &policy.install_root,
+            &into_markdown_core::ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                into_markdown_core::ResourceLimits {
+                    max_memory_bytes: policy.address_limit,
+                    ..into_markdown_core::ResourceLimits::default()
+                },
+            ),
+        )
+        .map_err(|_| ())?;
         if authority.root != policy.runtime_root
             || authority.install_root != policy.install_root
             || authority.kit_library != policy.kit_library
         {
             return Err(());
         }
-        Ok(Self { authority, install_root: path_c_string(&policy.install_root)? })
+        Ok(Self {
+            authority,
+            #[cfg(not(target_os = "macos"))]
+            install_root: path_c_string(&policy.install_root)?,
+        })
     }
 
     fn load(self) -> Result<NativeRuntime, ()> {
-        let library_path = self.authority.kit_library.clone();
-        // SAFETY: every package-owned dependency was copied from an
-        // authority-hashed no-follow handle into this private immutable tree;
-        // sandbox installation completed before the loader can run a constructor.
-        let library = load_library(&library_path)?;
-        // SAFETY: authority ABI validation requires this exact C export.
-        let hook = unsafe {
-            *library
+        #[cfg(target_os = "macos")]
+        {
+            let contents = self.authority.install_root.parent().ok_or(())?;
+            let soffice = contents.join("MacOS/soffice");
+            let metadata = std::fs::symlink_metadata(&soffice).map_err(|_| ())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(());
+            }
+            Ok(NativeRuntime { _authority: self.authority, soffice })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let library_path = self.authority.kit_library.clone();
+            // SAFETY: every package-owned dependency was copied from an
+            // authority-hashed no-follow handle into this private immutable tree;
+            // sandbox installation completed before the loader can run a constructor.
+            let library = load_library(&library_path)?;
+            // SAFETY: authority ABI validation requires this exact C export.
+            let hook = unsafe {
+                *library
                 .get::<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit>(
                     b"libreofficekit_hook_2\0",
                 )
                 .map_err(|_| ())?
-        };
-        Ok(NativeRuntime {
-            _library: library,
-            _authority: self.authority,
-            hook,
-            install_root: self.install_root,
-        })
+            };
+            Ok(NativeRuntime {
+                _library: library,
+                _authority: self.authority,
+                hook,
+                install_root: self.install_root,
+            })
+        }
     }
 }
 
@@ -201,17 +259,64 @@ impl NativeRuntime {
         profile: &Path,
         format: NormalizedFormat,
     ) -> Result<(), u8> {
-        let profile_url = CString::new(file_url(profile)).map_err(|_| ERROR_RUNTIME)?;
-        // SAFETY: hook and both strings follow the audited LOK C ABI. The
-        // returned object is immediately wrapped and destroyed on every path.
-        let office = unsafe { (self.hook)(self.install_root.as_ptr(), profile_url.as_ptr()) };
-        let office = Office::new(office).ok_or(ERROR_RUNTIME)?;
-        let source_url = CString::new(file_url(source)).map_err(|_| ERROR_RUNTIME)?;
-        let load_options = c"Language=en-US,MacroSecurityLevel=3,ReadOnly=true";
-        let document = office.load(&source_url, load_options)?;
-        let output_url = CString::new(file_url(output)).map_err(|_| ERROR_RUNTIME)?;
-        let format = CString::new(format.extension()).map_err(|_| ERROR_RUNTIME)?;
-        document.save(&output_url, &format)
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::{Command, Stdio};
+
+            let home = profile.parent().ok_or(ERROR_RUNTIME)?;
+            let user_installation = format!("-env:UserInstallation={}", file_url(profile));
+            let status = Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", MACOS_OFFLINE_PROFILE])
+                .arg(&self.soffice)
+                .args([
+                    "--headless",
+                    "--nologo",
+                    "--nodefault",
+                    "--nolockcheck",
+                    "--norestore",
+                    "--nofirststartwizard",
+                    &user_installation,
+                    "--convert-to",
+                    format.extension(),
+                    "--outdir",
+                ])
+                .arg(home)
+                .arg(source)
+                .env_clear()
+                .env("HOME", home)
+                .env("TMPDIR", home)
+                .env("LANG", "en_US.UTF-8")
+                .env("LC_ALL", "C")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|_| crate::protocol::ERROR_SANDBOX)?;
+            if output.is_file() {
+                Ok(())
+            } else if !status.success() {
+                if status.code().is_some_and(|code| (64..=78).contains(&code)) {
+                    return Err(crate::protocol::ERROR_SANDBOX);
+                }
+                Err(ERROR_MALFORMED)
+            } else {
+                Err(ERROR_RUNTIME)
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let profile_url = CString::new(file_url(profile)).map_err(|_| ERROR_RUNTIME)?;
+            // SAFETY: hook and both strings follow the audited LOK C ABI. The
+            // returned object is immediately wrapped and destroyed on every path.
+            let office = unsafe { (self.hook)(self.install_root.as_ptr(), profile_url.as_ptr()) };
+            let office = Office::new(office).ok_or(ERROR_RUNTIME)?;
+            let source_url = CString::new(file_url(source)).map_err(|_| ERROR_RUNTIME)?;
+            let load_options = c"Language=en-US,MacroSecurityLevel=3,ReadOnly=true";
+            let document = office.load(&source_url, load_options)?;
+            let output_url = CString::new(file_url(output)).map_err(|_| ERROR_RUNTIME)?;
+            let format = CString::new(format.extension()).map_err(|_| ERROR_RUNTIME)?;
+            document.save(&output_url, &format)
+        }
     }
 }
 
@@ -268,7 +373,7 @@ fn running_executable_sha256() -> Result<String, ()> {
     file_sha256(path)
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn load_library(path: &Path) -> Result<Library, ()> {
     // SAFETY: the caller validated and hashed this absolute package-owned
     // library immediately before invoking the platform loader.
@@ -308,11 +413,13 @@ fn file_sha256(path: &Path) -> Result<String, ()> {
 }
 
 #[repr(C)]
+#[cfg(not(target_os = "macos"))]
 struct LibreOfficeKit {
     class: *mut LibreOfficeKitClass,
 }
 
 #[repr(C)]
+#[cfg(not(target_os = "macos"))]
 struct LibreOfficeKitClass {
     size: usize,
     destroy: Option<unsafe extern "C" fn(*mut LibreOfficeKit)>,
@@ -331,11 +438,13 @@ struct LibreOfficeKitClass {
 }
 
 #[repr(C)]
+#[cfg(not(target_os = "macos"))]
 struct LibreOfficeDocument {
     class: *mut LibreOfficeDocumentClass,
 }
 
 #[repr(C)]
+#[cfg(not(target_os = "macos"))]
 struct LibreOfficeDocumentClass {
     size: usize,
     destroy: Option<unsafe extern "C" fn(*mut LibreOfficeDocument)>,
@@ -349,8 +458,10 @@ struct LibreOfficeDocumentClass {
     >,
 }
 
+#[cfg(not(target_os = "macos"))]
 struct Office(*mut LibreOfficeKit);
 
+#[cfg(not(target_os = "macos"))]
 impl Office {
     fn new(pointer: *mut LibreOfficeKit) -> Option<Self> {
         if pointer.is_null() { None } else { Some(Self(pointer)) }
@@ -399,6 +510,7 @@ impl Office {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl Drop for Office {
     fn drop(&mut self) {
         // SAFETY: the class pointer is part of the live LOK object and destroy
@@ -413,8 +525,10 @@ impl Drop for Office {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 struct Document(*mut LibreOfficeDocument);
 
+#[cfg(not(target_os = "macos"))]
 impl Document {
     fn save(&self, url: &CStr, format: &CStr) -> Result<(), u8> {
         // SAFETY: document/class pointers originate from the live Office.
@@ -431,6 +545,7 @@ impl Document {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl Drop for Document {
     fn drop(&mut self) {
         // SAFETY: destroy is invoked at most once for this live document.
@@ -444,6 +559,7 @@ impl Drop for Document {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn path_c_string(path: &Path) -> Result<CString, ()> {
     CString::new(path.to_str().ok_or(())?).map_err(|_| ())
 }

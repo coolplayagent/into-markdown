@@ -27,6 +27,21 @@ impl VerifiedTree {
             .iter()
             .find_map(|(name, snapshot)| (name == relative).then_some(snapshot.path.as_path()))
     }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn create_mountpoint(&mut self, relative: &str) -> Result<PathBuf, ConversionError> {
+        let relative = Path::new(relative);
+        if relative.components().count() != 1 || relative.is_absolute() {
+            return Err(invalid());
+        }
+        set_directory_permissions(&self.root, true).map_err(|()| invalid())?;
+        let path = self.root.join(relative);
+        let result = std::fs::create_dir(&path)
+            .map_err(|_| invalid())
+            .and_then(|()| sync_directory(&self.root).map_err(|()| invalid()));
+        set_directory_permissions(&self.root, false).map_err(|()| invalid())?;
+        result.map(|()| path)
+    }
 }
 
 impl Drop for VerifiedTree {

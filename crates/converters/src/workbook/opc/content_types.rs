@@ -262,16 +262,6 @@ pub(in crate::workbook) fn validate_content_type_authority(
             return Err(malformed(Some(part), "orphan content-type Override"));
         }
     }
-    for extension in content_types.defaults.keys() {
-        if !package_parts.iter().any(|part| {
-            opc_extension(part).is_some_and(|value| value.eq_ignore_ascii_case(extension))
-        }) {
-            return Err(malformed(
-                Some("[Content_Types].xml"),
-                format!("orphan content-type Default for .{extension}"),
-            ));
-        }
-    }
     for part in package_parts {
         if part != "[Content_Types].xml" && content_types.for_part(part).is_none() {
             return Err(malformed(Some(part), "OPC part has no content type authority"));

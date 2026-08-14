@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+fail() { printf '%s\n' "into-md uninstall: $*" >&2; exit 1; }
+prefix=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/into-markdown}
+bin_dir=${2:-${XDG_BIN_HOME:-$HOME/.local/bin}}
+case $prefix in /*) ;; *) fail "installation prefix must be absolute";; esac
+case $bin_dir in /*) ;; *) fail "command directory must be absolute";; esac
+case $prefix:$bin_dir in *'/../'*|*/..) fail "installation paths contain traversal";; esac
+newline='
+'
+case $prefix:$bin_dir in *"$newline"*) fail "installation paths contain a newline";; esac
+lock=$prefix/.install-lock
+mkdir -p "$prefix"
+mkdir "$lock" 2>/dev/null || fail "another install or uninstall is active"
+cleanup() { rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT HUP INT TERM
+
+if test -L "$prefix/current"; then
+  current=$(readlink "$prefix/current")
+  identity=${current#versions/}
+  case $current:$identity in versions/*:????????????????????????????????????????????????????????????????) ;; *) fail "current link is not installer-owned";; esac
+  case $identity in *[!0-9a-f]*) fail "current link is not installer-owned";; esac
+fi
+if test -d "$prefix/versions"; then
+  for version in "$prefix/versions"/*; do
+    test -d "$version" || continue
+    identity=${version##*/}
+    test ${#identity} -eq 64 || fail "versions contains an unowned directory"
+    case $identity in *[!0-9a-f]*) fail "versions contains an unowned directory";; esac
+  done
+  for version in "$prefix/versions"/*; do
+    test -d "$version" || continue
+    chmod -R u+w "$version" || fail "cannot make installed version removable"
+  done
+fi
+if test -L "$bin_dir/into-md"; then
+  target=$(readlink "$bin_dir/into-md")
+  case $target in "$prefix"/current/bin/into-md) rm "$bin_dir/into-md";; esac
+fi
+if test -L "$prefix/current"; then
+  rm "$prefix/current"
+fi
+if test -d "$prefix/versions"; then
+  for version in "$prefix/versions"/*; do
+    test -d "$version" || continue
+    rm -R -- "$version"
+  done
+  rmdir "$prefix/versions" 2>/dev/null || true
+fi
+printf '%s\n' "into-md removed"

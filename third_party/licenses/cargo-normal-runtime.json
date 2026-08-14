@@ -21,7 +21,7 @@
     "crates/task-store/Cargo.toml": "0f9f0c0de64be5afdf8d4c4b4092da75877af8b340c015273101c465db1188fd",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
-    "tools/installed-smoke/Cargo.toml": "6a8823ef4fd9dc0476887ead79402e797a2ffd90dbca3d65a8b47ff68e7fe296",
+    "tools/installed-smoke/Cargo.toml": "e58acf5c57c564037cee75d29e777570d432153391d285cf4ed5ef5f16ed04e9",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
   },
   "normal_registry_packages": [

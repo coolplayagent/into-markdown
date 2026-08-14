@@ -2383,7 +2383,13 @@ fn validate_styles_hierarchy(
     }
     let valid = match local {
         b"style" => xml_name_is(parent, WORD_NS, b"styles"),
-        b"name" | b"basedOn" | b"pPr" | b"rPr" => xml_name_is(parent, WORD_NS, b"style"),
+        b"name" | b"basedOn" => xml_name_is(parent, WORD_NS, b"style"),
+        b"pPr" => {
+            xml_name_is(parent, WORD_NS, b"style") || xml_name_is(parent, WORD_NS, b"pPrDefault")
+        }
+        b"rPr" => {
+            xml_name_is(parent, WORD_NS, b"style") || xml_name_is(parent, WORD_NS, b"rPrDefault")
+        }
         b"outlineLvl" => {
             xml_name_is(parent, WORD_NS, b"pPr")
                 && ancestors
@@ -2504,9 +2510,10 @@ fn validate_word_content_hierarchy(
         }
         (
             WORD_NS,
-            b"rPr" | b"drawing" | b"pict" | b"t" | b"tab" | b"br" | b"cr" | b"fldChar"
-            | b"instrText" | b"footnoteReference" | b"endnoteReference" | b"commentReference",
+            b"drawing" | b"pict" | b"t" | b"tab" | b"br" | b"cr" | b"fldChar" | b"instrText"
+            | b"footnoteReference" | b"endnoteReference" | b"commentReference",
         ) => parent_word_is(b"r"),
+        (WORD_NS, b"rPr") => parent_word_is(b"r") || parent_word_is(b"pPr"),
         (WORD_DRAWING_NS, b"docPr") | (DRAWING_NS, b"blip") => {
             has_ancestor(WORD_NS, b"drawing") && has_ancestor(WORD_NS, b"r")
         }

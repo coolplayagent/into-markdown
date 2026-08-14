@@ -200,6 +200,9 @@ fn enrich_inventory_evidence(
             "onnxruntime-cpu" => Some("third_party/onnxruntime/manifest.json"),
             "pdfium" => Some("third_party/pdfium/manifest.json"),
             "ffmpeg" => Some("third_party/ffmpeg/source.json"),
+            "libreoffice-macos-arm64" => {
+                Some("third_party/legacy-office/macos-arm64-manifest.json")
+            }
             "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
                 Some("models/ppocrv6-tiny-recognizer-authority.json")
             }
@@ -438,13 +441,28 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
     if !safe_path(&file.path) {
         errors.push(format!("unsafe archive path {:?}", file.path));
     }
-    if file.bytes == 0 || !is_sha256(&file.sha256) {
-        errors.push(format!("archive file {} lacks fixed size or SHA-256", file.path));
+    if !is_sha256(&file.sha256) {
+        errors.push(format!("archive file {} lacks a fixed SHA-256", file.path));
     }
     let kind_path_is_valid = match file.kind {
         ArchiveFileKind::Project => {
-            matches!(file.path.as_str(), "bin/into-md" | "bin/into-md.exe")
-                || file.path.starts_with("lib/into-markdown-rust/")
+            matches!(
+                file.path.as_str(),
+                "bin/into-md"
+                    | "bin/into-md.exe"
+                    | "bin/installed-smoke"
+                    | "bin/installed-smoke.exe"
+                    | "bin/archive-check"
+                    | "bin/archive-check.exe"
+                    | "bin/onnxruntime-worker"
+                    | "bin/onnxruntime-worker.exe"
+                    | "bin/legacy-office-runtime/legacy-office-worker"
+                    | "bin/legacy-office-runtime/legacy-office-worker.exe"
+                    | "install"
+                    | "uninstall"
+            ) || file.path.starts_with("lib/into-markdown-rust/")
+                || (file.path.starts_with("bin/models/")
+                    && file.path.ends_with("/install-state.json"))
                 || file.path.starts_with("share/into-markdown/smoke/fixtures/")
         }
         ArchiveFileKind::Declaration => matches!(file.path.as_str(), LICENSE_PATH | NOTICE_PATH),
