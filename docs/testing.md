@@ -337,6 +337,30 @@ available 集合比对，并把每个非 OCR 样本送入真实 converter 和 Ma
 `ConversionOptions` 字段、相邻失败/成功值、错误 limit 名和成功输出 hash，防止仅凭文件
 名称推断边界。
 
+旧 Office native runtime、PDF、ZIP 与 EPUB 的小型二进制攻击图在各自 process/converter/API
+测试中程序生成，不复制 Office 或网络样本。旧 Office 测试 worker 是仓库源码构建的受控
+协议端点，authority 仍对它执行 exact tree/hash/license/ABI 校验；定向测试覆盖 DOC→DOCX、
+PPT→PPTX、XLS→XLSX、格式混淆、尾随帧、低内存 fail-before、额外文件/symlink、worker crash、
+encrypted、精确输出上限、取消/timeout、process-group descendant reap、temporary/lease 释放，
+temporary sparse-file 超限时的 watchdog terminate/reap，
+以及 nested 服务只收到根 context/options。它不代表 LibreOffice 质量或许可验证。
+Windows 的普通图以可注入 suspended-launch contract 覆盖 assign Job、token mismatch/error、resume
+失败后的 terminate+wait 顺序，以及命令行 quoting 和收窄 DLL flags；这些只作为 Windows target
+编译/运行证据，不在非 Windows 主机伪报为真实 AppContainer。真实 Windows runner 还必须使用
+包装任务预置的 profile/ACL 执行下面的 native smoke test。Unix fake-worker process fixtures 不依赖
+任何系统 Office 安装。
+
+显式本机 runtime 的 manual smoke test 使用安装内 LICENSE/third-party 清单生成的 authority，
+且只从以下四个绝对路径变量读取，不查询 PATH：
+
+```shell
+INTO_MD_LEGACY_OFFICE_ROOT=/absolute/runtime-bundle \
+INTO_MD_LEGACY_OFFICE_AUTHORITY=/absolute/runtime-bundle/authority.json \
+INTO_MD_LEGACY_OFFICE_WORKER=/absolute/runtime-bundle/worker \
+INTO_MD_LEGACY_OFFICE_DOC_FIXTURE=/absolute/repository-owned.doc \
+cargo test -p into-markdown-legacy-office --test worker_process manual_native_runtime_conversion -- --ignored
+```
+
 RTF corpus 使用仓库原创 ASCII 文件，覆盖中英 Unicode/样式、根组损坏、相邻 group-depth
 边界和 object/local-file field 恶意输入；其许可、生成器、字节数、SHA-256 与最终 Markdown
 hash 和其他 available 格式一起由 manifest 双向审计。转换测试注入计数型 OCR、AI 与

@@ -233,6 +233,15 @@ JSON object shape 同时成立时才接受 Wikipedia；普通 `/w/api.php` JSON 
 converter crate 还提供窄作用域的 `convert_rtf_bytes(bytes, options, context)` 给 MSG 等已解压
 容器正文复用；该入口不接受 `Services`，沿用调用方同一个 `ExecutionContext`、limit、取消、
 provenance 和 live-memory lease，不能重置预算或获得网络能力。
+旧 Office converter 使用相同的 nested-dispatch 契约：worker 返回的 bounded OOXML bytes 形成
+只存在于本次调用的 `ResolvedInput`，显式 `FormatHint` 固定为 DOCX/PPTX/XLSX，并排除
+`builtin.converter.legacy-office` 防止递归。`NestedConversionRequest` 借用根 options，调用时
+传入同一个 context；normalized bytes 的 reservation 在 nested 返回后释放，子输出 lease 仍由
+Engine 的外层 preflight 最终认证。`LegacyOfficeRuntime::new(RuntimeConfig)` 只接受显式路径；
+`packaged()` 只派生可执行文件旁固定 sibling layout，二者都必须通过同一 authority 校验。
+机器可读包装契约位于 `third_party/legacy-office/authority.schema.json`。Windows target 还必须
+声明预置 AppContainer 的 profile name、派生 SID、空 capability 集及固定 forbidden capability
+清单；缺 profile、SID 漂移或 storage/ACL 不可用均为 `componentUnavailable`，不会动态创建 profile。
 HTML、XML 与 RSS/Atom 探测最多检查 1 MiB UTF-8 前缀。JSON 与
 Jupyter Notebook 使用带 checkpoint 和 nesting 上限的非递归状态机扫描完整 resolved
 bytes；采样边界处无论结构开放还是恰好闭合都不会提前定案，完整结构后的非空白尾部

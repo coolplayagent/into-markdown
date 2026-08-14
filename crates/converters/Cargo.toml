@@ -19,6 +19,7 @@ into-markdown-pdfium = { path = "../pdfium" }
 into-markdown-pdf-layout = { path = "../pdf-layout" }
 into-markdown-ocr = { path = "../ocr" }
 into-markdown-http-transport = { path = "../http-transport" }
+into-markdown-legacy-office = { path = "../legacy-office" }
 pulldown-cmark.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
@@ -36,6 +37,7 @@ libc.workspace = true
 winapi-util.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 into-markdown-render-markdown = { path = "../render-markdown" }
 rustix = { workspace = true, features = ["process"] }
 sha2.workspace = true

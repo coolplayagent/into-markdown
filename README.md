@@ -103,6 +103,13 @@ raw HTML 与 blockquote 在现有 IR 中保存为不可执行代码容器并产�
 DOCX 与 DOCM 转换可用，覆盖标题样式、富文本、编号、表格、链接、图片、脚注、页眉页脚、
 批注、字段和公式。宏部件永不读取或执行；加密、损坏及超出 ZIP/XML/资源预算的输入稳定拒绝。
 
+DOC、PPT/PPS/POT 与 XLS 通过固定随包路径中的 `legacy-office-worker` 隔离转换为对应 OOXML，
+再以同一请求的取消、超时、资源预算和离线策略进入内置 OOXML 转换器。父进程不搜索系统
+LibreOffice、`PATH`、代理或 loader 环境；未安装当前平台的精确 authority/runtime 时稳定返回
+`componentUnavailable`。Windows 只消费安装器预置且 SID 精确匹配、零 capability 的
+AppContainer，不在转换路径创建或删除持久 profile。运行时制品的组装和发布许可清单由平台包装
+任务独立交付。
+
 RTF 转换可用，支持字符集与 Unicode escape、行内样式、段落、列表、表格、metadata 和
 经完整解码审计的 PNG/JPEG 图片。内嵌 object、文件路径、HTML 与 active destination 永不
 执行或联网；危险 hyperlink 和 EMF/WMF 安全降级并产生结构化诊断。

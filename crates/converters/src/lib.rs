@@ -8,6 +8,7 @@ mod epub;
 mod feed;
 mod html;
 mod image_converter;
+mod legacy_office;
 mod markdown;
 mod msg;
 mod notebook;
@@ -36,6 +37,7 @@ pub use into_markdown_pdf_layout::{
     LayoutConfig as PdfLayoutConfig, LayoutLimits as PdfLayoutLimits,
     reconstruct_document as reconstruct_pdf_layout,
 };
+pub use legacy_office::LegacyOfficeConverter;
 pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
@@ -117,7 +119,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Doc,
         family: "document",
         extensions: &["doc"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Docx,
@@ -129,7 +131,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Ppt,
         family: "document",
         extensions: &["ppt", "pps", "pot"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Pptx,
@@ -141,7 +143,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Xls,
         family: "document",
         extensions: &["xls"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Xlsx,

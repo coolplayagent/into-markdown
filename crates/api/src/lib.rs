@@ -82,6 +82,7 @@ pub fn default_engine_builder_with_services(services: Services) -> EngineBuilder
         .register_converter(Arc::new(into_markdown_converters::RtfConverter))
         .register_converter(Arc::new(into_markdown_converters::WorkbookConverter))
         .register_converter(Arc::new(into_markdown_converters::PresentationConverter))
+        .register_converter(Arc::new(into_markdown_converters::LegacyOfficeConverter::default()))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::MsgConverter))
