@@ -39,6 +39,7 @@ DATA = [
     "//crates/http-transport:Cargo.toml",
     "//crates/ocr:Cargo.toml",
     "//crates/onnxruntime:Cargo.toml",
+    "//crates/pdf-layout:Cargo.toml",
     "//crates/pdfium:Cargo.toml",
     "//crates/render-markdown:Cargo.toml",
     "//crates/task-store:Cargo.toml",

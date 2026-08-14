@@ -768,6 +768,70 @@ fn auto_ocr_degrades_only_provider_component_unavailability() {
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
+struct PreflightFailingOcr {
+    unavailable: bool,
+}
+
+impl OcrEngine for PreflightFailingOcr {
+    fn id(&self) -> &'static str {
+        "test.ocr.preflight-failing"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async { unreachable!("preflight failure must prevent provider execution") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        if self.unavailable {
+            Err(ConversionError::ComponentUnavailable {
+                component: self.id().into(),
+                detail: "provider disappeared during preflight".into(),
+            })
+        } else {
+            Err(ConversionError::Ocr {
+                provider: self.id().into(),
+                detail: "provider preflight failed".into(),
+            })
+        }
+    }
+}
+
+#[test]
+fn auto_ocr_preflight_degrades_only_component_unavailability() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Auto;
+
+    let failure_context = context(&options);
+    let services = Services {
+        ocr: Some(Arc::new(PreflightFailingOcr { unavailable: false })),
+        ..Services::default()
+    };
+    let error =
+        block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &failure_context))
+            .unwrap_err();
+    assert_eq!(error.code(), into_markdown_core::ErrorCode::Ocr);
+    assert_eq!(failure_context.reserved_memory_bytes(), 0);
+
+    let context = context(&options);
+    let services = Services {
+        ocr: Some(Arc::new(PreflightFailingOcr { unavailable: true })),
+        ..Services::default()
+    };
+    let contribution =
+        block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context)).unwrap();
+    assert_eq!(contribution.diagnostics[0].code, "image.ocrUnavailable");
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
 impl OcrEngine for PlannedOcr {
     fn id(&self) -> &'static str {
         "test.ocr.planned"

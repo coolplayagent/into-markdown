@@ -31,11 +31,11 @@ pub use docx::DocxConverter;
 pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;
+pub use image_converter::ImageConverter;
 pub use into_markdown_pdf_layout::{
     LayoutConfig as PdfLayoutConfig, LayoutLimits as PdfLayoutLimits,
     reconstruct_document as reconstruct_pdf_layout,
 };
-pub use image_converter::ImageConverter;
 pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;

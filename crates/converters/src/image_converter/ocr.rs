@@ -310,12 +310,13 @@ fn preflight_unavailable(
     error: ConversionError,
 ) -> Result<OcrContribution, ConversionError> {
     match error {
+        error @ ConversionError::ComponentUnavailable { .. } if policy == OcrPolicy::Auto => {
+            Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")))
+        }
+        error if policy == OcrPolicy::Auto => Err(error),
         ConversionError::Cancelled
         | ConversionError::Timeout
         | ConversionError::ResourceLimit { .. } => Err(error),
-        _ if policy == OcrPolicy::Auto => {
-            Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")))
-        }
         _ => Err(map_unavailable(provider, error)),
     }
 }
