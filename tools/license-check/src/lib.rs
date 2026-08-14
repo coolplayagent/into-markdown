@@ -726,6 +726,15 @@ fn arguments_are_empty(arguments: impl IntoIterator<Item = impl AsRef<std::ffi::
 }
 
 fn repository_root() -> Result<PathBuf, String> {
+    if let Ok(workspace) = env::var("BUILD_WORKSPACE_DIRECTORY") {
+        let candidate = PathBuf::from(workspace)
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel workspace: {error}"))?;
+        if candidate.join("Cargo.lock").is_file() && candidate.join("MODULE.bazel").is_file() {
+            return Ok(candidate);
+        }
+        return Err("BUILD_WORKSPACE_DIRECTORY is not the repository root".to_owned());
+    }
     if let Ok(test_srcdir) = env::var("TEST_SRCDIR") {
         let workspace = env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".to_owned());
         let candidate = PathBuf::from(test_srcdir).join(workspace);

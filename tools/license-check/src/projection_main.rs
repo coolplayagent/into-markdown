@@ -47,6 +47,15 @@ fn run(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Result<String
 }
 
 fn repository_root() -> Result<PathBuf, Vec<String>> {
+    if let Ok(workspace) = env::var("BUILD_WORKSPACE_DIRECTORY") {
+        let root = PathBuf::from(workspace)
+            .canonicalize()
+            .map_err(|error| vec![format!("cannot resolve Bazel workspace: {error}")])?;
+        if root.join("Cargo.lock").is_file() && root.join("MODULE.bazel").is_file() {
+            return Ok(root);
+        }
+        return Err(vec!["BUILD_WORKSPACE_DIRECTORY is not the repository root".to_owned()]);
+    }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let Some(root) = manifest.parent().and_then(Path::parent) else {
         return Err(vec!["cannot resolve repository root".to_owned()]);

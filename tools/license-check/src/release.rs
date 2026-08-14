@@ -183,6 +183,9 @@ fn enrich_inventory_evidence(
             "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
                 Some("models/ppocrv6-tiny-recognizer-authority.json")
             }
+            "ppocrv6-tiny-detector-onnx-model" => {
+                Some("models/ppocrv6-tiny-detector-onnx-authority.json")
+            }
             _ => None,
         };
         if let Some(evidence_path) = evidence_path {
@@ -206,6 +209,12 @@ fn select_components<'a>(
     for component in &inventory.components {
         if by_id.insert(component.id.as_str(), component).is_some() {
             errors.push(format!("duplicate authority component {}", component.id));
+        }
+    }
+    let mut caller_ids = BTreeSet::new();
+    for id in requested {
+        if !caller_ids.insert(id.as_str()) {
+            errors.push(format!("duplicate projected component {id}"));
         }
     }
     let mut ids = BTreeSet::new();

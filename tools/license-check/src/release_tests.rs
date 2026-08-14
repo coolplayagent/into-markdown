@@ -241,7 +241,9 @@ fn install_base_materials(
         .filter(|id| {
             matches!(
                 id.as_str(),
-                "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table"
+                "ppocrv6-tiny-detector-onnx-model"
+                    | "ppocrv6-tiny-recognizer-onnx-model"
+                    | "ppocrv6-tiny-recognizer-character-table"
             )
         })
         .cloned()
@@ -334,7 +336,7 @@ fn four_platform_requests_use_one_license_conclusion() {
         let json = fs::read_to_string(fixture).unwrap();
         let generated = generate_release_inputs(&repository, &json).unwrap();
         assert_eq!(generated.target, target);
-        assert!(generated.third_party_notices.contents.contains("License: LGPL-2.1-or-later"));
+        assert!(!generated.third_party_notices.contents.contains("License: LGPL-2.1-or-later"));
         for required in ["imageproc-contour-adaptation", "clipper2-rust", "calamine"] {
             assert!(generated.component_ids.iter().any(|id| id == required));
         }
@@ -431,7 +433,11 @@ fn orphan_binary_cannot_claim_project_ownership() {
 #[allow(clippy::too_many_lines)]
 fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
-    select(&mut projection, &["ffmpeg"]);
+    let approval_errors =
+        generate_release_inputs(&root(), &request("aarch64-apple-darwin", &["ffmpeg"]))
+            .unwrap_err();
+    assert!(approval_errors.iter().any(|error| error.contains("no repository-approved")));
+    projection.components.push("ffmpeg".into());
     projection.files.push(ArchiveFile {
         path: "bin/ffmpeg".into(),
         bytes: 99,
@@ -528,17 +534,9 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
             .unwrap_err();
     assert!(incompatible.iter().any(|error| error.contains("reviewed build policy")));
-    let relink = projection
-        .license_materials
-        .iter_mut()
-        .find(|item| item.kind == LicenseMaterialKind::RelinkMaterial)
-        .unwrap();
-    relink.sha256 = "6".repeat(64);
-    projection.files.iter_mut().find(|file| file.path == relink.path).unwrap().sha256 =
-        relink.sha256.clone();
-    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
-        .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("exact corresponding source or relink")));
+    assert!(
+        incompatible.iter().any(|error| error.contains("exact corresponding source or relink"))
+    );
 }
 
 #[test]
@@ -631,9 +629,21 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     select(
         &mut projection,
-        &["ppocrv6-tiny-recognizer-onnx-model", "ppocrv6-tiny-recognizer-character-table"],
+        &[
+            "ppocrv6-tiny-detector-onnx-model",
+            "ppocrv6-tiny-recognizer-onnx-model",
+            "ppocrv6-tiny-recognizer-character-table",
+        ],
     );
     projection.files.extend([
+        ArchiveFile {
+            path: "share/models/detector/inference.onnx".into(),
+            bytes: 1_780_590,
+            sha256: "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("ppocrv6-tiny-detector-onnx-model".into()),
+            embedded_components: vec![],
+        },
         ArchiveFile {
             path: "share/models/inference.onnx".into(),
             bytes: 4_462_639,
@@ -652,10 +662,36 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
         },
     ]);
     verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
+    let mut omitted = projection.clone();
+    omitted
+        .files
+        .retain(|file| file.component_id.as_deref() != Some("ppocrv6-tiny-detector-onnx-model"));
+    let errors =
+        verify_archive_projection(&root(), &serde_json::to_string(&omitted).unwrap()).unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("fixed file authority")));
     projection.files.last_mut().unwrap().bytes -= 1;
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("fixed file authority")));
+}
+
+#[test]
+fn caller_duplicate_ids_fail_before_required_component_augmentation() {
+    let errors = generate_release_inputs(
+        &root(),
+        &request(
+            "aarch64-apple-darwin",
+            &["imageproc-contour-adaptation", "imageproc-contour-adaptation"],
+        ),
+    )
+    .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("duplicate projected component")));
+
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.components.push("imageproc-contour-adaptation".into());
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("duplicate projected component")));
 }
 
 #[test]

@@ -7,6 +7,7 @@ use std::path::Path;
 
 const MODEL_COMPONENT: &str = "ppocrv6-tiny-recognizer-onnx-model";
 const TABLE_COMPONENT: &str = "ppocrv6-tiny-recognizer-character-table";
+const DETECTOR_COMPONENT: &str = "ppocrv6-tiny-detector-onnx-model";
 
 pub(crate) fn validate(
     repository: &Path,
@@ -14,13 +15,44 @@ pub(crate) fn validate(
     files: &[ArchiveFile],
     errors: &mut Vec<String>,
 ) {
-    if !selected
-        .iter()
-        .any(|component| component == MODEL_COMPONENT || component == TABLE_COMPONENT)
-    {
+    if !selected.iter().any(|component| {
+        matches!(component.as_str(), MODEL_COMPONENT | TABLE_COMPONENT | DETECTOR_COMPONENT)
+    }) {
         return;
     }
-    let path = repository.join("models/ppocrv6-tiny-recognizer-authority.json");
+    validate_authority(
+        repository,
+        "models/ppocrv6-tiny-recognizer-authority.json",
+        selected,
+        files,
+        &[
+            (MODEL_COMPONENT, "runtime_model_size", "runtime_model_sha256"),
+            (TABLE_COMPONENT, "character_table_size", "character_table_sha256"),
+        ],
+        errors,
+    );
+    validate_authority(
+        repository,
+        "models/ppocrv6-tiny-detector-onnx-authority.json",
+        selected,
+        files,
+        &[(DETECTOR_COMPONENT, "runtime_model_size", "runtime_model_sha256")],
+        errors,
+    );
+}
+
+fn validate_authority(
+    repository: &Path,
+    relative_path: &str,
+    selected: &[String],
+    files: &[ArchiveFile],
+    fields: &[(&str, &str, &str)],
+    errors: &mut Vec<String>,
+) {
+    if !fields.iter().any(|(id, _, _)| selected.iter().any(|value| value == id)) {
+        return;
+    }
+    let path = repository.join(relative_path);
     let authority = fs::read_to_string(&path)
         .map_err(|error| errors.push(format!("cannot read {}: {error}", path.display())))
         .ok()
@@ -30,10 +62,7 @@ pub(crate) fn validate(
                 .ok()
         });
     let Some(authority) = authority else { return };
-    for (id, size_key, hash_key) in [
-        (MODEL_COMPONENT, "runtime_model_size", "runtime_model_sha256"),
-        (TABLE_COMPONENT, "character_table_size", "character_table_sha256"),
-    ] {
+    for &(id, size_key, hash_key) in fields {
         if !selected.iter().any(|component| component == id) {
             continue;
         }

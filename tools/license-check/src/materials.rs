@@ -116,9 +116,9 @@ fn covers_component(
         "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
         "calamine" => "third_party/licenses/calamine-MIT.txt",
         id if id.starts_with("npm:") => "third_party/licenses/npm/react-MIT.txt",
-        "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
-            "LICENSE"
-        }
+        "ppocrv6-tiny-recognizer-onnx-model"
+        | "ppocrv6-tiny-recognizer-character-table"
+        | "ppocrv6-tiny-detector-onnx-model" => "LICENSE",
         _ => return false,
     };
     let expected = fs::read_to_string(repository.join(authority_path)).unwrap_or_default();

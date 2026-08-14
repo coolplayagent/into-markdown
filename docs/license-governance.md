@@ -153,8 +153,10 @@ components compiled into that binary without pretending they are separate archiv
 declarations and generated metadata have no component owner. All paths are normalized ASCII relative
 paths; all file hashes are lowercase SHA-256 values.
 
-The checked-in files under `tools/license-check/fixtures/` exercise identical FFmpeg conclusions for
-all four supported targets. They are contract fixtures, not platform policy copies.
+The checked-in files under `tools/license-check/fixtures/` exercise one platform-neutral core
+conclusion for all four supported targets. FFmpeg is excluded until the selected target has a
+repository-reviewed approval binding its executable, build-authority, `config.log`, and relink
+material hashes; requesting it before that approval fails closed.
 
 ## Review and maintenance
 

@@ -41,7 +41,7 @@ bazel test //tools/license-check:license_check
 发布审计使用更严格的模式：
 
 ```shell
-bazel run //tools/license-check:release_audit
+bazel --batch run --jobs=2 --local_resources=memory=4096 //tools/license-check:release_audit
 ```
 
 任何 Cargo 锁文件漂移、无法与 workspace 清单精确匹配的无来源包、未知许可、

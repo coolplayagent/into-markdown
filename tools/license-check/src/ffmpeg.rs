@@ -1,6 +1,8 @@
 //! `FFmpeg` build-authority and LGPL-compatible policy verification.
 
-use crate::schema::{ArchiveFileKind, ArchiveProjection, FfmpegEvidence, SCHEMA_VERSION};
+use crate::schema::{
+    ArchiveFileKind, ArchiveProjection, FfmpegEvidence, IntegrityEvidence, SCHEMA_VERSION,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -175,7 +177,70 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
         };
         actual.len() == value.additional_flags.len() && actual == expected
     });
-    flags_are_allowed && target_flags_are_exact
+    let target_identity_is_exact = policy.targets.iter().all(|(target, value)| {
+        expected_target_identity(target).is_some_and(|(format, architecture, dependencies)| {
+            value.binary_format == format
+                && value.binary_architecture == architecture
+                && value.dynamic_dependencies == dependencies
+        })
+    });
+    flags_are_allowed && target_flags_are_exact && target_identity_is_exact
+}
+
+fn expected_target_identity(target: &str) -> Option<(&'static str, &'static str, Vec<String>)> {
+    let (format, architecture, dependencies): (_, _, &[&str]) = match target {
+        "aarch64-apple-darwin" => (
+            "mach-o",
+            "aarch64",
+            &[
+                "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+                "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+                "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+                "/usr/lib/libSystem.B.dylib",
+            ],
+        ),
+        "x86_64-unknown-linux-gnu" => {
+            ("elf", "x86_64", &["libc.so.6", "libm.so.6", "libpthread.so.0"])
+        }
+        "aarch64-unknown-linux-gnu" => {
+            ("elf", "aarch64", &["libc.so.6", "libm.so.6", "libpthread.so.0"])
+        }
+        "x86_64-pc-windows-msvc" => {
+            ("pe", "x86_64", &["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"])
+        }
+        _ => return None,
+    };
+    Some((format, architecture, dependencies.iter().map(|value| (*value).to_owned()).collect()))
+}
+
+pub(crate) fn integrity(
+    repository: &Path,
+    target: &str,
+    errors: &mut Vec<String>,
+) -> Vec<IntegrityEvidence> {
+    let Some(approvals) = load_approvals(repository, errors) else { return Vec::new() };
+    let Some(approved) = approvals.targets.get(target).and_then(Option::as_ref) else {
+        errors.push(format!("FFmpeg target {target} has no repository-approved build evidence"));
+        return Vec::new();
+    };
+    if !approved_fields_valid(approved) {
+        errors.push(format!("FFmpeg target {target} approval lacks fixed artifact evidence"));
+        return Vec::new();
+    }
+    [
+        (&approved.executable_sha256, "target executable"),
+        (&approved.authority_sha256, "build authority"),
+        (&approved.config_log_sha256, "config.log"),
+        (&approved.relink_sha256, "relink materials"),
+    ]
+    .into_iter()
+    .map(|(digest, subject)| IntegrityEvidence {
+        algorithm: "SHA-256".to_owned(),
+        digest: digest.clone(),
+        subject: format!("ffmpeg {subject}"),
+        target: Some(target.to_owned()),
+    })
+    .collect()
 }
 
 pub(crate) fn validate(
@@ -414,7 +479,7 @@ fn read(repository: &Path, path: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildPolicy, policy_is_lgpl_compatible};
+    use super::{ApprovedBuild, BuildPolicy, approved_fields_valid, policy_is_lgpl_compatible};
 
     #[test]
     fn repository_policy_rejects_incompatible_and_external_flags() {
@@ -440,6 +505,48 @@ mod tests {
             policy.required_flags.push(flag.to_owned());
             assert!(!policy_is_lgpl_compatible(&policy));
             policy.required_flags.pop();
+        }
+        for target in policy.targets.keys().cloned().collect::<Vec<_>>() {
+            let original = policy.targets[&target].dynamic_dependencies.clone();
+            for index in 0..original.len() {
+                policy.targets.get_mut(&target).unwrap().dynamic_dependencies.remove(index);
+                assert!(!policy_is_lgpl_compatible(&policy));
+                policy.targets.get_mut(&target).unwrap().dynamic_dependencies = original.clone();
+            }
+            policy.targets.get_mut(&target).unwrap().dynamic_dependencies.push("unreviewed".into());
+            assert!(!policy_is_lgpl_compatible(&policy));
+            policy.targets.get_mut(&target).unwrap().dynamic_dependencies = original;
+        }
+    }
+
+    #[test]
+    fn approval_rejects_each_missing_or_mutated_artifact_hash() {
+        let approved = ApprovedBuild {
+            authority_sha256: "a".repeat(64),
+            executable_bytes: 1,
+            executable_sha256: "b".repeat(64),
+            config_log_sha256: "c".repeat(64),
+            relink_bytes: 1,
+            relink_sha256: "d".repeat(64),
+        };
+        assert!(approved_fields_valid(&approved));
+        for field in ["authority", "executable", "config", "relink"] {
+            let mut changed = ApprovedBuild {
+                authority_sha256: approved.authority_sha256.clone(),
+                executable_bytes: approved.executable_bytes,
+                executable_sha256: approved.executable_sha256.clone(),
+                config_log_sha256: approved.config_log_sha256.clone(),
+                relink_bytes: approved.relink_bytes,
+                relink_sha256: approved.relink_sha256.clone(),
+            };
+            match field {
+                "authority" => changed.authority_sha256.pop(),
+                "executable" => changed.executable_sha256.pop(),
+                "config" => changed.config_log_sha256.pop(),
+                "relink" => changed.relink_sha256.pop(),
+                _ => unreachable!(),
+            };
+            assert!(!approved_fields_valid(&changed));
         }
     }
 }

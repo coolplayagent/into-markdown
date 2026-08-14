@@ -116,6 +116,22 @@ pub(crate) fn integrity(
     component: &str,
     errors: &mut Vec<String>,
 ) -> Vec<IntegrityEvidence> {
+    if component == "ffmpeg" {
+        let mut evidence = crate::ffmpeg::integrity(repository, target, errors);
+        if let Some(digest) = read_json(&repository.join("third_party/ffmpeg/source.json"), errors)
+            .as_ref()
+            .and_then(|value| value.get("source_sha256"))
+            .and_then(Value::as_str)
+        {
+            evidence.push(IntegrityEvidence {
+                algorithm: "SHA-256".to_owned(),
+                digest: digest.to_owned(),
+                subject: "ffmpeg source archive".to_owned(),
+                target: Some(target.to_owned()),
+            });
+        }
+        return evidence;
+    }
     let (path, archive_field, binary_field, archive_subject, binary_subject) = match component {
         "onnxruntime-cpu" => (
             "third_party/onnxruntime/manifest.json",
@@ -131,21 +147,10 @@ pub(crate) fn integrity(
             "download archive",
             "runtime library",
         ),
-        "ffmpeg" => (
-            "third_party/ffmpeg/source.json",
-            "source_sha256",
-            "source_sha256",
-            "source archive",
-            "source archive",
-        ),
         _ => return model_integrity(repository, target, component, errors),
     };
     let Some(manifest) = read_json(&repository.join(path), errors) else { return Vec::new() };
-    let authority = if component == "ffmpeg" {
-        &manifest
-    } else if let Some(value) = manifest.pointer(&format!("/targets/{target}")) {
-        value
-    } else {
+    let Some(authority) = manifest.pointer(&format!("/targets/{target}")) else {
         errors.push(format!("{component} has no SBOM integrity for target {target}"));
         return Vec::new();
     };
@@ -170,20 +175,17 @@ pub(crate) fn integrity(
         subject: format!("authority file {path}"),
         target: Some(target.to_owned()),
     });
-    if component != "ffmpeg" {
-        let group =
-            if component == "onnxruntime-cpu" { "native_archives" } else { "pdfium_archives" };
-        append_download_integrity(
-            repository,
-            target,
-            component,
-            group,
-            archive_field,
-            authority,
-            &mut result,
-            errors,
-        );
-    }
+    let group = if component == "onnxruntime-cpu" { "native_archives" } else { "pdfium_archives" };
+    append_download_integrity(
+        repository,
+        target,
+        component,
+        group,
+        archive_field,
+        authority,
+        &mut result,
+        errors,
+    );
     result
 }
 
@@ -193,10 +195,14 @@ fn model_integrity(
     component: &str,
     errors: &mut Vec<String>,
 ) -> Vec<IntegrityEvidence> {
-    let path = "models/ppocrv6-tiny-recognizer-authority.json";
+    let path = if component == "ppocrv6-tiny-detector-onnx-model" {
+        "models/ppocrv6-tiny-detector-onnx-authority.json"
+    } else {
+        "models/ppocrv6-tiny-recognizer-authority.json"
+    };
     let Some(authority) = read_json(&repository.join(path), errors) else { return Vec::new() };
     let fields: &[(&str, &str)] = match component {
-        "ppocrv6-tiny-recognizer-onnx-model" => &[
+        "ppocrv6-tiny-detector-onnx-model" | "ppocrv6-tiny-recognizer-onnx-model" => &[
             ("runtime_archive_sha256", "model download archive"),
             ("runtime_model_sha256", "model runtime member"),
         ],
@@ -227,7 +233,9 @@ fn model_integrity(
                 .find(|item| item.get("artifact_id").and_then(Value::as_str) == Some(component))
         });
     let manifest_digest = match component {
-        "ppocrv6-tiny-recognizer-onnx-model" => authority.get("runtime_model_sha256"),
+        "ppocrv6-tiny-detector-onnx-model" | "ppocrv6-tiny-recognizer-onnx-model" => {
+            authority.get("runtime_model_sha256")
+        }
         "ppocrv6-tiny-recognizer-character-table" => authority.get("character_table_sha256"),
         _ => None,
     }
