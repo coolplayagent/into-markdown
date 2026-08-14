@@ -1,5 +1,8 @@
 use crate::release::{generate_release_inputs, verify_archive_projection};
-use crate::schema::{ArchiveFile, ArchiveFileKind, ArchiveProjection, FfmpegEvidence};
+use crate::schema::{
+    ArchiveFile, ArchiveFileKind, ArchiveProjection, FfmpegEvidence, LicenseMaterial,
+    LicenseMaterialKind,
+};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
@@ -36,10 +39,38 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
     let repository = root();
     let inputs = generate_release_inputs(&repository, &request(target, &[])).unwrap();
     let license = fs::read(repository.join("LICENSE")).unwrap();
+    let license_contents = format!(
+        "Apache License\nPermission is hereby granted\nRedistribution and use in source and binary forms\nBoost Software License\nPermission to use, copy, modify, and/or distribute\nGNU LESSER GENERAL PUBLIC LICENSE\nMozilla Public License\nUNICODE LICENSE\nCommunity Data License Agreement\nThis software is provided 'as-is'\nSIL OPEN FONT LICENSE\n{}",
+        "complete license body fixture. ".repeat(30)
+    );
+    let license_material = LicenseMaterial {
+        path: "share/into-markdown/licenses/third-party-license-compendium.txt".into(),
+        bytes: license_contents.len() as u64,
+        sha256: hash(license_contents.as_bytes()),
+        kind: LicenseMaterialKind::LicenseText,
+        component_ids: inputs.component_ids.clone(),
+        spdx_expressions: [
+            "Apache-2.0",
+            "MIT",
+            "BSD-3-Clause",
+            "BSL-1.0",
+            "ISC",
+            "LGPL-2.1-or-later",
+            "MPL-2.0",
+            "Unicode-3.0",
+            "CDLA-Permissive-2.0",
+            "Zlib",
+            "OFL-1.1",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        contents: Some(license_contents),
+    };
     ArchiveProjection {
         schema_version: 1,
         target: target.into(),
-        components: vec![],
+        components: inputs.component_ids.clone(),
         files: vec![
             declaration(
                 "LICENSE",
@@ -71,17 +102,70 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
                 sha256: "a".repeat(64),
                 kind: ArchiveFileKind::Project,
                 component_id: None,
-                embedded_components: vec![],
+                embedded_components: inputs.component_ids.clone(),
             },
+            declaration(
+                &license_material.path,
+                license_material.bytes,
+                license_material.sha256.clone(),
+                ArchiveFileKind::LicenseMaterial,
+            ),
         ],
+        license_materials: vec![license_material],
         ffmpeg_evidence: None,
     }
 }
 
 fn select(projection: &mut ArchiveProjection, components: &[&str]) {
-    projection.components = components.iter().map(|id| (*id).to_owned()).collect();
     let inputs =
         generate_release_inputs(&root(), &request(&projection.target, components)).unwrap();
+    projection.components = inputs.component_ids.clone();
+    projection.license_materials[0].component_ids = inputs.component_ids.clone();
+    let binary =
+        projection.files.iter_mut().find(|file| file.kind == ArchiveFileKind::Project).unwrap();
+    binary.embedded_components = inputs
+        .component_ids
+        .iter()
+        .filter(|id| id.starts_with("cargo:") || id.starts_with("npm:"))
+        .cloned()
+        .collect();
+    if components.contains(&"ffmpeg") {
+        let source: serde_json::Value = serde_json::from_slice(
+            &fs::read(root().join("third_party/ffmpeg/source.json")).unwrap(),
+        )
+        .unwrap();
+        push_external_material(
+            projection,
+            "share/into-markdown/source/ffmpeg-8.1.2.tar.xz",
+            source["source_bytes"].as_u64().unwrap(),
+            source["source_sha256"].as_str().unwrap(),
+            LicenseMaterialKind::CorrespondingSource,
+            "ffmpeg",
+        );
+        push_external_material(
+            projection,
+            "share/into-markdown/relink/ffmpeg-relink-materials.tar",
+            10,
+            &"9".repeat(64),
+            LicenseMaterialKind::RelinkMaterial,
+            "ffmpeg",
+        );
+    }
+    if components.contains(&"pdfium") {
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(root().join("third_party/pdfium/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let target = &manifest["targets"][&projection.target];
+        push_external_material(
+            projection,
+            "share/into-markdown/licenses/pdfium-upstream-license-bundle.tgz",
+            target["archive_size"].as_u64().unwrap(),
+            target["archive_sha256"].as_str().unwrap(),
+            LicenseMaterialKind::NoticeBundle,
+            "pdfium",
+        );
+    }
     for (path, bytes, sha256) in [
         ("NOTICE", inputs.notice.bytes, inputs.notice.sha256),
         (
@@ -95,6 +179,31 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
         file.bytes = bytes;
         file.sha256 = sha256;
     }
+}
+
+fn push_external_material(
+    projection: &mut ArchiveProjection,
+    path: &str,
+    bytes: u64,
+    sha256: &str,
+    kind: LicenseMaterialKind,
+    component: &str,
+) {
+    projection.files.push(declaration(
+        path,
+        bytes,
+        sha256.to_owned(),
+        ArchiveFileKind::LicenseMaterial,
+    ));
+    projection.license_materials.push(LicenseMaterial {
+        path: path.to_owned(),
+        bytes,
+        sha256: sha256.to_owned(),
+        kind,
+        component_ids: vec![component.to_owned()],
+        spdx_expressions: vec![],
+        contents: None,
+    });
 }
 
 #[test]
@@ -119,6 +228,42 @@ fn empty_projection_contract_is_valid_on_every_platform() {
         let projection = serde_json::to_string(&minimal_projection(target)).unwrap();
         verify_archive_projection(&root(), &projection).unwrap();
     }
+}
+
+#[test]
+fn authoritative_runtime_closure_cannot_be_omitted_or_disguised() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    let omitted =
+        projection.components.iter().find(|id| id.starts_with("cargo:")).cloned().unwrap();
+    projection.components.retain(|id| id != &omitted);
+    projection.files[4].embedded_components.retain(|id| id != &omitted);
+    projection.license_materials[0].component_ids.retain(|id| id != &omitted);
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("authoritative runtime components")));
+
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.push(ArchiveFile {
+        path: "lib/disguised-cargo.dylib".into(),
+        bytes: 1,
+        sha256: "8".repeat(64),
+        kind: ArchiveFileKind::Component,
+        component_id: projection.components.iter().find(|id| id.starts_with("cargo:")).cloned(),
+        embedded_components: vec![],
+    });
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("cannot hide a standalone")));
+}
+
+#[test]
+fn missing_or_untyped_license_material_fails_closed() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.license_materials.clear();
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("no typed declaration")));
+    assert!(errors.iter().any(|error| error.contains("lacks complete archived license text")));
 }
 
 #[test]
@@ -173,44 +318,65 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         .unwrap_err();
     assert!(without.iter().any(|error| error.contains("without LGPL-compatible")));
 
+    let configure: Vec<String> = vec![
+        "--disable-everything",
+        "--disable-gpl",
+        "--disable-version3",
+        "--disable-nonfree",
+        "--disable-network",
+        "--disable-autodetect",
+        "--disable-shared",
+        "--enable-static",
+        "--enable-libx264",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let dependencies: Vec<String> = vec![
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+        "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+        "/usr/lib/libSystem.B.dylib",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let authority_contents = serde_json::json!({
+        "schema_version": 1,
+        "ffmpeg_version": "8.1.2",
+        "target": projection.target,
+        "executable_bytes": 99,
+        "executable_sha256": "c".repeat(64),
+        "configure": configure,
+        "binary_format": "mach-o",
+        "binary_architecture": "aarch64",
+        "dependencies": dependencies,
+        "toolchain": "Apple clang fixture",
+    })
+    .to_string();
+    let authority_bytes = authority_contents.len() as u64;
+    let authority_sha256 = hash(authority_contents.as_bytes());
     projection.ffmpeg_evidence = Some(FfmpegEvidence {
         authority_path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
-        authority_bytes: 88,
-        authority_sha256: "f".repeat(64),
+        authority_bytes,
+        authority_sha256: authority_sha256.clone(),
+        authority_contents,
         schema_version: 1,
         ffmpeg_version: "8.1.2".into(),
         target: projection.target.clone(),
         executable_path: "bin/ffmpeg".into(),
         executable_bytes: 99,
         executable_sha256: "c".repeat(64),
-        configure: vec![
-            "--disable-everything",
-            "--disable-gpl",
-            "--disable-version3",
-            "--disable-nonfree",
-            "--disable-network",
-            "--disable-autodetect",
-            "--disable-shared",
-            "--enable-static",
-            "--enable-libx264",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
-        dependencies: vec![
-            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
-            "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
-            "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
-            "/usr/lib/libSystem.B.dylib",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
+        configure,
+        dependencies,
+        binary_format: "mach-o".into(),
+        binary_architecture: "aarch64".into(),
+        toolchain: "Apple clang fixture".into(),
     });
     projection.files.push(ArchiveFile {
         path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
-        bytes: 88,
-        sha256: "f".repeat(64),
+        bytes: authority_bytes,
+        sha256: authority_sha256,
         kind: ArchiveFileKind::Component,
         component_id: Some("ffmpeg".into()),
         embedded_components: vec![],
@@ -218,7 +384,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let incompatible =
         verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
             .unwrap_err();
-    assert!(incompatible.iter().any(|error| error.contains("incompatible or external")));
+    assert!(incompatible.iter().any(|error| error.contains("reviewed build policy")));
 }
 
 #[test]
@@ -255,10 +421,12 @@ fn sbom_input_carries_ecosystem_and_native_integrity_authority() {
     )
     .unwrap();
     let sbom = &generated.sbom_input.contents;
-    assert!(sbom.contains("SHA256:"));
+    assert!(sbom.contains("\"algorithm\": \"SHA-256\""));
     assert!(sbom.contains("sha512-"));
     assert!(sbom.contains("Cargo.lock + third_party/licenses/rust-lock.tsv"));
     assert!(sbom.contains("third_party/onnxruntime/manifest.json"));
+    assert!(sbom.contains("c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc"));
+    assert!(!sbom.contains("5715f06d8992ca8eeeddcce43df3a7d38f97d537052126f558e912cb312460ca"));
 }
 
 #[test]
@@ -317,12 +485,6 @@ fn cargo_and_npm_authorities_can_bind_embedded_project_content() {
     let components = ["cargo:serde@1.0.229", "npm:react@19.2.8"];
     let mut projection = minimal_projection("aarch64-apple-darwin");
     select(&mut projection, &components);
-    projection
-        .files
-        .iter_mut()
-        .find(|file| file.path == "bin/into-md")
-        .unwrap()
-        .embedded_components = components.iter().map(|id| (*id).to_owned()).collect();
     verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
 
     projection.files[4].embedded_components.push("cargo:unknown@9.9.9".into());

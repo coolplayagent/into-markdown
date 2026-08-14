@@ -1,6 +1,6 @@
 //! npm lock/inventory-backed runtime component authority.
 
-use crate::schema::Component;
+use crate::schema::{Component, IntegrityEvidence};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -61,7 +61,8 @@ pub(crate) fn load(contents: &str, errors: &mut Vec<String>) -> Vec<Component> {
                 _included_in_release: true,
                 release_eligible: true,
                 manual_only: false,
-                version: Some(package.version),
+                required_in_core: true,
+                version: Some(package.version.clone()),
                 source: package.license_source.or(Some(package.source)),
                 license: Some(package.license),
                 obligations: Some(format!(
@@ -69,7 +70,12 @@ pub(crate) fn load(contents: &str, errors: &mut Vec<String>) -> Vec<Component> {
                     package.name,
                     package.copyright.clone().unwrap_or_default()
                 )),
-                integrity: vec![package.integrity],
+                integrity: vec![IntegrityEvidence {
+                    algorithm: "SRI-SHA-512".to_owned(),
+                    digest: package.integrity,
+                    subject: format!("npm tarball {}@{}", package.name, package.version),
+                    target: None,
+                }],
                 authority: "pnpm-lock.yaml + third_party/licenses/npm-inventory.json".to_owned(),
             }
         })

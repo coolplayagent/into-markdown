@@ -9,6 +9,7 @@ command -v jq >/dev/null
 for audit_tool in curl gpg jq make file python3 shasum; do command -v "$audit_tool" >/dev/null; done
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source_manifest="$root/third_party/ffmpeg/source.json"
+build_policy="$root/third_party/ffmpeg/build-policy.json"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 output_dir=${FFMPEG_AUDIT_OUTPUT_DIR:-$work/output}
@@ -19,6 +20,8 @@ fi
 url=$(jq -er .source_url "$source_manifest")
 source_sha=$(jq -er .source_sha256 "$source_manifest")
 source_bytes=$(jq -er .source_bytes "$source_manifest")
+version=$(jq -er .version "$source_manifest")
+test "$(jq -er .ffmpeg_version "$build_policy")" = "$version"
 sig_url=$(jq -er .signature_url "$source_manifest")
 sig_sha=$(jq -er .signature_sha256 "$source_manifest")
 if [ -n "${FFMPEG_AUDIT_SOURCE:-}" ]; then cp "$FFMPEG_AUDIT_SOURCE" "$work/source.tar.xz"; else
@@ -40,7 +43,7 @@ gpg --batch --import "$work/signing-key.asc"
 test "$(gpg --batch --with-colons --fingerprint FCF986EA15E6E293A5644F10B4322F04D67658D8 | awk -F: '$1 == "fpr" {print $10; exit}')" = FCF986EA15E6E293A5644F10B4322F04D67658D8
 gpg --batch --verify "$work/source.asc" "$work/source.tar.xz"
 tar -xJf "$work/source.tar.xz" -C "$work"
-src="$work/ffmpeg-8.1.2"
+src="$work/ffmpeg-$version"
 test -s "$src/COPYING.LGPLv2.1"
 grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1"
 
@@ -65,12 +68,17 @@ set -- \
   --enable-parser=aac,mpegaudio,opus,vorbis --enable-filter=aformat,aresample \
   --enable-encoder=pcm_s16le --enable-muxer=pcm_s16le --enable-static --disable-shared $toolchain_args
 source_date_epoch=$(jq -er .source_date_epoch "$source_manifest")
+actual_config=$(printf '%s\n' "$@" | sort)
+expected_config=$({ printf '%s\n' "--prefix=$prefix"; jq -er --arg target "$target" '.required_flags[], .targets[$target].additional_flags[]' "$build_policy"; } | sort)
+test "$actual_config" = "$expected_config"
+(test "$format" = "$(jq -er --arg target "$target" '.targets[$target].binary_format' "$build_policy")")
+(test "$arch" = "$(jq -er --arg target "$target" '.targets[$target].binary_architecture' "$build_policy")")
 (cd "$src" && SOURCE_DATE_EPOCH="$source_date_epoch" ./configure "$@" && SOURCE_DATE_EPOCH="$source_date_epoch" make -j2 && make DESTDIR="$stage" install)
 if [ "$format" = pe ]; then tool="$stage$prefix/bin/ffmpeg.exe"; else tool="$stage$prefix/bin/ffmpeg"; fi
 test -x "$tool"
 report="$work/version.txt"
 "$tool" -hide_banner -version > "$report"
-grep -q '^ffmpeg version 8.1.2' "$report"
+grep -q "^ffmpeg version $version" "$report"
 grep -q -- '--disable-gpl' "$report"
 grep -q -- '--disable-nonfree' "$report"
 ! grep -q -- '--enable-gpl' "$report"
@@ -119,11 +127,7 @@ case "$format" in
   elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
   pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
 esac
-case "$target" in
-  aarch64-apple-darwin) expected_deps='["/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation","/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia","/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo","/usr/lib/libSystem.B.dylib"]' ;;
-  *-unknown-linux-gnu) expected_deps='["libc.so.6","libm.so.6","libpthread.so.0"]' ;;
-  x86_64-pc-windows-msvc) expected_deps='["ADVAPI32.dll","KERNEL32.dll","OLE32.dll","USER32.dll"]' ;;
-esac
+expected_deps=$(jq -cS --arg target "$target" '.targets[$target].dynamic_dependencies' "$build_policy")
 test "$(printf '%s' "$deps" | jq -cS .)" = "$(printf '%s' "$expected_deps" | jq -cS .)"
 case "$format-$arch" in
   mach-o-aarch64) file "$tool" | grep -q 'Mach-O 64-bit executable arm64' ;;
@@ -132,7 +136,7 @@ case "$format-$arch" in
   pe-x86_64) file "$tool" | grep -Eq 'PE32\+ executable.*x86-64' ;;
 esac
 configure=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1]')
-jq -n --arg version 8.1.2 --arg target "$target" --arg sha "$sha" --argjson bytes "$bytes" \
+jq -n --arg version "$version" --arg target "$target" --arg sha "$sha" --argjson bytes "$bytes" \
   --arg format "$format" --arg arch "$arch" --arg compiler "$compiler" --argjson configure "$configure" --argjson deps "$deps" \
   '{schema_version:1,ffmpeg_version:$version,target:$target,executable_bytes:$bytes,executable_sha256:$sha,configure:$configure,binary_format:$format,binary_architecture:$arch,dependencies:$deps,toolchain:$compiler}' > "$output_dir/ffmpeg-authority-$target.json"
 cp "$tool" "$output_dir/ffmpeg-$target"

@@ -21,6 +21,7 @@ pub(crate) struct Inventory {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Component {
     pub id: String,
     pub kind: String,
@@ -31,12 +32,14 @@ pub(crate) struct Component {
     pub release_eligible: bool,
     #[serde(default)]
     pub manual_only: bool,
+    #[serde(skip)]
+    pub required_in_core: bool,
     pub version: Option<String>,
     pub source: Option<String>,
     pub license: Option<String>,
     pub obligations: Option<String>,
     #[serde(skip)]
-    pub integrity: Vec<String>,
+    pub integrity: Vec<IntegrityEvidence>,
     #[serde(skip)]
     pub authority: String,
 }
@@ -64,6 +67,8 @@ pub struct ArchiveProjection {
     pub target: String,
     pub components: Vec<String>,
     pub files: Vec<ArchiveFile>,
+    #[serde(default)]
+    pub license_materials: Vec<LicenseMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ffmpeg_evidence: Option<FfmpegEvidence>,
 }
@@ -74,6 +79,7 @@ pub struct FfmpegEvidence {
     pub authority_path: String,
     pub authority_bytes: u64,
     pub authority_sha256: String,
+    pub authority_contents: String,
     pub schema_version: u64,
     pub ffmpeg_version: String,
     pub target: String,
@@ -82,6 +88,9 @@ pub struct FfmpegEvidence {
     pub executable_sha256: String,
     pub configure: Vec<String>,
     pub dependencies: Vec<String>,
+    pub binary_format: String,
+    pub binary_architecture: String,
+    pub toolchain: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -104,6 +113,30 @@ pub enum ArchiveFileKind {
     Component,
     Declaration,
     Generated,
+    LicenseMaterial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LicenseMaterial {
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub kind: LicenseMaterialKind,
+    pub component_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spdx_expressions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contents: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LicenseMaterialKind {
+    LicenseText,
+    NoticeBundle,
+    CorrespondingSource,
+    RelinkMaterial,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -138,6 +171,15 @@ pub struct SbomComponent {
     pub version: String,
     pub source: String,
     pub license: String,
-    pub integrity: Vec<String>,
+    pub integrity: Vec<IntegrityEvidence>,
     pub authority: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IntegrityEvidence {
+    pub algorithm: String,
+    pub digest: String,
+    pub subject: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }

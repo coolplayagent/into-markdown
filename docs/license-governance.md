@@ -19,12 +19,14 @@ copy or reinterpret it.
 The following files are projections or evidence and must agree with the component authority:
 
 - `Cargo.lock` and `third_party/licenses/rust-lock.tsv` describe the complete Rust dependency set.
+  The transitive normal-dependency closure rooted at `into-markdown-cli` is mandatory, and Bazel's
+  `into-md` target must consume that same Cargo authority through `all_crate_deps`.
 - `pnpm-lock.yaml`, `third_party/licenses/npm-inventory.json`, checked-in license texts, and the npm
   SPDX document describe console assets shipped by Bazel.
 - `models/manifest.json` and model authority files describe source archives, derived runtime files,
   character tables, exact members, sizes, hashes, licenses, and supported targets.
-- Native runtime manifests describe ONNX Runtime and PDFium archives. FFmpeg source and fixture
-  manifests provide the fixed upstream source and build evidence.
+- Native runtime manifests describe ONNX Runtime and PDFium archives. FFmpeg source, build-policy,
+  and fixture manifests provide the fixed upstream source and content-bound build evidence.
 - `third_party/licenses/downloads.json` and its Bazel projection bind every controlled download to
   the same component ID, URL, target, size where known, SHA-256, and extraction boundary.
 - `fixtures/manifest.json` and `fixtures/downloads.json` distinguish repository-owned test data from
@@ -93,9 +95,12 @@ The projection is data, not policy. It contains:
 
 - a supported platform target;
 - the exact set of component IDs present in the archive;
-- every archived file path and SHA-256, with each non-project file owned by exactly one component;
+- every archived file path and SHA-256, with component payloads owned by one component and typed
+  license materials declaring the complete component set they cover;
 - paths to the project `LICENSE`, `NOTICE`, generated third-party notices, and SBOM input;
-- the FFmpeg build-evidence digest when FFmpeg is present.
+- the complete archived FFmpeg build-authority content and digest when FFmpeg is present;
+- typed full license texts and notice/source/relink bundles, each bound to an archived path, size,
+  hash, material kind, and covered components.
 
 The license checker exposes a narrow archive-verification operation that accepts this projection
 and returns success or a sorted list of policy violations. It does not create archives, install
@@ -106,12 +111,16 @@ Verification applies these invariants:
 
 - each projected component exists, is reviewed, is release-eligible, and has a complete license,
   source, version, and obligations declaration;
-- every component has at least one owned archive entry and every non-project archive entry has one
-  known owner;
+- every component has an owned or embedded archive entry, and embedded Cargo/npm components cannot
+  hide standalone files under a known owner;
+- every component has complete archived license text; FFmpeg additionally has its exact
+  corresponding source and relink materials, while PDFium has its exact upstream license/notice
+  bundle;
 - mandatory declaration paths exist and their hashes match repository-generated inputs;
 - the SBOM and NOTICE inputs contain exactly the projected third-party component set;
 - native and model files match their target-specific authority, hashes, and download bindings;
-- FFmpeg is accepted only with matching LGPL-compatible build evidence;
+- FFmpeg is accepted only when the strict archived authority schema matches its binary and the
+  repository build policy exactly matches version, flags, format, architecture, and dynamic deps;
 - changing only the platform target cannot change a component's license conclusion.
 
 This API intentionally verifies metadata and hashes supplied by a packaging implementation. Archive
@@ -132,7 +141,8 @@ list. Inventory components keep their stable IDs; crates use `cargo:name@version
 packages use `npm:name@version`. Its JSON output contains the exact bytes, sizes, and SHA-256 values
 for `NOTICE`, generated `THIRD_PARTY_NOTICES.md`, and `sbom-input.json`.
 
-`verify` accepts the same target and component set plus archive files. A component file names its
+`verify` accepts the same target and component set plus archive files. The Cargo and npm runtime
+closure is always added from repository authority, so a projection cannot omit it. A component file names its
 single component owner. A project binary may use `embedded_components` to bind the Cargo/npm/source
 components compiled into that binary without pretending they are separate archive files. Required
 declarations and generated metadata have no component owner. All paths are normalized ASCII relative
@@ -150,5 +160,5 @@ non-deterministic notice or SBOM inputs. P2 findings cover maintainability and d
 not weaken a release decision.
 
 The checker is split by authority domain (`schema`, `rust`, `npm`, `models_fixtures`, `native`,
-`release`, and `sbom`) so ownership remains visible and no platform-specific policy fork can grow
+`ffmpeg`, `materials`, `release`, and `sbom`) so ownership remains visible and no platform-specific policy fork can grow
 inside a general-purpose module.

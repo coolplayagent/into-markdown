@@ -1,5 +1,7 @@
 //! Offline validation for the repository's license policy and inventories.
 
+mod ffmpeg;
+mod materials;
 mod models_fixtures;
 mod native;
 mod npm;

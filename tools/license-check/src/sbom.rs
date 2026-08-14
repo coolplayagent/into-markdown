@@ -2,6 +2,7 @@
 
 use crate::schema::{Component, GeneratedFile, SbomComponent, SbomInput};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 pub(crate) fn generated_file(path: &str, contents: String) -> GeneratedFile {
     GeneratedFile {
@@ -35,20 +36,34 @@ pub(crate) fn render_notices(project_notice: &str, components: &[&Component]) ->
     output
 }
 
-pub(crate) fn render_sbom(target: &str, components: &[&Component]) -> SbomInput {
+pub(crate) fn render_sbom(
+    repository: &Path,
+    target: &str,
+    components: &[&Component],
+    errors: &mut Vec<String>,
+) -> SbomInput {
     SbomInput {
         schema_version: 1,
         target: target.to_owned(),
         components: components
             .iter()
-            .map(|component| SbomComponent {
-                id: component.id.clone(),
-                kind: component.kind.clone(),
-                version: component.version.clone().unwrap_or_default(),
-                source: component.source.clone().unwrap_or_default(),
-                license: component.license.clone().unwrap_or_default(),
-                integrity: component.integrity.clone(),
-                authority: component.authority.clone(),
+            .map(|component| {
+                let mut integrity = component.integrity.clone();
+                integrity.extend(crate::native::integrity(
+                    repository,
+                    target,
+                    &component.id,
+                    errors,
+                ));
+                SbomComponent {
+                    id: component.id.clone(),
+                    kind: component.kind.clone(),
+                    version: component.version.clone().unwrap_or_default(),
+                    source: component.source.clone().unwrap_or_default(),
+                    license: component.license.clone().unwrap_or_default(),
+                    integrity,
+                    authority: component.authority.clone(),
+                }
             })
             .collect(),
     }

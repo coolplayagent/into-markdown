@@ -1,6 +1,6 @@
 //! Cargo.lock-backed release component authority.
 
-use crate::schema::Component;
+use crate::schema::{Component, IntegrityEvidence};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,6 +15,8 @@ struct LockedPackage {
     version: String,
     source: Option<String>,
     checksum: Option<String>,
+    #[serde(default)]
+    dependencies: Vec<String>,
 }
 
 pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec<Component> {
@@ -40,6 +42,7 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             errors.push(format!("duplicate Rust release authority {}@{}", key.0, key.1));
         }
     }
+    let required = runtime_closure(&lock.package, "into-markdown-cli", errors);
     let mut locked = BTreeSet::new();
     let mut components = Vec::new();
     for package in lock.package {
@@ -67,6 +70,7 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             _included_in_release: false,
             release_eligible: true,
             manual_only: false,
+            required_in_core: required.contains(&key),
             version: Some(key.1.clone()),
             source: Some(format!("https://crates.io/crates/{}/{}", key.0, key.1)),
             license: Some(license.clone()),
@@ -76,7 +80,12 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             ),
             integrity: package
                 .checksum
-                .map(|checksum| vec![format!("SHA256:{checksum}")])
+                .map(|checksum| vec![IntegrityEvidence {
+                    algorithm: "SHA-256".to_owned(),
+                    digest: checksum,
+                    subject: format!("crates.io archive {}@{}", key.0, key.1),
+                    target: None,
+                }])
                 .unwrap_or_default(),
             authority: "Cargo.lock + third_party/licenses/rust-lock.tsv".to_owned(),
         });
@@ -85,4 +94,73 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
         errors.push(format!("stale Rust release authority {}@{}", stale.0, stale.1));
     }
     components
+}
+
+fn runtime_closure(
+    packages: &[LockedPackage],
+    root: &str,
+    errors: &mut Vec<String>,
+) -> BTreeSet<(String, String)> {
+    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, package) in packages.iter().enumerate() {
+        by_name.entry(&package.name).or_default().push(index);
+    }
+    let Some(root_index) =
+        by_name.get(root).and_then(|items| (items.len() == 1).then_some(items[0]))
+    else {
+        errors.push(format!("Cargo.lock must contain one {root} package"));
+        return BTreeSet::new();
+    };
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![root_index];
+    while let Some(index) = pending.pop() {
+        if !seen.insert(index) {
+            continue;
+        }
+        for dependency in &packages[index].dependencies {
+            let mut fields = dependency.split_whitespace();
+            let name = fields.next().unwrap_or_default();
+            let version = fields
+                .next()
+                .filter(|value| value.as_bytes().first().is_some_and(u8::is_ascii_digit));
+            let candidates = by_name.get(name).cloned().unwrap_or_default();
+            let matches: Vec<_> = candidates
+                .into_iter()
+                .filter(|candidate| version.is_none_or(|v| packages[*candidate].version == v))
+                .collect();
+            if matches.len() == 1 {
+                pending.push(matches[0]);
+            } else {
+                errors.push(format!(
+                    "Cargo.lock dependency {dependency:?} from {}@{} is ambiguous or missing",
+                    packages[index].name, packages[index].version
+                ));
+            }
+        }
+    }
+    seen.into_iter()
+        .filter_map(|index| {
+            let package = &packages[index];
+            package.source.as_deref().map(|_| (package.name.clone(), package.version.clone()))
+        })
+        .collect()
+}
+
+pub(crate) fn validate_bazel_bridge(repository: &std::path::Path, errors: &mut Vec<String>) {
+    let cli = std::fs::read_to_string(repository.join("apps/cli/BUILD.bazel")).unwrap_or_default();
+    if !cli.contains("all_crate_deps(normal = True)")
+        || !cli.contains("compile_data = [\"//web/console:checked_assets\"]")
+    {
+        errors.push(
+            "Bazel into-md target is not bound to Cargo runtime deps and console assets".to_owned(),
+        );
+    }
+    let module = std::fs::read_to_string(repository.join("MODULE.bazel")).unwrap_or_default();
+    if !module.contains("crate.from_cargo(")
+        || !module.contains("cargo_lockfile = \"//:Cargo.lock\"")
+        || !module.contains("manifests = [\"//:Cargo.toml\"]")
+    {
+        errors
+            .push("Bazel crate universe is not bound to the workspace Cargo authority".to_owned());
+    }
 }

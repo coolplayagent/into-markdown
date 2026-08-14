@@ -5,7 +5,7 @@ use crate::schema::{
     ArchiveFile, ArchiveFileKind, ArchiveProjection, Component, Inventory, Policy, ReleaseInputs,
     ReleaseRequest, SCHEMA_VERSION, SUPPORTED_TARGETS,
 };
-use crate::{models_fixtures, native, npm, rust};
+use crate::{ffmpeg, materials, models_fixtures, native, npm, rust};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17,6 +17,8 @@ const THIRD_PARTY_PATH: &str = "THIRD_PARTY_NOTICES.md";
 const SBOM_PATH: &str = "sbom-input.json";
 
 pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<String>) {
+    rust::validate_bazel_bridge(repository, errors);
+    ffmpeg::audit_repository(repository, errors);
     let mut notices = BTreeSet::new();
     for target in SUPPORTED_TARGETS {
         let path = repository
@@ -69,7 +71,7 @@ fn generate_release_inputs_unchecked(
 
     let project_notice = read(repository.join(NOTICE_PATH), &mut errors);
     let third_party = render_notices(&project_notice, &selected);
-    let sbom = render_sbom(&request.target, &selected);
+    let sbom = render_sbom(repository, &request.target, &selected, &mut errors);
     let sbom_json = match pretty_json(&sbom) {
         Ok(json) => json,
         Err(error) => {
@@ -125,8 +127,13 @@ pub fn verify_archive_projection(
         }
     };
 
+    if let Some((inventory, policy)) = load_authorities(repository, &mut errors) {
+        let selected = select_components(&projection.components, &inventory, &policy, &mut errors);
+        materials::validate(repository, &projection, &selected, &mut errors);
+    }
+
     validate_files(repository, &projection, inputs.as_ref(), &mut errors);
-    validate_ffmpeg(repository, &projection, &mut errors);
+    ffmpeg::validate(repository, &projection, &mut errors);
     native::validate(
         repository,
         &projection.target,
@@ -166,9 +173,6 @@ fn enrich_inventory_evidence(
 ) {
     for component in &mut inventory.components {
         component.authority = format!("third_party/licenses/inventory.json#{}", component.id);
-        if let Some(obligations) = component.obligations.as_deref() {
-            component.integrity.extend(sha256_tokens(obligations));
-        }
         let evidence_path = match component.id.as_str() {
             "onnxruntime-cpu" => Some("third_party/onnxruntime/manifest.json"),
             "pdfium" => Some("third_party/pdfium/manifest.json"),
@@ -179,25 +183,11 @@ fn enrich_inventory_evidence(
             _ => None,
         };
         if let Some(evidence_path) = evidence_path {
-            let evidence = read(repository.join(evidence_path), errors);
-            component.integrity.extend(sha256_tokens(&evidence));
-            component.integrity.sort();
-            component.integrity.dedup();
+            let _ = read(repository.join(evidence_path), errors);
             component.authority.push_str(" + ");
             component.authority.push_str(evidence_path);
         }
     }
-}
-
-fn sha256_tokens(contents: &str) -> Vec<String> {
-    contents
-        .split(|character: char| !character.is_ascii_hexdigit())
-        .filter(|token| {
-            token.len() == 64
-                && token.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-        .map(|token| format!("SHA256:{token}"))
-        .collect()
 }
 
 fn select_components<'a>(
@@ -217,16 +207,30 @@ fn select_components<'a>(
     }
     let mut ids = BTreeSet::new();
     let mut selected = Vec::new();
+    let requested: Vec<&str> = inventory
+        .components
+        .iter()
+        .filter(|component| component.required_in_core)
+        .map(|component| component.id.as_str())
+        .chain(requested.iter().map(String::as_str))
+        .collect();
     for id in requested {
         if !safe_id(id) {
             errors.push(format!("unsafe component ID {id:?}"));
             continue;
         }
-        if !ids.insert(id.as_str()) {
+        if !ids.insert(id) {
+            if inventory
+                .components
+                .iter()
+                .any(|component| component.id == id && component.required_in_core)
+            {
+                continue;
+            }
             errors.push(format!("duplicate projected component {id}"));
             continue;
         }
-        let Some(component) = by_id.get(id.as_str()).copied() else {
+        let Some(component) = by_id.get(id).copied() else {
             errors.push(format!("unknown projected component {id}"));
             continue;
         };
@@ -315,6 +319,14 @@ fn validate_files(
         }
         return;
     };
+    let expected_components: BTreeSet<_> =
+        inputs.component_ids.iter().map(String::as_str).collect();
+    if selected != expected_components {
+        errors.push(
+            "archive component projection omits or adds authoritative runtime components"
+                .to_owned(),
+        );
+    }
     let license = read_bytes(repository.join(LICENSE_PATH), errors);
     let expected = [
         (LICENSE_PATH, license.len() as u64, digest(&license), ArchiveFileKind::Declaration),
@@ -363,6 +375,7 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
         ArchiveFileKind::Project => matches!(file.path.as_str(), "bin/into-md" | "bin/into-md.exe"),
         ArchiveFileKind::Declaration => matches!(file.path.as_str(), LICENSE_PATH | NOTICE_PATH),
         ArchiveFileKind::Generated => matches!(file.path.as_str(), THIRD_PARTY_PATH | SBOM_PATH),
+        ArchiveFileKind::LicenseMaterial => projection_material_path(&file.path),
         ArchiveFileKind::Component => true,
     };
     if !kind_path_is_valid {
@@ -380,11 +393,22 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
             errors.push(format!("archive component file {} is orphaned", file.path));
         }
         (
-            ArchiveFileKind::Project | ArchiveFileKind::Declaration | ArchiveFileKind::Generated,
+            ArchiveFileKind::Project
+            | ArchiveFileKind::Declaration
+            | ArchiveFileKind::Generated
+            | ArchiveFileKind::LicenseMaterial,
             None,
         ) => {}
         (_, Some(id)) => errors
             .push(format!("archive non-component file {} has component owner {id}", file.path)),
+    }
+    if file.kind == ArchiveFileKind::Component
+        && file.component_id.as_deref().is_some_and(embedded_only)
+    {
+        errors.push(format!(
+            "embedded component cannot hide a standalone archive file {}",
+            file.path
+        ));
     }
     let mut embedded = BTreeSet::new();
     for id in &file.embedded_components {
@@ -406,125 +430,16 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
     }
 }
 
-fn validate_ffmpeg(repository: &Path, projection: &ArchiveProjection, errors: &mut Vec<String>) {
-    let selected = projection.components.iter().any(|id| id == "ffmpeg");
-    let Some(evidence) = projection.ffmpeg_evidence.as_ref() else {
-        if selected {
-            errors.push("FFmpeg is present without LGPL-compatible build evidence".to_owned());
-        }
-        return;
-    };
-    if !selected {
-        errors.push("FFmpeg build evidence is orphaned".to_owned());
-        return;
-    }
-    let authority = projection.files.iter().find(|file| file.path == evidence.authority_path);
-    let expected_authority_path =
-        format!("share/into-markdown/authority/ffmpeg-{}.json", projection.target);
-    if evidence.authority_path != expected_authority_path
-        || evidence.authority_path == evidence.executable_path
-        || evidence.authority_sha256 == evidence.executable_sha256
-        || authority.is_none_or(|file| {
-            file.kind != ArchiveFileKind::Component
-                || file.component_id.as_deref() != Some("ffmpeg")
-                || file.bytes != evidence.authority_bytes
-                || file.sha256 != evidence.authority_sha256
-        })
-    {
-        errors.push("FFmpeg build evidence is not bound to an archived authority file".to_owned());
-    }
-    let source_text = read(repository.join("third_party/ffmpeg/source.json"), errors);
-    let source: serde_json::Value = match serde_json::from_str(&source_text) {
-        Ok(source) => source,
-        Err(error) => {
-            errors.push(format!("invalid FFmpeg source authority: {error}"));
-            serde_json::Value::Null
-        }
-    };
-    let expected_version = source.get("version").and_then(serde_json::Value::as_str);
-    let binary = projection.files.iter().find(|file| file.path == evidence.executable_path);
-    if evidence.schema_version != SCHEMA_VERSION
-        || Some(evidence.ffmpeg_version.as_str()) != expected_version
-        || evidence.target != projection.target
-        || binary.is_none_or(|file| {
-            file.kind != ArchiveFileKind::Component
-                || file.component_id.as_deref() != Some("ffmpeg")
-                || file.bytes != evidence.executable_bytes
-                || file.sha256 != evidence.executable_sha256
-        })
-    {
-        errors.push("FFmpeg build evidence is not bound to the projected binary".to_owned());
-    }
-    let flags: BTreeSet<_> = evidence.configure.iter().map(String::as_str).collect();
-    for required in [
-        "--disable-everything",
-        "--disable-gpl",
-        "--disable-version3",
-        "--disable-nonfree",
-        "--disable-network",
-        "--disable-autodetect",
-        "--disable-shared",
-        "--enable-static",
-    ] {
-        if !flags.contains(required) {
-            errors.push(format!("FFmpeg build evidence lacks {required}"));
-        }
-    }
-    let allowed_enable = allowed_ffmpeg_enable_flags();
-    if evidence
-        .configure
-        .iter()
-        .any(|flag| flag.starts_with("--enable-") && !allowed_enable.contains(flag.as_str()))
-    {
-        errors.push("FFmpeg build evidence enables incompatible or external components".to_owned());
-    }
-    let actual_dependencies: BTreeSet<_> =
-        evidence.dependencies.iter().map(String::as_str).collect();
-    let expected_dependencies = expected_ffmpeg_dependencies(&projection.target);
-    if actual_dependencies != expected_dependencies {
-        errors.push("FFmpeg build evidence has unreviewed dynamic dependencies".to_owned());
-    }
+fn embedded_only(id: &str) -> bool {
+    id.starts_with("cargo:")
+        || id.starts_with("npm:")
+        || matches!(id, "imageproc-contour-adaptation" | "clipper2-rust" | "calamine")
 }
 
-fn expected_ffmpeg_dependencies(target: &str) -> BTreeSet<&'static str> {
-    match target {
-        "aarch64-apple-darwin" => [
-            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
-            "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
-            "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
-            "/usr/lib/libSystem.B.dylib",
-        ]
-        .into_iter()
-        .collect(),
-        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
-            ["libc.so.6", "libm.so.6", "libpthread.so.0"].into_iter().collect()
-        }
-        "x86_64-pc-windows-msvc" => {
-            ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"].into_iter().collect()
-        }
-        _ => BTreeSet::new(),
-    }
-}
-
-fn allowed_ffmpeg_enable_flags() -> BTreeSet<&'static str> {
-    [
-        "--enable-ffmpeg",
-        "--enable-avutil",
-        "--enable-avcodec",
-        "--enable-avformat",
-        "--enable-avfilter",
-        "--enable-swresample",
-        "--enable-protocol=file,pipe",
-        "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
-        "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
-        "--enable-parser=aac,mpegaudio,opus,vorbis",
-        "--enable-filter=aformat,aresample",
-        "--enable-encoder=pcm_s16le",
-        "--enable-muxer=pcm_s16le",
-        "--enable-static",
-    ]
-    .into_iter()
-    .collect()
+fn projection_material_path(path: &str) -> bool {
+    path.starts_with("share/into-markdown/licenses/")
+        || path.starts_with("share/into-markdown/source/")
+        || path.starts_with("share/into-markdown/relink/")
 }
 
 fn validate_header(version: u64, target: &str, errors: &mut Vec<String>) {
@@ -542,7 +457,7 @@ fn safe_id(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase()
                 || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@' | b'/')
+                || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@' | b'/' | b'+')
         })
 }
 

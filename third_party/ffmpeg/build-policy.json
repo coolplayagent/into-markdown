@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "ffmpeg_version": "8.1.2",
+  "required_flags": [
+    "--disable-everything",
+    "--disable-gpl",
+    "--disable-version3",
+    "--disable-nonfree",
+    "--disable-network",
+    "--disable-autodetect",
+    "--disable-programs",
+    "--enable-ffmpeg",
+    "--disable-ffprobe",
+    "--disable-doc",
+    "--disable-debug",
+    "--disable-devices",
+    "--disable-avdevice",
+    "--disable-swscale",
+    "--enable-avutil",
+    "--enable-avcodec",
+    "--enable-avformat",
+    "--enable-avfilter",
+    "--enable-swresample",
+    "--enable-protocol=file,pipe",
+    "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
+    "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
+    "--enable-parser=aac,mpegaudio,opus,vorbis",
+    "--enable-filter=aformat,aresample",
+    "--enable-encoder=pcm_s16le",
+    "--enable-muxer=pcm_s16le",
+    "--enable-static",
+    "--disable-shared"
+  ],
+  "targets": {
+    "aarch64-apple-darwin": {
+      "binary_format": "mach-o",
+      "binary_architecture": "aarch64",
+      "additional_flags": [],
+      "dynamic_dependencies": [
+        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+        "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "x86_64-unknown-linux-gnu": {
+      "binary_format": "elf",
+      "binary_architecture": "x86_64",
+      "additional_flags": [],
+      "dynamic_dependencies": ["libc.so.6", "libm.so.6", "libpthread.so.0"]
+    },
+    "aarch64-unknown-linux-gnu": {
+      "binary_format": "elf",
+      "binary_architecture": "aarch64",
+      "additional_flags": [],
+      "dynamic_dependencies": ["libc.so.6", "libm.so.6", "libpthread.so.0"]
+    },
+    "x86_64-pc-windows-msvc": {
+      "binary_format": "pe",
+      "binary_architecture": "x86_64",
+      "additional_flags": ["--toolchain=msvc", "--disable-x86asm"],
+      "dynamic_dependencies": ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"]
+    }
+  }
+}
