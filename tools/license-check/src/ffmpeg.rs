@@ -127,13 +127,55 @@ pub(crate) fn audit_repository(repository: &Path, errors: &mut Vec<String>) {
 }
 
 fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
-    !(policy.required_flags.iter().any(|flag| {
-        matches!(flag.as_str(), "--enable-gpl" | "--enable-version3" | "--enable-nonfree")
-            || flag.starts_with("--enable-lib")
-    }) || policy.targets.values().flat_map(|target| &target.additional_flags).any(|flag| {
-        matches!(flag.as_str(), "--enable-gpl" | "--enable-version3" | "--enable-nonfree")
-            || flag.starts_with("--enable-lib")
-    }))
+    let allowed: BTreeSet<_> = [
+        "--disable-everything",
+        "--disable-gpl",
+        "--disable-version3",
+        "--disable-nonfree",
+        "--disable-network",
+        "--disable-autodetect",
+        "--disable-programs",
+        "--enable-ffmpeg",
+        "--disable-ffprobe",
+        "--disable-doc",
+        "--disable-debug",
+        "--disable-devices",
+        "--disable-avdevice",
+        "--disable-swscale",
+        "--enable-avutil",
+        "--enable-avcodec",
+        "--enable-avformat",
+        "--enable-avfilter",
+        "--enable-swresample",
+        "--enable-protocol=file,pipe",
+        "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
+        "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
+        "--enable-parser=aac,mpegaudio,opus,vorbis",
+        "--enable-filter=aformat,aresample",
+        "--enable-encoder=pcm_s16le",
+        "--enable-muxer=pcm_s16le",
+        "--enable-static",
+        "--disable-shared",
+        "--toolchain=msvc",
+        "--disable-x86asm",
+    ]
+    .into_iter()
+    .collect();
+    let flags_are_allowed = policy
+        .required_flags
+        .iter()
+        .chain(policy.targets.values().flat_map(|target| &target.additional_flags))
+        .all(|flag| allowed.contains(flag.as_str()));
+    let target_flags_are_exact = policy.targets.iter().all(|(target, value)| {
+        let actual: BTreeSet<_> = value.additional_flags.iter().map(String::as_str).collect();
+        let expected: BTreeSet<_> = if target == "x86_64-pc-windows-msvc" {
+            ["--toolchain=msvc", "--disable-x86asm"].into_iter().collect()
+        } else {
+            BTreeSet::new()
+        };
+        actual.len() == value.additional_flags.len() && actual == expected
+    });
+    flags_are_allowed && target_flags_are_exact
 }
 
 pub(crate) fn validate(
@@ -382,7 +424,19 @@ mod tests {
         .unwrap();
         let mut policy: BuildPolicy = serde_json::from_str(&policy_text).unwrap();
         assert!(policy_is_lgpl_compatible(&policy));
-        for flag in ["--enable-gpl", "--enable-nonfree", "--enable-libx264"] {
+        for flag in [
+            "--enable-gpl",
+            "--enable-nonfree",
+            "--enable-libx264",
+            "--enable-openssl",
+            "--enable-gnutls",
+            "--enable-cuda-nvcc",
+            "--enable-vulkan",
+            "--enable-vaapi",
+            "--enable-amf",
+            "--extra-ldflags=-lcrypto",
+            "--disable-unreviewed-component",
+        ] {
             policy.required_flags.push(flag.to_owned());
             assert!(!policy_is_lgpl_compatible(&policy));
             policy.required_flags.pop();
