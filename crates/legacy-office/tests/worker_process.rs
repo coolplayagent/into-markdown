@@ -40,19 +40,7 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
             object::read::NameOrOrdinal::Name(b"libreofficekit_hook_2" | b"_libreofficekit_hook_2")
         )
     }));
-    let mut system_libraries = kit_object
-        .imports()
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|import| std::str::from_utf8(import.library()).unwrap().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    if cfg!(target_os = "macos") {
-        system_libraries.extend([
-            "/usr/lib/libSystem.B.dylib".to_owned(),
-            "/usr/lib/libiconv.2.dylib".to_owned(),
-            "/usr/lib/libsandbox.1.dylib".to_owned(),
-        ]);
-    }
+    let system_libraries = fixture_system_libraries(&kit_object);
     let system_read_paths =
         if cfg!(windows) { vec![r"C:\Windows\System32"] } else { vec!["/usr/lib"] };
     std::fs::write(root_path.join("LICENSE"), b"Apache-2.0 fixture only\n").unwrap();
@@ -106,6 +94,33 @@ fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
     std::fs::write(&authority_path, serde_json::to_vec_pretty(&authority).unwrap()).unwrap();
     let runtime = LegacyOfficeRuntime::new(RuntimeConfig::new(authority_path, root_path, worker));
     (root, runtime)
+}
+
+#[cfg(target_os = "macos")]
+fn fixture_system_libraries(object: &object::File<'_>) -> std::collections::BTreeSet<String> {
+    let object::File::MachO64(macho) = object else {
+        panic!("macOS fixture worker must be a 64-bit Mach-O binary");
+    };
+    let endian = macho.endian();
+    let mut commands = macho.macho_load_commands().unwrap();
+    let mut libraries = std::collections::BTreeSet::new();
+    while let Some(command) = commands.next().unwrap() {
+        if let Some(dylib) = command.dylib().unwrap() {
+            let identity = command.string(endian, dylib.dylib.name).unwrap();
+            libraries.insert(std::str::from_utf8(identity).unwrap().to_owned());
+        }
+    }
+    libraries
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fixture_system_libraries(object: &object::File<'_>) -> std::collections::BTreeSet<String> {
+    object
+        .imports()
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|import| std::str::from_utf8(import.library()).unwrap().to_owned())
+        .collect()
 }
 
 fn process_test_guard() -> MutexGuard<'static, ()> {
@@ -245,13 +260,24 @@ fn early_partial_and_nonzero_responses_are_protocol_failures_and_reaped() {
         vec![0_u8; 4 * 1024 * 1024 + 19],
         b"fixture:response-then-nonzero".to_vec(),
     ] {
+        // Workspace feature unification can make the audited test-worker
+        // snapshot larger than the ordinary 64 MiB fixture budget. Keep this
+        // protocol regression's temporary allowance above that authenticated
+        // snapshot so each case reaches the malicious IPC behavior it asserts.
+        let mut protocol_limits = limits();
+        protocol_limits.max_temporary_bytes = 128 * 1024 * 1024;
         let context =
-            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), protocol_limits);
         let error = runtime.convert(&source, InputFormat::Doc, 1024, &context).unwrap_err();
-        assert!(matches!(
-            error,
-            ConversionError::ComponentUnavailable { ref detail, .. } if detail == "workerProtocol"
-        ));
+        assert!(
+            matches!(
+                error,
+                ConversionError::ComponentUnavailable { ref detail, .. }
+                    if detail == "workerProtocol"
+            ),
+            "source length {} returned {error:?}",
+            source.len()
+        );
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_temporary_released(&context);
     }
