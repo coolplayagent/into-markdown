@@ -154,17 +154,51 @@ impl Child {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn resident_bytes(&self) -> io::Result<u64> {
-        let mut usage = MaybeUninit::<RusageInfoV2>::zeroed();
-        // SAFETY: the child pid is live and the versioned output buffer has the
-        // exact Darwin rusage_info_v2 layout.
-        let result = unsafe { proc_pid_rusage(self.pid, 2, usage.as_mut_ptr().cast()) };
-        if result != 0 {
+    pub(super) fn group_usage(&self) -> io::Result<GroupUsage> {
+        // SAFETY: a null buffer asks libproc for a conservative PID capacity.
+        let capacity = unsafe { libc::proc_listpgrppids(self.pid, std::ptr::null_mut(), 0) };
+        if capacity <= 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: successful proc_pid_rusage initialized the full structure.
-        Ok(unsafe { usage.assume_init() }.ri_phys_footprint)
+        let mut pids = vec![0_i32; usize::try_from(capacity).map_err(io::Error::other)? + 16];
+        let bytes =
+            i32::try_from(std::mem::size_of_val(pids.as_slice())).map_err(io::Error::other)?;
+        // SAFETY: the PID buffer is writable for exactly `bytes` bytes.
+        let count = unsafe { libc::proc_listpgrppids(self.pid, pids.as_mut_ptr().cast(), bytes) };
+        if count <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut resident_bytes = 0_u64;
+        let mut processes = 0_u32;
+        for pid in pids.into_iter().take(usize::try_from(count).map_err(io::Error::other)?) {
+            let mut usage = MaybeUninit::<RusageInfoV2>::zeroed();
+            // SAFETY: every positive PID came from libproc and the output has
+            // the exact versioned Darwin rusage layout.
+            let result = unsafe { proc_pid_rusage(pid, 2, usage.as_mut_ptr().cast()) };
+            if result == 0 {
+                processes = processes
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("process count overflow"))?;
+                // SAFETY: successful proc_pid_rusage initialized the structure.
+                let resident = unsafe { usage.assume_init() }.ri_phys_footprint;
+                resident_bytes = resident_bytes
+                    .checked_add(resident)
+                    .ok_or_else(|| io::Error::other("resident byte count overflow"))?;
+            } else {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(GroupUsage { processes, resident_bytes })
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) struct GroupUsage {
+    pub(super) processes: u32,
+    pub(super) resident_bytes: u64,
 }
 
 #[cfg(target_os = "macos")]

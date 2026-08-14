@@ -46,6 +46,7 @@ fn target() -> Target {
             system_libraries: Vec::new(),
             network: "deny".into(),
             child_processes: "deny".into(),
+            compatibility_child: None,
             app_container: if name == "x86_64-pc-windows-msvc" {
                 Some(AppContainerAuthority {
                     profile_name: "into-markdown.legacy-office".into(),

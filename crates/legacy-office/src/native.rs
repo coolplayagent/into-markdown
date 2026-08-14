@@ -10,12 +10,8 @@ use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "macos")]
-const MACOS_OFFLINE_PROFILE: &str = "(version 1)(allow default)(deny network*)\
-    (allow network* (local unix-socket))(allow network* (remote unix-socket))\
-    (allow network-bind (local ip \"localhost:*\"))\
-    (allow network-inbound (local ip \"localhost:*\"))\
-    (allow network-outbound (remote ip \"localhost:*\"))";
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests;
 
 pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), u8> {
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
@@ -167,8 +163,11 @@ fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
 }
 
 struct NativeRuntime {
+    #[cfg(target_os = "macos")]
+    authority: crate::authority::VerifiedBundle,
     #[cfg(not(target_os = "macos"))]
     _library: Library,
+    #[cfg(not(target_os = "macos"))]
     _authority: crate::authority::VerifiedBundle,
     #[cfg(not(target_os = "macos"))]
     hook: unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit,
@@ -224,7 +223,7 @@ impl PreparedRuntime {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(());
             }
-            Ok(NativeRuntime { _authority: self.authority, soffice })
+            Ok(NativeRuntime { authority: self.authority, soffice })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -265,8 +264,9 @@ impl NativeRuntime {
 
             let home = profile.parent().ok_or(ERROR_RUNTIME)?;
             let user_installation = format!("-env:UserInstallation={}", file_url(profile));
+            let seatbelt = macos_soffice_profile(&self.authority.root, home, &self.soffice)?;
             let status = Command::new("/usr/bin/sandbox-exec")
-                .args(["-p", MACOS_OFFLINE_PROFILE])
+                .args(["-p", &seatbelt])
                 .arg(&self.soffice)
                 .args([
                     "--headless",
@@ -287,6 +287,9 @@ impl NativeRuntime {
                 .env("TMPDIR", home)
                 .env("LANG", "en_US.UTF-8")
                 .env("LC_ALL", "C")
+                .env("CFFIXED_USER_HOME", home)
+                .env("__CF_USER_TEXT_ENCODING", "0x1F5:0x0:0x0")
+                .current_dir(home)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -318,6 +321,84 @@ impl NativeRuntime {
             document.save(&output_url, &format)
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_soffice_profile(runtime: &Path, temporary: &Path, soffice: &Path) -> Result<String, u8> {
+    use std::fmt::Write as _;
+    let runtime = seatbelt_path(runtime)?;
+    let temporary = seatbelt_path(temporary)?;
+    let soffice = seatbelt_path(soffice)?;
+    let mut profile = String::from(
+        "(version 1)\n(deny default)\n(import \"system.sb\")\n\
+         (deny network*)\n\
+         (allow network* (local unix-socket))\n\
+         (allow network* (remote unix-socket))\n\
+         (allow file-read* file-write*\n\
+           (literal \"/private/tmp\")\n\
+           (regex #\"^/private/tmp/OSL_PIPE_[0-9]+_SingleOfficeIPC_[0-9a-f]+$\"))\n\
+         (allow process-fork)\n(allow process-info*)\n(allow sysctl-read)\n\
+         (allow user-preference-read)\n(allow signal (target self))\n\
+         (allow mach-lookup\n\
+           (global-name \"com.apple.FontObjectsServer\")\n\
+           (global-name \"com.apple.fonts\")\n\
+           (global-name \"com.apple.system.opendirectoryd.libinfo\")\n\
+           (global-name \"com.apple.SystemConfiguration.configd\")\n\
+           (global-name \"com.apple.CoreServices.coreservicesd\")\n\
+           (global-name \"com.apple.DiskArbitration.diskarbitrationd\")\n\
+           (global-name \"com.apple.pasteboard.1\")\n\
+           (global-name \"com.apple.distributed_notifications@Uv3\")\n\
+           (global-name \"com.apple.tccd.system\")\n\
+           (global-name \"com.apple.windowserver.active\")\n\
+           (global-name \"com.apple.coreservices.launchservicesd\")\n\
+           (global-name \"com.apple.lsd.mapdb\")\n\
+           (global-name \"com.apple.lsd.modifydb\")\n\
+           (global-name \"com.apple.dock.server\")\n\
+           (global-name \"com.apple.iohideventsystem\")\n\
+           (global-name \"com.apple.windowmanager.server\")\n\
+           (global-name \"com.apple.CARenderServer\")\n\
+           (global-name \"com.apple.pbs.fetch_services\")\n\
+           (global-name \"com.apple.appkit.restoration_storage\")\n\
+           (global-name \"com.apple.coreservices.appleevents\")\n\
+           (global-name \"com.apple.touchbarserver.mig\")\n\
+           (global-name \"com.apple.window_proxies\"))\n\
+         (allow iokit-open-user-client\n\
+           (iokit-user-client-class \"IOHIDParamUserClient\")\n\
+           (iokit-user-client-class \"IOSurfaceRootUserClient\"))\n",
+    );
+    writeln!(profile, "(allow file-read* (subpath \"{runtime}\") (subpath \"{temporary}\"))")
+        .map_err(|_| ERROR_RUNTIME)?;
+    let mut ancestors = std::collections::BTreeSet::new();
+    for root in [runtime.as_str(), temporary.as_str()] {
+        let mut ancestor = Path::new(root).parent();
+        while let Some(path) = ancestor {
+            if path != Path::new("/") {
+                ancestors.insert(seatbelt_path(path)?);
+            }
+            ancestor = path.parent();
+        }
+    }
+    for ancestor in ancestors {
+        writeln!(profile, "(allow file-read* (literal \"{ancestor}\"))")
+            .map_err(|_| ERROR_RUNTIME)?;
+    }
+    writeln!(profile, "(allow file-read* (literal \"/private/var/db/.AppleSetupDone\"))")
+        .map_err(|_| ERROR_RUNTIME)?;
+    writeln!(profile, "(allow file-write* (subpath \"{temporary}\"))")
+        .map_err(|_| ERROR_RUNTIME)?;
+    writeln!(profile, "(allow file-issue-extension (subpath \"{runtime}\"))")
+        .map_err(|_| ERROR_RUNTIME)?;
+    writeln!(profile, "(allow process-exec (literal \"{soffice}\"))").map_err(|_| ERROR_RUNTIME)?;
+    Ok(profile)
+}
+
+#[cfg(target_os = "macos")]
+fn seatbelt_path(path: &Path) -> Result<String, u8> {
+    let value = path.to_str().ok_or(ERROR_RUNTIME)?;
+    if value.bytes().any(|byte| byte == 0 || byte.is_ascii_control()) {
+        return Err(ERROR_RUNTIME);
+    }
+    Ok(value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn reverify_authority(policy: &Policy) -> Result<crate::authority::VerifiedBundle, ()> {

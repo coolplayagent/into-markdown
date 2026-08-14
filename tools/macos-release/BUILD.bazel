@@ -31,6 +31,18 @@ py_test(
     deps = [":library"],
 )
 
+py_test(
+    name = "audit_test",
+    srcs = ["audit_test.py"],
+    deps = [":library"],
+)
+
+py_test(
+    name = "installer_attack_test",
+    srcs = ["installer_attack_test.py"],
+    data = ["install"],
+)
+
 exports_files([
     "authority.json",
     "install",

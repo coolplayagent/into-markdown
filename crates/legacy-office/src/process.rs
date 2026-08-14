@@ -65,6 +65,7 @@ pub(crate) struct WorkerChild {
     container: Option<macos_container::MountedContainer>,
     status: Option<WorkerStatus>,
     memory_limit: u64,
+    process_limit: u32,
 }
 
 #[cfg(unix)]
@@ -173,6 +174,7 @@ impl WorkerChild {
                 container,
                 status: None,
                 memory_limit: address_limit,
+                process_limit: bundle.process_limit,
             });
         }
         #[cfg(windows)]
@@ -188,6 +190,7 @@ impl WorkerChild {
             _runtime_tree: Some(runtime_tree),
             status: None,
             memory_limit: address_limit,
+            process_limit: bundle.process_limit,
         });
         #[allow(unreachable_code)]
         Err(unavailable("unsupportedTarget"))
@@ -215,14 +218,24 @@ impl WorkerChild {
     pub(crate) fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
         #[cfg(target_os = "macos")]
         {
-            let resident = self.child.resident_bytes().map_err(|_| unavailable("workerMemory"))?;
-            if resident > self.memory_limit {
+            let usage = self.child.group_usage().map_err(|_| unavailable("workerMemory"))?;
+            if usage.processes > self.process_limit {
+                self.terminate();
+                return Err(ConversionError::ResourceLimit {
+                    limit: "legacy_office_worker_processes",
+                    detail: format!(
+                        "worker process group has {} members; limit is {}",
+                        usage.processes, self.process_limit
+                    ),
+                });
+            }
+            if usage.resident_bytes > self.memory_limit {
                 self.terminate();
                 return Err(ConversionError::ResourceLimit {
                     limit: "legacy_office_worker_memory",
                     detail: format!(
-                        "worker physical footprint {resident} exceeds {} bytes",
-                        self.memory_limit
+                        "worker process-group physical footprint {} exceeds {} bytes",
+                        usage.resident_bytes, self.memory_limit
                     ),
                 });
             }
@@ -357,6 +370,7 @@ fn spawn_platform(
         container: None,
         status: None,
         memory_limit: address_limit,
+        process_limit: 1,
     })
 }
 
@@ -687,6 +701,39 @@ mod tests {
         );
         assert!(matches!(worker.wait(&context), Err(ConversionError::Cancelled)));
         worker.terminate();
+        assert!(worker.has_exited().unwrap());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn process_group_accounting_includes_a_compatibility_child() {
+        let root = tempfile::tempdir().unwrap();
+        let mut worker = shell("/bin/sleep 5 & echo ready; wait", root.path());
+        let mut stdout = std::io::BufReader::new(worker.take_stdout().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        let usage = worker.child.group_usage().unwrap();
+        assert_eq!(usage.processes, 2);
+        assert!(usage.resident_bytes > 0);
+        worker.process_limit = 2;
+        worker.memory_limit = 1;
+        assert!(matches!(
+            worker.enforce_memory_limit(),
+            Err(ConversionError::ResourceLimit { limit: "legacy_office_worker_memory", .. })
+        ));
+        assert!(worker.has_exited().unwrap());
+
+        let mut worker = shell("/bin/sleep 5 & echo ready; wait", root.path());
+        let mut stdout = std::io::BufReader::new(worker.take_stdout().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        worker.process_limit = 1;
+        assert!(matches!(
+            worker.enforce_memory_limit(),
+            Err(ConversionError::ResourceLimit { limit: "legacy_office_worker_processes", .. })
+        ));
         assert!(worker.has_exited().unwrap());
     }
 

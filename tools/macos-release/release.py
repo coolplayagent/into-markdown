@@ -43,13 +43,23 @@ def check_host() -> None:
 
 def build(target: pathlib.Path) -> None:
     environment = os.environ.copy()
+    cargo_home = pathlib.Path(environment.get("CARGO_HOME", pathlib.Path.home() / ".cargo")).resolve()
+    rustup_home = pathlib.Path(environment.get("RUSTUP_HOME", pathlib.Path.home() / ".rustup")).resolve()
+    sysroot = pathlib.Path(run(["rustc", "--print", "sysroot"])).resolve()
+    remaps = [
+        (ROOT, "/usr/src/into-markdown"),
+        (target, "/usr/src/into-markdown-target"),
+        (cargo_home, "/usr/src/cargo-home"),
+        (rustup_home, "/usr/src/rustup-home"),
+        (sysroot, "/usr/src/rust-sysroot"),
+    ]
     environment.update(
         {
             "CARGO_INCREMENTAL": "0",
             "MACOSX_DEPLOYMENT_TARGET": authority()["minimumMacos"],
             "RUSTFLAGS": (
-                f"--remap-path-prefix={ROOT}=/usr/src/into-markdown "
-                f"--remap-path-prefix={target}=/usr/src/into-markdown-target "
+                " ".join(f"--remap-path-prefix={source}={destination}" for source, destination in remaps)
+                + " -C strip=debuginfo "
                 f"-C link-arg=-mmacosx-version-min={authority()['minimumMacos']}"
             ),
             "CARGO_TARGET_DIR": str(target),

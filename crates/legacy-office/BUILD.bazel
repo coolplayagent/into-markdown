@@ -46,6 +46,7 @@ rust_test(
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    tags = ["no-sandbox"],
 )
 
 rust_test(

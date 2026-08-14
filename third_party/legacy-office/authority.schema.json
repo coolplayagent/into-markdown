@@ -76,7 +76,7 @@
         "addressSpaceOverheadBytes": { "type": "integer", "minimum": 268435456 },
         "fileSizeLimitBytes": { "type": "integer", "minimum": 1 },
         "openFileLimit": { "type": "integer", "minimum": 16, "maximum": 4096 },
-        "processLimit": { "const": 1 }
+        "processLimit": { "enum": [1, 2] }
       }
     },
     "abi": {
@@ -101,8 +101,20 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/systemLibrary" }
         },
-        "network": { "const": "deny" },
-        "childProcesses": { "const": "deny" }
+        "network": { "enum": ["deny", "denyIp"] },
+        "childProcesses": { "enum": ["deny", "exactCompatibilityChild"] },
+        "compatibilityChild": { "$ref": "#/$defs/compatibilityChild" }
+      }
+    },
+    "compatibilityChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "maximumInstances", "localIp", "localIpc"],
+      "properties": {
+        "executable": { "$ref": "#/$defs/relativePath" },
+        "maximumInstances": { "const": 1 },
+        "localIp": { "const": "deny" },
+        "localIpc": { "const": "uidBoundTemporaryUnixSocketOnly" }
       }
     },
     "systemLibrary": {

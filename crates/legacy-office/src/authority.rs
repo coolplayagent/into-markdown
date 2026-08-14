@@ -101,6 +101,7 @@ pub(crate) struct VerifiedBundle {
     pub address_space_overhead: u64,
     pub file_size_limit: u64,
     pub open_file_limit: u32,
+    pub process_limit: u32,
     pub system_read_paths: Vec<PathBuf>,
     pub container: Option<VerifiedContainer>,
     #[cfg(windows)]
@@ -201,6 +202,7 @@ pub(crate) fn verify(
         address_space_overhead: target.limits.address_space_overhead_bytes,
         file_size_limit: target.limits.file_size_limit_bytes,
         open_file_limit: target.limits.open_file_limit,
+        process_limit: target.limits.process_limit,
         system_read_paths,
         container,
         #[cfg(windows)]
@@ -372,9 +374,7 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         || target.limits.address_space_overhead_bytes < 256 * 1024 * 1024
         || target.limits.file_size_limit_bytes == 0
         || !(16..=4_096).contains(&target.limits.open_file_limit)
-        || target.limits.process_limit != 1
-        || target.sandbox.network != "deny"
-        || target.sandbox.child_processes != "deny"
+        || !valid_process_authority(target, target_name)
         || !valid_app_container_authority(target, target_name)
         || target.sandbox.system_libraries.len() > 128
         || target.sandbox.system_libraries.iter().collect::<BTreeSet<_>>().len()
@@ -390,6 +390,25 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         return Err(unavailable("targetAuthority"));
     }
     Ok(())
+}
+
+fn valid_process_authority(target: &Target, target_name: &str) -> bool {
+    if target_name == "aarch64-apple-darwin" && target.container.is_some() {
+        let Some(child) = &target.sandbox.compatibility_child else {
+            return false;
+        };
+        return target.limits.process_limit == 2
+            && target.sandbox.network == "denyIp"
+            && target.sandbox.child_processes == "exactCompatibilityChild"
+            && child.maximum_instances == 1
+            && child.local_ip == "deny"
+            && child.local_ipc == "uidBoundTemporaryUnixSocketOnly"
+            && child.executable == "container/LibreOffice.app/Contents/MacOS/soffice";
+    }
+    target.limits.process_limit == 1
+        && target.sandbox.network == "deny"
+        && target.sandbox.child_processes == "deny"
+        && target.sandbox.compatibility_child.is_none()
 }
 
 fn container_authority_is_valid(target: &Target, target_name: &str) -> bool {

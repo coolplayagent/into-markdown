@@ -101,14 +101,20 @@ def generate(
                     "addressSpaceOverheadBytes": 2147483648,
                     "fileSizeLimitBytes": 536870912,
                     "openFileLimit": 1024,
-                    "processLimit": 1,
+                    "processLimit": 2,
                 },
                 "sandbox": {
                     "systemLibraries": [
                         {"identity": identity, "path": identity} for identity in sorted(system)
                     ],
-                    "network": "deny",
-                    "childProcesses": "deny",
+                    "network": "denyIp",
+                    "childProcesses": "exactCompatibilityChild",
+                    "compatibilityChild": {
+                        "executable": "container/LibreOffice.app/Contents/MacOS/soffice",
+                        "maximumInstances": 1,
+                        "localIp": "deny",
+                        "localIpc": "uidBoundTemporaryUnixSocketOnly",
+                    },
                 },
             }
         },
