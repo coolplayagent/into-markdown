@@ -28,11 +28,17 @@ pub(crate) struct Component {
     #[serde(rename = "included_in_release")]
     pub _included_in_release: bool,
     #[serde(default)]
+    pub release_eligible: bool,
+    #[serde(default)]
     pub manual_only: bool,
     pub version: Option<String>,
     pub source: Option<String>,
     pub license: Option<String>,
     pub obligations: Option<String>,
+    #[serde(skip)]
+    pub integrity: Vec<String>,
+    #[serde(skip)]
+    pub authority: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -65,6 +71,9 @@ pub struct ArchiveProjection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FfmpegEvidence {
+    pub authority_path: String,
+    pub authority_bytes: u64,
+    pub authority_sha256: String,
     pub schema_version: u64,
     pub ffmpeg_version: String,
     pub target: String,
@@ -129,4 +138,6 @@ pub struct SbomComponent {
     pub version: String,
     pub source: String,
     pub license: String,
+    pub integrity: Vec<String>,
+    pub authority: String,
 }

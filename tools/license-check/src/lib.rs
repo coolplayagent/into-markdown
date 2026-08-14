@@ -37,6 +37,8 @@ struct Component {
     status: String,
     included_in_release: bool,
     #[serde(default)]
+    release_eligible: bool,
+    #[serde(default)]
     manual_only: bool,
     version: Option<String>,
     source: Option<String>,
@@ -1404,6 +1406,9 @@ fn validate_inventory(
                 "manual-only component {} cannot be included in a release",
                 component.id
             ));
+        }
+        if component.release_eligible && component.status != "reviewed" {
+            errors.push(format!("release-eligible component {} is not reviewed", component.id));
         }
     }
     for required in [
@@ -3583,6 +3588,7 @@ mod tests {
             kind: "placeholder".to_owned(),
             status: "planned".to_owned(),
             included_in_release: false,
+            release_eligible: false,
             manual_only: false,
             version: None,
             source: None,
@@ -3597,6 +3603,7 @@ mod tests {
             kind: "model-source".to_owned(),
             status: "reviewed".to_owned(),
             included_in_release: false,
+            release_eligible: false,
             manual_only: false,
             version: Some(version.to_owned()),
             source: Some(artifact.url.clone()),
@@ -3823,6 +3830,7 @@ mod tests {
                 kind: "native-runtime".to_owned(),
                 status: "reviewed".to_owned(),
                 included_in_release: false,
+                release_eligible: true,
                 manual_only: false,
                 version: Some(version.to_owned()),
                 source: Some(source),
@@ -3880,6 +3888,7 @@ mod tests {
                     kind: "native-runtime".to_owned(),
                     status: "reviewed".to_owned(),
                     included_in_release: false,
+                    release_eligible: true,
                     manual_only: false,
                     version: Some("153.0.7999.0".to_owned()),
                     source: Some(source.to_owned()),

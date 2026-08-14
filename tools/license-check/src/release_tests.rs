@@ -174,6 +174,9 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     assert!(without.iter().any(|error| error.contains("without LGPL-compatible")));
 
     projection.ffmpeg_evidence = Some(FfmpegEvidence {
+        authority_path: "share/ffmpeg-authority.json".into(),
+        authority_bytes: 88,
+        authority_sha256: "f".repeat(64),
         schema_version: 1,
         ffmpeg_version: "8.1.2".into(),
         target: projection.target.clone(),
@@ -204,6 +207,14 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         .map(str::to_owned)
         .collect(),
     });
+    projection.files.push(ArchiveFile {
+        path: "share/ffmpeg-authority.json".into(),
+        bytes: 88,
+        sha256: "f".repeat(64),
+        kind: ArchiveFileKind::Component,
+        component_id: Some("ffmpeg".into()),
+        embedded_components: vec![],
+    });
     let incompatible =
         verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
             .unwrap_err();
@@ -221,6 +232,33 @@ fn schemas_reject_unknown_fields_and_unfixed_hashes() {
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("lacks fixed size or SHA-256")));
+}
+
+#[test]
+fn non_release_eligible_authority_is_fail_closed() {
+    let errors = generate_release_inputs(
+        &root(),
+        &request("aarch64-apple-darwin", &["onnx-protobuf-schema"]),
+    )
+    .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("not release-eligible")));
+}
+
+#[test]
+fn sbom_input_carries_ecosystem_and_native_integrity_authority() {
+    let generated = generate_release_inputs(
+        &root(),
+        &request(
+            "aarch64-apple-darwin",
+            &["cargo:serde@1.0.229", "npm:react@19.2.8", "onnxruntime-cpu"],
+        ),
+    )
+    .unwrap();
+    let sbom = &generated.sbom_input.contents;
+    assert!(sbom.contains("SHA256:"));
+    assert!(sbom.contains("sha512-"));
+    assert!(sbom.contains("Cargo.lock + third_party/licenses/rust-lock.tsv"));
+    assert!(sbom.contains("third_party/onnxruntime/manifest.json"));
 }
 
 #[test]

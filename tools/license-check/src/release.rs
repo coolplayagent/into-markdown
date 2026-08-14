@@ -23,7 +23,7 @@ pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<Stri
             .join("tools/license-check/fixtures")
             .join(format!("release-request-{target}.json"));
         let request = read(path, errors);
-        match generate_release_inputs(repository, &request) {
+        match generate_release_inputs_unchecked(repository, &request) {
             Ok(inputs) if inputs.target == target => {
                 notices.insert(inputs.third_party_notices.contents);
             }
@@ -44,6 +44,14 @@ pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<Stri
 ///
 /// Returns every sorted authority, schema, policy, or rendering violation. Input is never repaired.
 pub fn generate_release_inputs(
+    repository: &Path,
+    request_json: &str,
+) -> Result<ReleaseInputs, Vec<String>> {
+    crate::audit(repository, true)?;
+    generate_release_inputs_unchecked(repository, request_json)
+}
+
+fn generate_release_inputs_unchecked(
     repository: &Path,
     request_json: &str,
 ) -> Result<ReleaseInputs, Vec<String>> {
@@ -137,6 +145,7 @@ fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inve
     let policy = parse("license policy", &policy_text, errors);
     match (inventory, policy) {
         (Some(mut inventory), Some(policy)) => {
+            enrich_inventory_evidence(repository, &mut inventory, errors);
             let cargo_lock = read(repository.join("Cargo.lock"), errors);
             let rust_approvals =
                 read(repository.join("third_party/licenses/rust-lock.tsv"), errors);
@@ -148,6 +157,47 @@ fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inve
         }
         _ => None,
     }
+}
+
+fn enrich_inventory_evidence(
+    repository: &Path,
+    inventory: &mut Inventory,
+    errors: &mut Vec<String>,
+) {
+    for component in &mut inventory.components {
+        component.authority = format!("third_party/licenses/inventory.json#{}", component.id);
+        if let Some(obligations) = component.obligations.as_deref() {
+            component.integrity.extend(sha256_tokens(obligations));
+        }
+        let evidence_path = match component.id.as_str() {
+            "onnxruntime-cpu" => Some("third_party/onnxruntime/manifest.json"),
+            "pdfium" => Some("third_party/pdfium/manifest.json"),
+            "ffmpeg" => Some("third_party/ffmpeg/source.json"),
+            "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
+                Some("models/ppocrv6-tiny-recognizer-authority.json")
+            }
+            _ => None,
+        };
+        if let Some(evidence_path) = evidence_path {
+            let evidence = read(repository.join(evidence_path), errors);
+            component.integrity.extend(sha256_tokens(&evidence));
+            component.integrity.sort();
+            component.integrity.dedup();
+            component.authority.push_str(" + ");
+            component.authority.push_str(evidence_path);
+        }
+    }
+}
+
+fn sha256_tokens(contents: &str) -> Vec<String> {
+    contents
+        .split(|character: char| !character.is_ascii_hexdigit())
+        .filter(|token| {
+            token.len() == 64
+                && token.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .map(|token| format!("SHA256:{token}"))
+        .collect()
 }
 
 fn select_components<'a>(
@@ -190,6 +240,9 @@ fn select_components<'a>(
 fn validate_component(component: &Component, policy: &Policy, errors: &mut Vec<String>) {
     if component.status != "reviewed" {
         errors.push(format!("projected component {} is not reviewed", component.id));
+    }
+    if !component.release_eligible {
+        errors.push(format!("projected component {} is not release-eligible", component.id));
     }
     if component.manual_only {
         errors.push(format!("manual-only component {} cannot be released", component.id));
@@ -371,6 +424,15 @@ fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
         errors.push("FFmpeg build evidence is orphaned".to_owned());
         return;
     }
+    let authority = projection.files.iter().find(|file| file.path == evidence.authority_path);
+    if authority.is_none_or(|file| {
+        file.kind != ArchiveFileKind::Component
+            || file.component_id.as_deref() != Some("ffmpeg")
+            || file.bytes != evidence.authority_bytes
+            || file.sha256 != evidence.authority_sha256
+    }) {
+        errors.push("FFmpeg build evidence is not bound to an archived authority file".to_owned());
+    }
     let binary = projection.files.iter().find(|file| file.path == evidence.executable_path);
     if evidence.schema_version != SCHEMA_VERSION
         || evidence.ffmpeg_version != "8.1.2"
@@ -399,12 +461,29 @@ fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
             errors.push(format!("FFmpeg build evidence lacks {required}"));
         }
     }
-    if evidence.configure.iter().any(|flag| {
-        flag == "--enable-gpl"
-            || flag == "--enable-version3"
-            || flag == "--enable-nonfree"
-            || flag.starts_with("--enable-lib")
-    }) {
+    let allowed_enable: BTreeSet<_> = [
+        "--enable-ffmpeg",
+        "--enable-avutil",
+        "--enable-avcodec",
+        "--enable-avformat",
+        "--enable-avfilter",
+        "--enable-swresample",
+        "--enable-protocol=file,pipe",
+        "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
+        "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
+        "--enable-parser=aac,mpegaudio,opus,vorbis",
+        "--enable-filter=aformat,aresample",
+        "--enable-encoder=pcm_s16le",
+        "--enable-muxer=pcm_s16le",
+        "--enable-static",
+    ]
+    .into_iter()
+    .collect();
+    if evidence
+        .configure
+        .iter()
+        .any(|flag| flag.starts_with("--enable-") && !allowed_enable.contains(flag.as_str()))
+    {
         errors.push("FFmpeg build evidence enables incompatible or external components".to_owned());
     }
     let actual_dependencies: BTreeSet<_> =

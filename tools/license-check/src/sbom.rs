@@ -47,6 +47,8 @@ pub(crate) fn render_sbom(target: &str, components: &[&Component]) -> SbomInput 
                 version: component.version.clone().unwrap_or_default(),
                 source: component.source.clone().unwrap_or_default(),
                 license: component.license.clone().unwrap_or_default(),
+                integrity: component.integrity.clone(),
+                authority: component.authority.clone(),
             })
             .collect(),
     }

@@ -65,6 +65,7 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             kind: "rust-library".to_owned(),
             status: "reviewed".to_owned(),
             _included_in_release: false,
+            release_eligible: true,
             manual_only: false,
             version: Some(key.1.clone()),
             source: Some(format!("https://crates.io/crates/{}/{}", key.0, key.1)),
@@ -73,6 +74,11 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
                 "Preserve the concluded upstream license and notices; Cargo.lock fixes the exact crates.io checksum."
                     .to_owned(),
             ),
+            integrity: package
+                .checksum
+                .map(|checksum| vec![format!("SHA256:{checksum}")])
+                .unwrap_or_default(),
+            authority: "Cargo.lock + third_party/licenses/rust-lock.tsv".to_owned(),
         });
     }
     for stale in approved.keys().filter(|key| !locked.contains(*key)) {

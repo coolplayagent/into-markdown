@@ -59,14 +59,18 @@ pub(crate) fn load(contents: &str, errors: &mut Vec<String>) -> Vec<Component> {
                 kind: "npm-runtime".to_owned(),
                 status: "reviewed".to_owned(),
                 _included_in_release: true,
+                release_eligible: true,
                 manual_only: false,
                 version: Some(package.version),
                 source: package.license_source.or(Some(package.source)),
                 license: Some(package.license),
                 obligations: Some(format!(
-                    "Preserve {} and its fixed license text and copyright notice.",
-                    package.name
+                    "Preserve {} and its fixed license text and copyright notice: {}",
+                    package.name,
+                    package.copyright.clone().unwrap_or_default()
                 )),
+                integrity: vec![package.integrity],
+                authority: "pnpm-lock.yaml + third_party/licenses/npm-inventory.json".to_owned(),
             }
         })
         .collect()

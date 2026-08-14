@@ -49,5 +49,16 @@ pub(crate) fn validate(
                 "projected model component {id} does not match fixed file authority"
             ));
         }
+        for file in files.iter().filter(|file| file.component_id.as_deref() == Some(id)) {
+            if file.kind != ArchiveFileKind::Component
+                || file.bytes != bytes
+                || file.sha256 != sha256
+            {
+                errors.push(format!(
+                    "projected model component {id} contains a file outside its authority: {}",
+                    file.path
+                ));
+            }
+        }
     }
 }

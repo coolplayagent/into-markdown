@@ -72,6 +72,14 @@ fn validate_runtime(
             "projected {component} file does not match target library size and SHA-256"
         ));
     }
+    for file in files.iter().filter(|file| file.component_id.as_deref() == Some(component)) {
+        if file.kind != ArchiveFileKind::Component || file.bytes != size || file.sha256 != hash {
+            errors.push(format!(
+                "projected {component} contains a file outside its target authority: {}",
+                file.path
+            ));
+        }
+    }
     let archive_hash =
         authority.get(archive_hash_field).and_then(Value::as_str).unwrap_or_default();
     let Some(downloads) =
