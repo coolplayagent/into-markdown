@@ -288,12 +288,9 @@ fn run_models(
     command: Option<ModelsCommand>,
     json: bool,
     loaded: &LoadedConfig,
-    catalog: Catalog,
+    _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
-    if let Some(ModelsCommand::Install { id }) = &command {
-        preflight_model_install(id.as_deref(), catalog)?;
-    }
     let manager = model_manager()?;
     let execution = into_markdown::ExecutionContext::new(
         into_markdown::ExecutionOptions {
@@ -368,7 +365,11 @@ fn run_models(
         Some(ModelsCommand::Install { id }) => {
             let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
             manager.require_installable(id).map_err(model_error)?;
-            Err(CliError::component(format!("models install {id}: {}", catalog.unavailable())))
+            let status = manager
+                .install(id, &crate::model_fetch::PinnedModelFetcher::default(), &execution)
+                .map_err(model_error)?;
+            writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
+            Ok(())
         }
         Some(ModelsCommand::Verify { id, json }) => {
             let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
@@ -389,20 +390,6 @@ fn run_models(
             writeln!(context.stdout, "{}", manager.path(&id).map_err(model_error)?.display())?;
             Ok(())
         }
-    }
-}
-
-fn preflight_model_install(id: Option<&str>, catalog: Catalog) -> Result<(), CliError> {
-    let manifest = into_markdown::model_manifest().map_err(CliError::from)?;
-    let selected = id.unwrap_or(&manifest.default_bundle);
-    let installable =
-        manifest.bundles.iter().find(|bundle| bundle.id == selected).is_some_and(|bundle| {
-            bundle.availability == "available" && !bundle.runtime_artifacts.is_empty()
-        });
-    if installable {
-        Ok(())
-    } else {
-        Err(CliError::component(format!("models install {selected}: {}", catalog.unavailable())))
     }
 }
 
@@ -1030,6 +1017,7 @@ struct ExecutionPolicy {
     options: ConversionOptions,
     execution: into_markdown::ExecutionOptions,
     output_context: into_markdown::ExecutionContext,
+    services: into_markdown::Services,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -1095,11 +1083,13 @@ fn run_conversion(
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
         ..into_markdown::ExecutionOptions::default()
     };
+    let services = crate::services::assemble(&loaded, &execution)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
         execution,
         output_context,
+        services,
         options: loaded.options,
         hint: FormatHint {
             format: arguments.format.as_deref().map(parse_format).transpose()?,
@@ -1830,7 +1820,8 @@ fn convert_item(
     }
     request.execution = policy.execution.clone();
     request.hint = policy.hint.clone();
-    let engine = into_markdown::default_engine().map_err(CliError::from)?;
+    let engine = into_markdown::default_engine_with_services(policy.services.clone())
+        .map_err(CliError::from)?;
     futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
 }
 

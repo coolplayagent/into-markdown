@@ -5,7 +5,7 @@
     {
       "id": "pp-ocrv6-tiny-zh-en",
       "kind": "ocr-pipeline",
-      "availability": "planned",
+      "availability": "available",
       "upstream_version": "PP-OCRv6 tiny / PaddleOCR 3.x",
       "languages": ["zh-Hans", "zh-Hant", "en"],
       "platforms": [
@@ -14,9 +14,13 @@
         "aarch64-unknown-linux-gnu",
         "x86_64-pc-windows-msvc"
       ],
-      "runtime_format": "onnx-derived",
+      "runtime_format": "onnx",
+      "components": [
+        "pp-ocrv6-tiny-detector-onnx",
+        "pp-ocrv6-tiny-recognizer-onnx"
+      ],
       "character_set": {
-        "status": "planned",
+        "status": "available",
         "source_artifact_id": "pp-ocrv6-tiny-recognizer-source"
       },
       "runtime_artifacts": [],
@@ -40,6 +44,75 @@
       ]
     },
     {
+      "id": "pp-ocrv6-tiny-detector-onnx",
+      "kind": "detector-component",
+      "availability": "available",
+      "upstream_version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "languages": ["zh-Hans", "zh-Hant", "en"],
+      "platforms": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ],
+      "runtime_format": "onnx",
+      "components": [],
+      "character_set": {
+        "status": "available",
+        "source_artifact_id": "ppocrv6-tiny-detector-onnx-source"
+      },
+      "runtime_artifacts": [
+        {
+          "id": "ppocrv6-tiny-detector-onnx-model",
+          "role": "detector",
+          "file_name": "inference.onnx",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+          "archive_sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
+          "archive_size": 1792000,
+          "archive_member": "PP-OCRv6_tiny_det_onnx_infer/inference.onnx",
+          "archive_members": [
+            {
+              "path": "PP-OCRv6_tiny_det_onnx_infer/",
+              "kind": "directory",
+              "size": 0,
+              "sha256": null
+            },
+            {
+              "path": "PP-OCRv6_tiny_det_onnx_infer/inference.onnx",
+              "kind": "file",
+              "size": 1780590,
+              "sha256": "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8"
+            },
+            {
+              "path": "PP-OCRv6_tiny_det_onnx_infer/inference.yml",
+              "kind": "file",
+              "size": 883,
+              "sha256": "3ac018be6f97499a08faa3bbdeb33640968d9307f6736d152902747a9f259593"
+            }
+          ],
+          "sha256": "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8",
+          "size": 1780590,
+          "platforms": [
+            "aarch64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc"
+          ],
+          "license": "Apache-2.0"
+        }
+      ],
+      "source_artifacts": [
+        {
+          "id": "ppocrv6-tiny-detector-onnx-source",
+          "role": "detector",
+          "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+          "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
+          "format": "onnx-inference-tar",
+          "license": "Apache-2.0"
+        }
+      ]
+    },
+    {
       "id": "pp-ocrv6-tiny-recognizer-onnx",
       "kind": "recognizer-component",
       "availability": "available",
@@ -56,6 +129,7 @@
         "x86_64-pc-windows-msvc"
       ],
       "runtime_format": "onnx",
+      "components": [],
       "character_set": {
         "status": "available",
         "source_artifact_id": "ppocrv6-tiny-recognizer-onnx-source"

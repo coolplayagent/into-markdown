@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "model_id": "pp-ocrv6-tiny-zh-en",
+  "model_id": "pp-ocrv6-tiny-detector-onnx",
   "upstream_repository": "https://github.com/PaddlePaddle/PaddleOCR",
   "upstream_commit": "2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
   "upstream_config": "configs/det/PP-OCRv6/PP-OCRv6_tiny_det.yml",

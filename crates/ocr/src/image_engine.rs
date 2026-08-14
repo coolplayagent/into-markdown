@@ -1,0 +1,317 @@
+//! Product OCR engine joining the audited image, detector, and recognizer boundaries.
+
+use crate::{
+    DetectionConfig, ImageOrientation, ModelManager, PixelFormat, PixelView, PpOcrTextDetector,
+    PpOcrTextRecognizer, RecognitionConfig,
+};
+use image::{DynamicImage, ImageFormat, ImageReader};
+use into_markdown_core::{
+    BoundOcrResult, BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine,
+    OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest,
+    OcrResult, ResourceLimits, TensorRuntime,
+};
+use std::io::Cursor;
+use std::sync::Arc;
+
+const PROVIDER: &str = "builtin.ocr.ppocrv6-image";
+const DETECTOR_PROVIDER: &str = "builtin.ocr.ppocrv6-detector";
+const RECOGNIZER_PROVIDER: &str = "builtin.ocr.ppocrv6-recognizer";
+const MAX_DIMENSION: u32 = 32_768;
+const MAX_REGIONS: u32 = 3000;
+const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
+const OUTPUT_BYTES_PER_REGION: u64 = 2048;
+const OUTPUT_FIXED_BYTES: u64 = 16 * 1024;
+
+/// Installed, offline PP-OCRv6 image pipeline.
+pub struct PpOcrImageEngine {
+    runtime: Arc<dyn TensorRuntime>,
+    manager: Arc<ModelManager>,
+    limits: ResourceLimits,
+}
+
+impl PpOcrImageEngine {
+    /// Construct only after both exact pipeline components are locally installed and verified.
+    pub fn from_installed(
+        runtime: Arc<dyn TensorRuntime>,
+        manager: Arc<ModelManager>,
+        limits: ResourceLimits,
+        context: &ExecutionContext,
+    ) -> Result<Self, ConversionError> {
+        context.checkpoint()?;
+        manager
+            .verify_with_context(crate::detector_model::PIPELINE_ID, context)
+            .map_err(map_manager_error)?;
+        validate_engine_limits(&limits)?;
+        Ok(Self { runtime, manager, limits })
+    }
+
+    async fn execute(
+        &self,
+        request: OcrRequest<'_>,
+        context: &ExecutionContext,
+    ) -> Result<BoundOcrResult, ConversionError> {
+        context.checkpoint()?;
+        self.manager
+            .verify_with_context(crate::detector_model::PIPELINE_ID, context)
+            .map_err(map_manager_error)?;
+        let max_source_pixels = source_pixel_limit(&self.limits)?;
+        let max_regions = usize::try_from(self.limits.max_archive_entries.min(MAX_REGIONS))
+            .map_err(|_| {
+                resource("max_archive_entries", "OCR region bound is not representable")
+            })?;
+        let detector = PpOcrTextDetector::new(
+            Arc::clone(&self.runtime),
+            DetectionConfig {
+                max_source_pixels,
+                max_contour_events: max_source_pixels.min(16_000_000),
+                max_contour_points: max_source_pixels.min(16_000_000),
+                max_score_pixels: max_source_pixels.min(32_000_000),
+                ..DetectionConfig::default()
+            },
+        )?;
+        let recognizer = PpOcrTextRecognizer::from_installed(
+            Arc::clone(&self.runtime),
+            &self.manager,
+            RecognitionConfig {
+                max_regions,
+                max_decoded_bytes: usize::try_from(self.limits.max_field_bytes.min(MAX_TEXT_BYTES))
+                    .map_err(|_| {
+                        resource("max_field_bytes", "OCR text bound is not representable")
+                    })?,
+                ..RecognitionConfig::default()
+            },
+            context,
+        )?;
+        let (pixels, _memory) = decode_normalized_png(request, &self.limits, context)?;
+        let image = PixelView {
+            width: pixels.width() as usize,
+            height: pixels.height() as usize,
+            row_stride: pixels.width() as usize * 3,
+            format: PixelFormat::Rgb8,
+            orientation: ImageOrientation::Normal,
+            bytes: pixels.as_raw(),
+        };
+        let detected = detector.detect_page(1, image, context).await?;
+        let language = language_hint(request.languages)?;
+        let recognized = recognizer.recognize_page(image, &detected, language, context).await?;
+        context.checkpoint()?;
+        bind_result(&detected, recognized.result(), context)
+    }
+}
+
+impl OcrEngine for PpOcrImageEngine {
+    fn id(&self) -> &'static str {
+        PROVIDER
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(
+            async move { self.execute(request, context).await.map(|value| value.into_parts().0) },
+        )
+    }
+
+    fn planned_bound_output(
+        &self,
+        request: OcrRequest<'_>,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        context.checkpoint()?;
+        validate_png_header(request, &self.limits)?;
+        let max_regions = options.limits.max_archive_entries.min(MAX_REGIONS);
+        let max_text = options.limits.max_field_bytes.min(MAX_TEXT_BYTES);
+        let retained = u64::from(max_regions)
+            .checked_mul(OUTPUT_BYTES_PER_REGION)
+            .and_then(|bytes| bytes.checked_add(max_text.checked_mul(2)?))
+            .and_then(|bytes| bytes.checked_add(OUTPUT_FIXED_BYTES))
+            .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
+        OcrOutputPlan::try_new(retained, max_regions, max_text)
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move { self.execute(request, context).await.map(OcrRecognition::Bound) })
+    }
+}
+
+fn decode_normalized_png(
+    request: OcrRequest<'_>,
+    limits: &ResourceLimits,
+    context: &ExecutionContext,
+) -> Result<(image::RgbImage, into_markdown_core::ResourceReservation), ConversionError> {
+    let (width, height) = validate_png_header(request, limits)?;
+    let working = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR image working set overflow"))?;
+    let memory = context.reserve_memory(working)?;
+    context.checkpoint()?;
+    let mut reader = ImageReader::with_format(Cursor::new(request.image), ImageFormat::Png);
+    let mut decoder_limits = image::Limits::default();
+    decoder_limits.max_image_width = Some(MAX_DIMENSION);
+    decoder_limits.max_image_height = Some(MAX_DIMENSION);
+    decoder_limits.max_alloc = Some(limits.max_decompressed_bytes.min(limits.max_memory_bytes));
+    reader.limits(decoder_limits);
+    let decoded = reader.decode().map_err(map_image_error)?;
+    if decoded.width() != width || decoded.height() != height {
+        return Err(malformed("PNG decoder dimensions disagree with IHDR"));
+    }
+    context.checkpoint()?;
+    Ok((DynamicImage::into_rgb8(decoded), memory))
+}
+
+fn validate_png_header(
+    request: OcrRequest<'_>,
+    limits: &ResourceLimits,
+) -> Result<(u32, u32), ConversionError> {
+    if request.media_type != "image/png" {
+        return Err(ConversionError::Unsupported {
+            detail: "PP-OCRv6 image input must be normalized image/png".into(),
+        });
+    }
+    if u64::try_from(request.image.len()).unwrap_or(u64::MAX) > limits.max_input_bytes {
+        return Err(resource("max_input_bytes", "OCR PNG exceeds the source-byte bound"));
+    }
+    if request.image.len() < 33
+        || request.image[..8] != [137, 80, 78, 71, 13, 10, 26, 10]
+        || request.image[8..12] != [0, 0, 0, 13]
+        || &request.image[12..16] != b"IHDR"
+    {
+        return Err(malformed("OCR input is not a canonical PNG envelope"));
+    }
+    let width = u32::from_be_bytes(request.image[16..20].try_into().expect("fixed slice"));
+    let height = u32::from_be_bytes(request.image[20..24].try_into().expect("fixed slice"));
+    if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(resource("image_dimensions", "OCR PNG dimensions are outside product bounds"));
+    }
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| resource("max_decompressed_bytes", "OCR pixel count overflow"))?;
+    if pixels > u64::try_from(source_pixel_limit(limits)?).unwrap_or(u64::MAX)
+        || pixels.saturating_mul(4) > limits.max_decompressed_bytes
+    {
+        return Err(resource("max_decompressed_bytes", "OCR PNG pixel payload exceeds limits"));
+    }
+    Ok((width, height))
+}
+
+fn bind_result(
+    detected: &crate::PageDetection,
+    recognized: &crate::RecognitionResult,
+    context: &ExecutionContext,
+) -> Result<BoundOcrResult, ConversionError> {
+    if recognized.provider.as_ref() != RECOGNIZER_PROVIDER
+        || recognized.regions.len() != detected.result().regions.len()
+    {
+        return Err(ocr("detector and recognizer payloads disagree"));
+    }
+    let count = recognized.regions.len();
+    let mut regions = Vec::new();
+    let mut confidences = Vec::new();
+    regions
+        .try_reserve_exact(count)
+        .map_err(|_| resource("max_memory_bytes", "OCR result allocation failed"))?;
+    confidences
+        .try_reserve_exact(count)
+        .map_err(|_| resource("max_memory_bytes", "OCR confidence allocation failed"))?;
+    for (index, (text, detection)) in
+        recognized.regions.iter().zip(&detected.result().regions).enumerate()
+    {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        if text.source_index != index {
+            return Err(ocr("recognizer source order disagrees with detector order"));
+        }
+        regions.push(OcrRegion {
+            text: text.text.clone(),
+            polygon: detection.polygon,
+            confidence: text.confidence,
+        });
+        confidences.push(detection.confidence);
+    }
+    BoundOcrResult::try_new(
+        OcrResult { regions, provider: RECOGNIZER_PROVIDER.into() },
+        confidences,
+        vec![
+            OcrEvidenceStep {
+                stage: OcrEvidenceStage::Detection,
+                provider: DETECTOR_PROVIDER.into(),
+                model: Some(crate::detector_model::DETECTOR_MODEL_ID.into()),
+            },
+            OcrEvidenceStep {
+                stage: OcrEvidenceStage::Recognition,
+                provider: RECOGNIZER_PROVIDER.into(),
+                model: Some(crate::recognizer_model::RECOGNIZER_MODEL_ID.into()),
+            },
+        ],
+    )
+}
+
+fn language_hint<'a>(languages: &'a [&'a str]) -> Result<Option<&'a str>, ConversionError> {
+    let mut selected = None;
+    for language in languages {
+        if !matches!(*language, "zh-Hans" | "zh-Hant" | "en") {
+            return Err(ocr("unsupported OCR language hint"));
+        }
+        if selected.is_some_and(|value| value != *language) {
+            return Ok(None);
+        }
+        selected = Some(*language);
+    }
+    Ok(selected)
+}
+
+fn source_pixel_limit(limits: &ResourceLimits) -> Result<usize, ConversionError> {
+    usize::try_from(limits.max_decompressed_bytes / 4)
+        .map(|pixels| pixels.min(100_000_000))
+        .map_err(|_| resource("max_decompressed_bytes", "OCR pixel limit is not representable"))
+}
+
+fn validate_engine_limits(limits: &ResourceLimits) -> Result<(), ConversionError> {
+    if limits.max_archive_entries.min(MAX_REGIONS) == 0
+        || limits.max_field_bytes.min(MAX_TEXT_BYTES) == 0
+    {
+        return Err(resource("max_archive_entries", "OCR region and text bounds must be non-zero"));
+    }
+    source_pixel_limit(limits).map(|_| ())
+}
+
+fn map_manager_error(error: crate::ModelManagerError) -> ConversionError {
+    match error {
+        crate::ModelManagerError::Execution(error) => error,
+        crate::ModelManagerError::Corrupt(_)
+        | crate::ModelManagerError::DataDirectoryUnsafe
+        | crate::ModelManagerError::UnsafePath => ocr("installed OCR pipeline is corrupt"),
+        _ => ConversionError::ComponentUnavailable {
+            component: crate::detector_model::PIPELINE_ID.into(),
+            detail: "install the exact detector and recognizer components before OCR".into(),
+        },
+    }
+}
+
+fn map_image_error(error: image::ImageError) -> ConversionError {
+    match error {
+        image::ImageError::Limits(_) => resource("max_decompressed_bytes", error.to_string()),
+        _ => malformed(format!("PNG decoder rejected normalized OCR input: {error}")),
+    }
+}
+
+fn malformed(detail: impl Into<String>) -> ConversionError {
+    ConversionError::Malformed { part: Some("ocr.image".into()), detail: detail.into() }
+}
+
+fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
+    ConversionError::ResourceLimit { limit, detail: detail.into() }
+}
+
+fn ocr(detail: impl Into<String>) -> ConversionError {
+    ConversionError::Ocr { provider: PROVIDER.into(), detail: detail.into() }
+}

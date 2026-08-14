@@ -1,0 +1,110 @@
+//! Per-invocation optional-service assembly with no implicit discovery or download.
+
+use crate::config::LoadedConfig;
+use crate::error::CliError;
+use into_markdown::{
+    AiMode, ExecutionContext, ExecutionOptions, InstalledOcrConfig, OcrPolicy,
+    OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
+    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub(crate) fn assemble(
+    loaded: &LoadedConfig,
+    execution: &ExecutionOptions,
+) -> Result<Services, CliError> {
+    let mut services = Services::default();
+    let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
+    if loaded.options.ocr.policy != OcrPolicy::Off {
+        services.ocr = assemble_ocr(loaded, &context).ok();
+    }
+    if loaded.options.ai.image_description != AiMode::Off {
+        services.ai = assemble_image_description(loaded)?;
+    }
+    Ok(services)
+}
+
+fn assemble_ocr(
+    loaded: &LoadedConfig,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        into_markdown::ConversionError::ComponentUnavailable {
+            component: "onnxruntime-worker".into(),
+            detail: format!("cannot resolve the current executable: {error}"),
+        }
+    })?;
+    let directory = executable.parent().ok_or_else(|| {
+        into_markdown::ConversionError::ComponentUnavailable {
+            component: "onnxruntime-worker".into(),
+            detail: "current executable has no distribution directory".into(),
+        }
+    })?;
+    let runtime_root = directory.join("onnxruntime");
+    let runtime_library = into_markdown::expected_ocr_runtime_library(&runtime_root)?;
+    let model_bundle =
+        loaded.options.ocr.model_bundle.clone().unwrap_or_else(|| "pp-ocrv6-tiny-zh-en".into());
+    into_markdown::installed_ocr_service(
+        &InstalledOcrConfig {
+            writable_model_root: writable_model_root()?,
+            bundled_model_root: bundled_model_root(directory),
+            runtime_trusted_root: runtime_root,
+            runtime_library,
+            worker_executable: directory.join(worker_name()),
+            model_bundle,
+        },
+        &loaded.options,
+        context,
+    )
+}
+
+fn assemble_image_description(
+    loaded: &LoadedConfig,
+) -> Result<Option<Arc<dyn into_markdown::AiProvider>>, CliError> {
+    let Some(name) = loaded.ai_provider.as_deref() else {
+        return Ok(None);
+    };
+    let Some(configured) = loaded.effective.providers.get(name) else {
+        return Ok(None);
+    };
+    if !configured.capabilities.iter().any(|value| value == "image-description") {
+        return Ok(None);
+    }
+    let model = loaded.ai_model.as_deref().unwrap_or(&configured.model);
+    let timeout = std::time::Duration::from_millis(
+        configured.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
+    );
+    let config = TransportProviderConfig::parse(
+        &configured.base_url,
+        model,
+        &configured.api_key_env,
+        timeout,
+        configured.capabilities.clone(),
+    )?;
+    let network = ProviderNetworkPolicy {
+        allow_network: loaded.options.network.enabled,
+        allow_private_network: !loaded.options.network.deny_private_networks,
+        allowed_hosts: loaded.options.network.allowed_hosts.clone(),
+    };
+    let client = OpenAiCompatibleClient::new(config, network.clone());
+    Ok(Some(Arc::new(OpenAiImageDescriptionProvider::new(client, network))))
+}
+
+fn writable_model_root() -> Result<PathBuf, into_markdown::ConversionError> {
+    directories::ProjectDirs::from("", "", "into-markdown")
+        .map(|directories| directories.data_dir().join("models"))
+        .ok_or_else(|| into_markdown::ConversionError::ComponentUnavailable {
+            component: "ocr-models".into(),
+            detail: "platform model data directory is unavailable".into(),
+        })
+}
+
+fn bundled_model_root(directory: &Path) -> Option<PathBuf> {
+    let path = directory.join("models");
+    path.is_dir().then_some(path)
+}
+
+const fn worker_name() -> &'static str {
+    if cfg!(windows) { "onnxruntime-worker.exe" } else { "onnxruntime-worker" }
+}

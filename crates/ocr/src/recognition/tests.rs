@@ -343,7 +343,7 @@ impl TensorRuntime for PipelineRuntime {
     ) -> BoxFuture<'a, Result<Vec<Tensor>, ConversionError>> {
         Box::pin(async move {
             match model_id {
-                "pp-ocrv6-tiny-zh-en" => {
+                crate::detector_model::DETECTOR_MODEL_ID => {
                     let height = inputs[0].shape[2];
                     let width = inputs[0].shape[3];
                     let mut values = vec![0.0; height * width];

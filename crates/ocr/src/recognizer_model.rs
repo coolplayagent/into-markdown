@@ -30,6 +30,9 @@ impl ModelResolver for ManifestModelResolver {
         context: &ExecutionContext,
     ) -> Result<ResolvedModel, ConversionError> {
         context.checkpoint()?;
+        if model_id == crate::detector_model::DETECTOR_MODEL_ID {
+            return crate::detector_model::resolve_installed(&self.manager, context);
+        }
         if model_id != RECOGNIZER_MODEL_ID {
             return Err(unavailable("UnknownModel"));
         }

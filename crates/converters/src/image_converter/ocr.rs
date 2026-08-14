@@ -46,8 +46,11 @@ pub(super) async fn recognize(
     validate_plan(plan, options, context)?;
     let planned_bytes = plan.max_retained_bytes();
     let mut memory = context.reserve_memory(planned_bytes)?;
-    let credited = context.with_memory_credit(&mut memory)?;
-    let recognition = match context.run(engine.recognize_bound(request, &credited)).await? {
+    let credited = (!context.has_memory_credit())
+        .then(|| context.with_memory_credit(&mut memory))
+        .transpose()?;
+    let provider_context = credited.as_deref().unwrap_or(context);
+    let recognition = match context.run(engine.recognize_bound(request, provider_context)).await? {
         Ok(value) => value,
         Err(error) if options.ocr.policy == OcrPolicy::Auto => {
             return Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")));

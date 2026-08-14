@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 const PROVIDER: &str = "builtin.ocr.ppocrv6-detector";
-const MODEL_ID: &str = "pp-ocrv6-tiny-zh-en";
+const MODEL_ID: &str = crate::detector_model::DETECTOR_MODEL_ID;
 const STRIDE: usize = 32;
 const SCALE: f32 = 1.0 / 255.0;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];

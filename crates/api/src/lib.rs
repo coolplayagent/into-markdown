@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+mod ocr_service;
+
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
@@ -32,6 +34,7 @@ pub use into_markdown_task_store::{
     InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
     TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
+pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installed_ocr_service};
 
 /// Create the standard builder with safe local source resolvers, hint
 /// detection, the deterministic GFM renderer, plain-text conversion, and

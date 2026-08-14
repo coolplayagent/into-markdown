@@ -37,7 +37,9 @@ pub(super) async fn describe(
         });
     }
     let mut memory = context.reserve_memory(plan)?;
-    let credited = (plan != 0).then(|| context.with_memory_credit(&mut memory)).transpose()?;
+    let credited = (plan != 0 && !context.has_memory_credit())
+        .then(|| context.with_memory_credit(&mut memory))
+        .transpose()?;
     let provider_context = credited.as_deref().unwrap_or(context);
     let output =
         match context.run(provider.execute_with_options(request, options, provider_context)).await?
