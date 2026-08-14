@@ -52,6 +52,32 @@ const MIN_SCAN_IMAGE_COVERAGE: f64 = 0.50;
 const MAX_RENDER_DIMENSION: u32 = 4096;
 static PDF_CONVERSION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
+fn request_path_scan<T>(
+    context: &ExecutionContext,
+    scan: impl FnOnce(&mut dyn FnMut() -> bool) -> Result<T, PdfiumError>,
+) -> Result<T, ConversionError> {
+    let mut checkpoint_error = None;
+    let result = {
+        let mut checkpoint = || {
+            if checkpoint_error.is_some() {
+                return false;
+            }
+            match context.checkpoint() {
+                Ok(()) => true,
+                Err(error) => {
+                    checkpoint_error = Some(error);
+                    false
+                }
+            }
+        };
+        scan(&mut checkpoint)
+    };
+    if let Some(error) = checkpoint_error {
+        return Err(error);
+    }
+    result.map_err(map_pdfium_error)
+}
+
 /// PDF converter backed only by an explicitly configured, pinned `PDFium` runtime.
 #[derive(Debug, Clone, Default)]
 pub struct PdfConverter {
@@ -208,10 +234,15 @@ fn convert_pdf(
             "pdfPageObjects",
         )?;
         let info = page.info().map_err(map_pdfium_error)?;
-        let path_plan = page.plan_path_bounds().map_err(map_pdfium_error)?;
+        let path_plan = request_path_scan(context, |checkpoint| {
+            page.plan_path_bounds_with_checkpoint(checkpoint)
+        })?;
+        let path_allocation_bytes = path_plan.allocation_bytes();
         let (raw_path_bounds, raw_path_memory) =
-            materialize_after_reserve(context, path_plan.allocation_bytes(), || {
-                path_plan.materialize().map_err(map_pdfium_error)
+            materialize_after_reserve(context, path_allocation_bytes, || {
+                request_path_scan(context, |checkpoint| {
+                    path_plan.materialize_with_checkpoint(checkpoint)
+                })
             })?;
         let path_capacity = allocation_capacity_bound(raw_path_bounds.len())?;
         let normalized_path_bytes = path_capacity

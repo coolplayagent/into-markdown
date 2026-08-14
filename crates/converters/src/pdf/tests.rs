@@ -320,6 +320,95 @@ fn conversion_gate_wait_honors_cancellation() {
 }
 
 #[test]
+fn path_plan_scan_observes_in_flight_cancellation_without_publishing_or_leaking() {
+    let cancellation = into_markdown_core::CancellationToken::new();
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions {
+            cancellation: cancellation.clone(),
+            ..into_markdown_core::ExecutionOptions::default()
+        },
+        into_markdown_core::ResourceLimits::default(),
+    );
+    let later_stage = AtomicUsize::new(0);
+    let mut checkpoints = 0_usize;
+    let mut scanned = 0_usize;
+    let result = (|| {
+        let _inventory = context.reserve_memory(64)?;
+        request_path_scan(&context, |checkpoint| {
+            for index in 0_u32..600 {
+                if index.is_multiple_of(256) {
+                    checkpoints += 1;
+                    if checkpoints == 2 {
+                        cancellation.cancel();
+                    }
+                    if !checkpoint() {
+                        return Err(PdfiumError::InvalidResult {
+                            operation: "path_bounds_plan_checkpoint",
+                            detail: "caller interrupted PATH object scan".into(),
+                        });
+                    }
+                }
+                scanned += 1;
+            }
+            Ok(())
+        })?;
+        later_stage.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), ConversionError>(())
+    })();
+    assert!(matches!(result, Err(ConversionError::Cancelled)));
+    assert_eq!(checkpoints, 2);
+    assert_eq!(scanned, 256);
+    assert_eq!(later_stage.load(Ordering::SeqCst), 0);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn path_materialize_scan_observes_in_flight_timeout_without_publishing_or_leaking() {
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions {
+            timeout: Some(std::time::Duration::from_millis(100)),
+            ..into_markdown_core::ExecutionOptions::default()
+        },
+        into_markdown_core::ResourceLimits::default(),
+    );
+    let later_stage = AtomicUsize::new(0);
+    let mut checkpoints = 0_usize;
+    let mut scanned = 0_usize;
+    let result = (|| {
+        let ((), _materialized) = materialize_after_reserve(&context, 128, || {
+            request_path_scan(&context, |checkpoint| {
+                for index in 0_u32..600 {
+                    if index.is_multiple_of(256) {
+                        checkpoints += 1;
+                        if checkpoints == 2 {
+                            let remaining = context.remaining_time().expect("timeout configured");
+                            std::thread::sleep(
+                                remaining.saturating_add(std::time::Duration::from_millis(2)),
+                            );
+                        }
+                        if !checkpoint() {
+                            return Err(PdfiumError::InvalidResult {
+                                operation: "path_bounds_checkpoint",
+                                detail: "caller interrupted PATH object scan".into(),
+                            });
+                        }
+                    }
+                    scanned += 1;
+                }
+                Ok(())
+            })
+        })?;
+        later_stage.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), ConversionError>(())
+    })();
+    assert!(matches!(result, Err(ConversionError::Timeout)));
+    assert_eq!(checkpoints, 2);
+    assert_eq!(scanned, 256);
+    assert_eq!(later_stage.load(Ordering::SeqCst), 0);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
 fn total_asset_budget_counts_bytes_before_deduplication() {
     let mut options = ConversionOptions::default();
     options.limits.max_total_asset_bytes = 7;

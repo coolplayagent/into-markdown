@@ -1,7 +1,7 @@
 use crate::{
     Backend, Character, CharacterAllocationPlan, Error, ImageAllocationPlan, ImageBitmap,
-    ImageObject, Limits, Link, LinkAllocationPlan, LinkTarget, PageInfo, PathBoundsAllocationPlan,
-    PdfRect, PixelFormat,
+    ImageObject, Limits, Link, LinkAllocationPlan, LinkTarget, PATH_SCAN_CHECKPOINT_OBJECTS,
+    PageInfo, PathBoundsAllocationPlan, PdfRect, PixelFormat,
 };
 use libloading::Library;
 use object::{Architecture, BinaryFormat, NameOrOrdinal, Object as _};
@@ -718,6 +718,17 @@ fn object_bounds(
     finite_rect(operation, left, bottom, right, top)
 }
 
+fn path_scan_checkpoint(
+    index: u32,
+    operation: &'static str,
+    checkpoint: &mut dyn FnMut() -> bool,
+) -> Result<(), Error> {
+    if index.is_multiple_of(PATH_SCAN_CHECKPOINT_OBJECTS) && !checkpoint() {
+        return Err(invalid(operation, "caller interrupted PATH object scan"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn f64_to_f32(value: f64) -> f32 {
     value as f32
@@ -1130,6 +1141,7 @@ impl Backend for Native {
         page: usize,
         max_objects: u32,
         plan: PathBoundsAllocationPlan,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<Vec<PdfRect>, Error> {
         let count = nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })?;
         if count > max_objects {
@@ -1142,6 +1154,7 @@ impl Backend for Native {
         let mut bounds =
             FixedOutput::new(usize::try_from(plan.count).unwrap_or(usize::MAX), "path_bounds")?;
         for index in 0..count {
+            path_scan_checkpoint(index, "path_bounds_checkpoint", checkpoint)?;
             let object = unsafe {
                 (self.get_object)(
                     page as Handle,
@@ -1170,6 +1183,7 @@ impl Backend for Native {
         &self,
         page: usize,
         max_objects: u32,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<PathBoundsAllocationPlan, Error> {
         let count = nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })?;
         if count > max_objects {
@@ -1181,6 +1195,7 @@ impl Backend for Native {
         }
         let mut paths = 0_u32;
         for index in 0..count {
+            path_scan_checkpoint(index, "path_bounds_plan_checkpoint", checkpoint)?;
             let object = unsafe {
                 (self.get_object)(
                     page as Handle,

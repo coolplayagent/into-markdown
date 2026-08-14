@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 pub use native::{Artifact, Platform};
 
+const PATH_SCAN_CHECKPOINT_OBJECTS: u32 = 256;
+
 /// Fallibly allocate an exact-layout zeroed byte buffer without allocator
 /// capacity slack. This is shared with the PDF converter's asset encoder.
 #[doc(hidden)]
@@ -140,11 +142,13 @@ trait Backend: Send + Sync {
         page: usize,
         max_objects: u32,
         plan: PathBoundsAllocationPlan,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<Vec<PdfRect>, Error>;
     fn path_bounds_allocation_bytes(
         &self,
         page: usize,
         max_objects: u32,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<PathBoundsAllocationPlan, Error>;
     fn links(
         &self,
@@ -337,25 +341,38 @@ impl Page<'_> {
 
     /// Plan a bounded snapshot of finite PDF PATH object bounds on this page.
     pub fn plan_path_bounds(&self) -> Result<PlannedPathBounds<'_, '_>, Error> {
+        self.plan_path_bounds_with_checkpoint(&mut || true)
+    }
+
+    /// Plan PATH bounds while invoking a caller-owned checkpoint once per
+    /// fixed object batch. Returning `false` interrupts the scan.
+    pub fn plan_path_bounds_with_checkpoint(
+        &self,
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<PlannedPathBounds<'_, '_>, Error> {
         let limits = self.document.runtime.0.limits;
         let _guard = self.document.runtime.0.lock()?;
-        let plan = self
-            .document
-            .runtime
-            .0
-            .backend
-            .path_bounds_allocation_bytes(self.raw, limits.max_page_objects)?;
+        let plan = self.document.runtime.0.backend.path_bounds_allocation_bytes(
+            self.raw,
+            limits.max_page_objects,
+            checkpoint,
+        )?;
         Ok(PlannedPathBounds { page: self, plan })
     }
 
     fn materialize_path_bounds(
         &self,
         plan: PathBoundsAllocationPlan,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<Vec<PdfRect>, Error> {
         let limits = self.document.runtime.0.limits;
         let _guard = self.document.runtime.0.lock()?;
-        let bounds =
-            self.document.runtime.0.backend.path_bounds(self.raw, limits.max_page_objects, plan)?;
+        let bounds = self.document.runtime.0.backend.path_bounds(
+            self.raw,
+            limits.max_page_objects,
+            plan,
+            checkpoint,
+        )?;
         if bounds.len() != usize::try_from(plan.count).unwrap_or(usize::MAX) {
             return Err(Error::InvalidResult {
                 operation: "path_bounds",
@@ -647,7 +664,16 @@ impl PlannedPathBounds<'_, '_> {
         self.plan.bytes
     }
     pub fn materialize(self) -> Result<Vec<PdfRect>, Error> {
-        self.page.materialize_path_bounds(self.plan)
+        self.materialize_with_checkpoint(&mut || true)
+    }
+
+    /// Materialize PATH bounds while invoking a caller-owned checkpoint once
+    /// per fixed object batch. Returning `false` interrupts the scan.
+    pub fn materialize_with_checkpoint(
+        self,
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<PdfRect>, Error> {
+        self.page.materialize_path_bounds(self.plan, checkpoint)
     }
 }
 impl<'plan> PlannedImages<'plan, '_> {
@@ -870,6 +896,8 @@ mod tests {
         path_plan_count: AtomicUsize,
         path_materialized_count: AtomicUsize,
         path_allocations: AtomicUsize,
+        path_plan_scanned: AtomicUsize,
+        path_materialized_scanned: AtomicUsize,
         character_plan_count: AtomicUsize,
         character_materialized_count: AtomicUsize,
         character_plan_font_bytes: AtomicUsize,
@@ -884,6 +912,24 @@ mod tests {
             self.max_active.fetch_max(active, Ordering::SeqCst);
             std::thread::yield_now();
             self.active.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        fn scan_paths(
+            count: u32,
+            scanned: &AtomicUsize,
+            operation: &'static str,
+            checkpoint: &mut dyn FnMut() -> bool,
+        ) -> Result<(), Error> {
+            for index in 0..count {
+                if index.is_multiple_of(PATH_SCAN_CHECKPOINT_OBJECTS) && !checkpoint() {
+                    return Err(Error::InvalidResult {
+                        operation,
+                        detail: "caller interrupted PATH object scan".into(),
+                    });
+                }
+                scanned.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(())
         }
     }
     impl Backend for Arc<Mock> {
@@ -984,6 +1030,7 @@ mod tests {
             _: usize,
             _: u32,
             plan: PathBoundsAllocationPlan,
+            checkpoint: &mut dyn FnMut() -> bool,
         ) -> Result<Vec<PdfRect>, Error> {
             let actual = u32::try_from(self.path_materialized_count.load(Ordering::SeqCst))
                 .unwrap_or(u32::MAX);
@@ -993,6 +1040,12 @@ mod tests {
                     detail: "materialized count exceeded preflight plan".into(),
                 });
             }
+            Mock::scan_paths(
+                actual,
+                &self.path_materialized_scanned,
+                "path_bounds_checkpoint",
+                checkpoint,
+            )?;
             self.path_allocations.fetch_add(1, Ordering::SeqCst);
             Ok(vec![PdfRect::default(); usize::try_from(actual).unwrap_or(usize::MAX)])
         }
@@ -1000,9 +1053,16 @@ mod tests {
             &self,
             _: usize,
             _: u32,
+            checkpoint: &mut dyn FnMut() -> bool,
         ) -> Result<PathBoundsAllocationPlan, Error> {
             let count =
                 u32::try_from(self.path_plan_count.load(Ordering::SeqCst)).unwrap_or(u32::MAX);
+            Mock::scan_paths(
+                count,
+                &self.path_plan_scanned,
+                "path_bounds_plan_checkpoint",
+                checkpoint,
+            )?;
             Ok(PathBoundsAllocationPlan {
                 bytes: u64::from(count) * u64::try_from(std::mem::size_of::<PdfRect>()).unwrap(),
                 count,
@@ -1225,6 +1285,52 @@ mod tests {
             Err(Error::InvalidResult { operation: "image_bitmap", .. })
         ));
         assert_eq!(mock.bitmap_copies.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn path_plan_and_materialization_stop_at_fixed_checkpoint_batches() {
+        let mock = Arc::new(Mock::default());
+        mock.path_plan_count.store(600, Ordering::SeqCst);
+        mock.path_materialized_count.store(600, Ordering::SeqCst);
+        let runtime = runtime(Arc::clone(&mock), Limits::default());
+        let document = runtime.open(Arc::from(b"ok".as_slice()), None).unwrap();
+        let page = document.page(0).unwrap();
+
+        let mut plan_checkpoints = 0_usize;
+        let Err(error) = page.plan_path_bounds_with_checkpoint(&mut || {
+            plan_checkpoints += 1;
+            plan_checkpoints < 2
+        }) else {
+            panic!("plan scan should stop at its second checkpoint")
+        };
+        assert!(matches!(
+            error,
+            Error::InvalidResult { operation: "path_bounds_plan_checkpoint", .. }
+        ));
+        assert_eq!(plan_checkpoints, 2);
+        assert_eq!(
+            mock.path_plan_scanned.load(Ordering::SeqCst),
+            usize::try_from(PATH_SCAN_CHECKPOINT_OBJECTS).unwrap()
+        );
+        assert_eq!(mock.path_allocations.load(Ordering::SeqCst), 0);
+
+        mock.path_plan_scanned.store(0, Ordering::SeqCst);
+        let plan = page.plan_path_bounds().unwrap();
+        assert_eq!(mock.path_plan_scanned.load(Ordering::SeqCst), 600);
+        let mut materialize_checkpoints = 0_usize;
+        let error = plan
+            .materialize_with_checkpoint(&mut || {
+                materialize_checkpoints += 1;
+                materialize_checkpoints < 2
+            })
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidResult { operation: "path_bounds_checkpoint", .. }));
+        assert_eq!(materialize_checkpoints, 2);
+        assert_eq!(
+            mock.path_materialized_scanned.load(Ordering::SeqCst),
+            usize::try_from(PATH_SCAN_CHECKPOINT_OBJECTS).unwrap()
+        );
+        assert_eq!(mock.path_allocations.load(Ordering::SeqCst), 0);
     }
 
     #[test]
