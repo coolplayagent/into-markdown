@@ -1446,6 +1446,9 @@ fn validate_fixture_corpus(
         "ipynb",
         "json",
         "markdown",
+        "odp",
+        "ods",
+        "odt",
         "outlook-msg",
         "pdf",
         "rtf",
@@ -1678,7 +1681,11 @@ fn validate_fixture_metadata(fixture: &CorpusFixture, errors: &mut Vec<String>) 
         && (fixture.expected.error_code != "resourceLimit"
             || !matches!(
                 limit.option.as_str(),
-                "max_input_bytes" | "max_nesting_depth" | "max_table_columns" | "max_table_rows"
+                "max_input_bytes"
+                    | "max_memory_bytes"
+                    | "max_nesting_depth"
+                    | "max_table_columns"
+                    | "max_table_rows"
             )
             || limit.failing_value.checked_add(1) != Some(limit.passing_value)
             || limit.error_limit.trim().is_empty()

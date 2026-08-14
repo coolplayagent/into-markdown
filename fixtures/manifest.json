@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "2c679ba388e4710c8269b50671a41a956494baf74e7ef9dda7ea7b6a0d3bf2a6",
+    "sha256": "3db7c4bf0de4509ee06dc1366686c4e15c256c4613a1fe29cfa52cd81f56ecfd",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -21,6 +21,9 @@
     "ipynb",
     "json",
     "markdown",
+    "odp",
+    "ods",
+    "odt",
     "outlook-msg",
     "pdf",
     "pptx",
@@ -1375,6 +1378,678 @@
         "error_code": "",
         "semantic_sha256": "4cf2715adb1376bf8eb1a85af435559110df8b6d3e720f44c918318398cc8745",
         "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "odp-corrupt",
+      "format": "odp",
+      "scenario": "corrupt",
+      "path": "small/odp/corrupt.odp",
+      "bytes": 914,
+      "sha256": "14be5cd2634e674270bc52a8f8d4f4001ed884aba8d22bf6c27814362090604a",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated ODP ZIP package"
+      }
+    },
+    {
+      "id": "odp-limit",
+      "format": "odp",
+      "scenario": "limit",
+      "path": "small/odp/limit.odp",
+      "bytes": 1540,
+      "sha256": "ce007aaeee4cf1b2e3327812600e27a4dc7f69d65d2f1523b6c7fd24c170ef97",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "ODP XML crosses the exact nesting boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 6,
+          "passing_value": 7,
+          "error_limit": "max_nesting_depth",
+          "passing_semantic_sha256": "cc48588a89274842d8d58d61d0908f78aeacd709ea67846037d6f73994337d94"
+        }
+      }
+    },
+    {
+      "id": "odp-normal",
+      "format": "odp",
+      "scenario": "normal",
+      "path": "small/odp/normal.odp",
+      "bytes": 1828,
+      "sha256": "2f510b774188c9b2418cff6e61ea999c916616e1cd0e114263099671d966f804",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "33364d2a5a9a9f1cb93e22c57d6d54d31badb3247327641cfce39ca9ac180adf",
+        "description": "ODP title, positioned shape, and speaker notes"
+      }
+    },
+    {
+      "id": "odp-rotation",
+      "format": "odp",
+      "scenario": "normal",
+      "path": "small/odp/rotation.odp",
+      "bytes": 1674,
+      "sha256": "bf24b8461f48539672cffa0dccd3f6836f9a5fcb2e3abaebf26acac72bcc6e2f",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "f8d0336401a5dd25e4428cdcc547114b31d96c34dd46f51857e0b4379b9685c0",
+        "description": "finite nested affine rotation and bounds are retained"
+      }
+    },
+    {
+      "id": "odp-script-malicious",
+      "format": "odp",
+      "scenario": "malicious",
+      "path": "small/odp/script-malicious.odp",
+      "bytes": 1516,
+      "sha256": "73c166e397f980ff8b01d1b44481bfd119d8bc8703b4c760f7262b3ab2f375f0",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "empty active event nodes are rejected by the whole-tree profile"
+      }
+    },
+    {
+      "id": "odp-transform-overflow-malicious",
+      "format": "odp",
+      "scenario": "malicious",
+      "path": "small/odp/transform-overflow-malicious.odp",
+      "bytes": 1693,
+      "sha256": "8692faf7e63d58a0aebf66be5b536770f0d65b89b1aa7cd194804f936f5837c8",
+      "media_type": "application/vnd.oasis.opendocument.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "every affine composition and transformed bound must remain finite"
+      }
+    },
+    {
+      "id": "ods-corrupt",
+      "format": "ods",
+      "scenario": "corrupt",
+      "path": "small/ods/corrupt.ods",
+      "bytes": 926,
+      "sha256": "753370afe53eb5a37694d9f3e93b4765a3eb470aa021fabb1d7802b396cd4b36",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated ODS ZIP package"
+      }
+    },
+    {
+      "id": "ods-limit",
+      "format": "ods",
+      "scenario": "limit",
+      "path": "small/ods/limit.ods",
+      "bytes": 1620,
+      "sha256": "8425a8ce646c558ca0a34ef2e5f11deb69118706073c97883efbe0358bef1c54",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "ODS repeat crosses the exact column boundary",
+        "limit": {
+          "option": "max_table_columns",
+          "failing_value": 2,
+          "passing_value": 3,
+          "error_limit": "max_table_columns",
+          "passing_semantic_sha256": "98ad1cbcda974034ec34248e36d970447e0a552cdfeca4c3cdb874adff156a6b"
+        }
+      }
+    },
+    {
+      "id": "ods-manifest-malicious",
+      "format": "ods",
+      "scenario": "malicious",
+      "path": "small/ods/manifest-malicious.ods",
+      "bytes": 1860,
+      "sha256": "aa5cdcc5198f63a6f6f088476471d899a2638ea9a5bda7f497ff3ac13503d3c1",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "core part manifest media type must be exact text/xml"
+      }
+    },
+    {
+      "id": "ods-normal",
+      "format": "ods",
+      "scenario": "normal",
+      "path": "small/ods/normal.ods",
+      "bytes": 1853,
+      "sha256": "3a835462fd804b3003b407c05ff6d747fff24bdf8655349d8c89a01089aa9e1b",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "34087e4a175f614e604a67f9755063363d4dda096fccf68f9bd92b7589b93864",
+        "description": "ODS sparse sheet with repeated rows and columns"
+      }
+    },
+    {
+      "id": "ods-repeat-malicious",
+      "format": "ods",
+      "scenario": "malicious",
+      "path": "small/ods/repeat-malicious.ods",
+      "bytes": 1665,
+      "sha256": "93ac045724fbdc0a171dd7d947cb628caf3e8d0d1e2cf1087d092728b8b412f4",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "repeat offset arithmetic fails closed"
+      }
+    },
+    {
+      "id": "ods-span-nested",
+      "format": "ods",
+      "scenario": "nested",
+      "path": "small/ods/span-nested.ods",
+      "bytes": 1655,
+      "sha256": "eaff5236c0d61cc75f737fddce0e58742ce22c69b383965d33eaa7835bb1e583",
+      "media_type": "application/vnd.oasis.opendocument.spreadsheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "d8bf223846629dbb60468011666b5656e8aa1bfd0d11bba700ccfd48336839ea",
+        "description": "merged cell span retains a bounded covered grid"
+      }
+    },
+    {
+      "id": "odt-central-name-extra-malicious",
+      "format": "odt",
+      "scenario": "malicious",
+      "path": "small/odt/central-name-extra-malicious.odt",
+      "bytes": 2143,
+      "sha256": "443767cc0ba4526e1b2ed2c743cd05de4999be8419d1d160c2f7bcd8cbfd276c",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "central Unicode Path extra cannot rename an authenticated raw part"
+      }
+    },
+    {
+      "id": "odt-corrupt",
+      "format": "odt",
+      "scenario": "corrupt",
+      "path": "small/odt/corrupt.odt",
+      "bytes": 1061,
+      "sha256": "b0929c6aac8ec866ed5f9d0c8b62445092ddaf01dab39fb1e785c01b9ba5835d",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated ODT ZIP package"
+      }
+    },
+    {
+      "id": "odt-encrypted",
+      "format": "odt",
+      "scenario": "encrypted",
+      "path": "small/odt/encrypted.odt",
+      "bytes": 2123,
+      "sha256": "5596ad06ac7fba87e35fc69df7c60fa4d21b6a2b2f7ae93a9ceac0e5e6cbcfcc",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "encrypted",
+        "semantic_sha256": "",
+        "description": "encrypted ODF ZIP flags are rejected before XML"
+      }
+    },
+    {
+      "id": "odt-image-exact",
+      "format": "odt",
+      "scenario": "limit",
+      "path": "small/odt/image-exact.odt",
+      "bytes": 1783,
+      "sha256": "693d828c72b5adee1286364abf15194e84bee445c903aad4886a8f2c82d755b3",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "reachable image read and decoder require an authenticated exact memory plan",
+        "limit": {
+          "option": "max_memory_bytes",
+          "failing_value": 513408767,
+          "passing_value": 513408768,
+          "error_limit": "max_memory_bytes",
+          "passing_semantic_sha256": "f4193797e682f2c822f38852f5ba0cd7ea0a8a5da2b2805821610c7c7e3bcf13"
+        }
+      }
+    },
+    {
+      "id": "odt-image-malicious",
+      "format": "odt",
+      "scenario": "malicious",
+      "path": "small/odt/image-malicious.odt",
+      "bytes": 1708,
+      "sha256": "9ca40e6aa7d30753ed2e92c0a735147727630bf00f6993a3eb42ecfff3f24766",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "referenced image must pass MIME, extension, sniff, and full decode"
+      }
+    },
+    {
+      "id": "odt-implicit-nested-list",
+      "format": "odt",
+      "scenario": "nested",
+      "path": "small/odt/implicit-nested-list.odt",
+      "bytes": 1885,
+      "sha256": "1a8b3c71588f71b8bdb066d07d6e8d2e4c7f681b02d006908023cde69d76ace0",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "907ffdcf8638ecc2ccf7c5d8a67004e281a4b4067bbf26ab01e57fa54cc9ea44",
+        "description": "nested list inherits outer style identity while header remains markerless"
+      }
+    },
+    {
+      "id": "odt-invalid-utf8-name-malicious",
+      "format": "odt",
+      "scenario": "malicious",
+      "path": "small/odt/invalid-utf8-name-malicious.odt",
+      "bytes": 2123,
+      "sha256": "ee26be9fc1e55d7d007ef64d884378fae12045b3a3ddd515a765d7368257a578",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "bit-11 raw ZIP names must be strict UTF-8"
+      }
+    },
+    {
+      "id": "odt-limit",
+      "format": "odt",
+      "scenario": "limit",
+      "path": "small/odt/limit.odt",
+      "bytes": 1458,
+      "sha256": "25180babb0b5d3d0a5163c9e7ad2d9d1a6d835e6b0ad744e0d81ef4b01518796",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "ODT XML crosses the exact nesting boundary",
+        "limit": {
+          "option": "max_nesting_depth",
+          "failing_value": 4,
+          "passing_value": 5,
+          "error_limit": "max_nesting_depth",
+          "passing_semantic_sha256": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac"
+        }
+      }
+    },
+    {
+      "id": "odt-mimetype-malicious",
+      "format": "odt",
+      "scenario": "malicious",
+      "path": "small/odt/mimetype-malicious.odt",
+      "bytes": 2123,
+      "sha256": "aec50b150d2813e4178266c09cc93feaa7dc32fd0d63aeb11272caea78a5f759",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "mimetype local data descriptor flag is rejected"
+      }
+    },
+    {
+      "id": "odt-normal",
+      "format": "odt",
+      "scenario": "normal",
+      "path": "small/odt/normal.odt",
+      "bytes": 2123,
+      "sha256": "c5ca1f895d25bde3866a7adae32a7225b3f0f35d458d04533643029b28e65c9f",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769",
+        "description": "ODT heading, styled text, list, and table"
+      }
+    },
+    {
+      "id": "odt-ranged-annotation",
+      "format": "odt",
+      "scenario": "normal",
+      "path": "small/odt/ranged-annotation.odt",
+      "bytes": 1630,
+      "sha256": "359f721fface84ca6840f2ad7ef78b93132e30b75b5673759d8fd4977ebad6e9",
+      "media_type": "application/vnd.oasis.opendocument.text",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "041f1e090f14a75c74d38cd6ecd729f0dfe3f0f8ab92d88d08b0137e1c29ae81",
+        "description": "paired ranged annotation retains safe author/date and visible text"
       }
     },
     {

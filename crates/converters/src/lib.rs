@@ -10,6 +10,7 @@ mod html;
 mod markdown;
 mod msg;
 mod notebook;
+mod odf;
 mod pdf;
 mod presentation;
 mod remote;
@@ -31,6 +32,7 @@ pub use html::HtmlConverter;
 pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
+pub use odf::OdfConverter;
 pub use pdf::PdfConverter;
 pub use presentation::PresentationConverter;
 pub use remote::{
@@ -143,19 +145,19 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Odt,
         family: "document",
         extensions: &["odt"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Ods,
         family: "document",
         extensions: &["ods"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Odp,
         family: "document",
         extensions: &["odp"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Rtf,
