@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "a1a547c485d7f4feb5ad3af1593a99aa9960f7d08b5716026a65bfafb37e0604",
+    "sha256": "da244ff6b17f192265c5e873531d5379e9d88ea6afefc5fe0a8541fd57740446",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -2081,6 +2081,34 @@
       }
     },
     {
+      "id": "pdf-layout-columns-then-table",
+      "format": "pdf",
+      "scenario": "normal",
+      "path": "small/pdf/columns-then-table.pdf",
+      "bytes": 1093,
+      "sha256": "2add643fe34b2d2a44b4d0e849d2cdc0c041fcf49d0750a42f4043f547881b66",
+      "media_type": "application/pdf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "110ceab11656b3bcb3b59ab7be15665faf86356411fee5b20649dc690428c828",
+        "description": "ambiguous broad columns remain paragraph flows before a locally styled table"
+      }
+    },
+    {
       "id": "pdf-layout-equal-dual-column",
       "format": "pdf",
       "scenario": "normal",
@@ -2106,6 +2134,34 @@
         "error_code": "",
         "semantic_sha256": "6742fe8e29e4ad49ed4424786f6af2660bcb75b70fe0249406bef26f8f4795cd",
         "description": "three broad equal-width column rows remain two paragraph flows"
+      }
+    },
+    {
+      "id": "pdf-layout-header-body-table",
+      "format": "pdf",
+      "scenario": "normal",
+      "path": "small/pdf/header-body-table.pdf",
+      "bytes": 813,
+      "sha256": "227aaa9448b01fcf51fd7fb266bb6885e6ad63b7547933e66b1db87a10cb4dcc",
+      "media_type": "application/pdf",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "b7d5054fc1d5ea041fcbf56227d741ae46d2ee523ce52f95c06ba91735e1f7a3",
+        "description": "a non-compact styled header and two compact body rows form one complete table"
       }
     },
     {

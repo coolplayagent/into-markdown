@@ -7,6 +7,7 @@ use crate::{LayoutConfig, memory};
 use into_markdown_core::{Block, BlockNode, Cell, ConversionError, Inline, NodeId, TableRow};
 use std::collections::VecDeque;
 use std::fmt::Write as _;
+use std::ops::Range;
 
 pub(crate) fn recover(
     mut lines: Vec<Line>,
@@ -34,99 +35,77 @@ pub(crate) fn recover(
     let mut total_cells = 0_usize;
     while let Some(first) = pending.pop_front() {
         budget.checkpoint_item()?;
-        let window = candidate_window(&first, &pending, config, budget)?;
-        let run = window.len();
-        if run < 2 {
-            remaining.push(first);
-            continue;
+        let run = candidate_run(first, &mut pending, config, budget)?;
+        let windows = evidence_windows(&run, budget)?;
+        let mut decisions = Vec::new();
+        decisions.try_reserve_exact(windows.len()).map_err(|_| memory("layout table decisions"))?;
+        for window in windows {
+            budget.checkpoint_item()?;
+            let rows = &run[window.clone()];
+            decisions.push((window, grid_evidence(rows, budget)?, header_likely(rows)));
         }
-        let accepted = strong_grid(&window, budget)?;
-        let header = header_likely(&window);
-        let columns = window[0].segments.len();
-        drop(window);
-        if !accepted {
-            // An ambiguous maximal window must not be reconsidered as smaller
-            // two-row slices, which could turn ordinary repeated columns into
-            // a sequence of invented tables.
-            remaining.push(first);
-            for _ in 1..run {
-                remaining.push(
-                    pending.pop_front().ok_or_else(|| memory("layout rejected table window"))?,
-                );
+        let mut cursor = 0_usize;
+        let mut owned = run.into_iter();
+        for (window, evidence, header) in decisions {
+            while cursor < window.start {
+                remaining
+                    .push(owned.next().ok_or_else(|| memory("layout table window prefix"))?.line);
+                cursor += 1;
             }
-            continue;
-        }
-        let cells = run.checked_mul(columns).ok_or_else(|| memory("layout table cells"))?;
-        total_cells = total_cells.checked_add(cells).ok_or_else(|| memory("layout table cells"))?;
-        if total_cells > config.limits.max_table_cells {
-            return Err(crate::limit(
-                "pdfLayoutTableCells",
-                format!("{total_cells} > {}", config.limits.max_table_cells),
-            ));
-        }
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(run).map_err(|_| memory("layout table rows"))?;
-        let mut owned_rows = Vec::new();
-        owned_rows.try_reserve_exact(run).map_err(|_| memory("layout source rows"))?;
-        owned_rows.push(first);
-        for _ in 1..run {
-            owned_rows.push(pending.pop_front().ok_or_else(|| memory("layout table run"))?);
-        }
-        let mut table_bounds = owned_rows[0].bounds;
-        let source_index = owned_rows[0].source_index;
-        let mut confidence = None;
-        for (row_index, row) in owned_rows.into_iter().enumerate() {
-            table_bounds = union(table_bounds, row.bounds);
-            confidence = min_confidence(confidence, confidence_of(&row));
-            let ranges = segments(&row, budget)?;
-            rows.push(materialize_row(
-                row,
-                &ranges,
+            if evidence.is_none() {
+                while cursor < window.end {
+                    remaining.push(
+                        owned.next().ok_or_else(|| memory("layout rejected table window"))?.line,
+                    );
+                    cursor += 1;
+                }
+                continue;
+            }
+            let row_count = window.end - window.start;
+            tables.push(materialize_window(
+                &mut owned,
+                row_count,
                 page,
                 width,
                 height,
                 sequence,
-                row_index,
-                header && row_index == 0,
+                header,
+                config,
+                &mut total_cells,
                 budget,
             )?);
+            cursor += row_count;
+            sequence += 1;
         }
-        tables.push(RebuiltBlock {
-            node: BlockNode {
-                id: table_id(page, sequence, None, None)?,
-                block: Block::Table { rows, alignments: Vec::new() },
-                provenance: block_provenance(page, table_bounds, width, height, confidence),
-            },
-            bounds: Some(table_bounds),
-            orientation: 0,
-            source_index,
-        });
-        sequence += 1;
+        for evidence in owned {
+            remaining.push(evidence.line);
+        }
     }
     Ok((tables, remaining))
 }
 
-fn candidate_window<'a>(
-    first: &'a Line,
-    pending: &'a VecDeque<Line>,
+/// Gather the maximal run that shares a stable column-start profile. Table
+/// evidence is deliberately not considered here: a run can contain ambiguous
+/// column text followed by a locally provable table with the same starts.
+fn candidate_run(
+    first: Line,
+    pending: &mut VecDeque<Line>,
     config: &LayoutConfig,
     budget: &mut LayoutBudget<'_>,
-) -> Result<Vec<RowEvidence<'a>>, ConversionError> {
-    let first_segments = segments(first, budget)?;
+) -> Result<Vec<RowEvidence>, ConversionError> {
+    let first_segments = segments(&first, budget)?;
+    let mut run = Vec::new();
+    run.try_reserve_exact(1).map_err(|_| memory("layout table run"))?;
     if !row_candidate(&first_segments, config) {
-        return Ok(Vec::new());
+        run.push(RowEvidence::new(first, first_segments));
+        return Ok(run);
     }
-    let mut window = Vec::new();
-    window.try_reserve_exact(1).map_err(|_| memory("layout table window"))?;
-    window.push(RowEvidence::new(first, first_segments));
-    let mut repeated_profile = None;
-    let mut all_compact = window[0].compact;
-    let mut header_profile = false;
-    for next in pending {
+    run.push(RowEvidence::new(first, first_segments));
+    while let Some(next) = pending.front() {
         let next_segments = segments(next, budget)?;
         if !row_candidate(&next_segments, config)
             || !compatible_rows(
-                window.last().ok_or_else(|| memory("layout table window"))?,
+                run.last().ok_or_else(|| memory("layout table run"))?,
                 next,
                 &next_segments,
                 budget,
@@ -134,25 +113,11 @@ fn candidate_window<'a>(
         {
             break;
         }
-        let next_evidence = RowEvidence::new(next, next_segments);
-        let repeats_first = repeated_boundaries(&window[0], &next_evidence, budget)?;
-        if window.len() >= 2
-            && (repeated_profile != Some(repeats_first)
-                || all_compact != next_evidence.compact
-                || (header_profile
-                    && window.last().is_some_and(|row| row.compact != next_evidence.compact)))
-        {
-            break;
-        }
-        window.try_reserve(1).map_err(|_| memory("layout table window"))?;
-        window.push(next_evidence);
-        all_compact &= window.last().is_some_and(|row| row.compact);
-        if window.len() == 2 {
-            repeated_profile = Some(repeats_first);
-            header_profile = header_likely(&window);
-        }
+        let next = pending.pop_front().ok_or_else(|| memory("layout table run"))?;
+        run.try_reserve(1).map_err(|_| memory("layout table run"))?;
+        run.push(RowEvidence::new(next, next_segments));
     }
-    Ok(window)
+    Ok(run)
 }
 
 #[derive(Clone, Copy)]
@@ -163,19 +128,50 @@ struct Segment {
     right: f32,
 }
 
-struct RowEvidence<'a> {
-    line: &'a Line,
+struct RowEvidence {
+    line: Line,
     segments: Vec<Segment>,
     compact: bool,
 }
 
-impl<'a> RowEvidence<'a> {
-    fn new(line: &'a Line, segments: Vec<Segment>) -> Self {
+impl RowEvidence {
+    fn new(line: Line, segments: Vec<Segment>) -> Self {
         let compact = segments
             .iter()
             .all(|segment| segment.right - segment.x <= line.bounds.height.max(1.0) * 8.0);
         Self { line, segments, compact }
     }
+}
+
+/// Partition one column-profile run into non-overlapping evidence windows.
+/// A larger-font row after body text is a stable new-header boundary. A
+/// compactness transition is also a boundary unless the wider row is a header
+/// for the compact body. This single-pass model keeps ambiguous prefixes and
+/// suffixes as text instead of either poisoning or being swallowed by a table.
+fn evidence_windows(
+    rows: &[RowEvidence],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<Vec<Range<usize>>, ConversionError> {
+    let mut ranges = Vec::new();
+    ranges.try_reserve_exact(rows.len()).map_err(|_| memory("layout evidence windows"))?;
+    let mut start = 0_usize;
+    for index in 1..rows.len() {
+        budget.compare()?;
+        if starts_evidence_window(&rows[index - 1], &rows[index]) {
+            ranges.push(start..index);
+            start = index;
+        }
+    }
+    ranges.push(start..rows.len());
+    Ok(ranges)
+}
+
+fn starts_evidence_window(previous: &RowEvidence, next: &RowEvidence) -> bool {
+    let previous_font = previous.line.font_size.unwrap_or(previous.line.bounds.height.max(1.0));
+    let next_font = next.line.font_size.unwrap_or(next.line.bounds.height.max(1.0));
+    let next_is_header = next_font >= previous_font * 1.08;
+    let previous_is_header = previous_font >= next_font * 1.08;
+    next_is_header || (previous.compact != next.compact && !previous_is_header)
 }
 
 fn segments(line: &Line, budget: &mut LayoutBudget<'_>) -> Result<Vec<Segment>, ConversionError> {
@@ -215,21 +211,32 @@ fn row_candidate(segments: &[Segment], config: &LayoutConfig) -> bool {
 /// grid through repeated starts and ends. Longer windows need independent
 /// compact-cell or header evidence; identical broad columns are deliberately
 /// ambiguous and remain paragraphs.
-fn strong_grid(
-    rows: &[RowEvidence<'_>],
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum GridEvidence {
+    RepeatedBoundaries,
+    CompactOccupancy,
+    StyledHeader,
+}
+
+fn grid_evidence(
+    rows: &[RowEvidence],
     budget: &mut LayoutBudget<'_>,
-) -> Result<bool, ConversionError> {
+) -> Result<Option<GridEvidence>, ConversionError> {
+    if rows.len() < 2 {
+        return Ok(None);
+    }
     if header_likely(rows) {
-        return Ok(true);
+        return Ok(Some(GridEvidence::StyledHeader));
     }
     if rows.len() == 2 {
-        return repeated_boundaries(&rows[0], &rows[1], budget);
+        return Ok(repeated_boundaries(&rows[0], &rows[1], budget)?
+            .then_some(GridEvidence::RepeatedBoundaries));
     }
-    Ok(rows.iter().all(|row| row.compact))
+    Ok(rows.iter().all(|row| row.compact).then_some(GridEvidence::CompactOccupancy))
 }
 
 fn compatible_rows(
-    previous: &RowEvidence<'_>,
+    previous: &RowEvidence,
     next: &Line,
     next_segments: &[Segment],
     budget: &mut LayoutBudget<'_>,
@@ -252,8 +259,8 @@ fn compatible_rows(
 }
 
 fn repeated_boundaries(
-    first: &RowEvidence<'_>,
-    next: &RowEvidence<'_>,
+    first: &RowEvidence,
+    next: &RowEvidence,
     budget: &mut LayoutBudget<'_>,
 ) -> Result<bool, ConversionError> {
     if first.segments.len() != next.segments.len() {
@@ -269,6 +276,65 @@ fn repeated_boundaries(
         }
     }
     Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_window(
+    owned: &mut std::vec::IntoIter<RowEvidence>,
+    row_count: usize,
+    page: u32,
+    width: f32,
+    height: f32,
+    sequence: usize,
+    header: bool,
+    config: &LayoutConfig,
+    total_cells: &mut usize,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<RebuiltBlock, ConversionError> {
+    let mut first = Some(owned.next().ok_or_else(|| memory("layout table window"))?);
+    let first_row = first.as_ref().ok_or_else(|| memory("layout table window"))?;
+    let columns = first_row.segments.len();
+    let cells = row_count.checked_mul(columns).ok_or_else(|| memory("layout table cells"))?;
+    *total_cells = total_cells.checked_add(cells).ok_or_else(|| memory("layout table cells"))?;
+    if *total_cells > config.limits.max_table_cells {
+        return Err(crate::limit(
+            "pdfLayoutTableCells",
+            format!("{total_cells} > {}", config.limits.max_table_cells),
+        ));
+    }
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(row_count).map_err(|_| memory("layout table rows"))?;
+    let mut table_bounds = first_row.line.bounds;
+    let source_index = first_row.line.source_index;
+    let mut confidence = None;
+    for row_index in 0..row_count {
+        budget.checkpoint_item()?;
+        let evidence =
+            first.take().or_else(|| owned.next()).ok_or_else(|| memory("layout table run"))?;
+        table_bounds = union(table_bounds, evidence.line.bounds);
+        confidence = min_confidence(confidence, confidence_of(&evidence.line));
+        rows.push(materialize_row(
+            evidence.line,
+            &evidence.segments,
+            page,
+            width,
+            height,
+            sequence,
+            row_index,
+            header && row_index == 0,
+            budget,
+        )?);
+    }
+    Ok(RebuiltBlock {
+        node: BlockNode {
+            id: table_id(page, sequence, None, None)?,
+            block: Block::Table { rows, alignments: Vec::new() },
+            provenance: block_provenance(page, table_bounds, width, height, confidence),
+        },
+        bounds: Some(table_bounds),
+        orientation: 0,
+        source_index,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -345,7 +411,7 @@ fn table_id(
     Ok(NodeId(value))
 }
 
-fn header_likely(rows: &[RowEvidence<'_>]) -> bool {
+fn header_likely(rows: &[RowEvidence]) -> bool {
     let Some(first) = rows.first().and_then(|row| row.line.font_size) else { return false };
     let Some(body) = rows.iter().skip(1).filter_map(|row| row.line.font_size).reduce(f32::midpoint)
     else {

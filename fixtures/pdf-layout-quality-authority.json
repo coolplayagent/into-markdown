@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "b2a8210e0fdc3aa491b77e7c82ec0510caa79e0af7f54d03ea1962ec53966e85",
+  "fixture_manifest_sha256": "438a1d8e6c91ef45a88534de0109cd70531dbfb2432007fec15c05e02086f185",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "1a2c2a88622a0202e79f3b1645a247ad0eb12d7029cf2da15fee2243839272c0",
+  "ocr_merge_authority_sha256": "7cd9f91844519b4a9d221fa0c8570b397527bf31d8083dace154760b039f65bb",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -72,11 +72,27 @@
       ]
     },
     {
+      "fixture_id": "pdf-layout-columns-then-table",
+      "fixture_sha256": "2add643fe34b2d2a44b4d0e849d2cdc0c041fcf49d0750a42f4043f547881b66",
+      "expected_sequence": [
+        "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "table:Table key|Table value;A|1"
+      ]
+    },
+    {
       "fixture_id": "pdf-layout-equal-dual-column",
       "fixture_sha256": "9a95f2a7093bd58cd5a0bc832434efff5419f3aab8e064334b559160764da5bd",
       "expected_sequence": [
         "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-header-body-table",
+      "fixture_sha256": "227aaa9448b01fcf51fd7fb266bb6885e6ad63b7547933e66b1db87a10cb4dcc",
+      "expected_sequence": [
+        "table:MMMMMMMMMMMMMMMMMM|NNNNNNNNNNNNNNNNNN;A|1;B|2"
       ]
     },
     {

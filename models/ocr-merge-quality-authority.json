@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "b2a8210e0fdc3aa491b77e7c82ec0510caa79e0af7f54d03ea1962ec53966e85",
+  "fixture_manifest_sha256": "438a1d8e6c91ef45a88534de0109cd70531dbfb2432007fec15c05e02086f185",
   "recognizer_authority_sha256": "bda342ad69b5add1846b5a7a5252d0479145284ad27eabf70f14f09d5df2b5c5",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",

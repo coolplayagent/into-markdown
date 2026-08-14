@@ -359,6 +359,42 @@ fn asymmetric_two_by_two_repeated_boundaries_allow_a_wide_description_cell() {
 }
 
 #[test]
+fn noncompact_header_and_two_compact_body_rows_form_one_complete_table() {
+    let input = document(
+        [
+            source_text(
+                "Long left header",
+                Rect { x: 40.0, y: 180.0, width: 130.0, height: 14.0 },
+                14.0,
+            ),
+            source_text(
+                "Long right header",
+                Rect { x: 360.0, y: 180.0, width: 130.0, height: 14.0 },
+                14.0,
+            ),
+            source_text("A", Rect { x: 40.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 360.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("B", Rect { x: 40.0, y: 230.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("2", Rect { x: 360.0, y: 230.0, width: 40.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let Block::Table { rows, .. } = &page_blocks(&actual)[0].block else {
+        panic!("header and body table")
+    };
+    assert_eq!((rows.len(), rows[0].cells.len()), (3, 2));
+    assert!(rows[0].cells.iter().all(|cell| cell.header));
+    assert_eq!(
+        rows.iter()
+            .flat_map(|row| &row.cells)
+            .map(|cell| block_text(&cell.blocks[0].block))
+            .collect::<Vec<_>>(),
+        ["Long left header", "Long right header", "A", "1", "B", "2"]
+    );
+}
+
+#[test]
 fn three_equal_broad_dual_columns_are_not_a_table() {
     let input = document(
         [
@@ -380,6 +416,40 @@ fn three_equal_broad_dual_columns_are_not_a_table() {
     assert!(!blocks.iter().any(|node| matches!(node.block, Block::Table { .. })));
     assert_eq!(block_text(&blocks[0].block), "Left one Left two Left three");
     assert_eq!(block_text(&blocks[1].block), "Right one Right two Right three");
+}
+
+#[test]
+fn broad_column_prefix_does_not_poison_following_same_profile_header_table() {
+    let input = document(
+        [
+            source_text("Left one", Rect { x: 40.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right one", Rect { x: 350.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left three", Rect { x: 40.0, y: 150.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text(
+                "Right three",
+                Rect { x: 350.0, y: 150.0, width: 210.0, height: 12.0 },
+                12.0,
+            ),
+            source_text("Table key", Rect { x: 40.0, y: 180.0, width: 210.0, height: 14.0 }, 14.0),
+            source_text(
+                "Table value",
+                Rect { x: 350.0, y: 180.0, width: 210.0, height: 14.0 },
+                14.0,
+            ),
+            source_text("A", Rect { x: 40.0, y: 210.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 350.0, y: 210.0, width: 210.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let blocks = page_blocks(&actual);
+    assert_eq!(block_text(&blocks[0].block), "Left one Left two Left three");
+    assert_eq!(block_text(&blocks[1].block), "Right one Right two Right three");
+    let Block::Table { rows, .. } = &blocks[2].block else { panic!("following table") };
+    assert_eq!((rows.len(), rows[0].cells.len()), (2, 2));
+    assert!(rows[0].cells.iter().all(|cell| cell.header));
 }
 
 #[test]

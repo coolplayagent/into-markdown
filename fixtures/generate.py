@@ -1042,6 +1042,36 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
             "table:Key,Value;A,1|paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         ),
         (
+            "pdf-layout-header-body-table",
+            pdf_document(
+                b"BT /F1 14 Tf 40 690 Td (MMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 14 Tf 360 690 Td (NNNNNNNNNNNNNNNNNN) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (B) Tj ET\n"
+                b"BT /F1 12 Tf 360 630 Td (2) Tj ET\n"
+            ),
+            "a non-compact styled header and two compact body rows form one complete table",
+            "table:MMMMMMMMMMMMMMMMMM,NNNNNNNNNNNNNNNNNN;A,1;B,2",
+        ),
+        (
+            "pdf-layout-columns-then-table",
+            pdf_document(
+                b"BT /F1 12 Tf 40 710 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 710 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 680 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 680 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 650 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 650 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 14 Tf 40 620 Td (Table key) Tj ET\n"
+                b"BT /F1 14 Tf 350 620 Td (Table value) Tj ET\n"
+                b"BT /F1 12 Tf 40 590 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 350 590 Td (1) Tj ET\n"
+            ),
+            "ambiguous broad columns remain paragraph flows before a locally styled table",
+            "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB|table:Table key,Table value;A,1",
+        ),
+        (
             "pdf-layout-rotated",
             pdf_document(
                 b"BT /F1 12 Tf 80 700 Td (Rotated first) Tj ET\n"
