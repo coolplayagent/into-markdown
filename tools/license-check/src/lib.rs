@@ -1488,39 +1488,19 @@ fn validate_fixture_corpus(
     }
     validate_fixture_generator(root, &corpus.generator, errors);
 
-    let required_formats = BTreeSet::from([
-        "csv",
-        "doc",
-        "docx",
-        "epub",
-        "feed",
-        "html",
-        "image",
-        "ipynb",
-        "json",
-        "markdown",
-        "odp",
-        "ods",
-        "odt",
-        "outlook-msg",
-        "pdf",
-        "ppt",
-        "rtf",
-        "text",
-        "tsv",
-        "wikipedia",
-        "xls",
-        "xlsx",
-        "xml",
-        "zip",
-        "pptx",
-    ]);
+    let required_formats = into_markdown_converters::core_formats()
+        .iter()
+        .map(|descriptor| descriptor.format.as_str())
+        .collect::<BTreeSet<_>>();
     let formats: BTreeSet<_> = corpus.available_formats.iter().map(String::as_str).collect();
     if formats != required_formats || formats.len() != corpus.available_formats.len() {
         errors.push(
             "fixture corpus available_formats must exactly match converter availability".to_owned(),
         );
     }
+    // Site-plugin fixtures remain audited even though they are deliberately
+    // absent from the default core capability/release declaration.
+    let fixture_only_formats = BTreeSet::from(["wikipedia"]);
 
     let mut ids = BTreeSet::new();
     let mut paths = BTreeSet::new();
@@ -1535,7 +1515,10 @@ fn validate_fixture_corpus(
         if !paths.insert(fixture.path.as_str()) || !is_safe_fixture_path(&fixture.path) {
             errors.push(format!("fixture {} has a duplicate or unsafe path", fixture.id));
         }
-        if fixture.format != "ocr-image" && !formats.contains(fixture.format.as_str()) {
+        if fixture.format != "ocr-image"
+            && !formats.contains(fixture.format.as_str())
+            && !fixture_only_formats.contains(fixture.format.as_str())
+        {
             errors.push(format!("fixture {} uses an unavailable format", fixture.id));
         }
         if !matches!(

@@ -224,6 +224,10 @@ impl SourceResolver for MediaWikiSourceResolver {
         SOURCE_ID
     }
 
+    fn priority(&self) -> i32 {
+        100
+    }
+
     fn supports(&self, input: &InputRef) -> bool {
         matches!(input, InputRef::Uri(value) if looks_like_mediawiki_article(value))
     }

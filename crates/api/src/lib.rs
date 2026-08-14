@@ -13,8 +13,10 @@ pub use into_markdown_ai::{
     ProviderError, ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
 };
 pub use into_markdown_converters::{
-    FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits, merge_pdf_ocr,
-    reconstruct_pdf_layout,
+    CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
+    FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits, RuntimeRequirement,
+    core_capabilities, core_formats, merge_pdf_ocr, reconstruct_pdf_layout,
+    verify_packaged_legacy_office_runtime, verify_pdfium_runtime,
 };
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{
@@ -28,6 +30,7 @@ pub use into_markdown_ocr::{
 pub use into_markdown_ocr::{
     MergeConfig as OcrMergeConfig, MergeLimits as OcrMergeLimits, OcrPageInput,
 };
+pub use into_markdown_onnxruntime::verify_worker_executable as verify_ocr_worker_executable;
 pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
     render as render_markdown,
@@ -44,10 +47,7 @@ pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installe
 /// non-networking provider seams.
 #[must_use]
 pub fn default_engine_builder() -> EngineBuilder {
-    default_engine_builder_with_services(Services {
-        transcriber: Some(Arc::new(into_markdown_ai::PlaceholderTranscriber)),
-        ..Services::default()
-    })
+    default_engine_builder_with_services(Services::default())
 }
 
 /// Create the standard builder with explicitly selected per-invocation services.
@@ -60,37 +60,9 @@ pub fn default_engine_builder_with_services(services: Services) -> EngineBuilder
     let mut builder = EngineBuilder::new()
         .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))
         .services(services);
-    builder
-        .registry_mut()
-        .register_source_resolver(Arc::new(into_markdown_converters::MemorySourceResolver))
-        .register_source_resolver(Arc::new(into_markdown_converters::LocalFileSourceResolver))
-        .register_source_resolver(Arc::new(into_markdown_converters::StdinSourceResolver))
-        .register_source_resolver(Arc::new(
-            into_markdown_converters::MediaWikiSourceResolver::default(),
-        ))
-        .register_source_resolver(Arc::new(into_markdown_converters::HttpSourceResolver::default()))
-        .register_format_detector(Arc::new(into_markdown_converters::MediaWikiFormatDetector))
-        .register_format_detector(Arc::new(into_markdown_converters::HintFormatDetector))
-        .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
-        .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
-        .register_converter(Arc::new(into_markdown_converters::OdfConverter))
-        .register_converter(Arc::new(into_markdown_converters::ImageConverter))
-        .register_converter(Arc::new(into_markdown_converters::DocxConverter))
-        .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
-        .register_converter(Arc::new(into_markdown_converters::EpubConverter))
-        .register_converter(Arc::new(into_markdown_converters::ZipConverter))
-        .register_converter(Arc::new(into_markdown_converters::RtfConverter))
-        .register_converter(Arc::new(into_markdown_converters::WorkbookConverter))
-        .register_converter(Arc::new(into_markdown_converters::PresentationConverter))
-        .register_converter(Arc::new(into_markdown_converters::LegacyOfficeConverter::default()))
-        .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
-        .register_converter(Arc::new(into_markdown_converters::FeedConverter))
-        .register_converter(Arc::new(into_markdown_converters::MsgConverter))
-        .register_converter(Arc::new(into_markdown_converters::MediaWikiConverter))
-        .register_converter(Arc::new(into_markdown_converters::HtmlConverter))
-        .register_converter(Arc::new(into_markdown_converters::MarkdownConverter))
-        .register_converter(Arc::new(into_markdown_converters::DelimitedTextConverter))
-        .register_converter(Arc::new(into_markdown_converters::TextConverter));
+    if let Err(error) = into_markdown_converters::register_core_components(builder.registry_mut()) {
+        builder.registry_mut().record_validation_error(error.to_string());
+    }
     builder
 }
 
@@ -114,10 +86,10 @@ pub fn default_engine_with_services(services: Services) -> Result<Engine, Conver
     default_engine_builder_with_services(services).build()
 }
 
-/// Planned converter capabilities.
+/// Registered core converter capabilities.
 #[must_use]
 pub fn planned_formats() -> &'static [FormatDescriptor] {
-    into_markdown_converters::planned_formats()
+    core_formats()
 }
 
 /// Planned AI/plugin adapters.
@@ -334,6 +306,7 @@ mod tests {
     fn mediawiki_resolver_precedence_is_unambiguous_in_engine_selection() {
         let calls = Arc::new(ResolverCalls::default());
         let mut builder = EngineBuilder::new();
+        into_markdown_converters::register_core_components(builder.registry_mut()).unwrap();
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(
@@ -367,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn default_engine_mediawiki_pipeline_has_exact_memory_boundary_and_source_inventory() {
+    fn explicitly_assembled_mediawiki_pipeline_has_exact_memory_boundary_and_source_inventory() {
         use std::io::{ErrorKind, Read, Write};
         use std::net::TcpListener;
 
@@ -402,7 +375,17 @@ mod tests {
                 }
             }
         });
-        let engine = default_engine().unwrap();
+        let mut builder =
+            EngineBuilder::new().renderer(Arc::new(into_markdown_render_markdown::GfmRenderer));
+        into_markdown_converters::register_core_components(builder.registry_mut()).unwrap();
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(
+                into_markdown_converters::MediaWikiSourceResolver::default(),
+            ))
+            .register_format_detector(Arc::new(into_markdown_converters::MediaWikiFormatDetector))
+            .register_converter(Arc::new(into_markdown_converters::MediaWikiConverter));
+        let engine = builder.build().unwrap();
         let source = format!("mediawiki+http://{address}/wiki/Rust");
         let run = |memory| {
             let mut request = ConversionRequest::new(InputRef::Uri(source.clone()));

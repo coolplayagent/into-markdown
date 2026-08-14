@@ -54,10 +54,20 @@ impl CompatibilityAdapter for RuntimeAdapter {
         let runtime = if let Some(runtime) = &self.runtime {
             runtime
         } else {
-            packaged = LegacyOfficeRuntime::packaged()?;
+            packaged = LegacyOfficeRuntime::packaged().map_err(|error| match error {
+                ConversionError::ComponentUnavailable { .. } => {
+                    ConversionError::ComponentUnavailable {
+                        component: crate::core_catalog::LEGACY_OFFICE.component.into(),
+                        detail: crate::core_catalog::LEGACY_OFFICE.install_hint.into(),
+                    }
+                }
+                error => error,
+            })?;
             &packaged
         };
-        let package = runtime.convert(bytes, source, maximum_output_bytes, context)?;
+        let package = runtime
+            .convert(bytes, source, maximum_output_bytes, context)
+            .map_err(|error| remap_packaged_runtime_error(self.runtime.is_none(), error))?;
         Ok(AdapterOutput {
             bytes: package.bytes,
             format: package.format,
@@ -66,6 +76,24 @@ impl CompatibilityAdapter for RuntimeAdapter {
             target: package.runtime.target().to_owned(),
             memory: package.memory,
         })
+    }
+}
+
+fn remap_packaged_runtime_error(packaged: bool, error: ConversionError) -> ConversionError {
+    if !packaged {
+        return error;
+    }
+    match error {
+        ConversionError::ComponentUnavailable { component, detail } => {
+            ConversionError::ComponentUnavailable {
+                component: crate::core_catalog::LEGACY_OFFICE.component.into(),
+                detail: format!(
+                    "{}; cause: {component}/{detail}",
+                    crate::core_catalog::LEGACY_OFFICE.install_hint
+                ),
+            }
+        }
+        error => error,
     }
 }
 

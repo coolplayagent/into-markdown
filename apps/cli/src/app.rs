@@ -147,7 +147,12 @@ struct FormatView<'a> {
     format: &'a str,
     family: &'a str,
     status: &'a str,
+    source: &'a str,
     extensions: &'a [&'a str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_component: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    install_hint: Option<&'a str>,
 }
 
 fn list_formats(
@@ -164,20 +169,25 @@ fn list_formats(
             format: descriptor.format.as_str(),
             family: descriptor.family,
             status: descriptor.status.as_str(),
+            source: descriptor.source.as_str(),
             extensions: descriptor.extensions,
+            runtime_component: descriptor.runtime.map(|runtime| runtime.component),
+            install_hint: descriptor.runtime.map(|runtime| runtime.install_hint),
         })
         .collect::<Vec<_>>();
     if json {
         write_json(stdout, &views)
     } else {
-        writeln!(stdout, "FORMAT\tFAMILY\tSTATUS\tEXTENSIONS")?;
+        writeln!(stdout, "FORMAT\tFAMILY\tSTATUS\tSOURCE\tRUNTIME\tEXTENSIONS")?;
         for view in views {
             writeln!(
                 stdout,
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 view.format,
                 view.family,
                 view.status,
+                view.source,
+                view.runtime_component.unwrap_or("-"),
                 view.extensions.join(",")
             )?;
         }
@@ -192,7 +202,10 @@ fn show_format(value: &str, json: bool, stdout: &mut dyn Write) -> Result<(), Cl
         format: descriptor.format.as_str(),
         family: descriptor.family,
         status: descriptor.status.as_str(),
+        source: descriptor.source.as_str(),
         extensions: descriptor.extensions,
+        runtime_component: descriptor.runtime.map(|runtime| runtime.component),
+        install_hint: descriptor.runtime.map(|runtime| runtime.install_hint),
     };
     if json {
         write_json(stdout, &view)
@@ -200,6 +213,11 @@ fn show_format(value: &str, json: bool, stdout: &mut dyn Write) -> Result<(), Cl
         writeln!(stdout, "format: {}", view.format)?;
         writeln!(stdout, "family: {}", view.family)?;
         writeln!(stdout, "status: {}", view.status)?;
+        writeln!(stdout, "source: {}", view.source)?;
+        if let Some(component) = view.runtime_component {
+            writeln!(stdout, "runtime: {component}")?;
+            writeln!(stdout, "install hint: {}", view.install_hint.unwrap_or_default())?;
+        }
         writeln!(stdout, "extensions: {}", view.extensions.join(", "))?;
         Ok(())
     }
@@ -884,17 +902,12 @@ fn run_doctor(
                 .into(),
         },
         DoctorCheck {
-            id: "onnxRuntime".into(),
-            status: "unavailable".into(),
-            detail: "audited CPU loader exists; this CLI distribution has no configured native runtime path"
-                .into(),
-        },
-        DoctorCheck {
             id: "temporaryDirectory".into(),
             status: if std::env::temp_dir().is_dir() { "ok" } else { "error" }.into(),
             detail: std::env::temp_dir().display().to_string(),
         },
     ];
+    append_core_runtime_checks(&mut checks, loaded);
     for (name, provider) in &loaded.effective.providers {
         checks.push(DoctorCheck {
             id: format!("providerEnvironment:{name}"),
@@ -940,6 +953,48 @@ fn run_doctor(
             writeln!(context.stdout, "{}\t{}\t{}", check.id, check.status, check.detail)?;
         }
         Ok(())
+    }
+}
+
+fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConfig) {
+    for capability in into_markdown::core_capabilities()
+        .iter()
+        .filter(|capability| capability.kind == into_markdown::CapabilityKind::Runtime)
+    {
+        let Some(runtime) = capability.runtime else {
+            checks.push(DoctorCheck {
+                id: capability.id.into(),
+                status: "error".into(),
+                detail: "invalid core runtime catalog entry".into(),
+            });
+            continue;
+        };
+        let available = verify_core_runtime(runtime.component, loaded);
+        checks.push(DoctorCheck {
+            id: capability.id.into(),
+            status: if available { "ok" } else { "missing" }.into(),
+            detail: if available {
+                format!("{} runtime passed its local authority verification", runtime.component)
+            } else {
+                runtime.install_hint.into()
+            },
+        });
+    }
+}
+
+fn verify_core_runtime(component: &str, loaded: &LoadedConfig) -> bool {
+    match component {
+        "pdfium" => std::env::var_os("PDFIUM_LIBRARY")
+            .is_some_and(|path| into_markdown::verify_pdfium_runtime(Path::new(&path)).is_ok()),
+        "onnxruntime" => crate::services::verify_ocr_runtime(loaded).is_ok(),
+        "legacy-office" => {
+            let context = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                loaded.options.limits.clone(),
+            );
+            into_markdown::verify_packaged_legacy_office_runtime(&context).is_ok()
+        }
+        _ => false,
     }
 }
 
@@ -2781,7 +2836,30 @@ mod tests {
         let (formats, _) = invoke(&["formats", "--json"], true).unwrap();
         let (version, _) = invoke(&["version", "--json"], true).unwrap();
         assert!(formats.contains("\"format\": \"pdf\""));
+        assert!(formats.contains("\"source\": \"core\""));
+        assert!(formats.contains("\"runtimeComponent\": \"pdfium\""));
+        assert!(!formats.contains("\"status\": \"planned\""));
+        assert!(!formats.contains("\"format\": \"wikipedia\""));
+        assert!(!formats.contains("\"format\": \"youtube\""));
         assert!(version.contains("\"name\": \"into-md\""));
+    }
+
+    #[test]
+    fn doctor_runtime_checks_come_from_the_core_catalog() {
+        let (doctor, _) = invoke(&["doctor", "--json"], true).unwrap();
+        let checks: serde_json::Value = serde_json::from_str(&doctor).unwrap();
+        let checks = checks.as_array().unwrap();
+        for (id, hint) in [
+            ("runtime.pdfium", "PDFIUM_LIBRARY"),
+            ("runtime.ocr", "models install pp-ocrv6-tiny-zh-en"),
+            ("runtime.legacy-office", "legacy Office runtime"),
+        ] {
+            let check = checks.iter().find(|check| check["id"] == id).unwrap();
+            assert!(matches!(check["status"].as_str(), Some("ok" | "missing")));
+            assert!(check["detail"].as_str().unwrap().contains(hint));
+        }
+        let ocr = checks.iter().find(|check| check["id"] == "runtime.ocr").unwrap();
+        assert_eq!(ocr["status"], "missing");
     }
 
     #[test]

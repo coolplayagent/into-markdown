@@ -97,9 +97,19 @@ impl PdfConverter {
             .or_else(|| std::env::var_os("PDFIUM_LIBRARY").map(PathBuf::from))
             .ok_or_else(|| ConversionError::ComponentUnavailable {
                 component: "pdfium".into(),
-                detail: "set PDFIUM_LIBRARY to the exact pinned runtime file".into(),
+                detail: crate::core_catalog::PDFIUM.install_hint.into(),
             })
     }
+}
+
+/// Verify an exact pinned `PDFium` file without opening a document.
+///
+/// # Errors
+///
+/// Returns a stable component error if the runtime is missing, corrupt, or
+/// incompatible with the embedded `PDFium` authority.
+pub fn verify_pdfium_runtime(path: &Path) -> Result<(), ConversionError> {
+    Pdfium::load_pinned(path, Limits::default()).map(drop).map_err(map_pdfium_error)
 }
 
 impl Converter for PdfConverter {

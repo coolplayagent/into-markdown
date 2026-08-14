@@ -1,20 +1,19 @@
-# 规划格式矩阵
+# 核心格式目录
 
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOC/DOCX/DOCM、ODT/ODS/ODP、
 PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX、XLS/XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、
 Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及
 PNG/JPEG/TIFF/WebP/BMP 图片状态为 `available`。旧 Office 格式还要求安装当前平台的受审
-runtime，缺失时返回 `componentUnavailable`；其余尚未实现的条目保持 `planned`。
+runtime，缺失时返回 `componentUnavailable`。Audio、Video、YouTube、Wikipedia/MediaWiki、
+ASR、AI provider 与插件能力不进入核心目录，也不会以 `planned` 冒充可用格式。
 
 | 类别 | 格式 |
 | --- | --- |
 | 文档 | PDF；DOC/DOCX/DOCM；PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX；XLS/XLSX/XLSM/XLSB；ODT/ODS/ODP；RTF；EPUB |
 | 文本与数据 | TXT；Markdown；HTML；CSV/TSV；JSON；XML；RSS/Atom；IPYNB |
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
-| 音频 | WAV；MP3；M4A；FLAC；OGG |
-| 视频 | MP4；MOV；MKV；WebM，通过具备相应能力的 AI 提供者处理 |
 | 容器与消息 | ZIP；Outlook MSG |
-| 远程来源 | HTTP(S)；Wikipedia；RSS；YouTube |
+| 受控输入基础 | HTTP(S) SourceResolver（默认离线，须显式网络授权） |
 
 ## 图片
 
@@ -217,6 +216,9 @@ external-only audit Asset 返回；转换器不会 fetch，未来获取仍必须
 不解释 CSS、不会调用网络服务。
 
 ## Wikipedia / MediaWiki
+
+该实现保留为可显式构造的插件 API，不由默认 Engine 静态注册，也不进入核心 formats、doctor
+或发布能力清单。插件宿主可显式注册 resolver、detector 与 converter；以下安全约束保持不变。
 
 标准 Wikipedia `http(s)://<lang>.wikipedia.org/wiki/<title>` 会进入专用远程来源；其他
 MediaWiki host 必须使用显式 `mediawiki+http(s)://host/wiki/<title>` opt-in。只接受根

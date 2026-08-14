@@ -54,6 +54,7 @@ rust_library(
     crate_name = "license_check",
     edition = "2024",
     deps = [
+        "//crates/converters",
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:sha2",

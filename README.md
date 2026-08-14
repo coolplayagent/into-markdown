@@ -78,8 +78,9 @@ metadata；确定性正文选择会诊断降级并排除导航、广告和隐藏
 SVG/MathML active content 不执行也不穿透资源；`base` 只解析引用。外部图片仅作为 canonical
 HTTP(S) audit Asset 保留，转换全程离线且绝不自动获取。
 
-Wikipedia/MediaWiki 远程来源可用，网络仍默认关闭。Wikipedia 标准根 `/wiki/<title>` 可自动
-识别；其他 host 必须使用 `mediawiki+http(s)` 显式 opt-in。最终 API URL/MIME、同源 endpoint、
+Wikipedia/MediaWiki 作为显式组装的站点插件 API 提供，不进入默认 Engine 或核心发布清单；
+网络仍默认关闭。Wikipedia 标准根 `/wiki/<title>` 可由插件识别，其他 host 必须使用
+`mediawiki+http(s)` 显式 opt-in。最终 API URL/MIME、同源 endpoint、
 完整 JSON shape 与预算均在 HTML 语义提取前验证；block provenance 通过稳定 MediaWiki provider
 关联文档级 source URL、page/revision ID 和 retrieved-at 记录，不伪造 API HTML byte locator。
 

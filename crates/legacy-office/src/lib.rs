@@ -129,6 +129,16 @@ impl LegacyOfficeRuntime {
         )))
     }
 
+    /// Verify every packaged authority entry without launching the worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable component, resource, cancellation, or timeout error if
+    /// the local runtime is missing, corrupt, unsupported, or over budget.
+    pub fn verify(&self, context: &ExecutionContext) -> Result<RuntimeIdentity, ConversionError> {
+        authority::verify(&self.config, context).map(|bundle| bundle.identity.clone())
+    }
+
     /// Convert one legacy Office payload into an audited OOXML package.
     ///
     /// # Errors

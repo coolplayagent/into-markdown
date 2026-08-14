@@ -24,6 +24,7 @@ pub struct RegistryBuilder {
     source_resolvers: Vec<Arc<dyn SourceResolver>>,
     format_detectors: Vec<Arc<dyn FormatDetector>>,
     converters: Vec<Arc<dyn Converter>>,
+    validation_errors: Vec<String>,
 }
 
 impl RegistryBuilder {
@@ -34,6 +35,10 @@ impl RegistryBuilder {
     }
 
     /// Register a source resolver.
+    ///
+    /// When multiple resolvers support an input, the highest priority wins;
+    /// equal priorities use the most recently registered resolver. This lets
+    /// an explicit plugin refine a broad built-in source class.
     pub fn register_source_resolver(&mut self, resolver: Arc<dyn SourceResolver>) -> &mut Self {
         self.source_resolvers.push(resolver);
         self
@@ -51,7 +56,17 @@ impl RegistryBuilder {
         self
     }
 
+    /// Preserve an assembly-time validation failure for fail-closed build.
+    #[doc(hidden)]
+    pub fn record_validation_error(&mut self, detail: impl Into<String>) -> &mut Self {
+        self.validation_errors.push(detail.into());
+        self
+    }
+
     fn validate(&self) -> Result<(), ConversionError> {
+        if let Some(detail) = self.validation_errors.first() {
+            return Err(ConversionError::Internal { detail: detail.clone() });
+        }
         validate_unique("source resolver", self.source_resolvers.iter().map(|v| v.id()))?;
         validate_unique("format detector", self.format_detectors.iter().map(|v| v.id()))?;
         validate_unique("converter", self.converters.iter().map(|v| v.id()))
@@ -376,12 +391,14 @@ impl Engine {
         options: &into_markdown_core::ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<into_markdown_core::ResolvedSource, ConversionError> {
-        let resolver =
-            self.source_resolvers.iter().find(|resolver| resolver.supports(input)).ok_or_else(
-                || ConversionError::Unsupported {
-                    detail: "no source resolver accepts the requested input".into(),
-                },
-            )?;
+        let resolver = self
+            .source_resolvers
+            .iter()
+            .filter(|resolver| resolver.supports(input))
+            .max_by_key(|resolver| resolver.priority())
+            .ok_or_else(|| ConversionError::Unsupported {
+                detail: "no source resolver accepts the requested input".into(),
+            })?;
         context.run(resolver.resolve_accounted(input, options, context)).await?
     }
 
@@ -1235,6 +1252,15 @@ mod tests {
             .register_source_resolver(Arc::new(BytesResolver))
             .register_source_resolver(Arc::new(BytesResolver));
         assert_eq!(builder.build().err().unwrap().code(), into_markdown_core::ErrorCode::Internal);
+    }
+
+    #[test]
+    fn assembly_validation_errors_are_preserved_until_build() {
+        let mut builder = EngineBuilder::new();
+        builder.registry_mut().record_validation_error("forged core catalog");
+        let error = builder.build().err().unwrap();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+        assert!(error.to_string().contains("forged core catalog"));
     }
 
     #[test]
