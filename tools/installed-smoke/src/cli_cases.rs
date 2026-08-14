@@ -73,6 +73,7 @@ pub(crate) fn run(
             &doctor,
             "pdf",
             "pdfium",
+            FormatRuntimeBinding::Required,
             "pdf/structures.pdf",
             &[],
             executor,
@@ -88,6 +89,7 @@ pub(crate) fn run(
             &doctor,
             "image",
             "onnxruntime",
+            FormatRuntimeBinding::ModeOptional,
             "ocr/ocr-english-clear-1.png",
             &["--ocr", "always"],
             executor,
@@ -252,6 +254,7 @@ fn optional_conversion(
     doctor: &BTreeMap<String, DoctorEntry>,
     format: &str,
     runtime_component: &str,
+    binding: FormatRuntimeBinding,
     fixture: &str,
     extra: &[&str],
     executor: &dyn Executor,
@@ -266,7 +269,16 @@ fn optional_conversion(
         .iter()
         .find(|entry| entry.component == runtime_component)
         .ok_or_else(|| "optional runtime is absent from catalog authority".to_owned())?;
-    if entry.runtime_component.as_deref().is_some_and(|value| value != runtime_component) {
+    let format_binding_matches = match binding {
+        FormatRuntimeBinding::Required => {
+            entry.runtime_component.as_deref() == Some(runtime.component.as_str())
+                && entry.install_hint.as_deref() == Some(runtime.install_hint.as_str())
+        }
+        FormatRuntimeBinding::ModeOptional => {
+            entry.runtime_component.is_none() && entry.install_hint.is_none()
+        }
+    };
+    if !format_binding_matches {
         return Err("format and runtime authority disagree".into());
     }
     let path = fixture_path(request, fixture)?;
@@ -303,6 +315,12 @@ fn optional_conversion(
     } else {
         Err("missing optional runtime did not return its exact code and installation hint".into())
     }
+}
+
+#[derive(Clone, Copy)]
+enum FormatRuntimeBinding {
+    Required,
+    ModeOptional,
 }
 
 fn doctor_id(component: &str) -> Result<&str, String> {
@@ -364,25 +382,7 @@ mod tests {
     #[test]
     fn missing_optional_runtime_requires_exact_code_exit_and_hint() {
         let (temporary, request) = fixture_request("pdf/structures.pdf");
-        let authority = CoreCatalogAuthority {
-            schema_version: 1,
-            entries_sha256: "a".repeat(64),
-            entries: vec![CoreCatalogAuthorityEntry {
-                format: "pdf".into(),
-                family: "document".into(),
-                extensions: vec!["pdf".into()],
-                status: "available".into(),
-                source: "core".into(),
-                runtime_component: Some("pdfium".into()),
-                install_hint: Some("install the pinned PDFium runtime".into()),
-            }],
-            optional_runtimes_sha256: "b".repeat(64),
-            optional_runtimes: vec![CoreRuntimeAuthorityEntry {
-                id: "runtime.pdfium".into(),
-                component: "pdfium".into(),
-                install_hint: "install the pinned PDFium runtime".into(),
-            }],
-        };
+        let authority = pdf_authority();
         let executor = FakeExecutor {
             output: std::sync::Mutex::new(Some(CommandOutput {
                 exit_code: Some(9),
@@ -397,11 +397,49 @@ mod tests {
             &BTreeMap::new(),
             "pdf",
             "pdfium",
+            FormatRuntimeBinding::Required,
             "pdf/structures.pdf",
             &[],
             &executor,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn optional_format_requires_exact_runtime_component_and_hint_authority() {
+        let (temporary, request) = fixture_request("pdf/structures.pdf");
+        let authority = pdf_authority();
+        for mutate in [
+            |entry: &mut CoreCatalogAuthorityEntry| entry.runtime_component = None,
+            |entry: &mut CoreCatalogAuthorityEntry| entry.install_hint = None,
+            |entry: &mut CoreCatalogAuthorityEntry| {
+                entry.install_hint = Some("forged installation hint".into());
+            },
+        ] {
+            let mut mutated = authority.clone();
+            mutate(&mut mutated.entries[0]);
+            let executor = FakeExecutor {
+                output: std::sync::Mutex::new(Some(CommandOutput {
+                    exit_code: Some(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })),
+            };
+            let error = optional_conversion(
+                &request,
+                temporary.path(),
+                &mutated,
+                &BTreeMap::new(),
+                "pdf",
+                "pdfium",
+                FormatRuntimeBinding::Required,
+                "pdf/structures.pdf",
+                &[],
+                &executor,
+            )
+            .unwrap_err();
+            assert_eq!(error, "format and runtime authority disagree");
+        }
     }
 
     #[test]
@@ -443,5 +481,27 @@ mod tests {
             cancel_file: None,
         };
         (temporary, request)
+    }
+
+    fn pdf_authority() -> CoreCatalogAuthority {
+        CoreCatalogAuthority {
+            schema_version: 1,
+            entries_sha256: "a".repeat(64),
+            entries: vec![CoreCatalogAuthorityEntry {
+                format: "pdf".into(),
+                family: "document".into(),
+                extensions: vec!["pdf".into()],
+                status: "available".into(),
+                source: "core".into(),
+                runtime_component: Some("pdfium".into()),
+                install_hint: Some("install the pinned PDFium runtime".into()),
+            }],
+            optional_runtimes_sha256: "b".repeat(64),
+            optional_runtimes: vec![CoreRuntimeAuthorityEntry {
+                id: "runtime.pdfium".into(),
+                component: "pdfium".into(),
+                install_hint: "install the pinned PDFium runtime".into(),
+            }],
+        }
     }
 }
