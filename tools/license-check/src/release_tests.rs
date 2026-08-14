@@ -609,6 +609,7 @@ fn sbom_input_carries_ecosystem_and_native_integrity_authority() {
 fn native_runtime_is_bound_to_target_manifest_and_download() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     select(&mut projection, &["onnxruntime-cpu"]);
+    projection.files.extend(ocr_model_files());
     projection.files.push(ArchiveFile {
         path: "lib/libonnxruntime.dylib".into(),
         bytes: 43_184_400,
@@ -661,6 +662,14 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
             embedded_components: vec![],
         },
     ]);
+    projection.files.push(ArchiveFile {
+        path: "lib/libonnxruntime.dylib".into(),
+        bytes: 43_184_400,
+        sha256: "c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc".into(),
+        kind: ArchiveFileKind::Component,
+        component_id: Some("onnxruntime-cpu".into()),
+        embedded_components: vec![],
+    });
     verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
     let mut omitted = projection.clone();
     omitted
@@ -669,10 +678,46 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
     let errors =
         verify_archive_projection(&root(), &serde_json::to_string(&omitted).unwrap()).unwrap_err();
     assert!(errors.iter().any(|error| error.contains("fixed file authority")));
-    projection.files.last_mut().unwrap().bytes -= 1;
+    projection
+        .files
+        .iter_mut()
+        .find(|file| {
+            file.component_id.as_deref() == Some("ppocrv6-tiny-recognizer-character-table")
+        })
+        .unwrap()
+        .bytes -= 1;
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("fixed file authority")));
+}
+
+fn ocr_model_files() -> [ArchiveFile; 3] {
+    [
+        ArchiveFile {
+            path: "share/models/detector/inference.onnx".into(),
+            bytes: 1_780_590,
+            sha256: "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("ppocrv6-tiny-detector-onnx-model".into()),
+            embedded_components: vec![],
+        },
+        ArchiveFile {
+            path: "share/models/recognizer/inference.onnx".into(),
+            bytes: 4_462_639,
+            sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("ppocrv6-tiny-recognizer-onnx-model".into()),
+            embedded_components: vec![],
+        },
+        ArchiveFile {
+            path: "share/models/ppocrv6_tiny_dict.txt".into(),
+            bytes: 27_156,
+            sha256: "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("ppocrv6-tiny-recognizer-character-table".into()),
+            embedded_components: vec![],
+        },
+    ]
 }
 
 #[test]

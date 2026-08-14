@@ -211,35 +211,27 @@ fn select_components<'a>(
             errors.push(format!("duplicate authority component {}", component.id));
         }
     }
+    validate_catalog_runtime_authority(inventory, &by_id, errors);
     let mut caller_ids = BTreeSet::new();
     for id in requested {
         if !caller_ids.insert(id.as_str()) {
             errors.push(format!("duplicate projected component {id}"));
         }
     }
-    let mut ids = BTreeSet::new();
     let mut selected = Vec::new();
-    let requested: Vec<&str> = inventory
+    let mut requested: BTreeSet<&str> = inventory
         .components
         .iter()
         .filter(|component| component.required_in_core)
         .map(|component| component.id.as_str())
         .chain(requested.iter().map(String::as_str))
         .collect();
+    if requested.iter().any(|id| OCR_RUNTIME_COMPONENTS.contains(id)) {
+        requested.extend(OCR_RUNTIME_COMPONENTS);
+    }
     for id in requested {
         if !safe_id(id) {
             errors.push(format!("unsafe component ID {id:?}"));
-            continue;
-        }
-        if !ids.insert(id) {
-            if inventory
-                .components
-                .iter()
-                .any(|component| component.id == id && component.required_in_core)
-            {
-                continue;
-            }
-            errors.push(format!("duplicate projected component {id}"));
             continue;
         }
         let Some(component) = by_id.get(id).copied() else {
@@ -251,6 +243,46 @@ fn select_components<'a>(
     }
     selected.sort_by_key(|component| component.id.as_str());
     selected
+}
+
+const OCR_RUNTIME_COMPONENTS: [&str; 4] = [
+    "onnxruntime-cpu",
+    "ppocrv6-tiny-detector-onnx-model",
+    "ppocrv6-tiny-recognizer-onnx-model",
+    "ppocrv6-tiny-recognizer-character-table",
+];
+
+fn validate_catalog_runtime_authority(
+    inventory: &Inventory,
+    by_id: &BTreeMap<&str, &Component>,
+    errors: &mut Vec<String>,
+) {
+    let catalog: BTreeSet<_> = into_markdown_converters::core_capabilities()
+        .iter()
+        .filter_map(|capability| capability.runtime.map(|runtime| runtime.component))
+        .collect();
+    let expected = BTreeSet::from(["legacy-office", "onnxruntime", "pdfium"]);
+    if catalog != expected {
+        errors.push(format!(
+            "core runtime catalog differs from license projection authority: {catalog:?}"
+        ));
+    }
+    for id in OCR_RUNTIME_COMPONENTS.into_iter().chain(["pdfium"]) {
+        if by_id
+            .get(id)
+            .is_none_or(|component| component.status != "reviewed" || !component.release_eligible)
+        {
+            errors.push(format!(
+                "core runtime catalog component {id} lacks reviewed release authority"
+            ));
+        }
+    }
+    if inventory.components.iter().any(|component| component.id == "legacy-office") {
+        errors.push(
+            "project-owned legacy-office worker must not be disguised as third-party inventory"
+                .to_owned(),
+        );
+    }
 }
 
 fn validate_component(component: &Component, policy: &Policy, errors: &mut Vec<String>) {
