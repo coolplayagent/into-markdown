@@ -359,7 +359,8 @@ fn cargo_package_name(path: &std::path::Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{attribute, named_rule_body};
+    use super::{attribute, named_rule_body, validate_bazel_runtime_graph};
+    use std::fs;
 
     #[test]
     fn bridge_tokens_must_belong_to_named_runtime_binary() {
@@ -370,5 +371,66 @@ rust_test(name = "decoy", deps = all_crate_deps(normal = True), compile_data = [
         let body = named_rule_body(build, "rust_binary", "into-md").unwrap();
         assert!(!attribute(body, "deps").unwrap().contains("all_crate_deps"));
         assert_eq!(attribute(body, "compile_data"), Some("[]"));
+    }
+
+    #[test]
+    fn recursive_internal_bazel_runtime_omission_is_rejected() {
+        let nonce =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("license-bazel-{}-{nonce}", std::process::id()));
+        for path in ["apps/cli", "crates/a", "crates/b"] {
+            fs::create_dir_all(root.join(path)).unwrap();
+        }
+        fs::write(
+            root.join("Cargo.lock"),
+            r#"version = 4
+[[package]]
+name = "into-markdown-cli"
+version = "0.0.0"
+dependencies = ["a"]
+[[package]]
+name = "a"
+version = "0.0.0"
+dependencies = ["b"]
+[[package]]
+name = "b"
+version = "0.0.0"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/cli/BUILD.bazel"),
+            r#"rust_binary(name = "into-md", deps = ["//crates/a"] + all_crate_deps(normal = True), compile_data = ["//web/console:checked_assets"])"#,
+        )
+        .unwrap();
+        for package in ["a", "b"] {
+            fs::write(
+                root.join(format!("crates/{package}/Cargo.toml")),
+                format!("[package]\nname = \"{package}\"\nversion = \"0.0.0\"\n"),
+            )
+            .unwrap();
+        }
+        fs::write(
+            root.join("crates/a/BUILD.bazel"),
+            r#"rust_library(name = "a", deps = ["//crates/b"] + all_crate_deps(normal = True))"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/b/BUILD.bazel"),
+            r#"rust_library(name = "b", deps = all_crate_deps(normal = True))"#,
+        )
+        .unwrap();
+        let mut errors = Vec::new();
+        validate_bazel_runtime_graph(&root, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        fs::write(
+            root.join("crates/a/BUILD.bazel"),
+            r#"rust_library(name = "a", deps = all_crate_deps(normal = True))"#,
+        )
+        .unwrap();
+        validate_bazel_runtime_graph(&root, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("runtime closure differs")));
+        fs::remove_dir_all(root).unwrap();
     }
 }
