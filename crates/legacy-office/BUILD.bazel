@@ -41,6 +41,7 @@ rust_test(
     name = "legacy_office_test",
     crate = ":legacy_office",
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    compile_data = ["//third_party/legacy-office:authority.schema.json"],
     data = [":legacy_office_test_worker"],
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal_dev = True),

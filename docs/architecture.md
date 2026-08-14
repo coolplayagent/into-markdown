@@ -103,6 +103,15 @@ renderer。几何继承和 group transform 在 converter 内确定性合成，�
 编号写入每个 material node 的 SourceLocator。转换期间的 package/parser/geometry/codec 峰值
 在物化前由 request context 预留；返回时同一 reservation 经中央 retained estimator 认证并
 收缩为 opaque output lease，typed IR 校验也在独立 working-set preflight 后执行。
+旧 Office 兼容层是另一条独立、单向依赖链：`crates/legacy-office` 拥有 runtime authority、
+length-prefixed protocol、父进程生命周期、平台 sandbox 与窄 LibreOfficeKit C ABI；
+`crates/converters::legacy_office` 只负责 DOC/PPT/XLS probe、调用 worker、nested OOXML dispatch
+和 provenance remap。worker 不依赖 converter、engine 或 renderer；converter 不接触 native ABI，
+也不能给 worker 传 `Services`。一份源文件对应一个新进程和一个 request/response，终态前必须
+kill/wait 或正常 wait，因此 native global state、崩溃与临时 profile 不跨请求复用。
+Windows 启动器使用显式 `CreateProcessW` attribute list，把三个标准流列为唯一可继承 handle，
+在 suspended 状态下先绑定单进程 Job、复核 AppContainer token SID，再恢复主线程；失败路径统一
+terminate/wait。AppContainer profile 与 runtime ACL 是平台安装事务的输入，不由请求动态修改。
 
 AI 提供者不能返回无法追踪的整篇重写文档。它只能返回带 AI 溯源信息的新节点，
 或带版本的 `DocumentPatch`；引擎验证补丁后才能应用。原始来源节点始终可审计。
@@ -197,16 +206,6 @@ worker 在 OS hard memory limit 生效后才加载 ORT 和模型。缓存 key �
 bytes，预算直到底层 session 的最后一个 `Arc` 完成析构才释放；因此在途 clone 不会因
 LRU eviction 被误算为空闲。加载失败、panic 或取消会同时移除 loading entry 和预留，
 不会污染缓存。GPU 仅保留独立构建 feature 名称，默认 CPU artifact 不包含 GPU provider。
-
-旧 Office 兼容层是另一条独立、单向依赖链：`crates/legacy-office` 拥有 runtime authority、
-length-prefixed protocol、父进程生命周期、平台 sandbox 与窄 LibreOfficeKit C ABI；
-`crates/converters::legacy_office` 只负责 DOC/PPT/XLS probe、调用 worker、nested OOXML dispatch
-和 provenance remap。worker 不依赖 converter、engine 或 renderer；converter 不接触 native ABI，
-也不能给 worker传 `Services`。一份源文件对应一个新进程和一个 request/response，终态前必须
-kill/wait 或正常 wait，因此 native global state、崩溃与临时 profile 不跨请求复用。
-Windows 启动器使用显式 `CreateProcessW` attribute list，把三个标准流列为唯一可继承 handle，
-在 suspended 状态下先绑定单进程 Job、复核 AppContainer token SID，再恢复主线程；失败路径统一
-terminate/wait。AppContainer profile 与 runtime ACL 是平台安装事务的输入，不由请求动态修改。
 张量边界统一限制每侧 64 个名称、256 字节名称和 rank 16；run 预算覆盖输入值/shape
 副本、调用槽位、native 最大输出、返回值/shape 副本和 scratch。IPC 使用固定 header、
 protocol version、单调 request id 与有界消息/载荷。worker 通过 `ort-sys` API table 先把

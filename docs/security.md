@@ -25,6 +25,24 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   closed。stream chain 必须与声明长度所需 sector 数完全一致。CID 和 HTML 外链不触发网络；
   只有 exact canonical CID 引用可绑定通过 MIME 与结构审计的唯一 PNG/JPEG，未引用或非图片
   CID 按普通附件处理；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
+- 旧 Office 的 native 兼容解析只在单请求 `legacy-office-worker` 中发生。父进程先双向校验
+  `authority.json` 与完整 runtime tree，拒绝额外文件、symlink/reparse、许可或 ABI/export
+  漂移；worker 在加载 native library 前再次核对 authority hash、完整 tree 与 kit hash。环境从
+  空集合启动，参数均为 canonical absolute path，不读取 `PATH`、HOME、代理、loader 或当前目录
+  authority。协议具有固定 magic/version/kind/request-id、checked 64-bit payload length、完整
+  SHA-256 和 EOF exhaustion；格式混淆、尾随帧与超限输出 fail closed。
+  worker 在读取敌意正文前安装 hard address/file/descriptor limits 与平台 sandbox：macOS seatbelt
+  固定 deny network/fork/exec 且只开放受审 bundle/temp/system-read roots，Linux 使用 Landlock 加
+  seccomp（网络、非线程 clone、exec、ptrace、mount 等拒绝），Windows 要求使用预置 profile 的
+  零 capability AppContainer：`CreateProcessW` 只继承 stdin/stdout/stderr，suspended process 先
+  进入 process-memory/active-process=1/kill-on-close Job，复核 token SID 后才 resume；runtime DLL
+  搜索仅允许 authority kit directory 与 System32。profile/ACL 的创建、原子替换和删除属于平台
+  安装事务，转换请求绝不修改。任一证明不可用都返回 `componentUnavailable`，不降级为本进程解析。
+  父进程对取消、deadline、崩溃、协议错误均终止独立 process group/job 并 wait/reap；私有
+  temporary root 在 worker 运行与退出前持续扫描 entry/depth/declared bytes，超过同一请求已预留
+  上限或出现 symlink/special file 会立即终止 worker；input/output/profile 在成功或失败后共同释放。
+  宏以最高 security level 禁用，sandbox 同时阻止外链、任意文件读取与子进程；normalized package
+  受 memory/temporary/file size 和 SHA-256 约束后才进入 nested converter。
 - PresentationML 只沿 root officeDocument 与 slide order 可达的受授权关系图按需解压；未知或
   未引用 payload 不进入内存。VBA、ActiveX、OLE 与 embedded package 目标同时按 content type
   和关系 type 在解压前隔离，即使目标重命名或伪装为 octet-stream 也不能绕过。所有外部关系
@@ -81,25 +99,6 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   实际 capacity 补差的 `Vec`；destination 结束后原地排序/去重，正文只做 binary search。
   容器内 RTF helper 不接受 `Services`，不能重建 context 或重置 limit，返回值继续持有同一
   request memory lease。
-- 旧 Office 的 native 兼容解析只在单请求 `legacy-office-worker` 中发生。父进程先双向校验
-  `authority.json` 与完整 runtime tree，拒绝额外文件、symlink/reparse、许可或 ABI/export
-  漂移；worker 在加载 native library 前再次核对 authority hash、完整 tree 与 kit hash，环境从空集合启动，参数均为 canonical absolute path，不读取
-  `PATH`、HOME、代理、loader 或当前目录 authority。协议具有固定 magic/version/kind/request-id、
-  checked 64-bit payload length、完整 SHA-256 和 EOF exhaustion；格式混淆、尾随帧与超限输出
-  fail closed。worker 在读取敌意正文前安装 hard address/file/descriptor limits 与平台 sandbox：
-  macOS seatbelt 固定 deny network/fork/exec 且只开放受审 bundle/temp/system-read roots，Linux
-  使用 Landlock 加 seccomp（网络、非线程 clone、exec、ptrace、mount 等拒绝），Windows 要求
-  使用预置 profile 的零 capability AppContainer：`CreateProcessW` 只继承 stdin/stdout/stderr，
-  suspended process 先进入 process-memory/active-process=1/kill-on-close Job，复核 token SID 后才
-  resume；runtime DLL 搜索仅允许 authority kit directory 与 System32。profile/ACL 的创建、原子
-  替换和删除属于平台安装事务，转换请求绝不修改。任一证明不可用都返回
-  `componentUnavailable`，不降级为本进程解析。
-  父进程对取消、deadline、崩溃、协议错误均终止独立 process group/job 并 wait/reap；私有
-  temporary root 在 worker 运行与退出前持续扫描 entry/depth/declared bytes，超过同一请求已预留
-  上限或出现 symlink/special file 会立即终止 worker；input/output/profile 在成功或失败后共同释放。
-  宏以最高 security level
-  禁用，sandbox 同时阻止外链、任意文件读取与子进程；normalized package 受 memory/temporary/
-  file size 和 SHA-256 约束后才进入 nested converter。
 - TXT 自动探测按候选字符集增量解码完整输入；除 TAB、LF、CR 外，NUL、C0、DEL 或 C1
   都会拒绝自动候选，多字节编码不能借原始字节形态绕过规则。BOM 仅决定候选编码，
   不能绕过完整控制字符扫描、有界严格解码与文本安全阈值。结构化文本、具备三行及

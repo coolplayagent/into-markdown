@@ -62,6 +62,7 @@ rust_test(
         "@crates//:html5ever",
         "@crates//:image",
         "@crates//:flate2",
+        "@crates//:futures",
         "@crates//:libc",
         "@crates//:pulldown-cmark",
         "@crates//:quick-xml",

@@ -15,7 +15,7 @@ fn fixture_worker() -> PathBuf {
     let runfiles = PathBuf::from(std::env::var_os("TEST_SRCDIR").expect("Bazel runfiles root"));
     runfiles
         .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()))
-        .join("crates/legacy-office/legacy-office-test-worker")
+        .join("crates/legacy-office/legacy_office_test_worker")
 }
 
 fn configured_runtime() -> (tempfile::TempDir, LegacyOfficeRuntime) {
