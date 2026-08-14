@@ -24,4 +24,5 @@ filegroup(
         "//conditions:default": [],
     }),
     tags = ["manual"],
+    visibility = ["//crates/converters:__pkg__"],
 )

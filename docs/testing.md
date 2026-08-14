@@ -119,7 +119,8 @@ detector runtime artifact 而不可用。
 OCR-to-IR merge 另有显式
 `//crates/onnxruntime:ppocrv6_merge_quality`：它先核对 #55 manifest、12 图和 merge quality
 authority 的 hash，在内存施加固定 contrast/speckle 退化，执行官方 recognizer，再把
-source-index 0 与 authority 整图 polygon 送入真实 policy/geometry/dedup/IR merge，按
+source-index 0 与 authority 整图 polygon 送入真实 policy/geometry/dedup/IR merge，并经过
+PDF 页面级最终布局重建，按
 NFC+去 Unicode whitespace 计算 431 字符 aggregate CER 并要求不高于 15%。该目标明确不
 声称运行 detector 模型；缺少 detector runtime artifact 时也不会用 fake tensor 冒充。
 
@@ -140,6 +141,20 @@ PDFIUM_NATIVE_SMOKE=1 PDFIUM_AUDIT_NETWORK=1 ./tools/pdfium-audit.sh --native-sm
 代码；它有界解析并精确核对四个平台的格式、架构、SONAME/install name、imports 与
 RPATH。普通 `//...` 不包含这些 manual targets。native adapter 的输出检查在任何
 `GetTensorMutableData`、slice 或 Rust 值复制前完成，超界输出直接释放 native value。
+
+PDF 页面布局质量由独立 authority 绑定 fixture manifest、PDFium runtime manifest 和 OCR
+merge quality authority。显式 target 通过 production `PdfConverter` 读取三个真实 PDF，精确
+核对多栏、旋转、标题、列表与表格语义序列，并要求语义 precision/recall 均不低于 90%；同一
+输入重复转换必须得到 byte-identical IR。四个受支持配置分别执行：
+
+```shell
+bazel test --config=macos_arm64 //crates/converters:pdf_layout_quality
+bazel test --config=linux_x86_64 //crates/converters:pdf_layout_quality
+bazel test --config=linux_arm64 //crates/converters:pdf_layout_quality
+bazel test --config=windows_x86_64 //crates/converters:pdf_layout_quality
+```
+
+该 target 为显式 manual gate；普通 build/test 不下载或映射 PDFium。
 
 常用定向命令如下：
 

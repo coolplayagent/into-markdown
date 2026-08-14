@@ -16,11 +16,14 @@ fn explicit_quality_target_requires_pinned_artifacts() {}
     reason = "the hash-bound quality authority uses small fixture dimensions and exact numeric parameters"
 )]
 mod quality {
-    use into_markdown_core::{ExecutionContext, ExecutionOptions, OcrPolicy, ResourceLimits};
+    use into_markdown_core::{
+        Block, BlockNode, ConverterOutput, Document, ExecutionContext, ExecutionOptions, NodeId,
+        OcrPolicy, Provenance, ProvenanceKind, ResourceLimits, SourceLocator,
+    };
     use into_markdown_ocr::{
         AcquiredModelArtifact, ManifestModelResolver, MergeConfig, ModelAcquisition, ModelFetcher,
         ModelManager, ModelManagerError, OcrPageInput, PpOcrTextRecognizer, RecognitionConfig,
-        RuntimeArtifact, merge_document,
+        RuntimeArtifact,
     };
     use into_markdown_onnxruntime::{OrtSessionFactory, RuntimeLibrary};
     use sha2::{Digest, Sha256};
@@ -164,14 +167,15 @@ mod quality {
                 recognizer.recognize_page(view, &detection, None, &context),
             )
             .unwrap();
-            let output = merge_document(
-                into_markdown_core::Document::default(),
+            let output = into_markdown_converters::merge_pdf_ocr(
+                ConverterOutput::new(pdf_document(width, height), Vec::new(), Vec::new()),
                 &[OcrPageInput::new(detection, recognized).unwrap()],
                 &MergeConfig {
                     policy: OcrPolicy::Always,
                     minimum_confidence: 0.0,
                     ..MergeConfig::default()
                 },
+                &into_markdown_converters::PdfLayoutConfig::default(),
                 &context,
             )
             .unwrap();
@@ -218,6 +222,28 @@ mod quality {
                 group_cer <= group["maximum_cer"].as_f64().unwrap(),
                 "degraded merge group {name} CER {group_cer:.6}"
             );
+        }
+    }
+
+    fn pdf_document(width: usize, height: usize) -> Document {
+        let provenance = Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: "builtin.converter.pdfium".into(),
+            locator: SourceLocator {
+                page: Some(1),
+                page_width: Some(width as f32),
+                page_height: Some(height as f32),
+                ..SourceLocator::default()
+            },
+            confidence: None,
+        };
+        Document {
+            blocks: vec![BlockNode {
+                id: NodeId("pdf-page-1".into()),
+                block: Block::Page { number: 1, blocks: Vec::new() },
+                provenance,
+            }],
+            ..Document::default()
         }
     }
 

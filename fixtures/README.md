@@ -26,11 +26,13 @@ opaque upstream workbook. Across the slice, the normal cases bind 1900/1904 date
 formula-cache semantics, inert macro parts, and repeated image anchors; corrupt and limit cases
 bind duplicate physical-sheet authority, truncated OPC/BIFF12 structure, and row-budget ±1.
 
-PDF is the one native-runtime format: its Apache-2.0 text, mixed, scanned, encrypted, damaged,
-over-page-limit, link, and four-rotation fixtures are generated deterministically by the Rust test
-module and executed only by the explicit pinned-PDFium smoke. Keeping those bytes out of the
-ordinary manifest lets the default Cargo/Bazel corpus remain offline and runtime-independent while
-the registry still declares PDF available.
+PDF is the one native-runtime format. Most text, mixed, scanned, encrypted, damaged,
+over-page-limit, link, and four-rotation samples remain deterministic in-memory Rust fixtures for
+the explicit pinned-PDFium smoke. Three repository-generated Apache-2.0 layout PDFs are also bound
+to this manifest and `pdf-layout-quality-authority.json`: they exercise multiple columns, rotated
+text, headings, lists, and tables through the production converter. Ordinary Cargo/Bazel tests only
+audit those bytes and remain offline; the explicit PDF layout quality target maps the pinned PDFium
+runtime and checks exact semantic goldens plus precision and recall thresholds.
 
 Outlook MSG fixtures are produced entirely by `fixtures/generate.py --msg-only`. The deterministic
 writer creates CFB directory, FAT, miniFAT and MAPI property streams from repository-authored names,

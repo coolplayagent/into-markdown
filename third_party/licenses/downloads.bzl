@@ -4,6 +4,7 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file"
 
 def _downloads_impl(module_ctx):
     manifest = json.decode(module_ctx.read(Label("//third_party/licenses:downloads.json")))
+    pdfium_manifest = json.decode(module_ctx.read(Label("//third_party/pdfium:manifest.json")))
     if manifest.get("schema_version") != 1:
         fail("unsupported third-party download manifest schema")
 
@@ -51,16 +52,22 @@ def _downloads_impl(module_ctx):
         http_archive(name = item["repository"], **args)
 
     for item in manifest.get("pdfium_archives", []):
+        target = pdfium_manifest.get("targets", {}).get(item["target"])
+        if not target or target.get("archive_sha256") != item["sha256"]:
+            fail("PDFium download and runtime authorities disagree for " + item["target"])
+        library = target.get("library")
+        if not library:
+            fail("PDFium runtime authority is missing its library path for " + item["target"])
         http_archive(
             name = item["repository"],
             build_file_content = """
 exports_files(glob(["**"]), visibility = ["//visibility:public"])
 filegroup(
     name = "distribution",
-    srcs = glob(["lib/**", "bin/**", "LICENSE", "licenses/**"]),
+    srcs = ["%s"] + glob(["LICENSE", "licenses/**"]),
     visibility = ["//visibility:public"],
 )
-""",
+""" % library,
             sha256 = item["sha256"],
             urls = [item["url"]],
         )

@@ -11,6 +11,7 @@ members = [
     "crates/http-transport",
     "crates/ocr",
     "crates/onnxruntime",
+    "crates/pdf-layout",
     "crates/pdfium",
     "crates/render-markdown",
     "crates/task-store",

@@ -7,7 +7,10 @@ pub use into_markdown_ai::{
     OpenAiCompatibleClient, OpenAiCompatibleConfig, ProviderConfig, ProviderError,
     ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
 };
-pub use into_markdown_converters::{FormatDescriptor, FormatStatus};
+pub use into_markdown_converters::{
+    FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits, merge_pdf_ocr,
+    reconstruct_pdf_layout,
+};
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{
     Engine, EngineBuilder, RecoveryStore, RecoveryToken, RegistryBuilder, TaskCheckpoint, TaskPhase,
@@ -16,6 +19,9 @@ pub use into_markdown_ocr::{
     AcquiredModelArtifact, ArchiveMember, CharacterSet, DataDirectoryEnvironment, ModelAcquisition,
     ModelArtifact, ModelBundle, ModelFetcher, ModelManager, ModelManagerError, ModelManifest,
     ModelStatus, ProductTarget, RuntimeArtifact, model_data_directory,
+};
+pub use into_markdown_ocr::{
+    MergeConfig as OcrMergeConfig, MergeLimits as OcrMergeLimits, OcrPageInput,
 };
 pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,

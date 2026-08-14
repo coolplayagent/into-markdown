@@ -12,6 +12,8 @@ rust_library(
     deps = [
         "//crates/core",
         "//crates/pdfium",
+        "//crates/pdf-layout:pdf_layout",
+        "//crates/ocr",
         "//crates/http-transport:http_transport",
         "@crates//:base64",
         "@crates//:calamine",
@@ -46,6 +48,8 @@ rust_test(
     deps = [
         "//crates/core",
         "//crates/pdfium",
+        "//crates/pdf-layout:pdf_layout",
+        "//crates/ocr",
         "//crates/http-transport:http_transport",
         "//crates/render-markdown:render_markdown",
         "@crates//:base64",
@@ -67,4 +71,54 @@ rust_test(
         "@crates//:winapi-util",
         "@crates//:zip",
     ],
+)
+
+# Explicit pinned-PDFium semantic layout quality gate. Ordinary builds do not
+# download or map the native runtime.
+rust_test(
+    name = "pdf_layout_quality",
+    srcs = ["tests/pdf_layout_quality.rs"],
+    crate_name = "pdf_layout_quality",
+    edition = "2024",
+    rustc_flags = ["--cfg=pdf_layout_quality"],
+    tags = ["manual"],
+    compile_data = [
+        "//fixtures:manifest.json",
+        "//fixtures:pdf-layout-quality-authority.json",
+        "//third_party/pdfium:manifest.json",
+    ],
+    data = [
+        "//fixtures:corpus",
+        "//third_party/pdfium:manifest.json",
+        "//third_party/pdfium:runtime_for_target",
+    ],
+    deps = [
+        ":converters",
+        "//crates/core",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:unicode-normalization",
+    ],
+    rustc_env = select({
+        "//third_party/pdfium:is_macos_arm64": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "lib/libpdfium.dylib",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_macos_arm64",
+        },
+        "//third_party/pdfium:is_linux_x86_64": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "lib/libpdfium.so",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_linux_x86_64",
+        },
+        "//third_party/pdfium:is_linux_arm64": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "lib/libpdfium.so",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_linux_arm64",
+        },
+        "//third_party/pdfium:is_windows_x86_64": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "bin/pdfium.dll",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_windows_x86_64",
+        },
+        "//conditions:default": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "unsupported",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "unsupported",
+        },
+    }),
 )

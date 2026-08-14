@@ -309,7 +309,7 @@ fn corpus_available_formats_match_the_product_registry() {
 fn corpus_contracts_execute_through_real_converters() {
     let mut failures = Vec::new();
     for fixture in manifest().fixtures {
-        if fixture.format == "ocr-image" {
+        if matches!(fixture.format.as_str(), "ocr-image" | "pdf") {
             continue;
         }
         let _ = (

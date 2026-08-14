@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "fixture_manifest_sha256": "de6cd49bec55a7306852748c0fd69dc18a645cfc660224ed8d34a4af2ba333ec",
+  "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
+  "ocr_merge_authority_sha256": "5579d098cf382c86353c1045ede6816f033edb92bf6518e9a802eb3fa0aa6df7",
+  "fixture_license": "Apache-2.0",
+  "fixture_provenance": "repository-generated",
+  "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
+  "normalization": "unicode-nfc-collapse-whitespace",
+  "minimum_semantic_precision": 0.90,
+  "minimum_semantic_recall": 0.90,
+  "pipeline": [
+    "pinned-pdfium-character-and-geometry-extraction",
+    "bounded-native-and-ocr-page-layout",
+    "document-ir-validation"
+  ],
+  "fixtures": [
+    {
+      "fixture_id": "pdf-layout-multicolumn",
+      "fixture_sha256": "53eb49d0df854c57bd07d5d1574f6dc7b31f4474498b01116f7e874d1bdd25d6",
+      "expected_sequence": [
+        "heading:Layout title",
+        "paragraph:Left one Left two",
+        "paragraph:Right one Right two"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-structures",
+      "fixture_sha256": "0264ab4b63ba13a3fe91b13d154be8dcc3f1eab26b97bf45ac7213d78d99472d",
+      "expected_sequence": [
+        "heading:Section",
+        "list:Alpha|Beta",
+        "table:Name|Value;A|1",
+        "footnote:Repository footnote"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-rotated",
+      "fixture_sha256": "57d6aa0d6cac8bbc1f6ee08fa7a3f95aba9280e3224be5748912a85e7a9e9729",
+      "expected_sequence": [
+        "paragraph:Rotated first Rotated second"
+      ]
+    }
+  ]
+}

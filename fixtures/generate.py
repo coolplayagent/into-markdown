@@ -888,6 +888,95 @@ def presentation_fixtures(root: Path) -> list[dict[str, object]]:
         ),
     ])
     return fixtures
+def pdf_document(content: bytes, *, rotation: int = 0) -> bytes:
+    """Build one deterministic, uncompressed PDF with repository-authored text."""
+    rotation_entry = f" /Rotate {rotation}" if rotation else ""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800]"
+            f"{rotation_entry} /Resources << /Font << /F1 5 0 R >> >>"
+            " /Contents 4 0 R >>"
+        ).encode("ascii"),
+        b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n"
+        + content
+        + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    output = bytearray(b"%PDF-1.4\n%\x80\x80\x80\x80\n")
+    offsets: list[int] = []
+    for index, item in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(item)
+        output.extend(b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        output.extend(f"{offset:010} 00000 n \n".encode("ascii"))
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(output)
+
+
+def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
+    fixtures = [
+        (
+            "pdf-layout-multicolumn",
+            pdf_document(
+                b"BT /F1 24 Tf 60 750 Td (Layout title) Tj ET\n"
+                b"BT /F1 12 Tf 40 690 Td (Left one) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (Right one) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Left two) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (Right two) Tj ET\n"
+            ),
+            "heading followed by complete left and right columns",
+            "heading:Layout title|paragraph:Left one Left two|paragraph:Right one Right two",
+        ),
+        (
+            "pdf-layout-structures",
+            pdf_document(
+                b"BT /F1 24 Tf 40 750 Td (Section) Tj ET\n"
+                b"BT /F1 12 Tf 50 690 Td (- Alpha) Tj ET\n"
+                b"BT /F1 12 Tf 50 665 Td (- Beta) Tj ET\n"
+                b"BT /F1 13 Tf 50 590 Td (Name) Tj ET\n"
+                b"BT /F1 13 Tf 150 590 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 50 565 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 150 565 Td (1) Tj ET\n"
+                b"BT /F1 9 Tf 50 50 Td (1 Repository footnote) Tj ET\n"
+            ),
+            "heading, two-item list, two-by-two table, and bottom footnote",
+            "heading:Section|list:Alpha,Beta|table:Name,Value;A,1|footnote:Repository footnote",
+        ),
+        (
+            "pdf-layout-rotated",
+            pdf_document(
+                b"BT /F1 12 Tf 80 700 Td (Rotated first) Tj ET\n"
+                b"BT /F1 12 Tf 80 670 Td (Rotated second) Tj ET\n",
+                rotation=90,
+            ),
+            "declared page rotation retains source text order and bounds",
+            "paragraph:Rotated first Rotated second",
+        ),
+    ]
+    return [
+        generated_fixture(
+            root,
+            fixture_id,
+            "pdf",
+            "normal",
+            f"small/pdf/{fixture_id.removeprefix('pdf-layout-')}.pdf",
+            data,
+            "application/pdf",
+            expected_hash(description, sha256(golden.encode("utf-8"))),
+        )
+        for fixture_id, data, description, golden in fixtures
+    ]
 
 
 def patch_encrypted_flag(archive: bytes) -> bytes:
@@ -1284,6 +1373,7 @@ def build(root: Path, font_path: Path) -> None:
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
     fixtures.extend(write_msg_fixtures(root))
+    fixtures.extend(write_pdf_fixtures(root))
 
     epub_normal = epub3(
         b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Corpus chapter</title></head>'
@@ -1414,6 +1504,11 @@ def main() -> None:
         help="regenerate only the self-contained PresentationML subset and update its manifest records",
     )
     parser.add_argument(
+        "--pdf-only",
+        action="store_true",
+        help="regenerate repository-authored PDF layout fixtures and their manifest records",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="regenerate in a temporary directory and require byte equality with checked-in authority",
@@ -1475,9 +1570,21 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         return
+    if args.pdf_only:
+        manifest_path = output_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["fixtures"] = [
+            fixture for fixture in manifest["fixtures"] if fixture["format"] != "pdf"
+        ] + write_pdf_fixtures(output_root)
+        manifest["fixtures"].sort(key=lambda item: str(item["id"]))
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
     if args.font is None:
         parser.error(
-            "--font is required unless --refresh-odf, --msg-only, or --presentation-only is selected"
+            "--font is required unless --refresh-odf, --msg-only, --presentation-only, or --pdf-only is selected"
         )
     if not args.verify:
         build(output_root, args.font.resolve())
