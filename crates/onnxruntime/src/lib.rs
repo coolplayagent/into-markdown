@@ -230,6 +230,17 @@ pub struct OrtSessionFactory {
     worker_executable: PathBuf,
 }
 
+/// Verify the exact worker path used by isolated OCR sessions without
+/// starting a process.
+///
+/// # Errors
+///
+/// Returns a stable runtime error when the path is absent, relative,
+/// non-canonical, a symlink, not a regular file, or not executable.
+pub fn verify_worker_executable(path: &Path) -> Result<(), ConversionError> {
+    worker::validate_worker_path(path)
+}
+
 impl OrtSessionFactory {
     /// Bind an explicit worker executable to the verified runtime.
     ///

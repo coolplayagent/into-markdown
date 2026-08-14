@@ -85,6 +85,12 @@ checkpoint 加载在 typed serde 前执行文件大小、JSON depth、container 
 
 ## IR 与溯源
 
+默认 Engine 由单一核心 catalog 组装。catalog 同时驱动 Rust façade、`formats`、`doctor` 与
+发布能力清单，组件条目携带稳定 ID、优先级、`core`/`optional_runtime`/`plugin` 来源边界和
+安装提示。重复 ID、非核心来源静态注册、非法优先级、runtime 冒充 available 或 converter 与
+格式覆盖漂移都会使 Engine 构建失败。站点插件、媒体、ASR 与 AI provider 不在默认注册表中；
+受控 HTTP SourceResolver 仍是核心输入基础且默认离线。
+
 IR 可表达段落、标题、富文本、嵌套列表、表格、代码、公式、脚注、图片、页面、
 幻灯片、工作表和带时间范围的媒体片段。页码、幻灯片、工作表、单元格坐标及
 时间戳保存在 `SourceLocator` 中。文本来源还可使用原始输入的半开字节范围

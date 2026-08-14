@@ -341,13 +341,20 @@ fn spawn_worker_windows(
     Ok(WorkerProcess { child, _job: job })
 }
 
-fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
+pub(crate) fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
     if !path.is_absolute() {
         return Err(ort_error("workerLaunch"));
     }
     let metadata = std::fs::symlink_metadata(path).map_err(|_| ort_error("workerLaunch"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(ort_error("workerLaunch"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(ort_error("workerLaunch"));
+        }
     }
     let canonical = path.canonicalize().map_err(|_| ort_error("workerLaunch"))?;
     if canonical != path {

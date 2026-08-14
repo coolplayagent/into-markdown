@@ -2,6 +2,7 @@
 //!
 //! Built-in source resolvers, format detectors, and converters.
 
+mod core_catalog;
 mod delimited;
 mod docx;
 mod epub;
@@ -27,6 +28,12 @@ mod zip_converter;
 #[cfg(test)]
 mod fixture_corpus_tests;
 
+pub use core_catalog::{
+    CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
+    CatalogFormatDescriptor, FormatDescriptor, FormatStatus, RuntimeRequirement, core_capabilities,
+    core_format_catalog, core_formats, register_core_components, validate_core_capabilities,
+    verify_packaged_legacy_office_runtime,
+};
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;
 pub use epub::EpubConverter;
@@ -42,7 +49,7 @@ pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use odf::OdfConverter;
-pub use pdf::PdfConverter;
+pub use pdf::{PdfConverter, verify_pdfium_runtime};
 pub use pdf_ocr::merge_pdf_ocr;
 pub use presentation::PresentationConverter;
 pub use remote::{
@@ -72,217 +79,13 @@ use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::task::{Context, Poll, Waker};
 
-/// Converter implementation status exposed by `into-md formats`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatStatus {
-    /// The architecture reserves this format but contains no parser yet.
-    Planned,
-    /// A converter is implemented and available in this build.
-    Available,
-}
-
-impl FormatStatus {
-    /// Stable lowercase display value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Planned => "planned",
-            Self::Available => "available",
-        }
-    }
-}
-
-/// User-facing format capability descriptor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FormatDescriptor {
-    /// Format family.
-    pub format: InputFormat,
-    /// User-facing group.
-    pub family: &'static str,
-    /// Recognized filename extensions.
-    pub extensions: &'static [&'static str],
-    /// Implementation status.
-    pub status: FormatStatus,
-}
-
-const PLANNED: FormatStatus = FormatStatus::Planned;
-const AVAILABLE: FormatStatus = FormatStatus::Available;
-
-const FORMATS: &[FormatDescriptor] = &[
-    FormatDescriptor {
-        format: InputFormat::Pdf,
-        family: "document",
-        extensions: &["pdf"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Doc,
-        family: "document",
-        extensions: &["doc"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Docx,
-        family: "document",
-        extensions: &["docx", "docm"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Ppt,
-        family: "document",
-        extensions: &["ppt", "pps", "pot"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Pptx,
-        family: "document",
-        extensions: &["pptx", "pptm", "ppsx", "ppsm", "potx"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Xls,
-        family: "document",
-        extensions: &["xls"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Xlsx,
-        family: "document",
-        extensions: &["xlsx", "xlsm", "xlsb"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Odt,
-        family: "document",
-        extensions: &["odt"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Ods,
-        family: "document",
-        extensions: &["ods"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Odp,
-        family: "document",
-        extensions: &["odp"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Rtf,
-        family: "document",
-        extensions: &["rtf"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Epub,
-        family: "document",
-        extensions: &["epub"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Text,
-        family: "text",
-        extensions: &["txt", "text", "log"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Markdown,
-        family: "text",
-        extensions: &["md", "markdown", "mdown"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Html,
-        family: "text",
-        extensions: &["html", "htm"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Csv,
-        family: "text",
-        extensions: &["csv"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Tsv,
-        family: "text",
-        extensions: &["tsv"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Json,
-        family: "text",
-        extensions: &["json"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Xml,
-        family: "text",
-        extensions: &["xml"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Feed,
-        family: "text",
-        extensions: &["rss", "atom"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Ipynb,
-        family: "text",
-        extensions: &["ipynb"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Image,
-        family: "media",
-        extensions: &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::Audio,
-        family: "media",
-        extensions: &["wav", "mp3", "m4a", "flac", "ogg"],
-        status: PLANNED,
-    },
-    FormatDescriptor {
-        format: InputFormat::Video,
-        family: "media",
-        extensions: &["mp4", "mov", "mkv", "webm"],
-        status: PLANNED,
-    },
-    FormatDescriptor {
-        format: InputFormat::Zip,
-        family: "container",
-        extensions: &["zip"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::OutlookMsg,
-        family: "message",
-        extensions: &["msg"],
-        status: AVAILABLE,
-    },
-    FormatDescriptor {
-        format: InputFormat::YouTube,
-        family: "remote",
-        extensions: &[],
-        status: PLANNED,
-    },
-    FormatDescriptor {
-        format: InputFormat::Wikipedia,
-        family: "remote",
-        extensions: &[],
-        status: AVAILABLE,
-    },
-];
-
-/// Complete planned format matrix.
+/// Backward-compatible access to the installed core format catalog.
+///
+/// The result intentionally contains no planned, media, site-specific, or
+/// plugin capabilities.
 #[must_use]
 pub fn planned_formats() -> &'static [FormatDescriptor] {
-    FORMATS
+    core_formats()
 }
 
 const PATH_WORKER_COUNT: usize = 4;

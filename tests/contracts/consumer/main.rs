@@ -3,8 +3,8 @@
 use into_markdown::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError,
     ConversionOptions, ConversionRequest, DetectionRequest, ExecutionContext, ExecutionOptions,
-    FormatHint, InputRef, OcrEngine, OcrRegion, OcrRequest, OcrResult, ResolvedInput,
-    ResourceLimits, SourceMetadata, SourceResolver,
+    FormatDescriptor, FormatHint, FormatStatus, InputFormat, InputRef, OcrEngine, OcrRegion,
+    OcrRequest, OcrResult, ResolvedInput, ResourceLimits, SourceMetadata, SourceResolver,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -86,6 +86,15 @@ impl SourceResolver for LegacyResolver {
 fn require_send_sync<T: ?Sized + Send + Sync>() {}
 
 fn main() {
+    // Exact legacy literal: catalog provenance must not add required fields to
+    // the public format descriptor consumed by downstream crates.
+    let format = FormatDescriptor {
+        format: InputFormat::Text,
+        family: "text",
+        extensions: &["txt"],
+        status: FormatStatus::Available,
+    };
+    std::hint::black_box(format);
     require_send_sync::<dyn SourceResolver>();
     let resolver: Arc<dyn SourceResolver> = Arc::new(LegacyResolver);
     let input = InputRef::bytes(b"consumer".as_slice(), Some("consumer.txt"));

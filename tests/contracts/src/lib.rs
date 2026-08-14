@@ -82,7 +82,6 @@ mod tests {
                 InputFormat::Image,
                 InputFormat::Zip,
                 InputFormat::OutlookMsg,
-                InputFormat::Wikipedia,
             ]
         );
 

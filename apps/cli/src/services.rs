@@ -3,7 +3,7 @@
 use crate::config::LoadedConfig;
 use crate::error::CliError;
 use into_markdown::{
-    AiMode, ExecutionContext, ExecutionOptions, InstalledOcrConfig, OcrPolicy,
+    AiMode, ConversionError, ExecutionContext, ExecutionOptions, InstalledOcrConfig, OcrPolicy,
     OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
 };
@@ -18,6 +18,28 @@ pub(crate) fn assemble(
         CliError::component(format!("cannot resolve the current executable: {error}"))
     })?;
     assemble_at(loaded, execution, &executable)
+}
+
+/// Verify the exact local OCR distribution used by conversion without any
+/// download or network access.
+pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig) -> Result<(), ConversionError> {
+    let executable =
+        std::env::current_exe().map_err(|error| ConversionError::ComponentUnavailable {
+            component: "onnxruntime".into(),
+            detail: format!("cannot resolve the current executable: {error}"),
+        })?;
+    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
+        component: "onnxruntime-worker".into(),
+        detail: "current executable has no distribution directory".into(),
+    })?;
+    into_markdown::verify_ocr_worker_executable(&directory.join(worker_name())).map_err(
+        |error| ConversionError::ComponentUnavailable {
+            component: "onnxruntime-worker".into(),
+            detail: format!("installed ONNX worker is unavailable: {error}"),
+        },
+    )?;
+    let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
+    assemble_ocr(loaded, &context, &executable).map(drop)
 }
 
 fn assemble_at(

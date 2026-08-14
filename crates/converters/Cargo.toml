@@ -15,6 +15,7 @@ html5ever.workspace = true
 image.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
+into-markdown-engine = { path = "../engine" }
 into-markdown-pdfium = { path = "../pdfium" }
 into-markdown-pdf-layout = { path = "../pdf-layout" }
 into-markdown-ocr = { path = "../ocr" }

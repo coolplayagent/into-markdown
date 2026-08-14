@@ -241,6 +241,30 @@ impl into_markdown_core::NestedConversionService for NativeNested {
 }
 
 #[test]
+fn missing_packaged_runtime_uses_catalog_component_and_install_hint() {
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let services =
+        Services { nested: Some(Arc::new(NativeNested::default())), ..Services::default() };
+    let error = futures::executor::block_on(LegacyOfficeConverter::default().convert(
+        &input(),
+        &FormatCandidate::explicit(InputFormat::Doc),
+        &options,
+        &services,
+        &context,
+    ))
+    .unwrap_err();
+    match error {
+        ConversionError::ComponentUnavailable { component, detail } => {
+            assert_eq!(component, crate::core_catalog::LEGACY_OFFICE.component);
+            assert!(detail.contains(crate::core_catalog::LEGACY_OFFICE.install_hint));
+            assert!(detail.contains("cause:"));
+        }
+        error => panic!("expected stable runtime error, got {error}"),
+    }
+}
+
+#[test]
 #[ignore = "requires an explicitly audited local LibreOffice runtime and DOC/PPT/XLS fixtures"]
 fn manual_native_three_families_enter_real_nested_converters() {
     let path = |name: &str| {

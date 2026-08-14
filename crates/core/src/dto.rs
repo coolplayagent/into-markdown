@@ -17,6 +17,7 @@
 
 use crate::{
     Asset, Diagnostic, DiagnosticSeverity, Document, Provenance, ProvenanceKind, SourceLocator,
+    ir::is_safe_container_part_name,
 };
 use base64::Engine as _;
 use serde::{
@@ -2365,8 +2366,14 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), DtoError>
             "time range start must precede end",
         ));
     }
-    if let Some(part) = &locator.part {
-        validate_bundle_path(part, &format!("{path}.part"))?;
+    if let Some(part) = &locator.part
+        && (part.len() > 1024 || !is_safe_container_part_name(part))
+    {
+        return Err(DtoError::new(
+            DtoErrorCode::InvalidField,
+            format!("{path}.part"),
+            "expected a bounded safe container-relative part name",
+        ));
     }
     Ok(())
 }
@@ -3332,6 +3339,40 @@ mod tests {
             confidence: Some(1.0),
         };
         assert_eq!(Provenance::try_from(invalid).unwrap_err().code, DtoErrorCode::InvalidField);
+    }
+
+    #[test]
+    fn locator_parts_use_container_names_not_bundle_output_names() {
+        let diagnostic = DiagnosticDto {
+            code: "presentation.dangerousPartsIgnored".into(),
+            severity: DiagnosticSeverityDto::Warning,
+            message: "isolated".into(),
+            locator: Some(SourceLocator {
+                part: Some("[Content_Types].xml".into()),
+                ..SourceLocator::default()
+            }),
+        };
+        let report = BatchReportDto::try_new(vec![BatchItemDto {
+            input: "macro.pptm".into(),
+            output: None,
+            format: Some("pptx".into()),
+            status: BatchItemStatus::Success,
+            diagnostics: vec![diagnostic],
+            error_code: None,
+            message: None,
+            warnings: vec![],
+        }])
+        .unwrap();
+        let json = report.to_json().unwrap();
+        let decoded = BatchReportDto::from_json(&json).unwrap();
+        assert_eq!(decoded.items[0].diagnostics[0].locator, report.items[0].diagnostics[0].locator);
+
+        for unsafe_part in ["../slide.xml", "/slide.xml", "C:/slide.xml", "a\\slide.xml"] {
+            let mut invalid = report.clone();
+            invalid.items[0].diagnostics[0].locator.as_mut().unwrap().part =
+                Some(unsafe_part.into());
+            assert_eq!(invalid.to_json().unwrap_err().code, DtoErrorCode::InvalidField);
+        }
     }
 
     #[test]

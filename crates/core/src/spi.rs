@@ -239,6 +239,11 @@ impl ConversionResult {
 pub trait SourceResolver: Send + Sync {
     /// Stable implementation ID.
     fn id(&self) -> &'static str;
+    /// Resolver precedence; larger values win when multiple resolvers support
+    /// the same input. Equal priorities preserve last-registration override.
+    fn priority(&self) -> i32 {
+        0
+    }
     /// Whether this resolver handles the source shape.
     fn supports(&self, input: &InputRef) -> bool;
     /// Resolve the source while enforcing request policy.

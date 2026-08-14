@@ -278,7 +278,7 @@ pub struct ConversionArgs {
 pub enum Command {
     /// Run the loopback-only local Web service.
     Ui(UiArgs),
-    /// List and inspect planned or available input formats.
+    /// List and inspect registered core input formats.
     Formats(FormatsArgs),
     /// Inspect and manage local OCR model bundles.
     Models(ModelsArgs),
