@@ -77,6 +77,11 @@ metadata；确定性正文选择会诊断降级并排除导航、广告和隐藏
 SVG/MathML active content 不执行也不穿透资源；`base` 只解析引用。外部图片仅作为 canonical
 HTTP(S) audit Asset 保留，转换全程离线且绝不自动获取。
 
+Wikipedia/MediaWiki 远程来源可用，网络仍默认关闭。Wikipedia 标准根 `/wiki/<title>` 可自动
+识别；其他 host 必须使用 `mediawiki+http(s)` 显式 opt-in。最终 API URL/MIME、同源 endpoint、
+完整 JSON shape 与预算均在 HTML 语义提取前验证；block provenance 通过稳定 MediaWiki provider
+关联文档级 source URL、page/revision ID 和 retrieved-at 记录，不伪造 API HTML byte locator。
+
 RSS 2.0 与 Atom 1.0 Feed 转换可用，提取标题、作者、时间、链接、摘要与正文，并保留每个条目的
 原始 byte provenance。HTML、`content:encoded` 与 Atom HTML/XHTML text construct 复用同一
 安全 HTML 转换器，active markup 被过滤后不会经纯文本 fallback 回显；相对 URL 按 source URI

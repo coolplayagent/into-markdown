@@ -165,6 +165,7 @@ fn format(value: &str) -> InputFormat {
         "outlook-msg" => InputFormat::OutlookMsg,
         "text" => InputFormat::Text,
         "tsv" => InputFormat::Tsv,
+        "wikipedia" => InputFormat::Wikipedia,
         "xml" => InputFormat::Xml,
         unknown => panic!("fixture uses unknown converter format {unknown}"),
     }
@@ -183,6 +184,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Feed => Box::new(FeedConverter),
         InputFormat::Rtf => Box::new(RtfConverter),
         InputFormat::OutlookMsg => Box::new(MsgConverter),
+        InputFormat::Wikipedia => Box::new(MediaWikiConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }
@@ -235,8 +237,13 @@ fn execute(
         bytes: Arc::from(bytes),
         metadata: SourceMetadata {
             name: Some(fixture.id.clone()),
-            media_type: Some(fixture.media_type.clone()),
-            uri: None,
+            media_type: Some(if fixture.format == "wikipedia" {
+                crate::remote::MEDIAWIKI_AUTHENTICATED_MEDIA_TYPE.into()
+            } else {
+                fixture.media_type.clone()
+            }),
+            uri: (fixture.format == "wikipedia")
+                .then(|| "https://en.wikipedia.org/w/api.php".into()),
             size: fixture.bytes,
         },
     };

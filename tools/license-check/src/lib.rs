@@ -1451,6 +1451,7 @@ fn validate_fixture_corpus(
         "rtf",
         "text",
         "tsv",
+        "wikipedia",
         "xml",
         "zip",
     ]);

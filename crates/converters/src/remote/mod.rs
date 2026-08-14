@@ -1,8 +1,13 @@
 //! HTTP(S) source resolver assembly.
 
+mod mediawiki;
 mod options;
 mod redirect;
 mod source_metadata;
+
+#[cfg(test)]
+pub(crate) use mediawiki::AUTHENTICATED_MEDIA_TYPE as MEDIAWIKI_AUTHENTICATED_MEDIA_TYPE;
+pub use mediawiki::{MediaWikiConverter, MediaWikiFormatDetector, MediaWikiSourceResolver};
 
 use self::options::{fetch_limits, network_policy};
 use self::source_metadata::resolved_source;

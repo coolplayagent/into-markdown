@@ -57,6 +57,16 @@ UTF-8/UTF-16 BOM、显式传统字符集、表头三种策略、strict/pad 不�
 literal、有效开放状态、错误尾部、括号不匹配、trailing comma 与 nesting 资源上限。
 JSON string 测试还要覆盖合法 surrogate pair、多个 pair、BMP escape、lone low、
 high 后接非 low、EOF high，以及不应被解释为 Unicode escape 的转义反斜杠。
+
+MediaWiki 回归使用受控 loopback 或 injected transport，不访问公共 Wiki。resolver selection 覆盖
+Wikipedia 根 `/wiki/`、显式通用 opt-in、普通 `/assets/wiki/`/JSON 与非标准 prefix 的 Engine
+fallback；普通 HTTP `/w/api.php` JSON 及伪造 resolver MIME 参数必须继续走通用 JSON converter，
+只有 MediaWiki resolver 验证并附加内部 identity 后才可选中专用 detector。响应反例覆盖跨
+origin/endpoint redirect、缺失或非 JSON MIME、缺页和标题 redirect。
+JSON shape 测试覆盖 nesting/field/collection exact 与 +1、known/unknown/escape-equivalent duplicate、
+扫描中的 cancel/deadline；完整默认 Engine 路径以二分边界证明 source、JSON、HTML/IR validation、
+renderer 与最终 provenance inventory 在 exact memory 成功且 exact-1 稳定失败。递归 list/table
+blocks 必须只有 MediaWiki provider、空 locator，并能关联唯一 `mediawiki.*` source record。
 真实子进程还覆盖 4096 层 JSON 在显式 4096 深度预算下成功、4097 层返回 `resourceLimit`，
 确保 parser、IR emitter 和析构均不依赖用户深度的调用栈。自动检测回归固定 `true`、`123`、
 `"x"` 为 JSON；500 KiB JSON string 在 128 KiB 逻辑内存预算下须在大分配前失败。XML 回归

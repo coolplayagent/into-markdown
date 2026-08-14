@@ -603,6 +603,12 @@ def build(root: Path, font_path: Path) -> None:
     add("ipynb-limit", "ipynb", "limit", "small/ipynb/limit.ipynb", ipynb_limit, "application/x-ipynb+json", limit_expected("notebook JSON crosses the exact configured nesting boundary", "max_nesting_depth", 4, 5, "json_nesting_depth", ""))
     add("ipynb-malicious", "ipynb", "malicious", "small/ipynb/malicious.ipynb", b'{"cells":[{"id":"active-output","cell_type":"code","execution_count":1,"metadata":{},"outputs":[{"output_type":"display_data","data":{"text/html":["<script>secret()</script><p>safe</p>"]},"metadata":{}}],"source":["print(1)"]}],"metadata":{},"nbformat":4,"nbformat_minor":5}', "application/x-ipynb+json", expected("success", "active HTML output is inert inside a fenced code block", "### Code cell \\[1\\]\n\n```\nprint(1)\n```\n\n```html\n<script>secret()</script><p>safe</p>\n```\n"))
 
+    wikipedia = b'{"requestid":"Rust (programming language)","curtimestamp":"2026-08-13T00:00:00Z","parse":{"title":"Rust (programming language)","pageid":1,"revid":123456,"text":"<main><p>Rust is a systems language.</p><p><a href=\\"/wiki/Type_system\\">Type system</a></p><h2>History</h2><p>It began as a personal project.</p><img src=\\"//upload.wikimedia.org/rust.png\\" alt=\\"Rust logo\\"></main>","sections":[{"line":"History"}],"links":[{"title":"Type system"}],"images":["Rust.png"]}}\n'
+    add("wikipedia-normal", "wikipedia", "normal", "small/wikipedia/normal.json", wikipedia, "application/json", expected("success", "offline MediaWiki API response with sections, links, and primary image", "Rust is a systems language\\.\n\n[Type system](<https://en.wikipedia.org/wiki/Type_system>)\n\n## History\n\nIt began as a personal project\\.\n\n![Rust logo](<https://upload.wikimedia.org/rust.png>)\n"))
+    wikipedia_missing = b'{"requestid":"Missing","curtimestamp":"2026-08-13T00:00:00Z","error":{"code":"missingtitle"}}\n'
+    add("wikipedia-corrupt", "wikipedia", "corrupt", "small/wikipedia/corrupt.json", wikipedia_missing, "application/json", expected("error", "stable missing-page API response", error_code="malformed"))
+    add("wikipedia-limit", "wikipedia", "limit", "small/wikipedia/limit.json", wikipedia, "application/json", limit_expected("MediaWiki API response exceeds the exact configured byte budget", "max_input_bytes", len(wikipedia) - 1, len(wikipedia), "max_input_bytes", "Rust is a systems language\\.\n\n[Type system](<https://en.wikipedia.org/wiki/Type_system>)\n\n## History\n\nIt began as a personal project\\.\n\n![Rust logo](<https://upload.wikimedia.org/rust.png>)\n"))
+
     normal_document = b'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Corpus Alpha \xe4\xb8\xad\xe6\x96\x87</w:t></w:r></w:p></w:body></w:document>'
     normal_docx = docx(normal_document)
     add("docx-normal", "docx", "normal", "small/docx/normal.docx", normal_docx, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("success", "one WordprocessingML paragraph", "Corpus Alpha 中文\n"))
@@ -615,7 +621,7 @@ def build(root: Path, font_path: Path) -> None:
     add("docx-malicious", "docx", "malicious", "small/docx/malicious.docx", docx(external_document, external), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("success", "referenced external hyperlink is rendered without any service or network request", "[safe external link](<https://example.invalid/fixture-link>)\n"))
 
     rtf_normal = b"{\\rtf1\\ansi\\ansicpg1252 Corpus {\\b Alpha} \\u20013?\\u25991?\\par}\n"
-    add("rtf-normal", "rtf", "normal", "small/rtf/normal.rtf", rtf_normal, "application/rtf", expected("success", "styled English and Unicode Chinese paragraph", "Corpus **Alpha** \u4e2d\u6587\n"))
+    add("rtf-normal", "rtf", "normal", "small/rtf/normal.rtf", rtf_normal, "application/rtf", expected("success", "styled English and Unicode Chinese paragraph", "Corpus <strong>Alpha</strong> \u4e2d\u6587\n"))
     add("rtf-corrupt", "rtf", "corrupt", "small/rtf/corrupt.rtf", b"{\\rtf1\\ansi unterminated\n", "application/rtf", expected("error", "unterminated root group", error_code="malformed"))
     rtf_limit = ("{\\rtf1\\ansi " + ("{" * 8) + "deep" + ("}" * 8) + "}\n").encode()
     add("rtf-limit", "rtf", "limit", "small/rtf/limit.rtf", rtf_limit, "application/rtf", limit_expected("RTF group stack crosses the exact configured depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "deep\n"))
@@ -647,7 +653,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "wikipedia", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {

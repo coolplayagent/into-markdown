@@ -73,6 +73,7 @@ mod tests {
                 InputFormat::Ipynb,
                 InputFormat::Zip,
                 InputFormat::OutlookMsg,
+                InputFormat::Wikipedia,
             ]
         );
 

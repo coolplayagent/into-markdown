@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "dbe08944c168e08ab70655410c8e625b335755f255c685e5fb5aee18a6d3d39a",
+    "sha256": "6a53739327585897c8ab6b7f8abba281a14aa30d75ef8cb107a3cb89f6344469",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -26,6 +26,7 @@
     "rtf",
     "text",
     "tsv",
+    "wikipedia",
     "xml",
     "zip"
   ],
@@ -1673,6 +1674,97 @@
         "error_code": "",
         "semantic_sha256": "800366d08763acec506041dafe98faef619db37fe74dc52b76a640b8a520d3e2",
         "description": "header and two rows"
+      }
+    },
+    {
+      "id": "wikipedia-corrupt",
+      "format": "wikipedia",
+      "scenario": "corrupt",
+      "path": "small/wikipedia/corrupt.json",
+      "bytes": 94,
+      "sha256": "d15058c40fa8e8d8516ad4ebaafe733ebeacd67ab2c3a0ab3207464ba1b45101",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "stable missing-page API response"
+      }
+    },
+    {
+      "id": "wikipedia-limit",
+      "format": "wikipedia",
+      "scenario": "limit",
+      "path": "small/wikipedia/limit.json",
+      "bytes": 470,
+      "sha256": "e77c73f4c3016f66a9058eb9857cf29f0eb6dce2eba426778761bc93f2d7959e",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "MediaWiki API response exceeds the exact configured byte budget",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 469,
+          "passing_value": 470,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "3b9baf578c680e4c46536324deb79e134e37108479665593f16cc44f2f503778"
+        }
+      }
+    },
+    {
+      "id": "wikipedia-normal",
+      "format": "wikipedia",
+      "scenario": "normal",
+      "path": "small/wikipedia/normal.json",
+      "bytes": 470,
+      "sha256": "e77c73f4c3016f66a9058eb9857cf29f0eb6dce2eba426778761bc93f2d7959e",
+      "media_type": "application/json",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "3b9baf578c680e4c46536324deb79e134e37108479665593f16cc44f2f503778",
+        "description": "offline MediaWiki API response with sections, links, and primary image"
       }
     },
     {
