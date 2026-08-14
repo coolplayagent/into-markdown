@@ -61,6 +61,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_format_detector(Arc::new(into_markdown_converters::ContentFormatDetector))
         .register_converter(Arc::new(into_markdown_converters::NotebookConverter))
         .register_converter(Arc::new(into_markdown_converters::OdfConverter))
+        .register_converter(Arc::new(into_markdown_converters::ImageConverter))
         .register_converter(Arc::new(into_markdown_converters::DocxConverter))
         .register_converter(Arc::new(into_markdown_converters::PdfConverter::default()))
         .register_converter(Arc::new(into_markdown_converters::EpubConverter))

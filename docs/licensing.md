@@ -94,7 +94,8 @@ SHA-256、Apache-2.0 许可、生成器版本、未知字段策略和递归上�
 
 OCR 检测边界精确固定 `imageproc 0.25.0`，并与图片转换边界共享主分支固定的
 `image 0.25.8`。`imageproc` 关闭 default features；workspace 的 `image` 仅启用图片转换
-所需的 `gif`/`jpeg`/`png`/`webp` 纯 Rust codec，检测模块本身不调用 decoder/encoder。
+所需的 `bmp`/`gif`/`jpeg`/`png`/`tiff`/`webp` Rust codec，检测模块本身不调用
+decoder/encoder。
 `imageproc` 及其 Cargo.lock 传递依赖均为 Rust 数学、字体或容器实现，其精确 SPDX
 结论记录在 `rust-lock.tsv`，没有 native library 或下载步骤。closed polygon round
 offset 使用 `clipper2-rust 1.1.0`，选择精确 SPDX `BSL-1.0`；完整许可文本在
@@ -138,6 +139,11 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 amalgamation 上游声明为 public domain。新引入的 build/iterator/hash helper 已加入
 `rust-lock.tsv`，其中 `foldhash 0.1.5` 为 Zlib。Cargo/Bazel 离线 license/release audit 共同
 检查锁文件漂移。构建未启用 rusqlite load-extension API，运行时也不调用 extension loading。
+
+图像转换固定 `tiff 0.10.3`，并复用其纯 Rust `fax`、`half`、`crunchy` 依赖；对应精确版本
+与许可证已加入 `rust-lock.tsv`。转换器仅在完整 TIFF/BigTIFF envelope、IFD 链、字段范围、
+strip/tile 范围与资源上限验证通过后调用 decoder，不加载系统图像库、外部色彩配置、网络
+资源或可执行 metadata。`half` 在双许可中选择 Apache-2.0，其余三个包选择 MIT。
 
 ## Fixture 许可与来源
 

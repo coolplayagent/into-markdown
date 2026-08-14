@@ -76,6 +76,7 @@ mod tests {
                 InputFormat::Xml,
                 InputFormat::Feed,
                 InputFormat::Ipynb,
+                InputFormat::Image,
                 InputFormat::Zip,
                 InputFormat::OutlookMsg,
                 InputFormat::Wikipedia,

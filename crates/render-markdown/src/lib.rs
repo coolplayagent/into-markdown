@@ -1441,6 +1441,8 @@ fn media_type_extension(media_type: &str) -> Option<String> {
     let extension = match media_type {
         "image/jpeg" => "jpg",
         "image/png" => "png",
+        "image/tiff" => "tiff",
+        "image/bmp" => "bmp",
         "image/gif" => "gif",
         "image/webp" => "webp",
         "image/svg+xml" => "svg",

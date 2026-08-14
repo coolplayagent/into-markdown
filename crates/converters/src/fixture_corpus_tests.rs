@@ -2,7 +2,7 @@ use super::*;
 use into_markdown_core::{
     AiCapability, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionError, Converter,
     ConverterOutput, ErrorCode, ExecutionOptions, FormatCandidate, NestedConversionRequest,
-    NestedConversionService, OcrEngine, OcrRequest, OcrResult, Services, Transcriber,
+    NestedConversionService, OcrEngine, OcrPolicy, OcrRequest, OcrResult, Services, Transcriber,
     TranscriptionRequest, TranscriptionResult,
 };
 use serde::Deserialize;
@@ -158,6 +158,7 @@ fn format(value: &str) -> InputFormat {
         "epub" => InputFormat::Epub,
         "feed" => InputFormat::Feed,
         "html" => InputFormat::Html,
+        "image" => InputFormat::Image,
         "ipynb" => InputFormat::Ipynb,
         "json" => InputFormat::Json,
         "markdown" => InputFormat::Markdown,
@@ -181,6 +182,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Text => Box::new(TextConverter),
         InputFormat::Markdown => Box::new(MarkdownConverter),
         InputFormat::Html => Box::new(HtmlConverter),
+        InputFormat::Image => Box::new(ImageConverter),
         InputFormat::Csv | InputFormat::Tsv => Box::new(DelimitedTextConverter),
         InputFormat::Json | InputFormat::Xml => Box::new(StructuredDataConverter),
         InputFormat::Ipynb => Box::new(NotebookConverter),
@@ -241,7 +243,10 @@ fn execute(
     assert_eq!(u64::try_from(bytes.len()).unwrap(), fixture.bytes, "{}", fixture.id);
     assert_eq!(hex(&bytes), fixture.sha256, "{}", fixture.id);
     let format = format(&fixture.format);
-    let options = options(limit);
+    let mut options = options(limit);
+    if format == InputFormat::Image {
+        options.ocr.policy = OcrPolicy::Off;
+    }
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let input = ResolvedInput {
         bytes: Arc::from(bytes),

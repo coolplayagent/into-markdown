@@ -42,7 +42,7 @@ futures = "0.3.31"
 getrandom = "0.4.3"
 globset = "0.4.16"
 html5ever = "=0.39.0"
-image = { version = "=0.25.8", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+image = { version = "=0.25.8", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 imageproc = { version = "=0.25.0", default-features = false }
 libc = "0.2.189"
 libloading = "0.9.0"
@@ -64,6 +64,7 @@ thiserror = "2.0.12"
 tokio = { version = "=1.47.1", features = ["net", "rt-multi-thread", "signal"] }
 toml = "0.9.5"
 tempfile = "3.27.0"
+tiff = "=0.10.3"
 unicode-normalization = "0.1.25"
 url = "2.5.4"
 winapi-util = "0.1.11"

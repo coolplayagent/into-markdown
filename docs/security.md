@@ -174,7 +174,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   像素视图；像素数、stride 乘加、tensor shape/元素数、概率范围、contour 总点数、
   candidate 数、累计 score pixels/work 和 polygon offset 点数都在使用前后有界，
   NaN/Infinity 和 `[0,1]` 外概率稳定拒绝。概率验证、bitmap 构造、score 扫描、长预处理
-  与候选循环执行协作式 checkpoint。调用 `imageproc`/`clipper2-rust`
+  与候选循环执行协作式 checkpoint。独立图像转换器对 PNG chunk/CRC、JPEG marker/entropy、
+  WebP RIFF/frame、BMP file/DIB/pixel range、TIFF/BigTIFF IFD/strip/tile range 做完整 envelope
+  审计，所有长扫描每 4 KiB checkpoint 后才进入固定 Rust decoder；ICC/profile、Exif/XMP
+  自由文本和 active payload 均不执行，仅提取受界数字方向与 DPI。调用 `imageproc`/`clipper2-rust`
   前按 model pixels 和最大几何结构保留请求逻辑内存，并把 tensor reservation 保持到
   runtime 与后处理结束；这只表示请求 heap capacity 的保守逻辑计费，不是 allocator
   metadata、RSS 或防止系统 OOM 的声明。边界扫描一次只构造一个 contour，每次扩容
