@@ -1131,10 +1131,12 @@ dependencies = [
  "chardetng",
  "encoding_rs",
  "flate2",
+ "futures",
  "html5ever",
  "image",
  "into-markdown-core",
  "into-markdown-http-transport",
+ "into-markdown-legacy-office",
  "into-markdown-ocr",
  "into-markdown-pdf-layout",
  "into-markdown-pdfium",
@@ -1204,6 +1206,25 @@ dependencies = [
  "unicode-normalization",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "into-markdown-legacy-office"
+version = "0.0.0"
+dependencies = [
+ "crc32fast",
+ "into-markdown-core",
+ "libc",
+ "libloading",
+ "object 0.40.0",
+ "quick-xml 0.38.3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "windows-sys 0.61.2",
+ "zip 2.4.2",
 ]
 
 [[package]]

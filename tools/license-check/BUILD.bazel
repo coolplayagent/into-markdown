@@ -37,6 +37,7 @@ DATA = [
     "//crates/engine:Cargo.toml",
     "//crates/ffmpeg:Cargo.toml",
     "//crates/http-transport:Cargo.toml",
+    "//crates/legacy-office:Cargo.toml",
     "//crates/ocr:Cargo.toml",
     "//crates/onnxruntime:Cargo.toml",
     "//crates/pdf-layout:Cargo.toml",

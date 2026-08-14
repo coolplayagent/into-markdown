@@ -1,9 +1,10 @@
 # 规划格式矩阵
 
-运行时的权威列表以 `into-md formats` 输出为准。PDF、DOCX/DOCM、ODT/ODS/ODP、
-PPTX/PPTM/PPSX/PPSM/POTX、XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、Markdown、HTML、
-CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及 PNG/JPEG/TIFF/WebP/BMP
-图片状态为 `available`，其余尚未实现的条目保持 `planned`。
+运行时的权威列表以 `into-md formats` 输出为准。PDF、DOC/DOCX/DOCM、ODT/ODS/ODP、
+PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX、XLS/XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、
+Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及
+PNG/JPEG/TIFF/WebP/BMP 图片状态为 `available`。旧 Office 格式还要求安装当前平台的受审
+runtime，缺失时返回 `componentUnavailable`；其余尚未实现的条目保持 `planned`。
 
 | 类别 | 格式 |
 | --- | --- |
@@ -31,6 +32,29 @@ OCR `off` 零调用，`auto` 缺模型或缺少 detector/model 绑定证据时�
 `Inline::OcrText`。`image_description` 按 `off`/`fallback`/`prefer`/`only` 路由固定
 `ImageDescription` 请求，不接受文档 prompt；AI 节点、诊断、provider/page provenance 和
 内存 plan 全部验证成功后才事务发布。
+
+## 旧 Office 隔离转换
+
+DOC、PPT/PPS/POT 与 XLS 只接受经 CFB/OLE 目录证据或调用方显式选择的候选，converter probe
+仍要求完整 compound-file magic。固定 worker 把源文档转换为 DOCX、PPTX 或 XLSX 后，通过
+`Services.nested` 在同一个 `ExecutionContext`、`ConversionOptions` 与 offline authority 下
+交给对应转换器；不会启动一条新请求、重置 limit 或取得额外服务。规范化会重写整个容器，
+因此子转换器的 `byteStart`/`byteEnd` 明确清除；page、slide、sheet、cell、bounds 与安全 part
+继续保留，并把 runtime version、target、artifact SHA-256 写入 namespaced metadata。
+
+运行时只从当前可执行文件旁的固定 `legacy-office-runtime/` 或调用方提供的三个显式绝对路径
+解析。`authority.json` 按 `third_party/legacy-office/authority.schema.json` 按平台记录精确版本、来源 URL、artifact size/hash、完整安装文件
+size/hash/role 清单、许可证文本清单、ABI/export、worker hard limits 与 sandbox policy。
+任何缺失、多余文件、symlink/reparse、hash/ABI/license 不一致或不受支持平台都会在启动前
+稳定返回 `componentUnavailable`；绝不回退到系统 LibreOffice、UNO service、COM 或 PATH。
+平台 runtime 安装包及其随版本变化的完整第三方许可证由独立包装任务提供，本仓库不会捏造
+未审计制品 hash。
+worker 输出不是凭 `PK` 前缀判定：worker 与父进程都对 ZIP local/central 范围、flag、路径、重复、
+CRC、内容类型和根 officeDocument relationship 做有界完整审计，并要求声明 family 与
+DOCX/PPTX/XLSX 主部件一致，错误包不会进入 nested converter。
+Windows authority 额外绑定由平台安装事务预置的 AppContainer profile name 与精确派生 SID；
+capability 集必须为空，网络/身份/库/可移动存储 capability 以固定 forbidden 清单明确拒绝。
+converter 不创建、删除或修复 profile/ACL，任何缺失或漂移都 fail closed。
 
 ## Outlook MSG
 

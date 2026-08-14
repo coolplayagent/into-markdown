@@ -47,6 +47,19 @@ HTML 转换器同样复用文本 decoder、compact byte mapping 与 `ExecutionCo
 只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
 权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 
+旧 Office converter 使用相同的 nested-dispatch 契约：worker 返回的 bounded OOXML bytes 形成
+只存在于本次调用的 `ResolvedInput`，显式 `FormatHint` 固定为 DOCX/PPTX/XLSX，并排除
+`builtin.converter.legacy-office` 防止递归。`NestedConversionRequest` 借用根 options，调用时
+传入同一个 context；normalized bytes 的 reservation 在 nested 返回后释放，子输出 lease 仍由
+Engine 的外层 preflight 最终认证。`LegacyOfficeRuntime::new(RuntimeConfig)` 只接受显式路径；
+`packaged()` 只派生可执行文件旁固定 sibling layout，二者都必须通过同一 authority 校验。
+机器可读包装契约位于 `third_party/legacy-office/authority.schema.json`。Windows target 还必须
+声明预置 AppContainer 的 profile name、派生 SID、空 capability 集及固定 forbidden capability
+清单；缺 profile、SID 漂移或 storage/ACL 不可用均为 `componentUnavailable`，不会动态创建 profile。
+每个平台 target 的 `systemLibraries` 是实际二进制 load command/import 的精确
+identity/path 集合，并逐文件约束系统 loader 读取面。所有其余递归依赖必须是 `files` inventory 中的
+`runtime`/`kitLibrary` 项，且相对 loader/rpath 只能唯一解析到 authority tree。
+
 ## 可选服务
 
 `OcrEngine`、`Transcriber`、`AiProvider` 和 `TensorRuntime` 都是对象安全的

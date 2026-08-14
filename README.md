@@ -112,6 +112,14 @@ PPTX、PPTM、PPSX、PPSM 与 POTX 转换可用，覆盖 slide 边界、标题/�
 provenance；宏、ActiveX、OLE、嵌入包与所有
 外部关系不读取、不执行且不联网，损坏、加密和资源越界输入 fail closed。
 
+DOC、PPT/PPS/POT 与 XLS 通过固定随包路径中的 `legacy-office-worker` 隔离转换为对应 OOXML，
+再以同一请求的取消、超时、资源预算和离线策略进入内置 OOXML 转换器。父进程不搜索系统
+LibreOffice、`PATH`、代理或 loader 环境；未安装当前平台的精确 authority/runtime 时稳定返回
+`componentUnavailable`。Windows 只消费安装器预置且 SID 精确匹配、零 capability 的
+AppContainer，不在转换路径创建或删除持久 profile。运行时制品的组装和发布许可清单由平台包装
+任务独立交付。worker/kit 与非系统依赖只从 authority 校验后的请求私有只读快照 exec/load，
+输出必须通过 exact ZIP、CRC、内容类型与根 relationship 的 DOCX/PPTX/XLSX family 审计。
+
 模型查询、显式安装、离线校验、路径和安全清理后端已实现。完整
 `pp-ocrv6-tiny-zh-en` pipeline 绑定可安装的 detector 与 recognizer 组件；两者分别固定官方
 ONNX/TAR/config，recognizer 另外固定字符表，全部经过 SHA-256、归档结构、license 与安装事务

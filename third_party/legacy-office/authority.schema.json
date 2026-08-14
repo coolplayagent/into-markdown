@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://into-markdown.invalid/schemas/legacy-office-authority-1.json",
+  "title": "into-markdown legacy Office runtime authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "product", "version", "sourceUrl", "targets"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "product": { "const": "LibreOffice" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "sourceUrl": { "$ref": "#/$defs/httpsUrl" },
+    "targets": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 4,
+      "additionalProperties": false,
+      "properties": {
+        "aarch64-apple-darwin": { "$ref": "#/$defs/macosArm64Target" },
+        "aarch64-unknown-linux-gnu": { "$ref": "#/$defs/linuxArm64Target" },
+        "x86_64-unknown-linux-gnu": { "$ref": "#/$defs/linuxX64Target" },
+        "x86_64-pc-windows-msvc": { "$ref": "#/$defs/windowsTarget" }
+      }
+    }
+  },
+  "$defs": {
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://[^@\\u0000-\\u001f\\u007f]{1,2039}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f]+(?:/[^/\\\\\\u0000-\\u001f\\u007f]+)*$",
+      "not": { "pattern": "(?:^|/)\\.{1,2}(?:/|$)" }
+    },
+    "runtimeFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256", "role"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 17179869184 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "role": {
+          "enum": ["worker", "kitLibrary", "runtime", "configuration", "license"]
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "noticePath", "noticeSha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "spdx": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+        "noticePath": { "$ref": "#/$defs/relativePath" },
+        "noticeSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "addressSpaceOverheadBytes",
+        "fileSizeLimitBytes",
+        "openFileLimit",
+        "processLimit"
+      ],
+      "properties": {
+        "addressSpaceOverheadBytes": { "type": "integer", "minimum": 268435456 },
+        "fileSizeLimitBytes": { "type": "integer", "minimum": 1 },
+        "openFileLimit": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "processLimit": { "const": 1 }
+      }
+    },
+    "abi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binaryFormat", "architecture", "libraryIdentity", "requiredExport"],
+      "properties": {
+        "binaryFormat": { "enum": ["elf", "mach-o", "pe"] },
+        "architecture": { "enum": ["aarch64", "x86_64"] },
+        "libraryIdentity": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "requiredExport": { "const": "libreofficekit_hook_2" }
+      }
+    },
+    "unixSandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemLibraries", "network", "childProcesses"],
+      "properties": {
+        "systemLibraries": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/systemLibrary" }
+        },
+        "network": { "const": "deny" },
+        "childProcesses": { "const": "deny" }
+      }
+    },
+    "systemLibrary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "path"],
+      "properties": {
+        "identity": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "appContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileName", "sid", "capabilities", "forbiddenCapabilities"],
+      "properties": {
+        "profileName": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "sid": {
+          "type": "string",
+          "maxLength": 192,
+          "pattern": "^S-1-15-2-[0-9-]+$"
+        },
+        "capabilities": { "const": [] },
+        "forbiddenCapabilities": {
+          "const": [
+            "documentsLibrary",
+            "enterpriseAuthentication",
+            "internetClient",
+            "internetClientServer",
+            "musicLibrary",
+            "picturesLibrary",
+            "privateNetworkClientServer",
+            "removableStorage",
+            "sharedUserCertificates",
+            "videosLibrary"
+          ]
+        }
+      }
+    },
+    "windowsSandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemLibraries", "network", "childProcesses", "appContainer"],
+      "properties": {
+        "systemLibraries": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/systemLibrary" }
+        },
+        "network": { "const": "deny" },
+        "childProcesses": { "const": "deny" },
+        "appContainer": { "$ref": "#/$defs/appContainer" }
+      }
+    },
+    "unixTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactUrl", "artifactBytes", "artifactSha256", "installRoot", "kitLibrary",
+        "worker", "files", "licenses", "abi", "limits", "sandbox"
+      ],
+      "properties": {
+        "artifactUrl": { "$ref": "#/$defs/httpsUrl" },
+        "artifactBytes": { "type": "integer", "minimum": 1 },
+        "artifactSha256": { "$ref": "#/$defs/sha256" },
+        "installRoot": { "$ref": "#/$defs/relativePath" },
+        "kitLibrary": { "$ref": "#/$defs/relativePath" },
+        "worker": { "$ref": "#/$defs/relativePath" },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/runtimeFile" }
+        },
+        "licenses": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/license" }
+        },
+        "abi": { "$ref": "#/$defs/abi" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "sandbox": { "$ref": "#/$defs/unixSandbox" }
+      }
+    },
+    "windowsTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactUrl", "artifactBytes", "artifactSha256", "installRoot", "kitLibrary",
+        "worker", "files", "licenses", "abi", "limits", "sandbox"
+      ],
+      "properties": {
+        "artifactUrl": { "$ref": "#/$defs/httpsUrl" },
+        "artifactBytes": { "type": "integer", "minimum": 1 },
+        "artifactSha256": { "$ref": "#/$defs/sha256" },
+        "installRoot": { "$ref": "#/$defs/relativePath" },
+        "kitLibrary": { "$ref": "#/$defs/relativePath" },
+        "worker": { "$ref": "#/$defs/relativePath" },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/runtimeFile" }
+        },
+        "licenses": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/license" }
+        },
+        "abi": {
+          "allOf": [
+            { "$ref": "#/$defs/abi" },
+            { "properties": { "binaryFormat": { "const": "pe" }, "architecture": { "const": "x86_64" } } }
+          ]
+        },
+        "limits": { "$ref": "#/$defs/limits" },
+        "sandbox": { "$ref": "#/$defs/windowsSandbox" }
+      }
+    },
+    "macosArm64Target": {
+      "allOf": [
+        { "$ref": "#/$defs/unixTarget" },
+        {
+          "properties": {
+            "abi": {
+              "allOf": [
+                { "$ref": "#/$defs/abi" },
+                { "properties": { "binaryFormat": { "const": "mach-o" }, "architecture": { "const": "aarch64" } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "linuxArm64Target": {
+      "allOf": [
+        { "$ref": "#/$defs/unixTarget" },
+        {
+          "properties": {
+            "abi": {
+              "allOf": [
+                { "$ref": "#/$defs/abi" },
+                { "properties": { "binaryFormat": { "const": "elf" }, "architecture": { "const": "aarch64" } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "linuxX64Target": {
+      "allOf": [
+        { "$ref": "#/$defs/unixTarget" },
+        {
+          "properties": {
+            "abi": {
+              "allOf": [
+                { "$ref": "#/$defs/abi" },
+                { "properties": { "binaryFormat": { "const": "elf" }, "architecture": { "const": "x86_64" } } }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

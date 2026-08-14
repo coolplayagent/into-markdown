@@ -59,8 +59,11 @@ mod tests {
             available,
             vec![
                 InputFormat::Pdf,
+                InputFormat::Doc,
                 InputFormat::Docx,
+                InputFormat::Ppt,
                 InputFormat::Pptx,
+                InputFormat::Xls,
                 InputFormat::Xlsx,
                 InputFormat::Odt,
                 InputFormat::Ods,

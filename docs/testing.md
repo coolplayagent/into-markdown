@@ -327,6 +327,39 @@ error 不改 task。
 source build；没有对应目标 native runner 时，交叉编译只证明 toolchain/source/link
 compatibility，不能替代 Windows reparse/DACL 或 Linux filesystem runtime 测试。
 
+旧 Office native runtime、PDF、ZIP 与 EPUB 的小型二进制攻击图在各自 process/converter/API
+测试中程序生成，不复制 Office 或网络样本。旧 Office 测试 worker 是仓库源码构建的受控
+协议端点，authority 仍对它执行 exact tree/hash/license/ABI 校验；定向测试覆盖 DOC→DOCX、
+PPT→PPTX、XLS→XLSX、格式混淆、尾随帧、低内存 fail-before、额外文件/symlink、worker crash、
+encrypted、精确输出上限、取消/timeout、process-group descendant reap、temporary/lease 释放、
+temporary sparse-file 超限时的 watchdog terminate/reap，以及 nested 服务只收到根
+context/options。恶意图还覆盖非 CLOEXEC secret file/socket 不继承、原子 worker/kit path swap、
+未授权 loader dependency/rpath、Linux cross-process/io_uring syscall、请求写入 broken pipe、提前/
+部分响应、非零退出，以及 ZIP duplicate/path/encryption/overlap/CRC/family/root-relationship 混淆。
+它不代表 LibreOffice 质量或许可验证。
+
+Windows 的普通图以可注入 suspended-launch contract 覆盖 assign Job、token mismatch/error、resume
+失败后的 terminate+wait 顺序，以及命令行 quoting 和收窄 DLL flags；这些只作为 Windows target
+编译/运行证据，不在非 Windows 主机伪报为真实 AppContainer。真实 Windows runner 还必须使用
+包装任务预置的 profile/ACL 执行下面的 native smoke test。Unix fake-worker process fixtures 不依赖
+任何系统 Office 安装。
+
+显式本机 runtime 的 manual smoke test 使用安装内 LICENSE/third-party 清单生成的 authority，
+且只从以下四个绝对路径变量读取，不查询 PATH：
+
+```shell
+INTO_MD_LEGACY_OFFICE_ROOT=/absolute/runtime-bundle \
+INTO_MD_LEGACY_OFFICE_AUTHORITY=/absolute/runtime-bundle/authority.json \
+INTO_MD_LEGACY_OFFICE_WORKER=/absolute/runtime-bundle/worker \
+INTO_MD_LEGACY_OFFICE_DOC_FIXTURE=/absolute/repository-owned.doc \
+INTO_MD_LEGACY_OFFICE_PPT_FIXTURE=/absolute/repository-owned.ppt \
+INTO_MD_LEGACY_OFFICE_XLS_FIXTURE=/absolute/repository-owned.xls \
+cargo test -p into-markdown-legacy-office --test worker_process manual_native_runtime_conversion -- --ignored
+```
+
+同一组变量可运行 converters 内 ignored manual test，实际进入 DOCX、PresentationML 与 XLSX 三个
+nested converter，而不是只检查 worker 返回包头。
+
 ## 全格式 fixture 语料库
 
 `fixtures/manifest.json` 是小型离线语料的机器权威。它覆盖产品格式 registry 中每个
