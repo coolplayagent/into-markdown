@@ -1,7 +1,7 @@
 use crate::{
     Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, ExecutionContext,
-    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, OcrRecognition,
-    OcrResult, Provenance, ResolvedInput, ResolvedSource, ResourceReservation,
+    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, OcrOutputPlan,
+    OcrRecognition, OcrResult, Provenance, ResolvedInput, ResolvedSource, ResourceReservation,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1133,6 +1133,23 @@ pub trait OcrEngine: Send + Sync {
         request: OcrRequest<'a>,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>>;
+    /// Plan one identity-bound result before any provider allocation or inference.
+    ///
+    /// The safe default refuses bound execution. Existing implementations remain
+    /// source compatible, while consumers never execute an unplanned provider
+    /// under a structured-evidence policy.
+    fn planned_bound_output(
+        &self,
+        request: OcrRequest<'_>,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        let _ = (request, options, context);
+        Err(ConversionError::ComponentUnavailable {
+            component: self.id().into(),
+            detail: "OCR engine does not declare a bound output plan".into(),
+        })
+    }
     /// Recognize text with additive, identity-bound structured evidence.
     ///
     /// Existing providers remain source compatible and explicitly produce an
@@ -1210,6 +1227,15 @@ pub enum AiInput<'a> {
         bytes: &'a [u8],
         /// MIME media type.
         media_type: &'a str,
+    },
+    /// Encoded image whose output must retain a page/frame identity.
+    PageImage {
+        /// Encoded image bytes.
+        bytes: &'a [u8],
+        /// MIME media type.
+        media_type: &'a str,
+        /// One-based image frame identity.
+        page: u32,
     },
     /// Structured document.
     Document(&'a Document),

@@ -173,6 +173,9 @@ async fn convert_image(
             context,
         )
         .await?;
+        if let Some(memory) = ocr.memory.take() {
+            leases.push(memory);
+        }
         if options.ai.image_description == AiMode::Fallback && !ocr.accepted_text {
             let ai_image = normalized.as_ref().ok_or_else(|| ConversionError::Internal {
                 detail: "AI fallback image input was not materialized".into(),

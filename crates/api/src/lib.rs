@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
-    OpenAiCompatibleClient, OpenAiCompatibleConfig, ProviderConfig, ProviderError,
-    ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
+    OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
+    ProviderError, ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
 };
 pub use into_markdown_converters::{
     FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits, merge_pdf_ocr,
@@ -38,12 +38,19 @@ pub use into_markdown_task_store::{
 /// non-networking provider seams.
 #[must_use]
 pub fn default_engine_builder() -> EngineBuilder {
-    let services = into_markdown_core::Services {
-        ocr: Some(Arc::new(into_markdown_ocr::PlaceholderOcrEngine)),
+    default_engine_builder_with_services(Services {
         transcriber: Some(Arc::new(into_markdown_ai::PlaceholderTranscriber)),
-        ai: Some(Arc::new(into_markdown_ai::PlaceholderAiProvider)),
-        nested: None,
-    };
+        ..Services::default()
+    })
+}
+
+/// Create the standard builder with explicitly selected per-invocation services.
+///
+/// Optional OCR and AI capabilities are absent unless the caller supplies an
+/// installed, verified engine or a policy-bound provider. This constructor
+/// performs no model download, secret lookup, DNS lookup, or network request.
+#[must_use]
+pub fn default_engine_builder_with_services(services: Services) -> EngineBuilder {
     let mut builder = EngineBuilder::new()
         .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))
         .services(services);
@@ -88,6 +95,16 @@ pub fn default_engine_builder() -> EngineBuilder {
 /// violates an engine invariant.
 pub fn default_engine() -> Result<Engine, ConversionError> {
     default_engine_builder().build()
+}
+
+/// Build the standard engine with explicitly selected per-invocation services.
+///
+/// # Errors
+///
+/// Returns [`ConversionError::Internal`] when built-in component registration
+/// violates an engine invariant.
+pub fn default_engine_with_services(services: Services) -> Result<Engine, ConversionError> {
+    default_engine_builder_with_services(services).build()
 }
 
 /// Planned converter capabilities.

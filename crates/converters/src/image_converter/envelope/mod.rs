@@ -1,6 +1,7 @@
 //! Complete encoded-file envelope validation before codec entry.
 
 mod bmp;
+mod intervals;
 mod jpeg;
 pub(super) mod meter;
 mod png;

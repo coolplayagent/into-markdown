@@ -2,8 +2,8 @@ use super::*;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use into_markdown_core::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoundOcrResult, BoxFuture,
-    ExecutionOptions, Inline, OcrEngine, OcrEvidenceStage, OcrEvidenceStep, OcrPolicy,
-    OcrRecognition, OcrRegion, OcrRequest, OcrResult, ResourceLimits, SourceMetadata,
+    ExecutionOptions, Inline, OcrEngine, OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan,
+    OcrPolicy, OcrRecognition, OcrRegion, OcrRequest, OcrResult, ResourceLimits, SourceMetadata,
 };
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -11,6 +11,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 use tiff::encoder::{Rational, TiffEncoder, colortype};
 use tiff::tags::{ResolutionUnit, Tag};
 
@@ -69,7 +70,23 @@ fn oriented_tiff() -> Vec<u8> {
             .write_data(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 0, 255, 255, 255, 0, 255])
             .unwrap();
     }
-    bytes.into_inner()
+    let mut bytes = bytes.into_inner();
+    // The encoder preserves the superseded default 1-DPI rationals as an
+    // unreferenced allocation. Remove that allocation so this positive
+    // fixture has an exact, fully owned TIFF envelope.
+    let ifd = usize::try_from(u32::from_le_bytes(bytes[4..8].try_into().unwrap())).unwrap();
+    let count = usize::from(u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()));
+    for index in 0..count {
+        let entry = ifd + 2 + index * 12;
+        let tag = u16::from_le_bytes(bytes[entry..entry + 2].try_into().unwrap());
+        if matches!(tag, 273 | 282 | 283) {
+            let value = u32::from_le_bytes(bytes[entry + 8..entry + 12].try_into().unwrap());
+            bytes[entry + 8..entry + 12].copy_from_slice(&(value - 16).to_le_bytes());
+        }
+    }
+    bytes[4..8].copy_from_slice(&(u32::try_from(ifd - 16).unwrap()).to_le_bytes());
+    bytes.drain(20..36);
+    bytes
 }
 
 fn big_tiff() -> Vec<u8> {
@@ -79,6 +96,64 @@ fn big_tiff() -> Vec<u8> {
         encoder.write_image::<colortype::Gray8>(2, 1, &[0, 255]).unwrap();
     }
     bytes.into_inner()
+}
+
+fn tiff_with_unowned_gap(length: usize) -> Vec<u8> {
+    let ifd = length - 30;
+    let mut bytes = vec![0_u8; length];
+    bytes[..4].copy_from_slice(b"II\x2a\0");
+    bytes[4..8].copy_from_slice(&u32::try_from(ifd).unwrap().to_le_bytes());
+    bytes[8] = 0x7f;
+    bytes[ifd..ifd + 2].copy_from_slice(&2_u16.to_le_bytes());
+    let strip_offset = ifd + 2;
+    bytes[strip_offset..strip_offset + 2].copy_from_slice(&273_u16.to_le_bytes());
+    bytes[strip_offset + 2..strip_offset + 4].copy_from_slice(&4_u16.to_le_bytes());
+    bytes[strip_offset + 4..strip_offset + 8].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[strip_offset + 8..strip_offset + 12].copy_from_slice(&8_u32.to_le_bytes());
+    let strip_count = strip_offset + 12;
+    bytes[strip_count..strip_count + 2].copy_from_slice(&279_u16.to_le_bytes());
+    bytes[strip_count + 2..strip_count + 4].copy_from_slice(&4_u16.to_le_bytes());
+    bytes[strip_count + 4..strip_count + 8].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[strip_count + 8..strip_count + 12].copy_from_slice(&1_u32.to_le_bytes());
+    bytes
+}
+
+fn tiff_with_pixel_ifd_overlap(length: usize) -> Vec<u8> {
+    let mut bytes = tiff_with_unowned_gap(length);
+    let ifd = length - 30;
+    let strip_offset = ifd + 2;
+    bytes[strip_offset + 8..strip_offset + 12]
+        .copy_from_slice(&u32::try_from(ifd + 1).unwrap().to_le_bytes());
+    bytes
+}
+
+fn bmp_with_header_pixel_gap() -> Vec<u8> {
+    let mut bytes = vec![0_u8; 66];
+    bytes[..2].copy_from_slice(b"BM");
+    bytes[2..6].copy_from_slice(&66_u32.to_le_bytes());
+    bytes[10..14].copy_from_slice(&62_u32.to_le_bytes());
+    bytes[14..18].copy_from_slice(&40_u32.to_le_bytes());
+    bytes[18..22].copy_from_slice(&1_i32.to_le_bytes());
+    bytes[22..26].copy_from_slice(&1_i32.to_le_bytes());
+    bytes[26..28].copy_from_slice(&1_u16.to_le_bytes());
+    bytes[28..30].copy_from_slice(&24_u16.to_le_bytes());
+    bytes[34..38].copy_from_slice(&4_u32.to_le_bytes());
+    bytes
+}
+
+fn tiff_with_oversized_resolution_count() -> Vec<u8> {
+    let mut bytes = oriented_tiff();
+    let ifd = usize::try_from(u32::from_le_bytes(bytes[4..8].try_into().unwrap())).unwrap();
+    let count = usize::from(u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()));
+    for index in 0..count {
+        let entry = ifd + 2 + index * 12;
+        let tag = u16::from_le_bytes(bytes[entry..entry + 2].try_into().unwrap());
+        if tag == 282 {
+            bytes[entry + 4..entry + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+            return bytes;
+        }
+    }
+    panic!("oriented TIFF fixture has no XResolution tag")
 }
 
 fn animated_webp_envelope(frame_count: usize) -> Vec<u8> {
@@ -310,6 +385,79 @@ fn exact_envelopes_reject_trailing_bytes_and_corrupt_png_crc() {
 }
 
 #[test]
+fn reviewer_exact_tiff_and_bmp_gap_overlap_fixtures_fail_closed() {
+    let fixtures = [
+        (tiff_with_unowned_gap(131), "gap-131.tiff"),
+        (tiff_with_pixel_ifd_overlap(135), "overlap-135.tiff"),
+        (bmp_with_header_pixel_gap(), "gap-66.bmp"),
+    ];
+    assert_eq!(fixtures[0].0.len(), 131);
+    assert_eq!(fixtures[1].0.len(), 135);
+    assert_eq!(fixtures[2].0.len(), 66);
+    for (bytes, name) in fixtures {
+        let options = options();
+        let context = context(&options);
+        let error =
+            block_on(convert_image(&input(bytes, name), &options, &Services::default(), &context))
+                .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed, "{name}: {error}");
+        assert_eq!(context.reserved_memory_bytes(), 0, "{name}");
+    }
+}
+
+#[test]
+fn tiff_density_failures_precede_decoder_entry_and_release_every_lease() {
+    let cases = [
+        (
+            tiff_with_oversized_resolution_count(),
+            options(),
+            ExecutionOptions::default(),
+            into_markdown_core::ErrorCode::Malformed,
+        ),
+        {
+            let mut low = options();
+            low.limits.max_memory_bytes = 0;
+            (
+                oriented_tiff(),
+                low,
+                ExecutionOptions::default(),
+                into_markdown_core::ErrorCode::ResourceLimit,
+            )
+        },
+        {
+            let token = into_markdown_core::CancellationToken::new();
+            token.cancel();
+            (
+                oriented_tiff(),
+                options(),
+                ExecutionOptions { cancellation: token, ..ExecutionOptions::default() },
+                into_markdown_core::ErrorCode::Cancelled,
+            )
+        },
+        (
+            oriented_tiff(),
+            options(),
+            ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
+            into_markdown_core::ErrorCode::Timeout,
+        ),
+    ];
+    for (bytes, options, execution, expected) in cases {
+        decode::reset_decoder_entries();
+        let context = ExecutionContext::new(execution, options.limits.clone());
+        let error = block_on(convert_image(
+            &input(bytes, "density.tiff"),
+            &options,
+            &Services::default(),
+            &context,
+        ))
+        .unwrap_err();
+        assert_eq!(error.code(), expected, "{error}");
+        assert_eq!(decode::decoder_entries(), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
 fn frame_and_pixel_budgets_fail_before_materialization() {
     let bytes = multi_tiff();
     let mut page_options = options();
@@ -376,6 +524,15 @@ impl OcrEngine for BoundOcr {
         _: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
         Box::pin(async { unreachable!("bound provider must use recognize_bound") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new(16 * 1024, 16, 4096)
     }
 
     fn recognize_bound<'a>(
@@ -470,6 +627,148 @@ fn legacy_ocr_cannot_forge_structured_evidence() {
     assert_eq!(error.code(), into_markdown_core::ErrorCode::ComponentUnavailable);
 }
 
+#[derive(Clone, Copy)]
+enum TestOcrPlan {
+    Zero,
+    Valid,
+}
+
+struct PlannedOcr {
+    calls: Arc<AtomicUsize>,
+    plan: TestOcrPlan,
+    regions: usize,
+    text_capacity: usize,
+}
+
+impl OcrEngine for PlannedOcr {
+    fn id(&self) -> &'static str {
+        "test.ocr.planned"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async { unreachable!("planned provider must use recognize_bound") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        match self.plan {
+            TestOcrPlan::Zero => OcrOutputPlan::try_new(0, 0, 0),
+            TestOcrPlan::Valid => OcrOutputPlan::try_new(4096, 1, 32),
+        }
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            context.checkpoint()?;
+            let mut regions = Vec::with_capacity(self.regions);
+            for _ in 0..self.regions {
+                let mut text = String::with_capacity(self.text_capacity);
+                text.push('x');
+                regions.push(OcrRegion {
+                    text,
+                    polygon: [(0.0, 0.0), (3.0, 0.0), (3.0, 2.0), (0.0, 2.0)],
+                    confidence: 0.9,
+                });
+            }
+            let bound = BoundOcrResult::try_new(
+                OcrResult { regions, provider: "test.ocr.recognizer".into() },
+                vec![0.9; self.regions],
+                vec![
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Detection,
+                        provider: "test.ocr.detector".into(),
+                        model: Some("detector-sha256".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Recognition,
+                        provider: "test.ocr.recognizer".into(),
+                        model: Some("recognizer-sha256".into()),
+                    },
+                ],
+            )?;
+            Ok(OcrRecognition::Bound(bound))
+        })
+    }
+}
+
+fn planned_ocr_services(engine: PlannedOcr) -> Services {
+    Services { ocr: Some(Arc::new(engine)), ..Services::default() }
+}
+
+#[test]
+fn ocr_preflight_rejects_zero_huge_and_low_memory_plans_without_leaks() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    for (plan, regions, text_capacity, memory, expected_calls) in [
+        (TestOcrPlan::Zero, 1, 1, 1024 * 1024, 0),
+        (TestOcrPlan::Valid, 2, 1, 1024 * 1024, 1),
+        (TestOcrPlan::Valid, 1, 8192, 1024 * 1024, 1),
+        (TestOcrPlan::Valid, 1, 1, 2048, 0),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let services = planned_ocr_services(PlannedOcr {
+            calls: Arc::clone(&calls),
+            plan,
+            regions,
+            text_capacity,
+        });
+        let mut limits = options.limits.clone();
+        limits.max_memory_bytes = memory;
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let error = block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit, "{error}");
+        assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+fn ocr_preflight_observes_precancel_and_deadline_before_provider_execution() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    let token = into_markdown_core::CancellationToken::new();
+    token.cancel();
+    let executions = [
+        (
+            ExecutionOptions { cancellation: token, ..ExecutionOptions::default() },
+            into_markdown_core::ErrorCode::Cancelled,
+        ),
+        (
+            ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
+            into_markdown_core::ErrorCode::Timeout,
+        ),
+    ];
+    for (execution, expected) in executions {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let services = planned_ocr_services(PlannedOcr {
+            calls: Arc::clone(&calls),
+            plan: TestOcrPlan::Valid,
+            regions: 1,
+            text_capacity: 1,
+        });
+        let context = ExecutionContext::new(execution, options.limits.clone());
+        let error = block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
 struct OpaqueInputOcr;
 
 impl OcrEngine for OpaqueInputOcr {
@@ -483,6 +782,15 @@ impl OcrEngine for OpaqueInputOcr {
         _: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
         Box::pin(async { unreachable!("bound provider must use recognize_bound") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new(16 * 1024, 16, 4096)
     }
 
     fn recognize_bound<'a>(
@@ -564,7 +872,10 @@ impl AiProvider for DescriptionAi {
         context: &ExecutionContext,
     ) -> Result<u64, ConversionError> {
         assert_eq!(request.capability, AiCapability::ImageDescription);
-        assert!(matches!(request.input, AiInput::Image { media_type: "image/png", .. }));
+        assert!(matches!(
+            request.input,
+            AiInput::PageImage { media_type: "image/png", page: 1, .. }
+        ));
         assert!(request.prompt.is_none());
         assert!(!options.network.enabled);
         context.checkpoint()?;

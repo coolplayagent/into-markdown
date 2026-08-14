@@ -10,6 +10,11 @@ use std::io::{BufReader, Cursor};
 use tiff::decoder::{Decoder as TiffDecoder, DecodingResult, Limits as TiffLimits};
 use tiff::{ColorType as TiffColorType, tags::Tag};
 
+#[cfg(test)]
+std::thread_local! {
+    static DECODER_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const MAX_DIMENSION: u32 = 32_768;
 
 pub(super) struct DecodedSet {
@@ -48,6 +53,7 @@ fn decode_static(
         format.image_format().ok_or_else(|| malformed("static decoder format is unavailable"))?;
     let mut reader = ImageReader::with_format(Cursor::new(bytes), image_format);
     reader.limits(image_limits(limits));
+    mark_decoder_entry();
     let mut decoder = reader.into_decoder().map_err(map_image_error)?;
     let (width, height) = decoder.dimensions();
     validate_dimensions(width, height, limits)?;
@@ -76,6 +82,7 @@ fn decode_webp_animation(
     context: &ExecutionContext,
 ) -> Result<DecodedSet, ConversionError> {
     let reader = BufReader::new(Cursor::new(bytes));
+    mark_decoder_entry();
     let mut webp_decoder = WebPDecoder::new(reader).map_err(map_image_error)?;
     webp_decoder.set_limits(image_limits(limits)).map_err(map_image_error)?;
     let (width, height) = webp_decoder.dimensions();
@@ -125,6 +132,7 @@ fn decode_tiff(
     context: &ExecutionContext,
 ) -> Result<DecodedSet, ConversionError> {
     let decoder_limits = tiff_limits(limits)?;
+    mark_decoder_entry();
     let mut audit = TiffDecoder::new(Cursor::new(bytes))
         .map_err(map_tiff_error)?
         .with_limits(decoder_limits.clone());
@@ -158,6 +166,7 @@ fn decode_tiff(
     enforce_decompressed(decoded_bytes, limits)?;
     let memory = context.reserve_memory(allocation)?;
 
+    mark_decoder_entry();
     let mut decoder =
         TiffDecoder::new(Cursor::new(bytes)).map_err(map_tiff_error)?.with_limits(decoder_limits);
     let mut frames = Vec::new();
@@ -196,6 +205,24 @@ fn decode_tiff(
         orientation: first_orientation,
         _memory: memory,
     })
+}
+
+#[cfg(test)]
+fn mark_decoder_entry() {
+    DECODER_ENTRIES.with(|entries| entries.set(entries.get() + 1));
+}
+
+#[cfg(not(test))]
+const fn mark_decoder_entry() {}
+
+#[cfg(test)]
+pub(super) fn reset_decoder_entries() {
+    DECODER_ENTRIES.with(|entries| entries.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn decoder_entries() -> usize {
+    DECODER_ENTRIES.with(std::cell::Cell::get)
 }
 
 fn to_rgba(

@@ -43,7 +43,7 @@ pub use ir::{
     TableRow, TimeRange, ValidationLimits,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
-pub use ocr_binding::{BoundOcrResult, OcrRecognition, OcrRegion, OcrResult};
+pub use ocr_binding::{BoundOcrResult, OcrOutputPlan, OcrRecognition, OcrRegion, OcrResult};
 pub use options::{
     AiMode, AiOptions, AssetMode, ConversionOptions, DelimitedTextOptions, NetworkOptions,
     OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode,

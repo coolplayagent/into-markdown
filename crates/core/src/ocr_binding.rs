@@ -3,6 +3,67 @@
 use crate::{ConversionError, OcrEvidenceStage, OcrEvidenceStep};
 use serde::{Deserialize, Serialize};
 
+/// Conservative retained-output and cardinality plan for bound OCR execution.
+///
+/// Fields remain private so providers cannot bypass validation with a struct
+/// literal. The plan covers the provider result and the structured OCR IR that
+/// consumes it; callers reserve it before invoking the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OcrOutputPlan {
+    max_retained_bytes: u64,
+    max_regions: u32,
+    max_text_bytes: u64,
+}
+
+impl OcrOutputPlan {
+    /// Construct a non-zero, internally consistent OCR output plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ResourceLimit`] for a zero bound or when the
+    /// cardinality bounds cannot fit inside the retained-byte bound.
+    pub fn try_new(
+        max_retained_bytes: u64,
+        max_regions: u32,
+        max_text_bytes: u64,
+    ) -> Result<Self, ConversionError> {
+        let structural = u64::from(max_regions)
+            .checked_mul(256)
+            .and_then(|bytes| bytes.checked_add(max_text_bytes))
+            .ok_or_else(|| plan_error("OCR output plan overflow"))?;
+        if max_retained_bytes == 0
+            || max_regions == 0
+            || max_text_bytes == 0
+            || structural > max_retained_bytes
+        {
+            return Err(plan_error("OCR output plan is zero or smaller than its declared payload"));
+        }
+        Ok(Self { max_retained_bytes, max_regions, max_text_bytes })
+    }
+
+    /// Maximum bytes retained by the bound result and emitted OCR IR.
+    #[must_use]
+    pub const fn max_retained_bytes(self) -> u64 {
+        self.max_retained_bytes
+    }
+
+    /// Maximum recognized regions returned by the provider.
+    #[must_use]
+    pub const fn max_regions(self) -> u32 {
+        self.max_regions
+    }
+
+    /// Maximum total UTF-8 text bytes across all regions.
+    #[must_use]
+    pub const fn max_text_bytes(self) -> u64 {
+        self.max_text_bytes
+    }
+}
+
+fn plan_error(detail: &str) -> ConversionError {
+    ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: detail.into() }
+}
+
 /// One spatial OCR result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OcrRegion {

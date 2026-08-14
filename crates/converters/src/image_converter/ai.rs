@@ -26,7 +26,7 @@ pub(super) async fn describe(
     }
     let request = AiRequest {
         capability: AiCapability::ImageDescription,
-        input: AiInput::Image { bytes: image, media_type: "image/png" },
+        input: AiInput::PageImage { bytes: image, media_type: "image/png", page },
         prompt: None,
     };
     let plan = provider.planned_output_bytes(request, options, context)?;

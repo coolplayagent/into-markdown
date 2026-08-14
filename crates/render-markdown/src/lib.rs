@@ -725,7 +725,9 @@ fn planned_render_peak(
                     }
                     rendered.checked_add(8).ok_or_else(render_plan_overflow)?
                 }
-                Block::Page { blocks, .. } => nodes(blocks, depth + 1, plan)?,
+                Block::Page { blocks, .. } => nodes(blocks, depth + 1, plan)?
+                    .checked_add(64)
+                    .ok_or_else(render_plan_overflow)?,
                 Block::Slide { title, blocks, .. } => {
                     let mut rendered = 32_u64;
                     if let Some(title) = title {
@@ -871,7 +873,7 @@ impl RenderContext<'_> {
     ) -> Result<String, ConversionError> {
         let mut rendered = Vec::with_capacity(nodes.len());
         for node in nodes {
-            let block = self.render_block(&node.block, inline_context)?;
+            let block = self.render_block(node, inline_context)?;
             if !block.is_empty() {
                 rendered.push(block);
             }
@@ -882,10 +884,10 @@ impl RenderContext<'_> {
     #[allow(clippy::too_many_lines)]
     fn render_block(
         &self,
-        block: &Block,
+        node: &BlockNode,
         inline_context: InlineContext,
     ) -> Result<String, ConversionError> {
-        match block {
+        match &node.block {
             Block::Paragraph(content) => render_inlines(content, inline_context),
             Block::Heading { level, content } => Ok(format!(
                 "{} {}",
@@ -912,8 +914,9 @@ impl RenderContext<'_> {
             Block::Image { asset, alt } => self.render_image(&asset.0, alt.as_deref()),
             Block::Page { number, blocks } => {
                 let body = self.render_blocks_in(blocks, inline_context)?;
+                let (anchor_prefix, heading) = page_render_identity(node);
                 Ok(with_body(
-                    format!("<a id=\"pdf-page-{number}\"></a>\n\n## Page {number}"),
+                    format!("<a id=\"{anchor_prefix}-{number}\"></a>\n\n## {heading} {number}"),
                     &body,
                 ))
             }
@@ -1204,6 +1207,17 @@ impl RenderContext<'_> {
                 escape_destination(&target, InlineContext::Normal)
             };
         Ok(format!("![{alt}](<{destination}>)"))
+    }
+}
+
+fn page_render_identity(node: &BlockNode) -> (&'static str, &'static str) {
+    if node.provenance.provider == "builtin.converter.image" || node.id.0.starts_with("image-page-")
+    {
+        ("image-frame", "Image frame")
+    } else {
+        // Preserve the established PDF anchor contract for PDF and legacy Page
+        // producers. New source families opt in through an audited identity.
+        ("pdf-page", "Page")
     }
 }
 

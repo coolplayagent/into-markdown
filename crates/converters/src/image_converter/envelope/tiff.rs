@@ -1,5 +1,6 @@
 //! Classic TIFF and `BigTIFF` directory-envelope validation.
 
+use super::intervals::IntervalGraph;
 use super::meter::Meter;
 use super::{Summary, limit, malformed, read_u16, read_u32, read_u64};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceLimits};
@@ -17,12 +18,15 @@ pub(super) fn validate(
     }
     validate_ifd_chain(bytes, layout, little, ifd, limits.max_pages, context)?;
 
+    let max_intervals = u64::from(limits.max_archive_entries)
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(u64::from(limits.max_pages)))
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| limit("image_intervals", "TIFF interval budget overflow"))?;
+    let mut intervals = IntervalGraph::new(max_intervals, context)?;
+    intervals.add(0, layout.header_size(), bytes.len())?;
     let mut frames = 0_u32;
     let mut total_entries = 0_u64;
-    let mut reachable_end = match layout {
-        Layout::Classic => 8_usize,
-        Layout::Big => 16_usize,
-    };
     while ifd != 0 {
         context.checkpoint()?;
         if frames >= limits.max_pages {
@@ -33,11 +37,10 @@ pub(super) fn validate(
         let (count, entries_offset, next_offset) = layout.directory(bytes, offset, little)?;
         let inline_size = usize::try_from(layout.inline_size())
             .map_err(|_| malformed("TIFF inline field size is unrepresentable"))?;
-        reachable_end = reachable_end.max(
-            next_offset
-                .checked_add(inline_size)
-                .ok_or_else(|| malformed("TIFF directory end overflow"))?,
-        );
+        let directory_end = next_offset
+            .checked_add(inline_size)
+            .ok_or_else(|| malformed("TIFF directory end overflow"))?;
+        intervals.add(offset, directory_end, bytes.len())?;
         total_entries = total_entries
             .checked_add(count)
             .ok_or_else(|| limit("max_archive_entries", "TIFF entry count overflow"))?;
@@ -63,7 +66,9 @@ pub(super) fn validate(
                         .ok_or_else(|| malformed("TIFF directory entry offset overflow"))?,
                 )
                 .ok_or_else(|| malformed("TIFF directory entry offset overflow"))?;
-            reachable_end = reachable_end.max(layout.validate_entry(bytes, entry, little)?);
+            if let Some((start, end)) = layout.validate_entry(bytes, entry, little)? {
+                intervals.add(start, end, bytes.len())?;
+            }
             let tag = read_u16(bytes, entry, little)
                 .ok_or_else(|| malformed("truncated TIFF field tag"))?;
             match tag {
@@ -137,19 +142,18 @@ pub(super) fn validate(
             if end > bytes.len() as u64 {
                 return Err(malformed("TIFF pixel segment exceeds the file envelope"));
             }
-            reachable_end = reachable_end.max(
+            intervals.add(
+                usize::try_from(data_offset)
+                    .map_err(|_| malformed("TIFF pixel segment is unrepresentable"))?,
                 usize::try_from(end)
                     .map_err(|_| malformed("TIFF pixel segment is unrepresentable"))?,
-            );
+                bytes.len(),
+            )?;
         }
         ifd = layout.read_offset(bytes, next_offset, little)?;
         frames += 1;
     }
-    if reachable_end != bytes.len() {
-        return Err(malformed(
-            "TIFF contains bytes beyond every declared directory and pixel range",
-        ));
-    }
+    intervals.require_exact_coverage(bytes, layout.alignment())?;
     Ok(Summary { frames, animated: frames > 1 })
 }
 
@@ -160,6 +164,20 @@ enum Layout {
 }
 
 impl Layout {
+    const fn header_size(self) -> usize {
+        match self {
+            Self::Classic => 8,
+            Self::Big => 16,
+        }
+    }
+
+    const fn alignment(self) -> usize {
+        match self {
+            Self::Classic => 4,
+            Self::Big => 8,
+        }
+    }
+
     const fn entry_size(self) -> usize {
         match self {
             Self::Classic => 12,
@@ -221,7 +239,7 @@ impl Layout {
         bytes: &[u8],
         offset: usize,
         little: bool,
-    ) -> Result<usize, ConversionError> {
+    ) -> Result<Option<(usize, usize)>, ConversionError> {
         let field_type = read_u16(bytes, offset + 2, little)
             .ok_or_else(|| malformed("truncated TIFF field type"))?;
         let element_bytes = field_type_size(field_type)
@@ -241,9 +259,10 @@ impl Layout {
         if payload_bytes <= self.inline_size() {
             let inline_size = usize::try_from(self.inline_size())
                 .map_err(|_| malformed("TIFF inline field size is unrepresentable"))?;
-            return value_offset
+            value_offset
                 .checked_add(inline_size)
-                .ok_or_else(|| malformed("TIFF inline field end overflow"));
+                .ok_or_else(|| malformed("TIFF inline field end overflow"))?;
+            return Ok(None);
         }
         let payload_offset = self.read_offset(bytes, value_offset, little)?;
         let end = payload_offset
@@ -252,7 +271,11 @@ impl Layout {
         if end > bytes.len() as u64 {
             return Err(malformed("TIFF field payload exceeds the file envelope"));
         }
-        usize::try_from(end).map_err(|_| malformed("TIFF field payload is unrepresentable"))
+        let start = usize::try_from(payload_offset)
+            .map_err(|_| malformed("TIFF field payload is unrepresentable"))?;
+        let end =
+            usize::try_from(end).map_err(|_| malformed("TIFF field payload is unrepresentable"))?;
+        Ok(Some((start, end)))
     }
 
     fn unsigned_field(
