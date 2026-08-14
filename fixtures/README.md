@@ -19,6 +19,13 @@ through its real converter and Markdown renderer. A limit fixture records an exa
 `ConversionOptions` field, the failing value, the adjacent passing value, the expected error limit,
 and the passing Markdown hash.
 
+The workbook slice contains separately checked-in XLSX, XLSM, and XLSB normal, corrupt, and
+exact-adjacent limit packages. `generate.py` writes the BIFF12 record streams directly from
+repository-owned values, so the XLSB corpus is reproducible without Excel, LibreOffice, or an
+opaque upstream workbook. Across the slice, the normal cases bind 1900/1904 dates, scalar and
+formula-cache semantics, inert macro parts, and repeated image anchors; corrupt and limit cases
+bind duplicate physical-sheet authority, truncated OPC/BIFF12 structure, and row-budget ±1.
+
 PDF is the one native-runtime format: its Apache-2.0 text, mixed, scanned, encrypted, damaged,
 over-page-limit, link, and four-rotation fixtures are generated deterministically by the Rust test
 module and executed only by the explicit pinned-PDFium smoke. Keeping those bytes out of the

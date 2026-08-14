@@ -13,6 +13,16 @@ by `AND` applies; in particular, `unicode-ident` is concluded as
 each package's copyright and license text; the registry source for every
 package is fixed by `Cargo.lock`.
 
+`calamine 0.36.1` parses XLSX/XLSM/XLSB only after the repository-owned
+OPC/BIFF12 scanner authenticates the third-party reading surface and its
+combined retained/transient peak under the engine's request credit. The panic
+boundary is error mapping, not allocator isolation. Calamine is distributed
+under MIT; Copyright (c) 2016 Johann Tuffe. The complete upstream license is
+preserved in `third_party/licenses/calamine-MIT.txt`. The reviewed crate
+checksum is `5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3`
+and its recorded upstream VCS revision is
+`0a24c2a9f1e38c0932c1299e633270dc730db505`.
+
 `clipper2-rust 1.1.0` is used for closed-polygon round offsets in OCR text
 detection. It is distributed under BSL-1.0; the complete license text is in
 `third_party/licenses/BSL-1.0.txt`. The reviewed crates.io source checksum is

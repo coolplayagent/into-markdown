@@ -59,6 +59,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::EpubConverter))
         .register_converter(Arc::new(into_markdown_converters::ZipConverter))
         .register_converter(Arc::new(into_markdown_converters::RtfConverter))
+        .register_converter(Arc::new(into_markdown_converters::WorkbookConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::MsgConverter))
@@ -116,6 +117,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::future::Future;
+    use std::io::{Cursor, Write as _};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -485,6 +487,370 @@ mod tests {
         let result = block_on(engine.convert(ConversionRequest::new(input))).unwrap();
         assert_eq!(result.markdown, "API 中文\n");
         assert!(result.provenance.iter().all(|record| record.provider == "builtin.converter.rtf"));
+    }
+
+    #[test]
+    fn default_engine_converts_repository_authored_xlsb() {
+        let request = ConversionRequest::new(InputRef::bytes(
+            repository_authored_xlsb(),
+            Some("repository-authored.xlsb"),
+        ));
+        let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+        assert!(result.markdown.contains("`=1+2 [cached: 3]`"));
+        assert!(result.markdown.contains("`=binary`"));
+        assert!(!result.markdown.lines().any(|line| line.starts_with("=binary")));
+        assert!(result.markdown.contains("https://example.invalid/xlsb"));
+        assert!(result.markdown.contains("Comment A1 (Alice): reviewed"));
+        assert!(result.markdown.contains("![xlsb pixel]"));
+        assert!(result.markdown.contains("2024\\-01\\-01"));
+        assert_eq!(result.document.metadata.properties["spreadsheet.sheet.0.hiddenRows"], "2");
+        assert_eq!(result.document.metadata.properties["spreadsheet.sheet.0.hiddenColumns"], "C");
+        let Block::Sheet { blocks, .. } = &result.document.blocks[0].block else { panic!() };
+        let Block::Table { rows, .. } = &blocks[0].block else { panic!() };
+        let Block::Paragraph(formula_link) = &rows[1].cells[0].blocks[0].block else { panic!() };
+        assert!(matches!(
+            &formula_link[0],
+            Inline::Link { target, content }
+                if target == "https://example.invalid/xlsb"
+                    && content == &[Inline::Code("=1+2 [cached: 3]".into())]
+        ));
+        assert_eq!(
+            result.document.metadata.properties["spreadsheet.formulaStylePolicy"],
+            "codeSemanticsOverrideCellMarks"
+        );
+        let image = blocks.iter().find(|node| matches!(node.block, Block::Image { .. })).unwrap();
+        assert_eq!(image.provenance.locator.part.as_deref(), Some("xl/drawings/drawing1.xml"));
+        assert_eq!(image.provenance.locator.cell, Some(CellRef { row: 1, column: 1 }));
+        assert_eq!(
+            result.document.metadata.properties["spreadsheet.sheet.0.image.0.target"],
+            "xl/media/pixel.png"
+        );
+        assert_eq!(
+            result.document.metadata.properties["spreadsheet.sheet.0.image.0.relationshipId"],
+            "rIdImage"
+        );
+        assert!(result.has_memory_lease());
+    }
+
+    #[test]
+    fn default_engine_workbook_memory_threshold_is_exact() {
+        let engine = default_engine().unwrap();
+        let bytes = Arc::<[u8]>::from(repository_authored_xlsb());
+        let attempt = |memory| {
+            let mut request = ConversionRequest::new(InputRef::bytes(
+                Arc::clone(&bytes),
+                Some("repository-authored.xlsb"),
+            ));
+            request.options.limits.max_memory_bytes = memory;
+            block_on(engine.convert(request))
+        };
+        let mut low = 0_u64;
+        let mut high = ConversionOptions::default().limits.max_memory_bytes;
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if attempt(middle).is_ok() {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        let exact = attempt(high).unwrap();
+        assert!(exact.has_memory_lease());
+        drop(exact);
+        assert!(matches!(
+            attempt(high - 1),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+    }
+
+    #[test]
+    fn default_engine_stale_xlsb_dimension_peak_precedes_calamine() {
+        let engine = default_engine().unwrap();
+        for actual_cell in [false, true] {
+            let bytes = Arc::<[u8]>::from(repository_authored_stale_xlsb(actual_cell));
+            let broad = block_on(engine.convert(ConversionRequest::new(InputRef::bytes(
+                Arc::clone(&bytes),
+                Some("stale-dimension.xlsb"),
+            ))))
+            .unwrap();
+            let peak = broad.document.metadata.properties["spreadsheet.preflight.memoryPeak"]
+                .parse::<u64>()
+                .unwrap();
+            assert!(peak >= 32_000_000);
+            drop(broad);
+
+            let exact_limit = u64::try_from(bytes.len()).unwrap().checked_add(peak).unwrap();
+            let attempt = |memory| {
+                let mut request = ConversionRequest::new(InputRef::bytes(
+                    Arc::clone(&bytes),
+                    Some("stale-dimension.xlsb"),
+                ));
+                request.options.limits.max_memory_bytes = memory;
+                block_on(engine.convert(request))
+            };
+            let exact = attempt(exact_limit).unwrap();
+            assert_eq!(
+                exact.document.metadata.properties["spreadsheet.sheet.0.bounds"],
+                if actual_cell { "A1:A1" } else { "empty" }
+            );
+            drop(exact);
+            let low = attempt(exact_limit - 1).unwrap_err();
+            assert!(matches!(
+                &low,
+                ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }
+            ));
+            assert!(format!("{low:?}").contains(&format!("{peak} >")));
+        }
+    }
+
+    // This fixture is assembled from the public MS-XLSB record layout during
+    // the test. It contains no third-party workbook bytes and is deterministic.
+    #[allow(clippy::too_many_lines)] // Keeping the record sequence linear makes the fixture auditable.
+    fn repository_authored_xlsb() -> Vec<u8> {
+        let mut workbook = Vec::new();
+        xlsb_record(&mut workbook, 0x0099, &0_u64.to_le_bytes()); // BrtWbProp
+        let mut bundle = Vec::new();
+        bundle.extend_from_slice(&0_u32.to_le_bytes()); // visible
+        bundle.extend_from_slice(&1_u32.to_le_bytes());
+        xlsb_string(&mut bundle, "rId1");
+        xlsb_string(&mut bundle, "Binary Sheet");
+        xlsb_record(&mut workbook, 0x009c, &bundle); // BrtBundleSh
+        xlsb_record(&mut workbook, 0x0090, &[]); // BrtEndBundleShs
+        xlsb_record(&mut workbook, 0x009d, &[]); // BrtEndBook
+
+        let mut styles = Vec::new();
+        xlsb_record(&mut styles, 0x0267, &0_u32.to_le_bytes()); // BrtBeginFmts
+        xlsb_record(&mut styles, 0x0268, &[]); // BrtEndFmts
+        xlsb_record(&mut styles, 0x0269, &2_u32.to_le_bytes()); // BrtBeginCellXFs
+        xlsb_record(&mut styles, 0x002f, &[0; 16]);
+        let mut date_xf = [0_u8; 16];
+        date_xf[2..4].copy_from_slice(&14_u16.to_le_bytes());
+        xlsb_record(&mut styles, 0x002f, &date_xf);
+        xlsb_record(&mut styles, 0x026a, &[]); // BrtEndCellXFs
+
+        let mut sheet = Vec::new();
+        xlsb_record(&mut sheet, 0x0081, &[]); // BrtBeginSheet
+        let mut dimensions = Vec::new();
+        dimensions.extend_from_slice(&0_u32.to_le_bytes());
+        dimensions.extend_from_slice(&1_u32.to_le_bytes());
+        dimensions.extend_from_slice(&0_u32.to_le_bytes());
+        dimensions.extend_from_slice(&2_u32.to_le_bytes());
+        xlsb_record(&mut sheet, 0x0094, &dimensions);
+        let mut column = [0_u8; 18];
+        column[0..4].copy_from_slice(&2_u32.to_le_bytes());
+        column[4..8].copy_from_slice(&2_u32.to_le_bytes());
+        column[16..18].copy_from_slice(&1_u16.to_le_bytes());
+        xlsb_record(&mut sheet, 0x003c, &column); // hidden C
+        xlsb_record(&mut sheet, 0x0091, &[]); // BrtBeginSheetData
+        xlsb_row(&mut sheet, 0, false);
+        let mut text_cell = xlsb_cell_header(0, 0);
+        xlsb_string(&mut text_cell, "Binary value");
+        xlsb_record(&mut sheet, 0x0006, &text_cell); // BrtCellSt
+        let mut bool_cell = xlsb_cell_header(1, 0);
+        bool_cell.push(1);
+        xlsb_record(&mut sheet, 0x0004, &bool_cell); // BrtCellBool
+        let mut date_cell = xlsb_cell_header(2, 1);
+        date_cell.extend_from_slice(&45_292_f64.to_le_bytes());
+        xlsb_record(&mut sheet, 0x0005, &date_cell); // BrtCellReal
+        xlsb_row(&mut sheet, 1, true);
+        let mut formula = xlsb_cell_header(0, 0);
+        formula.extend_from_slice(&3_f64.to_le_bytes());
+        formula.extend_from_slice(&0_u16.to_le_bytes());
+        let tokens = [0x1e, 1, 0, 0x1e, 2, 0, 0x03]; // 1 + 2
+        formula.extend_from_slice(&u32::try_from(tokens.len()).unwrap().to_le_bytes());
+        formula.extend_from_slice(&tokens);
+        xlsb_record(&mut sheet, 0x0009, &formula); // BrtFmlaNum
+        let mut dangerous_text = xlsb_cell_header(1, 0);
+        xlsb_string(&mut dangerous_text, "=binary");
+        xlsb_record(&mut sheet, 0x0006, &dangerous_text); // inert BrtCellSt
+        xlsb_record(&mut sheet, 0x0092, &[]); // BrtEndSheetData
+        let mut hyperlink = Vec::new();
+        hyperlink.extend_from_slice(&1_u32.to_le_bytes());
+        hyperlink.extend_from_slice(&1_u32.to_le_bytes());
+        hyperlink.extend_from_slice(&0_u32.to_le_bytes());
+        hyperlink.extend_from_slice(&0_u32.to_le_bytes());
+        xlsb_string(&mut hyperlink, "rIdHyper");
+        xlsb_string(&mut hyperlink, "");
+        xlsb_string(&mut hyperlink, "fixture hyperlink");
+        xlsb_string(&mut hyperlink, "safe");
+        xlsb_record(&mut sheet, 0x01ee, &hyperlink);
+        let mut drawing_id = Vec::new();
+        xlsb_string(&mut drawing_id, "rIdDrawing");
+        xlsb_record(&mut sheet, 0x0226, &drawing_id); // BrtDrawing
+        xlsb_record(&mut sheet, 0x0082, &[]); // BrtEndSheet
+
+        let mut comments = Vec::new();
+        xlsb_record(&mut comments, 0x0274, &[]); // BrtBeginComments
+        xlsb_record(&mut comments, 0x0276, &[]);
+        let mut author = Vec::new();
+        xlsb_string(&mut author, "Alice");
+        xlsb_record(&mut comments, 0x0278, &author);
+        xlsb_record(&mut comments, 0x0277, &[]);
+        xlsb_record(&mut comments, 0x0279, &[]);
+        let mut comment = Vec::new();
+        comment.extend_from_slice(&0_u32.to_le_bytes()); // author
+        comment.extend_from_slice(&0_u32.to_le_bytes()); // row first
+        comment.extend_from_slice(&0_u32.to_le_bytes()); // row last
+        comment.extend_from_slice(&0_u32.to_le_bytes()); // col first
+        comment.extend_from_slice(&0_u32.to_le_bytes()); // col last
+        comment.extend_from_slice(&[0; 16]); // guid
+        xlsb_record(&mut comments, 0x027b, &comment);
+        let mut comment_text = vec![1]; // RichStr with one formatting run
+        xlsb_string(&mut comment_text, "reviewed");
+        comment_text.extend_from_slice(&1_u32.to_le_bytes());
+        comment_text.extend_from_slice(&0_u16.to_le_bytes());
+        comment_text.extend_from_slice(&0_u16.to_le_bytes());
+        xlsb_record(&mut comments, 0x027d, &comment_text);
+        xlsb_record(&mut comments, 0x027c, &[]);
+        xlsb_record(&mut comments, 0x027a, &[]);
+        xlsb_record(&mut comments, 0x0275, &[]);
+
+        let content_types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/worksheets/sheet1.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/xl/styles.bin" ContentType="application/vnd.ms-excel.styles"/><Override PartName="/xl/comments1.bin" ContentType="application/vnd.ms-excel.comments"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>"#;
+        let root_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#;
+        let workbook_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.bin"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.bin"/></Relationships>"#;
+        let sheet_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdHyper" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/xlsb" TargetMode="External"/><Relationship Id="rIdComment" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.bin"/><Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+        let drawing = r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="XLSB pixel" descr="xlsb pixel"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImage"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
+        let drawing_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/pixel.png"/></Relationships>"#;
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00,
+            0x00, 0xb5, 0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0xda, 0x63, 0x64, 0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut output);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, bytes) in [
+                ("[Content_Types].xml", content_types.as_bytes()),
+                ("_rels/.rels", root_rels.as_bytes()),
+                ("xl/workbook.bin", workbook.as_slice()),
+                ("xl/_rels/workbook.bin.rels", workbook_rels.as_bytes()),
+                ("xl/styles.bin", styles.as_slice()),
+                ("xl/worksheets/sheet1.bin", sheet.as_slice()),
+                ("xl/worksheets/_rels/sheet1.bin.rels", sheet_rels.as_bytes()),
+                ("xl/comments1.bin", comments.as_slice()),
+                ("xl/drawings/drawing1.xml", drawing.as_bytes()),
+                ("xl/drawings/_rels/drawing1.xml.rels", drawing_rels.as_bytes()),
+                ("xl/media/pixel.png", png),
+            ] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        output.into_inner()
+    }
+
+    fn repository_authored_stale_xlsb(actual_cell: bool) -> Vec<u8> {
+        let mut workbook = Vec::new();
+        xlsb_record(&mut workbook, 0x0099, &0_u64.to_le_bytes());
+        let mut bundle = Vec::new();
+        bundle.extend_from_slice(&0_u32.to_le_bytes());
+        bundle.extend_from_slice(&1_u32.to_le_bytes());
+        xlsb_string(&mut bundle, "rId1");
+        xlsb_string(&mut bundle, "Stale");
+        xlsb_record(&mut workbook, 0x009c, &bundle);
+        xlsb_record(&mut workbook, 0x0090, &[]);
+        xlsb_record(&mut workbook, 0x009d, &[]);
+
+        let mut styles = Vec::new();
+        xlsb_record(&mut styles, 0x0267, &0_u32.to_le_bytes());
+        xlsb_record(&mut styles, 0x0268, &[]);
+        xlsb_record(&mut styles, 0x0269, &1_u32.to_le_bytes());
+        xlsb_record(&mut styles, 0x002f, &[0; 16]);
+        xlsb_record(&mut styles, 0x026a, &[]);
+
+        let mut sheet = Vec::new();
+        xlsb_record(&mut sheet, 0x0081, &[]);
+        let dimensions = [
+            0_u32.to_le_bytes(),
+            (MAX_XLSB_ROW - 1).to_le_bytes(),
+            0_u32.to_le_bytes(),
+            (MAX_XLSB_COLUMN - 1).to_le_bytes(),
+        ]
+        .concat();
+        xlsb_record(&mut sheet, 0x0094, &dimensions);
+        xlsb_record(&mut sheet, 0x0091, &[]);
+        if actual_cell {
+            xlsb_record(&mut sheet, 0x0000, &[0; 17]);
+            xlsb_record(&mut sheet, 0x0001, &[0; 8]);
+        }
+        xlsb_record(&mut sheet, 0x0092, &[]);
+        xlsb_record(&mut sheet, 0x0082, &[]);
+
+        let content_types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/xl/worksheets/sheet1.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/xl/styles.bin" ContentType="application/vnd.ms-excel.styles"/></Types>"#;
+        let root_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#;
+        let workbook_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.bin"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.bin"/></Relationships>"#;
+        let mut output = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut output);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, bytes) in [
+                ("[Content_Types].xml", content_types.as_bytes()),
+                ("_rels/.rels", root_rels.as_bytes()),
+                ("xl/workbook.bin", workbook.as_slice()),
+                ("xl/_rels/workbook.bin.rels", workbook_rels.as_bytes()),
+                ("xl/styles.bin", styles.as_slice()),
+                ("xl/worksheets/sheet1.bin", sheet.as_slice()),
+            ] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        output.into_inner()
+    }
+
+    const MAX_XLSB_ROW: u32 = 1_048_576;
+    const MAX_XLSB_COLUMN: u32 = 16_384;
+
+    fn xlsb_record(output: &mut Vec<u8>, typ: u16, payload: &[u8]) {
+        xlsb_varint(output, u32::from(typ));
+        xlsb_varint(output, u32::try_from(payload.len()).unwrap());
+        output.extend_from_slice(payload);
+    }
+
+    fn xlsb_varint(output: &mut Vec<u8>, mut value: u32) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            output.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn xlsb_string(output: &mut Vec<u8>, value: &str) {
+        let utf16: Vec<_> = value.encode_utf16().collect();
+        output.extend_from_slice(&u32::try_from(utf16.len()).unwrap().to_le_bytes());
+        for unit in utf16 {
+            output.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+
+    fn xlsb_cell_header(column: u32, style: u32) -> Vec<u8> {
+        let mut output = column.to_le_bytes().to_vec();
+        output.extend_from_slice(&style.to_le_bytes()[..3]);
+        output.push(0);
+        output
+    }
+
+    fn xlsb_row(output: &mut Vec<u8>, row: u32, hidden: bool) {
+        let mut payload = [0_u8; 17];
+        payload[0..4].copy_from_slice(&row.to_le_bytes());
+        payload[8..10].copy_from_slice(&300_u16.to_le_bytes());
+        if hidden {
+            payload[11] = 0x10;
+        }
+        xlsb_record(output, 0x0000, &payload);
     }
 
     #[test]

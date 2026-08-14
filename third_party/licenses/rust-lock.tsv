@@ -205,6 +205,17 @@ zerovec-derive	0.11.3	Unicode-3.0
 zip	2.4.2	MIT
 zmij	1.0.23	MIT
 zopfli	0.8.3	Apache-2.0
+atoi_simd	0.18.1	MIT
+byteorder	1.5.0	MIT
+calamine	0.36.1	MIT
+chrono	0.4.45	MIT
+codepage	0.1.2	MIT
+debug_unsafe	0.1.4	MIT
+fast-float2	0.2.3	MIT
+quick-xml	0.41.0	MIT
+typed-path	0.12.3	MIT
+zip	8.6.0	MIT
+zlib-rs	0.6.7	Zlib
 html5ever	0.39.0	MIT
 lock_api	0.4.14	MIT
 markup5ever	0.39.0	MIT

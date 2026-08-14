@@ -450,13 +450,13 @@ struct Numbering {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SupportedImage {
+pub(super) enum SupportedImage {
     Png,
     Jpeg,
 }
 
 impl SupportedImage {
-    fn media_type(self) -> &'static str {
+    pub(super) fn media_type(self) -> &'static str {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
@@ -2818,7 +2818,7 @@ fn local(name: &[u8]) -> &str {
     std::str::from_utf8(name.rsplit(|b| *b == b':').next().unwrap_or(name)).unwrap_or("")
 }
 
-fn supported_image(
+pub(super) fn supported_image(
     part: &str,
     declared_content_type: &str,
 ) -> Result<SupportedImage, ConversionError> {
@@ -2839,7 +2839,7 @@ fn supported_image(
     }
 }
 
-fn validate_image_bytes(
+pub(super) fn validate_image_bytes(
     image: SupportedImage,
     bytes: &[u8],
     part: &str,

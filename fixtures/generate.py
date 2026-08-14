@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import shutil
@@ -475,6 +476,220 @@ def patch_encrypted_flag(archive: bytes) -> bytes:
     return bytes(data)
 
 
+WORKBOOK_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+WORKBOOK_MACRO_MEDIA_TYPE = "application/vnd.ms-excel.sheet.macroEnabled.12"
+WORKBOOK_BINARY_MEDIA_TYPE = "application/vnd.ms-excel.sheet.binary.macroEnabled.12"
+
+
+def xml_workbook(
+    sheet: bytes,
+    *,
+    macro: bool = False,
+    date_1904: bool = False,
+    sheet_relationships: bytes | None = None,
+    extras: list[tuple[str, bytes, str]] | None = None,
+    duplicate_sheet_target: bool = False,
+) -> bytes:
+    extras = extras or []
+    main_type = (
+        "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+        if macro
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+    )
+    overrides = [
+        f'<Override PartName="/xl/workbook.xml" ContentType="{main_type}"/>',
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+    ]
+    defaults = [
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+        '<Default Extension="xml" ContentType="application/xml"/>',
+    ]
+    for name, _, content_type in extras:
+        extension = Path(name).suffix.removeprefix(".")
+        if extension in {"png", "jpg", "jpeg"}:
+            declaration = f'<Default Extension="{extension}" ContentType="{content_type}"/>'
+            if declaration not in defaults:
+                defaults.append(declaration)
+        elif not name.endswith(".rels"):
+            overrides.append(f'<Override PartName="/{name}" ContentType="{content_type}"/>')
+    content_types = (
+        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        + "".join(defaults + overrides)
+        + "</Types>"
+    ).encode()
+    duplicate_sheet = '<sheet name="Duplicate" sheetId="2" r:id="rIdDuplicate"/>' if duplicate_sheet_target else ""
+    workbook = (
+        '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<workbookPr date1904="{1 if date_1904 else 0}"/>'
+        f'<sheets><sheet name="Corpus" sheetId="1" r:id="rId1"/>{duplicate_sheet}</sheets></workbook>'
+    ).encode()
+    workbook_relationships = [
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    ]
+    if duplicate_sheet_target:
+        workbook_relationships.append(
+            '<Relationship Id="rIdDuplicate" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        )
+    if macro:
+        workbook_relationships.append(
+            '<Relationship Id="rIdMacro" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>'
+        )
+    workbook_rels = (
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(workbook_relationships)
+        + "</Relationships>"
+    ).encode()
+    styles = b'<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="0"/><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/></cellXfs></styleSheet>'
+    entries = [
+        ("[Content_Types].xml", content_types),
+        (
+            "_rels/.rels",
+            b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        ),
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", workbook_rels),
+        ("xl/styles.xml", styles),
+        ("xl/worksheets/sheet1.xml", sheet),
+    ]
+    if sheet_relationships is not None:
+        entries.append(("xl/worksheets/_rels/sheet1.xml.rels", sheet_relationships))
+    entries.extend((name, data) for name, data, _ in extras)
+    return zip_bytes(entries)
+
+
+def xlsb_varint(value: int) -> bytes:
+    output = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            byte |= 0x80
+        output.append(byte)
+        if not value:
+            return bytes(output)
+
+
+def xlsb_record(record_type: int, payload: bytes = b"") -> bytes:
+    return xlsb_varint(record_type) + xlsb_varint(len(payload)) + payload
+
+
+def xlsb_string(value: str) -> bytes:
+    encoded = value.encode("utf-16le")
+    return struct.pack("<I", len(encoded) // 2) + encoded
+
+
+def binary_workbook(row_count: int, *, corrupt_sheet: bool = False) -> bytes:
+    workbook = bytearray()
+    workbook += xlsb_record(0x0099, struct.pack("<Q", 0))
+    bundle = struct.pack("<II", 0, 1) + xlsb_string("rId1") + xlsb_string("Binary")
+    workbook += xlsb_record(0x009C, bundle)
+    workbook += xlsb_record(0x0090)
+    workbook += xlsb_record(0x009D)
+    styles = bytearray()
+    styles += xlsb_record(0x0267, struct.pack("<I", 0))
+    styles += xlsb_record(0x0268)
+    styles += xlsb_record(0x0269, struct.pack("<I", 2))
+    styles += xlsb_record(0x002F, bytes(16))
+    date_style = bytearray(16)
+    struct.pack_into("<H", date_style, 2, 14)
+    styles += xlsb_record(0x002F, bytes(date_style))
+    styles += xlsb_record(0x026A)
+    if corrupt_sheet:
+        sheet = b"\x94\x81"
+    else:
+        sheet_bytes = bytearray(xlsb_record(0x0081))
+        sheet_bytes += xlsb_record(0x0094, struct.pack("<IIII", 0, row_count - 1, 0, 2))
+        sheet_bytes += xlsb_record(0x0091)
+        for row in range(row_count):
+            row_header = bytearray(17)
+            struct.pack_into("<I", row_header, 0, row)
+            struct.pack_into("<H", row_header, 8, 300)
+            sheet_bytes += xlsb_record(0x0000, bytes(row_header))
+            header = struct.pack("<I", 0) + bytes(4)
+            if row == 0:
+                sheet_bytes += xlsb_record(0x0006, header + xlsb_string("Binary value"))
+                sheet_bytes += xlsb_record(0x0004, struct.pack("<I", 1) + bytes(4) + b"\x01")
+                sheet_bytes += xlsb_record(
+                    0x0005,
+                    struct.pack("<I", 2) + b"\x01\x00\x00\x00" + struct.pack("<d", 45292.0),
+                )
+            elif row == 1:
+                tokens = b"\x1e\x01\x00\x1e\x02\x00\x03"
+                formula = header + struct.pack("<dH", 3.0, 0) + struct.pack("<I", len(tokens)) + tokens
+                sheet_bytes += xlsb_record(0x0009, formula)
+            else:
+                sheet_bytes += xlsb_record(0x0001, header)
+        sheet_bytes += xlsb_record(0x0092)
+        sheet_bytes += xlsb_record(0x0082)
+        sheet = bytes(sheet_bytes)
+    content_types = b'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/xl/worksheets/sheet1.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/xl/styles.bin" ContentType="application/vnd.ms-excel.styles"/></Types>'
+    root_rels = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>'
+    workbook_rels = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.bin"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.bin"/></Relationships>'
+    return zip_bytes(
+        [
+            ("[Content_Types].xml", content_types),
+            ("_rels/.rels", root_rels),
+            ("xl/workbook.bin", bytes(workbook)),
+            ("xl/_rels/workbook.bin.rels", workbook_rels),
+            ("xl/styles.bin", bytes(styles)),
+            ("xl/worksheets/sheet1.bin", sheet),
+        ]
+    )
+
+
+def workbook_fixtures(root: Path) -> list[dict[str, object]]:
+    fixtures: list[dict[str, object]] = []
+    add = lambda *args: fixtures.append(generated_fixture(root, *args))
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    drawing = b'<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>2</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="Corpus" descr="corpus pixel"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImage"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Corpus again"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rIdImage"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>'
+    drawing_rels = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/corpus.png"/></Relationships>'
+    sheet_rels = b'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'
+    normal_sheet = b'<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:C3"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Corpus</t></is></c><c r="B1" t="b"><v>1</v></c><c r="C1"><v>42.5</v></c></row><row r="2"><c r="A2" s="1"><v>45292</v></c><c r="B2"><f>SUM(1,2)</f><v>3</v></c><c r="C2" t="inlineStr"><is><t>=cmd</t></is></c></row></sheetData><drawing r:id="rIdDrawing"/></worksheet>'
+    normal_xlsx = xml_workbook(
+        normal_sheet,
+        sheet_relationships=sheet_rels,
+        extras=[
+            ("xl/drawings/drawing1.xml", drawing, "application/vnd.openxmlformats-officedocument.drawing+xml"),
+            ("xl/drawings/_rels/drawing1.xml.rels", drawing_rels, "application/vnd.openxmlformats-package.relationships+xml"),
+            ("xl/media/corpus.png", png, "image/png"),
+        ],
+    )
+    xlsx_markdown = "## Sheet: Corpus\n\n|  |  |  |\n| --- | --- | --- |\n| Corpus | true | 42\\.5 |\n| 2024\\-01\\-01 00:00:00 | `=SUM(1,2) [cached: 3]` | `=cmd` |\n|  |  |  |\n\n![corpus pixel](<asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png>)\n\n![Corpus again](<asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png>)\n"
+    add("xlsx-normal", "xlsx", "normal", "small/xlsx/normal.xlsx", normal_xlsx, WORKBOOK_MEDIA_TYPE, expected("success", "1900 dates, scalar types, formula cache, dangerous text, and repeated image anchors", xlsx_markdown))
+    duplicate_workbook = xml_workbook(normal_sheet, duplicate_sheet_target=True)
+    add("xlsx-corrupt", "xlsx", "corrupt", "small/xlsx/corrupt.xlsx", duplicate_workbook, WORKBOOK_MEDIA_TYPE, expected("error", "two logical sheets reference one physical worksheet", error_code="malformed"))
+    limit_sheet = ('<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A257"/><sheetData>' + ''.join(f'<row r="{row}"><c r="A{row}"><v>{row}</v></c></row>' for row in range(1, 258)) + '</sheetData></worksheet>').encode()
+    limit_xlsx = xml_workbook(limit_sheet)
+    add("xlsx-limit", "xlsx", "limit", "small/xlsx/limit.xlsx", limit_xlsx, WORKBOOK_MEDIA_TYPE, limit_expected("worksheet row count crosses an exact large-table boundary", "max_table_rows", 256, 257, "max_table_rows", "", "cc60d88c796ebb658eee1669e2355d8e1ee1d78aac08e7abb3c60676d7d23d0f"))
+
+    macro_sheet = b'<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B2"/><sheetData><row r="1"><c r="A1" s="1"><v>45292</v></c><c r="B1" t="inlineStr"><is><t>macro inert</t></is></c></row><row r="2"><c r="A2"><f>1+2</f><v>3</v></c></row></sheetData></worksheet>'
+    normal_xlsm = xml_workbook(
+        macro_sheet,
+        macro=True,
+        date_1904=True,
+        extras=[("xl/vbaProject.bin", b"repository-owned inert macro fixture", "application/vnd.ms-office.vbaProject")],
+    )
+    xlsm_markdown = "## Sheet: Corpus\n\n|  |  |\n| --- | --- |\n| 2028\\-01\\-02 00:00:00 | macro inert |\n| `=1+2 [cached: 3]` |  |\n"
+    add("xlsm-normal", "xlsx", "normal", "small/xlsm/normal.xlsm", normal_xlsm, WORKBOOK_MACRO_MEDIA_TYPE, expected("success", "1904 date epoch and inert macro-bearing OPC parts", xlsm_markdown))
+    add("xlsm-corrupt", "xlsx", "corrupt", "small/xlsm/corrupt.xlsm", normal_xlsm[: len(normal_xlsm) // 2], WORKBOOK_MACRO_MEDIA_TYPE, expected("error", "truncated macro-enabled OPC package", error_code="malformed"))
+    limit_xlsm = xml_workbook(limit_sheet, macro=True, extras=[("xl/vbaProject.bin", b"inert", "application/vnd.ms-office.vbaProject")])
+    add("xlsm-limit", "xlsx", "limit", "small/xlsm/limit.xlsm", limit_xlsm, WORKBOOK_MACRO_MEDIA_TYPE, limit_expected("macro workbook row count crosses an exact large-table boundary", "max_table_rows", 256, 257, "max_table_rows", "", "cc60d88c796ebb658eee1669e2355d8e1ee1d78aac08e7abb3c60676d7d23d0f"))
+
+    normal_xlsb = binary_workbook(2)
+    xlsb_markdown = "## Sheet: Binary\n\n|  |  |  |\n| --- | --- | --- |\n| Binary value | true | 2024\\-01\\-01 00:00:00 |\n| `=1+2 [cached: 3]` |  |  |\n"
+    add("xlsb-normal", "xlsx", "normal", "small/xlsb/normal.xlsb", normal_xlsb, WORKBOOK_BINARY_MEDIA_TYPE, expected("success", "repository-authored BIFF12 types, cached formula, date style, and bounds", xlsb_markdown))
+    add("xlsb-corrupt", "xlsx", "corrupt", "small/xlsb/corrupt.xlsb", binary_workbook(2, corrupt_sheet=True), WORKBOOK_BINARY_MEDIA_TYPE, expected("error", "truncated BIFF12 record varint", error_code="malformed"))
+    limit_xlsb = binary_workbook(257)
+    xlsb_limit_markdown = xlsb_markdown + "|  |  |  |\n" * 255
+    add("xlsb-limit", "xlsx", "limit", "small/xlsb/limit.xlsb", limit_xlsb, WORKBOOK_BINARY_MEDIA_TYPE, limit_expected("BIFF12 row count crosses an exact large-table boundary", "max_table_rows", 256, 257, "max_table_rows", xlsb_limit_markdown))
+    return fixtures
+
+
 def render_ocr(root: Path, font_path: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if sha256(font_path.read_bytes()) != FONT_SHA256:
         raise SystemExit("font SHA-256 does not match the fixture authority")
@@ -635,6 +850,7 @@ def build(root: Path, font_path: Path) -> None:
     )
     add("epub-normal", "epub", "normal", "small/epub/normal.epub", epub_normal, "application/epub+zip", expected("success", "EPUB 3 package with navigation and one XHTML spine item", "# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n"))
 
+    fixtures.extend(workbook_fixtures(root))
     ocr_fixtures, ocr_goldens = render_ocr(root, font_path)
     fixtures.extend(ocr_fixtures)
     fixtures.sort(key=lambda item: str(item["id"]))
@@ -653,7 +869,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "wikipedia", "xml", "zip"],
+        "available_formats": ["csv", "docx", "epub", "feed", "html", "ipynb", "json", "markdown", "outlook-msg", "pdf", "rtf", "text", "tsv", "wikipedia", "xlsx", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {

@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "6a53739327585897c8ab6b7f8abba281a14aa30d75ef8cb107a3cb89f6344469",
+    "sha256": "882c7e042b92a53294302bcdb98fb7939fa7223786338b05413c83d4087873a3",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -27,6 +27,7 @@
     "text",
     "tsv",
     "wikipedia",
+    "xlsx",
     "xml",
     "zip"
   ],
@@ -1765,6 +1766,279 @@
         "error_code": "",
         "semantic_sha256": "3b9baf578c680e4c46536324deb79e134e37108479665593f16cc44f2f503778",
         "description": "offline MediaWiki API response with sections, links, and primary image"
+      }
+    },
+    {
+      "id": "xlsb-corrupt",
+      "format": "xlsx",
+      "scenario": "corrupt",
+      "path": "small/xlsb/corrupt.xlsb",
+      "bytes": 1937,
+      "sha256": "24ad0e12b401f5737379ff8f074049fd0cad2da78f277ca6f1ef460648e41ed4",
+      "media_type": "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated BIFF12 record varint"
+      }
+    },
+    {
+      "id": "xlsb-limit",
+      "format": "xlsx",
+      "scenario": "limit",
+      "path": "small/xlsb/limit.xlsb",
+      "bytes": 9497,
+      "sha256": "3f70a9a2aecf56da2539c2c5ed20ee2b351a895f5d86246cd65575a441b1d059",
+      "media_type": "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "BIFF12 row count crosses an exact large-table boundary",
+        "limit": {
+          "option": "max_table_rows",
+          "failing_value": 256,
+          "passing_value": 257,
+          "error_limit": "max_table_rows",
+          "passing_semantic_sha256": "6c256a7638166a689ba9c094a280e2f77b68a2e58ef6dd37c069f62b828a8310"
+        }
+      }
+    },
+    {
+      "id": "xlsb-normal",
+      "format": "xlsx",
+      "scenario": "normal",
+      "path": "small/xlsb/normal.xlsb",
+      "bytes": 2102,
+      "sha256": "12d75c9ade6db25935024bb38e069d1c976cbdce959686abbb249b1e624460c0",
+      "media_type": "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee",
+        "description": "repository-authored BIFF12 types, cached formula, date style, and bounds"
+      }
+    },
+    {
+      "id": "xlsm-corrupt",
+      "format": "xlsx",
+      "scenario": "corrupt",
+      "path": "small/xlsm/corrupt.xlsm",
+      "bytes": 1667,
+      "sha256": "1fc8f096f7d88a106e892d3e99ad1aab5e407e8efdbbd8ec3147cfaa9e8d72ef",
+      "media_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated macro-enabled OPC package"
+      }
+    },
+    {
+      "id": "xlsm-limit",
+      "format": "xlsx",
+      "scenario": "limit",
+      "path": "small/xlsm/limit.xlsm",
+      "bytes": 14393,
+      "sha256": "6983a31ec871070d5860fe0a5d2d2a3f3943b937f8739286a40e4cff0a36c1e6",
+      "media_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "macro workbook row count crosses an exact large-table boundary",
+        "limit": {
+          "option": "max_table_rows",
+          "failing_value": 256,
+          "passing_value": 257,
+          "error_limit": "max_table_rows",
+          "passing_semantic_sha256": "cc60d88c796ebb658eee1669e2355d8e1ee1d78aac08e7abb3c60676d7d23d0f"
+        }
+      }
+    },
+    {
+      "id": "xlsm-normal",
+      "format": "xlsx",
+      "scenario": "normal",
+      "path": "small/xlsm/normal.xlsm",
+      "bytes": 3334,
+      "sha256": "bc835f5adc98fd23300792388ad79f361b1829a71b5dee360010c41efc6c19b9",
+      "media_type": "application/vnd.ms-excel.sheet.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "78361dfef27119e9b1600879712ab0cf3b9196b14a908d1980b8780cc23e0751",
+        "description": "1904 date epoch and inert macro-bearing OPC parts"
+      }
+    },
+    {
+      "id": "xlsx-corrupt",
+      "format": "xlsx",
+      "scenario": "corrupt",
+      "path": "small/xlsx/corrupt.xlsx",
+      "bytes": 3405,
+      "sha256": "9d31e17738b6f01d99bb5c1a56d283474c6a09dc20995f74d56142d7d31f7c99",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "two logical sheets reference one physical worksheet"
+      }
+    },
+    {
+      "id": "xlsx-limit",
+      "format": "xlsx",
+      "scenario": "limit",
+      "path": "small/xlsx/limit.xlsx",
+      "bytes": 14082,
+      "sha256": "59ba3ccb4ccdfdc761c45e338ce385e7fdd14cd84d4c77030e1023994c661600",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "worksheet row count crosses an exact large-table boundary",
+        "limit": {
+          "option": "max_table_rows",
+          "failing_value": 256,
+          "passing_value": 257,
+          "error_limit": "max_table_rows",
+          "passing_semantic_sha256": "cc60d88c796ebb658eee1669e2355d8e1ee1d78aac08e7abb3c60676d7d23d0f"
+        }
+      }
+    },
+    {
+      "id": "xlsx-normal",
+      "format": "xlsx",
+      "scenario": "normal",
+      "path": "small/xlsx/normal.xlsx",
+      "bytes": 5293,
+      "sha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "54f31131d817ff48fb79e562d820992c04924d7a2639c3cd8f96ee70ebeed6d4",
+        "description": "1900 dates, scalar types, formula cache, dangerous text, and repeated image anchors"
       }
     },
     {
