@@ -380,6 +380,30 @@ fn authoritative_runtime_closure_cannot_be_omitted_or_disguised() {
 }
 
 #[test]
+fn build_only_cargo_packages_are_not_release_runtime_components() {
+    let inputs = generate_release_inputs(&root(), &request("aarch64-apple-darwin", &[])).unwrap();
+    assert!(inputs.component_ids.iter().any(|id| id == "cargo:serde@1.0.229"));
+    for package in [
+        "autocfg@1.5.1",
+        "cc@1.4.2",
+        "find-msvc-tools@0.1.10",
+        "phf_codegen@0.13.1",
+        "phf_generator@0.13.1",
+        "pkg-config@0.3.33",
+        "shlex@2.0.1",
+        "string_cache_codegen@0.6.1",
+        "vcpkg@0.2.15",
+        "version_check@0.9.5",
+    ] {
+        assert!(!inputs.component_ids.iter().any(|id| id == &format!("cargo:{package}")));
+    }
+    let errors =
+        generate_release_inputs(&root(), &request("aarch64-apple-darwin", &["cargo:cc@1.4.2"]))
+            .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("not release-eligible")));
+}
+
+#[test]
 fn missing_or_untyped_license_material_fails_closed() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     projection.license_materials.clear();

@@ -18,9 +18,13 @@ copy or reinterpret it.
 
 The following files are projections or evidence and must agree with the component authority:
 
-- `Cargo.lock` and `third_party/licenses/rust-lock.tsv` describe the complete Rust dependency set.
-  The transitive normal-dependency closure rooted at `into-markdown-cli` is mandatory, and Bazel's
-  `into-md` target must consume that same Cargo authority through `all_crate_deps`.
+- `Cargo.lock`, `third_party/licenses/rust-lock.tsv`, and the checked
+  `cargo-normal-runtime.json` metadata projection describe the complete Rust dependency set. The
+  metadata projection is bound to `Cargo.lock` and every workspace member manifest, and partitions
+  every locked registry package by dependency kind, so only the
+  transitive normal-dependency closure rooted at `into-markdown-cli` is mandatory; build-only
+  packages are ineligible for release. Bazel's `into-md` graph must consume that same normal
+  authority through named production targets.
 - `pnpm-lock.yaml`, `third_party/licenses/npm-inventory.json`, checked-in license texts, and the npm
   SPDX document describe console assets shipped by Bazel.
 - `models/manifest.json` and model authority files describe source archives, derived runtime files,

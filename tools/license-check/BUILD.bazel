@@ -17,6 +17,7 @@ DATA = [
     "//third_party/licenses:inventory.json",
     "//third_party/licenses:BSL-1.0.txt",
     "//third_party/licenses:calamine-MIT.txt",
+    "//third_party/licenses:cargo-normal-runtime.json",
     "//third_party/licenses:imageproc-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
     "//third_party/licenses:npm-release.spdx.json",
@@ -76,6 +77,7 @@ filegroup(
 rust_library(
     name = "license_check_lib",
     srcs = [
+        "src/cargo_runtime.rs",
         "src/lib.rs",
         "src/ffmpeg.rs",
         "src/models_fixtures.rs",

@@ -19,8 +19,14 @@ struct LockedPackage {
     dependencies: Vec<String>,
 }
 
-pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec<Component> {
-    let lock: CargoLock = match toml::from_str(lock) {
+pub(crate) fn load(
+    repository: &std::path::Path,
+    lock_text: &str,
+    approvals: &str,
+    normal_runtime: &str,
+    errors: &mut Vec<String>,
+) -> Vec<Component> {
+    let lock: CargoLock = match toml::from_str(lock_text) {
         Ok(lock) => lock,
         Err(error) => {
             errors.push(format!("invalid Cargo.lock release authority: {error}"));
@@ -42,7 +48,22 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             errors.push(format!("duplicate Rust release authority {}@{}", key.0, key.1));
         }
     }
-    let required = runtime_closure(&lock.package, "into-markdown-cli", errors);
+    let registry_packages = lock
+        .package
+        .iter()
+        .filter(|package| {
+            package.source.as_deref()
+                == Some("registry+https://github.com/rust-lang/crates.io-index")
+        })
+        .map(|package| (package.name.clone(), package.version.clone()))
+        .collect();
+    let required = crate::cargo_runtime::packages(
+        repository,
+        lock_text,
+        &registry_packages,
+        normal_runtime,
+        errors,
+    );
     let mut locked = BTreeSet::new();
     let mut components = Vec::new();
     for package in lock.package {
@@ -68,7 +89,7 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             kind: "rust-library".to_owned(),
             status: "reviewed".to_owned(),
             included_in_release: false,
-            release_eligible: true,
+            release_eligible: required.contains(&key),
             manual_only: false,
             required_in_core: required.contains(&key),
             version: Some(key.1.clone()),
@@ -87,63 +108,13 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
                     target: None,
                 }])
                 .unwrap_or_default(),
-            authority: "Cargo.lock + third_party/licenses/rust-lock.tsv".to_owned(),
+            authority: "Cargo.lock + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json".to_owned(),
         });
     }
     for stale in approved.keys().filter(|key| !locked.contains(*key)) {
         errors.push(format!("stale Rust release authority {}@{}", stale.0, stale.1));
     }
     components
-}
-
-fn runtime_closure(
-    packages: &[LockedPackage],
-    root: &str,
-    errors: &mut Vec<String>,
-) -> BTreeSet<(String, String)> {
-    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, package) in packages.iter().enumerate() {
-        by_name.entry(&package.name).or_default().push(index);
-    }
-    let Some(root_index) =
-        by_name.get(root).and_then(|items| (items.len() == 1).then_some(items[0]))
-    else {
-        errors.push(format!("Cargo.lock must contain one {root} package"));
-        return BTreeSet::new();
-    };
-    let mut seen = BTreeSet::new();
-    let mut pending = vec![root_index];
-    while let Some(index) = pending.pop() {
-        if !seen.insert(index) {
-            continue;
-        }
-        for dependency in &packages[index].dependencies {
-            let mut fields = dependency.split_whitespace();
-            let name = fields.next().unwrap_or_default();
-            let version = fields
-                .next()
-                .filter(|value| value.as_bytes().first().is_some_and(u8::is_ascii_digit));
-            let candidates = by_name.get(name).cloned().unwrap_or_default();
-            let matches: Vec<_> = candidates
-                .into_iter()
-                .filter(|candidate| version.is_none_or(|v| packages[*candidate].version == v))
-                .collect();
-            if matches.len() == 1 {
-                pending.push(matches[0]);
-            } else {
-                errors.push(format!(
-                    "Cargo.lock dependency {dependency:?} from {}@{} is ambiguous or missing",
-                    packages[index].name, packages[index].version
-                ));
-            }
-        }
-    }
-    seen.into_iter()
-        .filter_map(|index| {
-            let package = &packages[index];
-            package.source.as_deref().map(|_| (package.name.clone(), package.version.clone()))
-        })
-        .collect()
 }
 
 pub(crate) fn validate_bazel_bridge(repository: &std::path::Path, errors: &mut Vec<String>) {
@@ -479,7 +450,8 @@ fn cargo_package_name(path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        attribute, contains_unquoted, named_rule_body, strip_comments, validate_bazel_runtime_graph,
+        CargoLock, attribute, contains_unquoted, named_rule_body, strip_comments,
+        validate_bazel_runtime_graph,
     };
     use std::fs;
 
@@ -582,5 +554,74 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         validate_bazel_runtime_graph(&root, &mut errors);
         assert!(errors.iter().any(|error| error.contains("runtime closure differs")));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normal_runtime_authority_rejects_build_only_inclusion_and_runtime_omission() {
+        let root = crate::repository_root().unwrap();
+        let lock_text = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let lock: CargoLock = toml::from_str(&lock_text).unwrap();
+        let authority_text =
+            fs::read_to_string(root.join("third_party/licenses/cargo-normal-runtime.json"))
+                .unwrap();
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        let normal = authority["normal_registry_packages"].as_array_mut().unwrap();
+        assert!(!normal.iter().any(|value| value == "cc@1.4.2"));
+        assert!(normal.iter().any(|value| value == "serde@1.0.229"));
+
+        normal.push(serde_json::Value::String("cc@1.4.2".into()));
+        normal.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        let mut errors = Vec::new();
+        crate::cargo_runtime::packages(
+            &root,
+            &lock_text,
+            &lock
+                .package
+                .iter()
+                .filter(|package| package.source.is_some())
+                .map(|package| (package.name.clone(), package.version.clone()))
+                .collect(),
+            &serde_json::to_string(&authority).unwrap(),
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| error.contains("exactly partition")));
+
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        authority["normal_registry_packages"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|value| value != "serde@1.0.229");
+        errors.clear();
+        crate::cargo_runtime::packages(
+            &root,
+            &lock_text,
+            &lock
+                .package
+                .iter()
+                .filter(|package| package.source.is_some())
+                .map(|package| (package.name.clone(), package.version.clone()))
+                .collect(),
+            &serde_json::to_string(&authority).unwrap(),
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| error.contains("exactly partition")));
+
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        authority["workspace_manifest_sha256"]["apps/cli/Cargo.toml"] =
+            serde_json::Value::String("0".repeat(64));
+        errors.clear();
+        crate::cargo_runtime::packages(
+            &root,
+            &lock_text,
+            &lock
+                .package
+                .iter()
+                .filter(|package| package.source.is_some())
+                .map(|package| (package.name.clone(), package.version.clone()))
+                .collect(),
+            &serde_json::to_string(&authority).unwrap(),
+            &mut errors,
+        );
+        assert!(errors.iter().any(|error| error.contains("apps/cli/Cargo.toml")));
     }
 }

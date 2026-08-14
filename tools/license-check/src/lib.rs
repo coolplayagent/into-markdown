@@ -1,5 +1,6 @@
 //! Offline validation for the repository's license policy and inventories.
 
+mod cargo_runtime;
 mod ffmpeg;
 mod materials;
 mod models_fixtures;

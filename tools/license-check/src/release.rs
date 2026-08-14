@@ -159,9 +159,17 @@ fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inve
             let cargo_lock = read(repository.join("Cargo.lock"), errors);
             let rust_approvals =
                 read(repository.join("third_party/licenses/rust-lock.tsv"), errors);
+            let cargo_normal_runtime =
+                read(repository.join("third_party/licenses/cargo-normal-runtime.json"), errors);
             let npm_inventory =
                 read(repository.join("third_party/licenses/npm-inventory.json"), errors);
-            inventory.components.extend(rust::load(&cargo_lock, &rust_approvals, errors));
+            inventory.components.extend(rust::load(
+                repository,
+                &cargo_lock,
+                &rust_approvals,
+                &cargo_normal_runtime,
+                errors,
+            ));
             inventory.components.extend(npm::load(&npm_inventory, errors));
             Some((inventory, policy))
         }
