@@ -1371,15 +1371,7 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> 
 }
 
 fn validate_part_name(part: &str, path: &str) -> Result<(), IrError> {
-    let has_drive_prefix = part.as_bytes().get(1) == Some(&b':')
-        && part.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    let invalid = part.is_empty()
-        || part.starts_with('/')
-        || has_drive_prefix
-        || part.contains('\\')
-        || part.chars().any(char::is_control)
-        || part.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | ".."));
-    if invalid {
+    if !is_safe_container_part_name(part) {
         return Err(IrError::new(
             IrErrorCode::InvalidLocator,
             path,
@@ -1387,6 +1379,17 @@ fn validate_part_name(part: &str, path: &str) -> Result<(), IrError> {
         ));
     }
     Ok(())
+}
+
+pub(crate) fn is_safe_container_part_name(part: &str) -> bool {
+    let has_drive_prefix = part.as_bytes().get(1) == Some(&b':')
+        && part.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    !(part.is_empty()
+        || part.starts_with('/')
+        || has_drive_prefix
+        || part.contains('\\')
+        || part.chars().any(char::is_control)
+        || part.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | "..")))
 }
 
 fn validate_block(

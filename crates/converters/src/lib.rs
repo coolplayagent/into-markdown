@@ -30,8 +30,9 @@ mod fixture_corpus_tests;
 
 pub use core_catalog::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
-    FormatDescriptor, FormatStatus, RuntimeRequirement, core_capabilities, core_formats,
-    register_core_components, validate_core_capabilities, verify_packaged_legacy_office_runtime,
+    CatalogFormatDescriptor, FormatDescriptor, FormatStatus, RuntimeRequirement, core_capabilities,
+    core_format_catalog, core_formats, register_core_components, validate_core_capabilities,
+    verify_packaged_legacy_office_runtime,
 };
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;

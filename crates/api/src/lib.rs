@@ -14,9 +14,9 @@ pub use into_markdown_ai::{
 };
 pub use into_markdown_converters::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
-    FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits, RuntimeRequirement,
-    core_capabilities, core_formats, merge_pdf_ocr, reconstruct_pdf_layout,
-    verify_packaged_legacy_office_runtime, verify_pdfium_runtime,
+    CatalogFormatDescriptor, FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits,
+    RuntimeRequirement, core_capabilities, core_format_catalog, core_formats, merge_pdf_ocr,
+    reconstruct_pdf_layout, verify_packaged_legacy_office_runtime, verify_pdfium_runtime,
 };
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{
@@ -90,6 +90,12 @@ pub fn default_engine_with_services(services: Services) -> Result<Engine, Conver
 #[must_use]
 pub fn planned_formats() -> &'static [FormatDescriptor] {
     core_formats()
+}
+
+/// Registered core formats with provenance and optional-runtime metadata.
+#[must_use]
+pub fn format_catalog() -> &'static [CatalogFormatDescriptor] {
+    core_format_catalog()
 }
 
 /// Planned AI/plugin adapters.

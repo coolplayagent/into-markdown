@@ -188,6 +188,30 @@ fn fixture(relative: &str) -> PathBuf {
 }
 
 #[test]
+fn presentationml_extensions_complete_real_cli_conversion() {
+    let directory = tempfile::tempdir().unwrap();
+    for relative in [
+        "small/pptx/normal.pptx",
+        "small/pptx/macro.pptm",
+        "small/pptx/slideshow.ppsx",
+        "small/pptx/macro-slideshow.ppsm",
+        "small/pptx/template.potx",
+    ] {
+        let fixture = fixture(relative);
+        let input = directory.path().join(fixture.file_name().unwrap());
+        std::fs::copy(fixture, &input).unwrap();
+        let output = Command::new(binary())
+            .args(["--no-config", "--ocr", "off", input.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{relative}: {}", String::from_utf8_lossy(&output.stderr));
+        let markdown = String::from_utf8(output.stdout).unwrap();
+        assert!(markdown.starts_with("## Slide 1:"), "{relative}: {markdown}");
+        assert!(markdown.contains("Speaker notes"), "{relative}: {markdown}");
+    }
+}
+
+#[test]
 fn provider_test_requires_double_authorization_and_never_emits_secret() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

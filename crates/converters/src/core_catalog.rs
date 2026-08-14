@@ -140,6 +140,17 @@ pub struct FormatDescriptor {
     pub extensions: &'static [&'static str],
     /// Converter registration status.
     pub status: FormatStatus,
+}
+
+/// Catalog metadata for one public format descriptor.
+///
+/// Provenance and runtime distribution details live here so extending the
+/// catalog does not add required fields to the long-standing public
+/// [`FormatDescriptor`] struct-literal contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogFormatDescriptor {
+    /// Backward-compatible public format description.
+    pub descriptor: &'static FormatDescriptor,
     /// Package provenance boundary.
     pub source: CapabilitySource,
     /// Separately installed dependency, when required.
@@ -163,44 +174,69 @@ const AVAILABLE: FormatStatus = FormatStatus::Available;
 const CORE: CapabilitySource = CapabilitySource::Core;
 
 const FORMATS: &[FormatDescriptor] = &[
-    format(InputFormat::Pdf, "document", &["pdf"], Some(PDFIUM)),
-    format(InputFormat::Doc, "document", &["doc"], Some(LEGACY_OFFICE)),
-    format(InputFormat::Docx, "document", &["docx", "docm"], None),
-    format(InputFormat::Ppt, "document", &["ppt", "pps", "pot"], Some(LEGACY_OFFICE)),
-    format(InputFormat::Pptx, "document", &["pptx", "pptm", "ppsx", "ppsm", "potx"], None),
-    format(InputFormat::Xls, "document", &["xls"], Some(LEGACY_OFFICE)),
-    format(InputFormat::Xlsx, "document", &["xlsx", "xlsm", "xlsb"], None),
-    format(InputFormat::Odt, "document", &["odt"], None),
-    format(InputFormat::Ods, "document", &["ods"], None),
-    format(InputFormat::Odp, "document", &["odp"], None),
-    format(InputFormat::Rtf, "document", &["rtf"], None),
-    format(InputFormat::Epub, "document", &["epub"], None),
-    format(InputFormat::Text, "text", &["txt", "text", "log"], None),
-    format(InputFormat::Markdown, "text", &["md", "markdown", "mdown"], None),
-    format(InputFormat::Html, "text", &["html", "htm"], None),
-    format(InputFormat::Csv, "data", &["csv"], None),
-    format(InputFormat::Tsv, "data", &["tsv"], None),
-    format(InputFormat::Json, "data", &["json"], None),
-    format(InputFormat::Xml, "data", &["xml"], None),
-    format(InputFormat::Feed, "data", &["rss", "atom"], None),
-    format(InputFormat::Ipynb, "data", &["ipynb"], None),
-    format(
-        InputFormat::Image,
-        "image",
-        &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"],
-        None,
-    ),
-    format(InputFormat::Zip, "container", &["zip"], None),
-    format(InputFormat::OutlookMsg, "message", &["msg"], None),
+    format(InputFormat::Pdf, "document", &["pdf"]),
+    format(InputFormat::Doc, "document", &["doc"]),
+    format(InputFormat::Docx, "document", &["docx", "docm"]),
+    format(InputFormat::Ppt, "document", &["ppt", "pps", "pot"]),
+    format(InputFormat::Pptx, "document", &["pptx", "pptm", "ppsx", "ppsm", "potx"]),
+    format(InputFormat::Xls, "document", &["xls"]),
+    format(InputFormat::Xlsx, "document", &["xlsx", "xlsm", "xlsb"]),
+    format(InputFormat::Odt, "document", &["odt"]),
+    format(InputFormat::Ods, "document", &["ods"]),
+    format(InputFormat::Odp, "document", &["odp"]),
+    format(InputFormat::Rtf, "document", &["rtf"]),
+    format(InputFormat::Epub, "document", &["epub"]),
+    format(InputFormat::Text, "text", &["txt", "text", "log"]),
+    format(InputFormat::Markdown, "text", &["md", "markdown", "mdown"]),
+    format(InputFormat::Html, "text", &["html", "htm"]),
+    format(InputFormat::Csv, "data", &["csv"]),
+    format(InputFormat::Tsv, "data", &["tsv"]),
+    format(InputFormat::Json, "data", &["json"]),
+    format(InputFormat::Xml, "data", &["xml"]),
+    format(InputFormat::Feed, "data", &["rss", "atom"]),
+    format(InputFormat::Ipynb, "data", &["ipynb"]),
+    format(InputFormat::Image, "image", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"]),
+    format(InputFormat::Zip, "container", &["zip"]),
+    format(InputFormat::OutlookMsg, "message", &["msg"]),
+];
+
+const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
+    catalog(0, Some(PDFIUM)),
+    catalog(1, Some(LEGACY_OFFICE)),
+    catalog(2, None),
+    catalog(3, Some(LEGACY_OFFICE)),
+    catalog(4, None),
+    catalog(5, Some(LEGACY_OFFICE)),
+    catalog(6, None),
+    catalog(7, None),
+    catalog(8, None),
+    catalog(9, None),
+    catalog(10, None),
+    catalog(11, None),
+    catalog(12, None),
+    catalog(13, None),
+    catalog(14, None),
+    catalog(15, None),
+    catalog(16, None),
+    catalog(17, None),
+    catalog(18, None),
+    catalog(19, None),
+    catalog(20, None),
+    catalog(21, None),
+    catalog(22, None),
+    catalog(23, None),
 ];
 
 const fn format(
     format: InputFormat,
     family: &'static str,
     extensions: &'static [&'static str],
-    runtime: Option<RuntimeRequirement>,
 ) -> FormatDescriptor {
-    FormatDescriptor { format, family, extensions, status: AVAILABLE, source: CORE, runtime }
+    FormatDescriptor { format, family, extensions, status: AVAILABLE }
+}
+
+const fn catalog(index: usize, runtime: Option<RuntimeRequirement>) -> CatalogFormatDescriptor {
+    CatalogFormatDescriptor { descriptor: &FORMATS[index], source: CORE, runtime }
 }
 
 const CAPABILITIES: &[CapabilityDescriptor] = &[
@@ -318,6 +354,12 @@ const fn runtime(id: &'static str, runtime: RuntimeRequirement) -> CapabilityDes
 #[must_use]
 pub const fn core_formats() -> &'static [FormatDescriptor] {
     FORMATS
+}
+
+/// Formats plus core catalog provenance and runtime distribution metadata.
+#[must_use]
+pub const fn core_format_catalog() -> &'static [CatalogFormatDescriptor] {
+    FORMAT_CATALOG
 }
 
 /// Components actually shipped or consumed by the core package.
@@ -451,8 +493,9 @@ fn validate_format_coverage(
     capabilities: &[CapabilityDescriptor],
     coverage: &BTreeMap<InputFormat, &str>,
 ) -> Result<(), ConversionError> {
-    for descriptor in FORMATS {
-        if descriptor.source != CapabilitySource::Core
+    for catalog_entry in FORMAT_CATALOG {
+        let descriptor = catalog_entry.descriptor;
+        if catalog_entry.source != CapabilitySource::Core
             || descriptor.status != FormatStatus::Available
         {
             return catalog_error(format!(
@@ -472,14 +515,14 @@ fn validate_format_coverage(
                     descriptor.format
                 ),
             })?;
-        if converter.runtime != descriptor.runtime {
+        if converter.runtime != catalog_entry.runtime {
             return catalog_error(format!(
                 "core format {} runtime requirement drifted",
                 descriptor.format
             ));
         }
     }
-    if coverage.len() != FORMATS.len() {
+    if coverage.len() != FORMAT_CATALOG.len() {
         return catalog_error("converter inventory exposes a non-core format");
     }
     Ok(())
@@ -638,8 +681,8 @@ mod tests {
 
     #[test]
     fn plugins_and_media_are_absent_from_core_release_inventory() {
-        assert!(FORMATS.iter().all(|entry| !matches!(
-            entry.format,
+        assert!(FORMAT_CATALOG.iter().all(|entry| !matches!(
+            entry.descriptor.format,
             InputFormat::Audio | InputFormat::Video | InputFormat::YouTube | InputFormat::Wikipedia
         )));
         assert!(CAPABILITIES.iter().all(

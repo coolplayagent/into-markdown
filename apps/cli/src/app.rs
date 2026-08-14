@@ -161,18 +161,18 @@ fn list_formats(
     json: bool,
     stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let views = into_markdown::planned_formats()
+    let views = into_markdown::format_catalog()
         .iter()
-        .filter(|descriptor| family.is_none_or(|family| descriptor.family == family))
-        .filter(|descriptor| status.is_none_or(|status| descriptor.status.as_str() == status))
-        .map(|descriptor| FormatView {
-            format: descriptor.format.as_str(),
-            family: descriptor.family,
-            status: descriptor.status.as_str(),
-            source: descriptor.source.as_str(),
-            extensions: descriptor.extensions,
-            runtime_component: descriptor.runtime.map(|runtime| runtime.component),
-            install_hint: descriptor.runtime.map(|runtime| runtime.install_hint),
+        .filter(|entry| family.is_none_or(|family| entry.descriptor.family == family))
+        .filter(|entry| status.is_none_or(|status| entry.descriptor.status.as_str() == status))
+        .map(|entry| FormatView {
+            format: entry.descriptor.format.as_str(),
+            family: entry.descriptor.family,
+            status: entry.descriptor.status.as_str(),
+            source: entry.source.as_str(),
+            extensions: entry.descriptor.extensions,
+            runtime_component: entry.runtime.map(|runtime| runtime.component),
+            install_hint: entry.runtime.map(|runtime| runtime.install_hint),
         })
         .collect::<Vec<_>>();
     if json {
@@ -196,16 +196,17 @@ fn list_formats(
 }
 
 fn show_format(value: &str, json: bool, stdout: &mut dyn Write) -> Result<(), CliError> {
-    let descriptor =
+    let entry =
         find_format(value).ok_or_else(|| CliError::usage(format!("unknown format '{value}'")))?;
+    let descriptor = entry.descriptor;
     let view = FormatView {
         format: descriptor.format.as_str(),
         family: descriptor.family,
         status: descriptor.status.as_str(),
-        source: descriptor.source.as_str(),
+        source: entry.source.as_str(),
         extensions: descriptor.extensions,
-        runtime_component: descriptor.runtime.map(|runtime| runtime.component),
-        install_hint: descriptor.runtime.map(|runtime| runtime.install_hint),
+        runtime_component: entry.runtime.map(|runtime| runtime.component),
+        install_hint: entry.runtime.map(|runtime| runtime.install_hint),
     };
     if json {
         write_json(stdout, &view)
@@ -2376,15 +2377,15 @@ fn sanitize_component(value: &str) -> String {
 
 fn parse_format(value: &str) -> Result<InputFormat, CliError> {
     find_format(value)
-        .map(|descriptor| descriptor.format)
+        .map(|entry| entry.descriptor.format)
         .ok_or_else(|| CliError::usage(format!("unknown format '{value}'")))
 }
 
-fn find_format(value: &str) -> Option<&'static into_markdown::FormatDescriptor> {
+fn find_format(value: &str) -> Option<&'static into_markdown::CatalogFormatDescriptor> {
     let normalized = value.trim_start_matches('.').to_ascii_lowercase();
-    into_markdown::planned_formats().iter().find(|descriptor| {
-        descriptor.format.as_str() == normalized
-            || descriptor.extensions.iter().any(|extension| *extension == normalized)
+    into_markdown::format_catalog().iter().find(|entry| {
+        entry.descriptor.format.as_str() == normalized
+            || entry.descriptor.extensions.iter().any(|extension| *extension == normalized)
     })
 }
 
