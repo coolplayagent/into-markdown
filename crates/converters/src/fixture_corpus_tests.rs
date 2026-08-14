@@ -166,6 +166,7 @@ fn format(value: &str) -> InputFormat {
         "text" => InputFormat::Text,
         "tsv" => InputFormat::Tsv,
         "wikipedia" => InputFormat::Wikipedia,
+        "xlsx" => InputFormat::Xlsx,
         "xml" => InputFormat::Xml,
         unknown => panic!("fixture uses unknown converter format {unknown}"),
     }
@@ -185,6 +186,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Rtf => Box::new(RtfConverter),
         InputFormat::OutlookMsg => Box::new(MsgConverter),
         InputFormat::Wikipedia => Box::new(MediaWikiConverter),
+        InputFormat::Xlsx => Box::new(WorkbookConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }
@@ -209,6 +211,7 @@ fn options(limit: Option<(&str, u64)>) -> ConversionOptions {
             "max_input_bytes" => options.limits.max_input_bytes = value,
             "max_nesting_depth" => options.limits.max_nesting_depth = u16::try_from(value).unwrap(),
             "max_table_columns" => options.limits.max_table_columns = value,
+            "max_table_rows" => options.limits.max_table_rows = value,
             unknown => panic!("unsupported fixture limit option {unknown}"),
         }
     }
@@ -254,20 +257,25 @@ fn execute(
         ai: Some(requests.clone()),
         nested: Some(Arc::new(HtmlNested)),
     };
-    let converted = block_on(converter(format).convert(
-        &input,
-        &FormatCandidate::explicit(format),
-        &options,
-        &services,
-        &context,
-    ));
+    let converter = converter(format);
+    let candidate = FormatCandidate::explicit(format);
+    let conversion_result = if format == InputFormat::Xlsx {
+        // Workbook conversion is entered only through the same authenticated
+        // parent credit that Engine acquires from planned_output_bytes.
+        let plan = converter.planned_output_bytes(&input, &candidate, &options, &context)?;
+        let mut parent = context.reserve_memory(plan)?;
+        let credit = context.with_memory_credit(&mut parent)?;
+        block_on(converter.convert(&input, &candidate, &options, &services, &credit))
+    } else {
+        block_on(converter.convert(&input, &candidate, &options, &services, &context))
+    };
     assert_eq!(
         requests.0.load(Ordering::SeqCst),
         0,
         "fixture {} attempted an optional service request",
         fixture.id
     );
-    let output = converted?;
+    let output = conversion_result?;
     into_markdown_render_markdown::render(&output.document, &output.assets, &options)
 }
 

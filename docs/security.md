@@ -89,6 +89,14 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   surrogate pairing。不能用递归 DOM parse 作为格式 guard。
 - 只有策略允许时，Office 宏和内嵌可执行文件才能作为惰性资源保留；它们永远
   不会被执行。
+- XLSX/XLSM/XLSB 在调用 Calamine 前由自有 OPC、XML 与 BIFF12 扫描器认证解析器可见的
+  条目、记录、字符串、样式、公式、图片与 worksheet 范围，并核算它们和累计 IR、验证、
+  provenance 共存的内存峰值。特别地，XLSB 公式读取会按 Calamine 0.36.1 的
+  `BrtWsDim.len().min(1_000_000)` 暂态容量单独计费，即使声明范围陈旧且实际 sheet 为空。
+  Calamine API 是同步调用，无法在单次调用中途抢占；转换器在构造 parser 以及每次 values、
+  formula 和 merge 调用前后执行 checkpoint。因此取消/timeout 的最坏延迟是一段已经由前置
+  扫描和资源上限约束的同步调用，而不是整本 workbook；高敌意部署仍应在具备 OS 内存与
+  时间硬限制的隔离进程运行。
 - PDFium 仅从显式绝对路径加载 authority 中精确 hash/size/ABI 的当前平台制品；不搜索
   system PDFium、`PATH` 或动态加载器 fallback，也不联网。所有 native count/length、页、字符、
   object、link、图片 stride/format/pixel bytes 与 render 尺寸在 Rust 分配或 slice 前有界检查，

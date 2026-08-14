@@ -22,6 +22,16 @@
       "obligations": "Preserve the upstream copyright notices and complete Boost Software License 1.0 text in source distributions; Cargo.lock fixes crates.io checksum 0fd663fe209e7030c956e3be4c051dcc20cdb73da794f31466762cff12ca11bf and upstream VCS commit 09e9505f99a18136505a64485011a292d4375a3a. The audited crate is a 18,590-line pure-Rust port, forbids unsafe code, has build=false, and has only num-traits as a runtime dependency. Any upgrade requires a new source, unsafe, build, dependency, and license audit."
     },
     {
+      "id": "calamine",
+      "kind": "rust-library",
+      "status": "reviewed",
+      "included_in_release": true,
+      "version": "0.36.1",
+      "source": "https://crates.io/crates/calamine/0.36.1",
+      "license": "MIT",
+      "obligations": "Preserve Copyright (c) 2016 Johann Tuffe and the complete MIT license in third_party/licenses/calamine-MIT.txt. Cargo.lock fixes crates.io checksum 5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3 and upstream VCS commit 0a24c2a9f1e38c0932c1299e633270dc730db505. Before Calamine is constructed, an in-house OPC/BIFF12 scanner authenticates reachable part authority, declared and actual record counts, dimensions, strings, styles, formulas, and media; the engine holds the full authenticated request plan while concrete scanner and codec work uses request credit. The panic boundary maps parser panics but is not claimed as allocator isolation. Upgrades require renewed parser-surface, dependency, unsafe, allocation, panic, and license review."
+    },
+    {
       "id": "onnx-protobuf-schema",
       "kind": "build-input",
       "status": "reviewed",

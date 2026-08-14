@@ -47,9 +47,8 @@ impl DocumentEvents {
                 if root_seen || inside_root || self.doctype_seen {
                     return Err(malformed("misplaced or duplicate XML doctype"));
                 }
-                if !matches!(doctype, DoctypePolicy::Html)
-                    || !value.as_ref().eq_ignore_ascii_case(b"html")
-                {
+                let value: &[u8] = value.as_ref();
+                if !matches!(doctype, DoctypePolicy::Html) || !value.eq_ignore_ascii_case(b"html") {
                     return Err(malformed("XML doctype is forbidden or unsupported"));
                 }
                 self.doctype_seen = true;

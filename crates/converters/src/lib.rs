@@ -15,6 +15,7 @@ mod remote;
 mod rtf;
 mod structured;
 mod text;
+mod workbook;
 #[path = "zip/mod.rs"]
 mod zip_converter;
 
@@ -36,6 +37,7 @@ pub use remote::{
 pub use rtf::RtfConverter;
 pub use structured::StructuredDataConverter;
 pub use text::TextConverter;
+pub use workbook::WorkbookConverter;
 pub use zip_converter::ZipConverter;
 
 use into_markdown_core::{
@@ -133,7 +135,7 @@ const FORMATS: &[FormatDescriptor] = &[
         format: InputFormat::Xlsx,
         family: "document",
         extensions: &["xlsx", "xlsm", "xlsb"],
-        status: PLANNED,
+        status: AVAILABLE,
     },
     FormatDescriptor {
         format: InputFormat::Odt,
@@ -2207,15 +2209,15 @@ fn inspect_ooxml_package(
     let content_types =
         read_zip_text(archive, "[Content_Types].xml", ZIP_METADATA_READ_LIMIT, diagnostics);
     let mut matches = Vec::new();
-    let ooxml_overrides =
+    let ooxml_content_types =
         content_types.as_deref().and_then(|document| match parse_ooxml_content_types(document) {
-            Ok(overrides) => Some(overrides),
+            Ok(content_types) => Some(content_types),
             Err(error) => {
                 diagnostics.push(format!("ZIP [Content_Types].xml was rejected: {error}"));
                 None
             }
         });
-    if let Some(overrides) = ooxml_overrides.as_ref() {
+    if let Some(content_types) = ooxml_content_types.as_ref() {
         let ooxml = [
             (
                 InputFormat::Docx,
@@ -2258,7 +2260,7 @@ fn inspect_ooxml_package(
         for (format, part, content_types_allowed, evidence) in ooxml {
             if names.iter().any(|name| name == part)
                 && zip_entry_nonempty(archive, part, diagnostics)
-                && overrides.get(&format!("/{part}")).is_some_and(|content_type| {
+                && content_types.for_part(part).is_some_and(|content_type| {
                     content_types_allowed.contains(&content_type.as_str())
                 })
                 && !matches.iter().any(|(existing, _)| *existing == format)
@@ -2405,9 +2407,24 @@ struct XmlAttribute {
     value: String,
 }
 
-fn parse_ooxml_content_types(document: &str) -> Result<BTreeMap<String, String>, String> {
+#[derive(Debug, Default)]
+struct OoxmlContentTypes {
+    defaults: BTreeMap<String, String>,
+    overrides: BTreeMap<String, String>,
+}
+
+impl OoxmlContentTypes {
+    fn for_part(&self, part: &str) -> Option<&String> {
+        self.overrides.get(&format!("/{part}")).or_else(|| {
+            let extension = part.rsplit_once('.')?.1.to_ascii_lowercase();
+            self.defaults.get(&extension)
+        })
+    }
+}
+
+fn parse_ooxml_content_types(document: &str) -> Result<OoxmlContentTypes, String> {
     let mut root_valid = false;
-    let mut overrides = BTreeMap::new();
+    let mut content_types = OoxmlContentTypes::default();
     parse_package_xml(document, |depth, name, parent, attributes| {
         if depth == 1 {
             if !name.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Types") {
@@ -2423,8 +2440,25 @@ fn parse_ooxml_content_types(document: &str) -> Result<BTreeMap<String, String>,
             }
             let part = required_xml_attribute(attributes, None, b"PartName")?.to_owned();
             let content_type = required_xml_attribute(attributes, None, b"ContentType")?.to_owned();
-            if overrides.insert(part, content_type).is_some() {
+            if content_types.overrides.insert(part, content_type).is_some() {
                 return Err("duplicate OOXML Override PartName".into());
+            }
+        } else if name.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Default") {
+            if depth != 2
+                || !parent
+                    .is_some_and(|parent| parent.matches(OOXML_CONTENT_TYPES_NAMESPACE, b"Types"))
+            {
+                return Err("OOXML Default is not a direct child of Types".into());
+            }
+            let extension =
+                required_xml_attribute(attributes, None, b"Extension")?.to_ascii_lowercase();
+            let content_type = required_xml_attribute(attributes, None, b"ContentType")?.to_owned();
+            if extension.is_empty()
+                || extension.starts_with('.')
+                || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                || content_types.defaults.insert(extension, content_type).is_some()
+            {
+                return Err("duplicate or invalid OOXML Default Extension".into());
             }
         }
         Ok(())
@@ -2432,7 +2466,7 @@ fn parse_ooxml_content_types(document: &str) -> Result<BTreeMap<String, String>,
     if !root_valid {
         return Err("OOXML Types root is missing".into());
     }
-    Ok(overrides)
+    Ok(content_types)
 }
 
 fn parse_epub_container(document: &str) -> Result<String, String> {
@@ -2568,11 +2602,11 @@ fn parse_package_xml(
                 }
             }
             Event::Text(text)
-                if ancestors.is_empty() && !text.as_ref().iter().all(u8::is_ascii_whitespace) =>
+                if ancestors.is_empty() && !text.iter().all(u8::is_ascii_whitespace) =>
             {
                 return Err("XML has character data outside its root".into());
             }
-            Event::CData(text) if ancestors.is_empty() && !text.as_ref().is_empty() => {
+            Event::CData(text) if ancestors.is_empty() && !text.is_empty() => {
                 return Err("XML has CDATA outside its root".into());
             }
             Event::DocType(_) | Event::GeneralRef(_) => {
@@ -2946,7 +2980,8 @@ fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
         | "application/vnd.ms-powerpoint.presentation.macroenabled.12" => InputFormat::Pptx,
         "application/vnd.ms-excel" => InputFormat::Xls,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        | "application/vnd.ms-excel.sheet.macroenabled.12" => InputFormat::Xlsx,
+        | "application/vnd.ms-excel.sheet.macroenabled.12"
+        | "application/vnd.ms-excel.sheet.binary.macroenabled.12" => InputFormat::Xlsx,
         "application/vnd.oasis.opendocument.text" => InputFormat::Odt,
         "application/vnd.oasis.opendocument.spreadsheet" => InputFormat::Ods,
         "application/vnd.oasis.opendocument.presentation" => InputFormat::Odp,
@@ -3745,6 +3780,16 @@ mod tests {
             assert_eq!(candidates[1].format, expected);
             assert_eq!(candidates[0].format, InputFormat::Zip);
         }
+    }
+
+    #[test]
+    fn zip_parts_detect_xlsb_main_content_type_from_default_extension() {
+        let types = br#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"><ct:Default Extension="bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/></ct:Types>"#;
+        let bytes = zip_with(&[("[Content_Types].xml", types), ("xl/workbook.bin", b"workbook")]);
+        let candidates = detect_zip(&bytes);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].format, InputFormat::Zip);
+        assert_eq!(candidates[1].format, InputFormat::Xlsx);
     }
 
     #[test]

@@ -14,6 +14,7 @@ DATA = [
     "//:THIRD_PARTY_NOTICES.md",
     "//models:license_authority_files",
     "//third_party/licenses:inventory.json",
+    "//third_party/licenses:calamine-MIT.txt",
     "//third_party/licenses:imageproc-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
     "//third_party/licenses:npm-release.spdx.json",

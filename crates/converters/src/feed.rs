@@ -433,7 +433,7 @@ pub(crate) fn strong_feed_evidence(
             }
             Ok(Event::End(_)) => depth = depth.saturating_sub(1),
             Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_)) => {}
-            Ok(Event::Text(value)) if value.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+            Ok(Event::Text(value)) if value.iter().all(u8::is_ascii_whitespace) => {}
             _ => return Ok(false),
         }
     }

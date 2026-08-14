@@ -664,6 +664,7 @@ mod tests {
         Asset, BoxFuture, ConversionOptions, ConverterOutput, Document, FormatHint, InputFormat,
         InputRef, MarkdownRenderer, ResolvedInput, SourceMetadata,
     };
+    use std::sync::Mutex;
 
     struct BytesResolver;
     impl SourceResolver for BytesResolver {
@@ -680,6 +681,42 @@ mod tests {
             _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
             Box::pin(async move {
+                let InputRef::Bytes { data, name } = input else {
+                    return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
+                };
+                Ok(ResolvedInput {
+                    bytes: Arc::clone(data),
+                    metadata: SourceMetadata {
+                        name: name.clone(),
+                        size: data.len() as u64,
+                        ..SourceMetadata::default()
+                    },
+                })
+            })
+        }
+    }
+
+    struct TrackingBytesResolver {
+        observed: Arc<Mutex<Option<ExecutionContext>>>,
+    }
+
+    impl SourceResolver for TrackingBytesResolver {
+        fn id(&self) -> &'static str {
+            "test.tracking-bytes"
+        }
+
+        fn supports(&self, input: &InputRef) -> bool {
+            matches!(input, InputRef::Bytes { .. })
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            input: &'a InputRef,
+            _: &'a ConversionOptions,
+            context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ResolvedInput, ConversionError>> {
+            Box::pin(async move {
+                *self.observed.lock().unwrap() = Some(context.clone());
                 let InputRef::Bytes { data, name } = input else {
                     return Err(ConversionError::Unsupported { detail: "expected bytes".into() });
                 };
@@ -936,7 +973,9 @@ mod tests {
         }
     }
 
-    struct CreditConverter;
+    struct CreditConverter {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
     impl Converter for CreditConverter {
         fn id(&self) -> &'static str {
             "test.credit"
@@ -959,7 +998,7 @@ mod tests {
             _: &ConversionOptions,
             _: &ExecutionContext,
         ) -> Result<u64, ConversionError> {
-            Ok(190_000)
+            Ok(210_000)
         }
         fn convert<'a>(
             &'a self,
@@ -969,8 +1008,11 @@ mod tests {
             _: &'a Services,
             context: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            let calls = Arc::clone(&self.calls);
             Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let work = context.reserve_memory(110_000)?;
+                let retained = context.reserve_memory(100_000)?;
                 let mut title = String::new();
                 title.try_reserve_exact(100_000).map_err(|_| ConversionError::ResourceLimit {
                     limit: "max_memory_bytes",
@@ -980,7 +1022,12 @@ mod tests {
                 drop(work);
                 let mut document = Document::default();
                 document.metadata.title = Some(title);
-                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
+                Ok(ConverterOutput::new_with_memory_reservations(
+                    document,
+                    Vec::new(),
+                    Vec::new(),
+                    vec![retained],
+                ))
             })
         }
     }
@@ -1278,19 +1325,35 @@ mod tests {
     }
 
     #[test]
-    fn converter_credit_allows_more_than_half_plan_without_double_charge() {
+    fn converter_credit_requires_each_coexisting_owner_before_allocation() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::new(Mutex::new(None));
         let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
         builder
             .registry_mut()
-            .register_source_resolver(Arc::new(BytesResolver))
+            .register_source_resolver(Arc::new(TrackingBytesResolver {
+                observed: Arc::clone(&observed),
+            }))
             .register_format_detector(Arc::new(TextDetector))
-            .register_converter(Arc::new(CreditConverter));
+            .register_converter(Arc::new(CreditConverter { calls: Arc::clone(&calls) }));
         let engine = builder.build().unwrap();
         let mut request = ConversionRequest::new(InputRef::bytes(b"x".as_slice(), Some("x.txt")));
-        request.options.limits.max_memory_bytes = 190_001;
+        request.options.limits.max_memory_bytes = 210_000;
+        assert!(matches!(
+            block_on(engine.convert(request.clone())),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(observed.lock().unwrap().as_ref().unwrap().reserved_memory_bytes(), 0);
+        request.options.limits.max_memory_bytes = 210_001;
         let result = block_on(engine.convert(request)).unwrap();
         assert_eq!(result.document.metadata.title.as_deref(), Some("x"));
         assert!(result.has_memory_lease());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let tracked = observed.lock().unwrap().as_ref().unwrap().clone();
+        assert!(tracked.reserved_memory_bytes() > 0);
+        drop(result);
+        assert_eq!(tracked.reserved_memory_bytes(), 0);
     }
 
     #[test]
