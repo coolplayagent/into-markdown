@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::ops::Range;
 
+const REPEATED_START_TOLERANCE_HEIGHTS: f32 = 0.16;
+
 pub(crate) fn recover(
     mut lines: Vec<Line>,
     page: u32,
@@ -36,23 +38,17 @@ pub(crate) fn recover(
     while let Some(first) = pending.pop_front() {
         budget.checkpoint_item()?;
         let run = candidate_run(first, &mut pending, config, budget)?;
-        let windows = evidence_windows(&run, budget)?;
-        let mut decisions = Vec::new();
-        decisions.try_reserve_exact(windows.len()).map_err(|_| memory("layout table decisions"))?;
-        for window in windows {
-            budget.checkpoint_item()?;
-            let rows = &run[window.clone()];
-            decisions.push((window, grid_evidence(rows, budget)?, header_likely(rows)));
-        }
+        let decisions = evidence_windows(&run, budget)?;
         let mut cursor = 0_usize;
         let mut owned = run.into_iter();
-        for (window, evidence, header) in decisions {
+        for decision in decisions {
+            let window = decision.range;
             while cursor < window.start {
                 remaining
                     .push(owned.next().ok_or_else(|| memory("layout table window prefix"))?.line);
                 cursor += 1;
             }
-            if evidence.is_none() {
+            if decision.evidence.is_none() {
                 while cursor < window.end {
                     remaining.push(
                         owned.next().ok_or_else(|| memory("layout rejected table window"))?.line,
@@ -69,7 +65,7 @@ pub(crate) fn recover(
                 width,
                 height,
                 sequence,
-                header,
+                decision.header,
                 config,
                 &mut total_cells,
                 budget,
@@ -143,35 +139,109 @@ impl RowEvidence {
     }
 }
 
-/// Partition one column-profile run into non-overlapping evidence windows.
-/// A larger-font row after body text is a stable new-header boundary. A
-/// compactness transition is also a boundary unless the wider row is a header
-/// for the compact body. This single-pass model keeps ambiguous prefixes and
-/// suffixes as text instead of either poisoning or being swallowed by a table.
+struct WindowDecision {
+    range: Range<usize>,
+    evidence: Option<GridEvidence>,
+    header: bool,
+}
+
+/// Find geometry-backed table windows without using font metadata to create
+/// or split candidates. A run of compact rows with repeated column starts is
+/// independently provable. It may absorb at most one immediately preceding
+/// non-compact row after font or height confirms that row as its header.
+/// Ambiguous text before or after a proven window remains one conservative
+/// paragraph window and is never reconsidered as overlapping two-row slices.
 fn evidence_windows(
     rows: &[RowEvidence],
     budget: &mut LayoutBudget<'_>,
-) -> Result<Vec<Range<usize>>, ConversionError> {
-    let mut ranges = Vec::new();
-    ranges.try_reserve_exact(rows.len()).map_err(|_| memory("layout evidence windows"))?;
-    let mut start = 0_usize;
-    for index in 1..rows.len() {
-        budget.compare()?;
-        if starts_evidence_window(&rows[index - 1], &rows[index]) {
-            ranges.push(start..index);
-            start = index;
+) -> Result<Vec<WindowDecision>, ConversionError> {
+    let mut windows = Vec::new();
+    windows.try_reserve_exact(rows.len()).map_err(|_| memory("layout evidence windows"))?;
+    let mut plain_start = 0_usize;
+    let mut index = 0_usize;
+    while index < rows.len() {
+        budget.checkpoint_item()?;
+        if !rows[index].compact {
+            index += 1;
+            continue;
         }
+        let body_start = index;
+        index += 1;
+        while index < rows.len()
+            && rows[index].compact
+            && repeated_starts(&rows[index - 1], &rows[index], budget)?
+        {
+            index += 1;
+        }
+        let body_end = index;
+        let absorb_header = body_start > plain_start
+            && !rows[body_start - 1].compact
+            && repeated_starts(&rows[body_start - 1], &rows[body_start], budget)?
+            && confirms_header(&rows[body_start - 1], &rows[body_start]);
+        let body_evidence = compact_body_evidence(&rows[body_start..body_end], budget)?;
+        if body_evidence.is_none() && !absorb_header {
+            continue;
+        }
+        let table_start = if absorb_header { body_start - 1 } else { body_start };
+        push_plain_window(&mut windows, plain_start..table_start)?;
+        let table_range = table_start..body_end;
+        windows.try_reserve(1).map_err(|_| memory("layout evidence windows"))?;
+        windows.push(WindowDecision {
+            header: absorb_header || header_likely(&rows[table_range.clone()]),
+            range: table_range,
+            evidence: body_evidence.or(Some(GridEvidence::AlignedCompactBody)),
+        });
+        plain_start = body_end;
     }
-    ranges.push(start..rows.len());
-    Ok(ranges)
+    if plain_start < rows.len() {
+        let range = plain_start..rows.len();
+        let evidence = if range.len() == 2
+            && repeated_boundaries(&rows[range.start], &rows[range.start + 1], budget)?
+        {
+            Some(GridEvidence::RepeatedBoundaries)
+        } else {
+            None
+        };
+        windows.try_reserve(1).map_err(|_| memory("layout evidence windows"))?;
+        windows.push(WindowDecision {
+            header: evidence.is_some() && header_likely(&rows[range.clone()]),
+            range,
+            evidence,
+        });
+    }
+    Ok(windows)
 }
 
-fn starts_evidence_window(previous: &RowEvidence, next: &RowEvidence) -> bool {
+fn push_plain_window(
+    windows: &mut Vec<WindowDecision>,
+    range: Range<usize>,
+) -> Result<(), ConversionError> {
+    if range.is_empty() {
+        return Ok(());
+    }
+    windows.try_reserve(1).map_err(|_| memory("layout evidence windows"))?;
+    windows.push(WindowDecision { range, evidence: None, header: false });
+    Ok(())
+}
+
+fn confirms_header(previous: &RowEvidence, next: &RowEvidence) -> bool {
     let previous_font = previous.line.font_size.unwrap_or(previous.line.bounds.height.max(1.0));
     let next_font = next.line.font_size.unwrap_or(next.line.bounds.height.max(1.0));
-    let next_is_header = next_font >= previous_font * 1.08;
-    let previous_is_header = previous_font >= next_font * 1.08;
-    next_is_header || (previous.compact != next.compact && !previous_is_header)
+    previous_font >= next_font * 1.08
+}
+
+fn compact_body_evidence(
+    rows: &[RowEvidence],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<Option<GridEvidence>, ConversionError> {
+    if rows.len() >= 3 {
+        return Ok(Some(GridEvidence::AlignedCompactBody));
+    }
+    if rows.len() == 2 && (header_likely(rows) || repeated_boundaries(&rows[0], &rows[1], budget)?)
+    {
+        return Ok(Some(GridEvidence::AlignedCompactBody));
+    }
+    Ok(None)
 }
 
 fn segments(line: &Line, budget: &mut LayoutBudget<'_>) -> Result<Vec<Segment>, ConversionError> {
@@ -207,32 +277,13 @@ fn row_candidate(segments: &[Segment], config: &LayoutConfig) -> bool {
         && segments.iter().all(|segment| segment.end.saturating_sub(segment.start) <= 256)
 }
 
-/// Score one maximal, locally-continuous row window. Two rows can establish a
-/// grid through repeated starts and ends. Longer windows need independent
-/// compact-cell or header evidence; identical broad columns are deliberately
-/// ambiguous and remain paragraphs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// Auditable geometry that can establish a table before style metadata is
+/// consulted. Identical broad columns longer than two rows have neither signal
+/// and deliberately remain paragraphs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GridEvidence {
     RepeatedBoundaries,
-    CompactOccupancy,
-    StyledHeader,
-}
-
-fn grid_evidence(
-    rows: &[RowEvidence],
-    budget: &mut LayoutBudget<'_>,
-) -> Result<Option<GridEvidence>, ConversionError> {
-    if rows.len() < 2 {
-        return Ok(None);
-    }
-    if header_likely(rows) {
-        return Ok(Some(GridEvidence::StyledHeader));
-    }
-    if rows.len() == 2 {
-        return Ok(repeated_boundaries(&rows[0], &rows[1], budget)?
-            .then_some(GridEvidence::RepeatedBoundaries));
-    }
-    Ok(rows.iter().all(|row| row.compact).then_some(GridEvidence::CompactOccupancy))
+    AlignedCompactBody,
 }
 
 fn compatible_rows(
@@ -272,6 +323,28 @@ fn repeated_boundaries(
         if (expected.x - actual.x).abs() > tolerance.max(0.5)
             || (expected.right - actual.right).abs() > tolerance.max(0.5)
         {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn repeated_starts(
+    first: &RowEvidence,
+    next: &RowEvidence,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<bool, ConversionError> {
+    if first.segments.len() != next.segments.len() {
+        return Ok(false);
+    }
+    // PDFium reports glyph ink bounds rather than text origins, so different
+    // leading glyphs in the same column can shift by a small fraction of the
+    // line height. This remains far tighter than the candidate-run tolerance.
+    let tolerance = first.line.bounds.height.max(next.line.bounds.height).max(1.0)
+        * REPEATED_START_TOLERANCE_HEIGHTS;
+    for (expected, actual) in first.segments.iter().zip(&next.segments) {
+        budget.compare()?;
+        if (expected.x - actual.x).abs() > tolerance.max(0.5) {
             return Ok(false);
         }
     }
