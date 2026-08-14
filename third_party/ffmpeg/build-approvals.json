@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "ffmpeg_version": "8.1.2",
+  "targets": {
+    "aarch64-apple-darwin": null,
+    "x86_64-unknown-linux-gnu": null,
+    "aarch64-unknown-linux-gnu": null,
+    "x86_64-pc-windows-msvc": null
+  }
+}

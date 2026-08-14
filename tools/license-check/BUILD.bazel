@@ -6,6 +6,7 @@ exports_files(["Cargo.toml"])
 
 DATA = [
     "//:BUILD.bazel",
+    "//:MODULE.bazel",
     "//:Cargo.lock",
     "//:Cargo.toml",
     "//:pnpm-lock.yaml",
@@ -14,7 +15,9 @@ DATA = [
     "//:THIRD_PARTY_NOTICES.md",
     "//models:license_authority_files",
     "//third_party/licenses:inventory.json",
+    "//third_party/licenses:BSL-1.0.txt",
     "//third_party/licenses:calamine-MIT.txt",
+    "//third_party/licenses:cargo-normal-runtime.json",
     "//third_party/licenses:imageproc-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
     "//third_party/licenses:npm-release.spdx.json",
@@ -25,32 +28,68 @@ DATA = [
     "//third_party/licenses:downloads.json",
     "//third_party/onnxruntime:manifest.json",
     "//third_party/ffmpeg:fixtures.json",
+    "//third_party/ffmpeg:build-approvals.json",
     "//third_party/ffmpeg:source.json",
+    "//third_party/ffmpeg:build-policy.json",
     "//third_party/pdfium:manifest.json",
     "//fixtures:corpus",
     ":Cargo.toml",
     "//apps/cli:Cargo.toml",
+    "//apps/cli:BUILD.bazel",
     "//crates/ai:Cargo.toml",
+    "//crates/ai:BUILD.bazel",
     "//crates/api:Cargo.toml",
+    "//crates/api:BUILD.bazel",
     "//crates/converters:Cargo.toml",
+    "//crates/converters:BUILD.bazel",
     "//crates/core:Cargo.toml",
+    "//crates/core:BUILD.bazel",
     "//crates/engine:Cargo.toml",
+    "//crates/engine:BUILD.bazel",
     "//crates/ffmpeg:Cargo.toml",
+    "//crates/ffmpeg:BUILD.bazel",
     "//crates/http-transport:Cargo.toml",
+    "//crates/http-transport:BUILD.bazel",
     "//crates/legacy-office:Cargo.toml",
+    "//crates/legacy-office:BUILD.bazel",
     "//crates/ocr:Cargo.toml",
+    "//crates/ocr:BUILD.bazel",
     "//crates/onnxruntime:Cargo.toml",
+    "//crates/onnxruntime:BUILD.bazel",
     "//crates/pdf-layout:Cargo.toml",
+    "//crates/pdf-layout:BUILD.bazel",
     "//crates/pdfium:Cargo.toml",
+    "//crates/pdfium:BUILD.bazel",
     "//crates/render-markdown:Cargo.toml",
+    "//crates/render-markdown:BUILD.bazel",
     "//crates/task-store:Cargo.toml",
+    "//crates/task-store:BUILD.bazel",
     "//tests/contracts:Cargo.toml",
     "//tools/asset-update:Cargo.toml",
+    ":projection_fixtures",
 ]
+
+filegroup(
+    name = "projection_fixtures",
+    srcs = glob(["fixtures/*.json"]),
+)
 
 rust_library(
     name = "license_check_lib",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/cargo_runtime.rs",
+        "src/lib.rs",
+        "src/ffmpeg.rs",
+        "src/models_fixtures.rs",
+        "src/materials.rs",
+        "src/native.rs",
+        "src/npm.rs",
+        "src/release.rs",
+        "src/release_tests.rs",
+        "src/rust.rs",
+        "src/sbom.rs",
+        "src/schema.rs",
+    ],
     crate_name = "license_check",
     edition = "2024",
     deps = [
@@ -82,10 +121,25 @@ rust_binary(
     deps = [":license_check_lib"],
 )
 
+rust_binary(
+    name = "release_projection",
+    srcs = ["src/projection_main.rs"],
+    crate_name = "release_projection",
+    data = DATA,
+    edition = "2024",
+    deps = [
+        ":license_check_lib",
+        "@crates//:serde_json",
+    ],
+)
+
 rust_test(
     name = "license_check_unit_test",
     crate = ":license_check_lib",
     data = DATA,
+    env = {"LICENSE_CHECK_TEST_WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)"},
+    env_inherit = ["CARGO", "CARGO_HOME", "HOME", "PATH", "RUSTUP_HOME"],
+    tags = ["no-sandbox"],
 )
 
 rust_test(
@@ -94,5 +148,8 @@ rust_test(
     crate_name = "repository_license_test",
     data = DATA,
     edition = "2024",
+    env = {"LICENSE_CHECK_TEST_WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)"},
+    env_inherit = ["CARGO", "CARGO_HOME", "HOME", "PATH", "RUSTUP_HOME"],
+    tags = ["no-sandbox"],
     deps = [":license_check_lib"],
 )

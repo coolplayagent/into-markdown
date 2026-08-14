@@ -1,5 +1,19 @@
 //! Offline validation for the repository's license policy and inventories.
 
+mod cargo_runtime;
+mod ffmpeg;
+mod materials;
+mod models_fixtures;
+mod native;
+mod npm;
+pub mod release;
+mod rust;
+mod sbom;
+pub mod schema;
+
+#[cfg(test)]
+mod release_tests;
+
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +39,8 @@ struct Component {
     kind: String,
     status: String,
     included_in_release: bool,
+    #[serde(default)]
+    release_eligible: bool,
     #[serde(default)]
     manual_only: bool,
     version: Option<String>,
@@ -711,6 +727,29 @@ fn arguments_are_empty(arguments: impl IntoIterator<Item = impl AsRef<std::ffi::
 }
 
 fn repository_root() -> Result<PathBuf, String> {
+    if let Ok(workspace) = env::var("BUILD_WORKSPACE_DIRECTORY") {
+        let candidate = PathBuf::from(workspace)
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel workspace: {error}"))?;
+        if candidate.join("Cargo.lock").is_file() && candidate.join("MODULE.bazel").is_file() {
+            return Ok(candidate);
+        }
+        return Err("BUILD_WORKSPACE_DIRECTORY is not the repository root".to_owned());
+    }
+    if env::var_os("TEST_SRCDIR").is_some()
+        && let Ok(manifest) = env::var("LICENSE_CHECK_TEST_WORKSPACE_MANIFEST")
+    {
+        let manifest = PathBuf::from(manifest)
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel test workspace manifest: {error}"))?;
+        let candidate = manifest
+            .parent()
+            .ok_or_else(|| "Bazel test workspace manifest has no parent".to_owned())?;
+        if candidate.join("Cargo.lock").is_file() && candidate.join("MODULE.bazel").is_file() {
+            return Ok(candidate.to_owned());
+        }
+        return Err("Bazel test workspace manifest is not in the repository root".to_owned());
+    }
     if let Ok(test_srcdir) = env::var("TEST_SRCDIR") {
         let workspace = env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".to_owned());
         let candidate = PathBuf::from(test_srcdir).join(workspace);
@@ -739,6 +778,7 @@ fn read(path: &Path, errors: &mut Vec<String>) -> String {
 fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     validate_project_files(root, &mut errors);
+    release::audit_repository_contract(root, &mut errors);
 
     let policy_text = read(&root.join("third_party/licenses/policy.json"), &mut errors);
     let inventory_text = read(&root.join("third_party/licenses/inventory.json"), &mut errors);
@@ -1392,6 +1432,9 @@ fn validate_inventory(
                 "manual-only component {} cannot be included in a release",
                 component.id
             ));
+        }
+        if component.release_eligible && component.status != "reviewed" {
+            errors.push(format!("release-eligible component {} is not reviewed", component.id));
         }
     }
     for required in [
@@ -3571,6 +3614,7 @@ mod tests {
             kind: "placeholder".to_owned(),
             status: "planned".to_owned(),
             included_in_release: false,
+            release_eligible: false,
             manual_only: false,
             version: None,
             source: None,
@@ -3585,6 +3629,7 @@ mod tests {
             kind: "model-source".to_owned(),
             status: "reviewed".to_owned(),
             included_in_release: false,
+            release_eligible: false,
             manual_only: false,
             version: Some(version.to_owned()),
             source: Some(artifact.url.clone()),
@@ -3811,6 +3856,7 @@ mod tests {
                 kind: "native-runtime".to_owned(),
                 status: "reviewed".to_owned(),
                 included_in_release: false,
+                release_eligible: true,
                 manual_only: false,
                 version: Some(version.to_owned()),
                 source: Some(source),
@@ -3868,6 +3914,7 @@ mod tests {
                     kind: "native-runtime".to_owned(),
                     status: "reviewed".to_owned(),
                     included_in_release: false,
+                    release_eligible: true,
                     manual_only: false,
                     version: Some("153.0.7999.0".to_owned()),
                     source: Some(source.to_owned()),

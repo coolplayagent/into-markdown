@@ -1,2 +1,2 @@
 package(default_visibility = ["//visibility:public"])
-exports_files(["fixtures.json", "source.json"])
+exports_files(["build-approvals.json", "build-policy.json", "fixtures.json", "source.json"])
