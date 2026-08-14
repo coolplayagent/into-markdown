@@ -39,35 +39,7 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
     let repository = root();
     let inputs = generate_release_inputs(&repository, &request(target, &[])).unwrap();
     let license = fs::read(repository.join("LICENSE")).unwrap();
-    let license_contents = format!(
-        "Apache License\nPermission is hereby granted\nRedistribution and use in source and binary forms\nBoost Software License\nPermission to use, copy, modify, and/or distribute\nGNU LESSER GENERAL PUBLIC LICENSE\nMozilla Public License\nUNICODE LICENSE\nCommunity Data License Agreement\nThis software is provided 'as-is'\nSIL OPEN FONT LICENSE\n{}",
-        "complete license body fixture. ".repeat(30)
-    );
-    let license_material = LicenseMaterial {
-        path: "share/into-markdown/licenses/third-party-license-compendium.txt".into(),
-        bytes: license_contents.len() as u64,
-        sha256: hash(license_contents.as_bytes()),
-        kind: LicenseMaterialKind::LicenseText,
-        component_ids: inputs.component_ids.clone(),
-        spdx_expressions: [
-            "Apache-2.0",
-            "MIT",
-            "BSD-3-Clause",
-            "BSL-1.0",
-            "ISC",
-            "LGPL-2.1-or-later",
-            "MPL-2.0",
-            "Unicode-3.0",
-            "CDLA-Permissive-2.0",
-            "Zlib",
-            "OFL-1.1",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
-        contents: Some(license_contents),
-    };
-    ArchiveProjection {
+    let mut projection = ArchiveProjection {
         schema_version: 1,
         target: target.into(),
         components: inputs.component_ids.clone(),
@@ -81,19 +53,19 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
             declaration(
                 "NOTICE",
                 inputs.notice.bytes,
-                inputs.notice.sha256,
+                inputs.notice.sha256.clone(),
                 ArchiveFileKind::Declaration,
             ),
             declaration(
                 "THIRD_PARTY_NOTICES.md",
                 inputs.third_party_notices.bytes,
-                inputs.third_party_notices.sha256,
+                inputs.third_party_notices.sha256.clone(),
                 ArchiveFileKind::Generated,
             ),
             declaration(
                 "sbom-input.json",
                 inputs.sbom_input.bytes,
-                inputs.sbom_input.sha256,
+                inputs.sbom_input.sha256.clone(),
                 ArchiveFileKind::Generated,
             ),
             ArchiveFile {
@@ -104,29 +76,34 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
                 component_id: None,
                 embedded_components: inputs.component_ids.clone(),
             },
-            declaration(
-                &license_material.path,
-                license_material.bytes,
-                license_material.sha256.clone(),
-                ArchiveFileKind::LicenseMaterial,
-            ),
         ],
-        license_materials: vec![license_material],
+        license_materials: vec![],
         ffmpeg_evidence: None,
-    }
+    };
+    install_base_materials(&mut projection, &inputs);
+    projection
 }
 
 fn select(projection: &mut ArchiveProjection, components: &[&str]) {
     let inputs =
         generate_release_inputs(&root(), &request(&projection.target, components)).unwrap();
     projection.components = inputs.component_ids.clone();
-    projection.license_materials[0].component_ids = inputs.component_ids.clone();
+    projection.files.retain(|file| file.kind != ArchiveFileKind::LicenseMaterial);
+    projection.license_materials.clear();
+    install_base_materials(projection, &inputs);
     let binary =
         projection.files.iter_mut().find(|file| file.kind == ArchiveFileKind::Project).unwrap();
     binary.embedded_components = inputs
         .component_ids
         .iter()
-        .filter(|id| id.starts_with("cargo:") || id.starts_with("npm:"))
+        .filter(|id| {
+            id.starts_with("cargo:")
+                || id.starts_with("npm:")
+                || matches!(
+                    id.as_str(),
+                    "imageproc-contour-adaptation" | "clipper2-rust" | "calamine"
+                )
+        })
         .cloned()
         .collect();
     if components.contains(&"ffmpeg") {
@@ -181,6 +158,147 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn install_base_materials(
+    projection: &mut ArchiveProjection,
+    inputs: &crate::schema::ReleaseInputs,
+) {
+    let sbom: serde_json::Value = serde_json::from_str(&inputs.sbom_input.contents).unwrap();
+    let mut npm = Vec::new();
+    for id in &inputs.component_ids {
+        if id.starts_with("cargo:") {
+            let component = sbom["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == id.as_str())
+                .unwrap();
+            let checksum = component["integrity"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| {
+                    item["subject"].as_str().unwrap_or_default().starts_with("crates.io archive")
+                })
+                .unwrap()["digest"]
+                .as_str()
+                .unwrap();
+            let safe = id.replace([':', '@', '/', '+'], "_");
+            push_external_material(
+                projection,
+                &format!("share/into-markdown/licenses/cargo/{safe}.crate"),
+                1,
+                checksum,
+                LicenseMaterialKind::UpstreamSourceArchive,
+                id,
+            );
+        } else if id.starts_with("npm:") {
+            npm.push(id.clone());
+        }
+    }
+    if !npm.is_empty() {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/npm/react-MIT.txt",
+            "third_party/licenses/npm/react-MIT.txt",
+            npm,
+            &["MIT"],
+        );
+    }
+    for (id, archive_path, authority_path, license) in [
+        (
+            "imageproc-contour-adaptation",
+            "share/into-markdown/licenses/imageproc-MIT.txt",
+            "third_party/licenses/imageproc-MIT.txt",
+            "MIT",
+        ),
+        (
+            "clipper2-rust",
+            "share/into-markdown/licenses/BSL-1.0.txt",
+            "third_party/licenses/BSL-1.0.txt",
+            "BSL-1.0",
+        ),
+        (
+            "calamine",
+            "share/into-markdown/licenses/calamine-MIT.txt",
+            "third_party/licenses/calamine-MIT.txt",
+            "MIT",
+        ),
+    ] {
+        if inputs.component_ids.iter().any(|component| component == id) {
+            push_text_material(
+                projection,
+                archive_path,
+                authority_path,
+                vec![id.to_owned()],
+                &[license],
+            );
+        }
+    }
+    let models: Vec<_> = inputs
+        .component_ids
+        .iter()
+        .filter(|id| {
+            matches!(
+                id.as_str(),
+                "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table"
+            )
+        })
+        .cloned()
+        .collect();
+    if !models.is_empty() {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/model-Apache-2.0.txt",
+            "LICENSE",
+            models,
+            &["Apache-2.0"],
+        );
+    }
+    if inputs.component_ids.iter().any(|id| id == "onnxruntime-cpu") {
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(root().join("third_party/onnxruntime/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let authority = &manifest["targets"][&projection.target];
+        push_external_material(
+            projection,
+            "share/into-markdown/licenses/onnxruntime-upstream-bundle.tgz",
+            1,
+            authority["sha256"].as_str().unwrap(),
+            LicenseMaterialKind::NoticeBundle,
+            "onnxruntime-cpu",
+        );
+    }
+}
+
+fn push_text_material(
+    projection: &mut ArchiveProjection,
+    archive_path: &str,
+    authority_path: &str,
+    component_ids: Vec<String>,
+    licenses: &[&str],
+) {
+    let contents = fs::read_to_string(root().join(authority_path)).unwrap();
+    let bytes = contents.len() as u64;
+    let sha256 = hash(contents.as_bytes());
+    projection.files.push(declaration(
+        archive_path,
+        bytes,
+        sha256.clone(),
+        ArchiveFileKind::LicenseMaterial,
+    ));
+    projection.license_materials.push(LicenseMaterial {
+        path: archive_path.to_owned(),
+        bytes,
+        sha256,
+        kind: LicenseMaterialKind::LicenseText,
+        component_ids,
+        spdx_expressions: licenses.iter().map(|item| (*item).to_owned()).collect(),
+        contents: Some(contents),
+    });
+}
+
 fn push_external_material(
     projection: &mut ArchiveProjection,
     path: &str,
@@ -217,6 +335,9 @@ fn four_platform_requests_use_one_license_conclusion() {
         let generated = generate_release_inputs(&repository, &json).unwrap();
         assert_eq!(generated.target, target);
         assert!(generated.third_party_notices.contents.contains("License: LGPL-2.1-or-later"));
+        for required in ["imageproc-contour-adaptation", "clipper2-rust", "calamine"] {
+            assert!(generated.component_ids.iter().any(|id| id == required));
+        }
         notices.push(generated.third_party_notices.contents);
     }
     assert!(notices.windows(2).all(|pair| pair[0] == pair[1]));
@@ -237,7 +358,7 @@ fn authoritative_runtime_closure_cannot_be_omitted_or_disguised() {
         projection.components.iter().find(|id| id.starts_with("cargo:")).cloned().unwrap();
     projection.components.retain(|id| id != &omitted);
     projection.files[4].embedded_components.retain(|id| id != &omitted);
-    projection.license_materials[0].component_ids.retain(|id| id != &omitted);
+    projection.license_materials.retain(|item| !item.component_ids.contains(&omitted));
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("authoritative runtime components")));
@@ -263,7 +384,11 @@ fn missing_or_untyped_license_material_fails_closed() {
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("no typed declaration")));
-    assert!(errors.iter().any(|error| error.contains("lacks complete archived license text")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("lacks cryptographically fixed complete license material"))
+    );
 }
 
 #[test]
@@ -303,9 +428,10 @@ fn orphan_binary_cannot_claim_project_ownership() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
-    projection.components.push("ffmpeg".into());
+    select(&mut projection, &["ffmpeg"]);
     projection.files.push(ArchiveFile {
         path: "bin/ffmpeg".into(),
         bytes: 99,
@@ -352,6 +478,13 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         "binary_architecture": "aarch64",
         "dependencies": dependencies,
         "toolchain": "Apple clang fixture",
+        "source_sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+        "source_signature_sha256": "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8",
+        "signing_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8",
+        "build_policy_sha256": hash(&fs::read(root().join("third_party/ffmpeg/build-policy.json")).unwrap()),
+        "config_log_sha256": "7".repeat(64),
+        "relink_bytes": 10,
+        "relink_sha256": "9".repeat(64),
     })
     .to_string();
     let authority_bytes = authority_contents.len() as u64;
@@ -372,6 +505,16 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         binary_format: "mach-o".into(),
         binary_architecture: "aarch64".into(),
         toolchain: "Apple clang fixture".into(),
+        source_sha256: "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c".into(),
+        source_signature_sha256: "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8"
+            .into(),
+        signing_key_fingerprint: "FCF986EA15E6E293A5644F10B4322F04D67658D8".into(),
+        build_policy_sha256: hash(
+            &fs::read(root().join("third_party/ffmpeg/build-policy.json")).unwrap(),
+        ),
+        config_log_sha256: "7".repeat(64),
+        relink_bytes: 10,
+        relink_sha256: "9".repeat(64),
     });
     projection.files.push(ArchiveFile {
         path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
@@ -385,6 +528,41 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
             .unwrap_err();
     assert!(incompatible.iter().any(|error| error.contains("reviewed build policy")));
+    let relink = projection
+        .license_materials
+        .iter_mut()
+        .find(|item| item.kind == LicenseMaterialKind::RelinkMaterial)
+        .unwrap();
+    relink.sha256 = "6".repeat(64);
+    projection.files.iter_mut().find(|file| file.path == relink.path).unwrap().sha256 =
+        relink.sha256.clone();
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("exact corresponding source or relink")));
+}
+
+#[test]
+fn marker_padded_license_text_is_rejected_against_fixed_authority_bytes() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    let material = projection
+        .license_materials
+        .iter_mut()
+        .find(|item| item.component_ids == ["imageproc-contour-adaptation"])
+        .unwrap();
+    let fake = format!("Permission is hereby granted\n{}", "not the license ".repeat(100));
+    material.contents = Some(fake.clone());
+    material.bytes = fake.len() as u64;
+    material.sha256 = hash(fake.as_bytes());
+    let file = projection.files.iter_mut().find(|file| file.path == material.path).unwrap();
+    file.bytes = material.bytes;
+    file.sha256 = material.sha256.clone();
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("cryptographically fixed complete license material"))
+    );
 }
 
 #[test]

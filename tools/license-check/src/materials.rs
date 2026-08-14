@@ -2,7 +2,7 @@
 
 use crate::schema::{ArchiveFileKind, ArchiveProjection, Component, LicenseMaterialKind};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -13,11 +13,6 @@ pub(crate) fn validate(
     errors: &mut Vec<String>,
 ) {
     let selected: BTreeSet<_> = components.iter().map(|item| item.id.as_str()).collect();
-    let licenses: BTreeMap<_, _> = components
-        .iter()
-        .map(|item| (item.id.as_str(), item.license.as_deref().unwrap_or_default()))
-        .collect();
-    let mut covered = BTreeSet::new();
     let declared_paths: BTreeSet<_> =
         projection.license_materials.iter().map(|item| item.path.as_str()).collect();
     for file in projection.files.iter().filter(|file| file.kind == ArchiveFileKind::LicenseMaterial)
@@ -54,19 +49,6 @@ pub(crate) fn validate(
                     "license material {} covers unknown component {id}",
                     material.path
                 ));
-                continue;
-            }
-            if material.kind == LicenseMaterialKind::LicenseText {
-                covered.insert(id.as_str());
-                let expression = licenses.get(id.as_str()).copied().unwrap_or_default();
-                for term in expression.split(" AND ") {
-                    if !material.spdx_expressions.iter().any(|item| item == term) {
-                        errors.push(format!(
-                            "license material {} omits {term} for {id}",
-                            material.path
-                        ));
-                    }
-                }
             }
         }
         match material.contents.as_deref() {
@@ -79,14 +61,6 @@ pub(crate) fn validate(
                         material.path
                     ));
                 }
-                if material.kind == LicenseMaterialKind::LicenseText
-                    && !complete_license_text(contents, &material.spdx_expressions)
-                {
-                    errors.push(format!(
-                        "license material {} is not complete license text",
-                        material.path
-                    ));
-                }
             }
             None if material.kind == LicenseMaterialKind::LicenseText => {
                 errors
@@ -95,33 +69,103 @@ pub(crate) fn validate(
             None => {}
         }
     }
-    for id in selected.difference(&covered) {
-        errors.push(format!("projected component {id} lacks complete archived license text"));
+    for component in components {
+        if !covers_component(repository, projection, component, errors) {
+            errors.push(format!(
+                "projected component {} lacks cryptographically fixed complete license material",
+                component.id
+            ));
+        }
     }
     validate_ffmpeg(repository, projection, errors);
     validate_pdfium(repository, projection, errors);
 }
 
-fn complete_license_text(contents: &str, expressions: &[String]) -> bool {
-    if contents.len() < 500 {
-        return false;
+fn covers_component(
+    repository: &Path,
+    projection: &ArchiveProjection,
+    component: &Component,
+    errors: &mut Vec<String>,
+) -> bool {
+    if component.id.starts_with("cargo:") {
+        let checksum = component
+            .integrity
+            .iter()
+            .find(|item| {
+                item.algorithm == "SHA-256" && item.subject.starts_with("crates.io archive ")
+            })
+            .map(|item| item.digest.as_str());
+        return projection.license_materials.iter().any(|item| {
+            item.kind == LicenseMaterialKind::UpstreamSourceArchive
+                && item.component_ids == [component.id.as_str()]
+                && Some(item.sha256.as_str()) == checksum
+                && item.contents.is_none()
+        });
     }
-    expressions.iter().all(|expression| {
-        let marker = match expression.as_str() {
-            "Apache-2.0" => "Apache License",
-            "MIT" => "Permission is hereby granted",
-            "BSD-3-Clause" => "Redistribution and use in source and binary forms",
-            "BSL-1.0" => "Boost Software License",
-            "ISC" => "Permission to use, copy, modify, and/or distribute",
-            "LGPL-2.1-or-later" => "GNU LESSER GENERAL PUBLIC LICENSE",
-            "MPL-2.0" => "Mozilla Public License",
-            "Unicode-3.0" => "UNICODE LICENSE",
-            "CDLA-Permissive-2.0" => "Community Data License Agreement",
-            "Zlib" => "This software is provided 'as-is'",
-            "OFL-1.1" => "SIL OPEN FONT LICENSE",
-            _ => return false,
-        };
-        contents.contains(marker)
+    if component.id == "ffmpeg" {
+        return exact_source_material(repository, projection);
+    }
+    if component.id == "pdfium" {
+        return exact_pdfium_bundle(repository, projection);
+    }
+    if component.id == "onnxruntime-cpu" {
+        return exact_native_bundle(repository, projection, component, errors);
+    }
+    let authority_path = match component.id.as_str() {
+        "imageproc-contour-adaptation" => "third_party/licenses/imageproc-MIT.txt",
+        "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
+        "calamine" => "third_party/licenses/calamine-MIT.txt",
+        id if id.starts_with("npm:") => "third_party/licenses/npm/react-MIT.txt",
+        "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
+            "LICENSE"
+        }
+        _ => return false,
+    };
+    let expected = fs::read_to_string(repository.join(authority_path)).unwrap_or_default();
+    let terms: BTreeSet<_> =
+        component.license.as_deref().unwrap_or_default().split(" AND ").collect();
+    projection.license_materials.iter().any(|item| {
+        let declared: BTreeSet<_> = item.spdx_expressions.iter().map(String::as_str).collect();
+        item.kind == LicenseMaterialKind::LicenseText
+            && item.component_ids.iter().any(|id| id == &component.id)
+            && item.contents.as_deref() == Some(expected.as_str())
+            && declared == terms
+    })
+}
+
+fn exact_source_material(repository: &Path, projection: &ArchiveProjection) -> bool {
+    let source: serde_json::Value = serde_json::from_slice(
+        &fs::read(repository.join("third_party/ffmpeg/source.json")).unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    projection.license_materials.iter().any(|item| {
+        item.kind == LicenseMaterialKind::CorrespondingSource
+            && item.component_ids == ["ffmpeg"]
+            && source.get("source_bytes").and_then(serde_json::Value::as_u64) == Some(item.bytes)
+            && source.get("source_sha256").and_then(serde_json::Value::as_str)
+                == Some(item.sha256.as_str())
+    })
+}
+
+fn exact_native_bundle(
+    repository: &Path,
+    projection: &ArchiveProjection,
+    component: &Component,
+    errors: &mut Vec<String>,
+) -> bool {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(repository.join("third_party/onnxruntime/manifest.json")).unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    let Some(target) = manifest.pointer(&format!("/targets/{}", projection.target)) else {
+        errors.push(format!("{} has no target license bundle authority", component.id));
+        return false;
+    };
+    projection.license_materials.iter().any(|item| {
+        item.kind == LicenseMaterialKind::NoticeBundle
+            && item.component_ids == [component.id.as_str()]
+            && target.get("sha256").and_then(serde_json::Value::as_str)
+                == Some(item.sha256.as_str())
     })
 }
 
@@ -142,10 +186,13 @@ fn validate_ffmpeg(repository: &Path, projection: &ArchiveProjection, errors: &m
             && Some(item.sha256.as_str()) == source_hash
     });
     let relink_ok = projection.license_materials.iter().any(|item| {
+        let evidence = projection.ffmpeg_evidence.as_ref();
         item.kind == LicenseMaterialKind::RelinkMaterial
             && item.component_ids == ["ffmpeg"]
-            && item.bytes > 0
-            && item.sha256.len() == 64
+            && evidence.is_some_and(|evidence| {
+                item.bytes == evidence.relink_bytes && item.sha256 == evidence.relink_sha256
+            })
+            && item.contents.is_none()
     });
     if !source_ok || !relink_ok {
         errors
@@ -157,12 +204,19 @@ fn validate_pdfium(repository: &Path, projection: &ArchiveProjection, errors: &m
     if !projection.components.iter().any(|id| id == "pdfium") {
         return;
     }
+    if !exact_pdfium_bundle(repository, projection) {
+        errors
+            .push("PDFium archive lacks its exact upstream full license/notice bundle".to_owned());
+    }
+}
+
+fn exact_pdfium_bundle(repository: &Path, projection: &ArchiveProjection) -> bool {
     let manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(repository.join("third_party/pdfium/manifest.json")).unwrap_or_default(),
     )
     .unwrap_or_default();
     let target = manifest.pointer(&format!("/targets/{}", projection.target));
-    let complete = projection.license_materials.iter().any(|item| {
+    projection.license_materials.iter().any(|item| {
         item.kind == LicenseMaterialKind::NoticeBundle
             && item.component_ids == ["pdfium"]
             && target.is_some_and(|target| {
@@ -170,9 +224,5 @@ fn validate_pdfium(repository: &Path, projection: &ArchiveProjection, errors: &m
                     && target.get("archive_sha256").and_then(serde_json::Value::as_str)
                         == Some(item.sha256.as_str())
             })
-    });
-    if !complete {
-        errors
-            .push("PDFium archive lacks its exact upstream full license/notice bundle".to_owned());
-    }
+    })
 }

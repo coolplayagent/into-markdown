@@ -26,7 +26,9 @@ The following files are projections or evidence and must agree with the componen
 - `models/manifest.json` and model authority files describe source archives, derived runtime files,
   character tables, exact members, sizes, hashes, licenses, and supported targets.
 - Native runtime manifests describe ONNX Runtime and PDFium archives. FFmpeg source, build-policy,
-  and fixture manifests provide the fixed upstream source and content-bound build evidence.
+  build-approval, and fixture manifests provide the fixed upstream source and content-bound build
+  evidence. A target remains fail-closed until reviewed artifact hashes are committed to the
+  separate approval authority.
 - `third_party/licenses/downloads.json` and its Bazel projection bind every controlled download to
   the same component ID, URL, target, size where known, SHA-256, and extraction boundary.
 - `fixtures/manifest.json` and `fixtures/downloads.json` distinguish repository-owned test data from
@@ -113,14 +115,17 @@ Verification applies these invariants:
   source, version, and obligations declaration;
 - every component has an owned or embedded archive entry, and embedded Cargo/npm components cannot
   hide standalone files under a known owner;
-- every component has complete archived license text; FFmpeg additionally has its exact
+- every component has cryptographically fixed license material: exact repository license text or
+  the exact upstream source archive carrying that component's license; FFmpeg additionally has its exact
   corresponding source and relink materials, while PDFium has its exact upstream license/notice
   bundle;
 - mandatory declaration paths exist and their hashes match repository-generated inputs;
 - the SBOM and NOTICE inputs contain exactly the projected third-party component set;
 - native and model files match their target-specific authority, hashes, and download bindings;
-- FFmpeg is accepted only when the strict archived authority schema matches its binary and the
-  repository build policy exactly matches version, flags, format, architecture, and dynamic deps;
+- FFmpeg is accepted only when the strict archived authority schema binds source/signature,
+  config.log, policy bytes, binary and relink output; the repository build policy exactly matches
+  version, flags, format, architecture, and dynamic deps; and a separate reviewed target approval
+  fixes the authority, executable, config.log, and relink hashes;
 - changing only the platform target cannot change a component's license conclusion.
 
 This API intentionally verifies metadata and hashes supplied by a packaging implementation. Archive

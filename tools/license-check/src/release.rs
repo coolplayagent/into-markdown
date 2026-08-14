@@ -152,6 +152,9 @@ fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inve
     let policy = parse("license policy", &policy_text, errors);
     match (inventory, policy) {
         (Some(mut inventory), Some(policy)) => {
+            for component in &mut inventory.components {
+                component.required_in_core = component.included_in_release;
+            }
             enrich_inventory_evidence(repository, &mut inventory, errors);
             let cargo_lock = read(repository.join("Cargo.lock"), errors);
             let rust_approvals =

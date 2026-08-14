@@ -20,6 +20,13 @@ struct BuildAuthority {
     binary_architecture: String,
     dependencies: Vec<String>,
     toolchain: String,
+    source_sha256: String,
+    source_signature_sha256: String,
+    signing_key_fingerprint: String,
+    build_policy_sha256: String,
+    config_log_sha256: String,
+    relink_bytes: u64,
+    relink_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +45,25 @@ struct TargetPolicy {
     binary_architecture: String,
     additional_flags: Vec<String>,
     dynamic_dependencies: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildApprovals {
+    schema_version: u64,
+    ffmpeg_version: String,
+    targets: BTreeMap<String, Option<ApprovedBuild>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovedBuild {
+    authority_sha256: String,
+    executable_bytes: u64,
+    executable_sha256: String,
+    config_log_sha256: String,
+    relink_bytes: u64,
+    relink_sha256: String,
 }
 
 pub(crate) fn audit_repository(repository: &Path, errors: &mut Vec<String>) {
@@ -65,6 +91,19 @@ pub(crate) fn audit_repository(repository: &Path, errors: &mut Vec<String>) {
     {
         errors.push("FFmpeg build policy does not cover exact source/target authority".to_owned());
     }
+    let approvals = load_approvals(repository, errors);
+    if approvals.as_ref().is_some_and(|approvals| {
+        approvals.schema_version != SCHEMA_VERSION
+            || approvals.ffmpeg_version != policy.ffmpeg_version
+            || approvals.targets.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected
+    }) {
+        errors.push("FFmpeg build approvals do not cover exact source/target authority".to_owned());
+    }
+    if approvals.as_ref().is_some_and(|approvals| {
+        approvals.targets.values().flatten().any(|approved| !approved_fields_valid(approved))
+    }) {
+        errors.push("FFmpeg build approval lacks fixed artifact evidence".to_owned());
+    }
     let flags: BTreeSet<_> = policy.required_flags.iter().map(String::as_str).collect();
     if flags.len() != policy.required_flags.len()
         || ![
@@ -81,6 +120,20 @@ pub(crate) fn audit_repository(repository: &Path, errors: &mut Vec<String>) {
     {
         errors.push("FFmpeg build policy lacks unique LGPL-compatible constraints".to_owned());
     }
+    if !policy_is_lgpl_compatible(&policy) {
+        errors
+            .push("FFmpeg build policy contains incompatible or external enable flags".to_owned());
+    }
+}
+
+fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
+    !(policy.required_flags.iter().any(|flag| {
+        matches!(flag.as_str(), "--enable-gpl" | "--enable-version3" | "--enable-nonfree")
+            || flag.starts_with("--enable-lib")
+    }) || policy.targets.values().flat_map(|target| &target.additional_flags).any(|flag| {
+        matches!(flag.as_str(), "--enable-gpl" | "--enable-version3" | "--enable-nonfree")
+            || flag.starts_with("--enable-lib")
+    }))
 }
 
 pub(crate) fn validate(
@@ -117,6 +170,7 @@ pub(crate) fn validate(
             return;
         }
     };
+    let approvals = load_approvals(repository, errors);
     let source: serde_json::Value = serde_json::from_str(
         &read(repository, "third_party/ffmpeg/source.json").unwrap_or_default(),
     )
@@ -129,14 +183,83 @@ pub(crate) fn validate(
     {
         errors.push("FFmpeg authority, source, and build-policy versions disagree".to_owned());
     }
+    let policy_bytes =
+        fs::read(repository.join("third_party/ffmpeg/build-policy.json")).unwrap_or_default();
+    let policy_hash = format!("{:x}", Sha256::digest(&policy_bytes));
+    if source.get("source_sha256").and_then(serde_json::Value::as_str)
+        != Some(authority.source_sha256.as_str())
+        || source.get("signature_sha256").and_then(serde_json::Value::as_str)
+            != Some(authority.source_signature_sha256.as_str())
+        || source.get("signing_key_fingerprint").and_then(serde_json::Value::as_str)
+            != Some(authority.signing_key_fingerprint.as_str())
+        || authority.build_policy_sha256 != policy_hash
+    {
+        errors.push(
+            "FFmpeg build authority is not bound to source signature and policy bytes".to_owned(),
+        );
+    }
+    if authority.config_log_sha256.len() != 64
+        || authority.relink_sha256.len() != 64
+        || authority.relink_bytes == 0
+    {
+        errors.push("FFmpeg build authority lacks config.log or relink output evidence".to_owned());
+    }
     if !matches_evidence(&authority, evidence) {
         errors.push("FFmpeg projection fields differ from archived build authority".to_owned());
+    }
+    match approvals
+        .as_ref()
+        .and_then(|approvals| approvals.targets.get(&projection.target))
+        .and_then(Option::as_ref)
+    {
+        Some(approved) if approved_matches(approved, evidence) => {}
+        Some(_) => errors.push("FFmpeg evidence differs from repository-approved build".to_owned()),
+        None => errors.push(format!(
+            "FFmpeg target {} has no repository-approved build evidence",
+            projection.target
+        )),
     }
     let Some(target_policy) = policy.targets.get(&projection.target) else {
         errors.push(format!("FFmpeg build policy lacks target {}", projection.target));
         return;
     };
     validate_target(projection, &authority, &policy, target_policy, errors);
+}
+
+fn approved_matches(approved: &ApprovedBuild, evidence: &FfmpegEvidence) -> bool {
+    approved_fields_valid(approved)
+        && approved.authority_sha256 == evidence.authority_sha256
+        && approved.executable_bytes == evidence.executable_bytes
+        && approved.executable_sha256 == evidence.executable_sha256
+        && approved.config_log_sha256 == evidence.config_log_sha256
+        && approved.relink_bytes == evidence.relink_bytes
+        && approved.relink_sha256 == evidence.relink_sha256
+}
+
+fn approved_fields_valid(approved: &ApprovedBuild) -> bool {
+    approved.executable_bytes > 0
+        && approved.relink_bytes > 0
+        && [
+            approved.authority_sha256.as_str(),
+            approved.executable_sha256.as_str(),
+            approved.config_log_sha256.as_str(),
+            approved.relink_sha256.as_str(),
+        ]
+        .into_iter()
+        .all(|value| {
+            value.len() == 64
+                && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+fn load_approvals(repository: &Path, errors: &mut Vec<String>) -> Option<BuildApprovals> {
+    read(repository, "third_party/ffmpeg/build-approvals.json")
+        .and_then(|contents| {
+            serde_json::from_str(&contents)
+                .map_err(|error| format!("invalid FFmpeg build approvals: {error}"))
+        })
+        .map_err(|error| errors.push(error))
+        .ok()
 }
 
 fn validate_bound_authority(
@@ -174,6 +297,13 @@ fn matches_evidence(authority: &BuildAuthority, evidence: &FfmpegEvidence) -> bo
         && authority.binary_format == evidence.binary_format
         && authority.binary_architecture == evidence.binary_architecture
         && authority.toolchain == evidence.toolchain
+        && authority.source_sha256 == evidence.source_sha256
+        && authority.source_signature_sha256 == evidence.source_signature_sha256
+        && authority.signing_key_fingerprint == evidence.signing_key_fingerprint
+        && authority.build_policy_sha256 == evidence.build_policy_sha256
+        && authority.config_log_sha256 == evidence.config_log_sha256
+        && authority.relink_bytes == evidence.relink_bytes
+        && authority.relink_sha256 == evidence.relink_sha256
 }
 
 fn validate_target(
@@ -238,4 +368,24 @@ fn validate_target(
 fn read(repository: &Path, path: &str) -> Result<String, String> {
     fs::read_to_string(repository.join(path))
         .map_err(|error| format!("cannot read {path}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BuildPolicy, policy_is_lgpl_compatible};
+
+    #[test]
+    fn repository_policy_rejects_incompatible_and_external_flags() {
+        let policy_text = std::fs::read_to_string(
+            crate::repository_root().unwrap().join("third_party/ffmpeg/build-policy.json"),
+        )
+        .unwrap();
+        let mut policy: BuildPolicy = serde_json::from_str(&policy_text).unwrap();
+        assert!(policy_is_lgpl_compatible(&policy));
+        for flag in ["--enable-gpl", "--enable-nonfree", "--enable-libx264"] {
+            policy.required_flags.push(flag.to_owned());
+            assert!(!policy_is_lgpl_compatible(&policy));
+            policy.required_flags.pop();
+        }
+    }
 }

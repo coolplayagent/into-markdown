@@ -26,8 +26,7 @@ pub(crate) struct Component {
     pub id: String,
     pub kind: String,
     pub status: String,
-    #[serde(rename = "included_in_release")]
-    pub _included_in_release: bool,
+    pub included_in_release: bool,
     #[serde(default)]
     pub release_eligible: bool,
     #[serde(default)]
@@ -91,6 +90,13 @@ pub struct FfmpegEvidence {
     pub binary_format: String,
     pub binary_architecture: String,
     pub toolchain: String,
+    pub source_sha256: String,
+    pub source_signature_sha256: String,
+    pub signing_key_fingerprint: String,
+    pub build_policy_sha256: String,
+    pub config_log_sha256: String,
+    pub relink_bytes: u64,
+    pub relink_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -137,6 +143,7 @@ pub enum LicenseMaterialKind {
     NoticeBundle,
     CorrespondingSource,
     RelinkMaterial,
+    UpstreamSourceArchive,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

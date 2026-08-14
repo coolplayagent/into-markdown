@@ -58,7 +58,7 @@ pub(crate) fn load(contents: &str, errors: &mut Vec<String>) -> Vec<Component> {
                 id: format!("npm:{}@{}", package.name, package.version),
                 kind: "npm-runtime".to_owned(),
                 status: "reviewed".to_owned(),
-                _included_in_release: true,
+                included_in_release: true,
                 release_eligible: true,
                 manual_only: false,
                 required_in_core: true,

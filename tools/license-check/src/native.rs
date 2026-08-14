@@ -133,8 +133,8 @@ pub(crate) fn integrity(
         ),
         "ffmpeg" => (
             "third_party/ffmpeg/source.json",
-            "sha256",
-            "sha256",
+            "source_sha256",
+            "source_sha256",
             "source archive",
             "source archive",
         ),

@@ -67,7 +67,7 @@ pub(crate) fn load(lock: &str, approvals: &str, errors: &mut Vec<String>) -> Vec
             id: format!("cargo:{}@{}", key.0, key.1),
             kind: "rust-library".to_owned(),
             status: "reviewed".to_owned(),
-            _included_in_release: false,
+            included_in_release: false,
             release_eligible: true,
             manual_only: false,
             required_in_core: required.contains(&key),
