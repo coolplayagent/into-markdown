@@ -186,6 +186,7 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
             errors.push(format!("cannot read {}: {error}", path.display()));
             String::new()
         });
+        let text = strip_comments(&text);
         let rule_kind = if package == "apps/cli" { "rust_binary" } else { "rust_library" };
         let Some(body) = named_rule_body(&text, rule_kind, target) else {
             errors.push(format!("missing {rule_kind} {label}"));
@@ -323,9 +324,49 @@ fn balanced_end(text: &str, start: usize) -> Option<usize> {
 
 fn attribute<'a>(body: &'a str, name: &str) -> Option<&'a str> {
     let marker = format!("{name} =");
-    let start = body.find(&marker)? + marker.len();
+    let found = body.match_indices(&marker).find_map(|(index, _)| {
+        let boundary = index
+            .checked_sub(1)
+            .and_then(|previous| body.as_bytes().get(previous))
+            .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_');
+        boundary.then_some(index)
+    })?;
+    let start = found + marker.len();
     let end = balanced_end_attribute(body, start);
     Some(body[start..end].trim())
+}
+
+fn strip_comments(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let mut quoted = false;
+        let mut escaped = false;
+        let mut comment = false;
+        for character in line.chars() {
+            if comment {
+                if character == '\n' {
+                    output.push(character);
+                }
+                continue;
+            }
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    quoted = false;
+                }
+            } else if character == '"' {
+                quoted = true;
+            } else if character == '#' {
+                comment = true;
+                continue;
+            }
+            output.push(character);
+        }
+    }
+    output
 }
 
 fn balanced_end_attribute(text: &str, start: usize) -> usize {
@@ -359,7 +400,7 @@ fn cargo_package_name(path: &std::path::Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{attribute, named_rule_body, validate_bazel_runtime_graph};
+    use super::{attribute, named_rule_body, strip_comments, validate_bazel_runtime_graph};
     use std::fs;
 
     #[test]
@@ -371,6 +412,15 @@ rust_test(name = "decoy", deps = all_crate_deps(normal = True), compile_data = [
         let body = named_rule_body(build, "rust_binary", "into-md").unwrap();
         assert!(!attribute(body, "deps").unwrap().contains("all_crate_deps"));
         assert_eq!(attribute(body, "compile_data"), Some("[]"));
+        let commented = strip_comments(&format!(
+            "# rust_binary(name = \"into-md\", deps = all_crate_deps(normal = True))\n{build}"
+        ));
+        let body = named_rule_body(&commented, "rust_binary", "into-md").unwrap();
+        assert!(!attribute(body, "deps").unwrap().contains("all_crate_deps"));
+        assert_eq!(
+            attribute("crate_name = \"wrong\", name = \"right\"", "name"),
+            Some("\"right\"")
+        );
     }
 
     #[test]
