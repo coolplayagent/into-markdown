@@ -1,5 +1,10 @@
 //! Authoritative inventory and assembly of the offline core conversion surface.
 
+pub use super::core_catalog_authority::{
+    CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
+    CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
+    CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, RuntimeRequirement,
+};
 use super::{
     ContentFormatDetector, DelimitedTextConverter, DocxConverter, EpubConverter, FeedConverter,
     HintFormatDetector, HtmlConverter, HttpSourceResolver, ImageConverter, LegacyOfficeConverter,
@@ -9,205 +14,9 @@ use super::{
 };
 use into_markdown_core::{ConversionError, Converter, FormatDetector, InputFormat, SourceResolver};
 use into_markdown_engine::RegistryBuilder;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-
-/// Provenance boundary for a capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilitySource {
-    /// Shipped and statically assembled by the core package.
-    Core,
-    /// Separately installed native runtime or model bundle.
-    OptionalRuntime,
-    /// Explicitly installed plugin package.
-    Plugin,
-}
-
-impl CapabilitySource {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Core => "core",
-            Self::OptionalRuntime => "optional_runtime",
-            Self::Plugin => "plugin",
-        }
-    }
-}
-
-/// Component role in the catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityKind {
-    /// Authenticated input acquisition.
-    SourceResolver,
-    /// Bounded format detection.
-    FormatDetector,
-    /// Input-to-IR conversion.
-    Converter,
-    /// Separately distributed native/model dependency.
-    Runtime,
-}
-
-impl CapabilityKind {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SourceResolver => "source_resolver",
-            Self::FormatDetector => "format_detector",
-            Self::Converter => "converter",
-            Self::Runtime => "runtime",
-        }
-    }
-}
-
-/// Whether a catalog entry is self-contained or supplied separately.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityAvailability {
-    /// Present in the core package.
-    Available,
-    /// Installed and verified separately.
-    OptionalRuntime,
-}
-
-impl CapabilityAvailability {
-    /// Stable machine-readable value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::OptionalRuntime => "optional_runtime",
-        }
-    }
-}
-
-/// Stable installation guidance for a separately distributed runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeRequirement {
-    /// Stable component name used by conversion errors.
-    pub component: &'static str,
-    /// Stable actionable installation guidance.
-    pub install_hint: &'static str,
-}
-
-/// One registered component or optional runtime in the core inventory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityDescriptor {
-    /// Stable globally unique component ID.
-    pub id: &'static str,
-    /// Component role.
-    pub kind: CapabilityKind,
-    /// Package provenance boundary.
-    pub source: CapabilitySource,
-    /// Static distribution availability.
-    pub availability: CapabilityAvailability,
-    /// Deterministic detector/converter precedence, or zero when inapplicable.
-    pub priority: i32,
-    /// Formats routed by this converter.
-    pub formats: &'static [InputFormat],
-    /// Separately installed dependency, when required.
-    pub runtime: Option<RuntimeRequirement>,
-}
-
-/// Converter implementation status exposed by `into-md formats`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatStatus {
-    /// A real converter is registered in the default engine.
-    Available,
-    /// Compatibility value for extension catalogs; never emitted by the core catalog.
-    Planned,
-}
-
-impl FormatStatus {
-    /// Stable lowercase display value.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::Planned => "planned",
-        }
-    }
-}
-
-/// User-facing core format descriptor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FormatDescriptor {
-    /// Stable format identifier.
-    pub format: InputFormat,
-    /// User-facing format family.
-    pub family: &'static str,
-    /// Recognized filename extensions.
-    pub extensions: &'static [&'static str],
-    /// Converter registration status.
-    pub status: FormatStatus,
-}
-
-/// Catalog metadata for one public format descriptor.
-///
-/// Provenance and runtime distribution details live here so extending the
-/// catalog does not add required fields to the long-standing public
-/// [`FormatDescriptor`] struct-literal contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CatalogFormatDescriptor {
-    /// Backward-compatible public format description.
-    pub descriptor: &'static FormatDescriptor,
-    /// Package provenance boundary.
-    pub source: CapabilitySource,
-    /// Separately installed dependency, when required.
-    pub runtime: Option<RuntimeRequirement>,
-}
-
-/// Stable release authority for the exact core format catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CoreCatalogAuthority {
-    /// Wire schema version.
-    pub schema_version: u64,
-    /// SHA-256 of the canonical compact JSON encoding of `entries`.
-    pub entries_sha256: String,
-    /// Catalog entries in deterministic registration order.
-    pub entries: Vec<CoreCatalogAuthorityEntry>,
-    /// SHA-256 of the canonical compact JSON encoding of `optional_runtimes`.
-    pub optional_runtimes_sha256: String,
-    /// Separately installed runtime capabilities in deterministic catalog order.
-    pub optional_runtimes: Vec<CoreRuntimeAuthorityEntry>,
-}
-
-/// One separately installed runtime in [`CoreCatalogAuthority`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CoreRuntimeAuthorityEntry {
-    /// Stable catalog capability ID.
-    pub id: String,
-    /// Stable component name used by conversion errors.
-    pub component: String,
-    /// Exact installation guidance exposed to users.
-    pub install_hint: String,
-}
-
-/// One exact format entry in [`CoreCatalogAuthority`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CoreCatalogAuthorityEntry {
-    /// Stable format identifier.
-    pub format: String,
-    /// User-facing family.
-    pub family: String,
-    /// Exact recognized extensions.
-    pub extensions: Vec<String>,
-    /// Converter status.
-    pub status: String,
-    /// Provenance boundary.
-    pub source: String,
-    /// Optional runtime component ID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_component: Option<String>,
-    /// Exact installation guidance for the optional runtime.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub install_hint: Option<String>,
-}
 
 pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
     component: "pdfium",
@@ -775,6 +584,18 @@ mod tests {
         let index = runtime.iter().position(|entry| entry.kind == CapabilityKind::Runtime).unwrap();
         runtime[index].availability = CapabilityAvailability::Available;
         assert!(validate_core_capabilities(&runtime).is_err());
+
+        let mut omitted_requirement = CAPABILITIES.to_vec();
+        let index = omitted_requirement
+            .iter()
+            .position(|entry| entry.availability == CapabilityAvailability::OptionalRuntime)
+            .unwrap();
+        omitted_requirement[index].runtime = None;
+        assert!(validate_core_capabilities(&omitted_requirement).is_err());
+
+        let mut changed_hint = CAPABILITIES.to_vec();
+        changed_hint[index].runtime.as_mut().unwrap().install_hint = "forged hint";
+        assert!(validate_core_capabilities(&changed_hint).is_err());
     }
 
     #[test]

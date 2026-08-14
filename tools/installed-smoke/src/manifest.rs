@@ -7,8 +7,26 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::Read;
+use std::time::Instant;
+
+const MANIFEST_LIMIT: u64 = 16 * 1024 * 1024;
+const ENTRY_LIMIT: usize = 200_000;
+const PATH_LIMIT: usize = 4096;
+const FILE_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+const TOTAL_PROJECTION_LIMIT: u64 = 32 * 1024 * 1024 * 1024;
+const HASH_BUFFER: usize = 4096;
 
 pub(crate) fn verify_install(request: &ValidatedRequest) -> Result<ArchiveProjection, String> {
+    let deadline = Instant::now()
+        .checked_add(request.timeout)
+        .ok_or_else(|| "archive verification deadline is invalid".to_owned())?;
+    checkpoint(request, deadline)?;
+    let manifest_size = fs::metadata(&request.manifest)
+        .map_err(|error| format!("cannot inspect archive manifest: {error}"))?
+        .len();
+    if manifest_size > MANIFEST_LIMIT {
+        return Err("archive manifest size limit exceeded".into());
+    }
     let bytes = fs::read(&request.manifest)
         .map_err(|error| format!("cannot read archive manifest: {error}"))?;
     let projection: ArchiveProjection = serde_json::from_slice(&bytes)
@@ -16,12 +34,29 @@ pub(crate) fn verify_install(request: &ValidatedRequest) -> Result<ArchiveProjec
     if projection.schema_version != 1 {
         return Err("archive manifest schema version is unsupported".into());
     }
+    if projection.files.len() > ENTRY_LIMIT {
+        return Err("archive manifest entry limit exceeded".into());
+    }
     let mut paths = BTreeSet::new();
+    let mut total_bytes = 0_u64;
     for file in &projection.files {
-        if !safe_relative(&file.path) || !paths.insert(file.path.as_str()) {
+        checkpoint(request, deadline)?;
+        if file.path.len() > PATH_LIMIT
+            || !safe_relative(&file.path)
+            || !paths.insert(file.path.as_str())
+        {
             return Err("archive manifest contains an unsafe or duplicate path".into());
         }
-        verify_file(request, file)?;
+        if file.bytes > FILE_LIMIT {
+            return Err("archive manifest per-file byte limit exceeded".into());
+        }
+        total_bytes = total_bytes
+            .checked_add(file.bytes)
+            .ok_or_else(|| "archive manifest total byte count overflowed".to_owned())?;
+        if total_bytes > TOTAL_PROJECTION_LIMIT {
+            return Err("archive manifest total byte limit exceeded".into());
+        }
+        verify_file(request, file, deadline)?;
     }
     for required in ["core-catalog.json"] {
         if !projection.files.iter().any(|file| file.path == required) {
@@ -35,7 +70,7 @@ pub(crate) fn verify_install(request: &ValidatedRequest) -> Result<ArchiveProjec
             return Err("archive manifest does not bind a requested installed artifact".into());
         }
     }
-    verify_tree_is_manifest_bound(request, &request.install_root, &paths)?;
+    verify_tree_is_manifest_bound(request, &request.install_root, &paths, deadline)?;
     Ok(projection)
 }
 
@@ -43,12 +78,22 @@ fn verify_tree_is_manifest_bound(
     request: &ValidatedRequest,
     directory: &std::path::Path,
     manifest_paths: &BTreeSet<&str>,
+    deadline: Instant,
 ) -> Result<(), String> {
     let mut pending = vec![directory.to_owned()];
+    let mut visited = 0_usize;
     while let Some(current) = pending.pop() {
+        checkpoint(request, deadline)?;
         for item in
             fs::read_dir(&current).map_err(|_| "cannot inspect installed tree".to_owned())?
         {
+            checkpoint(request, deadline)?;
+            visited = visited
+                .checked_add(1)
+                .ok_or_else(|| "installed tree entry count overflowed".to_owned())?;
+            if visited > ENTRY_LIMIT {
+                return Err("installed tree entry limit exceeded".into());
+            }
             let item = item.map_err(|_| "cannot inspect installed tree entry".to_owned())?;
             let metadata = item
                 .file_type()
@@ -74,7 +119,11 @@ fn verify_tree_is_manifest_bound(
     Ok(())
 }
 
-fn verify_file(request: &ValidatedRequest, entry: &ArchiveFile) -> Result<(), String> {
+fn verify_file(
+    request: &ValidatedRequest,
+    entry: &ArchiveFile,
+    deadline: Instant,
+) -> Result<(), String> {
     let path = request.install_root.join(&entry.path);
     let metadata = fs::symlink_metadata(&path)
         .map_err(|_| format!("installed file is missing: {}", entry.path))?;
@@ -87,8 +136,9 @@ fn verify_file(request: &ValidatedRequest, entry: &ArchiveFile) -> Result<(), St
     }
     let mut input = File::open(&path).map_err(|_| "cannot open installed file".to_owned())?;
     let mut digest = Sha256::new();
-    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut buffer = [0_u8; HASH_BUFFER];
     loop {
+        checkpoint(request, deadline)?;
         let count = input.read(&mut buffer).map_err(|_| "cannot hash installed file".to_owned())?;
         if count == 0 {
             break;
@@ -97,6 +147,16 @@ fn verify_file(request: &ValidatedRequest, entry: &ArchiveFile) -> Result<(), St
     }
     if format!("{:x}", digest.finalize()) != entry.sha256 {
         return Err(format!("installed file hash disagrees with manifest: {}", entry.path));
+    }
+    Ok(())
+}
+
+fn checkpoint(request: &ValidatedRequest, deadline: Instant) -> Result<(), String> {
+    if request.cancelled() {
+        return Err("archive verification cancelled".into());
+    }
+    if Instant::now() >= deadline {
+        return Err("archive verification deadline exceeded".into());
     }
     Ok(())
 }
@@ -173,6 +233,23 @@ mod tests {
             cancel_file: None,
         };
         verify_install(&request).unwrap();
+
+        let mut oversized = projection.clone();
+        oversized.files[0].bytes = FILE_LIMIT + 1;
+        fs::write(&manifest, serde_json::to_vec(&oversized).unwrap()).unwrap();
+        assert!(verify_install(&request).unwrap_err().contains("per-file byte limit"));
+
+        fs::write(&manifest, serde_json::to_vec(&projection).unwrap()).unwrap();
+        let cancel = temporary.path().join("cancel");
+        fs::write(&cancel, b"cancel").unwrap();
+        let mut cancelled = request.clone();
+        cancelled.cancel_file = Some(cancel);
+        assert_eq!(verify_install(&cancelled).unwrap_err(), "archive verification cancelled");
+
+        let mut expired = request.clone();
+        expired.timeout = Duration::ZERO;
+        assert_eq!(verify_install(&expired).unwrap_err(), "archive verification deadline exceeded");
+
         fs::write(install.join("bin/into-md"), b"mutated").unwrap();
         assert!(verify_install(&request).unwrap_err().contains("metadata disagrees"));
         fs::write(install.join("bin/into-md"), b"binary").unwrap();

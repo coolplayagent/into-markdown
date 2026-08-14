@@ -3,6 +3,7 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod core_catalog;
+mod core_catalog_authority;
 mod delimited;
 mod docx;
 mod epub;

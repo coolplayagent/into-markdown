@@ -61,7 +61,17 @@ pub(crate) fn load_authority(
     if authority.entries.is_empty() {
         return Err("catalog authority is empty".into());
     }
+    validate_compiled_authority(&authority)?;
     Ok(authority)
+}
+
+fn validate_compiled_authority(authority: &CoreCatalogAuthority) -> Result<(), String> {
+    let trusted = into_markdown_converters::core_catalog_authority()
+        .map_err(|error| format!("cannot construct trusted core catalog: {error}"))?;
+    if *authority != trusted {
+        return Err("packaged catalog differs from the compiled core catalog authority".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn compare_cli(
@@ -166,5 +176,17 @@ mod tests {
         })));
         let error = compare_cli(&request, temporary.path(), &authority, &executor).unwrap_err();
         assert!(error.contains("differ from release catalog authority"));
+    }
+
+    #[test]
+    fn jointly_rehashed_catalog_and_cli_cannot_forge_compiled_authority() {
+        let mut forged = into_markdown_converters::core_catalog_authority().unwrap();
+        forged.entries[0].family = "forged".into();
+        forged.entries_sha256 =
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&forged.entries).unwrap()));
+        assert_eq!(
+            validate_compiled_authority(&forged).unwrap_err(),
+            "packaged catalog differs from the compiled core catalog authority"
+        );
     }
 }

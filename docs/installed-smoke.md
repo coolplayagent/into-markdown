@@ -19,9 +19,20 @@ recorded in the report.
 
 The runner launches absolute executables with an empty environment and isolated `HOME`, XDG and
 temporary directories. It does not inherit `PATH`, Cargo caches, wrappers, Rust flags, user
-configuration, Bazel runfiles, or network configuration. The external Rust consumer uses an empty
-`CARGO_HOME`, an explicitly configured installed vendor directory, an absolute `rustc`, and Cargo
-offline mode. Each child has a deadline, bounded output, cancellation, kill and reap behavior.
+configuration, Bazel runfiles, or network configuration. Cargo is invoked from the canonical
+filesystem root (which must not contain Cargo configuration), so configuration planted anywhere
+above either the installation or mutable temporary root is outside Cargo's discovery chain. The
+external Rust consumer uses an empty `CARGO_HOME`, an explicitly configured installed vendor
+directory, an absolute `rustc`, and Cargo offline mode. Its exact metadata closure rejects path
+dependencies outside the installed Rust library, registry packages outside its `vendor/`, and all
+Git sources. Each subprocess owns a Unix process group or Windows kill-on-close Job Object; success,
+cancellation and timeout terminate descendants before bounded output readers join.
+
+The projection parser limits manifest bytes, entry count, path bytes, individual file bytes, and
+checked aggregate bytes before verification. File hashes stream in 4 KiB checkpoints that enforce
+the run cancellation file and deadline. The packaged catalog must match both the projection file
+binding and the authority compiled into the runner; rehashing the manifest, catalog and CLI output
+together cannot manufacture a different production catalog.
 
 The CLI cases cover version and independently authorized formats, Markdown and result DTO output,
 file and stdin conversion, malformed input and stable exits, representative DOCX, EPUB, MSG, RTF,

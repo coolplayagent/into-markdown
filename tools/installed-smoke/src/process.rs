@@ -7,6 +7,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::process_tree;
+
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 
 pub(crate) struct CommandSpec<'a> {
@@ -62,22 +64,31 @@ impl Executor for RealExecutor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        process_tree::configure(&mut command);
         let mut child =
             command.spawn().map_err(|error| format!("cannot start process: {error}"))?;
+        let mut tree = match process_tree::own(&child) {
+            Ok(tree) => tree,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         if let Some(mut input) = child.stdin.take()
             && let Err(error) = input.write_all(spec.stdin)
         {
-            let _ = child.kill();
+            tree.terminate();
             let _ = child.wait();
             return Err(format!("cannot write process input: {error}"));
         }
         let Some(stdout) = child.stdout.take() else {
-            let _ = child.kill();
+            tree.terminate();
             let _ = child.wait();
             return Err("process stdout is unavailable".into());
         };
         let Some(stderr) = child.stderr.take() else {
-            let _ = child.kill();
+            tree.terminate();
             let _ = child.wait();
             return Err("process stderr is unavailable".into());
         };
@@ -86,7 +97,7 @@ impl Executor for RealExecutor {
         let deadline = Instant::now() + spec.timeout;
         let status = loop {
             if spec.cancel_file.is_some_and(Path::exists) {
-                let _ = child.kill();
+                tree.terminate();
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
@@ -96,7 +107,7 @@ impl Executor for RealExecutor {
                 Ok(Some(status)) => break status,
                 Ok(None) => {}
                 Err(error) => {
-                    let _ = child.kill();
+                    tree.terminate();
                     let _ = child.wait();
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
@@ -104,7 +115,7 @@ impl Executor for RealExecutor {
                 }
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
+                tree.terminate();
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
@@ -112,6 +123,9 @@ impl Executor for RealExecutor {
             }
             thread::sleep(Duration::from_millis(10));
         };
+        // A command that exits while leaving a grandchild holding an inherited
+        // pipe must not hang the reader joins or escape the smoke run.
+        tree.terminate();
         let stdout = stdout_thread.join().map_err(|_| "stdout reader panicked".to_owned())??;
         let stderr = stderr_thread.join().map_err(|_| "stderr reader panicked".to_owned())??;
         Ok(CommandOutput { exit_code: status.code(), stdout, stderr })
@@ -230,6 +244,90 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error, "process deadline exceeded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_parent_cannot_leave_pipe_holding_grandchild() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let script = temporary.path().join("spawn.sh");
+        std::fs::write(&script, b"#!/bin/sh\n(sleep 30) &\nprintf done\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let started = Instant::now();
+        let output = RealExecutor::new(BTreeMap::new())
+            .execute(CommandSpec {
+                program: &script,
+                arguments: &[],
+                current_dir: temporary.path(),
+                home: temporary.path(),
+                environment: BTreeMap::new(),
+                stdin: &[],
+                timeout: Duration::from_secs(2),
+                cancel_file: None,
+            })
+            .unwrap();
+        assert_eq!(output.stdout, b"done");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_terminates_the_owned_grandchild_group() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let script = temporary.path().join("tree.sh");
+        let pid_file = temporary.path().join("grandchild.pid");
+        let cancel = temporary.path().join("cancel");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nsleep 30 &\necho $! > '{}'\nwait\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let pid_for_cancel = pid_file.clone();
+        let cancel_for_thread = cancel.clone();
+        let trigger = thread::spawn(move || {
+            for _ in 0..200 {
+                if pid_for_cancel.is_file() {
+                    std::fs::write(cancel_for_thread, b"cancel").unwrap();
+                    return;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            panic!("grandchild PID was not published");
+        });
+        let error = RealExecutor::new(BTreeMap::new())
+            .execute(CommandSpec {
+                program: &script,
+                arguments: &[],
+                current_dir: temporary.path(),
+                home: temporary.path(),
+                environment: BTreeMap::new(),
+                stdin: &[],
+                timeout: Duration::from_secs(3),
+                cancel_file: Some(&cancel),
+            })
+            .unwrap_err();
+        trigger.join().unwrap();
+        assert_eq!(error, "process cancelled");
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let mut absent = false;
+        for _ in 0..100 {
+            absent = !std::process::Command::new("/bin/kill")
+                .args(["-0", pid.trim()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if absent {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(absent, "grandchild remained after cancellation");
     }
 
     #[test]

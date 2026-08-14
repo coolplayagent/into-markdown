@@ -6,6 +6,7 @@ mod manifest;
 mod path_policy;
 mod platform;
 mod process;
+mod process_tree;
 mod report;
 mod request;
 mod rust_consumer;
@@ -218,7 +219,8 @@ mod tests {
         let pdf = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file"}"#.to_vec();
         let image = br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md models install pp-ocrv6-tiny-zh-en"}"#.to_vec();
         let metadata = serde_json::to_vec(&serde_json::json!({
-            "packages": [{"name":"into-markdown","source":null,"manifest_path":rust.join("Cargo.toml")}]
+            "packages": [{"id":"root","name":"into-markdown","source":null,"manifest_path":rust.join("Cargo.toml")}],
+            "resolve":{"root":"root","nodes":[{"id":"root","dependencies":[]}]}
         }))
         .unwrap();
         let mut outputs =
