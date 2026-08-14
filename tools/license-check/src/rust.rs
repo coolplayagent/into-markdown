@@ -556,14 +556,42 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn normal_runtime_authority_rejects_build_only_inclusion_and_runtime_omission() {
+    fn normal_authority_fixture() -> (std::path::PathBuf, String, CargoLock, String) {
         let root = crate::repository_root().unwrap();
         let lock_text = fs::read_to_string(root.join("Cargo.lock")).unwrap();
         let lock: CargoLock = toml::from_str(&lock_text).unwrap();
         let authority_text =
             fs::read_to_string(root.join("third_party/licenses/cargo-normal-runtime.json"))
                 .unwrap();
+        (root, lock_text, lock, authority_text)
+    }
+
+    fn normal_authority_errors(
+        root: &std::path::Path,
+        lock_text: &str,
+        lock: &CargoLock,
+        authority: &serde_json::Value,
+    ) -> Vec<String> {
+        let locked = lock
+            .package
+            .iter()
+            .filter(|package| package.source.is_some())
+            .map(|package| (package.name.clone(), package.version.clone()))
+            .collect();
+        let mut errors = Vec::new();
+        crate::cargo_runtime::packages(
+            root,
+            lock_text,
+            &locked,
+            &serde_json::to_string(authority).unwrap(),
+            &mut errors,
+        );
+        errors
+    }
+
+    #[test]
+    fn normal_runtime_authority_rejects_overlap_and_omission() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
         let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
         let normal = authority["normal_registry_packages"].as_array_mut().unwrap();
         assert!(!normal.iter().any(|value| value == "cc@1.4.2"));
@@ -571,19 +599,7 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         normal.push(serde_json::Value::String("cc@1.4.2".into()));
         normal.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-        let mut errors = Vec::new();
-        crate::cargo_runtime::packages(
-            &root,
-            &lock_text,
-            &lock
-                .package
-                .iter()
-                .filter(|package| package.source.is_some())
-                .map(|package| (package.name.clone(), package.version.clone()))
-                .collect(),
-            &serde_json::to_string(&authority).unwrap(),
-            &mut errors,
-        );
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
         assert!(errors.iter().any(|error| error.contains("exactly partition")));
 
         let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
@@ -591,37 +607,52 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             .as_array_mut()
             .unwrap()
             .retain(|value| value != "serde@1.0.229");
-        errors.clear();
-        crate::cargo_runtime::packages(
-            &root,
-            &lock_text,
-            &lock
-                .package
-                .iter()
-                .filter(|package| package.source.is_some())
-                .map(|package| (package.name.clone(), package.version.clone()))
-                .collect(),
-            &serde_json::to_string(&authority).unwrap(),
-            &mut errors,
-        );
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
         assert!(errors.iter().any(|error| error.contains("exactly partition")));
+    }
 
+    #[test]
+    fn normal_runtime_authority_rejects_kind_reclassification() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        for (list, remove, insert) in [
+            ("normal_registry_packages", "serde@1.0.229", "cc@1.4.2"),
+            ("non_normal_registry_packages", "cc@1.4.2", "serde@1.0.229"),
+        ] {
+            let values = authority[list].as_array_mut().unwrap();
+            values.retain(|value| value != remove);
+            values.push(serde_json::Value::String(insert.into()));
+            values.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        }
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
+        assert!(errors.iter().any(|error| error.contains("metadata normal")));
+    }
+
+    #[test]
+    fn normal_runtime_authority_rejects_manifest_set_drift() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        authority["workspace_manifest_sha256"]
+            .as_object_mut()
+            .unwrap()
+            .remove("apps/cli/Cargo.toml");
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
+        assert!(errors.iter().any(|error| error.contains("exactly bind")));
+
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        authority["workspace_manifest_sha256"]["not-a-member/Cargo.toml"] =
+            serde_json::Value::String("0".repeat(64));
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
+        assert!(errors.iter().any(|error| error.contains("exactly bind")));
+    }
+
+    #[test]
+    fn normal_runtime_authority_rejects_manifest_hash_drift() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
         let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
         authority["workspace_manifest_sha256"]["apps/cli/Cargo.toml"] =
             serde_json::Value::String("0".repeat(64));
-        errors.clear();
-        crate::cargo_runtime::packages(
-            &root,
-            &lock_text,
-            &lock
-                .package
-                .iter()
-                .filter(|package| package.source.is_some())
-                .map(|package| (package.name.clone(), package.version.clone()))
-                .collect(),
-            &serde_json::to_string(&authority).unwrap(),
-            &mut errors,
-        );
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
         assert!(errors.iter().any(|error| error.contains("apps/cli/Cargo.toml")));
     }
 }

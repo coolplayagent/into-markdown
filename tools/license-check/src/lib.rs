@@ -736,6 +736,20 @@ fn repository_root() -> Result<PathBuf, String> {
         }
         return Err("BUILD_WORKSPACE_DIRECTORY is not the repository root".to_owned());
     }
+    if env::var_os("TEST_SRCDIR").is_some()
+        && let Ok(manifest) = env::var("LICENSE_CHECK_TEST_WORKSPACE_MANIFEST")
+    {
+        let manifest = PathBuf::from(manifest)
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel test workspace manifest: {error}"))?;
+        let candidate = manifest
+            .parent()
+            .ok_or_else(|| "Bazel test workspace manifest has no parent".to_owned())?;
+        if candidate.join("Cargo.lock").is_file() && candidate.join("MODULE.bazel").is_file() {
+            return Ok(candidate.to_owned());
+        }
+        return Err("Bazel test workspace manifest is not in the repository root".to_owned());
+    }
     if let Ok(test_srcdir) = env::var("TEST_SRCDIR") {
         let workspace = env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".to_owned());
         let candidate = PathBuf::from(test_srcdir).join(workspace);

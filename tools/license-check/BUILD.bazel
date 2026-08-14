@@ -137,6 +137,9 @@ rust_test(
     name = "license_check_unit_test",
     crate = ":license_check_lib",
     data = DATA,
+    env = {"LICENSE_CHECK_TEST_WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)"},
+    env_inherit = ["CARGO", "CARGO_HOME", "HOME", "PATH", "RUSTUP_HOME"],
+    tags = ["no-sandbox"],
 )
 
 rust_test(
@@ -145,5 +148,8 @@ rust_test(
     crate_name = "repository_license_test",
     data = DATA,
     edition = "2024",
+    env = {"LICENSE_CHECK_TEST_WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)"},
+    env_inherit = ["CARGO", "CARGO_HOME", "HOME", "PATH", "RUSTUP_HOME"],
+    tags = ["no-sandbox"],
     deps = [":license_check_lib"],
 )

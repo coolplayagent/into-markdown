@@ -4,6 +4,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
+use std::process::Command;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,6 +15,44 @@ struct NormalRuntimeAuthority {
     workspace_manifest_sha256: BTreeMap<String, String>,
     normal_registry_packages: Vec<String>,
     non_normal_registry_packages: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct CargoMetadata {
+    packages: Vec<MetadataPackage>,
+    workspace_members: Vec<String>,
+    resolve: Option<MetadataResolve>,
+}
+
+#[derive(Deserialize)]
+struct MetadataPackage {
+    id: String,
+    name: String,
+    version: String,
+    source: Option<String>,
+    manifest_path: String,
+}
+
+#[derive(Deserialize)]
+struct MetadataResolve {
+    nodes: Vec<MetadataNode>,
+}
+
+#[derive(Deserialize)]
+struct MetadataNode {
+    id: String,
+    deps: Vec<MetadataDependency>,
+}
+
+#[derive(Deserialize)]
+struct MetadataDependency {
+    pkg: String,
+    dep_kinds: Vec<MetadataDependencyKind>,
+}
+
+#[derive(Deserialize)]
+struct MetadataDependencyKind {
+    kind: Option<String>,
 }
 
 pub(crate) fn packages(
@@ -37,7 +76,16 @@ pub(crate) fn packages(
     if authority.cargo_lock_sha256 != lock_hash {
         errors.push("Cargo normal-runtime authority is stale for Cargo.lock".to_owned());
     }
-    validate_manifest_hashes(repository, &authority.workspace_manifest_sha256, errors);
+    let Some(metadata) = cargo_metadata(repository, errors) else {
+        return BTreeSet::new();
+    };
+    let expected_manifests = workspace_manifests(repository, &metadata, errors);
+    validate_manifest_hashes(
+        repository,
+        &expected_manifests,
+        &authority.workspace_manifest_sha256,
+        errors,
+    );
     let normal = parse_partition("normal", &authority.normal_registry_packages, errors);
     let non_normal = parse_partition("non-normal", &authority.non_normal_registry_packages, errors);
     if !normal.is_disjoint(&non_normal)
@@ -48,16 +96,139 @@ pub(crate) fn packages(
                 .to_owned(),
         );
     }
+    let computed_normal = metadata_normal_packages(&metadata, errors);
+    if normal != computed_normal {
+        errors.push(
+            "Cargo normal package authority differs from cargo metadata normal dependency closure"
+                .to_owned(),
+        );
+    }
+    let computed_non_normal = locked.difference(&computed_normal).cloned().collect();
+    if non_normal != computed_non_normal {
+        errors.push(
+            "Cargo non-normal package authority differs from cargo metadata dependency kinds"
+                .to_owned(),
+        );
+    }
+    normal
+}
+
+fn cargo_metadata(repository: &Path, errors: &mut Vec<String>) -> Option<CargoMetadata> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = match Command::new(cargo)
+        .args(["metadata", "--locked", "--offline", "--format-version", "1"])
+        .current_dir(repository)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            errors.push(format!("cannot run cargo metadata for release authority: {error}"));
+            return None;
+        }
+    };
+    if !output.status.success() {
+        errors.push(format!(
+            "cargo metadata failed for release authority: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        return None;
+    }
+    match serde_json::from_slice(&output.stdout) {
+        Ok(metadata) => Some(metadata),
+        Err(error) => {
+            errors.push(format!("invalid cargo metadata release authority: {error}"));
+            None
+        }
+    }
+}
+
+fn workspace_manifests(
+    repository: &Path,
+    metadata: &CargoMetadata,
+    errors: &mut Vec<String>,
+) -> BTreeSet<String> {
+    let members: BTreeSet<_> = metadata.workspace_members.iter().collect();
+    let mut paths = BTreeSet::from(["Cargo.toml".to_owned()]);
+    for package in metadata.packages.iter().filter(|package| members.contains(&package.id)) {
+        let manifest = Path::new(&package.manifest_path);
+        match manifest.strip_prefix(repository) {
+            Ok(relative) => {
+                let value = relative.to_string_lossy().replace('\\', "/");
+                paths.insert(value);
+            }
+            Err(_) => errors.push(format!(
+                "cargo metadata workspace manifest escapes repository: {}",
+                package.manifest_path
+            )),
+        }
+    }
+    if paths.len() != metadata.workspace_members.len() + 1 {
+        errors
+            .push("cargo metadata workspace members do not map one-to-one to manifests".to_owned());
+    }
+    paths
+}
+
+fn metadata_normal_packages(
+    metadata: &CargoMetadata,
+    errors: &mut Vec<String>,
+) -> BTreeSet<(String, String)> {
+    let Some(resolve) = &metadata.resolve else {
+        errors.push("cargo metadata lacks a resolve graph".to_owned());
+        return BTreeSet::new();
+    };
+    let packages: BTreeMap<_, _> =
+        metadata.packages.iter().map(|package| (package.id.as_str(), package)).collect();
+    let nodes: BTreeMap<_, _> = resolve.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+    let roots: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|package| package.name == "into-markdown-cli" && package.source.is_none())
+        .collect();
+    let [root] = roots.as_slice() else {
+        errors.push("cargo metadata must contain one workspace into-markdown-cli root".to_owned());
+        return BTreeSet::new();
+    };
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![root.id.as_str()];
+    let mut normal = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(package) = packages.get(id) else {
+            errors.push(format!("cargo metadata resolve references unknown package {id}"));
+            continue;
+        };
+        if package.source.as_deref()
+            == Some("registry+https://github.com/rust-lang/crates.io-index")
+        {
+            normal.insert((package.name.clone(), package.version.clone()));
+        }
+        let Some(node) = nodes.get(id) else {
+            errors.push(format!("cargo metadata lacks resolve node for {id}"));
+            continue;
+        };
+        for dependency in &node.deps {
+            if dependency.dep_kinds.iter().any(|kind| kind.kind.is_none()) {
+                pending.push(&dependency.pkg);
+            }
+        }
+    }
     normal
 }
 
 fn validate_manifest_hashes(
     repository: &Path,
+    expected_paths: &BTreeSet<String>,
     manifests: &BTreeMap<String, String>,
     errors: &mut Vec<String>,
 ) {
-    if manifests.is_empty() || !manifests.contains_key("Cargo.toml") {
-        errors.push("Cargo normal-runtime authority must bind workspace manifests".to_owned());
+    if manifests.keys().cloned().collect::<BTreeSet<_>>() != *expected_paths {
+        errors.push(
+            "Cargo normal-runtime authority must exactly bind cargo metadata workspace manifests"
+                .to_owned(),
+        );
     }
     for (path, expected) in manifests {
         let relative = Path::new(path);

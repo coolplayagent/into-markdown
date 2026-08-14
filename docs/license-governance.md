@@ -23,7 +23,9 @@ The following files are projections or evidence and must agree with the componen
   metadata projection is bound to `Cargo.lock` and every workspace member manifest, and partitions
   every locked registry package by dependency kind, so only the
   transitive normal-dependency closure rooted at `into-markdown-cli` is mandatory; build-only
-  packages are ineligible for release. Bazel's `into-md` graph must consume that same normal
+  packages are ineligible for release. The audit independently reruns locked, offline Cargo
+  metadata and requires both the dependency-kind partition and workspace-manifest set to match
+  exactly. Bazel's `into-md` graph must consume that same normal
   authority through named production targets.
 - `pnpm-lock.yaml`, `third_party/licenses/npm-inventory.json`, checked-in license texts, and the npm
   SPDX document describe console assets shipped by Bazel.
