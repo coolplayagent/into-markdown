@@ -25,11 +25,26 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   closed。stream chain 必须与声明长度所需 sector 数完全一致。CID 和 HTML 外链不触发网络；
   只有 exact canonical CID 引用可绑定通过 MIME 与结构审计的唯一 PNG/JPEG，未引用或非图片
   CID 按普通附件处理；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
+- PresentationML 只沿 root officeDocument 与 slide order 可达的受授权关系图按需解压；未知或
+  未引用 payload 不进入内存。VBA、ActiveX、OLE 与 embedded package 目标同时按 content type
+  和关系 type 在解压前隔离，即使目标重命名或伪装为 octet-stream 也不能绕过。所有外部关系
+  均 fail closed，转换器不执行宏、外部对象、链接或网络访问。图片还必须同时匹配关系 type、
+  OPC content type、扩展名和完整 PNG/JPEG codec 验证。隐藏 slide/shape 以及 layout、master、
+  notes 中随后不输出的引用同样先验证关系授权与目标存在性，但不会因此解压不可见目标。
+- PresentationML 在构造 ZIP 解析器前以无分配 EOCD/ZIP64 central-directory preflight 计算
+  条目、名称和可变元数据上界并完成 reservation；zip-rs 的统计随后必须与计划一致。实际 part
+  以固定小块解压、逐块检查取消状态，并在 declared size+1、CRC 或 ratio 异常时拒绝。part
+  byte buffer、parser-retained 结果与 image codec working set 使用独立许可；解析完成先释放
+  buffer，重复图片先销毁临时 Vec 再 shrink，唯一图片只把实际 capacity 与 IR/index 许可转交
+  opaque output lease。
 - 本地输入打开在 handle 层拒绝 Unix symlink 或 Windows reparse point，并只接受 regular
   file，不能把 CLI 规划时的路径检查当作最终安全边界。
 - XML streaming 解析禁用 DOCTYPE、DTD、自定义/外部实体与网络 resolver，仅接受五个预定义
   实体和合法 numeric character reference；namespace 作用域、重复 expanded attribute、
   closing tag、深度、事件数、属性/文本与扩张预算均在构造 IR 前校验。
+  PresentationML 的 `mc:AlternateContent` 对全部分支做上述安全 preflight，但语义解析只选择
+  第一个 `Requires` 前缀全部映射到已理解 URI 的 Choice，否则选择唯一 Fallback；未选分支的
+  relationship ID 不会授权或 materialize 目标。
 - RSS/Atom 复用同一 XML 解码、XML 1.0 character 与 entity 边界，并要求 RSS 2.0/Atom 1.0
   root、namespace 和 channel/entry 结构的强证据。`xml:base` 与相对 URL 只做离线数据解析；
   entry link 不触发请求，nested HTML 统一进入 HTML 安全转换器。Feed 对 entry、事件、深度、

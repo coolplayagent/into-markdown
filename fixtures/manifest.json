@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "882c7e042b92a53294302bcdb98fb7939fa7223786338b05413c83d4087873a3",
+    "sha256": "2c679ba388e4710c8269b50671a41a956494baf74e7ef9dda7ea7b6a0d3bf2a6",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -23,6 +23,7 @@
     "markdown",
     "outlook-msg",
     "pdf",
+    "pptx",
     "rtf",
     "text",
     "tsv",
@@ -1374,6 +1375,209 @@
         "error_code": "",
         "semantic_sha256": "4cf2715adb1376bf8eb1a85af435559110df8b6d3e720f44c918318398cc8745",
         "description": "clear traditional OCR line"
+      }
+    },
+    {
+      "id": "potx-normal",
+      "format": "pptx",
+      "scenario": "normal",
+      "path": "small/pptx/template.potx",
+      "bytes": 9637,
+      "sha256": "7defc292e4717ea9fbb0435e5588698bc89308647ea9a460eba7617178b73c34",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.template",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "description": "template main content type with the canonical semantic deck"
+      }
+    },
+    {
+      "id": "ppsm-malicious",
+      "format": "pptx",
+      "scenario": "malicious",
+      "path": "small/pptx/macro-slideshow.ppsm",
+      "bytes": 9993,
+      "sha256": "e399544d1a05a6d371ccd60d361d34ed0c12f6a1776b476e24457d04c8991efb",
+      "media_type": "application/vnd.ms-powerpoint.slideshow.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "description": "macro-enabled slideshow with a relationship-isolated VBA part"
+      }
+    },
+    {
+      "id": "ppsx-normal",
+      "format": "pptx",
+      "scenario": "normal",
+      "path": "small/pptx/slideshow.ppsx",
+      "bytes": 9638,
+      "sha256": "5eb433d259a8428a1fd5da78771237bae85648ce846e42ce9cd975e500149e41",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "description": "slideshow main content type with the canonical semantic deck"
+      }
+    },
+    {
+      "id": "pptm-malicious",
+      "format": "pptx",
+      "scenario": "malicious",
+      "path": "small/pptx/macro.pptm",
+      "bytes": 9996,
+      "sha256": "1911ed31b8ace709e6566cb17c405fb7e9a445258327f741cc3ac9d8cf10fcd3",
+      "media_type": "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "description": "macro-enabled presentation with a relationship-isolated VBA part"
+      }
+    },
+    {
+      "id": "pptx-corrupt",
+      "format": "pptx",
+      "scenario": "corrupt",
+      "path": "small/pptx/corrupt.pptx",
+      "bytes": 9508,
+      "sha256": "8d26bb77f5af05aba1f4e1ab47c3d39cf0b0b5d7eab4080c854071e04655208c",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "slide order references a missing relationship ID"
+      }
+    },
+    {
+      "id": "pptx-limit",
+      "format": "pptx",
+      "scenario": "limit",
+      "path": "small/pptx/limit.pptx",
+      "bytes": 9641,
+      "sha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "PresentationML package exceeds the adjacent input byte boundary",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 9640,
+          "passing_value": 9641,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+        }
+      }
+    },
+    {
+      "id": "pptx-normal",
+      "format": "pptx",
+      "scenario": "normal",
+      "path": "small/pptx/normal.pptx",
+      "bytes": 9641,
+      "sha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "description": "two layouts, multilingual rich text, master styles, and speaker notes"
       }
     },
     {

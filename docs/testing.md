@@ -39,6 +39,23 @@ locator 与 replacement diagnostic 必须断言原始半开 byte range，不能�
 伪装，以及位于 64 KiB 解码样本之后的 DEL、UTF-8 C1 与传统字符集 C1；格式检测不得
 返回 text，真实转换必须失败。
 
+PresentationML 测试由测试代码直接生成许可清晰的 OPC fixtures，覆盖五种扩展、slide 边界、
+多语言富文本、列表层级、表格、图片去重、图表缓存、speaker notes、layout/master
+placeholder Slide→Layout `idx` 消歧、Layout→Master type/class 投影与 layout 优先继承、
+逐属性 transform presence、master
+`txStyles` 1–9 级与显式 rich-style 关闭、隐藏 group 传播与 theme 元数据、任意角度（含
+45/315 度）、嵌套 group/flip、非正方形 bounds、AABB 候选后的凸四边形 SAT、重叠连通分量
+的绘制顺序以及可追溯 z-order；SAT 另覆盖点/线/归零 group transform 无显示面积、边接触、
+真交叉与嵌套。master 样式还覆盖重复 `txStyles`/section 拒绝，以及 MCE 选中与未选分支的语义计数/
+全分支安全预检。对抗用例覆盖加密 OLE、重复/
+逃逸 part、坏关系/namespace/父层级/MC、DTD/custom entity/非法 XML 1.0、重命名宏、OLE/
+ActiveX/embedded package、所有 external relationship，以及 ZIP ratio、条目/解压/XML 深宽、
+ZIP64 EOCD、合法目录记录、隐藏 slide/shape 与 layout/master/notes 实际引用授权、IR node/inline、
+大量唯一图片的有界摘要索引/取消、超过 11 MiB 的唯一/重复图片 exact/boundary/Drop、去重前 asset 总量和低内存 tiny-positive 边界。未引用大 payload 必须证明不会解压或计入
+请求 working-set 峰值；组合多 slide/shape/长文本/image/chart/diagnostic fixture 还要二分证明
+峰值 exact/boundary-minus-one，并断言中央 retained estimate 与 opaque output lease 精确一致、
+Drop 后 request 计数归零；中央 renderer 快照同时断言最终 GFM 的 slide 与 notes 边界。
+
 CSV/TSV 契约覆盖 CRLF/LF/CR、外围引号、doubled quote、字段内换行、尾随空字段、空记录、
 UTF-8/UTF-16 BOM、显式传统字符集、表头三种策略、strict/pad 不等宽策略与 GFM pipe
 转义。provenance 同时断言 quoted、多字节和补齐空单元格的原始 byte range；损坏 quote、
@@ -313,6 +330,9 @@ Outlook 或外部邮件。plain、HTML、同一请求上下文中的 LZFu/RTF �
 截断、循环 FAT 和精确输入边界进入同一 manifest；模块内额外用程序生成的变体覆盖 compressed
 LZFu/MELA 不伪造 MSG byte offset、CID 引用/未引用/非图片/重复歧义、mini/regular stream 的
 额外 sector、sector 重叠、String8 codepage、附件来源链以及取消/资源错误不会 panic。
+PresentationML 的 checked-in 子语料还固定两种 layout、多语言、speaker notes、损坏 slide
+relationship，以及 PPTX/PPTM/PPSX/PPSM/POTX 的实际 main content type；两个宏格式包含惰性
+repository-authored VBA payload，并以成功 semantic hash 证明 payload 在解压前被隔离。
 
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，

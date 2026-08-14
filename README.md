@@ -105,6 +105,11 @@ DOCX 与 DOCM 转换可用，覆盖标题样式、富文本、编号、表格、
 RTF 转换可用，支持字符集与 Unicode escape、行内样式、段落、列表、表格、metadata 和
 经完整解码审计的 PNG/JPEG 图片。内嵌 object、文件路径、HTML 与 active destination 永不
 执行或联网；危险 hyperlink 和 EMF/WMF 安全降级并产生结构化诊断。
+PPTX、PPTM、PPSX、PPSM 与 POTX 转换可用，覆盖 slide 边界、标题/文本、富文本、列表、
+表格、PNG/JPEG、图表缓存文字、speaker notes、layout/master placeholder 继承及 theme 元数据。
+内容按最终几何恢复阅读顺序，真实重叠元素保留 `spTree` z-order，并保留 slide+bounds
+provenance；宏、ActiveX、OLE、嵌入包与所有
+外部关系不读取、不执行且不联网，损坏、加密和资源越界输入 fail closed。
 
 模型查询、离线校验、路径和安全清理后端已实现。完整 OCR pipeline 保持
 `planned` / `unavailable`；独立 `pp-ocrv6-tiny-recognizer-onnx` 组件具有审核后的官方

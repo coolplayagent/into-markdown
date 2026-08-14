@@ -109,7 +109,7 @@ impl InputFormat {
             "doc" => Self::Doc,
             "docx" | "docm" => Self::Docx,
             "ppt" | "pps" | "pot" => Self::Ppt,
-            "pptx" | "pptm" | "ppsx" | "ppsm" => Self::Pptx,
+            "pptx" | "pptm" | "ppsx" | "ppsm" | "potx" => Self::Pptx,
             "xls" => Self::Xls,
             "xlsx" | "xlsm" | "xlsb" => Self::Xlsx,
             "odt" => Self::Odt,

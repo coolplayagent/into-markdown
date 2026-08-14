@@ -60,6 +60,7 @@ pub fn default_engine_builder() -> EngineBuilder {
         .register_converter(Arc::new(into_markdown_converters::ZipConverter))
         .register_converter(Arc::new(into_markdown_converters::RtfConverter))
         .register_converter(Arc::new(into_markdown_converters::WorkbookConverter))
+        .register_converter(Arc::new(into_markdown_converters::PresentationConverter))
         .register_converter(Arc::new(into_markdown_converters::StructuredDataConverter))
         .register_converter(Arc::new(into_markdown_converters::FeedConverter))
         .register_converter(Arc::new(into_markdown_converters::MsgConverter))
@@ -851,6 +852,29 @@ mod tests {
             payload[11] = 0x10;
         }
         xlsb_record(output, 0x0000, &payload);
+    }
+
+    #[test]
+    fn default_engine_detects_and_converts_all_presentation_extensions_offline() {
+        let bytes = std::fs::read(fixture_path("small/pptx/normal.pptx")).unwrap();
+        let engine = default_engine().unwrap();
+        for extension in ["pptx", "pptm", "ppsx", "ppsm", "potx"] {
+            let request = ConversionRequest::new(InputRef::bytes(
+                bytes.clone(),
+                Some(format!("fixture.{extension}")),
+            ));
+            let result = block_on(engine.convert(request)).unwrap();
+            assert_eq!(
+                result.markdown,
+                "## Slide 1: Corpus 你好 – Привет\n\n\
+                 <em>English français</em>\n\n\
+                 ### Speaker notes\n\n\
+                 Nota 日本語\n\n\
+                 ## Slide 2: Second layout\n\n\
+                 <em>مرحبا</em>\n"
+            );
+            assert!(result.has_memory_lease());
+        }
     }
 
     #[test]

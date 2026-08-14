@@ -2693,7 +2693,7 @@ fn unique_internal_relationship<'a>(
     Ok(first)
 }
 
-fn decode_text(event: &BytesText<'_>, part: &str) -> Result<String, ConversionError> {
+pub(super) fn decode_text(event: &BytesText<'_>, part: &str) -> Result<String, ConversionError> {
     let value = event
         .decode()
         .map_err(|error| malformed(Some(part), format!("invalid text encoding: {error}")))?
@@ -2702,7 +2702,7 @@ fn decode_text(event: &BytesText<'_>, part: &str) -> Result<String, ConversionEr
     Ok(value)
 }
 
-fn decode_cdata(event: &BytesCData<'_>, part: &str) -> Result<String, ConversionError> {
+pub(super) fn decode_cdata(event: &BytesCData<'_>, part: &str) -> Result<String, ConversionError> {
     let value = event
         .decode()
         .map_err(|error| malformed(Some(part), format!("invalid CDATA encoding: {error}")))?
@@ -2711,7 +2711,10 @@ fn decode_cdata(event: &BytesCData<'_>, part: &str) -> Result<String, Conversion
     Ok(value)
 }
 
-fn decode_reference(event: &BytesRef<'_>, part: &str) -> Result<String, ConversionError> {
+pub(super) fn decode_reference(
+    event: &BytesRef<'_>,
+    part: &str,
+) -> Result<String, ConversionError> {
     let reference = event
         .decode()
         .map_err(|error| malformed(Some(part), format!("invalid reference encoding: {error}")))?;
@@ -2751,7 +2754,7 @@ fn decode_reference_name(reference: &str, part: &str) -> Result<String, Conversi
     Ok(character.to_string())
 }
 
-fn decode_xml_attribute(raw: &[u8], part: &str) -> Result<String, ConversionError> {
+pub(super) fn decode_xml_attribute(raw: &[u8], part: &str) -> Result<String, ConversionError> {
     let raw = std::str::from_utf8(raw)
         .map_err(|error| malformed(Some(part), format!("attribute is not UTF-8: {error}")))?;
     let mut decoded = String::with_capacity(raw.len());
@@ -3148,7 +3151,7 @@ fn validate_png_data(
     Ok(())
 }
 
-fn png_crc32(bytes: &[u8]) -> u32 {
+pub(super) fn png_crc32(bytes: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for byte in bytes {
         crc ^= u32::from(*byte);
