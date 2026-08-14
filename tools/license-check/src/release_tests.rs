@@ -68,6 +68,12 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
                 inputs.sbom_input.sha256.clone(),
                 ArchiveFileKind::Generated,
             ),
+            declaration(
+                "core-catalog.json",
+                inputs.core_catalog.bytes,
+                inputs.core_catalog.sha256.clone(),
+                ArchiveFileKind::Generated,
+            ),
             ArchiveFile {
                 path: "bin/into-md".into(),
                 bytes: 1,
@@ -151,6 +157,7 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
             inputs.third_party_notices.sha256,
         ),
         ("sbom-input.json", inputs.sbom_input.bytes, inputs.sbom_input.sha256),
+        ("core-catalog.json", inputs.core_catalog.bytes, inputs.core_catalog.sha256),
     ] {
         let file = projection.files.iter_mut().find(|file| file.path == path).unwrap();
         file.bytes = bytes;
@@ -359,7 +366,13 @@ fn authoritative_runtime_closure_cannot_be_omitted_or_disguised() {
     let omitted =
         projection.components.iter().find(|id| id.starts_with("cargo:")).cloned().unwrap();
     projection.components.retain(|id| id != &omitted);
-    projection.files[4].embedded_components.retain(|id| id != &omitted);
+    projection
+        .files
+        .iter_mut()
+        .find(|file| file.kind == ArchiveFileKind::Project)
+        .unwrap()
+        .embedded_components
+        .retain(|id| id != &omitted);
     projection.license_materials.retain(|item| !item.component_ids.contains(&omitted));
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
@@ -444,6 +457,41 @@ fn orphan_binary_cannot_claim_project_ownership() {
         path: "lib/unreviewed.dylib".into(),
         bytes: 10,
         sha256: "e".repeat(64),
+        kind: ArchiveFileKind::Project,
+        component_id: None,
+        embedded_components: vec![],
+    });
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("outside the closed path set")));
+}
+
+#[test]
+fn smoke_and_rust_project_paths_are_narrowly_scoped() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.extend([
+        ArchiveFile {
+            path: "lib/into-markdown-rust/Cargo.toml".into(),
+            bytes: 1,
+            sha256: "a".repeat(64),
+            kind: ArchiveFileKind::Project,
+            component_id: None,
+            embedded_components: vec![],
+        },
+        ArchiveFile {
+            path: "share/into-markdown/smoke/fixtures/text/normal.txt".into(),
+            bytes: 1,
+            sha256: "b".repeat(64),
+            kind: ArchiveFileKind::Project,
+            component_id: None,
+            embedded_components: vec![],
+        },
+    ]);
+    verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
+    projection.files.push(ArchiveFile {
+        path: "share/into-markdown/arbitrary-project-file".into(),
+        bytes: 1,
+        sha256: "c".repeat(64),
         kind: ArchiveFileKind::Project,
         component_id: None,
         embedded_components: vec![],
@@ -598,6 +646,22 @@ fn schemas_reject_unknown_fields_and_unfixed_hashes() {
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("lacks fixed size or SHA-256")));
+}
+
+#[test]
+fn core_catalog_authority_is_mandatory_and_exact() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.retain(|file| file.path != "core-catalog.json");
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("core-catalog.json")));
+
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.iter_mut().find(|file| file.path == "core-catalog.json").unwrap().sha256 =
+        "f".repeat(64);
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("does not match generated input")));
 }
 
 #[test]
@@ -770,7 +834,13 @@ fn cargo_and_npm_authorities_can_bind_embedded_project_content() {
     select(&mut projection, &components);
     verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
 
-    projection.files[4].embedded_components.push("cargo:unknown@9.9.9".into());
+    projection
+        .files
+        .iter_mut()
+        .find(|file| file.kind == ArchiveFileKind::Project)
+        .unwrap()
+        .embedded_components
+        .push("cargo:unknown@9.9.9".into());
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("embeds unknown or unselected")));

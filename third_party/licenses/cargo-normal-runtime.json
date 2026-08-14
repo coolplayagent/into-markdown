@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "9dcb11930f5b72879fbfaa017744678faf152ec8e639b5ddf1e42e364b6eeeb9",
+  "cargo_lock_sha256": "d8aa6e2e960b001f00901d0e2fcbd2384896e29530fbd7c1eed26a85a0f4441a",
   "workspace_manifest_sha256": {
-    "Cargo.toml": "1929592ecb9f68d06cd9f5e60ddf663eba88a7a899bcf5dbbe788ec80548d185",
+    "Cargo.toml": "444c1b9c4c2b0b184d409083396ef97351e9c8a540c2429ff41124160cb8f2a1",
     "apps/cli/Cargo.toml": "76641f48b1fde33ccbdaacfdf1e8d81134a86ff9e8086736a09f3af9eaaae1ed",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
     "crates/api/Cargo.toml": "11566558af5d2a41b4763c9eabfc4a52988ee80224ff3f91b2bb7f4bb5dfd4de",
@@ -21,6 +21,7 @@
     "crates/task-store/Cargo.toml": "0f9f0c0de64be5afdf8d4c4b4092da75877af8b340c015273101c465db1188fd",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
+    "tools/installed-smoke/Cargo.toml": "873194969e5ce078cb2bd8f03bc0889a745b447da4387974f97c95e1c00616f3",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
   },
   "normal_registry_packages": [

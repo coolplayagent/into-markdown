@@ -9,6 +9,8 @@ use super::{
 };
 use into_markdown_core::{ConversionError, Converter, FormatDetector, InputFormat, SourceResolver};
 use into_markdown_engine::RegistryBuilder;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -155,6 +157,56 @@ pub struct CatalogFormatDescriptor {
     pub source: CapabilitySource,
     /// Separately installed dependency, when required.
     pub runtime: Option<RuntimeRequirement>,
+}
+
+/// Stable release authority for the exact core format catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CoreCatalogAuthority {
+    /// Wire schema version.
+    pub schema_version: u64,
+    /// SHA-256 of the canonical compact JSON encoding of `entries`.
+    pub entries_sha256: String,
+    /// Catalog entries in deterministic registration order.
+    pub entries: Vec<CoreCatalogAuthorityEntry>,
+    /// SHA-256 of the canonical compact JSON encoding of `optional_runtimes`.
+    pub optional_runtimes_sha256: String,
+    /// Separately installed runtime capabilities in deterministic catalog order.
+    pub optional_runtimes: Vec<CoreRuntimeAuthorityEntry>,
+}
+
+/// One separately installed runtime in [`CoreCatalogAuthority`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CoreRuntimeAuthorityEntry {
+    /// Stable catalog capability ID.
+    pub id: String,
+    /// Stable component name used by conversion errors.
+    pub component: String,
+    /// Exact installation guidance exposed to users.
+    pub install_hint: String,
+}
+
+/// One exact format entry in [`CoreCatalogAuthority`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CoreCatalogAuthorityEntry {
+    /// Stable format identifier.
+    pub format: String,
+    /// User-facing family.
+    pub family: String,
+    /// Exact recognized extensions.
+    pub extensions: Vec<String>,
+    /// Converter status.
+    pub status: String,
+    /// Provenance boundary.
+    pub source: String,
+    /// Optional runtime component ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_component: Option<String>,
+    /// Exact installation guidance for the optional runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
 }
 
 pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
@@ -360,6 +412,52 @@ pub const fn core_formats() -> &'static [FormatDescriptor] {
 #[must_use]
 pub const fn core_format_catalog() -> &'static [CatalogFormatDescriptor] {
     FORMAT_CATALOG
+}
+
+/// Materialize the release authority directly from the production catalog.
+///
+/// # Errors
+///
+/// Returns an error only if the canonical entry encoding cannot be serialized.
+pub fn core_catalog_authority() -> Result<CoreCatalogAuthority, serde_json::Error> {
+    let entries = FORMAT_CATALOG
+        .iter()
+        .map(|entry| CoreCatalogAuthorityEntry {
+            format: entry.descriptor.format.as_str().to_owned(),
+            family: entry.descriptor.family.to_owned(),
+            extensions: entry
+                .descriptor
+                .extensions
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            status: entry.descriptor.status.as_str().to_owned(),
+            source: entry.source.as_str().to_owned(),
+            runtime_component: entry.runtime.map(|runtime| runtime.component.to_owned()),
+            install_hint: entry.runtime.map(|runtime| runtime.install_hint.to_owned()),
+        })
+        .collect::<Vec<_>>();
+    let entries_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&entries)?));
+    let optional_runtimes = CAPABILITIES
+        .iter()
+        .filter(|entry| entry.kind == CapabilityKind::Runtime)
+        .filter_map(|entry| {
+            entry.runtime.map(|runtime| CoreRuntimeAuthorityEntry {
+                id: entry.id.to_owned(),
+                component: runtime.component.to_owned(),
+                install_hint: runtime.install_hint.to_owned(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let optional_runtimes_sha256 =
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&optional_runtimes)?));
+    Ok(CoreCatalogAuthority {
+        schema_version: 1,
+        entries_sha256,
+        entries,
+        optional_runtimes_sha256,
+        optional_runtimes,
+    })
 }
 
 /// Components actually shipped or consumed by the core package.
@@ -688,5 +786,30 @@ mod tests {
         assert!(CAPABILITIES.iter().all(
             |entry| !entry.id.contains("mediawiki") && entry.source != CapabilitySource::Plugin
         ));
+    }
+
+    #[test]
+    fn release_authority_hash_rejects_entry_mutation() {
+        let authority = core_catalog_authority().unwrap();
+        assert_eq!(authority.schema_version, 1);
+        assert_eq!(authority.entries.len(), FORMAT_CATALOG.len());
+        assert_eq!(
+            authority.entries_sha256,
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&authority.entries).unwrap()))
+        );
+        assert_eq!(authority.optional_runtimes.len(), 3);
+        assert_eq!(
+            authority.optional_runtimes_sha256,
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&authority.optional_runtimes).unwrap())
+            )
+        );
+        let mut mutated = authority.entries;
+        mutated[0].status = "planned".into();
+        assert_ne!(
+            authority.entries_sha256,
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&mutated).unwrap()))
+        );
     }
 }

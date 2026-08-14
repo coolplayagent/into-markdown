@@ -19,6 +19,7 @@ members = [
     "tests/contracts",
     "tools/asset-update",
     "tools/license-check",
+    "tools/installed-smoke",
 ]
 
 [workspace.package]

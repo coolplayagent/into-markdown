@@ -11,6 +11,7 @@ rust_library(
     edition = "2024",
     visibility = [
         "//crates:__subpackages__",
+        "//tools/installed-smoke:__pkg__",
         "//tools/license-check:__pkg__",
     ],
     deps = [

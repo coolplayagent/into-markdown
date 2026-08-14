@@ -138,6 +138,11 @@ This API intentionally verifies metadata and hashes supplied by a packaging impl
 materialization, deterministic tar/zip behavior, installation, and smoke testing remain outside this
 issue.
 
+Release input generation also emits `core-catalog.json` directly from the production converter
+catalog. Every archive projection must bind this generated file exactly. Installed-artifact smoke
+uses it as an independent authority and compares every CLI format ID, provenance, status, extension,
+and optional-runtime contract; the installed binary cannot self-attest its own coverage.
+
 ### Command-line adapter
 
 The narrow API is also exposed as an offline command:

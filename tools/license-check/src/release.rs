@@ -15,6 +15,7 @@ const LICENSE_PATH: &str = "LICENSE";
 const NOTICE_PATH: &str = "NOTICE";
 const THIRD_PARTY_PATH: &str = "THIRD_PARTY_NOTICES.md";
 const SBOM_PATH: &str = "sbom-input.json";
+const CORE_CATALOG_PATH: &str = "core-catalog.json";
 
 pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<String>) {
     rust::validate_bazel_bridge(repository, errors);
@@ -79,6 +80,16 @@ fn generate_release_inputs_unchecked(
             String::new()
         }
     };
+    let catalog_json = match into_markdown_converters::core_catalog_authority()
+        .map_err(|error| format!("cannot generate core catalog authority: {error}"))
+        .and_then(|authority| pretty_json(&authority))
+    {
+        Ok(json) => json,
+        Err(error) => {
+            errors.push(error);
+            String::new()
+        }
+    };
     if !errors.is_empty() {
         return Err(sorted(errors));
     }
@@ -89,6 +100,7 @@ fn generate_release_inputs_unchecked(
         notice: generated_file(NOTICE_PATH, project_notice),
         third_party_notices: generated_file(THIRD_PARTY_PATH, third_party),
         sbom_input: generated_file(SBOM_PATH, sbom_json),
+        core_catalog: generated_file(CORE_CATALOG_PATH, catalog_json),
     })
 }
 
@@ -364,7 +376,7 @@ fn validate_files(
         errors.push(format!("projected component {component} owns no archive file"));
     }
     let Some(inputs) = inputs else {
-        for path in [LICENSE_PATH, NOTICE_PATH, THIRD_PARTY_PATH, SBOM_PATH] {
+        for path in [LICENSE_PATH, NOTICE_PATH, THIRD_PARTY_PATH, SBOM_PATH, CORE_CATALOG_PATH] {
             if !projection.files.iter().any(|file| file.path == path) {
                 errors.push(format!("archive is missing required declaration {path}"));
             }
@@ -400,6 +412,12 @@ fn validate_files(
             inputs.sbom_input.sha256.clone(),
             ArchiveFileKind::Generated,
         ),
+        (
+            CORE_CATALOG_PATH,
+            inputs.core_catalog.bytes,
+            inputs.core_catalog.sha256.clone(),
+            ArchiveFileKind::Generated,
+        ),
     ];
     for (path, bytes, sha256, kind) in expected {
         match projection.files.iter().find(|file| file.path == path) {
@@ -424,9 +442,15 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
         errors.push(format!("archive file {} lacks fixed size or SHA-256", file.path));
     }
     let kind_path_is_valid = match file.kind {
-        ArchiveFileKind::Project => matches!(file.path.as_str(), "bin/into-md" | "bin/into-md.exe"),
+        ArchiveFileKind::Project => {
+            matches!(file.path.as_str(), "bin/into-md" | "bin/into-md.exe")
+                || file.path.starts_with("lib/into-markdown-rust/")
+                || file.path.starts_with("share/into-markdown/smoke/fixtures/")
+        }
         ArchiveFileKind::Declaration => matches!(file.path.as_str(), LICENSE_PATH | NOTICE_PATH),
-        ArchiveFileKind::Generated => matches!(file.path.as_str(), THIRD_PARTY_PATH | SBOM_PATH),
+        ArchiveFileKind::Generated => {
+            matches!(file.path.as_str(), THIRD_PARTY_PATH | SBOM_PATH | CORE_CATALOG_PATH)
+        }
         ArchiveFileKind::LicenseMaterial => projection_material_path(&file.path),
         ArchiveFileKind::Component => true,
     };
