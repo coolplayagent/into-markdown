@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "844edb81a0c7a8c58908eee9d3ad94f074bf6231e30e3775c50fc70a5ac666a3",
+  "fixture_manifest_sha256": "b2a8210e0fdc3aa491b77e7c82ec0510caa79e0af7f54d03ea1962ec53966e85",
   "pdfium_manifest_sha256": "c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368",
-  "ocr_merge_authority_sha256": "6105b38bd0e8cf5e869aa662b5c647208a0b578b8ae5c611988164e0a9a645d8",
+  "ocr_merge_authority_sha256": "1a2c2a88622a0202e79f3b1645a247ad0eb12d7029cf2da15fee2243839272c0",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
@@ -62,6 +62,30 @@
       "expected_sequence": [
         "heading:Table title",
         "table:Key|Value;A|1"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-asymmetric-wide-table",
+      "fixture_sha256": "cb113e2b0a99ddee2a452a97ec44b804c3405134227beb5b1fae01dafd22f192",
+      "expected_sequence": [
+        "table:MMMMMMMMMMMMMMMMMMMMMMMMMMMM|Value;MMMMMMMMMMMMMMMMMMMMMMMMMMMM|Value"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-equal-dual-column",
+      "fixture_sha256": "9a95f2a7093bd58cd5a0bc832434efff5419f3aab8e064334b559160764da5bd",
+      "expected_sequence": [
+        "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+      ]
+    },
+    {
+      "fixture_id": "pdf-layout-table-followed-by-columns",
+      "fixture_sha256": "9cee0f7baa35f0d7851591f2130f745902951cae64a3ba97a0c6fa6b77c4e487",
+      "expected_sequence": [
+        "table:Key|Value;A|1",
+        "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB"
       ]
     },
     {

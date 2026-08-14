@@ -1001,6 +1001,47 @@ def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
             "heading:Table title|table:Key,Value;A,1",
         ),
         (
+            "pdf-layout-asymmetric-wide-table",
+            pdf_document(
+                b"BT /F1 12 Tf 40 690 Td (MMMMMMMMMMMMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 12 Tf 400 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (MMMMMMMMMMMMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 12 Tf 400 660 Td (Value) Tj ET\n"
+            ),
+            "exact repeated boundaries recover an asymmetric two-row table with a wide description cell",
+            "table:MMMMMMMMMMMMMMMMMMMMMMMMMMMM,Value;MMMMMMMMMMMMMMMMMMMMMMMMMMMM,Value",
+        ),
+        (
+            "pdf-layout-equal-dual-column",
+            pdf_document(
+                b"BT /F1 12 Tf 40 690 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 630 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+            ),
+            "three broad equal-width column rows remain two paragraph flows",
+            "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        ),
+        (
+            "pdf-layout-table-followed-by-columns",
+            pdf_document(
+                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 160 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 160 660 Td (1) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 630 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 600 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 600 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 570 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 570 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+            ),
+            "a local two-row table stops before a following three-row column flow",
+            "table:Key,Value;A,1|paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        ),
+        (
             "pdf-layout-rotated",
             pdf_document(
                 b"BT /F1 12 Tf 80 700 Td (Rotated first) Tj ET\n"

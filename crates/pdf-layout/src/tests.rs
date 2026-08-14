@@ -333,6 +333,106 @@ fn repeated_long_cell_boundaries_lock_a_wide_two_by_two_table() {
 }
 
 #[test]
+fn asymmetric_two_by_two_repeated_boundaries_allow_a_wide_description_cell() {
+    let input = document(
+        [
+            source_text(
+                "Wide description",
+                Rect { x: 40.0, y: 180.0, width: 270.0, height: 12.0 },
+                12.0,
+            ),
+            source_text("Value", Rect { x: 400.0, y: 180.0, width: 100.0, height: 12.0 }, 12.0),
+            source_text(
+                "Another description",
+                Rect { x: 40.0, y: 205.0, width: 270.0, height: 12.0 },
+                12.0,
+            ),
+            source_text("Other", Rect { x: 400.0, y: 205.0, width: 100.0, height: 12.0 }, 12.0),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let Block::Table { rows, .. } = &page_blocks(&actual)[0].block else {
+        panic!("asymmetric table")
+    };
+    assert_eq!((rows.len(), rows[0].cells.len()), (2, 2));
+}
+
+#[test]
+fn three_equal_broad_dual_columns_are_not_a_table() {
+    let input = document(
+        [
+            source_text("Left one", Rect { x: 40.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right one", Rect { x: 350.0, y: 90.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left two", Rect { x: 40.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right two", Rect { x: 350.0, y: 120.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left three", Rect { x: 40.0, y: 150.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text(
+                "Right three",
+                Rect { x: 350.0, y: 150.0, width: 210.0, height: 12.0 },
+                12.0,
+            ),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let blocks = page_blocks(&actual);
+    assert!(!blocks.iter().any(|node| matches!(node.block, Block::Table { .. })));
+    assert_eq!(block_text(&blocks[0].block), "Left one Left two Left three");
+    assert_eq!(block_text(&blocks[1].block), "Right one Right two Right three");
+}
+
+#[test]
+fn three_by_three_long_body_is_ambiguous_and_remains_text() {
+    let mut inlines = Vec::new();
+    inlines.try_reserve_exact(9).unwrap();
+    for row in 0..3 {
+        for column in 0..3 {
+            inlines.extend(source_text(
+                ["Long left body", "Long middle body", "Long right body"][column],
+                Rect {
+                    x: 40.0 + column as f32 * 195.0,
+                    y: 180.0 + row as f32 * 25.0,
+                    width: 130.0,
+                    height: 12.0,
+                },
+                12.0,
+            ));
+        }
+    }
+    let actual = rebuild(document(inlines));
+    assert!(!page_blocks(&actual).iter().any(|node| matches!(node.block, Block::Table { .. })));
+}
+
+#[test]
+fn table_window_stops_before_following_three_row_column_flow() {
+    let input = document(
+        [
+            source_text("Key", Rect { x: 40.0, y: 180.0, width: 40.0, height: 13.0 }, 13.0),
+            source_text("Value", Rect { x: 160.0, y: 180.0, width: 40.0, height: 13.0 }, 13.0),
+            source_text("A", Rect { x: 40.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("1", Rect { x: 160.0, y: 205.0, width: 40.0, height: 12.0 }, 12.0),
+            source_text("Left one", Rect { x: 40.0, y: 240.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right one", Rect { x: 350.0, y: 240.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left two", Rect { x: 40.0, y: 270.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Right two", Rect { x: 350.0, y: 270.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text("Left three", Rect { x: 40.0, y: 300.0, width: 210.0, height: 12.0 }, 12.0),
+            source_text(
+                "Right three",
+                Rect { x: 350.0, y: 300.0, width: 210.0, height: 12.0 },
+                12.0,
+            ),
+        ]
+        .concat(),
+    );
+    let actual = rebuild(input);
+    let blocks = page_blocks(&actual);
+    assert_eq!(blocks.iter().filter(|node| matches!(node.block, Block::Table { .. })).count(), 1);
+    assert_eq!(block_text(&blocks[1].block), "Left one Left two Left three");
+    assert_eq!(block_text(&blocks[2].block), "Right one Right two Right three");
+}
+
+#[test]
 fn repeated_three_by_three_grid_survives_wide_gutters() {
     let mut inlines = Vec::new();
     inlines.try_reserve_exact(9).unwrap();
