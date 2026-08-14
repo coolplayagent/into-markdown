@@ -46,11 +46,27 @@ DATA = [
     "//crates/task-store:Cargo.toml",
     "//tests/contracts:Cargo.toml",
     "//tools/asset-update:Cargo.toml",
+    ":projection_fixtures",
 ]
+
+filegroup(
+    name = "projection_fixtures",
+    srcs = glob(["fixtures/*.json"]),
+)
 
 rust_library(
     name = "license_check_lib",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/models_fixtures.rs",
+        "src/native.rs",
+        "src/npm.rs",
+        "src/release.rs",
+        "src/release_tests.rs",
+        "src/rust.rs",
+        "src/sbom.rs",
+        "src/schema.rs",
+    ],
     crate_name = "license_check",
     edition = "2024",
     deps = [
@@ -80,6 +96,18 @@ rust_binary(
     data = DATA,
     edition = "2024",
     deps = [":license_check_lib"],
+)
+
+rust_binary(
+    name = "release_projection",
+    srcs = ["src/projection_main.rs"],
+    crate_name = "release_projection",
+    data = DATA,
+    edition = "2024",
+    deps = [
+        ":license_check_lib",
+        "@crates//:serde_json",
+    ],
 )
 
 rust_test(

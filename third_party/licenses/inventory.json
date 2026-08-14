@@ -133,6 +133,26 @@
       "license": "LGPL-2.1-or-later",
       "obligations": "Build only from pinned signed source with GPL, version3, nonfree, external libraries, autodetection, and networking disabled; distributors preserve notices, corresponding source, and relinking/replacement rights."
     },
+    {
+      "id": "ppocrv6-tiny-recognizer-onnx-model",
+      "kind": "model",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "license": "Apache-2.0",
+      "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed ONNX bytes to the reviewed archive member, size, SHA-256, and platform-neutral model authority."
+    },
+    {
+      "id": "ppocrv6-tiny-recognizer-character-table",
+      "kind": "model-data",
+      "status": "reviewed",
+      "included_in_release": false,
+      "version": "PaddleOCR commit 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
+      "source": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
+      "license": "Apache-2.0",
+      "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed character table to its exact commit, size, SHA-256, and recognizer authority."
+    },
     {"id": "libreoffice", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "wasmtime", "kind": "native-runtime", "status": "planned", "included_in_release": false},
     {"id": "generated-onnx-models", "kind": "model", "status": "planned", "included_in_release": false},

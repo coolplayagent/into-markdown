@@ -1,5 +1,16 @@
 //! Offline validation for the repository's license policy and inventories.
 
+mod models_fixtures;
+mod native;
+mod npm;
+pub mod release;
+mod rust;
+mod sbom;
+pub mod schema;
+
+#[cfg(test)]
+mod release_tests;
+
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -739,6 +750,7 @@ fn read(path: &Path, errors: &mut Vec<String>) -> String {
 fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     validate_project_files(root, &mut errors);
+    release::audit_repository_contract(root, &mut errors);
 
     let policy_text = read(&root.join("third_party/licenses/policy.json"), &mut errors);
     let inventory_text = read(&root.join("third_party/licenses/inventory.json"), &mut errors);

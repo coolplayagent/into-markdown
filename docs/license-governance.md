@@ -118,6 +118,29 @@ This API intentionally verifies metadata and hashes supplied by a packaging impl
 materialization, deterministic tar/zip behavior, installation, and smoke testing remain outside this
 issue.
 
+### Command-line adapter
+
+The narrow API is also exposed as an offline command:
+
+```text
+cargo run -p license-check --bin release-projection -- generate REQUEST.json
+cargo run -p license-check --bin release-projection -- verify ARCHIVE-PROJECTION.json
+```
+
+`generate` accepts `schema_version`, one supported Rust target triple, and a sorted component ID
+list. Inventory components keep their stable IDs; crates use `cargo:name@version`, and shipped npm
+packages use `npm:name@version`. Its JSON output contains the exact bytes, sizes, and SHA-256 values
+for `NOTICE`, generated `THIRD_PARTY_NOTICES.md`, and `sbom-input.json`.
+
+`verify` accepts the same target and component set plus archive files. A component file names its
+single component owner. A project binary may use `embedded_components` to bind the Cargo/npm/source
+components compiled into that binary without pretending they are separate archive files. Required
+declarations and generated metadata have no component owner. All paths are normalized ASCII relative
+paths; all file hashes are lowercase SHA-256 values.
+
+The checked-in files under `tools/license-check/fixtures/` exercise identical FFmpeg conclusions for
+all four supported targets. They are contract fixtures, not platform policy copies.
+
 ## Review and maintenance
 
 Policy changes require independent severity-based review. P0 findings cover incompatible licensing,

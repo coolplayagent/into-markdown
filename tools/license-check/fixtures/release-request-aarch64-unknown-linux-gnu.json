@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-unknown-linux-gnu",
+  "components": ["ffmpeg"]
+}

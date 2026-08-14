@@ -918,7 +918,7 @@
           "FILE:@@//crates/ffmpeg/Cargo.toml 0da3cea2a7b228e110dbd1f4b84ec11aa0ff91e8584faaf0c179548b90025092",
           "FILE:@@//tests/contracts/Cargo.toml 2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
           "FILE:@@//tools/asset-update/Cargo.toml eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
-          "FILE:@@//tools/license-check/Cargo.toml 1a56053113facbdc5c30365d1215b3e40902036d084426c02a3191a4317e2daa"
+          "FILE:@@//tools/license-check/Cargo.toml 6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
         ],
         "generatedRepoSpecs": {
           "crates": {
