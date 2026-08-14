@@ -49,6 +49,30 @@ fn encoded(format: ImageFormat) -> Vec<u8> {
     cursor.into_inner()
 }
 
+fn png_with_reserved_bit_set() -> Vec<u8> {
+    let mut png = encoded(ImageFormat::Png);
+    let ihdr_end = 8 + 4 + 4 + 13 + 4;
+    let kind = b"aaac";
+    let crc = png_crc(kind);
+    let mut chunk = Vec::with_capacity(12);
+    chunk.extend_from_slice(&0_u32.to_be_bytes());
+    chunk.extend_from_slice(kind);
+    chunk.extend_from_slice(&crc.to_be_bytes());
+    png.splice(ihdr_end..ihdr_end, chunk);
+    png
+}
+
+fn png_crc(bytes: &[u8]) -> u32 {
+    let mut value = u32::MAX;
+    for byte in bytes {
+        value ^= u32::from(*byte);
+        for _ in 0..8 {
+            value = if value & 1 == 0 { value >> 1 } else { (value >> 1) ^ 0xedb8_8320 };
+        }
+    }
+    !value
+}
+
 fn multi_tiff() -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     {
@@ -341,7 +365,7 @@ fn structural_work_and_animated_frame_limits_fail_before_codec_entry() {
 }
 
 #[test]
-fn exact_envelopes_reject_trailing_bytes_and_corrupt_png_crc() {
+fn exact_envelopes_reject_trailing_bytes_and_invalid_png_structure() {
     for (format, name) in [
         (ImageFormat::Png, "trailing.png"),
         (ImageFormat::Jpeg, "trailing.jpg"),
@@ -371,6 +395,17 @@ fn exact_envelopes_reject_trailing_bytes_and_corrupt_png_crc() {
     ))
     .unwrap_err();
     assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed);
+
+    let reserved_bit_context = context(&options);
+    let error = block_on(convert_image(
+        &input(png_with_reserved_bit_set(), "reserved-bit.png"),
+        &options,
+        &Services::default(),
+        &reserved_bit_context,
+    ))
+    .unwrap_err();
+    assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed);
+    assert_eq!(reserved_bit_context.reserved_memory_bytes(), 0);
 
     let mut tiff = multi_tiff();
     tiff.push(0);
@@ -638,6 +673,99 @@ struct PlannedOcr {
     plan: TestOcrPlan,
     regions: usize,
     text_capacity: usize,
+}
+
+#[derive(Clone, Copy)]
+enum ProviderExecutionFailure {
+    Cancelled,
+    Timeout,
+    ResourceLimit,
+    Ocr,
+    ComponentUnavailable,
+}
+
+struct FailingOcr {
+    failure: ProviderExecutionFailure,
+}
+
+impl OcrEngine for FailingOcr {
+    fn id(&self) -> &'static str {
+        "test.ocr.failing"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async { unreachable!("failing provider must use recognize_bound") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new(4096, 1, 32)
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move {
+            Err(match self.failure {
+                ProviderExecutionFailure::Cancelled => ConversionError::Cancelled,
+                ProviderExecutionFailure::Timeout => ConversionError::Timeout,
+                ProviderExecutionFailure::ResourceLimit => ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "provider execution exceeded its budget".into(),
+                },
+                ProviderExecutionFailure::Ocr => ConversionError::Ocr {
+                    provider: self.id().into(),
+                    detail: "provider execution failed".into(),
+                },
+                ProviderExecutionFailure::ComponentUnavailable => {
+                    ConversionError::ComponentUnavailable {
+                        component: self.id().into(),
+                        detail: "provider disappeared".into(),
+                    }
+                }
+            })
+        })
+    }
+}
+
+#[test]
+fn auto_ocr_degrades_only_provider_component_unavailability() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Auto;
+    for (failure, expected) in [
+        (ProviderExecutionFailure::Cancelled, into_markdown_core::ErrorCode::Cancelled),
+        (ProviderExecutionFailure::Timeout, into_markdown_core::ErrorCode::Timeout),
+        (ProviderExecutionFailure::ResourceLimit, into_markdown_core::ErrorCode::ResourceLimit),
+        (ProviderExecutionFailure::Ocr, into_markdown_core::ErrorCode::Ocr),
+    ] {
+        let context = context(&options);
+        let services =
+            Services { ocr: Some(Arc::new(FailingOcr { failure })), ..Services::default() };
+        let error = block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    let context = context(&options);
+    let services = Services {
+        ocr: Some(Arc::new(FailingOcr { failure: ProviderExecutionFailure::ComponentUnavailable })),
+        ..Services::default()
+    };
+    let contribution =
+        block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context)).unwrap();
+    assert_eq!(contribution.diagnostics[0].code, "image.ocrUnavailable");
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 impl OcrEngine for PlannedOcr {

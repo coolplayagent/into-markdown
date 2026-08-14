@@ -37,7 +37,7 @@ pub(super) fn validate(
         .map_err(|_| limit("max_input_bytes", "PNG chunk length is unrepresentable"))?;
         let kind: &[u8; 4] =
             header[4..8].try_into().map_err(|_| malformed("PNG chunk type is truncated"))?;
-        if !kind.iter().all(u8::is_ascii_alphabetic) {
+        if !kind.iter().all(u8::is_ascii_alphabetic) || !kind[2].is_ascii_uppercase() {
             return Err(malformed("PNG chunk type is invalid"));
         }
         if kind[0].is_ascii_uppercase() && !matches!(kind, b"IHDR" | b"PLTE" | b"IDAT" | b"IEND") {

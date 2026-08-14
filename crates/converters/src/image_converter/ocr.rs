@@ -52,9 +52,12 @@ pub(super) async fn recognize(
     let provider_context = credited.as_deref().unwrap_or(context);
     let recognition = match context.run(engine.recognize_bound(request, provider_context)).await? {
         Ok(value) => value,
-        Err(error) if options.ocr.policy == OcrPolicy::Auto => {
+        Err(error @ ConversionError::ComponentUnavailable { .. })
+            if options.ocr.policy == OcrPolicy::Auto =>
+        {
             return Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")));
         }
+        Err(error) if options.ocr.policy == OcrPolicy::Auto => return Err(error),
         Err(error) => return Err(map_unavailable(engine.id(), error)),
     };
     drop(credited);
