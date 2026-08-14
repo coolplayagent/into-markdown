@@ -228,6 +228,7 @@ rust_test(
     tags = ["manual"],
     deps = [
         ":onnxruntime",
+        "//crates/converters",
         "//crates/core",
         "//crates/ocr",
         "@crates//:futures",

@@ -69,12 +69,26 @@ PDF 使用审核并固定版本的 PDFium 动态库；调用方必须以 `PDFIUM
 `PdfConverter::with_runtime_path` 给出当前平台的精确绝对路径。转换器不搜索系统库、`PATH`
 或动态加载器环境，也不下载运行时；缺失运行时稳定返回 `componentUnavailable`。
 
-每页产生一个 `Block::Page`。字符按 PDFium 原生 character index 忠实进入
+每页先产生一个 `Block::Page`。字符按 PDFium 原生 character index 忠实进入
 `Inline::SourceText`，携带 index、Unicode scalar（不可映射、surrogate、NUL 与禁用控制字符
-为 U+FFFD）、字体名称线索、字号、规范化到 `[0, 360)` 的字符角度与边界框。这里不把原生字符顺序声称为视觉阅读
-顺序；跨栏、段落与高级 reading-order 合并属于后续版面阶段。页面、字符、链接和图片节点都
-带一基页码 provenance。坐标统一为 PDF point（1/72 inch）、应用页面旋转后的左上原点、X
-向右、Y 向下；page locator 同时记录显示宽高与顺时针旋转角。
+为 U+FFFD）、字体名称线索、字号、规范化到 `[0, 360)` 的字符角度与边界框。页面、字符、链接、
+图片和 OCR evidence 节点都带一基页码 provenance；坐标统一为 PDF point（1/72 inch）、应用页面
+旋转后的左上原点、X 向右、Y 向下，page locator 同时记录显示宽高与顺时针旋转角。
+
+PDF converter 随后把 native 字符、图片和已验证 OCR merge 结果交给独立的通用 IR 几何阶段。
+该阶段按方向聚合字符为行，以有界 XY-cut 恢复页面阅读序，再保守生成段落、标题、列表和对齐
+表格；native/OCR 重叠文本先按 NFC、空白和几何重合去重，native source 优先。水平、竖向和旋转
+文本只依据坐标和 source angle 排序，不从文字内容猜测语言或文档结构；证据不足时保留普通段落，
+不制造标题、列表或表格。两行纯文本表格必须有精确重复的文字边界，或由 PDFium 有界提取的
+多个 PATH bounds 形成覆盖每个 cell 的稳定行列网格；孤立矩形和 diagram path 不算表格证据。
+PATH bounds 只作为 page-scoped transient sidecar 参与布局，不进入 Document IR 或 wire DTO，
+字体只在几何已证明的窗口内标注 header。跨至少两个不同页面、位于页面上下 12% 边缘且规范化文本完全相同的
+段落会在既有 locator `part` 中标记为 `pdf/running-header` 或 `pdf/running-footer`，不删除原文，
+也不通过去数字等规则猜测变化中的页码。所有重建节点继续保留原 source locator 与 provenance。
+
+依赖边界保持单向：PDFium 只负责可信快照，OCR 只读写通用 Document IR，`pdf-layout` 只消费
+统一 IR，converter 负责先 OCR merge 再最终布局。普通 build/test 不下载 PDFium 或模型；真实
+PDF layout 与 OCR 质量分别由显式 authority target 验收。
 
 注释 link 与 PDFium web link 都被提取。内部目标表示为 `#pdf-page-N`，外部目标只接受绝对
 HTTP(S)/mailto URI；中央 Markdown renderer 为每页发出稳定的 `pdf-page-N` 安全 anchor，因此

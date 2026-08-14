@@ -12,6 +12,7 @@ mod msg;
 mod notebook;
 mod odf;
 mod pdf;
+mod pdf_ocr;
 mod presentation;
 mod remote;
 mod rtf;
@@ -29,11 +30,16 @@ pub use docx::DocxConverter;
 pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;
+pub use into_markdown_pdf_layout::{
+    LayoutConfig as PdfLayoutConfig, LayoutLimits as PdfLayoutLimits,
+    reconstruct_document as reconstruct_pdf_layout,
+};
 pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use odf::OdfConverter;
 pub use pdf::PdfConverter;
+pub use pdf_ocr::merge_pdf_ocr;
 pub use presentation::PresentationConverter;
 pub use remote::{
     HttpSourceResolver, MediaWikiConverter, MediaWikiFormatDetector, MediaWikiSourceResolver,

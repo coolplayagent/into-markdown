@@ -890,6 +890,234 @@ def presentation_fixtures(root: Path) -> list[dict[str, object]]:
     return fixtures
 
 
+def pdf_document(content: bytes, *, rotation: int = 0) -> bytes:
+    """Build one deterministic, uncompressed PDF with repository-authored text."""
+    rotation_entry = f" /Rotate {rotation}" if rotation else ""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800]"
+            f"{rotation_entry} /Resources << /Font << /F1 5 0 R >> >>"
+            " /Contents 4 0 R >>"
+        ).encode("ascii"),
+        b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n"
+        + content
+        + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    output = bytearray(b"%PDF-1.4\n%\x80\x80\x80\x80\n")
+    offsets: list[int] = []
+    for index, item in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(item)
+        output.extend(b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        output.extend(f"{offset:010} 00000 n \n".encode("ascii"))
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(output)
+
+
+def pdf_cell_grid(x_edges: tuple[int, ...], y_edges: tuple[int, ...]) -> bytes:
+    """Draw each table cell as a distinct, deterministic PDF PATH object."""
+    output = bytearray()
+    for bottom, top in zip(y_edges[:-1], y_edges[1:], strict=True):
+        for left, right in zip(x_edges[:-1], x_edges[1:], strict=True):
+            output.extend(
+                f"q 0.6 w {left} {bottom} {right - left} {top - bottom} re S Q\n".encode(
+                    "ascii"
+                )
+            )
+    return bytes(output)
+
+
+def write_pdf_fixtures(root: Path) -> list[dict[str, object]]:
+    fixtures = [
+        (
+            "pdf-layout-multicolumn",
+            pdf_document(
+                b"BT /F1 24 Tf 60 750 Td (Layout title) Tj ET\n"
+                b"BT /F1 12 Tf 40 690 Td (Left one) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (Right one) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Left two) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (Right two) Tj ET\n"
+            ),
+            "heading followed by complete left and right columns",
+            "heading:Layout title|paragraph:Left one Left two|paragraph:Right one Right two",
+        ),
+        (
+            "pdf-layout-narrow-gutter",
+            pdf_document(
+                b"BT /F1 12 Tf 40 690 Td (Left alpha has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (Right alpha has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Left beta has a wide measure) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (Right beta has a wide measure) Tj ET\n"
+            ),
+            "aligned wide column rows remain paragraphs across a narrow page gutter",
+            "paragraph:Left alpha has a wide measure Left beta has a wide measure|paragraph:Right alpha has a wide measure Right beta has a wide measure",
+        ),
+        (
+            "pdf-layout-structures",
+            pdf_document(
+                pdf_cell_grid((40, 140, 240), (550, 580, 610))
+                + b"BT /F1 24 Tf 40 750 Td (Section) Tj ET\n"
+                b"BT /F1 12 Tf 50 690 Td (- Alpha) Tj ET\n"
+                b"BT /F1 12 Tf 50 665 Td (- Beta) Tj ET\n"
+                b"BT /F1 13 Tf 50 590 Td (Name) Tj ET\n"
+                b"BT /F1 13 Tf 150 590 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 50 565 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 150 565 Td (1) Tj ET\n"
+                b"BT /F1 9 Tf 50 50 Td (1 Repository footnote) Tj ET\n"
+            ),
+            "heading, two-item list, two-by-two table, and bottom footnote",
+            "heading:Section|list:Alpha,Beta|table:Name,Value;A,1|footnote:Repository footnote",
+        ),
+        (
+            "pdf-layout-wide-gap-table",
+            pdf_document(
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+            ),
+            "two repeated compact columns across a page-wide gap remain a table",
+            "table:Key,Value;A,1",
+        ),
+        (
+            "pdf-layout-long-wide-table",
+            pdf_document(
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Long left heading) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Long right heading) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (Long left value) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (Long right value) Tj ET\n"
+            ),
+            "two non-compact columns with a repeated local grid remain a table",
+            "table:Long left heading,Long right heading;Long left value,Long right value",
+        ),
+        (
+            "pdf-layout-titled-table",
+            pdf_document(
+                pdf_cell_grid((30, 250, 570), (650, 680, 710))
+                + b"BT /F1 20 Tf 40 750 Td (Table title) Tj ET\n"
+                b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 360 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+            ),
+            "a heading above a repeated grid remains a heading followed by a table",
+            "heading:Table title|table:Key,Value;A,1",
+        ),
+        (
+            "pdf-layout-asymmetric-wide-table",
+            pdf_document(
+                b"BT /F1 12 Tf 40 690 Td (MMMMMMMMMMMMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 12 Tf 400 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (MMMMMMMMMMMMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 12 Tf 400 660 Td (Value) Tj ET\n"
+            ),
+            "exact repeated boundaries recover an asymmetric two-row table with a wide description cell",
+            "table:MMMMMMMMMMMMMMMMMMMMMMMMMMMM,Value;MMMMMMMMMMMMMMMMMMMMMMMMMMMM,Value",
+        ),
+        (
+            "pdf-layout-equal-dual-column",
+            pdf_document(
+                b"q 0.6 w 20 610 560 110 re S Q\n"
+                b"BT /F1 12 Tf 40 690 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 690 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 660 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 630 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+            ),
+            "three broad equal-width column rows remain two paragraph flows",
+            "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        ),
+        (
+            "pdf-layout-table-followed-by-columns",
+            pdf_document(
+                pdf_cell_grid((30, 140, 240), (650, 680, 710))
+                + b"BT /F1 13 Tf 40 690 Td (Key) Tj ET\n"
+                b"BT /F1 13 Tf 160 690 Td (Value) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 160 660 Td (1) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 630 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 600 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 600 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 570 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 570 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+            ),
+            "a local two-row table stops before a following three-row column flow",
+            "table:Key,Value;A,1|paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        ),
+        (
+            "pdf-layout-header-body-table",
+            pdf_document(
+                pdf_cell_grid((30, 250, 570), (620, 650, 680, 710))
+                + b"BT /F1 14 Tf 40 690 Td (MMMMMMMMMMMMMMMMMM) Tj ET\n"
+                b"BT /F1 14 Tf 360 690 Td (NNNNNNNNNNNNNNNNNN) Tj ET\n"
+                b"BT /F1 12 Tf 40 660 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 360 660 Td (1) Tj ET\n"
+                b"BT /F1 12 Tf 40 630 Td (B) Tj ET\n"
+                b"BT /F1 12 Tf 360 630 Td (2) Tj ET\n"
+            ),
+            "a non-compact styled header and two compact body rows form one complete table",
+            "table:MMMMMMMMMMMMMMMMMM,NNNNNNNNNNNNNNNNNN;A,1;B,2",
+        ),
+        (
+            "pdf-layout-columns-then-table",
+            pdf_document(
+                pdf_cell_grid((30, 250, 570), (580, 610, 640))
+                + b"BT /F1 12 Tf 40 710 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 710 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 680 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 680 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 12 Tf 40 650 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n"
+                b"BT /F1 12 Tf 350 650 Td (BBBBBBBBBBBBBBBBBBBBBBBBBBBB) Tj ET\n"
+                b"BT /F1 14 Tf 40 620 Td (Table key) Tj ET\n"
+                b"BT /F1 14 Tf 350 620 Td (Table value) Tj ET\n"
+                b"BT /F1 12 Tf 40 590 Td (A) Tj ET\n"
+                b"BT /F1 12 Tf 350 590 Td (1) Tj ET\n"
+            ),
+            "ambiguous broad columns remain paragraph flows before a locally styled table",
+            "paragraph:AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAAA|paragraph:BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB BBBBBBBBBBBBBBBBBBBBBBBBBBBB|table:Table key,Table value;A,1",
+        ),
+        (
+            "pdf-layout-rotated",
+            pdf_document(
+                b"BT /F1 12 Tf 80 700 Td (Rotated first) Tj ET\n"
+                b"BT /F1 12 Tf 80 670 Td (Rotated second) Tj ET\n",
+                rotation=90,
+            ),
+            "declared page rotation retains source text order and bounds",
+            "paragraph:Rotated first Rotated second",
+        ),
+    ]
+    return [
+        generated_fixture(
+            root,
+            fixture_id,
+            "pdf",
+            "normal",
+            f"small/pdf/{fixture_id.removeprefix('pdf-layout-')}.pdf",
+            data,
+            "application/pdf",
+            expected_hash(description, sha256(golden.encode("utf-8"))),
+        )
+        for fixture_id, data, description, golden in fixtures
+    ]
+
+
 def patch_encrypted_flag(archive: bytes) -> bytes:
     data = bytearray(archive)
     offset = 0
@@ -1284,6 +1512,7 @@ def build(root: Path, font_path: Path) -> None:
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
     fixtures.extend(write_msg_fixtures(root))
+    fixtures.extend(write_pdf_fixtures(root))
 
     epub_normal = epub3(
         b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Corpus chapter</title></head>'
@@ -1414,6 +1643,11 @@ def main() -> None:
         help="regenerate only the self-contained PresentationML subset and update its manifest records",
     )
     parser.add_argument(
+        "--pdf-only",
+        action="store_true",
+        help="regenerate repository-authored PDF layout fixtures and their manifest records",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="regenerate in a temporary directory and require byte equality with checked-in authority",
@@ -1475,9 +1709,21 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         return
+    if args.pdf_only:
+        manifest_path = output_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["fixtures"] = [
+            fixture for fixture in manifest["fixtures"] if fixture["format"] != "pdf"
+        ] + write_pdf_fixtures(output_root)
+        manifest["fixtures"].sort(key=lambda item: str(item["id"]))
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
     if args.font is None:
         parser.error(
-            "--font is required unless --refresh-odf, --msg-only, or --presentation-only is selected"
+            "--font is required unless --refresh-odf, --msg-only, --presentation-only, or --pdf-only is selected"
         )
     if not args.verify:
         build(output_root, args.font.resolve())

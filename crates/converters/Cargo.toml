@@ -16,6 +16,8 @@ image.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
 into-markdown-pdfium = { path = "../pdfium" }
+into-markdown-pdf-layout = { path = "../pdf-layout" }
+into-markdown-ocr = { path = "../ocr" }
 into-markdown-http-transport = { path = "../http-transport" }
 pulldown-cmark.workspace = true
 quick-xml.workspace = true

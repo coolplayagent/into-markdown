@@ -1108,6 +1108,8 @@ dependencies = [
  "image",
  "into-markdown-core",
  "into-markdown-http-transport",
+ "into-markdown-ocr",
+ "into-markdown-pdf-layout",
  "into-markdown-pdfium",
  "into-markdown-render-markdown",
  "libc",
@@ -1203,6 +1205,7 @@ version = "0.0.0"
 dependencies = [
  "futures",
  "image",
+ "into-markdown-converters",
  "into-markdown-core",
  "into-markdown-ocr",
  "libc",
@@ -1217,6 +1220,16 @@ dependencies = [
  "thiserror",
  "unicode-normalization",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "into-markdown-pdf-layout"
+version = "0.0.0"
+dependencies = [
+ "into-markdown-core",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
 ]
 
 [[package]]
