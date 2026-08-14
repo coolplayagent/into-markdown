@@ -126,7 +126,7 @@ pub fn verify_archive_projection(
     };
 
     validate_files(repository, &projection, inputs.as_ref(), &mut errors);
-    validate_ffmpeg(&projection, &mut errors);
+    validate_ffmpeg(repository, &projection, &mut errors);
     native::validate(
         repository,
         &projection.target,
@@ -359,10 +359,16 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
     if file.bytes == 0 || !is_sha256(&file.sha256) {
         errors.push(format!("archive file {} lacks fixed size or SHA-256", file.path));
     }
-    if file.kind == ArchiveFileKind::Project && requires_component_classification(&file.path) {
+    let kind_path_is_valid = match file.kind {
+        ArchiveFileKind::Project => matches!(file.path.as_str(), "bin/into-md" | "bin/into-md.exe"),
+        ArchiveFileKind::Declaration => matches!(file.path.as_str(), LICENSE_PATH | NOTICE_PATH),
+        ArchiveFileKind::Generated => matches!(file.path.as_str(), THIRD_PARTY_PATH | SBOM_PATH),
+        ArchiveFileKind::Component => true,
+    };
+    if !kind_path_is_valid {
         errors.push(format!(
-            "archive binary/model/font {} cannot be classified as project-owned",
-            file.path
+            "archive file {} is outside the closed path set for {:?}",
+            file.path, file.kind
         ));
     }
     match (file.kind, file.component_id.as_deref()) {
@@ -400,19 +406,7 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
     }
 }
 
-fn requires_component_classification(path: &str) -> bool {
-    if path.starts_with("bin/") {
-        return !matches!(path, "bin/into-md" | "bin/into-md.exe");
-    }
-    let lower = path.to_ascii_lowercase();
-    lower.starts_with("lib/")
-        || [".dll", ".dylib", ".onnx", ".otf", ".so", ".ttf", ".wasm", ".woff", ".woff2"]
-            .iter()
-            .any(|suffix| lower.ends_with(suffix))
-        || lower.contains(".so.")
-}
-
-fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
+fn validate_ffmpeg(repository: &Path, projection: &ArchiveProjection, errors: &mut Vec<String>) {
     let selected = projection.components.iter().any(|id| id == "ffmpeg");
     let Some(evidence) = projection.ffmpeg_evidence.as_ref() else {
         if selected {
@@ -425,17 +419,32 @@ fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
         return;
     }
     let authority = projection.files.iter().find(|file| file.path == evidence.authority_path);
-    if authority.is_none_or(|file| {
-        file.kind != ArchiveFileKind::Component
-            || file.component_id.as_deref() != Some("ffmpeg")
-            || file.bytes != evidence.authority_bytes
-            || file.sha256 != evidence.authority_sha256
-    }) {
+    let expected_authority_path =
+        format!("share/into-markdown/authority/ffmpeg-{}.json", projection.target);
+    if evidence.authority_path != expected_authority_path
+        || evidence.authority_path == evidence.executable_path
+        || evidence.authority_sha256 == evidence.executable_sha256
+        || authority.is_none_or(|file| {
+            file.kind != ArchiveFileKind::Component
+                || file.component_id.as_deref() != Some("ffmpeg")
+                || file.bytes != evidence.authority_bytes
+                || file.sha256 != evidence.authority_sha256
+        })
+    {
         errors.push("FFmpeg build evidence is not bound to an archived authority file".to_owned());
     }
+    let source_text = read(repository.join("third_party/ffmpeg/source.json"), errors);
+    let source: serde_json::Value = match serde_json::from_str(&source_text) {
+        Ok(source) => source,
+        Err(error) => {
+            errors.push(format!("invalid FFmpeg source authority: {error}"));
+            serde_json::Value::Null
+        }
+    };
+    let expected_version = source.get("version").and_then(serde_json::Value::as_str);
     let binary = projection.files.iter().find(|file| file.path == evidence.executable_path);
     if evidence.schema_version != SCHEMA_VERSION
-        || evidence.ffmpeg_version != "8.1.2"
+        || Some(evidence.ffmpeg_version.as_str()) != expected_version
         || evidence.target != projection.target
         || binary.is_none_or(|file| {
             file.kind != ArchiveFileKind::Component
@@ -461,7 +470,44 @@ fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
             errors.push(format!("FFmpeg build evidence lacks {required}"));
         }
     }
-    let allowed_enable: BTreeSet<_> = [
+    let allowed_enable = allowed_ffmpeg_enable_flags();
+    if evidence
+        .configure
+        .iter()
+        .any(|flag| flag.starts_with("--enable-") && !allowed_enable.contains(flag.as_str()))
+    {
+        errors.push("FFmpeg build evidence enables incompatible or external components".to_owned());
+    }
+    let actual_dependencies: BTreeSet<_> =
+        evidence.dependencies.iter().map(String::as_str).collect();
+    let expected_dependencies = expected_ffmpeg_dependencies(&projection.target);
+    if actual_dependencies != expected_dependencies {
+        errors.push("FFmpeg build evidence has unreviewed dynamic dependencies".to_owned());
+    }
+}
+
+fn expected_ffmpeg_dependencies(target: &str) -> BTreeSet<&'static str> {
+    match target {
+        "aarch64-apple-darwin" => [
+            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "/usr/lib/libSystem.B.dylib",
+        ]
+        .into_iter()
+        .collect(),
+        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
+            ["libc.so.6", "libm.so.6", "libpthread.so.0"].into_iter().collect()
+        }
+        "x86_64-pc-windows-msvc" => {
+            ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"].into_iter().collect()
+        }
+        _ => BTreeSet::new(),
+    }
+}
+
+fn allowed_ffmpeg_enable_flags() -> BTreeSet<&'static str> {
+    [
         "--enable-ffmpeg",
         "--enable-avutil",
         "--enable-avcodec",
@@ -478,36 +524,7 @@ fn validate_ffmpeg(projection: &ArchiveProjection, errors: &mut Vec<String>) {
         "--enable-static",
     ]
     .into_iter()
-    .collect();
-    if evidence
-        .configure
-        .iter()
-        .any(|flag| flag.starts_with("--enable-") && !allowed_enable.contains(flag.as_str()))
-    {
-        errors.push("FFmpeg build evidence enables incompatible or external components".to_owned());
-    }
-    let actual_dependencies: BTreeSet<_> =
-        evidence.dependencies.iter().map(String::as_str).collect();
-    let expected_dependencies: BTreeSet<_> = match projection.target.as_str() {
-        "aarch64-apple-darwin" => [
-            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
-            "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
-            "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
-            "/usr/lib/libSystem.B.dylib",
-        ]
-        .into_iter()
-        .collect(),
-        "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
-            ["libc.so.6", "libm.so.6", "libpthread.so.0"].into_iter().collect()
-        }
-        "x86_64-pc-windows-msvc" => {
-            ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"].into_iter().collect()
-        }
-        _ => BTreeSet::new(),
-    };
-    if actual_dependencies != expected_dependencies {
-        errors.push("FFmpeg build evidence has unreviewed dynamic dependencies".to_owned());
-    }
+    .collect()
 }
 
 fn validate_header(version: u64, target: &str, errors: &mut Vec<String>) {

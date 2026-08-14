@@ -154,7 +154,7 @@ fn orphan_binary_cannot_claim_project_ownership() {
     });
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("cannot be classified as project-owned")));
+    assert!(errors.iter().any(|error| error.contains("outside the closed path set")));
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     assert!(without.iter().any(|error| error.contains("without LGPL-compatible")));
 
     projection.ffmpeg_evidence = Some(FfmpegEvidence {
-        authority_path: "share/ffmpeg-authority.json".into(),
+        authority_path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
         authority_bytes: 88,
         authority_sha256: "f".repeat(64),
         schema_version: 1,
@@ -208,7 +208,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         .collect(),
     });
     projection.files.push(ArchiveFile {
-        path: "share/ffmpeg-authority.json".into(),
+        path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
         bytes: 88,
         sha256: "f".repeat(64),
         kind: ArchiveFileKind::Component,
