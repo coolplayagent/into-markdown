@@ -449,6 +449,20 @@ fn master_default_paragraph_properties_layer_below_level_properties() {
     assert_eq!(title.1.len(), 1);
     assert_eq!(title.1[0].default_style.bold, Some(true));
     assert_eq!(title.1[0].default_style.italic, Some(true));
+
+    let invalid_order = master_xml.replace(
+        r#"<a:defPPr><a:defRPr b="true"/></a:defPPr><a:lvl1pPr><a:defRPr i="true"/></a:lvl1pPr>"#,
+        r#"<a:lvl1pPr><a:defRPr i="true"/></a:lvl1pPr><a:defPPr><a:defRPr b="true"/></a:defPPr>"#,
+    );
+    assert!(matches!(
+        parse_master_text_styles(
+            invalid_order.as_bytes(),
+            "ppt/slideMasters/slideMaster1.xml",
+            &options,
+            &context,
+        ),
+        Err(ConversionError::Malformed { .. })
+    ));
 }
 
 #[test]

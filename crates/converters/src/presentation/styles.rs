@@ -269,7 +269,8 @@ pub(super) fn parse_master_text_styles(
                     }
                     _ if section.is_some() => {
                         if local_name == "defPPr" {
-                            if current.is_some() || section_default.is_some() {
+                            if current.is_some() || section_default.is_some() || !levels.is_empty()
+                            {
                                 return Err(malformed(
                                     Some(part),
                                     "master text style has multiple or nested defPPr elements",
@@ -331,7 +332,7 @@ pub(super) fn parse_master_text_styles(
                     result.push((parsed_section, Vec::new()));
                 } else if section.is_some() {
                     if local_name == "defPPr" {
-                        if current.is_some() || section_default.is_some() {
+                        if current.is_some() || section_default.is_some() || !levels.is_empty() {
                             return Err(malformed(
                                 Some(part),
                                 "master text style has multiple or nested defPPr elements",
