@@ -157,6 +157,15 @@ mod tests {
             "rtf/normal.rtf",
             "pdf/structures.pdf",
             "ocr/ocr-english-clear-1.png",
+            "pptx/normal.pptx",
+            "xlsx/normal.xlsx",
+            "xlsb/normal.xlsb",
+            "odt/normal.odt",
+            "ods/normal.ods",
+            "odp/normal.odp",
+            "legacy/normal.doc",
+            "legacy/normal.ppt",
+            "legacy/normal.xls",
         ] {
             let path = fixtures.join(fixture);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -213,6 +222,12 @@ mod tests {
             b"# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n".to_vec(),
             b"# Repository MSG\n\n<strong>From: </strong>Alice \\<alice@example\\.test\\>\n\n<strong>To: </strong>Bob \\<bob@example\\.test\\>\n\n<strong>Date: </strong>1970\\-01\\-01T00:00:00Z\n\n---\n\nPlain fixture body\n\n## Transport headers\n\n```rfc822\nMessage-ID: <repository@example.test>\nX-Offline: true\n```\n".to_vec(),
             b"Corpus <strong>Alpha</strong> \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
+            b"## Slide 1: Corpus \xe4\xbd\xa0\xe5\xa5\xbd \xe2\x80\x93 \xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n\n<em>English fran\xc3\xa7ais</em>\n\n### Speaker notes\n\nNota \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n\n## Slide 2: Second layout\n\n<em>\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</em>\n".to_vec(),
+            b"## Sheet: Corpus\n\n|  |  |  |\n| --- | --- | --- |\n| Corpus | true | 42\\.5 |\n| 2024\\-01\\-01 00:00:00 | `=SUM(1,2) [cached: 3]` | `=cmd` |\n|  |  |  |\n\n![corpus pixel](<data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=>)\n\n![Corpus again](<data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=>)\n".to_vec(),
+            b"## Sheet: Binary\n\n|  |  |  |\n| --- | --- | --- |\n| Binary value | true | 2024\\-01\\-01 00:00:00 |\n| `=1+2 [cached: 3]` |  |  |\n".to_vec(),
+            b"## Corpus ODT\n\nAlpha <strong>\xe4\xb8\xad\xe6\x96\x87</strong>\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n".to_vec(),
+            b"## Sheet: Data\n\n|  |  |\n| --- | --- |\n| Alpha | 1 |\n| tail |  |\n| tail |  |\n".to_vec(),
+            b"## Slide 1: Corpus ODP\n\nAlpha \xe4\xb8\xad\xe6\x96\x87\n\n<strong>Speaker notes</strong>\n\nSpeaker cue\n".to_vec(),
         ];
         let dto = br#"{"schemaVersion":1,"markdown":"Alpha \u4e2d\u6587 line  \nSecond line\n","document":{"blocks":[{}]}}"#.to_vec();
         let corrupt = br#"{"code":"malformed","exitCode":3}"#.to_vec();
@@ -231,6 +246,14 @@ mod tests {
         outputs.push_back(ok(b"Installed ZIP smoke\n".to_vec()));
         outputs.push_back(CommandOutput { exit_code: Some(9), stdout: vec![], stderr: pdf });
         outputs.push_back(CommandOutput { exit_code: Some(9), stdout: vec![], stderr: image });
+        let legacy = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the authority-verified legacy Office runtime for this platform"}"#.to_vec();
+        for _ in 0..3 {
+            outputs.push_back(CommandOutput {
+                exit_code: Some(9),
+                stdout: vec![],
+                stderr: legacy.clone(),
+            });
+        }
         outputs.push_back(ok(metadata));
         outputs.push_back(ok(vec![]));
         outputs.push_back(ok(vec![]));

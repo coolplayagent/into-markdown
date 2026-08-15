@@ -36,7 +36,7 @@ fn hidden_layout_and_master_placeholders_are_inherited() {
         let style = ShapeStyle { hidden: true, ..ShapeStyle::default() };
         let mut layout = Vec::new();
         let mut master = Vec::new();
-        let key = PlaceholderKey { index: 0 };
+        let key = PlaceholderKey { index: 0, class: PlaceholderClass::Body };
         if hidden_in_layout {
             layout.push((key, style));
         } else {
@@ -62,8 +62,12 @@ fn hidden_layout_and_master_placeholders_are_inherited() {
         }],
         ..ShapeStyle::default()
     };
-    apply_inheritance(&mut shapes, &vec![(PlaceholderKey { index: 0 }, style)], &Vec::new())
-        .unwrap();
+    apply_inheritance(
+        &mut shapes,
+        &vec![(PlaceholderKey { index: 0, class: PlaceholderClass::Body }, style)],
+        &Vec::new(),
+    )
+    .unwrap();
     assert_eq!(shapes[0].paragraphs[0].bullet, None);
 
     let mut shapes = vec![Shape {
@@ -75,7 +79,7 @@ fn hidden_layout_and_master_placeholders_are_inherited() {
         ..Shape::default()
     }];
     let layout = vec![(
-        PlaceholderKey { index: 0 },
+        PlaceholderKey { index: 0, class: PlaceholderClass::Body },
         ShapeStyle {
             paragraphs: vec![TextParagraph {
                 level: 2,
@@ -208,7 +212,7 @@ fn placeholder_layering_projects_layout_type_to_master_class() {
     ];
     let layout = vec![
         (
-            PlaceholderKey { index: 0 },
+            PlaceholderKey { index: 0, class: PlaceholderClass::Body },
             ShapeStyle {
                 geometry: Some(Geometry {
                     x: 10,
@@ -221,7 +225,7 @@ fn placeholder_layering_projects_layout_type_to_master_class() {
             },
         ),
         (
-            PlaceholderKey { index: 7 },
+            PlaceholderKey { index: 7, class: PlaceholderClass::Body },
             ShapeStyle {
                 geometry: Some(Geometry {
                     x: 70,
@@ -301,7 +305,7 @@ fn transform_presence_inherits_each_property_before_nested_groups() {
         ..Shape::default()
     }];
     let layout = vec![(
-        PlaceholderKey { index: 0 },
+        PlaceholderKey { index: 0, class: PlaceholderClass::Body },
         ShapeStyle {
             geometry: Some(Geometry {
                 x: 0,
@@ -376,7 +380,7 @@ fn master_text_styles_and_explicit_false_rich_properties_layer_by_level() {
     let mut master = Vec::new();
     merge_master_text_styles(&mut master, parsed, "ppt/slideMasters/slideMaster1.xml").unwrap();
     let layout = vec![(
-        PlaceholderKey { index: 0 },
+        PlaceholderKey { index: 0, class: PlaceholderClass::Body },
         ShapeStyle {
             paragraphs: vec![TextParagraph {
                 default_style: RichStyle { italic: Some(false), ..RichStyle::default() },
@@ -415,6 +419,25 @@ fn master_text_styles_and_explicit_false_rich_properties_layer_by_level() {
         &shapes[0].paragraphs[1].text[0],
         Inline::Text { marks, .. } if marks == &[InlineMark::Underline]
     ));
+}
+
+#[test]
+fn shape_list_styles_do_not_require_master_text_styles() {
+    let master_xml = format!(
+        r#"<p:sldMaster xmlns:p="{p}" xmlns:a="{a}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp></p:spTree></p:cSld></p:sldMaster>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(A_NS)
+    );
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let parsed = parse_master_text_styles(
+        master_xml.as_bytes(),
+        "ppt/slideMasters/slideMaster1.xml",
+        &options,
+        &context,
+    )
+    .unwrap();
+    assert!(parsed.is_empty());
 }
 
 #[test]

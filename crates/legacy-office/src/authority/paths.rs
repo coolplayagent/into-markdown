@@ -3,6 +3,38 @@ use into_markdown_core::ConversionError;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+const MACOS_SYSTEM_LIBRARIES: &[&str] = &[
+    "/usr/lib/libSystem.B.dylib",
+    "/usr/lib/libc++.1.dylib",
+    "/usr/lib/libexslt.0.dylib",
+    "/usr/lib/libiconv.2.dylib",
+    "/usr/lib/libicucore.A.dylib",
+    "/usr/lib/libobjc.A.dylib",
+    "/usr/lib/libresolv.9.dylib",
+    "/usr/lib/libsandbox.1.dylib",
+    "/usr/lib/libxml2.2.dylib",
+    "/usr/lib/libxslt.1.dylib",
+    "/usr/lib/libz.1.dylib",
+    "/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
+    "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+    "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+    "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+    "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+    "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+    "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+    "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+    "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+    "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+    "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+    "/System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO",
+    "/System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos",
+    "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+    "/System/Library/Frameworks/OpenCL.framework/Versions/A/OpenCL",
+    "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+    "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+    "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+];
+
 pub(super) fn explicit_directory(path: &Path) -> Result<PathBuf, ConversionError> {
     if !path.is_absolute() {
         return Err(unavailable("unsafePath"));
@@ -66,26 +98,7 @@ pub(super) fn system_library_path(
         return Err(unavailable("sandboxAuthority"));
     }
     match target {
-        "aarch64-apple-darwin" => {
-            // These identities are provided by the dyld shared cache and do not
-            // necessarily have a standalone inode on current macOS releases.
-            const SYSTEM_DYLIBS: &[&str] = &[
-                "/usr/lib/libSystem.B.dylib",
-                "/usr/lib/libc++.1.dylib",
-                "/usr/lib/libiconv.2.dylib",
-                "/usr/lib/libobjc.A.dylib",
-                "/usr/lib/libsandbox.1.dylib",
-                "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
-                "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
-                "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
-            ];
-            if library.identity != library.path
-                || !SYSTEM_DYLIBS.contains(&library.identity.as_str())
-            {
-                return Err(unavailable("sandboxAuthority"));
-            }
-            Ok(PathBuf::from(&library.path))
-        }
+        "aarch64-apple-darwin" => macos_system_library(library),
         "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu" => {
             const SYSTEM_SONAMES: &[&str] = &[
                 "ld-linux-aarch64.so.1",
@@ -133,6 +146,17 @@ pub(super) fn system_library_path(
         }
         _ => Err(unavailable("sandboxAuthority")),
     }
+}
+
+fn macos_system_library(library: &SystemLibraryAuthority) -> Result<PathBuf, ConversionError> {
+    // These identities are provided by the dyld shared cache and do not
+    // necessarily have a standalone inode on current macOS releases.
+    if library.identity != library.path
+        || !MACOS_SYSTEM_LIBRARIES.contains(&library.identity.as_str())
+    {
+        return Err(unavailable("sandboxAuthority"));
+    }
+    Ok(PathBuf::from(&library.path))
 }
 
 pub(super) fn safe_relative(value: &str) -> bool {

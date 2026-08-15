@@ -11,6 +11,7 @@ into-markdown-core = { path = "../core" }
 crc32fast.workspace = true
 libc.workspace = true
 libloading.workspace = true
+md5.workspace = true
 object.workspace = true
 quick-xml.workspace = true
 serde.workspace = true

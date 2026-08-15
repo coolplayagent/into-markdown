@@ -1,7 +1,9 @@
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::model::WorkbookInventory;
 use crate::workbook::opc::relationships::{decode_attr, require_spreadsheet_namespace};
-use crate::workbook::schema::{OFFICE_REL_NS, OFFICE_REL_STRICT_NS};
+use crate::workbook::schema::{
+    OFFICE_REL_NS, OFFICE_REL_STRICT_NS, SPREADSHEET_NS, SPREADSHEET_STRICT_NS,
+};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -86,7 +88,13 @@ pub(in crate::workbook) fn scan_xml_workbook_surface(
             Ok((namespace, raw_event @ (Event::Start(_) | Event::Empty(_)))) => {
                 let is_empty = matches!(raw_event, Event::Empty(_));
                 let (Event::Start(event) | Event::Empty(event)) = raw_event else { unreachable!() };
-                require_spreadsheet_namespace(&namespace, part)?;
+                match &namespace {
+                    ResolveResult::Bound(value)
+                        if value.as_ref() == SPREADSHEET_NS
+                            || value.as_ref() == SPREADSHEET_STRICT_NS => {}
+                    ResolveResult::Bound(_) => continue,
+                    _ => require_spreadsheet_namespace(&namespace, part)?,
+                }
                 match event.local_name().as_ref() {
                     b"sheet" => {
                         output.record_bytes = output.record_bytes.saturating_add(1);

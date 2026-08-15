@@ -24,6 +24,18 @@ pub(super) struct Target {
     pub abi: Abi,
     pub limits: WorkerLimits,
     pub sandbox: SandboxAuthority,
+    pub container: Option<ContainerAuthority>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct ContainerAuthority {
+    pub format: String,
+    pub image_path: String,
+    pub image_bytes: u64,
+    pub image_sha256: String,
+    pub mount_path: String,
+    pub kit_sha256: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -78,7 +90,17 @@ pub(super) struct SandboxAuthority {
     pub system_libraries: Vec<SystemLibraryAuthority>,
     pub network: String,
     pub child_processes: String,
+    pub compatibility_child: Option<CompatibilityChildAuthority>,
     pub app_container: Option<AppContainerAuthority>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct CompatibilityChildAuthority {
+    pub executable: String,
+    pub maximum_instances: u32,
+    pub local_ip: String,
+    pub local_ipc: String,
 }
 
 #[derive(Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]

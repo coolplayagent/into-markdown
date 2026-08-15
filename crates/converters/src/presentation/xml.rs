@@ -393,14 +393,14 @@ fn validate_interpreted_element(
         },
         (P_NS, b"spTree") => parent_is(P_NS, b"cSld"),
         (P_NS, b"grpSp") => parent_is(P_NS, b"spTree") || parent_is(P_NS, b"grpSp"),
-        (P_NS, b"grpSpPr") => parent_is(P_NS, b"grpSp"),
+        (P_NS, b"grpSpPr") => parent_is(P_NS, b"grpSp") || parent_is(P_NS, b"spTree"),
         (P_NS, b"sp" | b"pic" | b"graphicFrame") => {
             parent_is(P_NS, b"spTree") || parent_is(P_NS, b"grpSp")
         }
         (P_NS, b"nvSpPr") => parent_is(P_NS, b"sp"),
         (P_NS, b"nvPicPr") => parent_is(P_NS, b"pic"),
         (P_NS, b"nvGraphicFramePr") => parent_is(P_NS, b"graphicFrame"),
-        (P_NS, b"nvGrpSpPr") => parent_is(P_NS, b"grpSp"),
+        (P_NS, b"nvGrpSpPr") => parent_is(P_NS, b"grpSp") || parent_is(P_NS, b"spTree"),
         (P_NS, b"cNvPr") => matches!(
             parent,
             Some((namespace, local))
@@ -437,14 +437,16 @@ fn validate_interpreted_element(
         (A_NS, b"bodyPr" | b"lstStyle") => parent_is(P_NS, b"txBody") || parent_is(A_NS, b"txBody"),
         (A_NS, b"p") => parent_is(P_NS, b"txBody") || parent_is(A_NS, b"txBody"),
         (A_NS, b"pPr") => parent_is(A_NS, b"p"),
-        (A_NS, local) if level_paragraph(local).is_some() => matches!(
-            parent,
-            Some((namespace, local))
-                if namespace == P_NS
-                    && matches!(local.as_slice(), b"titleStyle" | b"bodyStyle" | b"otherStyle")
-        ),
+        (A_NS, local) if level_paragraph(local).is_some() => {
+            matches!(
+                parent,
+                Some((namespace, local))
+                    if namespace == P_NS
+                        && matches!(local.as_slice(), b"titleStyle" | b"bodyStyle" | b"otherStyle")
+            ) || parent_is(A_NS, b"lstStyle")
+        }
         (A_NS, b"r") => parent_is(A_NS, b"p"),
-        (A_NS, b"rPr") => parent_is(A_NS, b"r"),
+        (A_NS, b"rPr") => parent_is(A_NS, b"r") || parent_is(A_NS, b"fld"),
         (A_NS, b"defRPr") => {
             parent_is(A_NS, b"pPr")
                 || parent.is_some_and(|(namespace, local)| {

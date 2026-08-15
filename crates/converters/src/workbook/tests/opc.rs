@@ -125,6 +125,35 @@ fn opc_root_and_content_type_authority_is_fail_closed() {
         convert(&orphan, &ConversionOptions::default()),
         Err(ConversionError::Malformed { .. })
     ));
+
+    let unused_default = wrong_content_type.replace(
+        "</Types>",
+        r#"<Default Extension="fntdata" ContentType="application/x-fontdata"/></Types>"#,
+    );
+    let unused_default = unused_default.replace(
+        r#"ContentType="application/octet-stream""#,
+        r#"ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml""#,
+    );
+    assert!(
+        convert(
+            &rewrite_package(&base, &[("[Content_Types].xml", unused_default)], &[]),
+            &ConversionOptions::default(),
+        )
+        .is_ok()
+    );
+
+    let workbook_with_extension = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets><extLst><ext uri="fixture"><x15:workbookPr/></ext></extLst></workbook>"#;
+    assert!(
+        convert(
+            &rewrite_package(
+                &base,
+                &[("xl/workbook.xml", workbook_with_extension.to_owned())],
+                &[],
+            ),
+            &ConversionOptions::default(),
+        )
+        .is_ok()
+    );
 }
 
 #[test]

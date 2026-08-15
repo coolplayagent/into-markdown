@@ -59,28 +59,39 @@ fn convert_verified(
     let temporary = context.reserve_temporary(temporary_plan)?;
     let mut output_memory = context.reserve_memory(maximum_output_bytes)?;
     let working_directory = crate::process::working_directory(bundle)?;
-    let address_limit = bundle
-        .address_space_overhead
-        .checked_add(context.available_memory_bytes())
-        .and_then(|value| value.checked_add(input_bytes))
-        .and_then(|value| value.checked_add(maximum_output_bytes))
-        .ok_or_else(|| resource("legacy_office_worker_memory", "address limit overflowed"))?;
-    let mut worker = WorkerChild::spawn(bundle, working_directory.path(), address_limit, context)?;
+    let worker_temporary = working_directory.path().join("requests");
+    std::fs::create_dir(&worker_temporary).map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    let address_limit = worker_address_limit(bundle, input_bytes, maximum_output_bytes, context)?;
+    let mut worker = WorkerChild::spawn(
+        bundle,
+        working_directory.path(),
+        &worker_temporary,
+        address_limit,
+        context,
+    )?;
+    let maximum_temporary_entries = worker_temporary_entry_limit(bundle)?;
     let input: Arc<[u8]> = Arc::from(bytes);
     let io = WorkerIo::spawn(&mut worker, input, source_format, maximum_output_bytes)?;
     let result = wait_for_reply(
         &mut worker,
         &io.writes,
         &io.replies,
-        working_directory.path(),
+        &worker_temporary,
         temporary_plan,
+        maximum_temporary_entries,
         context,
     );
     let status = if result.is_err() {
         worker.terminate();
         Ok(())
     } else {
-        wait_for_exit(&mut worker, working_directory.path(), temporary_plan, context)
+        wait_for_exit(
+            &mut worker,
+            &worker_temporary,
+            temporary_plan,
+            maximum_temporary_entries,
+            context,
+        )
     };
     if status.is_err() {
         worker.terminate();
@@ -116,6 +127,9 @@ fn convert_verified(
         .map_err(|_| resource("max_memory_bytes", "normalized package size overflowed"))?;
     output_memory.shrink(maximum_output_bytes.saturating_sub(used))?;
     drop(audit_memory);
+    // The worker owns the immutable runtime snapshot. Reap it and let the
+    // snapshot restore directory owner-write before TempDir removal.
+    drop(worker);
     drop(temporary);
     drop(working_directory);
     Ok(NormalizedPackage {
@@ -126,12 +140,34 @@ fn convert_verified(
     })
 }
 
+fn worker_address_limit(
+    bundle: &VerifiedBundle,
+    input_bytes: u64,
+    output_bytes: u64,
+    context: &ExecutionContext,
+) -> Result<u64, ConversionError> {
+    bundle
+        .address_space_overhead
+        .checked_add(context.available_memory_bytes())
+        .and_then(|value| value.checked_add(input_bytes))
+        .and_then(|value| value.checked_add(output_bytes))
+        .ok_or_else(|| resource("legacy_office_worker_memory", "address limit overflowed"))
+}
+
+fn worker_temporary_entry_limit(bundle: &VerifiedBundle) -> Result<u32, ConversionError> {
+    u32::try_from(bundle.runtime_files.len())
+        .ok()
+        .and_then(|value| value.checked_add(MAX_WORKER_TEMP_ENTRIES))
+        .ok_or_else(|| resource("legacy_office_worker_temporary", "entry plan overflowed"))
+}
+
 fn wait_for_reply(
     worker: &mut WorkerChild,
     writes: &mpsc::Receiver<Result<(), ()>>,
     replies: &mpsc::Receiver<Result<ReplyEvent, ()>>,
     temporary_root: &std::path::Path,
     maximum_temporary_bytes: u64,
+    maximum_temporary_entries: u32,
     context: &ExecutionContext,
 ) -> Result<WorkerReply, ConversionError> {
     let mut write_finished = false;
@@ -143,7 +179,7 @@ fn wait_for_reply(
             match writes.try_recv() {
                 Ok(Ok(())) => write_finished = true,
                 Ok(Err(())) | Err(mpsc::TryRecvError::Disconnected) => {
-                    return Err(unavailable("workerProtocol"));
+                    return worker_protocol_or_exit(worker);
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
@@ -159,9 +195,9 @@ fn wait_for_reply(
                 Ok(Ok(ReplyEvent::Eof)) if reply.is_some() && !response_eof => {
                     response_eof = true;
                 }
-                Ok(Ok(ReplyEvent::Eof)) => return Err(unavailable("workerProtocol")),
+                Ok(Ok(ReplyEvent::Eof)) => return worker_protocol_or_exit(worker),
                 Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(unavailable("workerProtocol"));
+                    return worker_protocol_or_exit(worker);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -177,7 +213,13 @@ fn wait_for_reply(
         {
             return Err(unavailable("workerProtocol"));
         }
-        check_worker_temporary(temporary_root, maximum_temporary_bytes, context)?;
+        check_worker_temporary(
+            temporary_root,
+            maximum_temporary_bytes,
+            maximum_temporary_entries,
+            context,
+        )?;
+        worker.enforce_memory_limit()?;
         if let Err(error) = context.checkpoint() {
             worker.terminate();
             return Err(error);
@@ -189,14 +231,34 @@ fn wait_for_reply(
     }
 }
 
+fn worker_protocol_or_exit(worker: &mut WorkerChild) -> Result<WorkerReply, ConversionError> {
+    for _ in 0..50 {
+        if worker.has_exited()? {
+            if worker.exited_successfully() {
+                return Err(unavailable("workerProtocol"));
+            }
+            return Err(unavailable(worker.failure_detail()));
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Err(unavailable("workerProtocol"))
+}
+
 fn wait_for_exit(
     worker: &mut WorkerChild,
     temporary_root: &std::path::Path,
     maximum_temporary_bytes: u64,
+    maximum_temporary_entries: u32,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     loop {
-        check_worker_temporary(temporary_root, maximum_temporary_bytes, context)?;
+        check_worker_temporary(
+            temporary_root,
+            maximum_temporary_bytes,
+            maximum_temporary_entries,
+            context,
+        )?;
+        worker.enforce_memory_limit()?;
         if worker.has_exited()? {
             return worker.wait(context);
         }
@@ -208,10 +270,11 @@ fn wait_for_exit(
 fn check_worker_temporary(
     root: &std::path::Path,
     maximum_bytes: u64,
+    maximum_entries: u32,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     let mut state = TemporaryUsage { bytes: 0, entries: 0 };
-    scan_temporary(root, 0, maximum_bytes, &mut state, context)
+    scan_temporary(root, 0, maximum_bytes, maximum_entries, &mut state, context)
 }
 
 struct TemporaryUsage {
@@ -223,6 +286,7 @@ fn scan_temporary(
     directory: &std::path::Path,
     depth: u16,
     maximum_bytes: u64,
+    maximum_entries: u32,
     state: &mut TemporaryUsage,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
@@ -232,15 +296,18 @@ fn scan_temporary(
             "worker temporary directory nesting exceeded",
         ));
     }
-    let entries =
-        std::fs::read_dir(directory).map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if depth > 0 && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(unavailable("workerTemporaryDirectory")),
+    };
     for entry in entries {
         context.checkpoint()?;
         let entry = entry.map_err(|_| unavailable("workerTemporaryDirectory"))?;
         state.entries = state.entries.checked_add(1).ok_or_else(|| {
             resource("legacy_office_worker_temporary", "worker temporary entry count overflowed")
         })?;
-        if state.entries > MAX_WORKER_TEMP_ENTRIES {
+        if state.entries > maximum_entries {
             return Err(resource(
                 "legacy_office_worker_temporary",
                 "worker temporary entry limit exceeded",
@@ -256,7 +323,14 @@ fn scan_temporary(
             return Err(unavailable("workerTemporaryOutput"));
         }
         if metadata.is_dir() {
-            scan_temporary(&path, depth.saturating_add(1), maximum_bytes, state, context)?;
+            scan_temporary(
+                &path,
+                depth.saturating_add(1),
+                maximum_bytes,
+                maximum_entries,
+                state,
+                context,
+            )?;
         } else if metadata.is_file() {
             state.bytes = state.bytes.checked_add(metadata.len()).ok_or_else(|| {
                 resource("legacy_office_worker_temporary", "worker temporary bytes overflowed")
@@ -313,7 +387,7 @@ impl WorkerIo {
                 write_sender.send(result).map_err(|_| ())?;
                 result
             })
-            .map_err(|_| unavailable("workerLaunch"))?;
+            .map_err(|_| unavailable("workerInputThread"))?;
         let (read_sender, replies) = mpsc::sync_channel(2);
         let Ok(output_thread) = std::thread::Builder::new()
             .name("into-md-legacy-office-output".into())
@@ -334,7 +408,7 @@ impl WorkerIo {
         else {
             worker.terminate();
             let _ = join_one(input_thread);
-            return Err(unavailable("workerLaunch"));
+            return Err(unavailable("workerOutputThread"));
         };
         let stderr_bytes = Arc::new(Mutex::new(Vec::new()));
         let stderr_reader = match spawn_stderr_reader(stderr, Arc::clone(&stderr_bytes)) {
@@ -396,7 +470,7 @@ fn spawn_stderr_reader_with_hook(
                 bytes.extend_from_slice(&buffer[..count.min(remaining)]);
             }
         })
-        .map_err(|_| unavailable("workerLaunch"))
+        .map_err(|_| unavailable("workerStderrThread"))
 }
 
 fn expected_output(source: InputFormat) -> Result<NormalizedFormat, ConversionError> {

@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+mod container;
 mod dependencies;
 mod paths;
 mod schema;
@@ -100,10 +101,19 @@ pub(crate) struct VerifiedBundle {
     pub address_space_overhead: u64,
     pub file_size_limit: u64,
     pub open_file_limit: u32,
+    pub process_limit: u32,
     pub system_read_paths: Vec<PathBuf>,
+    pub container: Option<VerifiedContainer>,
     #[cfg(windows)]
     pub app_container: AppContainerAuthority,
     pub _memory: ResourceReservation,
+}
+
+#[derive(Clone)]
+pub(crate) struct VerifiedContainer {
+    pub image_relative: String,
+    pub mount_relative: String,
+    pub kit_sha256: String,
 }
 
 #[derive(Clone)]
@@ -148,10 +158,13 @@ pub(crate) fn verify(
     validate_target(target, target_name)?;
     let mut inventory = validate_files(target, &root, &authority_path, context)?;
     let kit_library = checked_join(&root, &target.kit_library)?;
-    validate_abi(&kit_library, &target.abi, context)?;
-    dependencies::validate(target, target_name, &root, context)?;
     let install_root = checked_join(&root, &target.install_root)?;
-    let install_root = explicit_directory(&install_root).map_err(|_| unavailable("installRoot"))?;
+    let container = container::verified(target)?;
+    if container.is_none() {
+        validate_abi(&kit_library, &target.abi, context)?;
+        dependencies::validate(target, target_name, &root, context)?;
+        explicit_directory(&install_root).map_err(|_| unavailable("installRoot"))?;
+    }
     let system_read_paths = target
         .sandbox
         .system_libraries
@@ -189,7 +202,9 @@ pub(crate) fn verify(
         address_space_overhead: target.limits.address_space_overhead_bytes,
         file_size_limit: target.limits.file_size_limit_bytes,
         open_file_limit: target.limits.open_file_limit,
+        process_limit: target.limits.process_limit,
         system_read_paths,
+        container,
         #[cfg(windows)]
         app_container: target
             .sandbox
@@ -260,10 +275,17 @@ fn validate_files(
             FileRole::Runtime | FileRole::Configuration => {}
         }
     }
-    if worker_roles != 1 || kit_roles != 1 || total == 0 {
+    let container = target.container.is_some();
+    if worker_roles != 1
+        || (!container && kit_roles != 1)
+        || (container && kit_roles != 0)
+        || total == 0
+    {
         return Err(unavailable("fileInventory"));
     }
-    validate_inventory_complete(root, authority_path, &paths, context)?;
+    if target.container.is_none() {
+        validate_inventory_complete(root, authority_path, &paths, context)?;
+    }
     let mut license_ids = BTreeSet::new();
     let mut license_paths = BTreeSet::new();
     for license in &target.licenses {
@@ -281,13 +303,17 @@ fn validate_files(
     if license_paths.len() != license_files.len() {
         return Err(unavailable("licenseInventory"));
     }
-    let kit_hash = target
-        .files
-        .iter()
-        .find(|entry| entry.path == target.kit_library)
-        .ok_or_else(|| unavailable("fileInventory"))?
-        .sha256
-        .clone();
+    let kit_hash = if let Some(container) = &target.container {
+        container.kit_sha256.clone()
+    } else {
+        target
+            .files
+            .iter()
+            .find(|entry| entry.path == target.kit_library)
+            .ok_or_else(|| unavailable("fileInventory"))?
+            .sha256
+            .clone()
+    };
     let worker = target
         .files
         .iter()
@@ -348,9 +374,7 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         || target.limits.address_space_overhead_bytes < 256 * 1024 * 1024
         || target.limits.file_size_limit_bytes == 0
         || !(16..=4_096).contains(&target.limits.open_file_limit)
-        || target.limits.process_limit != 1
-        || target.sandbox.network != "deny"
-        || target.sandbox.child_processes != "deny"
+        || !valid_process_authority(target, target_name)
         || !valid_app_container_authority(target, target_name)
         || target.sandbox.system_libraries.len() > 128
         || target.sandbox.system_libraries.iter().collect::<BTreeSet<_>>().len()
@@ -361,11 +385,56 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
         || target.abi.library_identity.len() > MAX_PATH_BYTES
         || target.abi.required_export != "libreofficekit_hook_2"
         || !abi_matches_target(&target.abi, target_name)
+        || !container_authority_is_valid(target, target_name)
     {
         return Err(unavailable("targetAuthority"));
     }
     Ok(())
 }
+
+fn valid_process_authority(target: &Target, target_name: &str) -> bool {
+    if target_name == "aarch64-apple-darwin" && target.container.is_some() {
+        let Some(child) = &target.sandbox.compatibility_child else {
+            return false;
+        };
+        return target.limits.process_limit == 2
+            && target.sandbox.network == "denyIp"
+            && target.sandbox.child_processes == "exactCompatibilityChild"
+            && child.maximum_instances == 1
+            && child.local_ip == "deny"
+            && child.local_ipc == "exactEffectiveUidSessionUnixSocketOnly"
+            && child.executable == "container/LibreOffice.app/Contents/MacOS/soffice";
+    }
+    target.limits.process_limit == 1
+        && target.sandbox.network == "deny"
+        && target.sandbox.child_processes == "deny"
+        && target.sandbox.compatibility_child.is_none()
+}
+
+fn container_authority_is_valid(target: &Target, target_name: &str) -> bool {
+    let Some(container) = &target.container else {
+        return true;
+    };
+    target_name == "aarch64-apple-darwin"
+        && container.format == "udif"
+        && container.image_bytes == target.artifact_bytes
+        && container.image_sha256 == target.artifact_sha256
+        && is_sha256(&container.image_sha256)
+        && is_sha256(&container.kit_sha256)
+        && safe_relative(&container.image_path)
+        && safe_relative(&container.mount_path)
+        && Path::new(&target.install_root).starts_with(&container.mount_path)
+        && Path::new(&target.kit_library).starts_with(&container.mount_path)
+        && target.files.iter().any(|file| {
+            file.path == container.image_path
+                && file.bytes == container.image_bytes
+                && file.sha256 == container.image_sha256
+                && file.role == FileRole::Runtime
+        })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) use container::validate_mounted;
 
 const FORBIDDEN_WINDOWS_CAPABILITIES: [&str; 10] = [
     "documentsLibrary",

@@ -645,7 +645,7 @@ fn schemas_reject_unknown_fields_and_unfixed_hashes() {
     projection.files[0].sha256 = "A".repeat(64);
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("lacks fixed size or SHA-256")));
+    assert!(errors.iter().any(|error| error.contains("lacks a fixed SHA-256")));
 }
 
 #[test]

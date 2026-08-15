@@ -1440,7 +1440,7 @@ fn validate_inventory(
     for required in [
         "pdfium",
         "ffmpeg",
-        "libreoffice",
+        "libreoffice-macos-arm64",
         "wasmtime",
         "generated-onnx-models",
         "distribution-fonts",
@@ -3937,7 +3937,7 @@ mod tests {
         let mut components = [
             "pdfium",
             "ffmpeg",
-            "libreoffice",
+            "libreoffice-macos-arm64",
             "wasmtime",
             "generated-onnx-models",
             "distribution-fonts",

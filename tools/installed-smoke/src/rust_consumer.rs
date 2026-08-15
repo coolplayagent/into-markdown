@@ -90,6 +90,7 @@ fn compile_and_run(
         ("CARGO_TARGET_DIR".into(), target.display().to_string()),
         ("RUSTC".into(), request.rustc.display().to_string()),
     ]));
+    configure_macos_linker(&mut environment)?;
     let invocation_root = filesystem_root(&home)?;
     validate_installed_metadata(request, &invocation_root, &home, &environment, executor)?;
     let manifest = consumer.join("Cargo.toml").display().to_string();
@@ -119,7 +120,13 @@ fn compile_and_run(
             cancel_file: request.cancel_file.as_deref(),
         })?;
         if output.exit_code != Some(0) {
-            return Err("offline external consumer compilation failed".into());
+            let diagnostics = String::from_utf8_lossy(&output.stderr);
+            let tail = diagnostics.char_indices().rev().nth(180).map_or(0, |(index, _)| index);
+            return Err(format!(
+                "offline external consumer compilation failed (exit {:?}): {}",
+                output.exit_code,
+                diagnostics[tail..].trim()
+            ));
         }
     }
     let executable = target
@@ -147,6 +154,22 @@ fn compile_and_run(
     } else {
         Err("external consumer DTO contract failed".into())
     }
+}
+
+fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<(), String> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        let linker = Path::new("/usr/bin/clang")
+            .canonicalize()
+            .map_err(|_| "fixed macOS linker is unavailable".to_owned())?;
+        if !linker.is_file() {
+            return Err("fixed macOS linker is not a regular file".into());
+        }
+        environment.insert(
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER".into(),
+            linker.display().to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_installed_metadata(

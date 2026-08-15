@@ -1,4 +1,5 @@
 exports_files([
     "README.md",
     "authority.schema.json",
+    "macos-arm64-manifest.json",
 ])

@@ -111,6 +111,9 @@ fn covers_component(
     if component.id == "onnxruntime-cpu" {
         return exact_native_bundle(repository, projection, component, errors);
     }
+    if component.id == "libreoffice-macos-arm64" {
+        return exact_libreoffice_bundle(repository, projection, component, errors);
+    }
     let authority_path = match component.id.as_str() {
         "imageproc-contour-adaptation" => "third_party/licenses/imageproc-MIT.txt",
         "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
@@ -130,6 +133,32 @@ fn covers_component(
             && item.component_ids.iter().any(|id| id == &component.id)
             && item.contents.as_deref() == Some(expected.as_str())
             && declared == terms
+    })
+}
+
+fn exact_libreoffice_bundle(
+    repository: &Path,
+    projection: &ArchiveProjection,
+    component: &Component,
+    errors: &mut Vec<String>,
+) -> bool {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(repository.join("third_party/legacy-office/macos-arm64-manifest.json"))
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    if projection.target != "aarch64-apple-darwin" {
+        errors.push("LibreOffice runtime is release-eligible only for macOS ARM64".to_owned());
+        return false;
+    }
+    projection.license_materials.iter().any(|item| {
+        item.kind == LicenseMaterialKind::NoticeBundle
+            && item.component_ids == [component.id.as_str()]
+            && manifest.get("artifact_bytes").and_then(serde_json::Value::as_u64)
+                == Some(item.bytes)
+            && manifest.get("artifact_sha256").and_then(serde_json::Value::as_str)
+                == Some(item.sha256.as_str())
+            && item.contents.is_none()
     })
 }
 

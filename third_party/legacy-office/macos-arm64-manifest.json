@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-apple-darwin",
+  "version": "26.2.5",
+  "artifact_url": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
+  "artifact_bytes": 297407265,
+  "artifact_sha256": "c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad",
+  "artifact_signature_url": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg.asc",
+  "product": "LibreOffice",
+  "runtime_root": "bin/legacy-office-runtime",
+  "application_root": "LibreOffice.app/Contents",
+  "kit_library": "LibreOffice.app/Contents/Frameworks/libmergedlo.dylib",
+  "required_export": "libreofficekit_hook_2",
+  "binary_format": "mach-o",
+  "architecture": "aarch64",
+  "license": "MPL-2.0"
+}

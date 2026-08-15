@@ -207,6 +207,7 @@ pub(super) struct ShapeStyle {
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct PlaceholderKey {
     pub(super) index: u32,
+    pub(super) class: PlaceholderClass,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]

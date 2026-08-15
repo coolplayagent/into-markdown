@@ -182,12 +182,33 @@ fn system_file(path: &Path) -> Result<(), ()> {
     const DYLD_CACHE_IDENTITIES: &[&str] = &[
         "/usr/lib/libSystem.B.dylib",
         "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libexslt.0.dylib",
         "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libicucore.A.dylib",
         "/usr/lib/libobjc.A.dylib",
+        "/usr/lib/libresolv.9.dylib",
         "/usr/lib/libsandbox.1.dylib",
+        "/usr/lib/libxml2.2.dylib",
+        "/usr/lib/libxslt.1.dylib",
+        "/usr/lib/libz.1.dylib",
+        "/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
         "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+        "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+        "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
         "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+        "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+        "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+        "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
         "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+        "/System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO",
+        "/System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos",
+        "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+        "/System/Library/Frameworks/OpenCL.framework/Versions/A/OpenCL",
+        "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
     ];
     let value = path.to_str().ok_or(())?;
     DYLD_CACHE_IDENTITIES.contains(&value).then_some(()).ok_or(())
@@ -200,8 +221,6 @@ fn system_file(path: &Path) -> Result<(), ()> {
 
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -209,7 +228,7 @@ pub(crate) fn install(policy: &Policy) -> Result<(), ()> {
     #[cfg(target_os = "linux")]
     return linux::install(policy);
     #[cfg(target_os = "macos")]
-    return macos::install(policy);
+    return install_unix_limits(policy);
     #[cfg(windows)]
     return windows::install(policy);
     #[allow(unreachable_code)]
@@ -218,6 +237,7 @@ pub(crate) fn install(policy: &Policy) -> Result<(), ()> {
 
 #[cfg(unix)]
 fn install_unix_limits(policy: &Policy) -> Result<(), ()> {
+    #[cfg(not(target_os = "macos"))]
     set_limit(libc::RLIMIT_AS, policy.address_limit)?;
     set_limit(libc::RLIMIT_FSIZE, policy.file_limit)?;
     set_limit(libc::RLIMIT_NOFILE, u64::from(policy.open_file_limit))?;

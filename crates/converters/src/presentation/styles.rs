@@ -144,7 +144,7 @@ pub(super) fn layout_styles_from_shapes(
                 limit("max_memory_bytes", format!("cannot reserve placeholder style: {error}"))
             })?;
             result.push((
-                PlaceholderKey { index: shape.placeholder_index },
+                PlaceholderKey { index: shape.placeholder_index, class },
                 ShapeStyle {
                     geometry: Some(shape.geometry),
                     pending_groups: shape.pending_groups,
@@ -356,7 +356,7 @@ pub(super) fn parse_master_text_styles(
             Event::End(element) => {
                 let qualified_name = element.name();
                 let local_name = local(qualified_name.as_ref());
-                if level_paragraph(local_name.as_bytes()).is_some() {
+                if section.is_some() && level_paragraph(local_name.as_bytes()).is_some() {
                     levels.try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve master level: {error}"))
                     })?;
@@ -596,7 +596,10 @@ pub(super) fn apply_inheritance(
         if shape.placeholder.is_none() {
             continue;
         }
-        let key = PlaceholderKey { index: shape.placeholder_index };
+        let key = PlaceholderKey {
+            index: shape.placeholder_index,
+            class: placeholder_class(shape.placeholder.as_deref().unwrap_or_default()),
+        };
         let layout_style = placeholder_style(layout, &key);
         let master_style = layout_style.and_then(|style| master_style(master, style.class));
         if let Some(geometry) = layout_style.and_then(|style| style.geometry) {

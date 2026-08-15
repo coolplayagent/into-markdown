@@ -41,6 +41,42 @@ pub(crate) fn validate(
             errors,
         );
     }
+    if components.iter().any(|id| id == "libreoffice-macos-arm64") {
+        validate_libreoffice(repository, target, files, errors);
+    }
+}
+
+fn validate_libreoffice(
+    repository: &Path,
+    target: &str,
+    files: &[ArchiveFile],
+    errors: &mut Vec<String>,
+) {
+    let path = repository.join("third_party/legacy-office/macos-arm64-manifest.json");
+    let Some(manifest) = read_json(&path, errors) else { return };
+    if target != "aarch64-apple-darwin"
+        || manifest.get("target").and_then(Value::as_str) != Some(target)
+        || manifest.get("artifact_bytes").and_then(Value::as_u64) != Some(297_407_265)
+        || manifest.get("artifact_sha256").and_then(Value::as_str)
+            != Some("c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad")
+    {
+        errors.push("LibreOffice macOS artifact authority is invalid".to_owned());
+    }
+    let owned: Vec<_> = files
+        .iter()
+        .filter(|file| file.component_id.as_deref() == Some("libreoffice-macos-arm64"))
+        .collect();
+    if owned.is_empty()
+        || !owned.iter().any(|file| file.path == "bin/legacy-office-runtime/authority.json")
+        || owned.iter().any(|file| {
+            file.kind != ArchiveFileKind::Component
+                || !file.path.starts_with("bin/legacy-office-runtime/")
+        })
+    {
+        errors.push(
+            "LibreOffice runtime projection is absent or escapes its private root".to_owned(),
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -140,6 +176,29 @@ pub(crate) fn integrity(
             "download archive",
             "runtime library",
         ),
+        "libreoffice-macos-arm64" => {
+            let path = "third_party/legacy-office/macos-arm64-manifest.json";
+            let Some(manifest) = read_json(&repository.join(path), errors) else {
+                return Vec::new();
+            };
+            let digest =
+                manifest.get("artifact_sha256").and_then(Value::as_str).unwrap_or_default();
+            let bytes = fs::read(repository.join(path)).unwrap_or_default();
+            return vec![
+                IntegrityEvidence {
+                    algorithm: "SHA-256".to_owned(),
+                    digest: digest.to_owned(),
+                    subject: "libreoffice-macos-arm64 official DMG".to_owned(),
+                    target: Some(target.to_owned()),
+                },
+                IntegrityEvidence {
+                    algorithm: "SHA-256".to_owned(),
+                    digest: format!("{:x}", Sha256::digest(bytes)),
+                    subject: format!("authority file {path}"),
+                    target: Some(target.to_owned()),
+                },
+            ];
+        }
         "pdfium" => (
             "third_party/pdfium/manifest.json",
             "archive_sha256",

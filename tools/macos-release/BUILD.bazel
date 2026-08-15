@@ -1,0 +1,50 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
+py_library(
+    name = "library",
+    srcs = [
+        "acquire.py",
+        "archive.py",
+        "audit.py",
+        "common.py",
+        "legacy_authority.py",
+        "rust_package.py",
+    ],
+    imports = ["."],
+    visibility = ["//visibility:private"],
+)
+
+py_binary(
+    name = "release",
+    srcs = ["release.py"],
+    data = glob(["fixtures/*"]) + [
+        "authority.json",
+        "install",
+        "uninstall",
+    ],
+    deps = [":library"],
+)
+
+py_test(
+    name = "archive_test",
+    srcs = ["archive_test.py"],
+    deps = [":library"],
+)
+
+py_test(
+    name = "audit_test",
+    srcs = ["audit_test.py"],
+    deps = [":library"],
+)
+
+py_test(
+    name = "installer_attack_test",
+    srcs = ["installer_attack_test.py"],
+    data = ["install"],
+)
+
+exports_files([
+    "authority.json",
+    "install",
+    "uninstall",
+])

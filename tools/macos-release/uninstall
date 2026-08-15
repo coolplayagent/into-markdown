@@ -1,0 +1,81 @@
+#!/bin/sh
+set -eu
+
+fail() { printf '%s\n' "into-md uninstall: $*" >&2; exit 1; }
+uid=$(/usr/bin/id -u)
+check_directory() {
+  path=$1
+  test "$(/usr/bin/stat -f %HT -- "$path" 2>/dev/null)" = Directory || fail "unsafe directory: $path"
+  owner=$(/usr/bin/stat -f %u -- "$path")
+  test "$owner" = "$uid" || test "$owner" = 0 || fail "directory has an unexpected owner: $path"
+}
+check_absent_or_type() {
+  path=$1 expected=$2
+  if test -e "$path" || test -L "$path"; then
+    test "$(/usr/bin/stat -f %HT -- "$path" 2>/dev/null)" = "$expected" \
+      || fail "unsafe existing path: $path"
+    test "$(/usr/bin/stat -f %u -- "$path")" = "$uid" || fail "path has an unexpected owner: $path"
+  fi
+}
+prefix=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/into-markdown}
+bin_dir=${2:-${XDG_BIN_HOME:-$HOME/.local/bin}}
+case $prefix in /*) ;; *) fail "installation prefix must be absolute";; esac
+case $bin_dir in /*) ;; *) fail "command directory must be absolute";; esac
+case $prefix:$bin_dir in *'/../'*|*/..) fail "installation paths contain traversal";; esac
+newline='
+'
+case $prefix:$bin_dir in *"$newline"*) fail "installation paths contain a newline";; esac
+lock=$prefix/.install-lock
+check_directory "$(dirname -- "$prefix")"
+check_directory "$(dirname -- "$bin_dir")"
+check_absent_or_type "$prefix" Directory
+mkdir -p "$prefix"
+check_directory "$prefix"
+check_absent_or_type "$lock" Directory
+mkdir "$lock" 2>/dev/null || fail "another install or uninstall is active"
+check_directory "$lock"
+cleanup() { rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT HUP INT TERM
+
+check_absent_or_type "$prefix/current" "Symbolic Link"
+check_absent_or_type "$prefix/versions" Directory
+check_absent_or_type "$bin_dir/into-md" "Symbolic Link"
+if test -L "$prefix/current"; then
+  current=$(readlink "$prefix/current")
+  identity=${current#versions/}
+  case $current:$identity in versions/*:????????????????????????????????????????????????????????????????) ;; *) fail "current link is not installer-owned";; esac
+  case $identity in *[!0-9a-f]*) fail "current link is not installer-owned";; esac
+fi
+if test -d "$prefix/versions"; then
+  for version in "$prefix/versions"/*; do
+    test -e "$version" || test -L "$version" || continue
+    test "$(/usr/bin/stat -f %HT -- "$version" 2>/dev/null)" = Directory \
+      || fail "versions contains an unsafe entry"
+    test "$(/usr/bin/stat -f %u -- "$version")" = "$uid" \
+      || fail "versions contains an unowned directory"
+    identity=${version##*/}
+    test ${#identity} -eq 64 || fail "versions contains an unowned directory"
+    case $identity in *[!0-9a-f]*) fail "versions contains an unowned directory";; esac
+  done
+  for version in "$prefix/versions"/*; do
+    test -e "$version" || test -L "$version" || continue
+    test "$(/usr/bin/stat -f %HT -- "$version" 2>/dev/null)" = Directory \
+      || fail "versions contains an unsafe entry"
+    chmod -R u+w "$version" || fail "cannot make installed version removable"
+  done
+fi
+if test -L "$bin_dir/into-md"; then
+  target=$(readlink "$bin_dir/into-md")
+  case $target in "$prefix"/current/bin/into-md) rm "$bin_dir/into-md";; esac
+fi
+if test -L "$prefix/current"; then
+  rm "$prefix/current"
+fi
+if test -d "$prefix/versions"; then
+  for version in "$prefix/versions"/*; do
+    test -d "$version" || continue
+    rm -R -- "$version"
+  done
+  rmdir "$prefix/versions" 2>/dev/null || true
+fi
+printf '%s\n' "into-md removed"

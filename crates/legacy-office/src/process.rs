@@ -10,6 +10,8 @@ use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt as _;
+#[cfg(target_os = "macos")]
+mod macos_container;
 #[cfg(unix)]
 mod unix;
 
@@ -59,7 +61,13 @@ pub(crate) struct WorkerChild {
     #[cfg(windows)]
     child: windows::Child,
     _runtime_tree: Option<crate::snapshot::VerifiedTree>,
+    #[cfg(target_os = "macos")]
+    container: Option<macos_container::MountedContainer>,
+    #[cfg(target_os = "macos")]
+    ipc_socket: std::path::PathBuf,
     status: Option<WorkerStatus>,
+    memory_limit: u64,
+    process_limit: u32,
 }
 
 #[cfg(unix)]
@@ -84,16 +92,17 @@ impl WorkerChild {
     pub(crate) fn spawn(
         bundle: &VerifiedBundle,
         working_directory: &Path,
+        temporary_root: &Path,
         address_limit: u64,
         context: &ExecutionContext,
     ) -> Result<Self, ConversionError> {
-        if !working_directory.is_absolute() || !working_directory.is_dir() {
-            return Err(unavailable("workerTemporaryDirectory"));
-        }
-        let working_directory = working_directory
-            .canonicalize()
-            .map_err(|_| unavailable("workerTemporaryDirectory"))?;
-        let runtime_tree = crate::snapshot::copy_tree(
+        let (working_directory, temporary_root) =
+            canonical_working_roots(working_directory, temporary_root)?;
+        #[cfg(unix)]
+        unix::ensure_descriptor_budget(bundle.runtime_files.len())?;
+        #[cfg(unix)]
+        let prepared = unix::Prepared::new().map_err(|error| unix::map_spawn_error(&error))?;
+        let mut runtime_tree = crate::snapshot::copy_tree(
             &bundle.runtime_files,
             &working_directory.join(".runtime"),
             context,
@@ -123,55 +132,51 @@ impl WorkerChild {
             .path(worker_relative)
             .ok_or_else(|| unavailable("workerIdentity"))?
             .to_owned();
-        let kit_library = runtime_tree
-            .path(kit_relative)
-            .ok_or_else(|| unavailable("workerIdentity"))?
-            .to_owned();
+        #[cfg(target_os = "macos")]
+        let container = if let Some(authority) = &bundle.container {
+            let mount = runtime_tree.create_mountpoint(&authority.mount_relative)?;
+            let image = runtime_tree
+                .path(&authority.image_relative)
+                .ok_or_else(|| unavailable("containerIdentity"))?;
+            Some(macos_container::MountedContainer::attach(image, &mount)?)
+        } else {
+            None
+        };
+        let kit_library = runtime_root.join(kit_relative);
         let install_root = runtime_root.join(install_relative);
         if !install_root.is_dir() {
             return Err(unavailable("workerIdentity"));
         }
-        let mut arguments = vec![
-            OsString::from("--runtime-root"),
-            runtime_root.as_os_str().to_owned(),
-            OsString::from("--worker-original"),
-            worker_original.as_os_str().to_owned(),
-            OsString::from("--worker-sha256"),
-            OsString::from(&bundle.worker_sha256),
-            OsString::from("--install-root"),
-            install_root.as_os_str().to_owned(),
-            OsString::from("--kit-library"),
-            kit_library.as_os_str().to_owned(),
-            OsString::from("--kit-sha256"),
-            OsString::from(&bundle.kit_sha256),
-            OsString::from("--authority-sha256"),
-            OsString::from(&bundle.authority_sha256),
-            OsString::from("--temporary-root"),
-            working_directory.as_os_str().to_owned(),
-            OsString::from("--address-limit"),
-            OsString::from(address_limit.to_string()),
-            OsString::from("--file-limit"),
-            OsString::from(bundle.file_size_limit.to_string()),
-            OsString::from("--open-file-limit"),
-            OsString::from(bundle.open_file_limit.to_string()),
-        ];
-        for path in &bundle.system_read_paths {
-            arguments.push(OsString::from("--system-read"));
-            arguments.push(path.as_os_str().to_owned());
-        }
-        #[cfg(windows)]
-        {
-            arguments.push(OsString::from("--app-container-sid"));
-            arguments.push(OsString::from(&bundle.app_container.sid));
-        }
-        #[cfg(unix)]
-        return spawn_platform(
-            &executable_path,
-            &arguments,
-            &working_directory,
+        #[cfg(target_os = "macos")]
+        validate_macos_bundle(bundle, &runtime_root, &kit_library, &install_root, context)?;
+        let arguments = worker_arguments(
+            bundle,
+            &runtime_root,
+            &worker_original,
+            &install_root,
+            &kit_library,
+            &temporary_root,
             address_limit,
-            Some(runtime_tree),
         );
+        #[cfg(target_os = "macos")]
+        let ipc_socket = macos_ipc_socket(&temporary_root)?;
+        #[cfg(unix)]
+        {
+            let child = prepared
+                .spawn(&executable_path, &arguments, &working_directory)
+                .map_err(|error| unix::map_spawn_error(&error))?;
+            return Ok(Self {
+                child,
+                _runtime_tree: Some(runtime_tree),
+                #[cfg(target_os = "macos")]
+                container,
+                #[cfg(target_os = "macos")]
+                ipc_socket,
+                status: None,
+                memory_limit: address_limit,
+                process_limit: bundle.process_limit,
+            });
+        }
         #[cfg(windows)]
         return windows::spawn(
             &executable_path,
@@ -180,7 +185,13 @@ impl WorkerChild {
             address_limit,
             &bundle.app_container,
         )
-        .map(|child| Self { child, _runtime_tree: Some(runtime_tree), status: None });
+        .map(|child| Self {
+            child,
+            _runtime_tree: Some(runtime_tree),
+            status: None,
+            memory_limit: address_limit,
+            process_limit: bundle.process_limit,
+        });
         #[allow(unreachable_code)]
         Err(unavailable("unsupportedTarget"))
     }
@@ -202,6 +213,38 @@ impl WorkerChild {
             self.status = try_wait(&mut self.child)?;
         }
         Ok(self.status.is_some())
+    }
+
+    pub(crate) fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
+        #[cfg(target_os = "macos")]
+        {
+            let usage = match self.child.group_usage() {
+                Ok(usage) => usage,
+                Err(_) if self.has_exited()? => return Ok(()),
+                Err(_) => return Err(unavailable("workerMemory")),
+            };
+            if usage.processes > self.process_limit {
+                self.terminate();
+                return Err(ConversionError::ResourceLimit {
+                    limit: "legacy_office_worker_processes",
+                    detail: format!(
+                        "worker process group has {} members; limit is {}",
+                        usage.processes, self.process_limit
+                    ),
+                });
+            }
+            if usage.resident_bytes > self.memory_limit {
+                self.terminate();
+                return Err(ConversionError::ResourceLimit {
+                    limit: "legacy_office_worker_memory",
+                    detail: format!(
+                        "worker process-group physical footprint {} exceeds {} bytes",
+                        usage.resident_bytes, self.memory_limit
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn wait(&mut self, context: &ExecutionContext) -> Result<(), ConversionError> {
@@ -227,6 +270,10 @@ impl WorkerChild {
         }
     }
 
+    pub(crate) fn exited_successfully(&self) -> bool {
+        self.status.is_some_and(status_success)
+    }
+
     pub(crate) fn terminate(&mut self) {
         if self.status.is_some() {
             return;
@@ -236,23 +283,127 @@ impl WorkerChild {
     }
 }
 
+fn canonical_working_roots(
+    working_directory: &Path,
+    temporary_root: &Path,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), ConversionError> {
+    if !working_directory.is_absolute() || !working_directory.is_dir() {
+        return Err(unavailable("workerTemporaryDirectory"));
+    }
+    let working_directory =
+        working_directory.canonicalize().map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    let temporary_root =
+        temporary_root.canonicalize().map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    if !temporary_root.starts_with(&working_directory) {
+        return Err(unavailable("workerTemporaryDirectory"));
+    }
+    #[cfg(target_os = "macos")]
+    std::fs::create_dir(temporary_root.join("home"))
+        .map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    Ok((working_directory, temporary_root))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn worker_arguments(
+    bundle: &VerifiedBundle,
+    runtime_root: &Path,
+    worker_original: &Path,
+    install_root: &Path,
+    kit_library: &Path,
+    temporary_root: &Path,
+    address_limit: u64,
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--runtime-root"),
+        runtime_root.as_os_str().to_owned(),
+        OsString::from("--worker-original"),
+        worker_original.as_os_str().to_owned(),
+        OsString::from("--worker-sha256"),
+        OsString::from(&bundle.worker_sha256),
+        OsString::from("--install-root"),
+        install_root.as_os_str().to_owned(),
+        OsString::from("--kit-library"),
+        kit_library.as_os_str().to_owned(),
+        OsString::from("--kit-sha256"),
+        OsString::from(&bundle.kit_sha256),
+        OsString::from("--authority-sha256"),
+        OsString::from(&bundle.authority_sha256),
+        OsString::from("--temporary-root"),
+        temporary_root.as_os_str().to_owned(),
+        OsString::from("--address-limit"),
+        OsString::from(address_limit.to_string()),
+        OsString::from("--file-limit"),
+        OsString::from(bundle.file_size_limit.to_string()),
+        OsString::from("--open-file-limit"),
+        OsString::from(bundle.open_file_limit.to_string()),
+    ];
+    for path in &bundle.system_read_paths {
+        arguments.push(OsString::from("--system-read"));
+        arguments.push(path.as_os_str().to_owned());
+    }
+    #[cfg(windows)]
+    {
+        arguments.push(OsString::from("--app-container-sid"));
+        arguments.push(OsString::from(&bundle.app_container.sid));
+    }
+    arguments
+}
+
 impl Drop for WorkerChild {
     fn drop(&mut self) {
         self.terminate();
+        #[cfg(target_os = "macos")]
+        drop(self.container.take());
+        #[cfg(target_os = "macos")]
+        crate::native::macos_remove_office_ipc(&self.ipc_socket);
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+fn validate_macos_bundle(
+    bundle: &VerifiedBundle,
+    runtime_root: &Path,
+    kit_library: &Path,
+    install_root: &Path,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    crate::authority::validate_mounted(bundle, runtime_root, kit_library, install_root, context)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ipc_socket(temporary_root: &Path) -> Result<std::path::PathBuf, ConversionError> {
+    let path = crate::native::macos_office_ipc_path(&temporary_root.join("profile"));
+    if matches!(
+        std::fs::symlink_metadata(&path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        Ok(path)
+    } else {
+        Err(unavailable("legacyOfficeIpcCrosstalk"))
+    }
+}
+
+#[cfg(all(test, unix))]
 fn spawn_platform(
     executable: &Path,
     arguments: &[OsString],
     working_directory: &Path,
-    _address_limit: u64,
+    address_limit: u64,
     runtime_tree: Option<crate::snapshot::VerifiedTree>,
 ) -> Result<WorkerChild, ConversionError> {
     let child = unix::Child::spawn(executable, arguments, working_directory)
-        .map_err(|_| unavailable("workerLaunch"))?;
-    Ok(WorkerChild { child, _runtime_tree: runtime_tree, status: None })
+        .map_err(|error| unix::map_spawn_error(&error))?;
+    Ok(WorkerChild {
+        child,
+        _runtime_tree: runtime_tree,
+        #[cfg(target_os = "macos")]
+        container: None,
+        #[cfg(target_os = "macos")]
+        ipc_socket: std::path::PathBuf::from("/private/tmp/unused-test-ipc"),
+        status: None,
+        memory_limit: address_limit,
+        process_limit: 1,
+    })
 }
 
 #[cfg(unix)]
@@ -525,6 +676,12 @@ mod tests {
     use std::io::BufRead as _;
     use std::os::fd::AsRawFd as _;
 
+    #[test]
+    fn descriptor_budget_fails_before_snapshot_at_low_limit() {
+        assert!(!unix::descriptor_budget_fits(17_606, 12, 16_384));
+        assert!(unix::descriptor_budget_fits(17_606, 12, 61_440));
+    }
+
     fn shell(script: &str, directory: &Path) -> WorkerChild {
         let _ = directory;
         spawn_platform(
@@ -580,6 +737,39 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn process_group_accounting_includes_a_compatibility_child() {
+        let root = tempfile::tempdir().unwrap();
+        let mut worker = shell("/bin/sleep 5 & echo ready; wait", root.path());
+        let mut stdout = std::io::BufReader::new(worker.take_stdout().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        let usage = worker.child.group_usage().unwrap();
+        assert_eq!(usage.processes, 2);
+        assert!(usage.resident_bytes > 0);
+        worker.process_limit = 2;
+        worker.memory_limit = 1;
+        assert!(matches!(
+            worker.enforce_memory_limit(),
+            Err(ConversionError::ResourceLimit { limit: "legacy_office_worker_memory", .. })
+        ));
+        assert!(worker.has_exited().unwrap());
+
+        let mut worker = shell("/bin/sleep 5 & echo ready; wait", root.path());
+        let mut stdout = std::io::BufReader::new(worker.take_stdout().unwrap());
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        worker.process_limit = 1;
+        assert!(matches!(
+            worker.enforce_memory_limit(),
+            Err(ConversionError::ResourceLimit { limit: "legacy_office_worker_processes", .. })
+        ));
+        assert!(worker.has_exited().unwrap());
+    }
+
+    #[test]
     fn spawn_closes_non_cloexec_files_and_sockets_but_preserves_stdio() {
         let root = tempfile::tempdir().unwrap();
         let secret = std::fs::File::create(root.path().join("secret")).unwrap();
@@ -616,7 +806,7 @@ mod tests {
             assert!(matches!(
                 error,
                 ConversionError::ComponentUnavailable { ref detail, .. }
-                    if detail == "workerLaunch"
+                    if detail == "workerLaunchMissing"
             ));
         }
     }

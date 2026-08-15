@@ -1,0 +1,102 @@
+#!/bin/sh
+set -eu
+
+fail() { printf '%s\n' "into-md install: $*" >&2; exit 1; }
+uid=$(/usr/bin/id -u)
+
+check_directory() {
+  path=$1
+  test "$(/usr/bin/stat -f %HT -- "$path" 2>/dev/null)" = Directory || fail "unsafe directory: $path"
+  owner=$(/usr/bin/stat -f %u -- "$path")
+  mode=$(/usr/bin/stat -f %p -- "$path")
+  test "$owner" = "$uid" || test "$owner" = 0 || fail "directory has an unexpected owner: $path"
+  permissions=$((8#$mode))
+  if test $((permissions & 0022)) -ne 0; then
+    test "$owner" = 0 && test $((permissions & 01000)) -ne 0 \
+      || fail "directory is writable by another account: $path"
+  fi
+}
+
+check_chain() {
+  path=$1
+  while test "$path" != /; do
+    check_directory "$path"
+    path=${path%/*}
+    test -n "$path" || path=/
+  done
+  check_directory /
+}
+
+check_absent_or_type() {
+  path=$1 expected=$2
+  if test -e "$path" || test -L "$path"; then
+    test "$(/usr/bin/stat -f %HT -- "$path" 2>/dev/null)" = "$expected" \
+      || fail "unsafe existing path: $path"
+    test "$(/usr/bin/stat -f %u -- "$path")" = "$uid" || fail "path has an unexpected owner: $path"
+  fi
+}
+test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64 || fail "requires macOS ARM64"
+
+distribution=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+prefix=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/into-markdown}
+bin_dir=${2:-${XDG_BIN_HOME:-$HOME/.local/bin}}
+case $prefix in /*) ;; *) fail "installation prefix must be absolute";; esac
+case $bin_dir in /*) ;; *) fail "command directory must be absolute";; esac
+case $prefix:$bin_dir in *'/../'*|*/..) fail "installation paths contain traversal";; esac
+newline='
+'
+case $prefix:$bin_dir in *"$newline"*) fail "installation paths contain a newline";; esac
+
+archive_id=$(/usr/bin/shasum -a 256 "$distribution/archive-manifest.json" | awk '{print $1}')
+test ${#archive_id} -eq 64 || fail "release identity is invalid"
+"$distribution/bin/archive-check" "$distribution" || fail "distribution integrity check failed"
+versions=$prefix/versions
+destination=$versions/$archive_id
+lock=$prefix/.install-lock
+check_chain "$(dirname -- "$prefix")"
+check_chain "$(dirname -- "$bin_dir")"
+check_absent_or_type "$prefix" Directory
+check_absent_or_type "$bin_dir" Directory
+mkdir -p "$prefix" "$versions" "$bin_dir"
+check_chain "$prefix"
+check_chain "$versions"
+check_chain "$bin_dir"
+check_absent_or_type "$lock" Directory
+mkdir "$lock" 2>/dev/null || fail "another install or uninstall is active"
+check_chain "$lock"
+temporary=$versions/.install-$archive_id-$$
+cleanup() { rm -rf "$temporary"; rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT HUP INT TERM
+
+check_absent_or_type "$destination" Directory
+if test -d "$destination"; then
+  "$destination/bin/archive-check" "$destination" || fail "existing installed copy failed integrity check"
+else
+  mkdir "$temporary"
+  check_chain "$temporary"
+  /usr/bin/ditto --noqtn "$distribution" "$temporary"
+  find "$temporary" -type l -o ! -type d ! -type f | grep . >/dev/null && fail "distribution contains an unsafe file type"
+  "$temporary/bin/archive-check" "$temporary" || fail "installed copy integrity check failed"
+  chmod -R a-w "$temporary"
+  mv "$temporary" "$destination"
+fi
+
+check_absent_or_type "$prefix/current" "Symbolic Link"
+if test -L "$prefix/current"; then
+  current=$(readlink "$prefix/current")
+  case $current in versions/$archive_id) ;; *) fail "current link is not installer-owned";; esac
+fi
+check_absent_or_type "$bin_dir/into-md" "Symbolic Link"
+if test -L "$bin_dir/into-md"; then
+  test "$(readlink "$bin_dir/into-md")" = "$prefix/current/bin/into-md" \
+    || fail "command link is not installer-owned"
+fi
+new_link=$prefix/.current-$archive_id-$$
+ln -s "versions/$archive_id" "$new_link"
+mv -h "$new_link" "$prefix/current"
+command_link=$bin_dir/.into-md-$archive_id-$$
+ln -s "$prefix/current/bin/into-md" "$command_link"
+mv -h "$command_link" "$bin_dir/into-md"
+
+case :$PATH: in *:"$bin_dir":*) ;; *) printf '%s\n' "into-md install: add $bin_dir to PATH";; esac
+printf '%s\n' "$destination"
