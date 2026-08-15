@@ -14,15 +14,17 @@ class InstallerAttackTest(unittest.TestCase):
         if os.uname().sysname != "Darwin":
             self.skipTest("the release installer is macOS-only")
 
-    def distribution(self, root: pathlib.Path) -> tuple[pathlib.Path, str]:
-        distribution = root / "distribution"
+    def distribution(
+        self, root: pathlib.Path, name: str = "distribution", manifest: str = "{}\n"
+    ) -> tuple[pathlib.Path, str]:
+        distribution = root / name
         (distribution / "bin").mkdir(parents=True)
-        (distribution / "archive-manifest.json").write_text("{}\n")
+        (distribution / "archive-manifest.json").write_text(manifest)
         checker = distribution / "bin/archive-check"
         checker.write_text(
             "#!/bin/sh\n"
             "test -f \"$1/archive-manifest.json\" || exit 1\n"
-            "test \"$(cat \"$1/archive-manifest.json\")\" = '{}' || exit 1\n"
+            f"test \"$(cat \"$1/archive-manifest.json\")\" = '{manifest.strip()}' || exit 1\n"
         )
         checker.chmod(0o755)
         installer = distribution / "install"
@@ -42,7 +44,7 @@ class InstallerAttackTest(unittest.TestCase):
 
     def test_preplaced_symlink_current_directory_and_corrupt_destination_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
+            root = pathlib.Path(temporary).resolve()
             distribution, identity = self.distribution(root)
             command = root / "command"
             command.mkdir()
@@ -61,7 +63,7 @@ class InstallerAttackTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue((prefix / "current").is_dir())
 
-            (prefix / "current").rmdir()
+            prefix = root / "corrupt-prefix"
             old = prefix / "versions" / "previous"
             old.mkdir(parents=True)
             (prefix / "current").symlink_to("versions/previous", target_is_directory=True)
@@ -77,6 +79,23 @@ class InstallerAttackTest(unittest.TestCase):
             self.assertEqual((destination / "archive-manifest.json").read_text(), "ATTACKER\n")
             self.assertTrue((prefix / "current").is_symlink())
             self.assertEqual(os.readlink(prefix / "current"), "versions/previous")
+
+    def test_verified_installed_version_can_upgrade_to_a_new_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            old, old_identity = self.distribution(root, "old", "{}\n")
+            new, new_identity = self.distribution(root, "new", '{"new":true}\n')
+            prefix = root / "prefix"
+            command = root / "command"
+            command.mkdir()
+
+            self.assertEqual(self.invoke(old, prefix, command).returncode, 0)
+            self.assertEqual(os.readlink(prefix / "current"), f"versions/{old_identity}")
+            self.assertEqual(self.invoke(new, prefix, command).returncode, 0)
+            self.assertEqual(os.readlink(prefix / "current"), f"versions/{new_identity}")
+            self.assertEqual(os.readlink(command / "into-md"), f"{prefix}/current/bin/into-md")
+            self.assertTrue((prefix / "versions" / old_identity).is_dir())
+            self.assertTrue((prefix / "versions" / new_identity).is_dir())
 
 
 if __name__ == "__main__":

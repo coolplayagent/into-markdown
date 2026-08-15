@@ -84,7 +84,13 @@ fi
 check_absent_or_type "$prefix/current" "Symbolic Link"
 if test -L "$prefix/current"; then
   current=$(readlink "$prefix/current")
-  case $current in versions/$archive_id) ;; *) fail "current link is not installer-owned";; esac
+  identity=${current#versions/}
+  case $current:$identity in versions/*:????????????????????????????????????????????????????????????????) ;; *) fail "current link is not installer-owned";; esac
+  case $identity in *[!0-9a-f]*) fail "current link is not installer-owned";; esac
+  installed=$prefix/$current
+  check_absent_or_type "$installed" Directory
+  "$installed/bin/archive-check" "$installed" \
+    || fail "current installed copy failed integrity check"
 fi
 check_absent_or_type "$bin_dir/into-md" "Symbolic Link"
 if test -L "$bin_dir/into-md"; then
