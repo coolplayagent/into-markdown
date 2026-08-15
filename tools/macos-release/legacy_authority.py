@@ -113,7 +113,7 @@ def generate(
                         "executable": "container/LibreOffice.app/Contents/MacOS/soffice",
                         "maximumInstances": 1,
                         "localIp": "deny",
-                        "localIpc": "uidBoundTemporaryUnixSocketOnly",
+                        "localIpc": "exactEffectiveUidSessionUnixSocketOnly",
                     },
                 },
             }

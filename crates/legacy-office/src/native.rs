@@ -10,8 +10,16 @@ use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "macos")]
+mod macos_ipc;
 #[cfg(all(test, target_os = "macos"))]
 mod macos_tests;
+#[cfg(target_os = "macos")]
+use macos_ipc::OfficeIpcSocket;
+#[cfg(target_os = "macos")]
+pub(crate) use macos_ipc::office_ipc_path as macos_office_ipc_path;
+#[cfg(target_os = "macos")]
+pub(crate) use macos_ipc::remove_office_ipc as macos_remove_office_ipc;
 
 pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), u8> {
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
@@ -53,7 +61,7 @@ fn run_request(policy: &Policy, runtime: &NativeRuntime) -> Result<(), u8> {
     source.sync_all().map_err(|_| ERROR_RUNTIME)?;
     drop(source);
     let output_path = request_root.path().join(format!("normalized.{}", format.extension()));
-    let profile = request_root.path().join("profile");
+    let profile = policy.temporary_root.join("profile");
     std::fs::create_dir(&profile).map_err(|_| ERROR_RUNTIME)?;
     runtime.convert(&source_path, &output_path, &profile, format)?;
     let bytes =
@@ -262,9 +270,12 @@ impl NativeRuntime {
         {
             use std::process::{Command, Stdio};
 
-            let home = profile.parent().ok_or(ERROR_RUNTIME)?;
+            let work = source.parent().ok_or(ERROR_RUNTIME)?;
+            let temporary = profile.parent().ok_or(ERROR_RUNTIME)?;
             let user_installation = format!("-env:UserInstallation={}", file_url(profile));
-            let seatbelt = macos_soffice_profile(&self.authority.root, home, &self.soffice)?;
+            let ipc = OfficeIpcSocket::new(profile)?;
+            let seatbelt =
+                macos_soffice_profile(&self.authority.root, temporary, &self.soffice, ipc.path())?;
             let status = Command::new("/usr/bin/sandbox-exec")
                 .args(["-p", &seatbelt])
                 .arg(&self.soffice)
@@ -280,16 +291,16 @@ impl NativeRuntime {
                     format.extension(),
                     "--outdir",
                 ])
-                .arg(home)
+                .arg(work)
                 .arg(source)
                 .env_clear()
-                .env("HOME", home)
-                .env("TMPDIR", home)
+                .env("HOME", work)
+                .env("TMPDIR", work)
                 .env("LANG", "en_US.UTF-8")
                 .env("LC_ALL", "C")
-                .env("CFFIXED_USER_HOME", home)
+                .env("CFFIXED_USER_HOME", work)
                 .env("__CF_USER_TEXT_ENCODING", "0x1F5:0x0:0x0")
-                .current_dir(home)
+                .current_dir(work)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -324,19 +335,21 @@ impl NativeRuntime {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_soffice_profile(runtime: &Path, temporary: &Path, soffice: &Path) -> Result<String, u8> {
+fn macos_soffice_profile(
+    runtime: &Path,
+    temporary: &Path,
+    soffice: &Path,
+    ipc_socket: &Path,
+) -> Result<String, u8> {
     use std::fmt::Write as _;
     let runtime = seatbelt_path(runtime)?;
     let temporary = seatbelt_path(temporary)?;
     let soffice = seatbelt_path(soffice)?;
+    let ipc_network = seatbelt_path(&macos_ipc::office_ipc_network_path(ipc_socket)?)?;
+    let ipc_socket = seatbelt_path(ipc_socket)?;
     let mut profile = String::from(
         "(version 1)\n(deny default)\n(import \"system.sb\")\n\
          (deny network*)\n\
-         (allow network* (local unix-socket))\n\
-         (allow network* (remote unix-socket))\n\
-         (allow file-read* file-write*\n\
-           (literal \"/private/tmp\")\n\
-           (regex #\"^/private/tmp/OSL_PIPE_[0-9]+_SingleOfficeIPC_[0-9a-f]+$\"))\n\
          (allow process-fork)\n(allow process-info*)\n(allow sysctl-read)\n\
          (allow user-preference-read)\n(allow signal (target self))\n\
          (allow mach-lookup\n\
@@ -366,6 +379,14 @@ fn macos_soffice_profile(runtime: &Path, temporary: &Path, soffice: &Path) -> Re
            (iokit-user-client-class \"IOHIDParamUserClient\")\n\
            (iokit-user-client-class \"IOSurfaceRootUserClient\"))\n",
     );
+    writeln!(
+        profile,
+        "(allow network*\n  (local unix-socket (path-literal \"{ipc_network}\"))\n  (remote unix-socket (path-literal \"{ipc_socket}\")))"
+    )
+    .map_err(|_| ERROR_RUNTIME)?;
+    writeln!(profile, "(allow file-read* file-write* (literal \"{ipc_socket}\"))")
+        .map_err(|_| ERROR_RUNTIME)?;
+    profile.push_str("(allow file-read-metadata file-write-data (literal \"/private/tmp\"))\n");
     writeln!(profile, "(allow file-read* (subpath \"{runtime}\") (subpath \"{temporary}\"))")
         .map_err(|_| ERROR_RUNTIME)?;
     let mut ancestors = std::collections::BTreeSet::new();

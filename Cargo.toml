@@ -49,6 +49,7 @@ image = { version = "=0.25.8", default-features = false, features = ["bmp", "gif
 imageproc = { version = "=0.25.0", default-features = false }
 libc = "0.2.189"
 libloading = "0.9.0"
+md5 = { package = "md-5", version = "0.10.6" }
 object = { version = "=0.40.0", default-features = false, features = ["read", "std"] }
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "alternative-backend", "api-28"] }
 prost = { version = "=0.14.4", default-features = false, features = ["derive", "std"] }

@@ -402,7 +402,7 @@ fn valid_process_authority(target: &Target, target_name: &str) -> bool {
             && target.sandbox.child_processes == "exactCompatibilityChild"
             && child.maximum_instances == 1
             && child.local_ip == "deny"
-            && child.local_ipc == "uidBoundTemporaryUnixSocketOnly"
+            && child.local_ipc == "exactEffectiveUidSessionUnixSocketOnly"
             && child.executable == "container/LibreOffice.app/Contents/MacOS/soffice";
     }
     target.limits.process_limit == 1

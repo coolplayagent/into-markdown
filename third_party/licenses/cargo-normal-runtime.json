@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "d6d8325ac92946a2e467a4f7e89f18b5fe2d00b1811a2890ab26b26d00b66895",
+  "cargo_lock_sha256": "b9653e5dd52038af23a449e9e137a0f044a77ead2334a08929c6e72b4c157a1e",
   "workspace_manifest_sha256": {
-    "Cargo.toml": "444c1b9c4c2b0b184d409083396ef97351e9c8a540c2429ff41124160cb8f2a1",
+    "Cargo.toml": "231e3537f0c9bad9b7b1cbe6f2f4345beb041c5cb6675dd6574016f006dbed1d",
     "apps/cli/Cargo.toml": "76641f48b1fde33ccbdaacfdf1e8d81134a86ff9e8086736a09f3af9eaaae1ed",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
     "crates/api/Cargo.toml": "11566558af5d2a41b4763c9eabfc4a52988ee80224ff3f91b2bb7f4bb5dfd4de",
@@ -12,7 +12,7 @@
     "crates/engine/Cargo.toml": "ff378c6ce7bf735e71601c52ce9e6aa4e50b560d6eb8d20f1e136749e7dedb3b",
     "crates/ffmpeg/Cargo.toml": "0da3cea2a7b228e110dbd1f4b84ec11aa0ff91e8584faaf0c179548b90025092",
     "crates/http-transport/Cargo.toml": "7ae44361c199c5989797d367c092bc4e0f755565d83f652b410a9dc1750dfb2c",
-    "crates/legacy-office/Cargo.toml": "6c49535c83e39ae6a34f382c196eea2b9b4d438d3d59282d948fabb9c0d7a335",
+    "crates/legacy-office/Cargo.toml": "3524ca29c2909fda5e2cb516cc34d8c5f237c9ef4b6e2501b4ef441c5dd457d8",
     "crates/ocr/Cargo.toml": "4bcf29e2b8be120693312b595a8b2e1c1620cd0ce7cf0dbfdc0c7a3a1f1db8c3",
     "crates/onnxruntime/Cargo.toml": "60048d910bad52c794a4f0aa6c9f521844783635ede0e1cb44c6db5bd78444cd",
     "crates/pdf-layout/Cargo.toml": "74c04a6a68e6da70d37ca0479738e21d4169baa14c8b1e10ea3c200098c88e45",
@@ -149,6 +149,7 @@
     "markup5ever@0.39.0",
     "matchit@0.8.4",
     "matrixmultiply@0.3.11",
+    "md-5@0.10.6",
     "memchr@2.8.3",
     "mime@0.3.17",
     "miniz_oxide@0.8.9",

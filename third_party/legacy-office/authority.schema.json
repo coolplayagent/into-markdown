@@ -114,7 +114,7 @@
         "executable": { "$ref": "#/$defs/relativePath" },
         "maximumInstances": { "const": 1 },
         "localIp": { "const": "deny" },
-        "localIpc": { "const": "uidBoundTemporaryUnixSocketOnly" }
+        "localIpc": { "const": "exactEffectiveUidSessionUnixSocketOnly" }
       }
     },
     "systemLibrary": {

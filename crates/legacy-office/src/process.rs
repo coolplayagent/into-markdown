@@ -63,6 +63,8 @@ pub(crate) struct WorkerChild {
     _runtime_tree: Option<crate::snapshot::VerifiedTree>,
     #[cfg(target_os = "macos")]
     container: Option<macos_container::MountedContainer>,
+    #[cfg(target_os = "macos")]
+    ipc_socket: std::path::PathBuf,
     status: Option<WorkerStatus>,
     memory_limit: u64,
     process_limit: u32,
@@ -146,13 +148,7 @@ impl WorkerChild {
             return Err(unavailable("workerIdentity"));
         }
         #[cfg(target_os = "macos")]
-        crate::authority::validate_mounted(
-            bundle,
-            &runtime_root,
-            &kit_library,
-            &install_root,
-            context,
-        )?;
+        validate_macos_bundle(bundle, &runtime_root, &kit_library, &install_root, context)?;
         let arguments = worker_arguments(
             bundle,
             &runtime_root,
@@ -162,6 +158,8 @@ impl WorkerChild {
             &temporary_root,
             address_limit,
         );
+        #[cfg(target_os = "macos")]
+        let ipc_socket = macos_ipc_socket(&temporary_root)?;
         #[cfg(unix)]
         {
             let child = prepared
@@ -172,6 +170,8 @@ impl WorkerChild {
                 _runtime_tree: Some(runtime_tree),
                 #[cfg(target_os = "macos")]
                 container,
+                #[cfg(target_os = "macos")]
+                ipc_socket,
                 status: None,
                 memory_limit: address_limit,
                 process_limit: bundle.process_limit,
@@ -218,7 +218,11 @@ impl WorkerChild {
     pub(crate) fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
         #[cfg(target_os = "macos")]
         {
-            let usage = self.child.group_usage().map_err(|_| unavailable("workerMemory"))?;
+            let usage = match self.child.group_usage() {
+                Ok(usage) => usage,
+                Err(_) if self.has_exited()? => return Ok(()),
+                Err(_) => return Err(unavailable("workerMemory")),
+            };
             if usage.processes > self.process_limit {
                 self.terminate();
                 return Err(ConversionError::ResourceLimit {
@@ -350,6 +354,32 @@ impl Drop for WorkerChild {
         self.terminate();
         #[cfg(target_os = "macos")]
         drop(self.container.take());
+        #[cfg(target_os = "macos")]
+        crate::native::macos_remove_office_ipc(&self.ipc_socket);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macos_bundle(
+    bundle: &VerifiedBundle,
+    runtime_root: &Path,
+    kit_library: &Path,
+    install_root: &Path,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    crate::authority::validate_mounted(bundle, runtime_root, kit_library, install_root, context)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ipc_socket(temporary_root: &Path) -> Result<std::path::PathBuf, ConversionError> {
+    let path = crate::native::macos_office_ipc_path(&temporary_root.join("profile"));
+    if matches!(
+        std::fs::symlink_metadata(&path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        Ok(path)
+    } else {
+        Err(unavailable("legacyOfficeIpcCrosstalk"))
     }
 }
 
@@ -368,6 +398,8 @@ fn spawn_platform(
         _runtime_tree: runtime_tree,
         #[cfg(target_os = "macos")]
         container: None,
+        #[cfg(target_os = "macos")]
+        ipc_socket: std::path::PathBuf::from("/private/tmp/unused-test-ipc"),
         status: None,
         memory_limit: address_limit,
         process_limit: 1,
