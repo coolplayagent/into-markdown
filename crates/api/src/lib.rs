@@ -17,8 +17,8 @@ pub use into_markdown_converters::{
     CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
     CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, PdfLayoutConfig, PdfLayoutLimits,
     RuntimeRequirement, core_capabilities, core_catalog_authority, core_format_catalog,
-    core_formats, merge_pdf_ocr, reconstruct_pdf_layout, verify_packaged_legacy_office_runtime,
-    verify_pdfium_runtime,
+    core_formats, default_pdfium_runtime_path, merge_pdf_ocr, reconstruct_pdf_layout,
+    verify_packaged_legacy_office_runtime, verify_pdfium_runtime,
 };
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{

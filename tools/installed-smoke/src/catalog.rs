@@ -87,7 +87,7 @@ pub(crate) fn compare_cli(
         arguments: &args,
         current_dir: root,
         home: &home,
-        environment: request.cli_environment(&home),
+        environment: ValidatedRequest::cli_environment(&home),
         stdin: &[],
         timeout: request.timeout,
         cancel_file: request.cancel_file.as_deref(),
@@ -150,7 +150,6 @@ mod tests {
             archive_sha256: "a".repeat(64),
             cargo: executable.clone(),
             rustc: executable,
-            pdfium_library: None,
             timeout: Duration::from_secs(1),
             cancel_file: None,
         };

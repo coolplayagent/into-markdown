@@ -43,7 +43,7 @@ impl WorkerClient {
         context: &ExecutionContext,
     ) -> Result<(Self, ModelMetadata), ConversionError> {
         context.checkpoint()?;
-        let address_limit = address_space_limit(library, model, contract)?;
+        let limits = worker_limits(library, model, contract)?;
         let working_directory = tempfile::Builder::new()
             .prefix("into-md-ort-worker-cwd-")
             .tempdir()
@@ -52,7 +52,7 @@ impl WorkerClient {
             worker_executable,
             library.private_path(),
             working_directory.path(),
-            address_limit,
+            limits,
         )?;
         let stdin = process.child.stdin.take().ok_or_else(|| ort_error("workerLaunch"))?;
         let mut stdout = process.child.stdout.take().ok_or_else(|| ort_error("workerLaunch"))?;
@@ -151,6 +151,7 @@ impl WorkerClient {
         context: &ExecutionContext,
     ) -> Result<Frame, ConversionError> {
         context.checkpoint()?;
+        self.process.enforce_memory_limit()?;
         self.request_id = self
             .request_id
             .checked_add(1)
@@ -166,6 +167,7 @@ impl WorkerClient {
         loop {
             match self.responses.recv_timeout(POLL_INTERVAL) {
                 Ok(Ok(frame)) => {
+                    self.process.enforce_memory_limit()?;
                     if frame.request_id != self.request_id {
                         self.terminate();
                         return Err(ort_error("workerProtocol"));
@@ -181,6 +183,7 @@ impl WorkerClient {
                         self.terminate();
                         return Err(error);
                     }
+                    self.process.enforce_memory_limit()?;
                 }
             }
         }
@@ -218,15 +221,76 @@ impl Drop for WorkerClient {
 
 struct WorkerProcess {
     child: Child,
+    #[cfg(target_os = "macos")]
+    physical_memory_limit: u64,
     #[cfg(windows)]
     _job: std::os::windows::io::OwnedHandle,
+}
+
+impl WorkerProcess {
+    fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
+        #[cfg(target_os = "macos")]
+        {
+            let pid =
+                i32::try_from(self.child.id()).map_err(|_| ort_error("workerLimitUnavailable"))?;
+            let mut usage = std::mem::MaybeUninit::<RusageInfoV2>::zeroed();
+            // SAFETY: `pid` identifies the owned child and the output buffer
+            // has Darwin's exact versioned rusage_info_v2 layout.
+            let result = unsafe { proc_pid_rusage(pid, 2, usage.as_mut_ptr().cast()) };
+            if result != 0 {
+                if self.child.try_wait().ok().flatten().is_some() {
+                    return Err(ort_error("workerTerminated"));
+                }
+                return Err(ort_error("workerLimitUnavailable"));
+            }
+            // SAFETY: successful `proc_pid_rusage` initialized the structure.
+            let resident = unsafe { usage.assume_init() }.ri_phys_footprint;
+            if resident > self.physical_memory_limit {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(resource_error("nativeWorkerMemory"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[allow(clippy::struct_field_names)]
+struct RusageInfoV2 {
+    ri_uuid: [u8; 16],
+    ri_user_time: u64,
+    ri_system_time: u64,
+    ri_pkg_idle_wkups: u64,
+    ri_interrupt_wkups: u64,
+    ri_pageins: u64,
+    ri_wired_size: u64,
+    ri_resident_size: u64,
+    ri_phys_footprint: u64,
+    ri_proc_start_abstime: u64,
+    ri_proc_exit_abstime: u64,
+    ri_child_user_time: u64,
+    ri_child_system_time: u64,
+    ri_child_pkg_idle_wkups: u64,
+    ri_child_interrupt_wkups: u64,
+    ri_child_pageins: u64,
+    ri_child_elapsed_abstime: u64,
+    ri_diskio_bytesread: u64,
+    ri_diskio_byteswritten: u64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pid_rusage(pid: libc::c_int, flavor: libc::c_int, buffer: *mut libc::c_void) -> i32;
 }
 
 fn spawn_worker(
     executable: &Path,
     runtime: &Path,
     working_directory: &Path,
-    address_limit: u64,
+    limits: WorkerLimits,
 ) -> Result<WorkerProcess, ConversionError> {
     validate_worker_path(executable)?;
     if !runtime.is_absolute() || !working_directory.is_absolute() {
@@ -239,21 +303,27 @@ fn spawn_worker(
             .arg("--runtime")
             .arg(runtime)
             .arg("--address-limit")
-            .arg(address_limit.to_string())
+            .arg(limits.address_space.to_string())
+            .arg("--physical-limit")
+            .arg(limits.physical_memory.to_string())
             .current_dir(working_directory)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // The worker installs and verifies RLIMIT_AS as its first operation.
-        // Doing so after exec avoids Darwin measuring Bazel's inherited parent
-        // mappings while remaining before authority parsing, ORT, or model IPC.
+        // The worker installs the platform-native limit before authority parsing,
+        // ORT loading, model receipt, or additional threads. On macOS the parent
+        // enforces the fixed physical-footprint ceiling instead of RLIMIT_AS.
         let child = command.spawn().map_err(|_| ort_error("workerLimitUnavailable"))?;
-        return Ok(WorkerProcess { child });
+        return Ok(WorkerProcess {
+            child,
+            #[cfg(target_os = "macos")]
+            physical_memory_limit: limits.physical_memory,
+        });
     }
     #[cfg(windows)]
     {
-        return spawn_worker_windows(executable, runtime, working_directory, address_limit);
+        return spawn_worker_windows(executable, runtime, working_directory, limits);
     }
     #[allow(unreachable_code)]
     Err(ConversionError::ComponentUnavailable {
@@ -267,7 +337,7 @@ fn spawn_worker_windows(
     executable: &Path,
     runtime: &Path,
     working_directory: &Path,
-    address_limit: u64,
+    limits: WorkerLimits,
 ) -> Result<WorkerProcess, ConversionError> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::os::windows::process::CommandExt;
@@ -289,7 +359,9 @@ fn spawn_worker_windows(
         .arg("--runtime")
         .arg(runtime)
         .arg("--address-limit")
-        .arg(address_limit.to_string())
+        .arg(limits.address_space.to_string())
+        .arg("--physical-limit")
+        .arg(limits.physical_memory.to_string())
         .current_dir(working_directory)
         .env_clear()
         .stdin(Stdio::piped())
@@ -307,8 +379,8 @@ fn spawn_worker_windows(
     let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     information.BasicLimitInformation.LimitFlags =
         JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    information.ProcessMemoryLimit =
-        usize::try_from(address_limit).map_err(|_| resource_error("nativeWorkerMemory"))?;
+    information.ProcessMemoryLimit = usize::try_from(limits.physical_memory)
+        .map_err(|_| resource_error("nativeWorkerMemory"))?;
     // SAFETY: job/process handles are live and information has the exact API
     // layout and size. The process is still suspended during both calls.
     let configured = unsafe {
@@ -363,11 +435,17 @@ pub(crate) fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn address_space_limit(
+#[derive(Debug, Clone, Copy)]
+struct WorkerLimits {
+    address_space: u64,
+    physical_memory: u64,
+}
+
+fn worker_limits(
     library: &RuntimeLibrary,
     model: &[u8],
     contract: &ModelContract,
-) -> Result<u64, ConversionError> {
+) -> Result<WorkerLimits, ConversionError> {
     let target_name = current_target().ok_or_else(|| ort_error("unsupportedTarget"))?;
     let authority = authority().map_err(|_| ort_error("runtimeAuthority"))?;
     let target =
@@ -375,12 +453,20 @@ fn address_space_limit(
     if library.version() != authority.version || library.api_version() != authority.api_version {
         return Err(ort_error("runtimeAuthority"));
     }
-    target
-        .worker_address_space_overhead_bytes
-        .checked_add(contract.session_memory_bytes)
-        .and_then(|value| value.checked_add(contract.run_memory_bytes))
+    let dynamic = contract
+        .session_memory_bytes
+        .checked_add(contract.run_memory_bytes)
         .and_then(|value| value.checked_add(u64::try_from(model.len()).ok()?))
-        .ok_or_else(|| resource_error("nativeWorkerMemory"))
+        .ok_or_else(|| resource_error("nativeWorkerMemory"))?;
+    let address_space = target
+        .worker_address_space_overhead_bytes
+        .checked_add(dynamic)
+        .ok_or_else(|| resource_error("nativeWorkerMemory"))?;
+    let physical_memory = target
+        .worker_physical_memory_overhead_bytes
+        .checked_add(dynamic)
+        .ok_or_else(|| resource_error("nativeWorkerMemory"))?;
+    Ok(WorkerLimits { address_space, physical_memory })
 }
 
 fn bind_native_metadata(
@@ -481,7 +567,14 @@ fn worker_entry_inner() -> Result<(), ()> {
         return Err(());
     }
     let address_limit = parse_decimal(args.next().ok_or(())?)?;
-    if args.next().is_some() || !runtime.is_absolute() || !install_and_verify_limit(address_limit) {
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("--physical-limit")) {
+        return Err(());
+    }
+    let physical_limit = parse_decimal(args.next().ok_or(())?)?;
+    if args.next().is_some()
+        || !runtime.is_absolute()
+        || !install_and_verify_limit(address_limit, physical_limit)
+    {
         return Err(());
     }
     let authority = authority().map_err(|_| ())?;
@@ -602,8 +695,11 @@ fn parse_decimal(value: OsString) -> Result<u64, ()> {
     value.parse().map_err(|_| ())
 }
 
-#[cfg(unix)]
-fn install_and_verify_limit(expected: u64) -> bool {
+#[cfg(all(unix, not(target_os = "macos")))]
+fn install_and_verify_limit(expected: u64, physical: u64) -> bool {
+    if physical == 0 || physical > expected {
+        return false;
+    }
     let limit: libc::rlim_t = expected;
     let requested = libc::rlimit { rlim_cur: limit, rlim_max: limit };
     // SAFETY: this is the worker's first operation after argument parsing and
@@ -617,8 +713,13 @@ fn install_and_verify_limit(expected: u64) -> bool {
     installed && limits.rlim_cur == expected && limits.rlim_max == expected
 }
 
+#[cfg(target_os = "macos")]
+const fn install_and_verify_limit(address_space: u64, physical: u64) -> bool {
+    physical >= 256 * 1024 * 1024 && physical <= address_space
+}
+
 #[cfg(windows)]
-fn install_and_verify_limit(expected: u64) -> bool {
+fn install_and_verify_limit(_address_space: u64, physical: u64) -> bool {
     use windows_sys::Win32::System::JobObjects::{
         IsProcessInJob, JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, QueryInformationJobObject,
@@ -644,11 +745,11 @@ fn install_and_verify_limit(expected: u64) -> bool {
     };
     queried
         && information.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0
-        && u64::try_from(information.ProcessMemoryLimit) == Ok(expected)
+        && u64::try_from(information.ProcessMemoryLimit) == Ok(physical)
 }
 
 #[cfg(not(any(unix, windows)))]
-const fn install_and_verify_limit(_expected: u64) -> bool {
+const fn install_and_verify_limit(_address_space: u64, _physical: u64) -> bool {
     false
 }
 
@@ -692,5 +793,15 @@ mod tests {
         use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
         assert_ne!(CREATE_SUSPENDED, 0);
         assert_ne!(CREATE_NO_WINDOW, 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_parent_enforces_worker_physical_memory_limit() {
+        let child = Command::new("/usr/bin/yes").stdout(Stdio::null()).spawn().unwrap();
+        let mut worker = WorkerProcess { child, physical_memory_limit: 1 };
+        let error = worker.enforce_memory_limit().unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+        assert!(worker.child.try_wait().unwrap().is_some());
     }
 }

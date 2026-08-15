@@ -51,7 +51,7 @@ pub use markdown::MarkdownConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use odf::OdfConverter;
-pub use pdf::{PdfConverter, verify_pdfium_runtime};
+pub use pdf::{PdfConverter, default_pdfium_runtime_path, verify_pdfium_runtime};
 pub use pdf_ocr::merge_pdf_ocr;
 pub use presentation::PresentationConverter;
 pub use remote::{

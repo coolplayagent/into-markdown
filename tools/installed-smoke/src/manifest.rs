@@ -228,7 +228,6 @@ mod tests {
             archive_sha256: "a".repeat(64),
             cargo: install.join("bin/into-md"),
             rustc: install.join("bin/into-md"),
-            pdfium_library: None,
             timeout: Duration::from_secs(1),
             cancel_file: None,
         };
