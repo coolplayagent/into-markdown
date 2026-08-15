@@ -5,6 +5,7 @@ use crate::process::{CommandOutput, CommandSpec, Executor, prepare_home};
 use crate::report::{CapabilityResult, CaseResult};
 use crate::request::ValidatedRequest;
 use into_markdown_converters::CoreCatalogAuthority;
+use license_check::schema::ArchiveProjection;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -66,6 +67,7 @@ pub(crate) fn run(
     request: &ValidatedRequest,
     root: &Path,
     authority: &CoreCatalogAuthority,
+    projection: &ArchiveProjection,
     executor: &dyn Executor,
     cases: &mut Vec<CaseResult>,
     capabilities: &mut Vec<CapabilityResult>,
@@ -88,6 +90,7 @@ pub(crate) fn run(
             request,
             root,
             authority,
+            projection,
             &doctor,
             "pdf",
             "pdfium",
@@ -104,6 +107,7 @@ pub(crate) fn run(
             request,
             root,
             authority,
+            projection,
             &doctor,
             "image",
             "onnxruntime",
@@ -133,7 +137,9 @@ pub(crate) fn run(
         record(
             cases,
             id,
-            legacy_conversion(request, root, authority, &doctor, fixture, golden, executor),
+            legacy_conversion(
+                request, root, authority, projection, &doctor, fixture, golden, executor,
+            ),
         );
     }
     if request.cancelled() {
@@ -142,10 +148,12 @@ pub(crate) fn run(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn legacy_conversion(
     request: &ValidatedRequest,
     root: &Path,
     authority: &CoreCatalogAuthority,
+    projection: &ArchiveProjection,
     doctor: &BTreeMap<String, DoctorEntry>,
     fixture: &str,
     golden: &str,
@@ -174,6 +182,10 @@ fn legacy_conversion(
         executor,
     )?;
     let available = doctor.get("runtime.legacy-office").is_some_and(|entry| entry.status == "ok");
+    let projected = runtime_is_projected(projection, "legacy-office")?;
+    if projected && !available {
+        return Err("projected legacy runtime is unavailable after installation".into());
+    }
     if available {
         if output.exit_code == Some(0)
             && output.stderr.is_empty()
@@ -349,6 +361,7 @@ fn optional_conversion(
     request: &ValidatedRequest,
     root: &Path,
     authority: &CoreCatalogAuthority,
+    projection: &ArchiveProjection,
     doctor: &BTreeMap<String, DoctorEntry>,
     format: &str,
     runtime_component: &str,
@@ -394,6 +407,10 @@ fn optional_conversion(
     let output = cli(request, root, &references, &[], executor)?;
     let available =
         doctor.get(doctor_id(runtime_component)?).is_some_and(|entry| entry.status == "ok");
+    let projected = runtime_is_projected(projection, runtime_component)?;
+    if projected && !available {
+        return Err("projected optional runtime is unavailable after installation".into());
+    }
     if available {
         if output.exit_code == Some(0) && !output.stdout.is_empty() {
             return Ok(());
@@ -416,6 +433,31 @@ fn optional_conversion(
     } else {
         Err("missing optional runtime did not return its exact code and installation hint".into())
     }
+}
+
+fn runtime_is_projected(
+    projection: &ArchiveProjection,
+    runtime_component: &str,
+) -> Result<bool, String> {
+    let required: &[&str] = match runtime_component {
+        "pdfium" => &["pdfium"],
+        "onnxruntime" => &[
+            "onnxruntime-cpu",
+            "ppocrv6-tiny-detector-onnx-model",
+            "ppocrv6-tiny-recognizer-onnx-model",
+            "ppocrv6-tiny-recognizer-character-table",
+        ],
+        "legacy-office" => &["libreoffice-macos-arm64"],
+        _ => return Err("catalog authority contains an unknown optional runtime".into()),
+    };
+    let present = required
+        .iter()
+        .filter(|component| projection.components.iter().any(|value| value == **component))
+        .count();
+    if present != 0 && present != required.len() {
+        return Err("archive projection contains an incomplete optional runtime".into());
+    }
+    Ok(present == required.len())
 }
 
 #[derive(Clone, Copy)]
@@ -456,7 +498,7 @@ fn cli(
         arguments: &arguments,
         current_dir: root,
         home: &home,
-        environment: request.cli_environment(&home),
+        environment: ValidatedRequest::cli_environment(&home),
         stdin,
         timeout: request.timeout,
         cancel_file: request.cancel_file.as_deref(),
@@ -495,6 +537,7 @@ mod tests {
             &request,
             temporary.path(),
             &authority,
+            &projection(&[]),
             &BTreeMap::new(),
             "pdf",
             "pdfium",
@@ -530,6 +573,7 @@ mod tests {
                 &request,
                 temporary.path(),
                 &mutated,
+                &projection(&[]),
                 &BTreeMap::new(),
                 "pdf",
                 "pdfium",
@@ -556,6 +600,20 @@ mod tests {
         assert!(corrupt(&request, temporary.path(), &executor).is_err());
     }
 
+    #[test]
+    fn projected_runtime_must_be_complete_and_cannot_report_missing() {
+        let complete = projection(&["pdfium"]);
+        assert!(runtime_is_projected(&complete, "pdfium").unwrap());
+        let absent = projection(&[]);
+        assert!(!runtime_is_projected(&absent, "pdfium").unwrap());
+
+        let incomplete = projection(&["onnxruntime-cpu"]);
+        assert_eq!(
+            runtime_is_projected(&incomplete, "onnxruntime").unwrap_err(),
+            "archive projection contains an incomplete optional runtime"
+        );
+    }
+
     fn fixture_request(relative: &str) -> (tempfile::TempDir, ValidatedRequest) {
         let temporary = tempfile::tempdir().unwrap();
         let fixture_root = temporary.path().join("fixtures");
@@ -577,7 +635,6 @@ mod tests {
             archive_sha256: "a".repeat(64),
             cargo: placeholder.clone(),
             rustc: placeholder,
-            pdfium_library: None,
             timeout: Duration::from_secs(1),
             cancel_file: None,
         };
@@ -603,6 +660,17 @@ mod tests {
                 component: "pdfium".into(),
                 install_hint: "install the pinned PDFium runtime".into(),
             }],
+        }
+    }
+
+    fn projection(components: &[&str]) -> ArchiveProjection {
+        ArchiveProjection {
+            schema_version: 1,
+            target: "aarch64-apple-darwin".into(),
+            components: components.iter().map(|value| (*value).to_owned()).collect(),
+            files: vec![],
+            license_materials: vec![],
+            ffmpeg_evidence: None,
         }
     }
 }

@@ -59,7 +59,15 @@ fn run_with_executor(
             return Err("archive manifest target differs from the executing platform".into());
         }
         let authority = catalog::load_authority(&validated, &projection)?;
-        cli_cases::run(&validated, &run_root, &authority, executor, &mut cases, &mut capabilities)?;
+        cli_cases::run(
+            &validated,
+            &run_root,
+            &authority,
+            &projection,
+            executor,
+            &mut cases,
+            &mut capabilities,
+        )?;
         rust_consumer::run(&validated, &run_root, executor, &mut cases);
         Ok(())
     })();

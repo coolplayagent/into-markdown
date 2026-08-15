@@ -14,20 +14,16 @@ pub(crate) fn assemble(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
 ) -> Result<Services, CliError> {
-    let executable = std::env::current_exe().map_err(|error| {
-        CliError::component(format!("cannot resolve the current executable: {error}"))
-    })?;
+    let executable = canonical_executable().map_err(CliError::component)?;
     assemble_at(loaded, execution, &executable)
 }
 
 /// Verify the exact local OCR distribution used by conversion without any
 /// download or network access.
 pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig) -> Result<(), ConversionError> {
-    let executable =
-        std::env::current_exe().map_err(|error| ConversionError::ComponentUnavailable {
-            component: "onnxruntime".into(),
-            detail: format!("cannot resolve the current executable: {error}"),
-        })?;
+    let executable = canonical_executable().map_err(|detail| {
+        ConversionError::ComponentUnavailable { component: "onnxruntime".into(), detail }
+    })?;
     let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
         component: "onnxruntime-worker".into(),
         detail: "current executable has no distribution directory".into(),
@@ -140,6 +136,14 @@ fn writable_model_root() -> Result<PathBuf, into_markdown::ConversionError> {
 fn bundled_model_root(directory: &Path) -> Option<PathBuf> {
     let path = directory.join("models");
     path.is_dir().then_some(path)
+}
+
+fn canonical_executable() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve the current executable: {error}"))?;
+    executable
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve the installed executable: {error}"))
 }
 
 const fn worker_name() -> &'static str {

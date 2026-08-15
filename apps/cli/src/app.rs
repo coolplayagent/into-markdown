@@ -424,6 +424,7 @@ fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
         })?;
     let bundled_root = std::env::current_exe()
         .ok()
+        .and_then(|path| path.canonicalize().ok())
         .and_then(|path| path.parent().map(|parent| parent.join("models")))
         .filter(|path| path.is_dir());
     into_markdown::ModelManager::embedded(writable_root, bundled_root).map_err(CliError::from)
@@ -985,8 +986,8 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
 
 fn verify_core_runtime(component: &str, loaded: &LoadedConfig) -> bool {
     match component {
-        "pdfium" => std::env::var_os("PDFIUM_LIBRARY")
-            .is_some_and(|path| into_markdown::verify_pdfium_runtime(Path::new(&path)).is_ok()),
+        "pdfium" => into_markdown::default_pdfium_runtime_path()
+            .is_some_and(|path| into_markdown::verify_pdfium_runtime(&path).is_ok()),
         "onnxruntime" => crate::services::verify_ocr_runtime(loaded).is_ok(),
         "legacy-office" => {
             let context = into_markdown::ExecutionContext::new(

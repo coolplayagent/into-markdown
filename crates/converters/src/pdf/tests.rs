@@ -1,7 +1,31 @@
 use super::*;
 use into_markdown_core::SourceMetadata;
+use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[test]
+fn packaged_pdfium_is_resolved_relative_to_the_canonical_executable() {
+    let nonce =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("into-md-pdfium-test-{}-{nonce}", std::process::id()));
+    let executable = root.join("bin/into-md");
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(&executable, b"binary").unwrap();
+    #[cfg(target_os = "macos")]
+    let runtime = root.join("lib/pdfium/libpdfium.dylib");
+    #[cfg(target_os = "linux")]
+    let runtime = root.join("lib/pdfium/libpdfium.so");
+    #[cfg(target_os = "windows")]
+    let runtime = root.join("lib/pdfium/pdfium.dll");
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return;
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(&runtime, b"runtime").unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), Some(runtime));
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn backend_materialization_only_runs_after_exact_memory_permit() {

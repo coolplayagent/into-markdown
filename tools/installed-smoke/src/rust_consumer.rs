@@ -395,7 +395,6 @@ mod tests {
             archive_sha256: "a".repeat(64),
             cargo: executable.clone(),
             rustc: executable,
-            pdfium_library: None,
             timeout: Duration::from_secs(1),
             cancel_file: None,
         };

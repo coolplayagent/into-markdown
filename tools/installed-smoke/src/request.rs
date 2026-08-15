@@ -63,7 +63,6 @@ pub(crate) struct ValidatedRequest {
     pub archive_sha256: String,
     pub cargo: PathBuf,
     pub rustc: PathBuf,
-    pub pdfium_library: Option<PathBuf>,
     pub timeout: std::time::Duration,
     pub cancel_file: Option<PathBuf>,
 }
@@ -133,7 +132,6 @@ impl SmokeRequest {
             archive_sha256: self.archive_sha256,
             cargo,
             rustc,
-            pdfium_library,
             timeout: std::time::Duration::from_secs(self.timeout_seconds.get()),
             cancel_file: self.cancel_file,
         })
@@ -155,15 +153,8 @@ impl ValidatedRequest {
         self.cancel_file.as_ref().is_some_and(|path| path.exists())
     }
 
-    pub(crate) fn cli_environment(
-        &self,
-        home: &Path,
-    ) -> std::collections::BTreeMap<String, String> {
-        let mut environment = crate::process::command_environment(home);
-        if let Some(path) = &self.pdfium_library {
-            environment.insert("PDFIUM_LIBRARY".into(), path.display().to_string());
-        }
-        environment
+    pub(crate) fn cli_environment(home: &Path) -> std::collections::BTreeMap<String, String> {
+        crate::process::command_environment(home)
     }
 }
 

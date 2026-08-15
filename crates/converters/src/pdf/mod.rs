@@ -95,11 +95,37 @@ impl PdfConverter {
         self.runtime_path
             .clone()
             .or_else(|| std::env::var_os("PDFIUM_LIBRARY").map(PathBuf::from))
+            .or_else(default_pdfium_runtime_path)
             .ok_or_else(|| ConversionError::ComponentUnavailable {
                 component: "pdfium".into(),
                 detail: crate::core_catalog::PDFIUM.install_hint.into(),
             })
     }
+}
+
+/// Resolve the explicit environment override or the pinned runtime shipped
+/// beside the canonical installed executable. No PATH lookup occurs.
+#[must_use]
+pub fn default_pdfium_runtime_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("PDFIUM_LIBRARY") {
+        return Some(PathBuf::from(path));
+    }
+    let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+    packaged_pdfium_path(&executable)
+}
+
+fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
+    let root = executable.parent()?.parent()?;
+    #[cfg(target_os = "macos")]
+    let relative = Path::new("lib/pdfium/libpdfium.dylib");
+    #[cfg(target_os = "linux")]
+    let relative = Path::new("lib/pdfium/libpdfium.so");
+    #[cfg(target_os = "windows")]
+    let relative = Path::new("lib/pdfium/pdfium.dll");
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return None;
+    let path = root.join(relative);
+    path.is_file().then_some(path)
 }
 
 /// Verify an exact pinned `PDFium` file without opening a document.
