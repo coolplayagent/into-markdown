@@ -129,6 +129,7 @@ pub(super) fn parse_shapes(
     let mut table_rows = Vec::<Vec<Vec<Inline>>>::new();
     let mut table_cell_count = 0_u64;
     let mut groups = Vec::<GroupTransform>::new();
+    let mut extension_list_depth = 0_usize;
     let mut mc = McSelection::default();
     let mut z_order = 0_usize;
     let mut parsed_inlines = 0_usize;
@@ -141,6 +142,13 @@ pub(super) fn parse_shapes(
         }
         match event {
             Event::Start(element) => match local(element.name().as_ref()) {
+                "extLst" => {
+                    extension_list_depth =
+                        extension_list_depth.checked_add(1).ok_or_else(|| {
+                            limit("max_nesting_depth", "extension-list depth overflow")
+                        })?;
+                }
+                "ext" if extension_list_depth > 0 => {}
                 "grpSp" => {
                     groups.try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve group stack: {error}"))
@@ -290,6 +298,7 @@ pub(super) fn parse_shapes(
                 _ => apply_shape_element(&reader, &element, part, &mut shape)?,
             },
             Event::Empty(element) => match local(element.name().as_ref()) {
+                "ext" if extension_list_depth > 0 => {}
                 "sp" | "pic" | "graphicFrame" if shape.is_none() => {
                     return Err(malformed(Some(part), "empty shape container is invalid"));
                 }
@@ -403,6 +412,11 @@ pub(super) fn parse_shapes(
                 )?;
             }
             Event::End(element) => match local(element.name().as_ref()) {
+                "extLst" => {
+                    extension_list_depth = extension_list_depth
+                        .checked_sub(1)
+                        .ok_or_else(|| malformed(Some(part), "extension-list end without start"))?;
+                }
                 "t" if shape.is_some() => {
                     if !capturing_text {
                         return Err(malformed(Some(part), "text end without text start"));

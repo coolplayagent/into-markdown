@@ -422,6 +422,58 @@ fn master_text_styles_and_explicit_false_rich_properties_layer_by_level() {
 }
 
 #[test]
+fn master_default_paragraph_properties_layer_below_level_properties() {
+    let master_xml = format!(
+        r#"<p:sldMaster xmlns:p="{p}" xmlns:a="{a}"><p:cSld><p:spTree/></p:cSld><p:txStyles><p:titleStyle><a:defPPr><a:defRPr b="true"/></a:defPPr><a:lvl1pPr><a:defRPr i="true"/></a:lvl1pPr></p:titleStyle><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(A_NS)
+    );
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    preflight_xml(
+        master_xml.as_bytes(),
+        "ppt/slideMasters/slideMaster1.xml",
+        XmlProfile::Master,
+        &options,
+        &context,
+    )
+    .unwrap();
+    let parsed = parse_master_text_styles(
+        master_xml.as_bytes(),
+        "ppt/slideMasters/slideMaster1.xml",
+        &options,
+        &context,
+    )
+    .unwrap();
+    let title = parsed.iter().find(|(section, _)| *section == MasterTextSection::Title).unwrap();
+    assert_eq!(title.1.len(), 1);
+    assert_eq!(title.1[0].default_style.bold, Some(true));
+    assert_eq!(title.1[0].default_style.italic, Some(true));
+}
+
+#[test]
+fn shape_extension_payload_does_not_overwrite_geometry_extent() {
+    let slide = format!(
+        r#"<p:sld xmlns:p="{p}" xmlns:a="{a}" xmlns:future="urn:future"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="1" name="Text"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm><a:extLst><a:ext uri="reviewed"><future:value/></a:ext></a:extLst></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>text</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(A_NS)
+    );
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let shapes = parse_shapes(
+        slide.as_bytes(),
+        "ppt/slides/slide1.xml",
+        XmlProfile::Slide,
+        &options,
+        &context,
+    )
+    .unwrap();
+    assert_eq!(shapes.len(), 1);
+    assert_eq!((shapes[0].geometry.x, shapes[0].geometry.y), (10, 20));
+    assert_eq!((shapes[0].geometry.cx, shapes[0].geometry.cy), (30, 40));
+}
+
+#[test]
 fn shape_list_styles_do_not_require_master_text_styles() {
     let master_xml = format!(
         r#"<p:sldMaster xmlns:p="{p}" xmlns:a="{a}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:buNone/></a:lvl1pPr></a:lstStyle><a:p/></p:txBody></p:sp></p:spTree></p:cSld></p:sldMaster>"#,

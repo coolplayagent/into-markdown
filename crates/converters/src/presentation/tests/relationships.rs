@@ -88,8 +88,9 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
         String::from_utf8_lossy(A_NS)
     );
     let chart = format!(
-        r#"<c:chartSpace xmlns:c="{c}"><c:chart><c:plotArea><c:ser><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Revenue</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:ser><c:tx><c:v>Direct title</c:v></c:tx></c:ser></c:plotArea></c:chart></c:chartSpace>"#,
-        c = String::from_utf8_lossy(C_NS)
+        r#"<c:chartSpace xmlns:c="{c}" xmlns:a="{a}" xmlns:future="urn:future"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Chart title</a:t></a:r></a:p></c:rich></c:tx><c:spPr/><c:txPr><a:bodyPr/><a:lstStyle/><a:p/></c:txPr></c:title><c:plotArea><c:barChart><c:ser><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>Revenue</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val><c:extLst><c:ext uri="reviewed"><future:value/></c:ext></c:extLst></c:ser><c:ser><c:tx><c:v>Direct title</c:v></c:tx></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        c = String::from_utf8_lossy(C_NS),
+        a = String::from_utf8_lossy(A_NS)
     );
     let mut archive = zip::ZipArchive::new(Cursor::new(original.as_slice())).unwrap();
     let mut parts = Vec::<(String, Vec<u8>)>::new();
@@ -266,6 +267,25 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
             .collect::<Vec<_>>();
         assert!(matches!(convert(&zip(&related_refs)), Err(ConversionError::Malformed { .. })));
     }
+    let external_chart_workbook = format!(
+        r#"<Relationships xmlns="{rels}"><Relationship Id="external" Type="{prefix}oleObject" Target="https://example.test/source.xlsx" TargetMode="External"/></Relationships>"#,
+        rels = String::from_utf8_lossy(REL_NS),
+        prefix = REL_PREFIX
+    );
+    let mut cached_chart_parts = parts.clone();
+    cached_chart_parts
+        .push(("ppt/charts/_rels/chart1.xml.rels".into(), external_chart_workbook.into_bytes()));
+    let cached_chart_refs = cached_chart_parts
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.clone()))
+        .collect::<Vec<_>>();
+    let cached_chart = convert(&zip(&cached_chart_refs)).unwrap();
+    assert!(
+        cached_chart
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "presentation.dangerousPartsIgnored")
+    );
     let mut hidden_chart_parts = parts.clone();
     for (name, value) in &mut hidden_chart_parts {
         if name == "ppt/slides/slide1.xml" {

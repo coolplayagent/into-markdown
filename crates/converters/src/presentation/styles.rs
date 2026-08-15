@@ -226,6 +226,8 @@ pub(super) fn parse_master_text_styles(
         limit("max_memory_bytes", format!("cannot reserve master style levels: {error}"))
     })?;
     let mut current = None::<TextParagraph>;
+    let mut section_default = None::<TextParagraph>;
+    let mut parsing_section_default = false;
     let mut mc = McSelection::default();
     let mut tx_styles_seen = false;
     let mut sections_seen = 0_u8;
@@ -262,9 +264,20 @@ pub(super) fn parse_master_text_styles(
                         mark_master_text_section(&mut sections_seen, parsed_section, part)?;
                         section = Some(parsed_section);
                         levels.clear();
+                        section_default = None;
+                        parsing_section_default = false;
                     }
                     _ if section.is_some() => {
-                        if let Some(level) = level_paragraph(local_name.as_bytes()) {
+                        if local_name == "defPPr" {
+                            if current.is_some() || section_default.is_some() {
+                                return Err(malformed(
+                                    Some(part),
+                                    "master text style has multiple or nested defPPr elements",
+                                ));
+                            }
+                            current = Some(TextParagraph { start: 1, ..TextParagraph::default() });
+                            parsing_section_default = true;
+                        } else if let Some(level) = level_paragraph(local_name.as_bytes()) {
                             if current.is_some() {
                                 return Err(malformed(Some(part), "nested master text level"));
                             }
@@ -317,19 +330,32 @@ pub(super) fn parse_master_text_styles(
                     mark_master_text_section(&mut sections_seen, parsed_section, part)?;
                     result.push((parsed_section, Vec::new()));
                 } else if section.is_some() {
-                    if let Some(level) = level_paragraph(local_name.as_bytes()) {
+                    if local_name == "defPPr" {
+                        if current.is_some() || section_default.is_some() {
+                            return Err(malformed(
+                                Some(part),
+                                "master text style has multiple or nested defPPr elements",
+                            ));
+                        }
+                        section_default =
+                            Some(TextParagraph { start: 1, ..TextParagraph::default() });
+                    } else if let Some(level) = level_paragraph(local_name.as_bytes()) {
                         levels.try_reserve(1).map_err(|error| {
                             limit(
                                 "max_memory_bytes",
                                 format!("cannot reserve master level: {error}"),
                             )
                         })?;
-                        levels.push(TextParagraph {
+                        let mut paragraph = TextParagraph {
                             level,
                             level_explicit: true,
                             start: 1,
                             ..TextParagraph::default()
-                        });
+                        };
+                        if let Some(default) = section_default.as_ref() {
+                            inherit_master_paragraph_default(&mut paragraph, default)?;
+                        }
+                        levels.push(paragraph);
                     } else if local_name == "defRPr" {
                         let paragraph = current.as_mut().ok_or_else(|| {
                             malformed(Some(part), "master defRPr is outside a level")
@@ -356,13 +382,26 @@ pub(super) fn parse_master_text_styles(
             Event::End(element) => {
                 let qualified_name = element.name();
                 let local_name = local(qualified_name.as_ref());
-                if section.is_some() && level_paragraph(local_name.as_bytes()).is_some() {
+                if section.is_some() && local_name == "defPPr" {
+                    if !parsing_section_default {
+                        return Err(malformed(Some(part), "master defPPr end without start"));
+                    }
+                    section_default =
+                        Some(current.take().ok_or_else(|| {
+                            malformed(Some(part), "master defPPr end without state")
+                        })?);
+                    parsing_section_default = false;
+                } else if section.is_some() && level_paragraph(local_name.as_bytes()).is_some() {
+                    let mut completed = current.take().ok_or_else(|| {
+                        malformed(Some(part), "master text level end without start")
+                    })?;
+                    if let Some(default) = section_default.as_ref() {
+                        inherit_master_paragraph_default(&mut completed, default)?;
+                    }
                     levels.try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve master level: {error}"))
                     })?;
-                    levels.push(current.take().ok_or_else(|| {
-                        malformed(Some(part), "master text level end without start")
-                    })?);
+                    levels.push(completed);
                 } else if matches!(local_name, "titleStyle" | "bodyStyle" | "otherStyle") {
                     if current.is_some() {
                         return Err(malformed(
@@ -373,6 +412,17 @@ pub(super) fn parse_master_text_styles(
                     levels.sort_unstable_by_key(|paragraph| paragraph.level);
                     if levels.windows(2).any(|pair| pair[0].level == pair[1].level) {
                         return Err(malformed(Some(part), "duplicate master text style level"));
+                    }
+                    if levels.is_empty()
+                        && let Some(default) = section_default.take()
+                    {
+                        levels.try_reserve(1).map_err(|error| {
+                            limit(
+                                "max_memory_bytes",
+                                format!("cannot reserve master default text style: {error}"),
+                            )
+                        })?;
+                        levels.push(default);
                     }
                     result.push((
                         section.take().ok_or_else(|| {
@@ -393,6 +443,25 @@ pub(super) fn parse_master_text_styles(
         return Err(limit("max_field_bytes", "master text style count"));
     }
     Ok(result)
+}
+
+fn inherit_master_paragraph_default(
+    paragraph: &mut TextParagraph,
+    default: &TextParagraph,
+) -> Result<(), ConversionError> {
+    paragraph.default_style.inherit(default.default_style);
+    paragraph.default_marks = marks_for_style(paragraph.default_style)?;
+    if !paragraph.bullet_explicit && default.bullet_explicit {
+        paragraph.bullet = default.bullet;
+        paragraph.bullet_explicit = true;
+        paragraph.start = default.start;
+        paragraph.numbering = default
+            .numbering
+            .as_deref()
+            .map(|value| try_clone_string(value, "master default numbering"))
+            .transpose()?;
+    }
+    Ok(())
 }
 
 fn mark_master_text_section(

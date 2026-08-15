@@ -504,3 +504,86 @@ fn xml_ir_and_geometry_work_limits_are_stable() {
         ));
     }
 }
+
+#[test]
+fn presentation_default_text_style_accepts_only_its_default_run_properties() {
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let valid = format!(
+        r#"<p:presentation xmlns:p="{p}" xmlns:a="{a}"><p:defaultTextStyle><a:defPPr><a:defRPr lang="en-US"/></a:defPPr><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:defaultTextStyle></p:presentation>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(super::super::schema::A_NS),
+    );
+    preflight_xml(
+        valid.as_bytes(),
+        "ppt/presentation.xml",
+        XmlProfile::Presentation,
+        &options,
+        &context,
+    )
+    .expect("ECMA-376 default paragraph run properties must be accepted");
+
+    let invalid = valid.replace("<a:defPPr>", "<a:bodyPr>").replace("</a:defPPr>", "</a:bodyPr>");
+    assert!(matches!(
+        preflight_xml(
+            invalid.as_bytes(),
+            "ppt/presentation.xml",
+            XmlProfile::Presentation,
+            &options,
+            &context,
+        ),
+        Err(ConversionError::Malformed { .. })
+    ));
+}
+
+#[test]
+fn master_text_styles_accept_default_paragraph_run_properties() {
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let valid = format!(
+        r#"<p:sldMaster xmlns:p="{p}" xmlns:a="{a}"><p:cSld><p:spTree/></p:cSld><p:txStyles><p:titleStyle><a:defPPr><a:defRPr b="true"/></a:defPPr></p:titleStyle><p:bodyStyle><a:defPPr/></p:bodyStyle><p:otherStyle><a:defPPr><a:defRPr lang="en-US"/></a:defPPr></p:otherStyle></p:txStyles></p:sldMaster>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(super::super::schema::A_NS),
+    );
+    preflight_xml(
+        valid.as_bytes(),
+        "ppt/slideMasters/slideMaster1.xml",
+        XmlProfile::Master,
+        &options,
+        &context,
+    )
+    .expect("master text-list styles may define default paragraph run properties");
+}
+
+#[test]
+fn presentation_extension_and_geometry_extent_are_namespace_distinct() {
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let valid = format!(
+        r#"<p:presentation xmlns:p="{p}" xmlns:a="{a}"><p:extLst><p:ext uri="reviewed"/></p:extLst></p:presentation>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(super::super::schema::A_NS),
+    );
+    preflight_xml(
+        valid.as_bytes(),
+        "ppt/presentation.xml",
+        XmlProfile::Presentation,
+        &options,
+        &context,
+    )
+    .expect("PresentationML extensions must not be confused with DrawingML extents");
+
+    let invalid = valid
+        .replace("<p:extLst>", "<p:defaultTextStyle>")
+        .replace("</p:extLst>", "</p:defaultTextStyle>");
+    assert!(matches!(
+        preflight_xml(
+            invalid.as_bytes(),
+            "ppt/presentation.xml",
+            XmlProfile::Presentation,
+            &options,
+            &context,
+        ),
+        Err(ConversionError::Malformed { .. })
+    ));
+}

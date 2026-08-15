@@ -290,11 +290,29 @@ impl<'a> Package<'a> {
                 format!("relationship part {relationship_part} lacks its exact content type"),
             ));
         }
-        let relationships = {
+        let mut relationships = {
             let bytes = self.load_for_parse(&relationship_part, options, context)?;
             parse_relationships(bytes, owner, options, context)?
         };
         self.release_parsed(&relationship_part)?;
+        let isolated_external_chart_data = owner.starts_with("ppt/charts/")
+            && relationships.iter().any(|relationship| {
+                relationship.external && dangerous_relationship_type(&relationship.kind)
+            });
+        if relationships.iter().any(|relationship| {
+            relationship.external
+                && !(owner.starts_with("ppt/charts/")
+                    && dangerous_relationship_type(&relationship.kind))
+        }) {
+            return Err(malformed(
+                Some(&relationship_part),
+                "external relationships are forbidden by PresentationML conversion policy",
+            ));
+        }
+        if isolated_external_chart_data {
+            self.dangerous_present = true;
+            relationships.retain(|relationship| !relationship.external);
+        }
         for relationship in relationships.iter().filter(|relationship| !relationship.external) {
             let target = resolve_target(owner, &relationship.target)?;
             if dangerous_relationship_type(&relationship.kind) {
@@ -309,12 +327,6 @@ impl<'a> Package<'a> {
                 }
                 self.dangerous_present = true;
             }
-        }
-        if relationships.iter().any(|relationship| relationship.external) {
-            return Err(malformed(
-                Some(&relationship_part),
-                "external relationships are forbidden by PresentationML conversion policy",
-            ));
         }
         Ok(relationships)
     }

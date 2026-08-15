@@ -354,12 +354,14 @@ fn validate_interpreted_element(
         | b"sldMaster" | b"cSld" | b"spTree" | b"sp" | b"pic" | b"graphicFrame" | b"grpSp"
         | b"grpSpPr" | b"nvSpPr" | b"nvPicPr" | b"nvGraphicFramePr" | b"nvGrpSpPr" | b"cNvPr"
         | b"cNvSpPr" | b"cNvPicPr" | b"cNvGraphicFramePr" | b"cNvGrpSpPr" | b"nvPr" | b"ph"
-        | b"spPr" | b"blipFill" => Some(P_NS),
-        b"txStyles" | b"titleStyle" | b"bodyStyle" | b"otherStyle" => Some(P_NS),
+        | b"blipFill" => Some(P_NS),
+        b"txStyles" | b"titleStyle" | b"bodyStyle" | b"otherStyle" | b"defaultTextStyle" => {
+            Some(P_NS)
+        }
         b"theme" | b"graphic" | b"graphicData" | b"tbl" | b"tr" | b"tc" | b"tcPr" | b"p"
         | b"pPr" | b"r" | b"rPr" | b"defRPr" | b"t" | b"br" | b"buChar" | b"buNone" | b"buBlip"
-        | b"bodyPr" | b"lstStyle" | b"buAutoNum" | b"off" | b"ext" | b"chOff" | b"chExt"
-        | b"blip" => Some(A_NS),
+        | b"bodyPr" | b"lstStyle" | b"buAutoNum" | b"off" | b"chOff" | b"chExt" | b"blip"
+        | b"defPPr" => Some(A_NS),
         b"chartSpace" | b"chart" | b"plotArea" | b"ser" | b"cat" | b"val" | b"tx" | b"strRef"
         | b"numRef" | b"strCache" | b"numCache" | b"pt" | b"v" => Some(C_NS),
         _ => None,
@@ -378,6 +380,12 @@ fn validate_interpreted_element(
     }
     if local == b"txBody" && !matches!(ns, P_NS | A_NS) {
         return Err(malformed(Some(part), "txBody has an unexpected namespace"));
+    }
+    if local == b"spPr" && !matches!(ns, P_NS | A_NS | C_NS) {
+        return Err(malformed(Some(part), "spPr has an unexpected namespace"));
+    }
+    if local == b"ext" && !matches!(ns, P_NS | A_NS | C_NS) {
+        return Err(malformed(Some(part), "ext has an unexpected namespace"));
     }
     let valid = match (ns, local) {
         (TYPES_NS, b"Override" | b"Default") => parent_is(TYPES_NS, b"Types"),
@@ -425,30 +433,74 @@ fn validate_interpreted_element(
         ),
         (P_NS, b"ph") => parent_is(P_NS, b"nvPr"),
         (P_NS, b"spPr") => parent_is(P_NS, b"sp") || parent_is(P_NS, b"pic"),
+        (A_NS, b"spPr") => {
+            profile == XmlProfile::Theme
+                && parent.is_some_and(|(namespace, local)| {
+                    namespace == A_NS && matches!(local.as_slice(), b"lnDef" | b"spDef" | b"txDef")
+                })
+        }
+        (C_NS, b"spPr") => {
+            profile == XmlProfile::Chart && parent.is_some_and(|(namespace, _)| namespace == C_NS)
+        }
         (P_NS, b"txBody") => parent_is(P_NS, b"sp"),
         (A_NS, b"txBody") => parent_is(A_NS, b"tc"),
         (P_NS, b"blipFill") => parent_is(P_NS, b"pic"),
         (P_NS, b"txStyles") => parent_is(P_NS, b"sldMaster"),
         (P_NS, b"titleStyle" | b"bodyStyle" | b"otherStyle") => parent_is(P_NS, b"txStyles"),
+        (P_NS, b"defaultTextStyle") => parent_is(P_NS, b"presentation"),
+        (P_NS, b"ext") => parent_is(P_NS, b"extLst"),
         (P_NS, b"xfrm") => parent_is(P_NS, b"graphicFrame"),
         (A_NS, b"xfrm") => parent_is(P_NS, b"spPr") || parent_is(P_NS, b"grpSpPr"),
-        (A_NS, b"off" | b"ext") => parent_is(A_NS, b"xfrm") || parent_is(P_NS, b"xfrm"),
+        (A_NS, b"off") => parent_is(A_NS, b"xfrm") || parent_is(P_NS, b"xfrm"),
+        (A_NS, b"ext") => {
+            parent_is(A_NS, b"xfrm") || parent_is(P_NS, b"xfrm") || parent_is(A_NS, b"extLst")
+        }
         (A_NS, b"chOff" | b"chExt") => parent_is(A_NS, b"xfrm"),
-        (A_NS, b"bodyPr" | b"lstStyle") => parent_is(P_NS, b"txBody") || parent_is(A_NS, b"txBody"),
-        (A_NS, b"p") => parent_is(P_NS, b"txBody") || parent_is(A_NS, b"txBody"),
+        (A_NS, b"bodyPr" | b"lstStyle") => {
+            parent_is(P_NS, b"txBody")
+                || parent_is(A_NS, b"txBody")
+                || parent_is(C_NS, b"rich")
+                || parent_is(C_NS, b"txPr")
+                || (profile == XmlProfile::Theme
+                    && parent.is_some_and(|(namespace, local)| {
+                        namespace == A_NS
+                            && matches!(local.as_slice(), b"lnDef" | b"spDef" | b"txDef")
+                    }))
+        }
+        (A_NS, b"p") => {
+            parent_is(P_NS, b"txBody")
+                || parent_is(A_NS, b"txBody")
+                || parent_is(C_NS, b"rich")
+                || parent_is(C_NS, b"txPr")
+        }
         (A_NS, b"pPr") => parent_is(A_NS, b"p"),
+        (A_NS, b"defPPr") => {
+            matches!(
+                parent,
+                Some((namespace, local))
+                    if namespace == P_NS
+                        && matches!(
+                            local.as_slice(),
+                            b"defaultTextStyle" | b"titleStyle" | b"bodyStyle" | b"otherStyle"
+                        )
+            )
+        }
         (A_NS, local) if level_paragraph(local).is_some() => {
             matches!(
                 parent,
                 Some((namespace, local))
                     if namespace == P_NS
-                        && matches!(local.as_slice(), b"titleStyle" | b"bodyStyle" | b"otherStyle")
+                        && matches!(
+                            local.as_slice(),
+                            b"titleStyle" | b"bodyStyle" | b"otherStyle" | b"defaultTextStyle"
+                        )
             ) || parent_is(A_NS, b"lstStyle")
         }
         (A_NS, b"r") => parent_is(A_NS, b"p"),
         (A_NS, b"rPr") => parent_is(A_NS, b"r") || parent_is(A_NS, b"fld"),
         (A_NS, b"defRPr") => {
             parent_is(A_NS, b"pPr")
+                || parent_is(A_NS, b"defPPr")
                 || parent.is_some_and(|(namespace, local)| {
                     namespace == A_NS && level_paragraph(local).is_some()
                 })
@@ -470,8 +522,33 @@ fn validate_interpreted_element(
         (A_NS, b"tcPr") => parent_is(A_NS, b"tc"),
         (C_NS, b"chart") => parent_is(C_NS, b"chartSpace") || parent_is(A_NS, b"graphicData"),
         (C_NS, b"plotArea") => parent_is(C_NS, b"chart"),
-        (C_NS, b"ser") => parent_is(C_NS, b"plotArea"),
-        (C_NS, b"cat" | b"val" | b"tx") => parent_is(C_NS, b"ser"),
+        (C_NS, b"ser") => {
+            parent_is(C_NS, b"plotArea")
+                || parent.is_some_and(|(namespace, local)| {
+                    namespace == C_NS
+                        && matches!(
+                            local.as_slice(),
+                            b"area3DChart"
+                                | b"areaChart"
+                                | b"bar3DChart"
+                                | b"barChart"
+                                | b"bubbleChart"
+                                | b"doughnutChart"
+                                | b"line3DChart"
+                                | b"lineChart"
+                                | b"ofPieChart"
+                                | b"pie3DChart"
+                                | b"pieChart"
+                                | b"radarChart"
+                                | b"scatterChart"
+                                | b"stockChart"
+                                | b"surface3DChart"
+                                | b"surfaceChart"
+                        )
+                })
+        }
+        (C_NS, b"cat" | b"val") => parent_is(C_NS, b"ser"),
+        (C_NS, b"tx") => parent_is(C_NS, b"ser") || parent_is(C_NS, b"title"),
         (C_NS, b"strRef" | b"numRef") => {
             parent_is(C_NS, b"cat") || parent_is(C_NS, b"val") || parent_is(C_NS, b"tx")
         }
@@ -480,6 +557,7 @@ fn validate_interpreted_element(
         }
         (C_NS, b"pt") => parent_is(C_NS, b"strCache") || parent_is(C_NS, b"numCache"),
         (C_NS, b"v") => parent_is(C_NS, b"pt") || parent_is(C_NS, b"tx"),
+        (C_NS, b"ext") => parent_is(C_NS, b"extLst"),
         (MC_NS, b"Choice" | b"Fallback") => parent_is(MC_NS, b"AlternateContent"),
         _ => true,
     };
