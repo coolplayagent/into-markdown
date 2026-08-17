@@ -54,8 +54,8 @@ pub use options::{
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, DocumentPatch,
-    FormatDetector, MarkdownRenderer, OcrEngine, OcrRequest, OutputEnricher, PatchOperation,
-    ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
+    EnrichmentPlan, FormatDetector, MarkdownRenderer, OcrEngine, OcrRequest, OutputEnricher,
+    PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
     TranscriptionRequest, TranscriptionResult,
 };
 #[doc(hidden)]

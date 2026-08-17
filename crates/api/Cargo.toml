@@ -17,6 +17,7 @@ into-markdown-render-markdown = { path = "../render-markdown" }
 into-markdown-task-store = { path = "../task-store" }
 
 [dev-dependencies]
+image.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

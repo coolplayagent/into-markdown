@@ -957,6 +957,18 @@ mod tests {
             "recovery.title-enricher"
         }
 
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<into_markdown_core::EnrichmentPlan, ConversionError> {
+            Ok(into_markdown_core::EnrichmentPlan::Reserve(64 * 1024))
+        }
+
         fn enrich<'a>(
             &'a self,
             mut output: ConverterOutput,

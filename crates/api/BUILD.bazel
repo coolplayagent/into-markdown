@@ -100,6 +100,7 @@ rust_test(
         "//crates/ocr",
         "//crates/render-markdown:render_markdown",
         "//crates/task-store:task_store",
+        "@crates//:image",
         "@crates//:serde_json",
         "@crates//:sha2",
         "@crates//:tempfile",

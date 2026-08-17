@@ -4,9 +4,9 @@ use crate::image_converter::{decode, encode, envelope, format};
 use image::{AnimationDecoder, ImageDecoder};
 use into_markdown_core::{
     AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, ExecutionContext, Inline, InputFormat, NodeId,
+    Diagnostic, DiagnosticSeverity, EnrichmentPlan, ExecutionContext, Inline, InputFormat, NodeId,
     OcrInputIdentity, OcrPolicy, OutputEnricher, Provenance, ResourceReservation, Services,
-    SourceLocator,
+    SourceLocator, estimate_validation_working_set,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +24,18 @@ impl OutputEnricher for EmbeddedVisualOcrEnricher {
         PROVIDER
     }
 
+    fn planned_enrichment_bytes(
+        &self,
+        output: &ConverterOutput,
+        _converter_id: &str,
+        input_format: InputFormat,
+        options: &ConversionOptions,
+        services: &Services,
+        context: &ExecutionContext,
+    ) -> Result<EnrichmentPlan, ConversionError> {
+        plan_enrichment(output, input_format, options, services, context)
+    }
+
     fn enrich<'a>(
         &'a self,
         output: ConverterOutput,
@@ -35,6 +47,249 @@ impl OutputEnricher for EmbeddedVisualOcrEnricher {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move { enrich(output, format, options, services, context).await })
     }
+}
+
+fn checked_add(total: &mut u64, bytes: u64, detail: &'static str) -> Result<(), ConversionError> {
+    *total = total.checked_add(bytes).ok_or_else(|| resource("max_memory_bytes", detail))?;
+    Ok(())
+}
+
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+        return Some((
+            u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+            u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+        ));
+    }
+    if (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) && bytes.len() >= 10 {
+        return Some((
+            u32::from(u16::from_le_bytes([bytes[6], bytes[7]])),
+            u32::from(u16::from_le_bytes([bytes[8], bytes[9]])),
+        ));
+    }
+    if bytes.starts_with(b"BM") && bytes.len() >= 26 {
+        let width = i32::from_le_bytes(bytes[18..22].try_into().ok()?).unsigned_abs();
+        let height = i32::from_le_bytes(bytes[22..26].try_into().ok()?).unsigned_abs();
+        return Some((width, height));
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        match bytes.get(12..16)? {
+            b"VP8X" if bytes.len() >= 30 => {
+                let width = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]) + 1;
+                let height = u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]) + 1;
+                return Some((width, height));
+            }
+            b"VP8L" if bytes.len() >= 25 && bytes[20] == 0x2f => {
+                let width = 1 + u32::from(bytes[21]) + (u32::from(bytes[22] & 0x3f) << 8);
+                let height = 1
+                    + u32::from(bytes[22] >> 6)
+                    + (u32::from(bytes[23]) << 2)
+                    + (u32::from(bytes[24] & 0x0f) << 10);
+                return Some((width, height));
+            }
+            b"VP8 " if bytes.len() >= 30 && bytes[23..26] == [0x9d, 0x01, 0x2a] => {
+                let width = u32::from(u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3fff);
+                let height = u32::from(u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3fff);
+                return Some((width, height));
+            }
+            _ => {}
+        }
+    }
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut offset = 2_usize;
+        while offset.checked_add(9)? <= bytes.len() {
+            if bytes[offset] != 0xff {
+                offset += 1;
+                continue;
+            }
+            let marker = bytes[offset + 1];
+            offset += 2;
+            if matches!(marker, 0xd8 | 0xd9 | 0x01) {
+                continue;
+            }
+            let length =
+                usize::from(u16::from_be_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?));
+            if length < 2 || offset.checked_add(length)? > bytes.len() {
+                return None;
+            }
+            if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+                let height =
+                    u32::from(u16::from_be_bytes(bytes[offset + 3..offset + 5].try_into().ok()?));
+                let width =
+                    u32::from(u16::from_be_bytes(bytes[offset + 5..offset + 7].try_into().ok()?));
+                return Some((width, height));
+            }
+            offset += length;
+        }
+    }
+    tiff_dimensions(bytes)
+}
+
+fn tiff_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let little = match bytes.get(..4)? {
+        b"II*\0" => true,
+        b"MM\0*" => false,
+        _ => return None,
+    };
+    let read_u16 = |slice: &[u8]| {
+        let value: [u8; 2] = slice.try_into().ok()?;
+        Some(if little { u16::from_le_bytes(value) } else { u16::from_be_bytes(value) })
+    };
+    let read_u32 = |slice: &[u8]| {
+        let value: [u8; 4] = slice.try_into().ok()?;
+        Some(if little { u32::from_le_bytes(value) } else { u32::from_be_bytes(value) })
+    };
+    let ifd = usize::try_from(read_u32(bytes.get(4..8)?)?).ok()?;
+    let entries = usize::from(read_u16(bytes.get(ifd..ifd.checked_add(2)?)?)?);
+    let mut width = None;
+    let mut height = None;
+    for index in 0..entries {
+        let start = ifd.checked_add(2)?.checked_add(index.checked_mul(12)?)?;
+        let entry = bytes.get(start..start.checked_add(12)?)?;
+        let tag = read_u16(&entry[..2])?;
+        if !matches!(tag, 256 | 257) {
+            continue;
+        }
+        let kind = read_u16(&entry[2..4])?;
+        let count = read_u32(&entry[4..8])?;
+        if count != 1 {
+            return None;
+        }
+        let value = match kind {
+            3 => u32::from(read_u16(&entry[8..10])?),
+            4 => read_u32(&entry[8..12])?,
+            _ => return None,
+        };
+        if tag == 256 {
+            width = Some(value);
+        } else {
+            height = Some(value);
+        }
+    }
+    Some((width?, height?))
+}
+
+/// Allocation-free with respect to image pixels: only envelope dimensions and
+/// provider-declared bounds are inspected before the engine reserves this peak.
+fn plan_enrichment(
+    output: &ConverterOutput,
+    input_format: InputFormat,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<EnrichmentPlan, ConversionError> {
+    if options.ocr.policy == OcrPolicy::Off
+        || input_format == InputFormat::Image
+        || !eligible_container(input_format)
+    {
+        return Ok(EnrichmentPlan::Skip);
+    }
+    let mut total = 0_u64;
+    let mut candidates = 0_u32;
+    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
+        let Some(asset) = output.assets.iter().find(|asset| asset.id == *asset_id) else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", asset_id.0),
+            });
+        };
+        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
+            return Ok(());
+        }
+        candidates = candidates.checked_add(1).ok_or_else(|| {
+            resource("max_archive_entries", "embedded OCR candidate count overflow")
+        })?;
+        // Treat every reference as unique. This is deliberately conservative:
+        // duplicate identities save inference work but still clone IR/evidence.
+        checked_add(&mut total, 128 * 1024, "embedded OCR reference plan overflow")?;
+        let dimensions = image_dimensions(&asset.bytes);
+        let normalized_peak = if let Some((width, height)) = dimensions {
+            u64::from(width)
+                .checked_mul(u64::from(height))
+                .and_then(|pixels| pixels.checked_mul(32))
+                .and_then(|bytes| bytes.checked_add(64 * 1024))
+                .ok_or_else(|| resource("max_memory_bytes", "normalization plan overflow"))?
+        } else {
+            64 * 1024
+        };
+        checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
+        checked_add(
+            &mut total,
+            u64::try_from(asset.bytes.len())
+                .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
+            "hash/cache plan overflow",
+        )?;
+        let provider_bound = match (services.ocr.as_deref(), dimensions) {
+            (_, None) => 0,
+            (Some(engine), Some((width, height))) => {
+                match engine.planned_normalized_png_output(width, height, options, context) {
+                    Ok(plan) => plan.max_retained_bytes(),
+                    Err(ConversionError::ComponentUnavailable { .. })
+                        if options.ocr.policy == OcrPolicy::Auto =>
+                    {
+                        0
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => 0,
+            (None, Some(_)) => {
+                return Err(ConversionError::ComponentUnavailable {
+                    component: "ocr".into(),
+                    detail: "no OCR engine is configured".into(),
+                });
+            }
+        };
+        checked_add(
+            &mut total,
+            provider_bound
+                .checked_mul(2)
+                .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?,
+            "OCR output plan overflow",
+        )?;
+        Ok(())
+    })?;
+    if candidates == 0 {
+        return Ok(EnrichmentPlan::Skip);
+    }
+    checked_add(
+        &mut total,
+        estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?,
+        "embedded OCR validation plan overflow",
+    )?;
+    Ok(EnrichmentPlan::Reserve(total))
+}
+
+fn for_each_visual_reference(
+    nodes: &[BlockNode],
+    context: &ExecutionContext,
+    visit: &mut impl FnMut(&AssetId) -> Result<(), ConversionError>,
+) -> Result<(), ConversionError> {
+    for node in nodes {
+        context.checkpoint()?;
+        match &node.block {
+            Block::Image { asset, .. } => visit(asset)?,
+            Block::List { items, .. } => {
+                for item in items {
+                    for_each_visual_reference(&item.blocks, context, visit)?;
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        for_each_visual_reference(&cell.blocks, context, visit)?;
+                    }
+                }
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => {
+                for_each_visual_reference(blocks, context, visit)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -139,7 +394,10 @@ async fn enrich(
         })?;
         let normalized = match normalize(asset, options, context) {
             Ok(value) => value,
-            Err(error) if options.ocr.policy == OcrPolicy::Auto => {
+            Err(error)
+                if options.ocr.policy == OcrPolicy::Auto
+                    && auto_degradable_normalization(&error) =>
+            {
                 cache.insert(
                     digest,
                     CachedContribution {
@@ -157,6 +415,35 @@ async fn enrich(
             normalized.height,
             0,
         )?;
+        let normalized_plan = match services.ocr.as_deref() {
+            Some(engine) => engine.planned_normalized_png_output(
+                normalized.width,
+                normalized.height,
+                options,
+                context,
+            ),
+            None => Err(ConversionError::ComponentUnavailable {
+                component: "ocr".into(),
+                detail: "no OCR engine is configured".into(),
+            }),
+        };
+        match normalized_plan {
+            Ok(_) => {}
+            Err(error)
+                if options.ocr.policy == OcrPolicy::Auto
+                    && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
+            {
+                cache.insert(
+                    digest,
+                    CachedContribution {
+                        nodes: Vec::new(),
+                        diagnostics: vec![visual_diagnostic(None, error.to_string())],
+                    },
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
         let mut contribution = crate::image_converter::ocr::recognize_for_input(
             &normalized.bytes,
             u32::try_from(ordinal + 1)
@@ -184,9 +471,12 @@ async fn enrich(
             contributions_by_asset.insert(asset, contribution.clone());
         }
     }
+    let mut occupied_ids = BTreeSet::new();
+    collect_node_ids(&output.document.blocks, &mut occupied_ids);
     output.document.blocks = rebuild_nodes(
         std::mem::take(&mut output.document.blocks),
         &contributions_by_asset,
+        &mut occupied_ids,
         context,
     )?;
     for reference in &references {
@@ -202,6 +492,10 @@ async fn enrich(
         output = crate::pdf_ocr::reconstruct_enriched_pdf(output, context)?;
     }
     Ok(output)
+}
+
+fn auto_degradable_normalization(error: &ConversionError) -> bool {
+    matches!(error, ConversionError::ComponentUnavailable { .. })
 }
 
 fn eligible_container(format: InputFormat) -> bool {
@@ -227,17 +521,18 @@ fn eligible_container(format: InputFormat) -> bool {
 }
 
 fn supported_raster(asset: &into_markdown_core::Asset) -> bool {
-    matches!(
-        asset.media_type.to_ascii_lowercase().as_str(),
-        "image/png"
-            | "image/jpeg"
-            | "image/jpg"
-            | "image/gif"
-            | "image/webp"
-            | "image/bmp"
-            | "image/tiff"
-            | "image/x-tiff"
-    )
+    [
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/tiff",
+        "image/x-tiff",
+    ]
+    .iter()
+    .any(|candidate| asset.media_type.eq_ignore_ascii_case(candidate))
 }
 
 fn normalize(
@@ -409,6 +704,7 @@ fn collect_references(
 fn rebuild_nodes(
     nodes: Vec<BlockNode>,
     cache: &BTreeMap<AssetId, CachedContribution>,
+    occupied_ids: &mut BTreeSet<NodeId>,
     context: &ExecutionContext,
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let mut rebuilt = Vec::new();
@@ -419,14 +715,23 @@ fn rebuild_nodes(
         match &mut node.block {
             Block::List { items, .. } => {
                 for item in items {
-                    item.blocks = rebuild_nodes(std::mem::take(&mut item.blocks), cache, context)?;
+                    item.blocks = rebuild_nodes(
+                        std::mem::take(&mut item.blocks),
+                        cache,
+                        occupied_ids,
+                        context,
+                    )?;
                 }
             }
             Block::Table { rows, .. } => {
                 for row in rows {
                     for cell in &mut row.cells {
-                        cell.blocks =
-                            rebuild_nodes(std::mem::take(&mut cell.blocks), cache, context)?;
+                        cell.blocks = rebuild_nodes(
+                            std::mem::take(&mut cell.blocks),
+                            cache,
+                            occupied_ids,
+                            context,
+                        )?;
                     }
                 }
             }
@@ -434,7 +739,7 @@ fn rebuild_nodes(
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                *blocks = rebuild_nodes(std::mem::take(blocks), cache, context)?;
+                *blocks = rebuild_nodes(std::mem::take(blocks), cache, occupied_ids, context)?;
             }
             _ => {}
         }
@@ -447,20 +752,25 @@ fn rebuild_nodes(
         rebuilt.push(node);
         if let Some(contribution) = contribution {
             for (ocr_index, template) in contribution.nodes.into_iter().enumerate() {
-                rebuilt.push(remap_ocr_node(template, &source_id, &source_provenance, ocr_index));
+                let mut suffix = ocr_index + 1;
+                let fresh_id = loop {
+                    let candidate = NodeId(format!("{}::ocr::{suffix}", source_id.0));
+                    if occupied_ids.insert(candidate.clone()) {
+                        break candidate;
+                    }
+                    suffix = suffix.checked_add(1).ok_or_else(|| {
+                        resource("max_archive_entries", "OCR node ID suffix overflow")
+                    })?;
+                };
+                rebuilt.push(remap_ocr_node(template, fresh_id, &source_provenance));
             }
         }
     }
     Ok(rebuilt)
 }
 
-fn remap_ocr_node(
-    mut node: BlockNode,
-    source_id: &NodeId,
-    source: &Provenance,
-    index: usize,
-) -> BlockNode {
-    node.id = NodeId(format!("{}::ocr::{}", source_id.0, index + 1));
+fn remap_ocr_node(mut node: BlockNode, fresh_id: NodeId, source: &Provenance) -> BlockNode {
+    node.id = fresh_id;
     let ocr_locator = node.provenance.locator.clone();
     node.provenance.locator = remapped_ocr_locator(&source.locator, &ocr_locator);
     if let Block::Paragraph(inlines) = &mut node.block {
@@ -484,6 +794,31 @@ fn remap_ocr_node(
         }
     }
     node
+}
+
+fn collect_node_ids(nodes: &[BlockNode], output: &mut BTreeSet<NodeId>) {
+    for node in nodes {
+        output.insert(node.id.clone());
+        match &node.block {
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_node_ids(&item.blocks, output);
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        collect_node_ids(&cell.blocks, output);
+                    }
+                }
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => collect_node_ids(blocks, output),
+            _ => {}
+        }
+    }
 }
 
 fn coordinate_frame(
@@ -569,6 +904,44 @@ mod tests {
         corrupt_identity: bool,
     }
 
+    struct LegacyBoundOcr(AtomicUsize);
+
+    impl OcrEngine for LegacyBoundOcr {
+        fn id(&self) -> &'static str {
+            "test.ocr.legacy-bound"
+        }
+
+        fn recognize<'a>(
+            &'a self,
+            _: OcrRequest<'a>,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+            Box::pin(async {
+                unreachable!("provider without normalized preflight must be skipped")
+            })
+        }
+
+        fn planned_bound_output(
+            &self,
+            _: OcrRequest<'_>,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<OcrOutputPlan, ConversionError> {
+            OcrOutputPlan::try_new(1024 * 1024, 1, 128)
+        }
+
+        fn recognize_bound<'a>(
+            &'a self,
+            _: OcrRequest<'a>,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                unreachable!("provider without normalized preflight must be skipped")
+            })
+        }
+    }
+
     impl OcrEngine for SourceBoundOcr {
         fn id(&self) -> &'static str {
             "test.ocr.source-bound"
@@ -585,6 +958,16 @@ mod tests {
         fn planned_bound_output(
             &self,
             _: OcrRequest<'_>,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<OcrOutputPlan, ConversionError> {
+            OcrOutputPlan::try_new(16 * 1024, 1, 128)
+        }
+
+        fn planned_normalized_png_output(
+            &self,
+            _: u32,
+            _: u32,
             _: &ConversionOptions,
             _: &ExecutionContext,
         ) -> Result<OcrOutputPlan, ConversionError> {
@@ -782,6 +1165,62 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_references_increase_the_preflight_plan() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let duplicate = output();
+        let mut single = output();
+        let Block::Page { blocks, .. } = &mut single.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        blocks.truncate(1);
+        let EnrichmentPlan::Reserve(single_plan) =
+            plan_enrichment(&single, InputFormat::Docx, &options, &services, &context).unwrap()
+        else {
+            panic!("active plan expected")
+        };
+        let EnrichmentPlan::Reserve(duplicate_plan) =
+            plan_enrichment(&duplicate, InputFormat::Docx, &options, &services, &context).unwrap()
+        else {
+            panic!("active plan expected")
+        };
+        assert!(duplicate_plan >= single_plan + 16 * 1024 + 4 * 1024);
+    }
+
+    #[test]
+    fn generated_ocr_ids_are_stable_and_never_collide() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let mut source = output();
+        let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        blocks.insert(
+            0,
+            BlockNode {
+                id: NodeId("image-a::ocr::1".into()),
+                block: Block::Rule,
+                provenance: provenance("existing"),
+            },
+        );
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let enriched =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+        let Block::Page { blocks, .. } = &enriched.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        let ids = blocks.iter().map(|node| node.id.0.as_str()).collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), blocks.len());
+        assert!(ids.contains("image-a::ocr::1"));
+        assert!(ids.contains("image-a::ocr::2"));
+    }
+
+    #[test]
     fn off_and_non_container_formats_are_exact_no_ops() {
         let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
@@ -874,12 +1313,17 @@ mod tests {
             block_on(enrich(remote, InputFormat::Html, &options, &services, &context)).unwrap();
         assert_eq!(after.document, expected);
 
-        let mut mismatched = output();
-        mismatched.assets[0].media_type = "image/jpeg".into();
-        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-        let error = block_on(enrich(mismatched, InputFormat::Docx, &options, &services, &context))
-            .unwrap_err();
-        assert!(matches!(error, ConversionError::Malformed { .. }));
+        for policy in [OcrPolicy::Always, OcrPolicy::Auto] {
+            let mut mismatched = output();
+            mismatched.assets[0].media_type = "image/jpeg".into();
+            options.ocr.policy = policy;
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let error =
+                block_on(enrich(mismatched, InputFormat::Docx, &options, &services, &context))
+                    .unwrap_err();
+            assert!(matches!(error, ConversionError::Malformed { .. }), "{policy:?}");
+        }
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
     }
 
@@ -923,6 +1367,81 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Cancelled);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn auto_propagates_normalization_limits_cancellation_and_timeout() {
+        let services = Services::default();
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        options.limits.max_decompressed_bytes = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let error = block_on(enrich(output(), InputFormat::Docx, &options, &services, &context))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. }
+        ));
+
+        let bytes = png();
+        let asset = Asset {
+            id: AssetId("direct".into()),
+            filename: Some("direct.png".into()),
+            media_type: "image/png".into(),
+            bytes,
+            external_uri: None,
+        };
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            ConversionOptions::default().limits,
+        );
+        assert!(matches!(
+            normalize(&asset, &ConversionOptions::default(), &cancelled),
+            Err(ConversionError::Cancelled)
+        ));
+
+        let timed_out = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+            ConversionOptions::default().limits,
+        );
+        assert!(matches!(
+            normalize(&asset, &ConversionOptions::default(), &timed_out),
+            Err(ConversionError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn auto_degrades_missing_normalized_provider_plan_but_always_fails() {
+        let ocr = Arc::new(LegacyBoundOcr(AtomicUsize::new(0)));
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context).unwrap(),
+            EnrichmentPlan::Reserve(_)
+        ));
+        let enriched =
+            block_on(enrich(output(), InputFormat::Docx, &options, &services, &context)).unwrap();
+        assert_eq!(ocr.0.load(Ordering::SeqCst), 0);
+        assert!(
+            enriched
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("normalized-PNG output bound"))
+        );
+
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context),
+            Err(ConversionError::ComponentUnavailable { .. })
+        ));
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {

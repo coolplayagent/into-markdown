@@ -158,6 +158,32 @@ impl OcrEngine for PpOcrImageEngine {
         output_plan(&options.limits)
     }
 
+    fn planned_normalized_png_output(
+        &self,
+        width: u32,
+        height: u32,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        context.checkpoint()?;
+        if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+            return Err(resource(
+                "image_dimensions",
+                "OCR PNG dimensions are outside product bounds",
+            ));
+        }
+        let decoded = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| resource("max_decompressed_bytes", "OCR PNG size overflow"))?;
+        if decoded > self.limits.max_decompressed_bytes
+            || decoded > options.limits.max_decompressed_bytes
+        {
+            return Err(resource("max_decompressed_bytes", "OCR PNG dimensions exceed limits"));
+        }
+        output_plan(&options.limits)
+    }
+
     fn recognize_bound<'a>(
         &'a self,
         request: OcrRequest<'a>,

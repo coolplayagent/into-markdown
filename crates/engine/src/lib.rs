@@ -10,7 +10,7 @@ use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
+    EnrichmentPlan, ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
     MarkdownRenderer, OutputEnricher, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation,
     Services, SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
     estimate_validation_working_set,
@@ -444,9 +444,39 @@ pub(crate) async fn invoke_enrichers(
 ) -> Result<ConverterOutput, ConversionError> {
     for enricher in enrichers {
         context.checkpoint()?;
+        let plan = enricher.planned_enrichment_bytes(
+            &output,
+            converter_id,
+            format,
+            options,
+            services,
+            context,
+        )?;
+        let EnrichmentPlan::Reserve(plan) = plan else {
+            continue;
+        };
+        let mut memory = context.reserve_memory(plan)?;
+        let credited_context = context.with_memory_credit(&mut memory)?;
         output = context
-            .run(enricher.enrich(output, converter_id, format, options, services, context))
+            .run(enricher.enrich(
+                output,
+                converter_id,
+                format,
+                options,
+                services,
+                &credited_context,
+            ))
             .await??;
+        let retained_bytes = into_markdown_core::estimate_retained_output(
+            &output.document,
+            &output.assets,
+            &output.diagnostics,
+        )?;
+        let validation_bytes =
+            estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?;
+        let retained_memory = credited_context
+            .reserve_memory(retained_bytes.saturating_sub(output.leased_memory_for(context)))?;
+        let validation_memory = credited_context.reserve_memory(validation_bytes)?;
         output.document.validate().map_err(|error| ConversionError::Internal {
             detail: format!(
                 "output enricher {} returned invalid document IR ({} at {}): {}",
@@ -456,7 +486,10 @@ pub(crate) async fn invoke_enrichers(
                 error.detail
             ),
         })?;
-        output = output.account_retained(context)?;
+        drop(validation_memory);
+        drop(retained_memory);
+        drop(credited_context);
+        output = output.certify_enrichment_reservation(context, memory)?;
     }
     Ok(output)
 }
@@ -1240,9 +1273,83 @@ mod tests {
         suffix: &'static str,
     }
 
+    struct PlanGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
+    struct SkipGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl OutputEnricher for SkipGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.skip-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Skip)
+        }
+        fn enrich<'a>(
+            &'a self,
+            _: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { unreachable!("skipped enricher must never execute") })
+        }
+    }
+
+    impl OutputEnricher for PlanGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.plan-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Reserve(8 * 1024))
+        }
+        fn enrich<'a>(
+            &'a self,
+            output: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { Ok(output) })
+        }
+    }
+
     impl OutputEnricher for TitleEnricher {
         fn id(&self) -> &'static str {
             self.id
+        }
+
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Reserve(64 * 1024))
         }
 
         fn enrich<'a>(
@@ -1357,6 +1464,61 @@ mod tests {
         let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
         let result = block_on(engine.convert(request)).unwrap();
         assert_eq!(result.document.metadata.title.as_deref(), Some("base.converter:one:two"));
+    }
+
+    #[test]
+    fn output_enricher_plan_is_reserved_before_provider_entry() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> = Arc::new(PlanGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 8 * 1024 - 1,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let error = block_on(invoke_enrichers(
+            &[enricher],
+            ConverterOutput::default(),
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn skipped_output_enricher_is_an_exact_no_op_even_with_zero_memory_budget() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> = Arc::new(SkipGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 0,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let output = ConverterOutput::default();
+        let result = block_on(invoke_enrichers(
+            &[enricher],
+            output,
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap();
+        assert_eq!(result.document, ConverterOutput::default().document);
+        assert!(result.assets.is_empty());
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]
