@@ -2,7 +2,9 @@ use crate::workbook::budget::checked_field_bytes;
 use crate::workbook::cell::parse_cell_ref;
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::model::CellCoordinate;
-use crate::workbook::opc::relationships::{decode_attr, require_spreadsheet_namespace};
+use crate::workbook::opc::relationships::{
+    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace,
+};
 use crate::workbook::schema::{MAX_EXCEL_COLUMNS, MAX_EXCEL_ROWS};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, InlineMark};
 use quick_xml::events::Event;
@@ -23,7 +25,12 @@ pub(super) fn parse_cell_styles(
         context.checkpoint()?;
         match reader.read_resolved_event() {
             Ok((namespace, Event::Start(event))) => {
-                require_spreadsheet_namespace(&namespace, part)?;
+                if event.local_name().as_ref() == b"styleSheet" {
+                    require_spreadsheet_namespace(&namespace, part)?;
+                }
+                if !is_spreadsheet_namespace(&namespace) {
+                    continue;
+                }
                 match event.local_name().as_ref() {
                     b"font" => current_font = Some(Vec::new()),
                     b"cellXfs" => in_cell_xfs = true,
@@ -39,7 +46,9 @@ pub(super) fn parse_cell_styles(
                 }
             }
             Ok((namespace, Event::Empty(event))) => {
-                require_spreadsheet_namespace(&namespace, part)?;
+                if !is_spreadsheet_namespace(&namespace) {
+                    continue;
+                }
                 match event.local_name().as_ref() {
                     b"font" => fonts.push(Vec::new()),
                     b"xf" if in_cell_xfs => styles.push(style_marks(&event, &fonts, part)?),
@@ -51,18 +60,20 @@ pub(super) fn parse_cell_styles(
                     _ => {}
                 }
             }
-            Ok((_, Event::End(event))) => match event.local_name().as_ref() {
-                b"font" => {
-                    let mut marks = current_font
-                        .take()
-                        .ok_or_else(|| malformed(Some(part), "font end without start"))?;
-                    marks.sort_unstable();
-                    marks.dedup();
-                    fonts.push(marks);
+            Ok((namespace, Event::End(event))) if is_spreadsheet_namespace(&namespace) => {
+                match event.local_name().as_ref() {
+                    b"font" => {
+                        let mut marks = current_font
+                            .take()
+                            .ok_or_else(|| malformed(Some(part), "font end without start"))?;
+                        marks.sort_unstable();
+                        marks.dedup();
+                        fonts.push(marks);
+                    }
+                    b"cellXfs" => in_cell_xfs = false,
+                    _ => {}
                 }
-                b"cellXfs" => in_cell_xfs = false,
-                _ => {}
-            },
+            }
             Ok((_, Event::Eof)) => break,
             Err(error) => {
                 return Err(malformed(Some(part), format!("invalid styles XML: {error}")));

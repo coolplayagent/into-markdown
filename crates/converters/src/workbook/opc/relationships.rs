@@ -204,3 +204,11 @@ pub(in crate::workbook) fn require_spreadsheet_namespace(
         _ => Err(malformed(Some(part), "invalid SpreadsheetML namespace")),
     }
 }
+
+pub(in crate::workbook) fn is_spreadsheet_namespace(namespace: &ResolveResult<'_>) -> bool {
+    matches!(
+        namespace,
+        ResolveResult::Bound(value)
+            if value.as_ref() == SPREADSHEET_NS || value.as_ref() == SPREADSHEET_STRICT_NS
+    )
+}

@@ -33,7 +33,12 @@ pub(crate) fn reconstruct_page(
     if content.atoms.is_empty() {
         return Ok(content.passthrough);
     }
-    let clustered = lines::cluster(content.atoms, budget)?;
+    // Page-render OCR and embedded-image OCR can describe the same pixels with
+    // different line segmentation. Remove overlapping OCR atoms before line
+    // clustering; once combined into one line, exact line-level deduplication
+    // can no longer distinguish those duplicate observations.
+    let atoms = dedup::suppress_overlapping_ocr_atoms(content.atoms, budget)?;
+    let clustered = lines::cluster(atoms, budget)?;
     let deduplicated = dedup::suppress(clustered, budget)?;
     let median_font = semantics::font_baseline(&deduplicated, budget)?;
     // Lock locally corroborated two-dimensional grids before interpreting

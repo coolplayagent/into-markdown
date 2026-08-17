@@ -261,6 +261,7 @@ fn plan_enrichment(
     let mut candidate_bytes = 0_u64;
     let existing_nodes = count_document_nodes(&output.document.blocks, context)?;
     let mut planned_added_nodes = 0_usize;
+    let mut provider_working_peak = 0_u64;
     for (index, asset) in output.assets.iter().enumerate() {
         context.checkpoint()?;
         if asset.bytes.is_empty()
@@ -334,27 +335,33 @@ fn plan_enrichment(
             64 * 1024
         };
         checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
-        let (provider_bound, provider_regions) = match (services.ocr.as_deref(), dimensions) {
-            (_, None) => (0, 0),
-            (Some(engine), Some((width, height))) => {
-                match engine.planned_normalized_png_output(width, height, options, context) {
-                    Ok(plan) => (plan.max_retained_bytes(), plan.max_regions()),
-                    Err(ConversionError::ComponentUnavailable { .. })
-                        if options.ocr.policy == OcrPolicy::Auto =>
-                    {
-                        (0, 0)
+        let (provider_bound, provider_working, provider_regions) =
+            match (services.ocr.as_deref(), dimensions) {
+                (_, None) => (0, 0, 0),
+                (Some(engine), Some((width, height))) => {
+                    match engine.planned_normalized_png_output(width, height, options, context) {
+                        Ok(plan) => (
+                            plan.max_retained_bytes(),
+                            plan.max_working_bytes(),
+                            plan.max_regions(),
+                        ),
+                        Err(ConversionError::ComponentUnavailable { .. })
+                            if options.ocr.policy == OcrPolicy::Auto =>
+                        {
+                            (0, 0, 0)
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 }
-            }
-            (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => (0, 0),
-            (None, Some(_)) => {
-                return Err(ConversionError::ComponentUnavailable {
-                    component: "ocr".into(),
-                    detail: "no OCR engine is configured".into(),
-                });
-            }
-        };
+                (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => (0, 0, 0),
+                (None, Some(_)) => {
+                    return Err(ConversionError::ComponentUnavailable {
+                        component: "ocr".into(),
+                        detail: "no OCR engine is configured".into(),
+                    });
+                }
+            };
+        provider_working_peak = provider_working_peak.max(provider_working);
         let reference_copies = visual_reference_count_for_bytes(output, &asset.bytes, context)?;
         let added_nodes = usize::try_from(provider_regions)
             .unwrap_or(usize::MAX)
@@ -386,6 +393,7 @@ fn plan_enrichment(
             "OCR output plan overflow",
         )?;
     }
+    checked_add(&mut total, provider_working_peak, "OCR provider working-set plan overflow")?;
     let (occupied_id_bytes, collision_scratch) =
         planned_node_id_working_set(&output.document.blocks, context)?;
     checked_add(&mut total, occupied_id_bytes, "occupied OCR node ID plan overflow")?;
@@ -1329,10 +1337,44 @@ fn remap_ocr_node(
                         }
                     }
                 }
+                provenance.locator.bounds = evidence_bounds(&evidence.regions);
             }
         }
     }
     Ok(node)
+}
+
+fn evidence_bounds(
+    regions: &[into_markdown_core::OcrSourceRegion],
+) -> Option<into_markdown_core::Rect> {
+    (!regions.is_empty()).then(|| {
+        let minimum_x = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min);
+        let minimum_y = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        let maximum_x = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let maximum_y = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        into_markdown_core::Rect {
+            x: minimum_x,
+            y: minimum_y,
+            width: maximum_x - minimum_x,
+            height: maximum_y - minimum_y,
+        }
+    })
 }
 
 fn collect_node_ids(
@@ -1448,6 +1490,7 @@ mod tests {
         calls: AtomicUsize,
         plans: AtomicUsize,
         planned_bytes: u64,
+        planned_working_bytes: u64,
         corrupt_identity: bool,
     }
 
@@ -1569,7 +1612,12 @@ mod tests {
             _: &ExecutionContext,
         ) -> Result<OcrOutputPlan, ConversionError> {
             self.plans.fetch_add(1, Ordering::SeqCst);
-            OcrOutputPlan::try_new(self.planned_bytes, 1, 128)
+            OcrOutputPlan::try_new_with_working(
+                self.planned_bytes,
+                self.planned_working_bytes,
+                1,
+                128,
+            )
         }
 
         fn recognize_bound<'a>(
@@ -1691,10 +1739,19 @@ mod tests {
         corrupt_identity: bool,
         planned_bytes: u64,
     ) -> Arc<SourceBoundOcr> {
+        source_bound_ocr_with_working_plan(corrupt_identity, planned_bytes, 0)
+    }
+
+    fn source_bound_ocr_with_working_plan(
+        corrupt_identity: bool,
+        planned_bytes: u64,
+        planned_working_bytes: u64,
+    ) -> Arc<SourceBoundOcr> {
         Arc::new(SourceBoundOcr {
             calls: AtomicUsize::new(0),
             plans: AtomicUsize::new(0),
             planned_bytes,
+            planned_working_bytes,
             corrupt_identity,
         })
     }
@@ -1925,6 +1982,36 @@ mod tests {
     }
 
     #[test]
+    fn remapped_locator_bounds_are_derived_from_the_published_evidence_points() {
+        let regions = vec![into_markdown_core::OcrSourceRegion {
+            source_index: 0,
+            polygon: [
+                into_markdown_core::SourcePoint { x: 0.1, y: 7.3 },
+                into_markdown_core::SourcePoint { x: 9.7, y: 1.2 },
+                into_markdown_core::SourcePoint { x: 8.4, y: 11.9 },
+                into_markdown_core::SourcePoint { x: 0.3, y: 10.1 },
+            ],
+            detection_confidence: 0.9,
+            recognition_confidence: 0.8,
+        }];
+        let bounds = evidence_bounds(&regions).unwrap();
+        let points = regions[0].polygon;
+        let minimum_x = points.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
+        let minimum_y = points.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
+        let maximum_x = points.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
+        let maximum_y = points.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(
+            bounds,
+            into_markdown_core::Rect {
+                x: minimum_x,
+                y: minimum_y,
+                width: maximum_x - minimum_x,
+                height: maximum_y - minimum_y,
+            }
+        );
+    }
+
+    #[test]
     fn duplicate_references_increase_the_preflight_plan() {
         let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr), ..Services::default() };
@@ -2003,6 +2090,36 @@ mod tests {
         assert_eq!(blocks.len(), 128);
         drop(enriched);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn provider_working_peak_is_reserved_once_before_recognition() {
+        let retained = 64 * 1024;
+        let working = 8 * 1024 * 1024;
+        let ocr = source_bound_ocr_with_working_plan(false, retained, working);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let EnrichmentPlan::Reserve(plan) =
+            plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context).unwrap()
+        else {
+            panic!("active plan expected")
+        };
+        assert!(plan >= working + retained * 2);
+
+        let low_context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: plan - 1,
+                ..options.limits.clone()
+            },
+        );
+        assert!(matches!(
+            low_context.reserve_memory(plan),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

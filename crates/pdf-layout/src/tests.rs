@@ -954,6 +954,25 @@ fn native_and_ocr_overlap_is_deduplicated_without_losing_evidence_source() {
 }
 
 #[test]
+fn overlapping_page_and_embedded_ocr_with_different_segmentation_is_deduplicated() {
+    let combined = Rect { x: 40.0, y: 80.0, width: 160.0, height: 18.0 };
+    let mut inlines = vec![ocr("OCR START 101", combined)];
+    inlines.push(ocr("OCR START", Rect { x: 40.0, y: 80.0, width: 115.0, height: 18.0 }));
+    inlines.push(ocr("101", Rect { x: 160.0, y: 80.0, width: 40.0, height: 18.0 }));
+    inlines.push(ocr("OCR START 101", Rect { x: 40.0, y: 180.0, width: 160.0, height: 18.0 }));
+
+    let actual = rebuild(document(inlines));
+    let text = page_blocks(&actual)
+        .iter()
+        .map(|node| block_text(&node.block))
+        .collect::<Vec<_>>()
+        .join("|");
+    assert_eq!(text.matches("OCR START 101").count(), 2);
+    assert!(!text.contains("OCR STARTOCR START"));
+    assert!(!text.contains("101101"));
+}
+
+#[test]
 fn page_wide_spatial_dedup_finds_old_overlap_and_preserves_distant_equal_text() {
     let top = Rect { x: 40.0, y: 20.0, width: 40.0, height: 6.0 };
     let mut inlines = source_text("same", top, 12.0);

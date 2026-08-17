@@ -46,7 +46,7 @@ pub(crate) async fn recognize_for_input(
     recognize_inner(image, page, width, height, Some(identity), options, services, context).await
 }
 
-#[allow(clippy::too_many_arguments)] // Shared adapter retains the public OCR request fields.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // Shared adapter retains the public OCR request fields.
 async fn recognize_inner(
     image: &[u8],
     page: u32,
@@ -72,8 +72,20 @@ async fn recognize_inner(
         Err(error) => return preflight_unavailable(options.ocr.policy, page, engine.id(), error),
     };
     validate_plan(plan, options, context)?;
-    let planned_bytes = plan.max_retained_bytes();
-    let mut memory = context.reserve_memory(planned_bytes)?;
+    let planned_bytes = plan
+        .max_retained_bytes()
+        .checked_add(plan.max_working_bytes())
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "OCR provider memory plan overflow".into(),
+        })?;
+    // An enclosing converter/enricher credit already reserved the complete
+    // provider peak. In that case retain only the output allowance here and
+    // let the provider charge its real working set to the enclosing credit.
+    // Reserving the working allowance again would double-charge that peak.
+    let reservation_bytes =
+        if context.has_memory_credit() { plan.max_retained_bytes() } else { planned_bytes };
+    let mut memory = context.reserve_memory(reservation_bytes)?;
     let credited = (!context.has_memory_credit())
         .then(|| context.with_memory_credit(&mut memory))
         .transpose()?;
@@ -137,14 +149,14 @@ async fn recognize_inner(
     let (document, diagnostics) = materialize_nodes(result, detection_confidences, &materialize)?;
     let assets = Vec::<Asset>::new();
     let retained = estimate_retained_output(&document, &assets, &diagnostics)?;
-    if retained > planned_bytes {
+    if retained > plan.max_retained_bytes() {
         return Err(ConversionError::Ocr {
             provider: engine.id().into(),
             detail: format!("structured OCR retained {retained} bytes beyond its plan"),
         });
     }
-    if retained < planned_bytes {
-        memory.shrink(planned_bytes - retained)?;
+    if retained < reservation_bytes {
+        memory.shrink(reservation_bytes - retained)?;
     }
     Ok(OcrContribution {
         accepted_text: !document.blocks.is_empty(),
@@ -260,9 +272,14 @@ fn validate_plan(
             detail: "OCR output plan exceeds the request text limit".into(),
         });
     }
-    if plan.max_retained_bytes() > options.limits.max_memory_bytes
-        || plan.max_retained_bytes() > context.available_memory_bytes()
-    {
+    let total =
+        plan.max_retained_bytes().checked_add(plan.max_working_bytes()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "OCR provider memory plan overflow".into(),
+            }
+        })?;
+    if total > options.limits.max_memory_bytes || total > context.available_memory_bytes() {
         return Err(ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: "OCR output plan exceeds the request memory limit".into(),

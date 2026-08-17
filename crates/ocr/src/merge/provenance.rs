@@ -40,13 +40,14 @@ pub(crate) fn materialize_paragraphs(
                     recognition_confidence: candidate.recognition_confidence,
                 });
             }
+            let bounds = evidence_bounds(&regions).ok_or_else(|| super::ocr("emptyOcrLine"))?;
             paragraph_confidence = paragraph_confidence.min(line_confidence);
             let provenance = Provenance {
                 kind: ProvenanceKind::LocalOcr,
                 provider: clone_string(&page.recognition.result().provider)?,
                 locator: SourceLocator {
                     page: Some(page.page()),
-                    bounds: Some(line.bounds),
+                    bounds: Some(bounds),
                     rotation_degrees: Some(line.angle_degrees.rem_euclid(360.0)),
                     page_width: Some(page.page_width()),
                     page_height: Some(page.page_height()),
@@ -83,6 +84,37 @@ pub(crate) fn materialize_paragraphs(
         });
     }
     Ok(nodes)
+}
+
+fn evidence_bounds(regions: &[OcrSourceRegion]) -> Option<into_markdown_core::Rect> {
+    (!regions.is_empty()).then(|| {
+        let minimum_x = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min);
+        let minimum_y = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        let maximum_x = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let maximum_y = regions
+            .iter()
+            .flat_map(|region| region.polygon.iter())
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        into_markdown_core::Rect {
+            x: minimum_x,
+            y: minimum_y,
+            width: maximum_x - minimum_x,
+            height: maximum_y - minimum_y,
+        }
+    })
 }
 
 pub(crate) fn page_provenance(page: &OcrPageInput) -> Result<Provenance, ConversionError> {

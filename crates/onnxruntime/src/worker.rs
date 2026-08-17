@@ -347,12 +347,20 @@ fn spawn_worker_windows(
         JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
     #[link(name = "ntdll")]
     unsafe extern "system" {
         fn NtResumeProcess(process: *mut core::ffi::c_void) -> i32;
     }
+
+    let mut system_information = SYSTEM_INFO::default();
+    // SAFETY: the pointer addresses a live, correctly sized SYSTEM_INFO value.
+    unsafe { GetSystemInfo(&raw mut system_information) };
+    let page_size = u64::from(system_information.dwPageSize);
+    let physical_memory = align_physical_memory_limit(limits.physical_memory, page_size)
+        .ok_or_else(|| resource_error("nativeWorkerMemory"))?;
 
     let mut command = Command::new(executable);
     command
@@ -361,7 +369,7 @@ fn spawn_worker_windows(
         .arg("--address-limit")
         .arg(limits.address_space.to_string())
         .arg("--physical-limit")
-        .arg(limits.physical_memory.to_string())
+        .arg(physical_memory.to_string())
         .current_dir(working_directory)
         .env_clear()
         .stdin(Stdio::piped())
@@ -379,8 +387,8 @@ fn spawn_worker_windows(
     let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     information.BasicLimitInformation.LimitFlags =
         JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    information.ProcessMemoryLimit = usize::try_from(limits.physical_memory)
-        .map_err(|_| resource_error("nativeWorkerMemory"))?;
+    information.ProcessMemoryLimit =
+        usize::try_from(physical_memory).map_err(|_| resource_error("nativeWorkerMemory"))?;
     // SAFETY: job/process handles are live and information has the exact API
     // layout and size. The process is still suspended during both calls.
     let configured = unsafe {
@@ -411,6 +419,14 @@ fn spawn_worker_windows(
     // SAFETY: ownership of the unique live job handle transfers here.
     let job = unsafe { OwnedHandle::from_raw_handle(job) };
     Ok(WorkerProcess { child, _job: job })
+}
+
+const fn align_physical_memory_limit(limit: u64, page_size: u64) -> Option<u64> {
+    if page_size == 0 {
+        return None;
+    }
+    let aligned = limit / page_size * page_size;
+    if aligned == 0 { None } else { Some(aligned) }
 }
 
 pub(crate) fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
@@ -785,6 +801,14 @@ mod tests {
                 .and_then(|value| value.checked_add(contract.run_memory_bytes))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn physical_memory_limit_uses_the_same_page_aligned_value_for_parent_and_child() {
+        assert_eq!(align_physical_memory_limit(65_537, 4_096), Some(65_536));
+        assert_eq!(align_physical_memory_limit(4_096, 4_096), Some(4_096));
+        assert_eq!(align_physical_memory_limit(4_095, 4_096), None);
+        assert_eq!(align_physical_memory_limit(4_096, 0), None);
     }
 
     #[cfg(windows)]

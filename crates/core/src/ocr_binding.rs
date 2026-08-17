@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OcrOutputPlan {
     retained_budget: u64,
+    working_budget: u64,
     region_limit: u32,
     text_bytes_cap: u64,
 }
@@ -40,15 +41,39 @@ impl OcrOutputPlan {
         }
         Ok(Self {
             retained_budget: max_retained_bytes,
+            working_budget: 0,
             region_limit: max_regions,
             text_bytes_cap: max_text_bytes,
         })
+    }
+
+    /// Construct a plan that also declares the provider's peak transient working set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ResourceLimit`] when the retained-output
+    /// bounds are zero, overflow, or cannot contain the declared payload.
+    pub fn try_new_with_working(
+        max_retained_bytes: u64,
+        max_working_bytes: u64,
+        max_regions: u32,
+        max_text_bytes: u64,
+    ) -> Result<Self, ConversionError> {
+        let mut plan = Self::try_new(max_retained_bytes, max_regions, max_text_bytes)?;
+        plan.working_budget = max_working_bytes;
+        Ok(plan)
     }
 
     /// Maximum bytes retained by the bound result and emitted OCR IR.
     #[must_use]
     pub const fn max_retained_bytes(self) -> u64 {
         self.retained_budget
+    }
+
+    /// Maximum transient bytes needed while the provider produces the result.
+    #[must_use]
+    pub const fn max_working_bytes(self) -> u64 {
+        self.working_budget
     }
 
     /// Maximum recognized regions returned by the provider.

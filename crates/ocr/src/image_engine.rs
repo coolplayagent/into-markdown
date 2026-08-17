@@ -1,14 +1,14 @@
 //! Product OCR engine joining the audited image, detector, and recognizer boundaries.
 
 use crate::{
-    DetectionConfig, ImageOrientation, ModelManager, PixelFormat, PixelView, PpOcrTextDetector,
-    PpOcrTextRecognizer, RecognitionConfig,
+    DetectionConfig, Dimension, ImageOrientation, ModelContract, ModelManager, PixelFormat,
+    PixelView, PpOcrTextDetector, PpOcrTextRecognizer, RecognitionConfig,
 };
 use image::{DynamicImage, ImageFormat, ImageReader};
 use into_markdown_core::{
     BoundOcrResult, BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine,
     OcrEvidenceStage, OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion,
-    OcrRequest, OcrResult, ResourceLimits, TensorRuntime,
+    OcrRequest, OcrResult, ResourceLimits, Tensor, TensorRuntime,
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -45,7 +45,7 @@ impl PpOcrImageEngine {
     ) -> Result<(), ConversionError> {
         context.checkpoint()?;
         validate_engine_limits(limits)?;
-        let plan = output_plan(limits)?;
+        let plan = output_plan(limits, 1, 1)?;
         if plan.max_retained_bytes() > limits.max_memory_bytes
             || plan.max_retained_bytes() > context.available_memory_bytes()
         {
@@ -154,8 +154,8 @@ impl OcrEngine for PpOcrImageEngine {
         context: &ExecutionContext,
     ) -> Result<OcrOutputPlan, ConversionError> {
         context.checkpoint()?;
-        validate_png_header(request, &self.limits)?;
-        output_plan(&options.limits)
+        let (width, height) = validate_png_header(request, &self.limits)?;
+        output_plan(&options.limits, width, height)
     }
 
     fn planned_normalized_png_output(
@@ -181,7 +181,7 @@ impl OcrEngine for PpOcrImageEngine {
         {
             return Err(resource("max_decompressed_bytes", "OCR PNG dimensions exceed limits"));
         }
-        output_plan(&options.limits)
+        output_plan(&options.limits, width, height)
     }
 
     fn recognize_bound<'a>(
@@ -338,7 +338,11 @@ fn validate_engine_limits(limits: &ResourceLimits) -> Result<(), ConversionError
     source_pixel_limit(limits).map(|_| ())
 }
 
-fn output_plan(limits: &ResourceLimits) -> Result<OcrOutputPlan, ConversionError> {
+fn output_plan(
+    limits: &ResourceLimits,
+    width: u32,
+    height: u32,
+) -> Result<OcrOutputPlan, ConversionError> {
     let max_regions = limits.max_archive_entries.min(MAX_REGIONS);
     let max_text = limits.max_field_bytes.min(MAX_TEXT_BYTES);
     let retained = u64::from(max_regions)
@@ -346,7 +350,73 @@ fn output_plan(limits: &ResourceLimits) -> Result<OcrOutputPlan, ConversionError
         .and_then(|bytes| bytes.checked_add(max_text.checked_mul(2)?))
         .and_then(|bytes| bytes.checked_add(OUTPUT_FIXED_BYTES))
         .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
-    OcrOutputPlan::try_new(retained, max_regions, max_text)
+    let working = provider_working_plan(width, height)?;
+    OcrOutputPlan::try_new_with_working(retained, working, max_regions, max_text)
+}
+
+fn provider_working_plan(width: u32, height: u32) -> Result<u64, ConversionError> {
+    let decoded = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR decoded working-set plan overflow"))?;
+    let detector = model_run_phase(&crate::ppocrv6_detector_contract())?;
+    let recognizer = model_run_phase(&crate::ppocrv6_recognizer_contract())?;
+    decoded
+        .checked_add(detector.max(recognizer))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR provider working-set plan overflow"))
+}
+
+fn model_run_phase(contract: &ModelContract) -> Result<u64, ConversionError> {
+    let input_storage = max_tensor_storage(&contract.inputs)?;
+    let output_storage = max_tensor_storage(&contract.outputs)?;
+    let input_entries = u64::try_from(contract.inputs.len())
+        .ok()
+        .and_then(|count| count.checked_mul(std::mem::size_of::<(String, Tensor)>() as u64))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR input plan overflow"))?;
+    let output_entries = u64::try_from(contract.outputs.len())
+        .ok()
+        .and_then(|count| count.checked_mul(std::mem::size_of::<Tensor>() as u64))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
+    // The prepared input remains live while the runtime clones it. Runtime
+    // output is charged twice (native backing plus the checked Rust copy),
+    // matching the executable runtime boundary's run_memory_peak contract.
+    input_storage
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(input_entries))
+        .and_then(|bytes| bytes.checked_add(output_entries))
+        .and_then(|bytes| {
+            output_storage.checked_mul(2).and_then(|output| bytes.checked_add(output))
+        })
+        .and_then(|bytes| bytes.checked_add(contract.run_memory_bytes))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR model working-set plan overflow"))
+}
+
+fn max_tensor_storage(specs: &[crate::TensorSpec]) -> Result<u64, ConversionError> {
+    specs.iter().try_fold(0_u64, |total, spec| {
+        let elements = spec.dimensions.iter().try_fold(1_u64, |count, dimension| {
+            let maximum = match dimension {
+                Dimension::Exact(value) => *value,
+                Dimension::Dynamic { max, .. } => *max,
+            };
+            count
+                .checked_mul(u64::try_from(maximum).map_err(|_| {
+                    resource("max_memory_bytes", "OCR tensor dimension is not representable")
+                })?)
+                .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))
+        })?;
+        let shape = u64::try_from(spec.dimensions.len())
+            .ok()
+            .and_then(|rank| rank.checked_mul(std::mem::size_of::<usize>() as u64))
+            .ok_or_else(|| resource("max_memory_bytes", "OCR tensor shape plan overflow"))?;
+        total
+            .checked_add(
+                elements
+                    .checked_mul(std::mem::size_of::<f32>() as u64)
+                    .and_then(|bytes| bytes.checked_add(shape))
+                    .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))?,
+            )
+            .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))
+    })
 }
 
 fn map_manager_error(error: crate::ModelManagerError) -> ConversionError {
