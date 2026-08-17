@@ -1085,6 +1085,8 @@ dependencies = [
  "into-markdown-render-markdown",
  "into-markdown-task-store",
  "serde_json",
+ "sha2",
+ "tempfile",
  "zip 2.4.2",
 ]
 

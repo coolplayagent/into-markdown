@@ -1,5 +1,46 @@
 # 测试策略
 
+Embedded-visual OCR regression tests create real container files dynamically
+instead of committing synthetic office archives. They use a source-bound mock
+OCR provider to verify normalized-input identity, byte deduplication with
+per-reference locators, PDF coordinate mapping, `off` no-op behavior, and
+extract/embed/omit asset behavior. Official detector/recognizer and platform
+runtime validation remains in the existing explicit manual quality targets.
+
+The executable format matrix is split by responsibility so a passing row has
+real parser evidence as well as common-enricher evidence:
+
+- `into-markdown` API tests dynamically create DOCX, PPTX, XLSX, ODT, ODS, ODP,
+  EPUB, RTF, IPYNB, HTML data-image, and nested-ZIP inputs. The PPTX fixture
+  interleaves one repeated image at the start, middle, and end; XLSX is the
+  image-only/no-native-text case; the 256-paragraph DOCX covers normal document
+  volume, all three asset modes, and `Off`.
+- Common-enricher tests run every eligible `InputFormat`, reject arbitrary
+  CSV/JSON/XML/Text/Feed/Markdown assets, preserve a locator for every repeated
+  reference, reject a mismatched normalized-input identity, and fail before OCR
+  publication on cancellation or reference/byte/OCR-work budget exhaustion.
+- PDF layout tests merge page-coordinate OCR with native text, remove spatial
+  duplicates without deleting OCR evidence, and keep a coordinate-mapped OCR
+  node when there is no native text. The existing generated mixed, scanned,
+  rotated, and text-only PDF smoke fixtures cover page/start/middle/end cases.
+- MSG positive/negative coverage is in
+  `html_cid_and_by_value_attachment_are_offline_assets` and
+  `cid_resources_require_an_exact_reference_and_an_audited_image`; remote HTML
+  is never fetched, while audited data/CID or converter-resolved local assets
+  enter the same stage.
+- Legacy DOC/PPT/XLS nested dispatch is exercised by
+  `all_legacy_families_use_same_context_nested_dispatch_and_conservative_provenance`.
+  The real installed-runtime target remains
+  `manual_native_three_families_enter_real_nested_converters`.
+- RecoveryStore tests (Unix filesystem semantics) prove enriched converter
+  output is atomically checkpointed before rendering and is not enriched again
+  after a process restart. Windows gates compile that path; Unix CI executes it.
+
+The focused local commands are `cargo test -p into-markdown-converters
+embedded_visual_ocr`, `cargo test -p into-markdown embedded_visual_ocr_tests`,
+and `cargo test -p into-markdown-pdf-layout
+native_and_ocr_overlap_is_deduplicated_without_losing_evidence_source`.
+
 ## 公共契约套件
 
 `tests/contracts` 是下游调用方视角的黑盒公共契约套件。它只通过公开 crate
@@ -10,8 +51,9 @@
 适配器以及请求构造器。Cargo 测试与 Bazel 构建都会编译该 target，因此只在实现
 crate 内保持源码兼容不能通过检查。
 
-契约套件逐项覆盖八个公共 SPI：`SourceResolver`、`FormatDetector`、`Converter`、
-`MarkdownRenderer`、`OcrEngine`、`Transcriber`、`TensorRuntime` 和 `AiProvider`。
+契约套件逐项覆盖九个公共 SPI：`SourceResolver`、`FormatDetector`、`Converter`、
+`OutputEnricher`、`MarkdownRenderer`、`OcrEngine`、`Transcriber`、`TensorRuntime` 和
+`AiProvider`。
 每个接口必须可形成 `Send + Sync` trait object；异步返回值会被实际轮询至完成、取消
 或超时，不使用无法终止的 pending future。Engine 契约覆盖重复 ID、显式 hint、
 confidence/priority/稳定 ID 排序、仅 `NotApplicable` 回退、其它错误立即短路、IR

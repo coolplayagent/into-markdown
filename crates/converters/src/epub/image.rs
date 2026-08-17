@@ -13,7 +13,7 @@ struct RasterInfo {
 }
 
 #[allow(clippy::too_many_lines)] // Decode budget and complete payload checks share one transaction.
-pub(super) fn validate(
+pub(crate) fn validate(
     bytes: &[u8],
     media_type: &str,
     part: &str,

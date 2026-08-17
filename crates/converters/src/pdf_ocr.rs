@@ -44,6 +44,24 @@ pub fn merge_pdf_ocr(
     source.account_retained(context)
 }
 
+/// Reconstruct an already-enriched PDF output through the same native/OCR
+/// coordinate merge used by page OCR. This keeps embedded-image OCR from
+/// becoming a second, order-dependent text stream.
+pub(crate) fn reconstruct_enriched_pdf(
+    mut source: ConverterOutput,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    context.checkpoint()?;
+    let document = std::mem::take(&mut source.document);
+    let layout = reconstruct_document(document, &LayoutConfig::default(), context)?;
+    let (document, reservation) = layout.into_parts();
+    source.document = document;
+    if let Some(reservation) = reservation {
+        source.attach_memory_reservation(context, reservation)?;
+    }
+    Ok(source)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

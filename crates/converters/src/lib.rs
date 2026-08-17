@@ -6,6 +6,7 @@ mod core_catalog;
 mod core_catalog_authority;
 mod delimited;
 mod docx;
+mod embedded_visual_ocr;
 mod epub;
 mod feed;
 mod html;
@@ -38,6 +39,7 @@ pub use core_catalog::{
 };
 pub use delimited::DelimitedTextConverter;
 pub use docx::DocxConverter;
+pub use embedded_visual_ocr::EmbeddedVisualOcrEnricher;
 pub use epub::EpubConverter;
 pub use feed::FeedConverter;
 pub use html::HtmlConverter;

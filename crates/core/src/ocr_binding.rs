@@ -98,6 +98,62 @@ pub struct BoundOcrResult {
     result: OcrResult,
     detection_confidences: Vec<f32>,
     evidence_chain: Vec<OcrEvidenceStep>,
+    input_identity: Option<OcrInputIdentity>,
+}
+
+/// Cryptographic identity of the exact normalized image accepted by an OCR provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OcrInputIdentity {
+    sha256: [u8; 32],
+    width: u32,
+    height: u32,
+    frame: u32,
+}
+
+impl OcrInputIdentity {
+    /// Construct an identity for one normalized image frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns an OCR error when either image dimension is zero.
+    pub fn try_new(
+        sha256: [u8; 32],
+        width: u32,
+        height: u32,
+        frame: u32,
+    ) -> Result<Self, ConversionError> {
+        if width == 0 || height == 0 {
+            return Err(ConversionError::Ocr {
+                provider: "ocr-binding".into(),
+                detail: "OCR input identity dimensions must be non-zero".into(),
+            });
+        }
+        Ok(Self { sha256, width, height, frame })
+    }
+
+    /// SHA-256 of the exact normalized encoded bytes supplied to OCR.
+    #[must_use]
+    pub const fn sha256(self) -> [u8; 32] {
+        self.sha256
+    }
+
+    /// Normalized image width.
+    #[must_use]
+    pub const fn width(self) -> u32 {
+        self.width
+    }
+
+    /// Normalized image height.
+    #[must_use]
+    pub const fn height(self) -> u32 {
+        self.height
+    }
+
+    /// Zero-based frame ordinal.
+    #[must_use]
+    pub const fn frame(self) -> u32 {
+        self.frame
+    }
 }
 
 impl BoundOcrResult {
@@ -152,7 +208,23 @@ impl BoundOcrResult {
                 detail: "OCR result provider does not match the bound recognition provider".into(),
             });
         }
-        Ok(Self { result, detection_confidences, evidence_chain })
+        Ok(Self { result, detection_confidences, evidence_chain, input_identity: None })
+    }
+
+    /// Bind validated OCR evidence to the exact normalized input image.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Self::try_new`].
+    pub fn try_new_for_input(
+        result: OcrResult,
+        detection_confidences: Vec<f32>,
+        evidence_chain: Vec<OcrEvidenceStep>,
+        input_identity: OcrInputIdentity,
+    ) -> Result<Self, ConversionError> {
+        let mut bound = Self::try_new(result, detection_confidences, evidence_chain)?;
+        bound.input_identity = Some(input_identity);
+        Ok(bound)
     }
 
     /// Read the legacy-compatible OCR payload.
@@ -171,6 +243,12 @@ impl BoundOcrResult {
     #[must_use]
     pub fn evidence_chain(&self) -> &[OcrEvidenceStep] {
         &self.evidence_chain
+    }
+
+    /// Exact normalized input identity, when supplied by the provider.
+    #[must_use]
+    pub const fn input_identity(&self) -> Option<OcrInputIdentity> {
+        self.input_identity
     }
 
     /// Consume the bound result after the caller has validated provider identity.

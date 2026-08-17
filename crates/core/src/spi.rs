@@ -1084,6 +1084,26 @@ pub trait Converter: Send + Sync {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
 }
 
+/// Transactional post-conversion enrichment before validation checkpoints and rendering.
+///
+/// Implementations consume the complete converter output and must return either a fully
+/// validated replacement or an error. This prevents partially enriched output from escaping.
+pub trait OutputEnricher: Send + Sync {
+    /// Stable implementation ID.
+    fn id(&self) -> &'static str;
+
+    /// Enrich one converter output under the original request authority.
+    fn enrich<'a>(
+        &'a self,
+        output: ConverterOutput,
+        converter_id: &'a str,
+        format: InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
+}
+
 /// Render the unified IR through a single Markdown policy.
 pub trait MarkdownRenderer: Send + Sync {
     /// Stable renderer ID.
@@ -1426,6 +1446,7 @@ mod tests {
         let _: Option<&dyn SourceResolver> = None;
         let _: Option<&dyn FormatDetector> = None;
         let _: Option<&dyn Converter> = None;
+        let _: Option<&dyn OutputEnricher> = None;
         let _: Option<&dyn MarkdownRenderer> = None;
         let _: Option<&dyn OcrEngine> = None;
         let _: Option<&dyn Transcriber> = None;

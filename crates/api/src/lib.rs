@@ -7,6 +7,9 @@ mod ocr_service;
 #[cfg(test)]
 mod image_ai_tests;
 
+#[cfg(test)]
+mod embedded_visual_ocr_tests;
+
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
@@ -61,6 +64,7 @@ pub fn default_engine_builder() -> EngineBuilder {
 pub fn default_engine_builder_with_services(services: Services) -> EngineBuilder {
     let mut builder = EngineBuilder::new()
         .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))
+        .enricher(Arc::new(into_markdown_converters::EmbeddedVisualOcrEnricher))
         .services(services);
     if let Err(error) = into_markdown_converters::register_core_components(builder.registry_mut()) {
         builder.registry_mut().record_validation_error(error.to_string());

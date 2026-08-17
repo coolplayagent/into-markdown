@@ -6,7 +6,7 @@ pub use store::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
 use super::{
     Attempt, Engine, collect_provenance_preflighted, invoke_converter_preflighted,
-    invoke_renderer_preflighted, measured_input_bytes, normalize_confidence,
+    invoke_enrichers, invoke_renderer_preflighted, measured_input_bytes, normalize_confidence,
     provenance_inventory_bytes,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -507,6 +507,16 @@ pub(super) async fn convert(
             },
         )
         .await?;
+        let output = invoke_enrichers(
+            &engine.enrichers,
+            output,
+            attempt.converter.id(),
+            attempt.candidate.format,
+            &request.options,
+            &engine.services,
+            &context,
+        )
+        .await?;
         store.commit(
             token,
             &context,
@@ -877,8 +887,8 @@ mod tests {
     use crate::EngineBuilder;
     use into_markdown_core::{
         BoxFuture, ConversionOptions, Converter, ExecutionOptions, FormatCandidate, FormatDetector,
-        FormatHint, Inline, InputFormat, InputRef, MarkdownRenderer, ResolvedInput, ResourceLimits,
-        Services, SourceResolver,
+        FormatHint, Inline, InputFormat, InputRef, MarkdownRenderer, OutputEnricher, ResolvedInput,
+        ResourceLimits, Services, SourceResolver,
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{fs, fs::File, io::Write as _, path::Path};
@@ -939,6 +949,32 @@ mod tests {
     }
 
     struct CountingConverter(Arc<AtomicUsize>);
+
+    struct CountingTitleEnricher(Arc<AtomicUsize>);
+
+    impl OutputEnricher for CountingTitleEnricher {
+        fn id(&self) -> &'static str {
+            "recovery.title-enricher"
+        }
+
+        fn enrich<'a>(
+            &'a self,
+            mut output: ConverterOutput,
+            converter_id: &'a str,
+            format: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                assert_eq!(converter_id, "recovery.converter");
+                assert_eq!(format, InputFormat::Text);
+                output.document.metadata.title.get_or_insert_default().push_str(":enriched");
+                Ok(output)
+            })
+        }
+    }
 
     impl Converter for CountingConverter {
         fn id(&self) -> &'static str {
@@ -1210,6 +1246,23 @@ mod tests {
         fail_renderer: Arc<AtomicBool>,
     ) -> Engine {
         let mut builder = EngineBuilder::new()
+            .renderer(Arc::new(ControlledRenderer { fail: fail_renderer, calls: renderer_calls }));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(CountingConverter(conversions)));
+        builder.build().unwrap()
+    }
+
+    fn enriched_engine(
+        conversions: Arc<AtomicUsize>,
+        enrichments: Arc<AtomicUsize>,
+        renderer_calls: Arc<AtomicUsize>,
+        fail_renderer: Arc<AtomicBool>,
+    ) -> Engine {
+        let mut builder = EngineBuilder::new()
+            .enricher(Arc::new(CountingTitleEnricher(enrichments)))
             .renderer(Arc::new(ControlledRenderer { fail: fail_renderer, calls: renderer_calls }));
         builder
             .registry_mut()
@@ -1500,6 +1553,43 @@ mod tests {
         assert_eq!(replay.markdown, result.markdown);
         assert_eq!(conversions.load(Ordering::SeqCst), 1);
         assert_eq!(renders.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn enriched_output_is_checkpointed_transactionally_and_not_reenriched_after_restart() {
+        let directory = private_tempdir();
+        let store = RecoveryStore::open(directory.path()).unwrap();
+        let token = store.create_token().unwrap();
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let enrichments = Arc::new(AtomicUsize::new(0));
+        let renders = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        let request = || ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x")));
+
+        let first = enriched_engine(
+            Arc::clone(&conversions),
+            Arc::clone(&enrichments),
+            Arc::clone(&renders),
+            Arc::clone(&fail),
+        );
+        assert_eq!(
+            block_on(first.convert_recoverable(request(), &store, &token)).unwrap_err().code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Converted);
+
+        let restarted = enriched_engine(
+            Arc::clone(&conversions),
+            Arc::clone(&enrichments),
+            Arc::clone(&renders),
+            Arc::clone(&fail),
+        );
+        let result = block_on(restarted.convert_recoverable(request(), &store, &token)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("hello:enriched"));
+        assert_eq!(result.markdown, "# hello:enriched\n");
+        assert_eq!(conversions.load(Ordering::SeqCst), 1);
+        assert_eq!(enrichments.load(Ordering::SeqCst), 1);
+        assert_eq!(renders.load(Ordering::SeqCst), 2);
     }
 
     #[test]

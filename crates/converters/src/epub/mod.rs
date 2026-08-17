@@ -3,7 +3,7 @@
 mod budget;
 mod container;
 mod encryption;
-mod image;
+pub(crate) mod image;
 #[cfg(test)]
 mod image_tests;
 mod merge;

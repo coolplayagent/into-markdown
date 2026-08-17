@@ -1,0 +1,939 @@
+//! Unified embedded-visual OCR between container conversion and Markdown rendering.
+
+use crate::image_converter::{decode, encode, envelope, format};
+use image::{AnimationDecoder, ImageDecoder};
+use into_markdown_core::{
+    AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, ConverterOutput,
+    Diagnostic, DiagnosticSeverity, ExecutionContext, Inline, InputFormat, NodeId,
+    OcrInputIdentity, OcrPolicy, OutputEnricher, Provenance, ResourceReservation, Services,
+    SourceLocator,
+};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Cursor;
+
+const PROVIDER: &str = "builtin.enricher.embedded-visual-ocr";
+const UNSUPPORTED_CODE: &str = "embeddedVisualOcr.unsupportedVisual";
+
+/// Default post-converter enrichment for locally extracted raster assets.
+#[derive(Debug, Default)]
+pub struct EmbeddedVisualOcrEnricher;
+
+impl OutputEnricher for EmbeddedVisualOcrEnricher {
+    fn id(&self) -> &'static str {
+        PROVIDER
+    }
+
+    fn enrich<'a>(
+        &'a self,
+        output: ConverterOutput,
+        _converter_id: &'a str,
+        format: InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+        Box::pin(async move { enrich(output, format, options, services, context).await })
+    }
+}
+
+#[derive(Clone)]
+struct VisualRef {
+    asset: AssetId,
+    provenance: Provenance,
+}
+
+#[derive(Clone, Default)]
+struct CachedContribution {
+    nodes: Vec<BlockNode>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+struct NormalizedImage {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    _leases: Vec<ResourceReservation>,
+}
+
+#[allow(clippy::too_many_lines)] // Discovery, OCR, and publication share one transaction.
+async fn enrich(
+    mut output: ConverterOutput,
+    input_format: InputFormat,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    if options.ocr.policy == OcrPolicy::Off
+        || input_format == InputFormat::Image
+        || !eligible_container(input_format)
+    {
+        return Ok(output);
+    }
+    let mut references = Vec::new();
+    collect_references(&output.document.blocks, &mut references, context)?;
+    if references.is_empty() {
+        return Ok(output);
+    }
+    let reference_count = u32::try_from(references.len()).map_err(|_| {
+        resource("max_archive_entries", "embedded visual reference count is not representable")
+    })?;
+    if reference_count > options.limits.max_archive_entries {
+        return Err(resource(
+            "max_archive_entries",
+            "embedded visual references exceed the request limit",
+        ));
+    }
+
+    let assets = output
+        .assets
+        .iter()
+        .map(|asset| (asset.id.clone(), asset.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut hashes_by_asset = BTreeMap::new();
+    let mut unique = BTreeMap::<[u8; 32], AssetId>::new();
+    let mut referenced_assets = BTreeSet::new();
+    let mut compressed_bytes = 0_u64;
+    for (index, reference) in references.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        if !referenced_assets.insert(reference.asset.clone()) {
+            continue;
+        }
+        let Some(asset) = assets.get(&reference.asset) else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", reference.asset.0),
+            });
+        };
+        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
+            continue;
+        }
+        compressed_bytes = compressed_bytes
+            .checked_add(u64::try_from(asset.bytes.len()).map_err(|_| {
+                resource("max_total_asset_bytes", "embedded visual byte count is not representable")
+            })?)
+            .ok_or_else(|| resource("max_total_asset_bytes", "embedded visual bytes overflow"))?;
+        if compressed_bytes > options.limits.max_total_asset_bytes {
+            return Err(resource(
+                "max_total_asset_bytes",
+                "embedded visual bytes exceed the request limit",
+            ));
+        }
+        let digest = checkpointed_sha256(&asset.bytes, context)?;
+        hashes_by_asset.insert(reference.asset.clone(), digest);
+        unique.entry(digest).or_insert_with(|| reference.asset.clone());
+    }
+
+    let unique_count = u32::try_from(unique.len())
+        .map_err(|_| resource("max_pages", "OCR request count is not representable"))?;
+    if unique_count > options.limits.max_pages {
+        return Err(resource("max_pages", "embedded OCR requests exceed the request limit"));
+    }
+
+    let mut cache = BTreeMap::<[u8; 32], CachedContribution>::new();
+    for (ordinal, (digest, asset_id)) in unique.into_iter().enumerate() {
+        context.checkpoint()?;
+        let asset = assets.get(&asset_id).ok_or_else(|| ConversionError::Internal {
+            detail: "embedded OCR asset inventory changed during enrichment".into(),
+        })?;
+        let normalized = match normalize(asset, options, context) {
+            Ok(value) => value,
+            Err(error) if options.ocr.policy == OcrPolicy::Auto => {
+                cache.insert(
+                    digest,
+                    CachedContribution {
+                        nodes: Vec::new(),
+                        diagnostics: vec![visual_diagnostic(None, error.to_string())],
+                    },
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let identity = OcrInputIdentity::try_new(
+            Sha256::digest(&normalized.bytes).into(),
+            normalized.width,
+            normalized.height,
+            0,
+        )?;
+        let mut contribution = crate::image_converter::ocr::recognize_for_input(
+            &normalized.bytes,
+            u32::try_from(ordinal + 1)
+                .map_err(|_| resource("max_pages", "OCR page ordinal overflow"))?,
+            normalized.width,
+            normalized.height,
+            identity,
+            options,
+            services,
+            context,
+        )
+        .await?;
+        if let Some(memory) = contribution.memory.take() {
+            output.attach_memory_reservation(context, memory)?;
+        }
+        cache.insert(
+            digest,
+            CachedContribution { nodes: contribution.nodes, diagnostics: contribution.diagnostics },
+        );
+    }
+
+    let mut contributions_by_asset = BTreeMap::new();
+    for (asset, digest) in hashes_by_asset {
+        if let Some(contribution) = cache.get(&digest) {
+            contributions_by_asset.insert(asset, contribution.clone());
+        }
+    }
+    output.document.blocks = rebuild_nodes(
+        std::mem::take(&mut output.document.blocks),
+        &contributions_by_asset,
+        context,
+    )?;
+    for reference in &references {
+        if let Some(contribution) = contributions_by_asset.get(&reference.asset) {
+            for diagnostic in &contribution.diagnostics {
+                let mut diagnostic = diagnostic.clone();
+                diagnostic.locator = Some(remapped_locator(&reference.provenance.locator));
+                output.diagnostics.push(diagnostic);
+            }
+        }
+    }
+    if input_format == InputFormat::Pdf && !contributions_by_asset.is_empty() {
+        output = crate::pdf_ocr::reconstruct_enriched_pdf(output, context)?;
+    }
+    Ok(output)
+}
+
+fn eligible_container(format: InputFormat) -> bool {
+    matches!(
+        format,
+        InputFormat::Pdf
+            | InputFormat::Doc
+            | InputFormat::Docx
+            | InputFormat::Ppt
+            | InputFormat::Pptx
+            | InputFormat::Xls
+            | InputFormat::Xlsx
+            | InputFormat::Odt
+            | InputFormat::Ods
+            | InputFormat::Odp
+            | InputFormat::Rtf
+            | InputFormat::Epub
+            | InputFormat::Html
+            | InputFormat::Ipynb
+            | InputFormat::Zip
+            | InputFormat::OutlookMsg
+    )
+}
+
+fn supported_raster(asset: &into_markdown_core::Asset) -> bool {
+    matches!(
+        asset.media_type.to_ascii_lowercase().as_str(),
+        "image/png"
+            | "image/jpeg"
+            | "image/jpg"
+            | "image/gif"
+            | "image/webp"
+            | "image/bmp"
+            | "image/tiff"
+            | "image/x-tiff"
+    )
+}
+
+fn normalize(
+    asset: &into_markdown_core::Asset,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<NormalizedImage, ConversionError> {
+    if asset.bytes.starts_with(b"GIF87a") || asset.bytes.starts_with(b"GIF89a") {
+        if asset.media_type.eq_ignore_ascii_case("image/gif") {
+            return normalize_gif(&asset.bytes, asset.filename.as_deref(), options, context);
+        }
+        return Err(ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "embedded raster media type disagrees with its GIF envelope".into(),
+        });
+    }
+    let raster =
+        format::detect(&asset.bytes, context)?.ok_or_else(|| ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "declared raster asset has an unrecognized envelope".into(),
+        })?;
+    let declared = asset.media_type.to_ascii_lowercase();
+    let declared = match declared.as_str() {
+        "image/jpg" => "image/jpeg",
+        "image/x-tiff" => "image/tiff",
+        value => value,
+    };
+    if raster.media_type() != declared {
+        return Err(ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "embedded raster media type disagrees with its byte envelope".into(),
+        });
+    }
+    let summary = envelope::validate(raster, &asset.bytes, &options.limits, context)?;
+    if summary.frames != 1 || summary.animated {
+        return Err(ConversionError::Unsupported {
+            detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
+        });
+    }
+    let decoded = decode::decode(raster, &asset.bytes, summary, &options.limits, context)?;
+    let frame = decoded.frames.first().ok_or_else(|| ConversionError::Malformed {
+        part: asset.filename.clone(),
+        detail: "embedded raster decoder returned no frame".into(),
+    })?;
+    if frame.pixels.pixels().all(|pixel| pixel.0[3] == 0) {
+        return Err(ConversionError::Unsupported {
+            detail: "fully transparent embedded raster is not eligible for OCR".into(),
+        });
+    }
+    let width = frame.pixels.width();
+    let height = frame.pixels.height();
+    let encoded = encode::png(&frame.pixels, true, &options.limits, context)?;
+    let (bytes, memory) = encoded.into_parts();
+    Ok(NormalizedImage { bytes, width, height, _leases: vec![memory] })
+}
+
+fn normalize_gif(
+    bytes: &[u8],
+    part: Option<&str>,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<NormalizedImage, ConversionError> {
+    if bytes.len() < 10 {
+        return Err(ConversionError::Malformed {
+            part: None,
+            detail: "embedded GIF header is truncated".into(),
+        });
+    }
+    let width = u32::from(u16::from_le_bytes([bytes[6], bytes[7]]));
+    let height = u32::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+    let working = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(20))
+        .ok_or_else(|| resource("max_memory_bytes", "GIF working set overflow"))?;
+    if width == 0
+        || height == 0
+        || working > options.limits.max_decompressed_bytes
+        || working > options.limits.max_memory_bytes
+    {
+        return Err(resource("max_decompressed_bytes", "GIF dimensions exceed request limits"));
+    }
+    crate::epub::image::validate(
+        bytes,
+        "image/gif",
+        part.unwrap_or("embedded GIF"),
+        &options.limits,
+        context,
+    )?;
+    let memory = context.reserve_memory(working)?;
+    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|error| {
+        ConversionError::Malformed { part: None, detail: format!("invalid embedded GIF: {error}") }
+    })?;
+    if decoder.dimensions() != (width, height) {
+        return Err(ConversionError::Malformed {
+            part: None,
+            detail: "GIF decoder dimensions disagree with the header".into(),
+        });
+    }
+    let frames = decoder.into_frames().take(2).collect::<Result<Vec<_>, _>>().map_err(|error| {
+        ConversionError::Malformed {
+            part: None,
+            detail: format!("invalid embedded GIF frames: {error}"),
+        }
+    })?;
+    if frames.len() != 1 {
+        return Err(ConversionError::Unsupported {
+            detail: "animated embedded GIF is not eligible for OCR".into(),
+        });
+    }
+    let pixels = frames.into_iter().next().expect("one frame").into_buffer();
+    if pixels.pixels().all(|pixel| pixel.0[3] == 0) {
+        return Err(ConversionError::Unsupported {
+            detail: "fully transparent embedded GIF is not eligible for OCR".into(),
+        });
+    }
+    let encoded = encode::png(&pixels, true, &options.limits, context)?;
+    let (bytes, png_memory) = encoded.into_parts();
+    Ok(NormalizedImage { bytes, width, height, _leases: vec![memory, png_memory] })
+}
+
+fn checkpointed_sha256(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<[u8; 32], ConversionError> {
+    let mut digest = Sha256::new();
+    for chunk in bytes.chunks(4096) {
+        context.checkpoint()?;
+        digest.update(chunk);
+    }
+    Ok(digest.finalize().into())
+}
+
+fn collect_references(
+    nodes: &[BlockNode],
+    output: &mut Vec<VisualRef>,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    for (index, node) in nodes.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        match &node.block {
+            Block::Image { asset, .. } => {
+                output
+                    .push(VisualRef { asset: asset.clone(), provenance: node.provenance.clone() });
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_references(&item.blocks, output, context)?;
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        collect_references(&cell.blocks, output, context)?;
+                    }
+                }
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => collect_references(blocks, output, context)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn rebuild_nodes(
+    nodes: Vec<BlockNode>,
+    cache: &BTreeMap<AssetId, CachedContribution>,
+    context: &ExecutionContext,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    let mut rebuilt = Vec::new();
+    for (index, mut node) in nodes.into_iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        match &mut node.block {
+            Block::List { items, .. } => {
+                for item in items {
+                    item.blocks = rebuild_nodes(std::mem::take(&mut item.blocks), cache, context)?;
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &mut row.cells {
+                        cell.blocks =
+                            rebuild_nodes(std::mem::take(&mut cell.blocks), cache, context)?;
+                    }
+                }
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => {
+                *blocks = rebuild_nodes(std::mem::take(blocks), cache, context)?;
+            }
+            _ => {}
+        }
+        let contribution = match &node.block {
+            Block::Image { asset, .. } => cache.get(asset).cloned(),
+            _ => None,
+        };
+        let source_id = node.id.clone();
+        let source_provenance = node.provenance.clone();
+        rebuilt.push(node);
+        if let Some(contribution) = contribution {
+            for (ocr_index, template) in contribution.nodes.into_iter().enumerate() {
+                rebuilt.push(remap_ocr_node(template, &source_id, &source_provenance, ocr_index));
+            }
+        }
+    }
+    Ok(rebuilt)
+}
+
+fn remap_ocr_node(
+    mut node: BlockNode,
+    source_id: &NodeId,
+    source: &Provenance,
+    index: usize,
+) -> BlockNode {
+    node.id = NodeId(format!("{}::ocr::{}", source_id.0, index + 1));
+    let ocr_locator = node.provenance.locator.clone();
+    node.provenance.locator = remapped_ocr_locator(&source.locator, &ocr_locator);
+    if let Block::Paragraph(inlines) = &mut node.block {
+        for inline in inlines {
+            if let Inline::OcrText { provenance, evidence, .. } = inline {
+                let inline_locator = provenance.locator.clone();
+                provenance.locator = remapped_ocr_locator(&source.locator, &inline_locator);
+                evidence.page = source.locator.page.or(source.locator.slide).unwrap_or(1);
+                if let Some((source_bounds, image_width, image_height)) =
+                    coordinate_frame(&source.locator, &inline_locator)
+                {
+                    for region in &mut evidence.regions {
+                        for point in &mut region.polygon {
+                            point.x = source_bounds.x + point.x * source_bounds.width / image_width;
+                            point.y =
+                                source_bounds.y + point.y * source_bounds.height / image_height;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    node
+}
+
+fn coordinate_frame(
+    source: &SourceLocator,
+    ocr: &SourceLocator,
+) -> Option<(into_markdown_core::Rect, f32, f32)> {
+    let bounds = source.bounds?;
+    let width = ocr.page_width?;
+    let height = ocr.page_height?;
+    (bounds.x.is_finite()
+        && bounds.y.is_finite()
+        && bounds.width.is_finite()
+        && bounds.height.is_finite()
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+        && width.is_finite()
+        && height.is_finite()
+        && width > 0.0
+        && height > 0.0)
+        .then_some((bounds, width, height))
+}
+
+fn remapped_ocr_locator(source: &SourceLocator, ocr: &SourceLocator) -> SourceLocator {
+    let mut locator = remapped_locator(source);
+    locator.page = source.page.or(source.slide).or(Some(1));
+    if let (Some((frame, width, height)), Some(bounds)) =
+        (coordinate_frame(source, ocr), ocr.bounds)
+    {
+        locator.page_width = source.page_width.or(ocr.page_width);
+        locator.page_height = source.page_height.or(ocr.page_height);
+        locator.bounds = Some(into_markdown_core::Rect {
+            x: frame.x + bounds.x * frame.width / width,
+            y: frame.y + bounds.y * frame.height / height,
+            width: bounds.width * frame.width / width,
+            height: bounds.height * frame.height / height,
+        });
+    } else {
+        locator.page_width = ocr.page_width;
+        locator.page_height = ocr.page_height;
+        locator.bounds = ocr.bounds;
+    }
+    locator
+}
+
+fn remapped_locator(source: &SourceLocator) -> SourceLocator {
+    let mut locator = source.clone();
+    locator.byte_start = None;
+    locator.byte_end = None;
+    locator.character_index = None;
+    locator
+}
+
+fn visual_diagnostic(locator: Option<SourceLocator>, detail: String) -> Diagnostic {
+    Diagnostic {
+        code: UNSUPPORTED_CODE.into(),
+        severity: DiagnosticSeverity::Warning,
+        message: detail,
+        locator,
+    }
+}
+
+fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
+    ConversionError::ResourceLimit { limit, detail: detail.into() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    use into_markdown_core::{
+        Asset, BoundOcrResult, CancellationToken, Document, ExecutionOptions, OcrEngine,
+        OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest,
+        OcrResult, ProvenanceKind,
+    };
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Waker};
+
+    struct SourceBoundOcr {
+        calls: AtomicUsize,
+        corrupt_identity: bool,
+    }
+
+    impl OcrEngine for SourceBoundOcr {
+        fn id(&self) -> &'static str {
+            "test.ocr.source-bound"
+        }
+
+        fn recognize<'a>(
+            &'a self,
+            _: OcrRequest<'a>,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+            Box::pin(async { unreachable!("embedded OCR requires a bound result") })
+        }
+
+        fn planned_bound_output(
+            &self,
+            _: OcrRequest<'_>,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<OcrOutputPlan, ConversionError> {
+            OcrOutputPlan::try_new(16 * 1024, 1, 128)
+        }
+
+        fn recognize_bound<'a>(
+            &'a self,
+            request: OcrRequest<'a>,
+            context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut digest: [u8; 32] = Sha256::digest(request.image).into();
+            if self.corrupt_identity {
+                digest[0] ^= 0xff;
+            }
+            let image = image::load_from_memory(request.image).expect("normalized PNG");
+            let identity = OcrInputIdentity::try_new(digest, image.width(), image.height(), 0);
+            Box::pin(async move {
+                context.checkpoint()?;
+                let bound = BoundOcrResult::try_new_for_input(
+                    OcrResult {
+                        regions: vec![OcrRegion {
+                            text: "embedded words".into(),
+                            polygon: [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
+                            confidence: 0.97,
+                        }],
+                        provider: "test.ocr.recognizer".into(),
+                    },
+                    vec![0.98],
+                    vec![
+                        OcrEvidenceStep {
+                            stage: OcrEvidenceStage::Detection,
+                            provider: "test.ocr.detector".into(),
+                            model: Some("detector-sha256".into()),
+                        },
+                        OcrEvidenceStep {
+                            stage: OcrEvidenceStage::Recognition,
+                            provider: "test.ocr.recognizer".into(),
+                            model: Some("recognizer-sha256".into()),
+                        },
+                    ],
+                    identity?,
+                )?;
+                Ok(OcrRecognition::Bound(bound))
+            })
+        }
+    }
+
+    fn png() -> Vec<u8> {
+        let pixels = RgbaImage::from_fn(3, 2, |x, y| {
+            Rgba([u8::try_from(x * 40).unwrap(), u8::try_from(y * 80).unwrap(), 30, 255])
+        });
+        let mut cursor = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(pixels).write_to(&mut cursor, ImageFormat::Png).unwrap();
+        cursor.into_inner()
+    }
+
+    fn provenance(part: &str) -> Provenance {
+        Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: "test.converter".into(),
+            locator: SourceLocator {
+                page: Some(2),
+                part: Some(part.into()),
+                bounds: Some(into_markdown_core::Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 20.0,
+                }),
+                page_width: Some(600.0),
+                page_height: Some(800.0),
+                byte_start: Some(4),
+                byte_end: Some(12),
+                ..SourceLocator::default()
+            },
+            confidence: Some(1.0),
+        }
+    }
+
+    fn image_node(id: &str, asset: &str, part: &str) -> BlockNode {
+        let mut source = provenance(part);
+        if id.ends_with('b') {
+            source.locator.bounds =
+                Some(into_markdown_core::Rect { x: 10.0, y: 60.0, width: 30.0, height: 20.0 });
+        }
+        BlockNode {
+            id: NodeId(id.into()),
+            block: Block::Image { asset: AssetId(asset.into()), alt: None },
+            provenance: source,
+        }
+    }
+
+    fn output() -> ConverterOutput {
+        let bytes = png();
+        let mut page_provenance = provenance("word/document.xml");
+        page_provenance.provider = "builtin.converter.pdfium".into();
+        ConverterOutput::new(
+            Document {
+                blocks: vec![BlockNode {
+                    id: NodeId("page-2".into()),
+                    block: Block::Page {
+                        number: 2,
+                        blocks: vec![
+                            image_node("image-a", "asset-a", "word/media/a.png"),
+                            image_node("image-b", "asset-b", "word/media/b.png"),
+                        ],
+                    },
+                    provenance: page_provenance,
+                }],
+                ..Document::default()
+            },
+            vec![
+                Asset {
+                    id: AssetId("asset-a".into()),
+                    filename: Some("a.png".into()),
+                    media_type: "image/png".into(),
+                    bytes: bytes.clone(),
+                    external_uri: None,
+                },
+                Asset {
+                    id: AssetId("asset-b".into()),
+                    filename: Some("b.png".into()),
+                    media_type: "image/png".into(),
+                    bytes,
+                    external_uri: None,
+                },
+            ],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn duplicate_bytes_are_recognized_once_and_remapped_per_reference() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let enriched =
+            block_on(enrich(output(), InputFormat::Pdf, &options, &services, &context)).unwrap();
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
+        let Block::Page { blocks, .. } = &enriched.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        assert_eq!(blocks.len(), 4);
+        let first = blocks
+            .iter()
+            .find(|node| {
+                matches!(
+                    &node.block,
+                    Block::Paragraph(inlines)
+                        if inlines.iter().any(|inline| matches!(inline,
+                            Inline::OcrText { provenance, .. }
+                                if provenance.locator.part.as_deref() == Some("word/media/a.png")))
+                )
+            })
+            .unwrap();
+        let second = blocks
+            .iter()
+            .find(|node| {
+                matches!(
+                    &node.block,
+                    Block::Paragraph(inlines)
+                        if inlines.iter().any(|inline| matches!(inline,
+                            Inline::OcrText { provenance, .. }
+                                if provenance.locator.part.as_deref() == Some("word/media/b.png")))
+                )
+            })
+            .unwrap();
+        let Block::Paragraph(inlines) = &first.block else { panic!("OCR paragraph expected") };
+        let Inline::OcrText { value, evidence, provenance, .. } = &inlines[0] else {
+            panic!("OCR inline expected")
+        };
+        assert_eq!(provenance.locator.part.as_deref(), Some("word/media/a.png"));
+        assert_eq!(provenance.locator.byte_start, None);
+        let Block::Paragraph(second_inlines) = &second.block else {
+            panic!("OCR paragraph expected")
+        };
+        let Inline::OcrText { provenance: second_provenance, .. } = &second_inlines[0] else {
+            panic!("OCR inline expected")
+        };
+        assert_eq!(second_provenance.locator.part.as_deref(), Some("word/media/b.png"));
+        assert_eq!(value, "embedded words");
+        assert_eq!(evidence.page, 2);
+        assert_eq!(
+            evidence.regions[0].polygon[2],
+            into_markdown_core::SourcePoint { x: 30.0, y: 30.0 }
+        );
+        assert_eq!(
+            provenance.locator.bounds,
+            Some(into_markdown_core::Rect { x: 10.0, y: 20.0, width: 20.0, height: 10.0 })
+        );
+    }
+
+    #[test]
+    fn off_and_non_container_formats_are_exact_no_ops() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        for (format, policy) in
+            [(InputFormat::Docx, OcrPolicy::Off), (InputFormat::Json, OcrPolicy::Always)]
+        {
+            let before = output();
+            let expected_document = before.document.clone();
+            let expected_assets = before.assets.clone();
+            let expected_diagnostics = before.diagnostics.clone();
+            let mut options = ConversionOptions::default();
+            options.ocr.policy = policy;
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let after = block_on(enrich(before, format, &options, &services, &context)).unwrap();
+            assert_eq!(after.document, expected_document);
+            assert_eq!(after.assets, expected_assets);
+            assert_eq!(after.diagnostics, expected_diagnostics);
+        }
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn every_supported_container_uses_the_same_source_bound_stage() {
+        let formats = [
+            InputFormat::Pdf,
+            InputFormat::Doc,
+            InputFormat::Docx,
+            InputFormat::Ppt,
+            InputFormat::Pptx,
+            InputFormat::Xls,
+            InputFormat::Xlsx,
+            InputFormat::Odt,
+            InputFormat::Ods,
+            InputFormat::Odp,
+            InputFormat::Rtf,
+            InputFormat::Epub,
+            InputFormat::Html,
+            InputFormat::Ipynb,
+            InputFormat::Zip,
+            InputFormat::OutlookMsg,
+        ];
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        for format in formats {
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let enriched = block_on(enrich(output(), format, &options, &services, &context))
+                .unwrap_or_else(|error| panic!("{format:?}: {error}"));
+            let Block::Page { blocks, .. } = &enriched.document.blocks[0].block else {
+                panic!("{format:?}: page expected")
+            };
+            assert_eq!(blocks.len(), 4, "{format:?}");
+        }
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), formats.len());
+    }
+
+    #[test]
+    fn arbitrary_data_formats_and_non_local_assets_are_never_guessed() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        for format in [
+            InputFormat::Csv,
+            InputFormat::Json,
+            InputFormat::Xml,
+            InputFormat::Text,
+            InputFormat::Feed,
+            InputFormat::Markdown,
+            InputFormat::Image,
+        ] {
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let before = output();
+            let expected = before.document.clone();
+            let after = block_on(enrich(before, format, &options, &services, &context)).unwrap();
+            assert_eq!(after.document, expected, "{format:?}");
+        }
+
+        let mut remote = output();
+        remote.assets[0].external_uri = Some("https://example.invalid/image.png".into());
+        remote.assets[0].bytes.clear();
+        remote.assets[1].media_type = "image/svg+xml".into();
+        let expected = remote.document.clone();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let after =
+            block_on(enrich(remote, InputFormat::Html, &options, &services, &context)).unwrap();
+        assert_eq!(after.document, expected);
+
+        let mut mismatched = output();
+        mismatched.assets[0].media_type = "image/jpeg".into();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let error = block_on(enrich(mismatched, InputFormat::Docx, &options, &services, &context))
+            .unwrap_err();
+        assert!(matches!(error, ConversionError::Malformed { .. }));
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ocr_result_is_rejected_when_it_is_bound_to_different_image_bytes() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: true });
+        let services = Services { ocr: Some(ocr), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let error = block_on(enrich(output(), InputFormat::Docx, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Ocr);
+        assert!(error.to_string().contains("does not match the normalized source image"));
+    }
+
+    #[test]
+    fn resource_limits_and_cancellation_stop_before_ocr_publication() {
+        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        options.limits.max_total_asset_bytes = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let error = block_on(enrich(output(), InputFormat::Docx, &options, &services, &context))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ResourceLimit { limit: "max_total_asset_bytes", .. }
+        ));
+
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            options.limits.clone(),
+        );
+        let error = block_on(enrich(output(), InputFormat::Docx, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Cancelled);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+}

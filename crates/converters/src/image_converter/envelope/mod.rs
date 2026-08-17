@@ -12,12 +12,12 @@ use super::format::RasterFormat;
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceLimits};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Summary {
-    pub(super) frames: u32,
-    pub(super) animated: bool,
+pub(crate) struct Summary {
+    pub(crate) frames: u32,
+    pub(crate) animated: bool,
 }
 
-pub(super) fn validate(
+pub(crate) fn validate(
     format: RasterFormat,
     bytes: &[u8],
     limits: &ResourceLimits,

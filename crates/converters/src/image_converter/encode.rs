@@ -4,18 +4,18 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceLimits, ResourceReservation};
 
-pub(super) struct EncodedImage {
+pub(crate) struct EncodedImage {
     pub(super) bytes: Vec<u8>,
     memory: ResourceReservation,
 }
 
 impl EncodedImage {
-    pub(super) fn into_parts(self) -> (Vec<u8>, ResourceReservation) {
+    pub(crate) fn into_parts(self) -> (Vec<u8>, ResourceReservation) {
         (self.bytes, self.memory)
     }
 }
 
-pub(super) fn png(
+pub(crate) fn png(
     pixels: &RgbaImage,
     composite_white: bool,
     limits: &ResourceLimits,

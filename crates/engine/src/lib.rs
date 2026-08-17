@@ -11,8 +11,8 @@ use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
     ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
-    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
-    SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
+    MarkdownRenderer, OutputEnricher, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation,
+    Services, SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
     estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
@@ -95,6 +95,7 @@ pub struct EngineBuilder {
     registry: RegistryBuilder,
     renderer: Option<Arc<dyn MarkdownRenderer>>,
     services: Services,
+    enrichers: Vec<Arc<dyn OutputEnricher>>,
 }
 
 impl EngineBuilder {
@@ -123,6 +124,13 @@ impl EngineBuilder {
         self
     }
 
+    /// Register a transactional post-conversion enricher.
+    #[must_use]
+    pub fn enricher(mut self, enricher: Arc<dyn OutputEnricher>) -> Self {
+        self.enrichers.push(enricher);
+        self
+    }
+
     /// Validate IDs and build an immutable engine.
     ///
     /// # Errors
@@ -131,6 +139,7 @@ impl EngineBuilder {
     /// IDs.
     pub fn build(mut self) -> Result<Engine, ConversionError> {
         self.registry.validate()?;
+        validate_unique("output enricher", self.enrichers.iter().map(|value| value.id()))?;
         self.registry.format_detectors.sort_by(|left, right| {
             right.priority().cmp(&left.priority()).then_with(|| left.id().cmp(right.id()))
         });
@@ -146,6 +155,7 @@ impl EngineBuilder {
             converters: self.registry.converters,
             renderer: self.renderer,
             services: self.services,
+            enrichers: self.enrichers,
         })
     }
 }
@@ -157,6 +167,7 @@ pub struct Engine {
     converters: Vec<Arc<dyn Converter>>,
     renderer: Option<Arc<dyn MarkdownRenderer>>,
     services: Services,
+    enrichers: Vec<Arc<dyn OutputEnricher>>,
 }
 
 impl Engine {
@@ -313,6 +324,16 @@ impl Engine {
             |_| Ok(()),
         )
         .await?;
+        let output = invoke_enrichers(
+            &self.enrichers,
+            output,
+            attempt.converter.id(),
+            attempt.candidate.format,
+            &request.options,
+            &self.services,
+            &context,
+        )
+        .await?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
@@ -410,6 +431,34 @@ impl Engine {
     ) -> Result<Vec<FormatCandidate>, ConversionError> {
         nested::detect_formats(&self.format_detectors, input, hint, context).await
     }
+}
+
+pub(crate) async fn invoke_enrichers(
+    enrichers: &[Arc<dyn OutputEnricher>],
+    mut output: ConverterOutput,
+    converter_id: &str,
+    format: into_markdown_core::InputFormat,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    for enricher in enrichers {
+        context.checkpoint()?;
+        output = context
+            .run(enricher.enrich(output, converter_id, format, options, services, context))
+            .await??;
+        output.document.validate().map_err(|error| ConversionError::Internal {
+            detail: format!(
+                "output enricher {} returned invalid document IR ({} at {}): {}",
+                enricher.id(),
+                error.code.as_str(),
+                error.path,
+                error.detail
+            ),
+        })?;
+        output = output.account_retained(context)?;
+    }
+    Ok(output)
 }
 
 async fn invoke_converter_preflighted<F>(
@@ -1186,6 +1235,35 @@ mod tests {
         }
     }
 
+    struct TitleEnricher {
+        id: &'static str,
+        suffix: &'static str,
+    }
+
+    impl OutputEnricher for TitleEnricher {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn enrich<'a>(
+            &'a self,
+            mut output: ConverterOutput,
+            converter_id: &'a str,
+            format: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            let suffix = self.suffix;
+            Box::pin(async move {
+                assert_eq!(converter_id, "base.converter");
+                assert_eq!(format, InputFormat::Text);
+                output.document.metadata.title.get_or_insert_default().push_str(suffix);
+                Ok(output)
+            })
+        }
+    }
+
     struct CapacityRenderer(usize, Arc<std::sync::atomic::AtomicUsize>);
     impl MarkdownRenderer for CapacityRenderer {
         fn id(&self) -> &'static str {
@@ -1252,6 +1330,33 @@ mod tests {
             .register_source_resolver(Arc::new(BytesResolver))
             .register_source_resolver(Arc::new(BytesResolver));
         assert_eq!(builder.build().err().unwrap().code(), into_markdown_core::ErrorCode::Internal);
+    }
+
+    #[test]
+    fn duplicate_output_enricher_ids_are_rejected() {
+        let builder = EngineBuilder::new()
+            .enricher(Arc::new(TitleEnricher { id: "same.enricher", suffix: ":one" }))
+            .enricher(Arc::new(TitleEnricher { id: "same.enricher", suffix: ":two" }));
+        let error = builder.build().err().unwrap();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+        assert!(error.to_string().contains("duplicate output enricher ID"));
+    }
+
+    #[test]
+    fn output_enrichers_run_in_registration_order_before_rendering() {
+        let mut builder = EngineBuilder::new()
+            .renderer(Arc::new(EmptyRenderer))
+            .enricher(Arc::new(TitleEnricher { id: "first.enricher", suffix: ":one" }))
+            .enricher(Arc::new(TitleEnricher { id: "second.enricher", suffix: ":two" }));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(MatchingConverter("base.converter")));
+        let engine = builder.build().unwrap();
+        let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let result = block_on(engine.convert(request)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("base.converter:one:two"));
     }
 
     #[test]

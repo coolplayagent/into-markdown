@@ -3,9 +3,9 @@
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity,
     Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
-    OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrResult, OcrSourceRegion, Provenance,
-    ProvenanceKind, ResourceReservation, Services, SourceLocator, SourcePoint,
-    estimate_retained_output,
+    OcrInputIdentity, OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrResult,
+    OcrSourceRegion, Provenance, ProvenanceKind, ResourceReservation, Services, SourceLocator,
+    SourcePoint, estimate_retained_output,
 };
 
 const MERGE_PROVIDER: &str = "builtin.converter.image.ocr-merge";
@@ -13,11 +13,11 @@ const INSTALL_HINT: &str =
     "install local OCR models with `into-md models install pp-ocrv6-tiny-zh-en`";
 
 #[derive(Debug)]
-pub(super) struct OcrContribution {
-    pub(super) nodes: Vec<BlockNode>,
-    pub(super) diagnostics: Vec<Diagnostic>,
+pub(crate) struct OcrContribution {
+    pub(crate) nodes: Vec<BlockNode>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
     pub(super) accepted_text: bool,
-    pub(super) memory: Option<ResourceReservation>,
+    pub(crate) memory: Option<ResourceReservation>,
 }
 
 pub(super) async fn recognize(
@@ -25,6 +25,34 @@ pub(super) async fn recognize(
     page: u32,
     width: u32,
     height: u32,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<OcrContribution, ConversionError> {
+    recognize_inner(image, page, width, height, None, options, services, context).await
+}
+
+#[allow(clippy::too_many_arguments)] // Source identity is intentionally explicit at this boundary.
+pub(crate) async fn recognize_for_input(
+    image: &[u8],
+    page: u32,
+    width: u32,
+    height: u32,
+    identity: OcrInputIdentity,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<OcrContribution, ConversionError> {
+    recognize_inner(image, page, width, height, Some(identity), options, services, context).await
+}
+
+#[allow(clippy::too_many_arguments)] // Shared adapter retains the public OCR request fields.
+async fn recognize_inner(
+    image: &[u8],
+    page: u32,
+    width: u32,
+    height: u32,
+    expected_identity: Option<OcrInputIdentity>,
     options: &ConversionOptions,
     services: &Services,
     context: &ExecutionContext,
@@ -68,6 +96,14 @@ pub(super) async fn recognize(
             "the configured OCR engine returned legacy output without bound detector/model evidence",
         );
     };
+    if let Some(expected) = expected_identity
+        && bound.input_identity() != Some(expected)
+    {
+        return Err(ConversionError::Ocr {
+            provider: engine.id().into(),
+            detail: "bound OCR result does not match the normalized source image".into(),
+        });
+    }
     let (result, detection_confidences, mut chain) = bound.into_parts();
     validate_bound_payload(
         &result,
@@ -157,7 +193,7 @@ fn materialize_nodes(
         if region.text.trim().is_empty() || confidence < materialize.options.ocr.minimum_confidence
         {
             diagnostics.push(Diagnostic {
-                code: "image.ocrLowConfidence".into(),
+                code: "ocr.lowConfidence".into(),
                 severity: DiagnosticSeverity::Info,
                 message: format!("OCR region {index} was omitted below the configured confidence"),
                 locator: Some(page_locator(

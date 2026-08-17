@@ -1,5 +1,6 @@
 //! Offline HTML5 parsing and deterministic semantic extraction.
 
+use base64::Engine as _;
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{Attribute, ParseOpts, QualName, parse_document};
@@ -1885,6 +1886,8 @@ struct Builder<'a, 'budget> {
     max_table_rows: u64,
     max_table_columns: u64,
     max_table_cells: u64,
+    limits: into_markdown_core::ResourceLimits,
+    total_asset_bytes: u64,
     feed_budget: Option<&'budget mut FeedHtmlBudget>,
 }
 
@@ -1961,6 +1964,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             max_table_rows: options.limits.max_table_rows,
             max_table_columns: options.limits.max_table_columns,
             max_table_cells: options.limits.max_table_cells,
+            limits: options.limits.clone(),
+            total_asset_bytes: 0,
             feed_budget,
         }
     }
@@ -2591,6 +2596,10 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 None => Ok(None),
             };
         }
+        if src.get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:")) {
+            let data_uri = src.to_owned();
+            return self.build_data_image(&data_uri, alt);
+        }
         let resolved = {
             Url::parse(src).ok().or_else(|| self.base.as_ref().and_then(|base| base.join(src).ok()))
         };
@@ -2659,6 +2668,141 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             external_uri: Some(uri),
         });
         Ok(Some(Block::Image { asset: block_asset_id, alt }))
+    }
+
+    #[allow(clippy::too_many_lines)] // Canonical decoding and complete raster audit are one boundary.
+    fn build_data_image(
+        &mut self,
+        src: &str,
+        alt: Option<String>,
+    ) -> Result<Option<Block>, ConversionError> {
+        // Feed conversion owns a separate aggregate-memory model. Keeping data
+        // images out of nested feed HTML avoids charging their bytes twice.
+        if self.feed_budget.is_some() {
+            self.push_warning(
+                "html.imageUriRejected",
+                "data image was retained only as alternative text in nested feed HTML",
+            )?;
+            return self.image_alt_fallback(alt);
+        }
+        let Some((header, payload)) = src.split_once(',') else {
+            self.push_warning("html.dataImageRejected", "data image URI has no payload")?;
+            return self.image_alt_fallback(alt);
+        };
+        let media_type = header
+            .get(5..)
+            .and_then(|value| value.strip_suffix(";base64"))
+            .map(str::to_ascii_lowercase);
+        let Some(media_type) = media_type.filter(|value| {
+            matches!(
+                value.as_str(),
+                "image/png"
+                    | "image/jpeg"
+                    | "image/gif"
+                    | "image/webp"
+                    | "image/bmp"
+                    | "image/tiff"
+            )
+        }) else {
+            self.push_warning(
+                "html.dataImageRejected",
+                "data image must use an explicitly supported raster media type and base64 encoding",
+            )?;
+            return self.image_alt_fallback(alt);
+        };
+        let estimated = payload.len().saturating_add(3) / 4 * 3;
+        if u64::try_from(estimated).unwrap_or(u64::MAX) > self.limits.max_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: "HTML data image exceeds the per-asset byte budget".into(),
+            });
+        }
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(payload) {
+            Ok(bytes) if base64::engine::general_purpose::STANDARD.encode(&bytes) == payload => {
+                bytes
+            }
+            _ => {
+                self.push_warning(
+                    "html.dataImageRejected",
+                    "data image payload is not canonical base64",
+                )?;
+                return self.image_alt_fallback(alt);
+            }
+        };
+        let byte_count = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if byte_count > self.limits.max_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_asset_bytes",
+                detail: "HTML data image exceeds the per-asset byte budget".into(),
+            });
+        }
+        let format = crate::image_converter::format::detect(&bytes, self.context)?;
+        let declared_matches = if media_type == "image/gif" {
+            bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")
+        } else {
+            format.is_some_and(|format| format.media_type() == media_type)
+        };
+        if !declared_matches {
+            self.push_warning(
+                "html.dataImageRejected",
+                "data image bytes do not match the declared raster media type",
+            )?;
+            return self.image_alt_fallback(alt);
+        }
+        let extension = if media_type == "image/gif" {
+            crate::epub::image::validate(
+                &bytes,
+                &media_type,
+                "HTML data image",
+                &self.limits,
+                self.context,
+            )?;
+            "gif"
+        } else {
+            let format = format.expect("checked above");
+            crate::image_converter::envelope::validate(format, &bytes, &self.limits, self.context)?;
+            format.extension()
+        };
+        if let Some(asset) = self.assets.iter().find(|asset| {
+            asset.external_uri.is_none() && asset.media_type == media_type && asset.bytes == bytes
+        }) {
+            return Ok(Some(Block::Image { asset: asset.id.clone(), alt }));
+        }
+        self.total_asset_bytes =
+            self.total_asset_bytes.checked_add(byte_count).ok_or_else(|| {
+                ConversionError::ResourceLimit {
+                    limit: "max_total_asset_bytes",
+                    detail: "HTML data image byte total overflowed".into(),
+                }
+            })?;
+        if self.total_asset_bytes > self.limits.max_total_asset_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_total_asset_bytes",
+                detail: "HTML data images exceed the aggregate asset byte budget".into(),
+            });
+        }
+        let asset = AssetId(format!("html-data-image-{:06}", self.assets.len() + 1));
+        self.assets.push(Asset {
+            id: asset.clone(),
+            filename: Some(format!("embedded.{extension}")),
+            media_type,
+            bytes,
+            external_uri: None,
+        });
+        Ok(Some(Block::Image { asset, alt }))
+    }
+
+    fn image_alt_fallback(
+        &mut self,
+        alt: Option<String>,
+    ) -> Result<Option<Block>, ConversionError> {
+        match alt {
+            Some(value) => {
+                self.reserve_inline()?;
+                Ok(Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }])))
+            }
+            None => Ok(None),
+        }
     }
 
     fn inline_children(&mut self, id: usize) -> Result<Vec<Inline>, ConversionError> {
@@ -3309,6 +3453,7 @@ pub(crate) fn safe_link_target(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{Frame, RgbaImage, codecs::gif::GifEncoder};
     use into_markdown_core::{ExecutionOptions, ResourceLimits, SourceMetadata};
     use std::sync::Arc;
 
@@ -3612,6 +3757,37 @@ mod tests {
             Some("https://example.invalid/docs/a.png")
         );
         assert!(output.assets[0].bytes.is_empty());
+    }
+
+    #[test]
+    fn standalone_data_gif_is_fully_audited_and_trailing_bytes_are_rejected() {
+        let mut gif = Vec::new();
+        GifEncoder::new(&mut gif)
+            .encode_frame(Frame::new(RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))))
+            .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&gif);
+        let output = convert(&format!(
+            "<main><img src='data:image/gif;base64,{encoded}' alt='safe'></main>"
+        ));
+        assert_eq!(output.assets.len(), 1);
+        assert_eq!(output.assets[0].media_type, "image/gif");
+        assert_eq!(output.assets[0].bytes, gif);
+
+        let mut trailing = output.assets[0].bytes.clone();
+        trailing.push(0);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(trailing);
+        let source =
+            format!("<main><img src='data:image/gif;base64,{encoded}' alt='fallback'></main>");
+        let error = convert_html(
+            &ResolvedInput {
+                bytes: Arc::from(source.as_bytes()),
+                metadata: SourceMetadata::default(),
+            },
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::Malformed { .. }));
     }
 
     #[test]

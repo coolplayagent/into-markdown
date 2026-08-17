@@ -17,19 +17,19 @@ std::thread_local! {
 
 const MAX_DIMENSION: u32 = 32_768;
 
-pub(super) struct DecodedSet {
-    pub(super) frames: Vec<DecodedFrame>,
+pub(crate) struct DecodedSet {
+    pub(crate) frames: Vec<DecodedFrame>,
     pub(super) color: String,
     pub(super) orientation: u8,
     _memory: ResourceReservation,
 }
 
-pub(super) struct DecodedFrame {
-    pub(super) pixels: RgbaImage,
+pub(crate) struct DecodedFrame {
+    pub(crate) pixels: RgbaImage,
     pub(super) has_alpha: bool,
 }
 
-pub(super) fn decode(
+pub(crate) fn decode(
     format: RasterFormat,
     bytes: &[u8],
     summary: Summary,

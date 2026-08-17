@@ -7,9 +7,10 @@ use crate::{
 use image::{DynamicImage, ImageFormat, ImageReader};
 use into_markdown_core::{
     BoundOcrResult, BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine,
-    OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest,
-    OcrResult, ResourceLimits, TensorRuntime,
+    OcrEvidenceStage, OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion,
+    OcrRequest, OcrResult, ResourceLimits, TensorRuntime,
 };
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -121,7 +122,13 @@ impl PpOcrImageEngine {
         let recognition_result =
             recognizer.recognize_page(image, &detected, language, context).await?;
         context.checkpoint()?;
-        bind_result(&detected, recognition_result.result(), context)
+        let identity = OcrInputIdentity::try_new(
+            Sha256::digest(request.image).into(),
+            pixels.width(),
+            pixels.height(),
+            0,
+        )?;
+        bind_result(&detected, recognition_result.result(), identity, context)
     }
 }
 
@@ -224,6 +231,7 @@ fn validate_png_header(
 fn bind_result(
     detected: &crate::PageDetection,
     recognized: &crate::RecognitionResult,
+    identity: OcrInputIdentity,
     context: &ExecutionContext,
 ) -> Result<BoundOcrResult, ConversionError> {
     if recognized.provider.as_ref() != RECOGNIZER_PROVIDER
@@ -256,7 +264,7 @@ fn bind_result(
         });
         confidences.push(detection.confidence);
     }
-    BoundOcrResult::try_new(
+    BoundOcrResult::try_new_for_input(
         OcrResult { regions, provider: RECOGNIZER_PROVIDER.into() },
         confidences,
         vec![
@@ -271,6 +279,7 @@ fn bind_result(
                 model: Some(crate::recognizer_model::RECOGNIZER_MODEL_ID.into()),
             },
         ],
+        identity,
     )
 }
 

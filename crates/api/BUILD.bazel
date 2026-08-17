@@ -101,6 +101,8 @@ rust_test(
         "//crates/render-markdown:render_markdown",
         "//crates/task-store:task_store",
         "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
         "@crates//:zip",
     ],
 )
