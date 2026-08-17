@@ -441,6 +441,13 @@ impl ExecutionContext {
         }
     }
 
+    /// Return the immutable request resource envelope carried by this context.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn resource_limits(&self) -> &ResourceLimits {
+        &self.shared.limits
+    }
+
     /// Whether this context already spends from an enclosing preflight credit.
     #[doc(hidden)]
     #[must_use]

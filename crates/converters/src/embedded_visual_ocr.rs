@@ -204,76 +204,91 @@ fn plan_enrichment(
     {
         return Ok(EnrichmentPlan::Skip);
     }
-    let mut raster_references = 0_u32;
+    // Inventory references once. Candidate envelope parsing and hashing below
+    // are then performed once per referenced AssetId, never once per node.
+    let mut reference_counts = BTreeMap::<AssetId, u64>::new();
     for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
+        if find_asset(&output.assets, asset_id, context)?.is_none() {
             return Err(ConversionError::Internal {
                 detail: format!("image node references missing asset {}", asset_id.0),
             });
-        };
-        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
-            return Ok(());
         }
-        if auto_excluded_raster(asset, options, context)? {
-            return Ok(());
-        }
-        raster_references = raster_references.checked_add(1).ok_or_else(|| {
+        let count = reference_counts.entry(asset_id.clone()).or_default();
+        *count = count.checked_add(1).ok_or_else(|| {
             resource("max_archive_entries", "embedded visual reference count is not representable")
         })?;
-        if raster_references > options.limits.max_archive_entries {
+        Ok(())
+    })?;
+    if reference_counts.is_empty() {
+        return Ok(EnrichmentPlan::Skip);
+    }
+    if options.ocr.policy == OcrPolicy::Always {
+        let mut supported_references = 0_u64;
+        for asset in &output.assets {
+            if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
+                continue;
+            }
+            supported_references = supported_references
+                .checked_add(reference_counts.get(&asset.id).copied().unwrap_or(0))
+                .ok_or_else(|| {
+                    resource(
+                        "max_archive_entries",
+                        "embedded visual reference count is not representable",
+                    )
+                })?;
+        }
+        if supported_references > u64::from(options.limits.max_archive_entries) {
             return Err(resource(
                 "max_archive_entries",
                 "embedded visual references exceed the request limit",
             ));
         }
-        Ok(())
-    })?;
-    if raster_references == 0 {
-        return Ok(EnrichmentPlan::Skip);
     }
-    let mut references = 0_u32;
-    let mut total = 0_u64;
-    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
-            return Err(ConversionError::Internal {
-                detail: format!("image node references missing asset {}", asset_id.0),
-            });
-        };
-        if asset.bytes.is_empty()
-            || asset.external_uri.is_some()
-            || !supported_raster(asset)
-            || candidate_dimensions_for_policy(asset, options, context)?.is_none()
-        {
-            return Ok(());
-        }
-        references = references.checked_add(1).ok_or_else(|| {
-            resource("max_archive_entries", "eligible visual reference count is not representable")
-        })?;
-        // Each eligible reference can clone OCR IR, evidence, and diagnostics,
-        // even when its source bytes share one provider request.
-        checked_add(&mut total, 128 * 1024, "embedded OCR reference plan overflow")?;
-        Ok(())
-    })?;
-    if references == 0 {
-        return Ok(EnrichmentPlan::Skip);
-    }
-    let mut candidates = 0_u32;
+
+    // (asset index, reference count, dimensions, exact-byte digest)
+    let mut candidates = Vec::<(usize, u64, (u32, u32), [u8; 32])>::new();
+    let mut references = 0_u64;
     let mut candidate_bytes = 0_u64;
-    let existing_nodes = count_document_nodes(&output.document.blocks, context)?;
-    let mut planned_added_nodes = 0_usize;
-    let mut provider_working_peak = 0_u64;
+    let mut total = 0_u64;
+    for asset in &output.assets {
+        context.checkpoint()?;
+        checked_add(
+            &mut total,
+            u64::try_from(asset.id.0.len())
+                .unwrap_or(u64::MAX)
+                .checked_add(128)
+                .ok_or_else(|| resource("max_memory_bytes", "asset index plan overflow"))?,
+            "asset index plan overflow",
+        )?;
+    }
     for (index, asset) in output.assets.iter().enumerate() {
         context.checkpoint()?;
-        if asset.bytes.is_empty()
-            || asset.external_uri.is_some()
-            || !supported_raster(asset)
-            || !has_visual_reference(&output.document.blocks, &asset.id, context)?
-        {
+        let Some(reference_count) = reference_counts.get(&asset.id).copied() else { continue };
+        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
             continue;
         }
-        if candidate_dimensions_for_policy(asset, options, context)?.is_none() {
+        if auto_excluded_raster(asset, options, context)? {
             continue;
         }
+        references = references.checked_add(reference_count).ok_or_else(|| {
+            resource("max_archive_entries", "eligible visual reference count is not representable")
+        })?;
+        if references > u64::from(options.limits.max_archive_entries) {
+            return Err(resource(
+                "max_archive_entries",
+                "embedded visual references exceed the request limit",
+            ));
+        }
+        let Some(dimensions) = candidate_dimensions_for_policy(asset, options, context)? else {
+            continue;
+        };
+        checked_add(
+            &mut total,
+            reference_count.checked_mul(128 * 1024).ok_or_else(|| {
+                resource("max_memory_bytes", "embedded OCR reference plan overflow")
+            })?,
+            "embedded OCR reference plan overflow",
+        )?;
         candidate_bytes = candidate_bytes
             .checked_add(u64::try_from(asset.bytes.len()).map_err(|_| {
                 resource("max_total_asset_bytes", "embedded visual byte count is not representable")
@@ -285,84 +300,99 @@ fn plan_enrichment(
                 "embedded visual bytes exceed the request limit",
             ));
         }
-        if first_referenced_asset_with_bytes(output, index, context)? {
-            candidates = candidates
-                .checked_add(1)
-                .ok_or_else(|| resource("max_pages", "embedded OCR candidate count overflow"))?;
-            if candidates > options.limits.max_pages {
-                return Err(resource(
-                    "max_pages",
-                    "embedded OCR candidate requests exceed the request limit",
-                ));
-            }
-        }
-    }
-    if candidates == 0 {
-        return Ok(EnrichmentPlan::Skip);
-    }
-
-    // Only consult provider plans after every knowable input count and envelope
-    // bound has passed, so a provider cannot observe a request that preflight
-    // must reject.
-    // Account hash/map work once per eligible AssetId, but normalization and
-    // provider output once per unique byte identity.
-    for (index, asset) in output.assets.iter().enumerate() {
-        context.checkpoint()?;
-        if asset.bytes.is_empty()
-            || asset.external_uri.is_some()
-            || !supported_raster(asset)
-            || !has_visual_reference(&output.document.blocks, &asset.id, context)?
-        {
-            continue;
-        }
         checked_add(
             &mut total,
             u64::try_from(asset.bytes.len())
                 .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
             "hash/cache plan overflow",
         )?;
-        if !first_referenced_asset_with_bytes(output, index, context)? {
+        candidates.push((
+            index,
+            reference_count,
+            dimensions,
+            checkpointed_sha256(&asset.bytes, context)?,
+        ));
+    }
+    if references == 0 {
+        return Ok(EnrichmentPlan::Skip);
+    }
+    let mut unique = Vec::<usize>::new();
+    for candidate_index in 0..candidates.len() {
+        context.checkpoint()?;
+        let candidate = &candidates[candidate_index];
+        if unique.iter().any(|prior_index| {
+            let prior = &candidates[*prior_index];
+            prior.3 == candidate.3
+                && output.assets[prior.0].bytes == output.assets[candidate.0].bytes
+        }) {
             continue;
         }
-        let dimensions = candidate_dimensions_for_policy(asset, options, context)?;
-        let normalized_peak = if let Some((width, height)) = dimensions {
-            u64::from(width)
-                .checked_mul(u64::from(height))
-                .and_then(|pixels| pixels.checked_mul(32))
-                .and_then(|bytes| bytes.checked_add(64 * 1024))
-                .ok_or_else(|| resource("max_memory_bytes", "normalization plan overflow"))?
-        } else {
-            64 * 1024
-        };
+        unique.push(candidate_index);
+    }
+    let unique_count = u32::try_from(unique.len())
+        .map_err(|_| resource("max_pages", "embedded OCR candidate count overflow"))?;
+    if unique_count > options.limits.max_pages {
+        return Err(resource(
+            "max_pages",
+            "embedded OCR candidate requests exceed the request limit",
+        ));
+    }
+
+    let existing_nodes = count_document_nodes(&output.document.blocks, context)?;
+    let mut planned_added_nodes = 0_usize;
+    let mut provider_working_peak = 0_u64;
+    // Only consult provider plans after every knowable input count and envelope
+    // bound has passed, so a provider cannot observe a request that preflight
+    // must reject.
+    // Account hash/map work once per eligible AssetId, but normalization and
+    // provider output once per unique byte identity.
+    for candidate_index in unique {
+        context.checkpoint()?;
+        let candidate = &candidates[candidate_index];
+        let asset = &output.assets[candidate.0];
+        let (width, height) = candidate.2;
+        let normalized_peak = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(32))
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .ok_or_else(|| resource("max_memory_bytes", "normalization plan overflow"))?;
         checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
-        let (provider_bound, provider_working, provider_regions) =
-            match (services.ocr.as_deref(), dimensions) {
-                (_, None) => (0, 0, 0),
-                (Some(engine), Some((width, height))) => {
-                    match engine.planned_normalized_png_output(width, height, options, context) {
-                        Ok(plan) => (
-                            plan.max_retained_bytes(),
-                            plan.max_working_bytes(),
-                            plan.max_regions(),
-                        ),
-                        Err(ConversionError::ComponentUnavailable { .. })
-                            if options.ocr.policy == OcrPolicy::Auto =>
-                        {
-                            (0, 0, 0)
-                        }
-                        Err(error) => return Err(error),
+        let (provider_bound, provider_working, provider_regions) = match services.ocr.as_deref() {
+            Some(engine) => {
+                match engine.planned_normalized_png_output(width, height, options, context) {
+                    Ok(plan) => {
+                        (plan.max_retained_bytes(), plan.max_working_bytes(), plan.max_regions())
                     }
+                    Err(ConversionError::ComponentUnavailable { .. })
+                        if options.ocr.policy == OcrPolicy::Auto =>
+                    {
+                        (0, 0, 0)
+                    }
+                    Err(error) => return Err(error),
                 }
-                (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => (0, 0, 0),
-                (None, Some(_)) => {
-                    return Err(ConversionError::ComponentUnavailable {
-                        component: "ocr".into(),
-                        detail: "no OCR engine is configured".into(),
-                    });
-                }
-            };
+            }
+            None if options.ocr.policy == OcrPolicy::Auto => (0, 0, 0),
+            None => {
+                return Err(ConversionError::ComponentUnavailable {
+                    component: "ocr".into(),
+                    detail: "no OCR engine is configured".into(),
+                });
+            }
+        };
         provider_working_peak = provider_working_peak.max(provider_working);
-        let reference_copies = visual_reference_count_for_bytes(output, &asset.bytes, context)?;
+        let (reference_copies, asset_copies) = candidates
+            .iter()
+            .filter(|other| other.3 == candidate.3 && output.assets[other.0].bytes == asset.bytes)
+            .try_fold((0_u64, 0_u64), |values, other| {
+                Ok::<_, ConversionError>((
+                    values.0.checked_add(other.1).ok_or_else(|| {
+                        resource("max_memory_bytes", "OCR reference-copy count overflow")
+                    })?,
+                    values.1.checked_add(1).ok_or_else(|| {
+                        resource("max_memory_bytes", "OCR asset-copy count overflow")
+                    })?,
+                ))
+            })?;
         let added_nodes = usize::try_from(provider_regions)
             .unwrap_or(usize::MAX)
             .checked_mul(usize::try_from(reference_copies).unwrap_or(usize::MAX))
@@ -380,7 +410,6 @@ fn plan_enrichment(
                 "embedded OCR output can exceed the document node limit",
             ));
         }
-        let asset_copies = referenced_asset_count_for_bytes(output, &asset.bytes, context)?;
         let retained_copies = reference_copies
             .checked_add(asset_copies)
             .and_then(|value| value.checked_add(1))
@@ -433,6 +462,7 @@ fn auto_excluded_raster(
     // the request deliberately set those OCR-stage limits low.
     let mut classification_options = options.clone();
     classification_options.limits.max_archive_entries = u32::MAX;
+    classification_options.limits.max_pages = u32::MAX;
     Ok(candidate_dimensions_for_policy(asset, &classification_options, context)?.is_none())
 }
 
@@ -480,54 +510,6 @@ fn count_document_nodes(
             .ok_or_else(|| resource("documentNodes", "document node count overflow"))?;
     }
     Ok(total)
-}
-
-fn visual_reference_count_for_bytes(
-    output: &ConverterOutput,
-    bytes: &[u8],
-    context: &ExecutionContext,
-) -> Result<u64, ConversionError> {
-    let mut count = 0_u64;
-    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
-            return Err(ConversionError::Internal {
-                detail: format!("image node references missing asset {}", asset_id.0),
-            });
-        };
-        if !asset.bytes.is_empty()
-            && asset.external_uri.is_none()
-            && supported_raster(asset)
-            && asset.bytes == bytes
-        {
-            count = count.checked_add(1).ok_or_else(|| {
-                resource("max_archive_entries", "embedded visual reference count overflow")
-            })?;
-        }
-        Ok(())
-    })?;
-    Ok(count)
-}
-
-fn referenced_asset_count_for_bytes(
-    output: &ConverterOutput,
-    bytes: &[u8],
-    context: &ExecutionContext,
-) -> Result<u64, ConversionError> {
-    let mut count = 0_u64;
-    for asset in &output.assets {
-        context.checkpoint()?;
-        if asset.bytes == bytes
-            && !asset.bytes.is_empty()
-            && asset.external_uri.is_none()
-            && supported_raster(asset)
-            && has_visual_reference(&output.document.blocks, &asset.id, context)?
-        {
-            count = count.checked_add(1).ok_or_else(|| {
-                resource("max_archive_entries", "embedded visual asset count overflow")
-            })?;
-        }
-    }
-    Ok(count)
 }
 
 fn planned_node_id_working_set(
@@ -603,44 +585,6 @@ fn planned_node_id_inventory(
         maximum = maximum.max(nested.1);
     }
     Ok((total, maximum))
-}
-
-fn has_visual_reference(
-    nodes: &[BlockNode],
-    asset_id: &AssetId,
-    context: &ExecutionContext,
-) -> Result<bool, ConversionError> {
-    let mut found = false;
-    for_each_visual_reference(nodes, context, &mut |candidate| {
-        if candidate == asset_id {
-            found = true;
-        }
-        Ok(())
-    })?;
-    Ok(found)
-}
-
-/// Returns true for the first referenced eligible `AssetId` carrying these exact
-/// bytes. Exact byte equality is the OCR input identity; no set allocation is
-/// needed before the engine reserves the enrichment plan.
-fn first_referenced_asset_with_bytes(
-    output: &ConverterOutput,
-    index: usize,
-    context: &ExecutionContext,
-) -> Result<bool, ConversionError> {
-    let asset = &output.assets[index];
-    for prior in &output.assets[..index] {
-        context.checkpoint()?;
-        if prior.bytes == asset.bytes
-            && !prior.bytes.is_empty()
-            && prior.external_uri.is_none()
-            && supported_raster(prior)
-            && has_visual_reference(&output.document.blocks, &prior.id, context)?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 fn validated_candidate_dimensions(
@@ -803,27 +747,46 @@ async fn enrich(
         return Ok(output);
     }
 
+    // Keep only stable indices here. Cloning `Asset` would duplicate every
+    // payload, including excluded and unreferenced assets outside the plan.
     let mut assets = BTreeMap::new();
     for (index, asset) in output.assets.iter().enumerate() {
         if index % 256 == 0 {
             context.checkpoint()?;
         }
-        assets.insert(asset.id.clone(), asset.clone());
+        assets.insert(asset.id.clone(), index);
+    }
+    let mut eligible_assets = BTreeSet::new();
+    let mut classified_assets = BTreeSet::new();
+    for reference in &references {
+        if !classified_assets.insert(reference.asset.clone()) {
+            continue;
+        }
+        let Some(asset_index) = assets.get(&reference.asset) else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", reference.asset.0),
+            });
+        };
+        let asset = &output.assets[*asset_index];
+        if !asset.bytes.is_empty()
+            && asset.external_uri.is_none()
+            && supported_raster(asset)
+            && !auto_excluded_raster(asset, options, context)?
+        {
+            eligible_assets.insert(reference.asset.clone());
+        }
     }
     let mut eligible_reference_count = 0_u32;
     for (index, reference) in references.iter().enumerate() {
         if index % 256 == 0 {
             context.checkpoint()?;
         }
-        let Some(asset) = assets.get(&reference.asset) else {
+        if !assets.contains_key(&reference.asset) {
             return Err(ConversionError::Internal {
                 detail: format!("image node references missing asset {}", reference.asset.0),
             });
-        };
-        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
-            continue;
         }
-        if auto_excluded_raster(asset, options, context)? {
+        if !eligible_assets.contains(&reference.asset) {
             continue;
         }
         eligible_reference_count = eligible_reference_count.checked_add(1).ok_or_else(|| {
@@ -844,15 +807,13 @@ async fn enrich(
         if index % 256 == 0 {
             context.checkpoint()?;
         }
-        let Some(asset) = assets.get(&reference.asset) else {
+        let Some(asset_index) = assets.get(&reference.asset) else {
             return Err(ConversionError::Internal {
                 detail: format!("image node references missing asset {}", reference.asset.0),
             });
         };
-        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
-            continue;
-        }
-        if auto_excluded_raster(asset, options, context)? {
+        let asset = &output.assets[*asset_index];
+        if !eligible_assets.contains(&reference.asset) {
             continue;
         }
         if !referenced_assets.insert(reference.asset.clone()) {
@@ -883,9 +844,10 @@ async fn enrich(
     let mut cache = BTreeMap::<[u8; 32], CachedContribution>::new();
     for (ordinal, (digest, asset_id)) in unique.into_iter().enumerate() {
         context.checkpoint()?;
-        let asset = assets.get(&asset_id).ok_or_else(|| ConversionError::Internal {
+        let asset_index = assets.get(&asset_id).ok_or_else(|| ConversionError::Internal {
             detail: "embedded OCR asset inventory changed during enrichment".into(),
         })?;
+        let asset = &output.assets[*asset_index];
         let normalized = match normalize(asset, options, context) {
             Ok(value) => value,
             Err(error)
@@ -1007,6 +969,8 @@ fn auto_skippable_raster(error: &ConversionError) -> bool {
         ConversionError::Unsupported { detail }
             if detail == "animated or multi-page embedded raster is not eligible for OCR"
                 || detail == "animated embedded GIF is not eligible for OCR"
+                || detail == "fully transparent embedded raster is not eligible for OCR"
+                || detail == "fully transparent embedded GIF is not eligible for OCR"
     )
 }
 
@@ -1137,21 +1101,22 @@ fn normalize_gif(
         context,
     )?;
     let memory = context.reserve_memory(working)?;
-    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|error| {
+    let gif_reader = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|error| {
         ConversionError::Malformed { part: None, detail: format!("invalid embedded GIF: {error}") }
     })?;
-    if decoder.dimensions() != (width, height) {
+    if gif_reader.dimensions() != (width, height) {
         return Err(ConversionError::Malformed {
             part: None,
             detail: "GIF decoder dimensions disagree with the header".into(),
         });
     }
-    let frames = decoder.into_frames().take(2).collect::<Result<Vec<_>, _>>().map_err(|error| {
-        ConversionError::Malformed {
-            part: None,
-            detail: format!("invalid embedded GIF frames: {error}"),
-        }
-    })?;
+    let frames =
+        gif_reader.into_frames().take(2).collect::<Result<Vec<_>, _>>().map_err(|error| {
+            ConversionError::Malformed {
+                part: None,
+                detail: format!("invalid embedded GIF frames: {error}"),
+            }
+        })?;
     if frames.len() != 1 {
         return Err(ConversionError::Unsupported {
             detail: "animated embedded GIF is not eligible for OCR".into(),
@@ -1481,10 +1446,12 @@ mod tests {
         OcrResult, ProvenanceKind,
     };
     use std::future::Future;
+    use std::io::Cursor;
     use std::pin::pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll, Waker};
+    use tiff::encoder::{TiffEncoder, colortype};
 
     struct SourceBoundOcr {
         calls: AtomicUsize,
@@ -1688,6 +1655,23 @@ mod tests {
         bytes
     }
 
+    fn transparent_png() -> Vec<u8> {
+        let pixels = RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 0]));
+        let mut cursor = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(pixels).write_to(&mut cursor, ImageFormat::Png).unwrap();
+        cursor.into_inner()
+    }
+
+    fn multi_tiff() -> Vec<u8> {
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut bytes).unwrap();
+            encoder.write_image::<colortype::Gray8>(1, 1, &[0]).unwrap();
+            encoder.write_image::<colortype::Gray8>(1, 1, &[255]).unwrap();
+        }
+        bytes.into_inner()
+    }
+
     #[test]
     fn big_tiff_dimensions_are_read_from_long8_ifd_entries() {
         let mut bytes = Vec::new();
@@ -1866,6 +1850,55 @@ mod tests {
             plan_enrichment(&source, InputFormat::Docx, &options, &services, &context),
             Err(ConversionError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn auto_policy_preserves_transparent_png_without_calling_provider() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut source = output();
+        let transparent = transparent_png();
+        for asset in &mut source.assets {
+            asset.bytes = transparent.clone();
+        }
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let expected_assets: Vec<_> =
+            source.assets.iter().map(|asset| asset.bytes.clone()).collect();
+
+        let enriched =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            enriched.assets.iter().map(|asset| asset.bytes.clone()).collect::<Vec<_>>(),
+            expected_assets
+        );
+        assert_eq!(enriched.diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn auto_multipage_tiff_classification_ignores_ocr_page_limit() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut source = output();
+        let bytes = multi_tiff();
+        for asset in &mut source.assets {
+            asset.bytes = bytes.clone();
+            asset.filename = Some(format!("{}.tiff", asset.id.0));
+            asset.media_type = "image/tiff".into();
+        }
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        options.limits.max_pages = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        assert_eq!(
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context).unwrap(),
+            EnrichmentPlan::Skip
+        );
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
