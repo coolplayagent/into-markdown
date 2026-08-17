@@ -16,7 +16,9 @@ real parser evidence as well as common-enricher evidence:
   group while preserving a table and cached chart. The three-sheet XLSX fixture
   verifies repeated-image locators in workbook order. A blank image provides
   the no-text case. The 256-paragraph DOCX covers normal document volume, all
-  three asset modes, and `Off`.
+  three asset modes, and `Off`. A real EPUB container negative proves that an
+  external image is not fetched or retained and that a manifest/chapter path
+  traversal is rejected before OCR.
 - Common-enricher tests run every eligible `InputFormat`, reject arbitrary
   CSV/JSON/XML/Text/Feed/Markdown assets, preserve a locator for every repeated
   reference, reject a mismatched normalized-input identity, and fail before OCR
@@ -24,8 +26,9 @@ real parser evidence as well as common-enricher evidence:
 - PDF layout tests merge page-coordinate OCR with native text, remove spatial
   duplicates without deleting OCR evidence, and keep a coordinate-mapped OCR
   node when there is no native text. A dynamically generated API fixture also
-  contains two byte-identical image XObjects and checks one recognition with
-  per-reference publication; that test is runtime-gated by `PDFIUM_LIBRARY` and
+  contains two distinct image XObjects and draws one of them twice, checking
+  one recognition per unique embedded input with per-reference publication;
+  that test is runtime-gated by `PDFIUM_LIBRARY` and
   is not evidence unless the pinned runtime target is actually executed.
 - MSG parser positive/negative coverage is in
   `html_cid_and_by_value_attachment_are_offline_assets` and

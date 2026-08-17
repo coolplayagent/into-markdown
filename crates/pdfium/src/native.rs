@@ -2050,13 +2050,8 @@ fn open_locked(path: &Path) -> Result<File, Error> {
 fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Result<(), Error> {
     let file =
         object::File::parse(bytes).map_err(|error| Error::BinaryValidation(error.to_string()))?;
-    let (format, architecture) = match platform {
-        Platform::MacArm64 => (BinaryFormat::MachO, Architecture::Aarch64),
-        Platform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
-        Platform::LinuxArm64 => (BinaryFormat::Elf, Architecture::Aarch64),
-        Platform::WindowsX64 => (BinaryFormat::Coff, Architecture::X86_64),
-    };
-    if file.format() != format || file.architecture() != architecture || !file.is_64() {
+    let (format, architecture) = expected_binary_identity(platform);
+    if !binary_identity_matches(platform, file.format(), file.architecture(), file.is_64()) {
         return Err(Error::BinaryValidation(format!(
             "expected {format:?}/{architecture:?}/64-bit, got {:?}/{:?}/{}-bit",
             file.format(),
@@ -2098,6 +2093,25 @@ fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Res
     Ok(())
 }
 
+fn expected_binary_identity(platform: Platform) -> (BinaryFormat, Architecture) {
+    match platform {
+        Platform::MacArm64 => (BinaryFormat::MachO, Architecture::Aarch64),
+        Platform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
+        Platform::LinuxArm64 => (BinaryFormat::Elf, Architecture::Aarch64),
+        Platform::WindowsX64 => (BinaryFormat::Pe, Architecture::X86_64),
+    }
+}
+
+fn binary_identity_matches(
+    platform: Platform,
+    actual_format: BinaryFormat,
+    actual_architecture: Architecture,
+    is_64: bool,
+) -> bool {
+    let (format, architecture) = expected_binary_identity(platform);
+    actual_format == format && actual_architecture == architecture && is_64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2117,7 +2131,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Config>(), 32);
         assert_eq!(std::mem::align_of::<Config>(), 8);
         assert_eq!(std::mem::size_of::<c_uint>(), 4);
-        assert_eq!(std::mem::size_of::<c_ulong>(), 8);
+        assert_eq!(std::mem::size_of::<c_ulong>(), if cfg!(windows) { 4 } else { 8 });
         let _: GetUnicode = unicode_signature;
         let _: GetActionType = action_type_signature;
         assert_eq!(std::mem::offset_of!(Config, version), 0);
@@ -2159,6 +2173,28 @@ mod tests {
         assert!(matches!(
             artifact_from_manifest(&value.to_string(), Platform::MacArm64),
             Err(Error::BinaryValidation(message)) if message.contains("unknown field")
+        ));
+    }
+
+    #[test]
+    fn windows_runtime_requires_a_64_bit_x86_64_pe_image() {
+        assert!(binary_identity_matches(
+            Platform::WindowsX64,
+            BinaryFormat::Pe,
+            Architecture::X86_64,
+            true
+        ));
+        assert!(!binary_identity_matches(
+            Platform::WindowsX64,
+            BinaryFormat::Coff,
+            Architecture::X86_64,
+            true
+        ));
+        assert!(!binary_identity_matches(
+            Platform::WindowsX64,
+            BinaryFormat::Pe,
+            Architecture::I386,
+            false
         ));
     }
     #[test]

@@ -56,29 +56,43 @@ impl OcrEngine for PdfGeometryOcr {
         request: OcrRequest<'a>,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
-        let ordinal = self.0.fetch_add(1, Ordering::SeqCst);
+        self.0.fetch_add(1, Ordering::SeqCst);
         let dimensions = normalized_png_dimensions(request.image);
         let digest = Sha256::digest(request.image).into();
-        let text = if ordinal == 0 { "native words" } else { "embedded second" };
         Box::pin(async move {
             context.checkpoint()?;
             let (width, height) = dimensions?;
+            let is_page_render = width > 10 && height > 10;
+            let regions = (!is_page_render)
+                .then(|| OcrRegion {
+                    text: "embedded second".into(),
+                    polygon: [
+                        (0.0, 0.0),
+                        (width as f32, 0.0),
+                        (width as f32, height as f32),
+                        (0.0, height as f32),
+                    ],
+                    confidence: 0.99,
+                })
+                .into_iter()
+                .collect();
+            let confidences = if is_page_render { Vec::new() } else { vec![0.99] };
             let identity = OcrInputIdentity::try_new(digest, width, height, 0);
             Ok(OcrRecognition::Bound(BoundOcrResult::try_new_for_input(
-                OcrResult {
-                    regions: vec![OcrRegion {
-                        text: text.into(),
-                        polygon: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
-                        confidence: 0.99,
-                    }],
-                    provider: "test.api.pdf-geometry-ocr".into(),
-                },
-                vec![0.99],
-                vec![OcrEvidenceStep {
-                    stage: OcrEvidenceStage::Recognition,
-                    provider: "test.api.pdf-geometry-ocr".into(),
-                    model: Some("source-bound-test".into()),
-                }],
+                OcrResult { regions, provider: "test.api.pdf-geometry-ocr".into() },
+                confidences,
+                vec![
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Detection,
+                        provider: "test.api.pdf-geometry-ocr".into(),
+                        model: Some("source-bound-detector".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Recognition,
+                        provider: "test.api.pdf-geometry-ocr".into(),
+                        model: Some("source-bound-recognizer".into()),
+                    },
+                ],
                 identity?,
             )?))
         })
@@ -283,6 +297,36 @@ fn dynamically_created_html_remote_image_is_not_fetched_or_ocr_guessed() {
 }
 
 #[test]
+fn dynamically_created_epub_external_and_traversal_images_never_enter_embedded_ocr() {
+    let ocr = Arc::new(SourceBoundOcr(AtomicUsize::new(0)));
+    let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+    let engine = default_engine_with_services(services).unwrap();
+
+    let mut request = ConversionRequest::new(InputRef::bytes(
+        epub_with_unsafe_image("https://example.invalid/secret.png", None),
+        Some("external-image.epub"),
+    ));
+    request.options.ocr.policy = OcrPolicy::Always;
+    let result = block_on(engine.convert(request)).unwrap();
+    assert!(result.markdown.contains("remote image"));
+    assert!(!result.markdown.contains("text from embedded picture"));
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 0, "external EPUB image must not reach OCR");
+    assert!(result.assets.iter().all(|asset| asset.bytes.is_empty()));
+
+    let mut request = ConversionRequest::new(InputRef::bytes(
+        epub_with_unsafe_image("../../../escape.png", Some("../../../escape.png")),
+        Some("traversal-image.epub"),
+    ));
+    request.options.ocr.policy = OcrPolicy::Always;
+    assert!(matches!(block_on(engine.convert(request)), Err(ConversionError::Malformed { .. })));
+    assert_eq!(
+        ocr.0.load(Ordering::SeqCst),
+        0,
+        "path-confined EPUB rejection must happen before embedded OCR"
+    );
+}
+
+#[test]
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
 fn dynamically_created_pdf_merges_native_and_embedded_ocr_geometry_and_deduplicates() {
     assert!(std::env::var_os("PDFIUM_LIBRARY").is_some());
@@ -295,9 +339,11 @@ fn dynamically_created_pdf_merges_native_and_embedded_ocr_geometry_and_deduplica
     ));
     request.options.ocr.policy = OcrPolicy::Always;
     let result = block_on(engine.convert(request)).unwrap();
-    assert_eq!(ocr.0.load(Ordering::SeqCst), 2);
+    // One request is the PDF page OCR pass. The embedded stage makes one request
+    // for red and one for green; the second green drawing reuses that result.
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 3);
     assert_eq!(result.markdown.matches("native words").count(), 1);
-    assert_eq!(result.markdown.matches("embedded second").count(), 2);
+    assert_eq!(result.markdown.matches("embedded second").count(), 3);
     assert!(
         result.markdown.find("native words").unwrap()
             < result.markdown.find("embedded second").unwrap()
@@ -312,11 +358,10 @@ fn pdf_with_native_text_and_two_images() -> Vec<u8> {
     let objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R /Im2 7 0 R /Im3 8 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R /Im2 7 0 R /Im3 7 0 R >> >> /Contents 4 0 R >>".to_vec(),
         content,
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
         pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[255, 0, 0]),
-        pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[0, 255, 0]),
         pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[0, 255, 0]),
     ];
     assemble_pdf(&objects)
@@ -533,6 +578,27 @@ fn epub_with_png() -> Vec<u8> {
         ("EPUB/nav.xhtml", NAV.as_bytes()),
         ("EPUB/chapter.xhtml", CHAPTER.as_bytes()),
         ("EPUB/image.png", TEST_PNG),
+    ])
+}
+
+fn epub_with_unsafe_image(source: &str, manifest_image: Option<&str>) -> Vec<u8> {
+    const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    const NAV: &str = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>"#;
+    let image_item = manifest_image.map_or_else(String::new, |href| {
+        format!(r#"<item id="image" href="{href}" media-type="image/png"/>"#)
+    });
+    let package = format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">urn:test:unsafe-embedded-ocr</dc:identifier><dc:title>Unsafe Embedded OCR</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-17T00:00:00Z</meta></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{image_item}</manifest><spine><itemref idref="chapter"/></spine></package>"#
+    );
+    let chapter = format!(
+        r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><p>safe text</p><img src="{source}" alt="remote image"/></body></html>"#
+    );
+    zip_owned(vec![
+        ("mimetype".into(), b"application/epub+zip".to_vec()),
+        ("META-INF/container.xml".into(), CONTAINER.as_bytes().to_vec()),
+        ("EPUB/package.opf".into(), package.into_bytes()),
+        ("EPUB/nav.xhtml".into(), NAV.as_bytes().to_vec()),
+        ("EPUB/chapter.xhtml".into(), chapter.into_bytes()),
     ])
 }
 
