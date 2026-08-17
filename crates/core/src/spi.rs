@@ -410,6 +410,49 @@ impl ConverterOutput {
         Ok(self)
     }
 
+    /// Certify the incremental reservation acquired before invoking an output
+    /// enricher. Existing parent-context leases remain attached; any leases
+    /// produced through the temporary enrichment credit are replaced by the
+    /// authenticated parent reservation.
+    #[doc(hidden)]
+    pub fn certify_enrichment_reservation(
+        mut self,
+        context: &ExecutionContext,
+        mut reservation: ResourceReservation,
+    ) -> Result<Self, ConversionError> {
+        let required = estimate_retained_output(&self.document, &self.assets, &self.diagnostics)?;
+        if !reservation.belongs_to_memory_context(context) {
+            return Err(ConversionError::Internal {
+                detail: "enricher preflight reservation belongs to a different context".into(),
+            });
+        }
+        self.memory_lease.leases.retain(|lease| lease.belongs_to_memory_context(context));
+        let held = self
+            .memory_lease
+            .leases
+            .iter()
+            .map(ResourceReservation::bytes)
+            .try_fold(0_u64, u64::checked_add)
+            .ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "enricher retained-memory accounting overflowed".into(),
+            })?;
+        let deficit = required.saturating_sub(held);
+        if reservation.bytes() < deficit {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: format!(
+                    "enricher retained {deficit} incremental bytes beyond its {}-byte preflight plan",
+                    reservation.bytes()
+                ),
+            });
+        }
+        reservation.shrink(reservation.bytes().saturating_sub(deficit))?;
+        self.memory_lease.push(reservation)?;
+        self.memory_lease.accounted_bytes = required;
+        Ok(self)
+    }
+
     /// Consume the intermediate output and assemble a final result without
     /// exposing its detachable memory ownership.
     #[doc(hidden)]
@@ -1084,6 +1127,59 @@ pub trait Converter: Send + Sync {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
 }
 
+/// Transactional post-conversion enrichment before validation checkpoints and rendering.
+///
+/// Implementations consume the complete converter output and must return either a fully
+/// validated replacement or an error. This prevents partially enriched output from escaping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrichmentPlan {
+    /// This enricher is an exact no-op for the request and is not invoked.
+    Skip,
+    /// Reserve this incremental peak before invoking the enricher.
+    Reserve(u64),
+}
+
+/// Transactional post-conversion enrichment with a mandatory preflight plan.
+pub trait OutputEnricher: Send + Sync {
+    /// Stable implementation ID.
+    fn id(&self) -> &'static str;
+
+    /// Conservative incremental allocation peak reserved before enrichment.
+    /// The plan must include all provider output, working-set, validation, and
+    /// retained-output growth that can coexist during [`Self::enrich`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable component or resource error when no safe plan can be
+    /// declared for this output.
+    fn planned_enrichment_bytes(
+        &self,
+        output: &ConverterOutput,
+        converter_id: &str,
+        format: InputFormat,
+        options: &ConversionOptions,
+        services: &Services,
+        context: &ExecutionContext,
+    ) -> Result<EnrichmentPlan, ConversionError> {
+        let _ = (output, converter_id, format, options, services, context);
+        Err(ConversionError::ComponentUnavailable {
+            component: self.id().into(),
+            detail: "output enricher does not declare a preflight memory plan".into(),
+        })
+    }
+
+    /// Enrich one converter output under the original request authority.
+    fn enrich<'a>(
+        &'a self,
+        output: ConverterOutput,
+        converter_id: &'a str,
+        format: InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
+}
+
 /// Render the unified IR through a single Markdown policy.
 pub trait MarkdownRenderer: Send + Sync {
     /// Stable renderer ID.
@@ -1158,6 +1254,29 @@ pub trait OcrEngine: Send + Sync {
         Err(ConversionError::ComponentUnavailable {
             component: self.id().into(),
             detail: "OCR engine does not declare a bound output plan".into(),
+        })
+    }
+
+    /// Bound the result for any canonical normalized PNG with these exact
+    /// dimensions. Container enrichers use this before allocating the
+    /// normalized bytes, then the provider revalidates the concrete request
+    /// through [`Self::planned_bound_output`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::ComponentUnavailable`] unless the provider
+    /// declares a bound for canonical normalized PNG input of this shape.
+    fn planned_normalized_png_output(
+        &self,
+        width: u32,
+        height: u32,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        let _ = (width, height, options, context);
+        Err(ConversionError::ComponentUnavailable {
+            component: self.id().into(),
+            detail: "OCR engine does not declare a normalized-PNG output bound".into(),
         })
     }
     /// Recognize text with additive, identity-bound structured evidence.
@@ -1426,6 +1545,7 @@ mod tests {
         let _: Option<&dyn SourceResolver> = None;
         let _: Option<&dyn FormatDetector> = None;
         let _: Option<&dyn Converter> = None;
+        let _: Option<&dyn OutputEnricher> = None;
         let _: Option<&dyn MarkdownRenderer> = None;
         let _: Option<&dyn OcrEngine> = None;
         let _: Option<&dyn Transcriber> = None;

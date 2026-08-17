@@ -1,6 +1,8 @@
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::model::WorkbookInventory;
-use crate::workbook::opc::relationships::{decode_attr, require_spreadsheet_namespace};
+use crate::workbook::opc::relationships::{
+    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace,
+};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 use quick_xml::events::Event;
 use std::collections::BTreeSet;
@@ -168,6 +170,7 @@ pub(in crate::workbook) fn scan_xml_style_counts(
     let mut declared_xfs = None;
     let mut declared_num_formats = None;
     let mut declared_fonts = None;
+    let mut foreign_depth = 0_u16;
     let mut output = WorkbookInventory::default();
     loop {
         context.checkpoint()?;
@@ -175,6 +178,23 @@ pub(in crate::workbook) fn scan_xml_style_counts(
             Ok((namespace, raw_event @ (Event::Start(_) | Event::Empty(_)))) => {
                 let is_empty = matches!(raw_event, Event::Empty(_));
                 let (Event::Start(event) | Event::Empty(event)) = raw_event else { unreachable!() };
+                if foreign_depth > 0 || !is_spreadsheet_namespace(&namespace) {
+                    if !saw_root || ended_root || depth == 0 {
+                        return Err(malformed(Some(part), "extension is outside styleSheet"));
+                    }
+                    if !is_empty {
+                        depth = depth.checked_add(1).ok_or_else(|| {
+                            limit("max_nesting_depth", "styleSheet depth overflow")
+                        })?;
+                        foreign_depth = foreign_depth.checked_add(1).ok_or_else(|| {
+                            limit("max_nesting_depth", "styleSheet extension depth overflow")
+                        })?;
+                        if depth > options.limits.max_nesting_depth {
+                            return Err(limit("max_nesting_depth", "styleSheet is too deep"));
+                        }
+                    }
+                    continue;
+                }
                 require_spreadsheet_namespace(&namespace, part)?;
                 let local = event.local_name();
                 if local.as_ref() == b"styleSheet" {
@@ -251,6 +271,14 @@ pub(in crate::workbook) fn scan_xml_style_counts(
                 }
             }
             Ok((namespace, Event::End(event))) => {
+                if foreign_depth > 0 {
+                    if depth == 0 {
+                        return Err(malformed(Some(part), "unbalanced styleSheet extension"));
+                    }
+                    depth -= 1;
+                    foreign_depth -= 1;
+                    continue;
+                }
                 require_spreadsheet_namespace(&namespace, part)?;
                 if depth == 0 {
                     return Err(malformed(Some(part), "unbalanced styleSheet element"));

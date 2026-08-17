@@ -1,12 +1,12 @@
 //! Safe raster-image conversion with bounded local OCR and optional image description.
 
 mod ai;
-mod decode;
-mod encode;
-mod envelope;
-mod format;
+pub(crate) mod decode;
+pub(crate) mod encode;
+pub(crate) mod envelope;
+pub(crate) mod format;
 mod metadata;
-mod ocr;
+pub(crate) mod ocr;
 
 use decode::DecodedFrame;
 use format::RasterFormat;

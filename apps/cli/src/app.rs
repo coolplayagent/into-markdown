@@ -310,6 +310,9 @@ fn run_models(
     _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    if matches!(&command, Some(ModelsCommand::Install { .. })) {
+        ensure_model_parent()?;
+    }
     let manager = model_manager()?;
     let execution = into_markdown::ExecutionContext::new(
         into_markdown::ExecutionOptions {
@@ -410,6 +413,23 @@ fn run_models(
             Ok(())
         }
     }
+}
+
+fn ensure_model_parent() -> Result<(), CliError> {
+    let data_dir = directories::ProjectDirs::from("", "", "into-markdown")
+        .map(|directories| directories.data_dir().to_path_buf())
+        .ok_or_else(|| {
+            CliError::new(
+                ExitClass::Io,
+                "modelDataDirectoryUnavailable",
+                "cannot determine the platform model data directory",
+            )
+        })?;
+    ensure_model_parent_at(&data_dir)
+}
+
+fn ensure_model_parent_at(data_dir: &Path) -> Result<(), CliError> {
+    fs::create_dir_all(data_dir).map_err(CliError::from)
 }
 
 fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
@@ -2901,6 +2921,18 @@ mod tests {
     fn default_model_pipeline_is_explicitly_installable() {
         let manager = model_manager().unwrap();
         manager.require_installable(&manager.manifest().default_bundle).unwrap();
+    }
+
+    #[test]
+    fn first_model_install_creates_the_missing_product_data_parent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data_dir = temporary.path().join("missing").join("into-markdown");
+        assert!(!data_dir.exists());
+
+        ensure_model_parent_at(&data_dir).unwrap();
+
+        assert!(data_dir.is_dir());
+        assert!(!data_dir.join("models").exists());
     }
 
     #[test]

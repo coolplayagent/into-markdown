@@ -12,8 +12,19 @@ struct RasterInfo {
     frames: u64,
 }
 
+/// Allocation-free raster envelope information for request preflight.
+pub(crate) fn preflight_info(
+    bytes: &[u8],
+    media_type: &str,
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<((u32, u32), u64), ConversionError> {
+    let info = envelope_info(bytes, format(media_type)?, part, context)?;
+    Ok((info.dimensions, info.frames))
+}
+
 #[allow(clippy::too_many_lines)] // Decode budget and complete payload checks share one transaction.
-pub(super) fn validate(
+pub(crate) fn validate(
     bytes: &[u8],
     media_type: &str,
     part: &str,

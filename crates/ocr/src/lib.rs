@@ -17,7 +17,9 @@ use into_markdown_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -33,6 +35,8 @@ mod onnx_proto;
 mod recognition;
 mod recognizer_model;
 mod runtime;
+#[cfg(windows)]
+mod windows_transaction_fs;
 
 pub use batch::BoundRecognition;
 
@@ -651,6 +655,17 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
         )));
     }
     if !bundle.runtime_artifacts.is_empty() {
+        let portable_names: BTreeSet<_> = bundle
+            .runtime_artifacts
+            .iter()
+            .map(|artifact| artifact.file_name.to_ascii_lowercase())
+            .collect();
+        if portable_names.len() != bundle.runtime_artifacts.len() {
+            return Err(invalid_manifest(format!(
+                "{} runtime artifact file names are not portable-unique",
+                bundle.id
+            )));
+        }
         let required_runtime_roles = match bundle.kind.as_str() {
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
             "detector-component" => BTreeSet::from(["detector"]),
@@ -765,10 +780,39 @@ fn validate_id(value: &str) -> Result<(), ConversionError> {
 
 fn validate_file_name(value: &str) -> Result<(), ConversionError> {
     let path = Path::new(value);
+    let stem = value.split('.').next().unwrap_or_default();
+    let windows_reserved = matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
     if value.is_empty()
         || path.is_absolute()
         || path.components().count() != 1
         || !matches!(path.components().next(), Some(Component::Normal(_)))
+        || value.contains(':')
+        || value.ends_with(['.', ' '])
+        || windows_reserved
     {
         return Err(invalid_manifest(format!("unsafe file name {value:?}")));
     }
@@ -1087,7 +1131,7 @@ impl ModelManager {
             return Ok(());
         }
         let lock = self.acquire_lock()?;
-        let result = self.recover_locked(bundle, context);
+        let result = self.recover_locked(bundle, context, &lock);
         drop(lock);
         result
     }
@@ -1169,7 +1213,9 @@ impl ModelManager {
             use std::os::unix::fs::MetadataExt as _;
             format!("unix-dev-ino:{}:{}", metadata.dev(), metadata.ino())
         };
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let file_identity = windows_transaction_fs::file_identity(&file)?;
+        #[cfg(not(any(unix, windows)))]
         let file_identity = format!("verified:{}:{}", artifact.sha256, artifact.size);
         let actual_bytes = bytes.capacity();
         if actual_bytes > capacity {
@@ -1225,10 +1271,9 @@ impl ModelManager {
         {
             return Err(ModelManagerError::ReadOnly);
         }
-        fs::create_dir_all(&self.writable_root)?;
-        reject_symlink(&self.writable_root)?;
+        ensure_private_root(&self.writable_root)?;
         let lock = self.acquire_lock()?;
-        self.recover_locked(bundle, context)?;
+        self.recover_locked(bundle, context, &lock)?;
         let path = self.writable_root.join(id);
         if !safe_existing_directory(&path)? {
             return Err(ModelManagerError::NotInstalled);
@@ -1240,9 +1285,11 @@ impl ModelManager {
         if fs::symlink_metadata(&tombstone).is_ok() {
             return Err(ModelManagerError::Busy);
         }
+        lock.validate_root(&self.writable_root)?;
         rename_no_replace(&path, &tombstone)?;
         sync_directory(&self.writable_root)?;
-        let result = fs::remove_dir_all(&tombstone).map_err(ModelManagerError::Io);
+        lock.validate_root(&self.writable_root)?;
+        let result = retire_directory(&self.writable_root, &tombstone);
         drop(lock);
         result
     }
@@ -1296,10 +1343,9 @@ impl ModelManager {
         })?;
         let _temporary = context.reserve_temporary(total_size)?;
         let _memory = context.reserve_memory(64 * 1024)?;
-        fs::create_dir_all(&self.writable_root)?;
-        reject_symlink(&self.writable_root)?;
+        ensure_private_root(&self.writable_root)?;
         let lock = self.acquire_lock()?;
-        self.recover_locked(bundle, context)?;
+        self.recover_locked(bundle, context, &lock)?;
         let final_path = self.writable_root.join(id);
         let had_old = safe_existing_directory(&final_path)?;
         if had_old {
@@ -1315,13 +1361,13 @@ impl ModelManager {
         let backup_name = format!(".{id}.backup-{nonce}");
         let staging_path = self.writable_root.join(&staging_name);
         let backup_path = self.writable_root.join(&backup_name);
-        fs::create_dir(&staging_path)?;
+        create_private_directory(&staging_path)?;
         let staging = StagingDirectory::new(staging_path);
         for artifact in &bundle.runtime_artifacts {
             context.checkpoint()?;
             let acquired = fetcher.open(artifact, context)?;
             let path = staging.path().join(&artifact.file_name);
-            let mut destination = OpenOptions::new().write(true).create_new(true).open(&path)?;
+            let mut destination = create_private_file(&path)?;
             model_acquisition::write_verified_artifact(
                 artifact,
                 acquired,
@@ -1336,12 +1382,10 @@ impl ModelManager {
             "complete": true,
         }))
         .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
-        let mut state_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(staging.path().join("install-state.json"))?;
+        let mut state_file = create_private_file(&staging.path().join("install-state.json"))?;
         state_file.write_all(&state)?;
         state_file.sync_all()?;
+        drop(state_file);
         sync_directory(staging.path())?;
         context.checkpoint()?;
 
@@ -1354,29 +1398,35 @@ impl ModelManager {
             root: self.ensure_root_identity()?,
             checksum: String::new(),
         };
+        lock.validate_root(&self.writable_root)?;
         self.write_journal(journal)?;
+        lock.validate_root(&self.writable_root)?;
         // From this point the durable journal, rather than Drop, owns cleanup.
         staging.disarm();
         if had_old {
+            lock.validate_root(&self.writable_root)?;
             rename_no_replace(&final_path, &backup_path)?;
             sync_directory(&self.writable_root)?;
+            lock.validate_root(&self.writable_root)?;
             if fault == InstallFault::AfterBackup {
                 return Err(ModelManagerError::Corrupt(
                     "simulated interruption after backup".into(),
                 ));
             }
         }
+        lock.validate_root(&self.writable_root)?;
         rename_no_replace(staging.path(), &final_path)?;
         sync_directory(&self.writable_root)?;
+        lock.validate_root(&self.writable_root)?;
         if fault == InstallFault::AfterPublish {
             return Err(ModelManagerError::Corrupt("simulated interruption after publish".into()));
         }
         verify_directory_with_context(bundle, &final_path, context)?;
         if had_old {
-            fs::remove_dir_all(&backup_path)?;
-            sync_directory(&self.writable_root)?;
+            retire_directory(&self.writable_root, &backup_path)?;
         }
         self.remove_journal(id)?;
+        lock.validate_root(&self.writable_root)?;
         drop(lock);
         self.status_with_context(id, context)
     }
@@ -1389,19 +1439,40 @@ impl ModelManager {
             .ok_or(ModelManagerError::UnknownBundle)
     }
 
-    fn acquire_lock(&self) -> Result<File, ModelManagerError> {
+    fn acquire_lock(&self) -> Result<TransactionLock, ModelManagerError> {
+        #[cfg(windows)]
+        let root = windows_transaction_fs::RootGuard::acquire(&self.writable_root)?;
         let path = self.writable_root.join(".models.lock");
         reject_symlink_if_present(&path)?;
-        let mut options = OpenOptions::new();
-        options.create(true).truncate(false).read(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW);
-        }
-        let file = options.open(path)?;
+        #[cfg(windows)]
+        let file = match windows_transaction_fs::create_lock_file(&path) {
+            Ok(file) => file,
+            Err(ModelManagerError::Io(error))
+                if error.kind() == std::io::ErrorKind::AlreadyExists =>
+            {
+                windows_transaction_fs::open_lock_file(&path)?
+            }
+            Err(error) => return Err(error),
+        };
+        #[cfg(not(windows))]
+        let file = {
+            let mut options = OpenOptions::new();
+            options.create(true).truncate(false).read(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            options.open(path)?
+        };
         file.try_lock().map_err(|_| ModelManagerError::Busy)?;
-        Ok(file)
+        #[cfg(windows)]
+        root.validate(&self.writable_root)?;
+        Ok(TransactionLock {
+            file,
+            #[cfg(windows)]
+            root,
+        })
     }
 
     fn reject_pending_transaction(&self, bundle: &ModelBundle) -> Result<(), ModelManagerError> {
@@ -1435,7 +1506,10 @@ impl ModelManager {
         &self,
         bundle: &ModelBundle,
         context: &ExecutionContext,
+        lock: &TransactionLock,
     ) -> Result<(), ModelManagerError> {
+        lock.validate_root(&self.writable_root)?;
+        cleanup_retired_garbage(&self.writable_root)?;
         context.checkpoint()?;
         ensure_durable_transactions_supported()?;
         let root_identity = self.ensure_root_identity()?;
@@ -1480,8 +1554,7 @@ impl ModelManager {
             // Journal was durable but the old bundle was not moved: roll back the staged update.
             (true, true, false) => {
                 verify_directory_with_context(bundle, &final_path, context)?;
-                fs::remove_dir_all(&staging_path)?;
-                sync_directory(&self.writable_root)?;
+                retire_directory(&self.writable_root, &staging_path)?;
             }
             // The old bundle was backed up: finish publishing the complete staged bundle.
             (false, true, true) => {
@@ -1492,16 +1565,14 @@ impl ModelManager {
                     }
                     rename_no_replace(&backup_path, &final_path)?;
                     sync_directory(&self.writable_root)?;
-                    fs::remove_dir_all(&staging_path)?;
-                    sync_directory(&self.writable_root)?;
+                    retire_directory(&self.writable_root, &staging_path)?;
                     self.remove_journal(&bundle.id)?;
                     return Ok(());
                 }
                 rename_no_replace(&staging_path, &final_path)?;
                 sync_directory(&self.writable_root)?;
                 verify_directory_with_context(bundle, &final_path, context)?;
-                fs::remove_dir_all(&backup_path)?;
-                sync_directory(&self.writable_root)?;
+                retire_directory(&self.writable_root, &backup_path)?;
             }
             // A new install was staged and its journal was durable: finish publication.
             (false, true, false) => {
@@ -1513,8 +1584,7 @@ impl ModelManager {
             // Publication completed; only durable cleanup remains.
             (true, false, true) => {
                 verify_directory_with_context(bundle, &final_path, context)?;
-                fs::remove_dir_all(&backup_path)?;
-                sync_directory(&self.writable_root)?;
+                retire_directory(&self.writable_root, &backup_path)?;
             }
             (true, false, false) => {
                 verify_directory_with_context(bundle, &final_path, context)?;
@@ -1531,7 +1601,8 @@ impl ModelManager {
                 ));
             }
         }
-        self.remove_journal(&bundle.id)
+        self.remove_journal(&bundle.id)?;
+        lock.validate_root(&self.writable_root)
     }
 
     fn write_journal(&self, mut journal: InstallJournal) -> Result<(), ModelManagerError> {
@@ -1550,8 +1621,7 @@ impl ModelManager {
     fn remove_journal(&self, id: &str) -> Result<(), ModelManagerError> {
         let path = journal_path(&self.writable_root, id);
         reject_symlink(&path)?;
-        fs::remove_file(path)?;
-        sync_directory(&self.writable_root)
+        retire_file(&self.writable_root, &path)
     }
 
     fn ensure_root_identity(&self) -> Result<RootIdentity, ModelManagerError> {
@@ -1598,8 +1668,7 @@ impl ModelManager {
         let general_prefix = format!(".{}.install-journal.tmp-", bundle.id);
         let prefix = format!("{general_prefix}{}-", root.token);
         let mut temps = Vec::new();
-        for entry in fs::read_dir(&self.writable_root)? {
-            let entry = entry?;
+        for entry in bounded_directory_entries(&self.writable_root, MAX_MODEL_ROOT_ENTRIES)? {
             let name =
                 entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
             if name.starts_with(&general_prefix) {
@@ -1647,11 +1716,11 @@ impl ModelManager {
         }
         let staging = self.writable_root.join(format!(".{}.staging-{nonce}", bundle.id));
         let staging_exists = safe_existing_directory(&staging)?;
-        fs::remove_file(&temp_path)?;
+        retire_file(&self.writable_root, &temp_path)?;
         if staging_exists {
-            fs::remove_dir_all(staging)?;
+            retire_directory(&self.writable_root, &staging)?;
         }
-        sync_directory(&self.writable_root)
+        Ok(())
     }
 }
 
@@ -1671,8 +1740,7 @@ fn verify_directory_with_context(
     }
     let expected: BTreeSet<_> =
         bundle.runtime_artifacts.iter().map(|artifact| artifact.file_name.as_str()).collect();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
+    for entry in bounded_directory_entries(path, MAX_MODEL_BUNDLE_ENTRIES)? {
         let file_type = entry.file_type()?;
         let name = entry.file_name();
         let name = name.to_str().ok_or(ModelManagerError::UnsafePath)?;
@@ -1824,7 +1892,13 @@ fn current_root_identity(
             token: token.unwrap_or_default(),
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = canonical;
+        let (canonical_path, filesystem_id) = windows_transaction_fs::root_identity(root)?;
+        Ok(RootIdentity { canonical_path, filesystem_id, token: token.unwrap_or_default() })
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (canonical, token);
         Err(ModelManagerError::ComponentUnavailable)
@@ -1863,8 +1937,7 @@ fn cleanup_root_temps(root: &Path, identity: &RootIdentity) -> Result<(), ModelM
     let general_prefix = ".models-root.tmp-";
     let expected_prefix = format!("{general_prefix}{}-", root_binding(identity));
     let mut temps = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in bounded_directory_entries(root, MAX_MODEL_ROOT_ENTRIES)? {
         let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
         if name.starts_with(general_prefix) {
             if !name.strip_prefix(&expected_prefix).is_some_and(valid_nonce) {
@@ -1880,20 +1953,78 @@ fn cleanup_root_temps(root: &Path, identity: &RootIdentity) -> Result<(), ModelM
     }
     if let Some(path) = temps.pop() {
         required_file_if_present(&path)?.ok_or(ModelManagerError::UnsafePath)?;
-        fs::remove_file(path)?;
-        sync_directory(root)?;
+        retire_file(root, &path)?;
     }
     Ok(())
 }
 
+fn ensure_private_root(path: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(path)?;
+        reject_symlink(path)
+    }
+    #[cfg(windows)]
+    {
+        windows_transaction_fs::ensure_private_root(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(ModelManagerError::ComponentUnavailable)
+    }
+}
+
+fn create_private_directory(path: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(path)?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        windows_transaction_fs::create_private_directory(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(ModelManagerError::ComponentUnavailable)
+    }
+}
+
+fn create_private_file(path: &Path) -> Result<File, ModelManagerError> {
+    #[cfg(unix)]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).read(true).create_new(true);
+        use std::os::unix::fs::OpenOptionsExt;
+        Ok(options.mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?)
+    }
+    #[cfg(windows)]
+    {
+        windows_transaction_fs::create_private_file(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(ModelManagerError::ComponentUnavailable)
+    }
+}
+
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), ModelManagerError> {
+    #[cfg(windows)]
+    let mut file = create_private_file(path)?;
+    #[cfg(not(windows))]
     let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
+    #[cfg(not(windows))]
     let mut file = options.open(path)?;
     file.write_all(bytes)?;
     file.sync_all()?;
@@ -1911,8 +2042,13 @@ fn validate_private_permissions(path: &Path) -> Result<(), ModelManagerError> {
     }
     #[cfg(not(unix))]
     {
-        let _ = path;
-        Err(ModelManagerError::ComponentUnavailable)
+        #[cfg(windows)]
+        return windows_transaction_fs::validate_private_file(path);
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(ModelManagerError::ComponentUnavailable)
+        }
     }
 }
 
@@ -1932,25 +2068,51 @@ fn rename_no_replace(from: &Path, to: &Path) -> Result<(), ModelManagerError> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (from, to);
-        Err(ModelManagerError::ComponentUnavailable)
+        #[cfg(windows)]
+        return windows_transaction_fs::rename_no_replace(from, to);
+        #[cfg(not(windows))]
+        {
+            let _ = (from, to);
+            Err(ModelManagerError::ComponentUnavailable)
+        }
     }
 }
 
 fn ensure_durable_transactions_supported() -> Result<(), ModelManagerError> {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
+    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
         Ok(())
     } else {
         Err(ModelManagerError::ComponentUnavailable)
     }
 }
 
+// Model roots contain manifests, installed bundles, and transaction residue;
+// bundles contain two runtime roles plus install state today. These generous
+// bounds keep all recovery/verification scans finite in same-user-writable
+// directories while retaining room for future manifest evolution.
+const MAX_MODEL_ROOT_ENTRIES: usize = 1_024;
+const MAX_MODEL_BUNDLE_ENTRIES: usize = 64;
+
+fn bounded_directory_entries(
+    path: &Path,
+    maximum: usize,
+) -> Result<Vec<fs::DirEntry>, ModelManagerError> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entries.len() == maximum {
+            return Err(ModelManagerError::DataDirectoryUnsafe);
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
 fn transaction_residues(root: &Path, id: &str) -> Result<Vec<String>, ModelManagerError> {
     let staging_prefix = format!(".{id}.staging-");
     let backup_prefix = format!(".{id}.backup-");
     let mut result = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in bounded_directory_entries(root, MAX_MODEL_ROOT_ENTRIES)? {
         let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
         if name.starts_with(&staging_prefix) || name.starts_with(&backup_prefix) {
             result.push(name);
@@ -1962,8 +2124,7 @@ fn transaction_residues(root: &Path, id: &str) -> Result<Vec<String>, ModelManag
 
 fn journal_temporary_present(root: &Path, id: &str) -> Result<bool, ModelManagerError> {
     let prefix = format!(".{id}.install-journal.tmp-");
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
+    for entry in bounded_directory_entries(root, MAX_MODEL_ROOT_ENTRIES)? {
         let name = entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
         if name.starts_with(&prefix) {
             return Ok(true);
@@ -1998,39 +2159,147 @@ fn required_regular_file(path: &Path, missing: &str) -> Result<File, ModelManage
 }
 
 fn open_regular_no_follow(path: &Path) -> Result<File, ModelManagerError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
     #[cfg(windows)]
+    return windows_transaction_fs::open_private_file_read(path);
+    #[cfg(not(windows))]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = options.open(path).map_err(|error| {
+        let mut options = OpenOptions::new();
+        options.read(true);
         #[cfg(unix)]
-        if error.raw_os_error() == Some(libc::ELOOP) {
-            return ModelManagerError::UnsafePath;
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
         }
-        ModelManagerError::Io(error)
-    })?;
-    let metadata = file.metadata()?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(path).map_err(|error| {
+            #[cfg(unix)]
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                return ModelManagerError::UnsafePath;
+            }
+            ModelManagerError::Io(error)
+        })?;
+        let metadata = file.metadata()?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+            if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(ModelManagerError::UnsafePath);
+            }
+        }
+        if !metadata.is_file() {
             return Err(ModelManagerError::UnsafePath);
         }
+        Ok(file)
     }
-    if !metadata.is_file() {
-        return Err(ModelManagerError::UnsafePath);
+}
+
+struct TransactionLock {
+    file: File,
+    #[cfg(windows)]
+    root: windows_transaction_fs::RootGuard,
+}
+
+impl TransactionLock {
+    fn validate_root(&self, path: &Path) -> Result<(), ModelManagerError> {
+        #[cfg(windows)]
+        self.root.validate(path)?;
+        #[cfg(not(windows))]
+        let _ = path;
+        // Reading metadata keeps the lock handle live and also avoids a dead-code
+        // field on platforms where the OS lock is released by Drop.
+        let _ = self.file.metadata()?;
+        Ok(())
     }
-    Ok(file)
+}
+
+fn validate_flat_private_directory(path: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(windows)]
+    windows_transaction_fs::validate_private_directory(path)?;
+    reject_symlink(path)?;
+    for entry in bounded_directory_entries(path, MAX_MODEL_BUNDLE_ENTRIES)? {
+        if !entry.file_type()?.is_file() {
+            return Err(ModelManagerError::UnsafePath);
+        }
+        #[cfg(windows)]
+        windows_transaction_fs::validate_private_file(&entry.path())?;
+    }
+    Ok(())
+}
+
+fn retire_directory(root: &Path, path: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(windows)]
+    {
+        validate_flat_private_directory(path)?;
+        let garbage = root.join(format!(".models-garbage-dir-{}", transaction_nonce()?));
+        rename_no_replace(path, &garbage)?;
+        sync_directory(root)?;
+        // Namespace retirement is the commit. Deletion may be delayed by an AV
+        // scanner and is retried under the model lock on the next transaction.
+        if windows_transaction_fs::delete_flat_private_directory(&garbage).is_ok() {
+            sync_directory(root)?;
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::remove_dir_all(path)?;
+        sync_directory(root)
+    }
+}
+
+fn retire_file(root: &Path, path: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(windows)]
+    {
+        windows_transaction_fs::validate_private_file(path)?;
+        let garbage = root.join(format!(".models-garbage-file-{}", transaction_nonce()?));
+        rename_no_replace(path, &garbage)?;
+        sync_directory(root)?;
+        if windows_transaction_fs::delete_private_file(&garbage).is_ok() {
+            sync_directory(root)?;
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::remove_file(path)?;
+        sync_directory(root)
+    }
+}
+
+fn cleanup_retired_garbage(root: &Path) -> Result<(), ModelManagerError> {
+    #[cfg(windows)]
+    {
+        for entry in bounded_directory_entries(root, MAX_MODEL_ROOT_ENTRIES)? {
+            let name =
+                entry.file_name().into_string().map_err(|_| ModelManagerError::UnsafePath)?;
+            if let Some(nonce) = name.strip_prefix(".models-garbage-file-") {
+                if !valid_nonce(nonce) {
+                    return Err(ModelManagerError::UnsafePath);
+                }
+                windows_transaction_fs::validate_private_file(&entry.path())?;
+                if windows_transaction_fs::delete_private_file(&entry.path()).is_ok() {
+                    sync_directory(root)?;
+                }
+            } else if let Some(nonce) = name.strip_prefix(".models-garbage-dir-") {
+                if !valid_nonce(nonce) {
+                    return Err(ModelManagerError::UnsafePath);
+                }
+                validate_flat_private_directory(&entry.path())?;
+                if windows_transaction_fs::delete_flat_private_directory(&entry.path()).is_ok() {
+                    sync_directory(root)?;
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = root;
+    Ok(())
 }
 
 struct StagingDirectory {
@@ -2054,8 +2323,10 @@ impl StagingDirectory {
 
 impl Drop for StagingDirectory {
     fn drop(&mut self) {
-        if self.armed.get() {
-            let _ = fs::remove_dir_all(&self.path);
+        if self.armed.get()
+            && let Some(root) = self.path.parent()
+        {
+            let _ = retire_directory(root, &self.path);
         }
     }
 }
@@ -2063,7 +2334,11 @@ impl Drop for StagingDirectory {
 fn safe_existing_directory(path: &Path) -> Result<bool, ModelManagerError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(ModelManagerError::UnsafePath),
-        Ok(metadata) if metadata.is_dir() => Ok(true),
+        Ok(metadata) if metadata.is_dir() => {
+            #[cfg(windows)]
+            windows_transaction_fs::validate_private_directory(path)?;
+            Ok(true)
+        }
         Ok(_) => Err(ModelManagerError::UnsafePath),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(ModelManagerError::Io(error)),
@@ -2092,8 +2367,13 @@ fn sync_directory(path: &Path) -> Result<(), ModelManagerError> {
     }
     #[cfg(not(unix))]
     {
-        let _ = path;
-        Err(ModelManagerError::ComponentUnavailable)
+        #[cfg(windows)]
+        return windows_transaction_fs::flush_directory(path);
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Err(ModelManagerError::ComponentUnavailable)
+        }
     }
 }
 
@@ -2291,26 +2571,57 @@ mod tests {
 
     #[test]
     fn four_product_targets_have_deterministic_data_directories() {
+        #[cfg(not(windows))]
         let env = DataDirectoryEnvironment {
             xdg_data_home: Some(PathBuf::from("/xdg")),
             home: Some(PathBuf::from("/home/alice")),
             local_app_data: Some(PathBuf::from("/windows/local")),
         };
+        #[cfg(windows)]
+        let env = DataDirectoryEnvironment {
+            xdg_data_home: Some(PathBuf::from(r"C:\xdg")),
+            home: Some(PathBuf::from(r"C:\Users\alice")),
+            local_app_data: Some(PathBuf::from(r"C:\Users\alice\AppData\Local")),
+        };
+        #[cfg(not(windows))]
         assert_eq!(
             model_data_directory(ProductTarget::MacOsArm64, &env).unwrap(),
             PathBuf::from("/home/alice/Library/Application Support/into-markdown/models")
         );
+        #[cfg(windows)]
+        assert_eq!(
+            model_data_directory(ProductTarget::MacOsArm64, &env).unwrap(),
+            PathBuf::from(r"C:\Users\alice\Library\Application Support\into-markdown\models")
+        );
+        #[cfg(not(windows))]
         assert_eq!(
             model_data_directory(ProductTarget::LinuxX86_64, &env).unwrap(),
             PathBuf::from("/xdg/into-markdown/models")
         );
+        #[cfg(windows)]
+        assert_eq!(
+            model_data_directory(ProductTarget::LinuxX86_64, &env).unwrap(),
+            PathBuf::from(r"C:\xdg\into-markdown\models")
+        );
+        #[cfg(not(windows))]
         assert_eq!(
             model_data_directory(ProductTarget::LinuxArm64, &env).unwrap(),
             PathBuf::from("/xdg/into-markdown/models")
         );
+        #[cfg(windows)]
+        assert_eq!(
+            model_data_directory(ProductTarget::LinuxArm64, &env).unwrap(),
+            PathBuf::from(r"C:\xdg\into-markdown\models")
+        );
+        #[cfg(not(windows))]
         assert_eq!(
             model_data_directory(ProductTarget::WindowsX86_64, &env).unwrap(),
             PathBuf::from("/windows/local/into-markdown/models")
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            model_data_directory(ProductTarget::WindowsX86_64, &env).unwrap(),
+            PathBuf::from(r"C:\Users\alice\AppData\Local\into-markdown\models")
         );
     }
 
@@ -2333,12 +2644,25 @@ mod tests {
         let writable = temp.path().join("writable");
         let id = "pp-ocrv6-tiny-zh-en";
         for root in [&bundled, &writable] {
-            fs::create_dir_all(root.join(id)).unwrap();
-            fs::write(
-                root.join(id).join("install-state.json"),
-                br#"{"schemaVersion":1,"bundleId":"pp-ocrv6-tiny-zh-en","complete":true}"#,
-            )
-            .unwrap();
+            #[cfg(windows)]
+            {
+                windows_transaction_fs::create_private_directory(root).unwrap();
+                windows_transaction_fs::create_private_directory(&root.join(id)).unwrap();
+                write_private_file(
+                    &root.join(id).join("install-state.json"),
+                    br#"{"schemaVersion":1,"bundleId":"pp-ocrv6-tiny-zh-en","complete":true}"#,
+                )
+                .unwrap();
+            }
+            #[cfg(not(windows))]
+            {
+                fs::create_dir_all(root.join(id)).unwrap();
+                fs::write(
+                    root.join(id).join("install-state.json"),
+                    br#"{"schemaVersion":1,"bundleId":"pp-ocrv6-tiny-zh-en","complete":true}"#,
+                )
+                .unwrap();
+            }
         }
         let manager = ModelManager::new(
             ModelManifest::embedded().unwrap(),
@@ -2398,6 +2722,8 @@ mod tests {
     }
 
     fn installable_manager(root: &Path) -> ModelManager {
+        #[cfg(windows)]
+        windows_transaction_fs::harden_test_directory(root).unwrap();
         let mut manifest = ModelManifest::embedded().unwrap();
         let bundle =
             manifest.bundles.iter_mut().find(|bundle| bundle.id == TEST_INSTALL_ID).unwrap();
@@ -2437,13 +2763,21 @@ mod tests {
     }
 
     fn write_complete_test_bundle(path: &Path, id: &str) {
+        #[cfg(windows)]
+        windows_transaction_fs::create_private_directory(path).unwrap();
+        #[cfg(not(windows))]
         fs::create_dir(path).unwrap();
-        fs::write(path.join("model.onnx"), b"hello").unwrap();
-        fs::write(
-            path.join("install-state.json"),
-            format!(r#"{{"schemaVersion":1,"bundleId":"{id}","complete":true}}"#),
-        )
-        .unwrap();
+        let state = format!(r#"{{"schemaVersion":1,"bundleId":"{id}","complete":true}}"#);
+        #[cfg(windows)]
+        {
+            write_private_file(&path.join("model.onnx"), b"hello").unwrap();
+            write_private_file(&path.join("install-state.json"), state.as_bytes()).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            fs::write(path.join("model.onnx"), b"hello").unwrap();
+            fs::write(path.join("install-state.json"), state).unwrap();
+        }
     }
 
     fn test_journal(manager: &ModelManager, id: &str, nonce: &str) -> (InstallJournal, Vec<u8>) {
@@ -2595,7 +2929,8 @@ mod tests {
                 .is_err()
         );
         destination_manager.install(id, &fetcher, &execution(5)).unwrap();
-        fs::copy(journal_path(source.path(), id), journal_path(destination.path(), id)).unwrap();
+        let source_journal = fs::read(journal_path(source.path(), id)).unwrap();
+        write_private_file(&journal_path(destination.path(), id), &source_journal).unwrap();
         let before = fs::read(destination.path().join(id).join("model.onnx")).unwrap();
         assert!(matches!(
             destination_manager.recover_with_context(id, &execution(5)),
@@ -2607,9 +2942,9 @@ mod tests {
 
     #[test]
     fn durable_transaction_policy_matches_compiled_platform() {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         assert!(ensure_durable_transactions_supported().is_ok());
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         assert!(matches!(
             ensure_durable_transactions_supported(),
             Err(ModelManagerError::ComponentUnavailable)
@@ -2757,7 +3092,21 @@ mod tests {
             manager.install(TEST_INSTALL_ID, &fetcher, &execution(5)),
             Err(ModelManagerError::Busy)
         ));
+        #[cfg(windows)]
+        {
+            let lock = temp.path().join(".models.lock");
+            let moved = temp.path().join(".models.lock.moved");
+            assert!(fs::rename(&lock, &moved).is_err());
+            assert!(fs::remove_file(&lock).is_err());
+        }
         drop(held);
+        #[cfg(windows)]
+        {
+            let lock = temp.path().join(".models.lock");
+            let moved = temp.path().join(".models.lock.moved");
+            fs::rename(&lock, &moved).unwrap();
+            fs::rename(&moved, &lock).unwrap();
+        }
         let token = into_markdown_core::CancellationToken::new();
         token.cancel();
         let cancelled = ExecutionContext::new(

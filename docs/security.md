@@ -248,7 +248,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   与锁内原子切换；install/remove 或显式恢复会在锁内恢复中断事务，查询与校验只读并在
   发现未完成事务时 fail closed，损坏或歧义 journal 一律 fail closed；
   journal 先完整写入并同步根身份绑定的临时文件，再以 no-replace rename 发布；Windows
-  目录 handle 持久同步尚未审计，因此 Windows 安装稳定拒绝而不伪报成功；
+  x86_64 在固定本地 NTFS/ReFS 上持有受保护 DACL 与物理 FileId 绑定的根 handle，使用
+  `MoveFileExW(MOVEFILE_WRITE_THROUGH)` no-replace 发布，并将待删对象先原子退休到唯一
+  garbage 名称后再 best-effort 清理；
   校验和删除拒绝符号链接及非普通对象，随包只读模型不能删除。取消、超时、临时空间
   预算和内存预算由统一 ExecutionContext 执行。
 - OCR 识别只消费检测器给出的 raw-source `CropDescriptor`，不会再次应用 EXIF orientation。

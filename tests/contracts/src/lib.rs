@@ -354,6 +354,7 @@ mod tests {
         require_send_sync::<dyn SourceResolver>();
         require_send_sync::<dyn FormatDetector>();
         require_send_sync::<dyn Converter>();
+        require_send_sync::<dyn OutputEnricher>();
         require_send_sync::<dyn MarkdownRenderer>();
         require_send_sync::<dyn OcrEngine>();
         require_send_sync::<dyn Transcriber>();
@@ -362,6 +363,7 @@ mod tests {
         let _: Option<&dyn SourceResolver> = None;
         let _: Option<&dyn FormatDetector> = None;
         let _: Option<&dyn Converter> = None;
+        let _: Option<&dyn OutputEnricher> = None;
         let _: Option<&dyn MarkdownRenderer> = None;
         let _: Option<&dyn OcrEngine> = None;
         let _: Option<&dyn Transcriber> = None;

@@ -4,7 +4,7 @@ use into_markdown_core::{ConversionError, ExecutionContext};
 
 /// Audited raster codecs accepted by the image converter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RasterFormat {
+pub(crate) enum RasterFormat {
     Png,
     Jpeg,
     Tiff,
@@ -13,7 +13,7 @@ pub(super) enum RasterFormat {
 }
 
 impl RasterFormat {
-    pub(super) const fn media_type(self) -> &'static str {
+    pub(crate) const fn media_type(self) -> &'static str {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
@@ -23,7 +23,7 @@ impl RasterFormat {
         }
     }
 
-    pub(super) const fn extension(self) -> &'static str {
+    pub(crate) const fn extension(self) -> &'static str {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpg",
@@ -44,7 +44,7 @@ impl RasterFormat {
     }
 }
 
-pub(super) fn detect(
+pub(crate) fn detect(
     bytes: &[u8],
     context: &ExecutionContext,
 ) -> Result<Option<RasterFormat>, ConversionError> {

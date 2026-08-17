@@ -1,5 +1,31 @@
 # OCR 与 AI
 
+## Embedded visual OCR
+
+The default API engine runs embedded raster OCR after a format converter has
+produced validated IR and before the renderer or a recovery `converted`
+checkpoint is published. It applies to PDF, Office and OpenDocument containers,
+EPUB, MSG, RTF, converter-resolved local/data/CID HTML images, notebooks, and
+ZIP/nested documents. The OCR stage never opens an ordinary HTML path itself;
+only bytes that the converter has already resolved under its resource policy
+are eligible.
+It does not reinterpret arbitrary strings in text, Markdown, CSV, JSON, XML, or
+feeds as images, and it never fetches an external image URI.
+
+PNG, JPEG, GIF, WebP, BMP, and TIFF assets are decoded through the audited image
+boundary and normalized to one PNG frame. Animated/multi-page, fully transparent,
+SVG, EMF, and WMF visuals are excluded. Identical source bytes are recognized
+once per request, while every image reference receives its own adjacent OCR node
+and source locator. The bound OCR result must identify the SHA-256, dimensions,
+and frame of the exact normalized input together with exact detector and
+recognizer model identities; mismatches fail before publication.
+
+`asset_mode=extract` and `asset_mode=embed` keep both the image and OCR text.
+`asset_mode=omit` hides the image but retains OCR text. `ocr=off` bypasses this
+stage exactly. Embedded processing shares request cancellation, deadline,
+memory, asset, entry, and OCR-count limits. In PDF IR, image-local OCR geometry
+is transformed into the image's page rectangle before rendering.
+
 ## 本地 OCR
 
 完整 `pp-ocrv6-tiny-zh-en` 是可安装的 detector + recognizer pipeline。两个组件精确绑定

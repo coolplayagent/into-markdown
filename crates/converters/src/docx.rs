@@ -1312,6 +1312,17 @@ fn parse_word_part(
                         return Err(malformed(Some(part), "run is outside a paragraph"));
                     }
                     marks.clear();
+                } else if name == "docPr" {
+                    if let Some(p) = &mut paragraph {
+                        p.pending_alt = attr(&e, b"descr", part)?.or(attr(&e, b"title", part)?);
+                    }
+                } else if matches!(name.as_str(), "blip" | "imagedata") {
+                    if let Some(p) = &mut paragraph
+                        && let Some(id) =
+                            attr_local(&e, "embed", part)?.or(attr_local(&e, "id", part)?)
+                    {
+                        p.images.push((id, p.pending_alt.take()));
+                    }
                 } else if name == "vMerge" {
                     return Err(malformed(Some(part), "vertical table merges are unsupported"));
                 } else if matches!(
@@ -4243,6 +4254,28 @@ mod tests {
         let output = succeeds(high).unwrap();
         assert_eq!(output.assets.len(), 1);
         assert_eq!(output.assets[0].bytes.len(), image.len());
+    }
+
+    #[test]
+    fn producer_style_non_empty_blip_preserves_the_image_reference() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}" xmlns:r="{OFFICE_REL}" xmlns:a="{DRAWING}"><w:body><w:p><w:r><w:drawing><a:blip r:embed="rImage"><a:extLst><a:ext uri="{{producer-extension}}"/></a:extLst></a:blip></w:drawing></w:r></w:p></w:body></w:document>"#
+        );
+        let rels = format!(
+            r#"<Relationships xmlns="{PACKAGE_REL}"><Relationship Id="rImage" Type="{REL_TYPE_PREFIX}image" Target="media/producer.png"/></Relationships>"#
+        );
+        let image = valid_png(256);
+        let bytes = base(
+            document.as_bytes(),
+            &[
+                ("word/_rels/document.xml.rels", rels.as_bytes()),
+                ("word/media/producer.png", image.as_slice()),
+            ],
+        );
+
+        let output = convert_docx(&bytes, &ConversionOptions::default(), &context()).unwrap();
+        assert_eq!(output.assets.len(), 1);
+        assert_eq!(output.assets[0].bytes.as_slice(), image.as_slice());
     }
 
     #[test]

@@ -548,6 +548,76 @@ fn cancelled_large_envelope_returns_cancelled_without_a_lease() {
 
 struct BoundOcr;
 
+struct WorkingSetOcr;
+
+impl OcrEngine for WorkingSetOcr {
+    fn id(&self) -> &'static str {
+        "test.ocr.working-set"
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async { unreachable!("working-set provider must use recognize_bound") })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new_with_working(4096, 8192, 1, 32)
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move {
+            let _working = context.reserve_memory(8192)?;
+            let bound = BoundOcrResult::try_new(
+                OcrResult { regions: vec![], provider: "test.ocr.recognizer".into() },
+                vec![],
+                vec![
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Detection,
+                        provider: "test.ocr.detector".into(),
+                        model: Some("detector-sha256".into()),
+                    },
+                    OcrEvidenceStep {
+                        stage: OcrEvidenceStage::Recognition,
+                        provider: "test.ocr.recognizer".into(),
+                        model: Some("recognizer-sha256".into()),
+                    },
+                ],
+            )?;
+            Ok(OcrRecognition::Bound(bound))
+        })
+    }
+}
+
+#[test]
+fn enclosing_credit_does_not_double_charge_provider_working_memory() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    options.limits.max_memory_bytes = 12_288;
+    let root = context(&options);
+    let mut parent = root.reserve_memory(12_288).unwrap();
+    let credit = root.with_memory_credit(&mut parent).unwrap();
+    let services = Services { ocr: Some(Arc::new(WorkingSetOcr)), ..Services::default() };
+
+    let contribution =
+        block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &credit)).unwrap();
+
+    assert!(contribution.memory.is_some());
+    drop(contribution);
+    assert_eq!(credit.reserved_memory_bytes(), 0);
+}
+
 impl OcrEngine for BoundOcr {
     fn id(&self) -> &'static str {
         "test.ocr.pipeline"

@@ -64,9 +64,9 @@ mod quality {
             into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits::default(),
         );
-        let model_root = tempfile::tempdir().unwrap();
-        let manager =
-            Arc::new(ModelManager::embedded(model_root.path().to_path_buf(), None).unwrap());
+        let model_parent = tempfile::tempdir().unwrap();
+        let model_root = model_parent.path().join("models");
+        let manager = Arc::new(ModelManager::embedded(model_root, None).unwrap());
         manager
             .install(
                 "pp-ocrv6-tiny-recognizer-onnx",

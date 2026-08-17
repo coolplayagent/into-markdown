@@ -937,14 +937,14 @@ impl SafeDir {
     }
 
     pub(crate) fn open_child_private(&self, _name: &OsStr) -> Result<Self, CliError> {
-        unsupported_safe_dir()
+        Err(transaction_platform_unavailable())
     }
 
     pub(crate) fn open_child_private_optional(
         &self,
         _name: &OsStr,
     ) -> Result<Option<Self>, CliError> {
-        unsupported_safe_dir()
+        Err(transaction_platform_unavailable())
     }
 
     pub(crate) fn create_regular(&self, _name: &OsStr) -> Result<File, CliError> {
@@ -1037,7 +1037,7 @@ impl SafeDir {
         Err(transaction_platform_unavailable())
     }
 
-    fn sync(&self) -> Result<(), CliError> {
+    pub(crate) fn sync(&self) -> Result<(), CliError> {
         Err(transaction_platform_unavailable())
     }
 }

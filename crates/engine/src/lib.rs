@@ -10,9 +10,9 @@ use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
     Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
-    MarkdownRenderer, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services,
-    SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
+    EnrichmentPlan, ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
+    MarkdownRenderer, OutputEnricher, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation,
+    Services, SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
     estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
@@ -95,6 +95,7 @@ pub struct EngineBuilder {
     registry: RegistryBuilder,
     renderer: Option<Arc<dyn MarkdownRenderer>>,
     services: Services,
+    enrichers: Vec<Arc<dyn OutputEnricher>>,
 }
 
 impl EngineBuilder {
@@ -123,6 +124,13 @@ impl EngineBuilder {
         self
     }
 
+    /// Register a transactional post-conversion enricher.
+    #[must_use]
+    pub fn enricher(mut self, enricher: Arc<dyn OutputEnricher>) -> Self {
+        self.enrichers.push(enricher);
+        self
+    }
+
     /// Validate IDs and build an immutable engine.
     ///
     /// # Errors
@@ -131,6 +139,7 @@ impl EngineBuilder {
     /// IDs.
     pub fn build(mut self) -> Result<Engine, ConversionError> {
         self.registry.validate()?;
+        validate_unique("output enricher", self.enrichers.iter().map(|value| value.id()))?;
         self.registry.format_detectors.sort_by(|left, right| {
             right.priority().cmp(&left.priority()).then_with(|| left.id().cmp(right.id()))
         });
@@ -146,6 +155,7 @@ impl EngineBuilder {
             converters: self.registry.converters,
             renderer: self.renderer,
             services: self.services,
+            enrichers: self.enrichers,
         })
     }
 }
@@ -157,6 +167,7 @@ pub struct Engine {
     converters: Vec<Arc<dyn Converter>>,
     renderer: Option<Arc<dyn MarkdownRenderer>>,
     services: Services,
+    enrichers: Vec<Arc<dyn OutputEnricher>>,
 }
 
 impl Engine {
@@ -313,6 +324,16 @@ impl Engine {
             |_| Ok(()),
         )
         .await?;
+        let output = invoke_enrichers(
+            &self.enrichers,
+            output,
+            attempt.converter.id(),
+            attempt.candidate.format,
+            &request.options,
+            &self.services,
+            &context,
+        )
+        .await?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
@@ -410,6 +431,67 @@ impl Engine {
     ) -> Result<Vec<FormatCandidate>, ConversionError> {
         nested::detect_formats(&self.format_detectors, input, hint, context).await
     }
+}
+
+pub(crate) async fn invoke_enrichers(
+    enrichers: &[Arc<dyn OutputEnricher>],
+    mut output: ConverterOutput,
+    converter_id: &str,
+    format: into_markdown_core::InputFormat,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    for enricher in enrichers {
+        context.checkpoint()?;
+        let plan = enricher.planned_enrichment_bytes(
+            &output,
+            converter_id,
+            format,
+            options,
+            services,
+            context,
+        )?;
+        let EnrichmentPlan::Reserve(plan) = plan else {
+            continue;
+        };
+        let mut memory = context.reserve_memory(plan)?;
+        let credited_context = context.with_memory_credit(&mut memory)?;
+        output = context
+            .run(enricher.enrich(
+                output,
+                converter_id,
+                format,
+                options,
+                services,
+                &credited_context,
+            ))
+            .await??;
+        let retained_bytes = into_markdown_core::estimate_retained_output(
+            &output.document,
+            &output.assets,
+            &output.diagnostics,
+        )?;
+        let validation_bytes =
+            estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?;
+        let retained_memory = credited_context
+            .reserve_memory(retained_bytes.saturating_sub(output.leased_memory_for(context)))?;
+        let validation_memory = credited_context.reserve_memory(validation_bytes)?;
+        output.document.validate().map_err(|error| ConversionError::Internal {
+            detail: format!(
+                "output enricher {} returned invalid document IR ({} at {}): {}",
+                enricher.id(),
+                error.code.as_str(),
+                error.path,
+                error.detail
+            ),
+        })?;
+        drop(validation_memory);
+        drop(retained_memory);
+        drop(credited_context);
+        output = output.certify_enrichment_reservation(context, memory)?;
+    }
+    Ok(output)
 }
 
 async fn invoke_converter_preflighted<F>(
@@ -1186,6 +1268,143 @@ mod tests {
         }
     }
 
+    struct TitleEnricher {
+        id: &'static str,
+        suffix: &'static str,
+    }
+
+    struct PlanGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
+    struct LimitPlanGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
+    struct SkipGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl OutputEnricher for SkipGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.skip-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Skip)
+        }
+        fn enrich<'a>(
+            &'a self,
+            _: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { unreachable!("skipped enricher must never execute") })
+        }
+    }
+
+    impl OutputEnricher for PlanGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.plan-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Reserve(8 * 1024))
+        }
+        fn enrich<'a>(
+            &'a self,
+            output: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { Ok(output) })
+        }
+    }
+
+    impl OutputEnricher for LimitPlanGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.limit-plan-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Err(ConversionError::ResourceLimit {
+                limit: "max_archive_entries",
+                detail: "embedded visual references exceed the request limit".into(),
+            })
+        }
+        fn enrich<'a>(
+            &'a self,
+            _: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { unreachable!("failed preflight must never execute the enricher") })
+        }
+    }
+
+    impl OutputEnricher for TitleEnricher {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Ok(EnrichmentPlan::Reserve(64 * 1024))
+        }
+
+        fn enrich<'a>(
+            &'a self,
+            mut output: ConverterOutput,
+            converter_id: &'a str,
+            format: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            let suffix = self.suffix;
+            Box::pin(async move {
+                assert_eq!(converter_id, "base.converter");
+                assert_eq!(format, InputFormat::Text);
+                output.document.metadata.title.get_or_insert_default().push_str(suffix);
+                Ok(output)
+            })
+        }
+    }
+
     struct CapacityRenderer(usize, Arc<std::sync::atomic::AtomicUsize>);
     impl MarkdownRenderer for CapacityRenderer {
         fn id(&self) -> &'static str {
@@ -1252,6 +1471,115 @@ mod tests {
             .register_source_resolver(Arc::new(BytesResolver))
             .register_source_resolver(Arc::new(BytesResolver));
         assert_eq!(builder.build().err().unwrap().code(), into_markdown_core::ErrorCode::Internal);
+    }
+
+    #[test]
+    fn duplicate_output_enricher_ids_are_rejected() {
+        let builder = EngineBuilder::new()
+            .enricher(Arc::new(TitleEnricher { id: "same.enricher", suffix: ":one" }))
+            .enricher(Arc::new(TitleEnricher { id: "same.enricher", suffix: ":two" }));
+        let error = builder.build().err().unwrap();
+        assert_eq!(error.code(), into_markdown_core::ErrorCode::Internal);
+        assert!(error.to_string().contains("duplicate output enricher ID"));
+    }
+
+    #[test]
+    fn output_enrichers_run_in_registration_order_before_rendering() {
+        let mut builder = EngineBuilder::new()
+            .renderer(Arc::new(EmptyRenderer))
+            .enricher(Arc::new(TitleEnricher { id: "first.enricher", suffix: ":one" }))
+            .enricher(Arc::new(TitleEnricher { id: "second.enricher", suffix: ":two" }));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(MatchingConverter("base.converter")));
+        let engine = builder.build().unwrap();
+        let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let result = block_on(engine.convert(request)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("base.converter:one:two"));
+    }
+
+    #[test]
+    fn output_enricher_plan_is_reserved_before_provider_entry() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> = Arc::new(PlanGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 8 * 1024 - 1,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let error = block_on(invoke_enrichers(
+            &[enricher],
+            ConverterOutput::default(),
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn output_enricher_limit_preflight_fails_before_entry_without_leases() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> =
+            Arc::new(LimitPlanGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        let error = block_on(invoke_enrichers(
+            &[enricher],
+            ConverterOutput::default(),
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ResourceLimit { limit: "max_archive_entries", .. }
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn skipped_output_enricher_is_an_exact_no_op_even_with_zero_memory_budget() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> = Arc::new(SkipGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: 0,
+                ..into_markdown_core::ResourceLimits::default()
+            },
+        );
+        let output = ConverterOutput::default();
+        let result = block_on(invoke_enrichers(
+            &[enricher],
+            output,
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap();
+        assert_eq!(result.document, ConverterOutput::default().document);
+        assert!(result.assets.is_empty());
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]

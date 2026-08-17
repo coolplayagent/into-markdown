@@ -2,10 +2,58 @@ use crate::budget::LayoutBudget;
 use crate::geometry::overlap_ratio;
 use crate::lines;
 use crate::memory;
-use crate::model::{Line, SourceKind};
+use crate::model::{Atom, Line, SourceKind};
 use crate::ordering;
 use into_markdown_core::ConversionError;
 use unicode_normalization::UnicodeNormalization;
+
+pub(crate) fn suppress_overlapping_ocr_atoms(
+    atoms: Vec<Atom>,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<Vec<Atom>, ConversionError> {
+    let mut kept = Vec::<AtomCandidate>::new();
+    kept.try_reserve_exact(atoms.len()).map_err(|_| memory("layout atom dedup output"))?;
+    for atom in atoms {
+        budget.checkpoint_item()?;
+        let normalized = canonical(lines::inline_text(&atom.inline), budget)?;
+        let mut duplicate = false;
+        if atom.source_kind == SourceKind::Ocr && !normalized.is_empty() {
+            for existing in kept.iter().rev() {
+                budget.compare()?;
+                if existing.atom.source_kind != SourceKind::Ocr
+                    || existing.atom.orientation != atom.orientation
+                    || overlap_ratio(existing.atom.bounds, atom.bounds) < 0.55
+                {
+                    continue;
+                }
+                if equivalent_ocr_text(&existing.normalized, &normalized) {
+                    duplicate = true;
+                    break;
+                }
+            }
+        }
+        if !duplicate {
+            kept.push(AtomCandidate { atom, normalized });
+        }
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(kept.len()).map_err(|_| memory("layout atom dedup atoms"))?;
+    output.extend(kept.into_iter().map(|candidate| candidate.atom));
+    Ok(output)
+}
+
+struct AtomCandidate {
+    atom: Atom,
+    normalized: String,
+}
+
+fn equivalent_ocr_text(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let (shorter, longer) = if left.len() <= right.len() { (left, right) } else { (right, left) };
+    shorter.chars().take(3).count() == 3 && longer.contains(shorter)
+}
 
 pub(crate) fn suppress(
     lines: Vec<Line>,

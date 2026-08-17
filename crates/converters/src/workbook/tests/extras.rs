@@ -1,5 +1,6 @@
 use super::support::{
-    context, convert, image_xlsx, push_xlsb_record, push_xlsb_string, xlsx, xlsx_with_parts,
+    context, convert, image_xlsx, push_xlsb_record, push_xlsb_string, rewrite_package, xlsx,
+    xlsx_with_parts,
 };
 use crate::workbook::calamine_adapter::{append_sheet_extras_for_test, validate_extras_fields};
 use crate::workbook::extras::metadata::{display_ranges, push_compact_range};
@@ -15,6 +16,18 @@ use into_markdown_core::{
     Block, CellRef, ConversionError, ConversionOptions, ExecutionContext, Inline,
 };
 use std::collections::BTreeMap;
+
+#[test]
+fn producer_extension_namespaces_in_styles_are_ignored() {
+    let base = xlsx(
+        r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>"#,
+    );
+    let styles = r#"<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"><fonts count="1" x14ac:knownFonts="1"><font><b/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0"/></cellXfs><extLst><x14ac:ext uri="{producer-extension}"/></extLst></styleSheet>"#;
+    let bytes = rewrite_package(&base, &[("xl/styles.xml", styles.to_owned())], &[]);
+
+    let output = convert(&bytes, &ConversionOptions::default()).unwrap();
+    assert!(!output.document.blocks.is_empty());
+}
 
 #[test]
 fn xlsb_comments_require_complete_unique_containers_and_required_richstr_form() {

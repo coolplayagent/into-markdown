@@ -20,12 +20,14 @@ use budget::{
 use count::checked_count;
 use coverage::PageCoverage;
 use error::{malformed, map_pdfium_error, resource};
-use geometry::{normalize_rect, page_locator, render_dimensions, safe_link_target};
+use geometry::{
+    displayed_dimensions, normalize_rect, page_locator, render_dimensions, safe_link_target,
+};
 use ir::{allocation_capacity_bound, character_working_set_bytes, provenance, text_block};
 use runtime::lock_pdf_conversion;
 
 #[cfg(test)]
-use geometry::{displayed_dimensions, normalize_point};
+use geometry::normalize_point;
 #[cfg(test)]
 use ir::character_ir_allocation_bytes;
 
@@ -454,6 +456,7 @@ fn convert_pdf(
             || (options.ocr.policy == OcrPolicy::Auto && scanned);
         if render_requested {
             let (width, height) = render_dimensions(&info)?;
+            let (page_width, page_height) = displayed_dimensions(&info);
             let render_bytes = u64::from(width)
                 .checked_mul(u64::from(height))
                 .and_then(|pixels| pixels.checked_mul(4))
@@ -496,7 +499,12 @@ fn convert_pdf(
             blocks.push(BlockNode {
                 id: NodeId(format!("pdf-page-{page_number}-ocr-render")),
                 block: Block::Image { asset: AssetId(id), alt: Some("page render for OCR".into()) },
-                provenance: provenance(page_number, None, None, &info)?,
+                provenance: provenance(
+                    page_number,
+                    Some(Rect { x: 0.0, y: 0.0, width: page_width, height: page_height }),
+                    None,
+                    &info,
+                )?,
             });
         }
         if scanned {

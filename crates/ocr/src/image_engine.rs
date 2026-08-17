@@ -1,15 +1,16 @@
 //! Product OCR engine joining the audited image, detector, and recognizer boundaries.
 
 use crate::{
-    DetectionConfig, ImageOrientation, ModelManager, PixelFormat, PixelView, PpOcrTextDetector,
-    PpOcrTextRecognizer, RecognitionConfig,
+    DetectionConfig, Dimension, ImageOrientation, ModelContract, ModelManager, PixelFormat,
+    PixelView, PpOcrTextDetector, PpOcrTextRecognizer, RecognitionConfig,
 };
 use image::{DynamicImage, ImageFormat, ImageReader};
 use into_markdown_core::{
     BoundOcrResult, BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine,
-    OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest,
-    OcrResult, ResourceLimits, TensorRuntime,
+    OcrEvidenceStage, OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion,
+    OcrRequest, OcrResult, ResourceLimits, Tensor, TensorRuntime,
 };
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -44,7 +45,7 @@ impl PpOcrImageEngine {
     ) -> Result<(), ConversionError> {
         context.checkpoint()?;
         validate_engine_limits(limits)?;
-        let plan = output_plan(limits)?;
+        let plan = output_plan(limits, 1, 1)?;
         if plan.max_retained_bytes() > limits.max_memory_bytes
             || plan.max_retained_bytes() > context.available_memory_bytes()
         {
@@ -79,9 +80,10 @@ impl PpOcrImageEngine {
         self.manager
             .verify_with_context(crate::detector_model::PIPELINE_ID, context)
             .map_err(map_manager_error)?;
-        let max_source_pixels = source_pixel_limit(&self.limits)?;
-        let max_regions = usize::try_from(self.limits.max_archive_entries.min(MAX_REGIONS))
-            .map_err(|_| {
+        let limits = effective_limits(&self.limits, context.resource_limits());
+        let max_source_pixels = source_pixel_limit(&limits)?;
+        let max_regions =
+            usize::try_from(limits.max_archive_entries.min(MAX_REGIONS)).map_err(|_| {
                 resource("max_archive_entries", "OCR region bound is not representable")
             })?;
         let detector = PpOcrTextDetector::new(
@@ -99,7 +101,7 @@ impl PpOcrImageEngine {
             &self.manager,
             RecognitionConfig {
                 max_regions,
-                max_decoded_bytes: usize::try_from(self.limits.max_field_bytes.min(MAX_TEXT_BYTES))
+                max_decoded_bytes: usize::try_from(limits.max_field_bytes.min(MAX_TEXT_BYTES))
                     .map_err(|_| {
                         resource("max_field_bytes", "OCR text bound is not representable")
                     })?,
@@ -107,7 +109,7 @@ impl PpOcrImageEngine {
             },
             context,
         )?;
-        let (pixels, _memory) = decode_normalized_png(request, &self.limits, context)?;
+        let (pixels, _memory) = decode_normalized_png(request, &limits, context)?;
         let image = PixelView {
             width: pixels.width() as usize,
             height: pixels.height() as usize,
@@ -121,7 +123,13 @@ impl PpOcrImageEngine {
         let recognition_result =
             recognizer.recognize_page(image, &detected, language, context).await?;
         context.checkpoint()?;
-        bind_result(&detected, recognition_result.result(), context)
+        let identity = OcrInputIdentity::try_new(
+            Sha256::digest(request.image).into(),
+            pixels.width(),
+            pixels.height(),
+            0,
+        )?;
+        bind_result(&detected, recognition_result.result(), identity, context)
     }
 }
 
@@ -147,8 +155,34 @@ impl OcrEngine for PpOcrImageEngine {
         context: &ExecutionContext,
     ) -> Result<OcrOutputPlan, ConversionError> {
         context.checkpoint()?;
-        validate_png_header(request, &self.limits)?;
-        output_plan(&options.limits)
+        let limits = effective_limits(&self.limits, &options.limits);
+        let (width, height) = validate_png_header(request, &limits)?;
+        output_plan(&limits, width, height)
+    }
+
+    fn planned_normalized_png_output(
+        &self,
+        width: u32,
+        height: u32,
+        options: &ConversionOptions,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        context.checkpoint()?;
+        if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
+            return Err(resource(
+                "image_dimensions",
+                "OCR PNG dimensions are outside product bounds",
+            ));
+        }
+        let decoded = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| resource("max_decompressed_bytes", "OCR PNG size overflow"))?;
+        let limits = effective_limits(&self.limits, &options.limits);
+        if decoded > limits.max_decompressed_bytes {
+            return Err(resource("max_decompressed_bytes", "OCR PNG dimensions exceed limits"));
+        }
+        output_plan(&limits, width, height)
     }
 
     fn recognize_bound<'a>(
@@ -158,6 +192,17 @@ impl OcrEngine for PpOcrImageEngine {
     ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
         Box::pin(async move { self.execute(request, context).await.map(OcrRecognition::Bound) })
     }
+}
+
+fn effective_limits(service: &ResourceLimits, request: &ResourceLimits) -> ResourceLimits {
+    let mut limits = request.clone();
+    limits.max_input_bytes = limits.max_input_bytes.min(service.max_input_bytes);
+    limits.max_decompressed_bytes =
+        limits.max_decompressed_bytes.min(service.max_decompressed_bytes);
+    limits.max_archive_entries = limits.max_archive_entries.min(service.max_archive_entries);
+    limits.max_memory_bytes = limits.max_memory_bytes.min(service.max_memory_bytes);
+    limits.max_field_bytes = limits.max_field_bytes.min(service.max_field_bytes);
+    limits
 }
 
 fn decode_normalized_png(
@@ -224,6 +269,7 @@ fn validate_png_header(
 fn bind_result(
     detected: &crate::PageDetection,
     recognized: &crate::RecognitionResult,
+    identity: OcrInputIdentity,
     context: &ExecutionContext,
 ) -> Result<BoundOcrResult, ConversionError> {
     if recognized.provider.as_ref() != RECOGNIZER_PROVIDER
@@ -256,7 +302,7 @@ fn bind_result(
         });
         confidences.push(detection.confidence);
     }
-    BoundOcrResult::try_new(
+    BoundOcrResult::try_new_for_input(
         OcrResult { regions, provider: RECOGNIZER_PROVIDER.into() },
         confidences,
         vec![
@@ -271,6 +317,7 @@ fn bind_result(
                 model: Some(crate::recognizer_model::RECOGNIZER_MODEL_ID.into()),
             },
         ],
+        identity,
     )
 }
 
@@ -303,7 +350,11 @@ fn validate_engine_limits(limits: &ResourceLimits) -> Result<(), ConversionError
     source_pixel_limit(limits).map(|_| ())
 }
 
-fn output_plan(limits: &ResourceLimits) -> Result<OcrOutputPlan, ConversionError> {
+fn output_plan(
+    limits: &ResourceLimits,
+    width: u32,
+    height: u32,
+) -> Result<OcrOutputPlan, ConversionError> {
     let max_regions = limits.max_archive_entries.min(MAX_REGIONS);
     let max_text = limits.max_field_bytes.min(MAX_TEXT_BYTES);
     let retained = u64::from(max_regions)
@@ -311,7 +362,73 @@ fn output_plan(limits: &ResourceLimits) -> Result<OcrOutputPlan, ConversionError
         .and_then(|bytes| bytes.checked_add(max_text.checked_mul(2)?))
         .and_then(|bytes| bytes.checked_add(OUTPUT_FIXED_BYTES))
         .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
-    OcrOutputPlan::try_new(retained, max_regions, max_text)
+    let working = provider_working_plan(width, height)?;
+    OcrOutputPlan::try_new_with_working(retained, working, max_regions, max_text)
+}
+
+fn provider_working_plan(width: u32, height: u32) -> Result<u64, ConversionError> {
+    let decoded = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR decoded working-set plan overflow"))?;
+    let detector = model_run_phase(&crate::ppocrv6_detector_contract())?;
+    let recognizer = model_run_phase(&crate::ppocrv6_recognizer_contract())?;
+    decoded
+        .checked_add(detector.max(recognizer))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR provider working-set plan overflow"))
+}
+
+fn model_run_phase(contract: &ModelContract) -> Result<u64, ConversionError> {
+    let input_storage = max_tensor_storage(&contract.inputs)?;
+    let output_storage = max_tensor_storage(&contract.outputs)?;
+    let input_entries = u64::try_from(contract.inputs.len())
+        .ok()
+        .and_then(|count| count.checked_mul(std::mem::size_of::<(String, Tensor)>() as u64))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR input plan overflow"))?;
+    let output_entries = u64::try_from(contract.outputs.len())
+        .ok()
+        .and_then(|count| count.checked_mul(std::mem::size_of::<Tensor>() as u64))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?;
+    // The prepared input remains live while the runtime clones it. Runtime
+    // output is charged twice (native backing plus the checked Rust copy),
+    // matching the executable runtime boundary's run_memory_peak contract.
+    input_storage
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(input_entries))
+        .and_then(|bytes| bytes.checked_add(output_entries))
+        .and_then(|bytes| {
+            output_storage.checked_mul(2).and_then(|output| bytes.checked_add(output))
+        })
+        .and_then(|bytes| bytes.checked_add(contract.run_memory_bytes))
+        .ok_or_else(|| resource("max_memory_bytes", "OCR model working-set plan overflow"))
+}
+
+fn max_tensor_storage(specs: &[crate::TensorSpec]) -> Result<u64, ConversionError> {
+    specs.iter().try_fold(0_u64, |total, spec| {
+        let elements = spec.dimensions.iter().try_fold(1_u64, |count, dimension| {
+            let maximum = match dimension {
+                Dimension::Exact(value) => *value,
+                Dimension::Dynamic { max, .. } => *max,
+            };
+            count
+                .checked_mul(u64::try_from(maximum).map_err(|_| {
+                    resource("max_memory_bytes", "OCR tensor dimension is not representable")
+                })?)
+                .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))
+        })?;
+        let shape = u64::try_from(spec.dimensions.len())
+            .ok()
+            .and_then(|rank| rank.checked_mul(std::mem::size_of::<usize>() as u64))
+            .ok_or_else(|| resource("max_memory_bytes", "OCR tensor shape plan overflow"))?;
+        total
+            .checked_add(
+                elements
+                    .checked_mul(std::mem::size_of::<f32>() as u64)
+                    .and_then(|bytes| bytes.checked_add(shape))
+                    .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))?,
+            )
+            .ok_or_else(|| resource("max_memory_bytes", "OCR tensor plan overflow"))
+    })
 }
 
 fn map_manager_error(error: crate::ModelManagerError) -> ConversionError {
@@ -344,4 +461,31 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 
 fn ocr(detail: impl Into<String>) -> ConversionError {
     ConversionError::Ocr { provider: PROVIDER.into(), detail: detail.into() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_limits_never_exceed_request_or_service_envelope() {
+        let service = ResourceLimits::default();
+        let mut request = service.clone();
+        request.max_input_bytes = 12;
+        request.max_decompressed_bytes = 34;
+        request.max_archive_entries = 2;
+        request.max_memory_bytes = 56;
+        request.max_field_bytes = 7;
+
+        let effective = effective_limits(&service, &request);
+        assert_eq!(effective.max_input_bytes, 12);
+        assert_eq!(effective.max_decompressed_bytes, 34);
+        assert_eq!(effective.max_archive_entries, 2);
+        assert_eq!(effective.max_memory_bytes, 56);
+        assert_eq!(effective.max_field_bytes, 7);
+
+        let mut tighter_service = service;
+        tighter_service.max_archive_entries = 1;
+        assert_eq!(effective_limits(&tighter_service, &request).max_archive_entries, 1);
+    }
 }

@@ -1076,6 +1076,7 @@ dependencies = [
 name = "into-markdown"
 version = "0.0.0"
 dependencies = [
+ "image",
  "into-markdown-ai",
  "into-markdown-converters",
  "into-markdown-core",
@@ -1085,6 +1086,8 @@ dependencies = [
  "into-markdown-render-markdown",
  "into-markdown-task-store",
  "serde_json",
+ "sha2",
+ "tempfile",
  "zip 2.4.2",
 ]
 
@@ -1265,6 +1268,7 @@ dependencies = [
  "thiserror",
  "unicode-normalization",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
