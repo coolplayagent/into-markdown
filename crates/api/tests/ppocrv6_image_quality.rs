@@ -73,9 +73,10 @@ mod quality {
             "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
         );
         let dictionary = fs::read(runfiles.join("_main/models/ppocrv6_tiny_dict.txt")).unwrap();
-        let model_root = tempfile::tempdir().unwrap();
+        let model_parent = tempfile::tempdir().unwrap();
+        let model_root = model_parent.path().join("models");
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-        let manager = ModelManager::embedded(model_root.path().to_path_buf(), None).unwrap();
+        let manager = ModelManager::embedded(model_root.clone(), None).unwrap();
         let fetcher = QualityFetcher { detector, recognizer, dictionary };
         let status = manager.install("pp-ocrv6-tiny-zh-en", &fetcher, &context).unwrap();
         assert_eq!(status.state, "installed");
@@ -96,7 +97,7 @@ mod quality {
         options.ocr.policy = OcrPolicy::Always;
         options.ocr.minimum_confidence = 0.0;
         let service_config = InstalledOcrConfig {
-            writable_model_root: model_root.path().to_path_buf(),
+            writable_model_root: model_root,
             bundled_model_root: None,
             runtime_trusted_root: runtime_root,
             runtime_library,

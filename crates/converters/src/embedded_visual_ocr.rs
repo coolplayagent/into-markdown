@@ -126,9 +126,11 @@ fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn tiff_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let little = match bytes.get(..4)? {
-        b"II*\0" => true,
-        b"MM\0*" => false,
+    let (little, big_tiff) = match bytes.get(..4)? {
+        b"II*\0" => (true, false),
+        b"MM\0*" => (false, false),
+        b"II+\0" => (true, true),
+        b"MM\0+" => (false, true),
         _ => return None,
     };
     let read_u16 = |slice: &[u8]| {
@@ -139,25 +141,42 @@ fn tiff_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         let value: [u8; 4] = slice.try_into().ok()?;
         Some(if little { u32::from_le_bytes(value) } else { u32::from_be_bytes(value) })
     };
-    let ifd = usize::try_from(read_u32(bytes.get(4..8)?)?).ok()?;
-    let entries = usize::from(read_u16(bytes.get(ifd..ifd.checked_add(2)?)?)?);
+    let read_u64 = |slice: &[u8]| {
+        let value: [u8; 8] = slice.try_into().ok()?;
+        Some(if little { u64::from_le_bytes(value) } else { u64::from_be_bytes(value) })
+    };
+    let (ifd, entries, entries_start, entry_size) = if big_tiff {
+        if read_u16(bytes.get(4..6)?)? != 8 || read_u16(bytes.get(6..8)?)? != 0 {
+            return None;
+        }
+        let ifd = usize::try_from(read_u64(bytes.get(8..16)?)?).ok()?;
+        let entries = usize::try_from(read_u64(bytes.get(ifd..ifd.checked_add(8)?)?)?).ok()?;
+        (ifd, entries, 8_usize, 20_usize)
+    } else {
+        let ifd = usize::try_from(read_u32(bytes.get(4..8)?)?).ok()?;
+        let entries = usize::from(read_u16(bytes.get(ifd..ifd.checked_add(2)?)?)?);
+        (ifd, entries, 2_usize, 12_usize)
+    };
     let mut width = None;
     let mut height = None;
     for index in 0..entries {
-        let start = ifd.checked_add(2)?.checked_add(index.checked_mul(12)?)?;
-        let entry = bytes.get(start..start.checked_add(12)?)?;
+        let start = ifd.checked_add(entries_start)?.checked_add(index.checked_mul(entry_size)?)?;
+        let entry = bytes.get(start..start.checked_add(entry_size)?)?;
         let tag = read_u16(&entry[..2])?;
         if !matches!(tag, 256 | 257) {
             continue;
         }
         let kind = read_u16(&entry[2..4])?;
-        let count = read_u32(&entry[4..8])?;
+        let count =
+            if big_tiff { read_u64(&entry[4..12])? } else { u64::from(read_u32(&entry[4..8])?) };
         if count != 1 {
             return None;
         }
-        let value = match kind {
-            3 => u32::from(read_u16(&entry[8..10])?),
-            4 => read_u32(&entry[8..12])?,
+        let value_offset = if big_tiff { 12 } else { 8 };
+        let value = match (kind, big_tiff) {
+            (3, _) => u32::from(read_u16(&entry[value_offset..value_offset + 2])?),
+            (4, _) => read_u32(&entry[value_offset..value_offset + 4])?,
+            (16, true) => u32::try_from(read_u64(&entry[value_offset..value_offset + 8])?).ok()?,
             _ => return None,
         };
         if tag == 256 {
@@ -185,8 +204,7 @@ fn plan_enrichment(
     {
         return Ok(EnrichmentPlan::Skip);
     }
-    let mut references = 0_u32;
-    let mut total = 0_u64;
+    let mut raster_references = 0_u32;
     for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
         let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
             return Err(ConversionError::Internal {
@@ -196,15 +214,41 @@ fn plan_enrichment(
         if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
             return Ok(());
         }
-        references = references.checked_add(1).ok_or_else(|| {
+        if auto_excluded_raster(asset, options, context)? {
+            return Ok(());
+        }
+        raster_references = raster_references.checked_add(1).ok_or_else(|| {
             resource("max_archive_entries", "embedded visual reference count is not representable")
         })?;
-        if references > options.limits.max_archive_entries {
+        if raster_references > options.limits.max_archive_entries {
             return Err(resource(
                 "max_archive_entries",
                 "embedded visual references exceed the request limit",
             ));
         }
+        Ok(())
+    })?;
+    if raster_references == 0 {
+        return Ok(EnrichmentPlan::Skip);
+    }
+    let mut references = 0_u32;
+    let mut total = 0_u64;
+    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
+        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", asset_id.0),
+            });
+        };
+        if asset.bytes.is_empty()
+            || asset.external_uri.is_some()
+            || !supported_raster(asset)
+            || candidate_dimensions_for_policy(asset, options, context)?.is_none()
+        {
+            return Ok(());
+        }
+        references = references.checked_add(1).ok_or_else(|| {
+            resource("max_archive_entries", "eligible visual reference count is not representable")
+        })?;
         // Each eligible reference can clone OCR IR, evidence, and diagnostics,
         // even when its source bytes share one provider request.
         checked_add(&mut total, 128 * 1024, "embedded OCR reference plan overflow")?;
@@ -213,9 +257,10 @@ fn plan_enrichment(
     if references == 0 {
         return Ok(EnrichmentPlan::Skip);
     }
-
     let mut candidates = 0_u32;
     let mut candidate_bytes = 0_u64;
+    let existing_nodes = count_document_nodes(&output.document.blocks, context)?;
+    let mut planned_added_nodes = 0_usize;
     for (index, asset) in output.assets.iter().enumerate() {
         context.checkpoint()?;
         if asset.bytes.is_empty()
@@ -223,6 +268,9 @@ fn plan_enrichment(
             || !supported_raster(asset)
             || !has_visual_reference(&output.document.blocks, &asset.id, context)?
         {
+            continue;
+        }
+        if candidate_dimensions_for_policy(asset, options, context)?.is_none() {
             continue;
         }
         candidate_bytes = candidate_bytes
@@ -236,7 +284,6 @@ fn plan_enrichment(
                 "embedded visual bytes exceed the request limit",
             ));
         }
-        validated_candidate_dimensions(asset, options, context)?;
         if first_referenced_asset_with_bytes(output, index, context)? {
             candidates = candidates
                 .checked_add(1)
@@ -248,6 +295,9 @@ fn plan_enrichment(
                 ));
             }
         }
+    }
+    if candidates == 0 {
+        return Ok(EnrichmentPlan::Skip);
     }
 
     // Only consult provider plans after every knowable input count and envelope
@@ -273,7 +323,7 @@ fn plan_enrichment(
         if !first_referenced_asset_with_bytes(output, index, context)? {
             continue;
         }
-        let dimensions = image_dimensions(&asset.bytes);
+        let dimensions = candidate_dimensions_for_policy(asset, options, context)?;
         let normalized_peak = if let Some((width, height)) = dimensions {
             u64::from(width)
                 .checked_mul(u64::from(height))
@@ -284,20 +334,20 @@ fn plan_enrichment(
             64 * 1024
         };
         checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
-        let provider_bound = match (services.ocr.as_deref(), dimensions) {
-            (_, None) => 0,
+        let (provider_bound, provider_regions) = match (services.ocr.as_deref(), dimensions) {
+            (_, None) => (0, 0),
             (Some(engine), Some((width, height))) => {
                 match engine.planned_normalized_png_output(width, height, options, context) {
-                    Ok(plan) => plan.max_retained_bytes(),
+                    Ok(plan) => (plan.max_retained_bytes(), plan.max_regions()),
                     Err(ConversionError::ComponentUnavailable { .. })
                         if options.ocr.policy == OcrPolicy::Auto =>
                     {
-                        0
+                        (0, 0)
                     }
                     Err(error) => return Err(error),
                 }
             }
-            (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => 0,
+            (None, Some(_)) if options.ocr.policy == OcrPolicy::Auto => (0, 0),
             (None, Some(_)) => {
                 return Err(ConversionError::ComponentUnavailable {
                     component: "ocr".into(),
@@ -306,6 +356,23 @@ fn plan_enrichment(
             }
         };
         let reference_copies = visual_reference_count_for_bytes(output, &asset.bytes, context)?;
+        let added_nodes = usize::try_from(provider_regions)
+            .unwrap_or(usize::MAX)
+            .checked_mul(usize::try_from(reference_copies).unwrap_or(usize::MAX))
+            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?;
+        planned_added_nodes = planned_added_nodes
+            .checked_add(added_nodes)
+            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?;
+        if existing_nodes
+            .checked_add(planned_added_nodes)
+            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?
+            > into_markdown_core::MAX_DOCUMENT_NODES
+        {
+            return Err(resource(
+                "documentNodes",
+                "embedded OCR output can exceed the document node limit",
+            ));
+        }
         let asset_copies = referenced_asset_count_for_bytes(output, &asset.bytes, context)?;
         let retained_copies = reference_copies
             .checked_add(asset_copies)
@@ -329,6 +396,82 @@ fn plan_enrichment(
         "embedded OCR validation plan overflow",
     )?;
     Ok(EnrichmentPlan::Reserve(total))
+}
+
+fn candidate_dimensions_for_policy(
+    asset: &into_markdown_core::Asset,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Option<(u32, u32)>, ConversionError> {
+    match validated_candidate_dimensions(asset, options, context) {
+        Ok(dimensions) => Ok(Some(dimensions)),
+        Err(error) if options.ocr.policy == OcrPolicy::Auto && auto_skippable_raster(&error) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn auto_excluded_raster(
+    asset: &into_markdown_core::Asset,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    if options.ocr.policy != OcrPolicy::Auto {
+        return Ok(false);
+    }
+    // Classification must not consume OCR reference limits: otherwise an
+    // animated/multi-page raster that Auto excludes could fail merely because
+    // the request deliberately set those OCR-stage limits low.
+    let mut classification_options = options.clone();
+    classification_options.limits.max_archive_entries = u32::MAX;
+    Ok(candidate_dimensions_for_policy(asset, &classification_options, context)?.is_none())
+}
+
+fn count_document_nodes(
+    nodes: &[BlockNode],
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
+    let mut total = 0_usize;
+    for node in nodes {
+        context.checkpoint()?;
+        total = total
+            .checked_add(1)
+            .ok_or_else(|| resource("documentNodes", "document node count overflow"))?;
+        let nested = match &node.block {
+            Block::List { items, .. } => {
+                let mut count = 0_usize;
+                for item in items {
+                    count = count
+                        .checked_add(count_document_nodes(&item.blocks, context)?)
+                        .ok_or_else(|| resource("documentNodes", "document node count overflow"))?;
+                }
+                count
+            }
+            Block::Table { rows, .. } => {
+                let mut count = 0_usize;
+                for row in rows {
+                    for cell in &row.cells {
+                        count = count
+                            .checked_add(count_document_nodes(&cell.blocks, context)?)
+                            .ok_or_else(|| {
+                                resource("documentNodes", "document node count overflow")
+                            })?;
+                    }
+                }
+                count
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => count_document_nodes(blocks, context)?,
+            _ => 0,
+        };
+        total = total
+            .checked_add(nested)
+            .ok_or_else(|| resource("documentNodes", "document node count overflow"))?;
+    }
+    Ok(total)
 }
 
 fn visual_reference_count_for_bytes(
@@ -517,7 +660,7 @@ fn validated_candidate_dimensions(
         }
         let decoded_bytes = u64::from(width)
             .checked_mul(u64::from(height))
-            .and_then(|pixels| pixels.checked_mul(20))
+            .and_then(|pixels| pixels.checked_mul(4))
             .ok_or_else(|| resource("max_decompressed_bytes", "GIF pixel size overflow"))?;
         if width == 0 || height == 0 || decoded_bytes > options.limits.max_decompressed_bytes {
             return Err(resource("max_decompressed_bytes", "GIF dimensions exceed request limits"));
@@ -672,6 +815,9 @@ async fn enrich(
         if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
             continue;
         }
+        if auto_excluded_raster(asset, options, context)? {
+            continue;
+        }
         eligible_reference_count = eligible_reference_count.checked_add(1).ok_or_else(|| {
             resource("max_archive_entries", "embedded visual reference count is not representable")
         })?;
@@ -690,15 +836,18 @@ async fn enrich(
         if index % 256 == 0 {
             context.checkpoint()?;
         }
-        if !referenced_assets.insert(reference.asset.clone()) {
-            continue;
-        }
         let Some(asset) = assets.get(&reference.asset) else {
             return Err(ConversionError::Internal {
                 detail: format!("image node references missing asset {}", reference.asset.0),
             });
         };
         if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
+            continue;
+        }
+        if auto_excluded_raster(asset, options, context)? {
+            continue;
+        }
+        if !referenced_assets.insert(reference.asset.clone()) {
             continue;
         }
         compressed_bytes = compressed_bytes
@@ -835,13 +984,22 @@ async fn enrich(
         }
     }
     if input_format == InputFormat::Pdf && !contributions_by_asset.is_empty() {
-        output = crate::pdf_ocr::reconstruct_enriched_pdf(output, context)?;
+        output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
     }
     Ok(output)
 }
 
 fn auto_degradable_normalization(error: &ConversionError) -> bool {
-    matches!(error, ConversionError::ComponentUnavailable { .. })
+    matches!(error, ConversionError::ComponentUnavailable { .. }) || auto_skippable_raster(error)
+}
+
+fn auto_skippable_raster(error: &ConversionError) -> bool {
+    matches!(
+        error,
+        ConversionError::Unsupported { detail }
+            if detail == "animated or multi-page embedded raster is not eligible for OCR"
+                || detail == "animated embedded GIF is not eligible for OCR"
+    )
 }
 
 fn eligible_container(format: InputFormat) -> bool {
@@ -953,12 +1111,15 @@ fn normalize_gif(
         .checked_mul(u64::from(height))
         .and_then(|pixels| pixels.checked_mul(20))
         .ok_or_else(|| resource("max_memory_bytes", "GIF working set overflow"))?;
-    if width == 0
-        || height == 0
-        || working > options.limits.max_decompressed_bytes
-        || working > options.limits.max_memory_bytes
-    {
+    let decoded = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| resource("max_decompressed_bytes", "GIF decoded size overflow"))?;
+    if width == 0 || height == 0 || decoded > options.limits.max_decompressed_bytes {
         return Err(resource("max_decompressed_bytes", "GIF dimensions exceed request limits"));
+    }
+    if working > options.limits.max_memory_bytes {
+        return Err(resource("max_memory_bytes", "GIF working set exceeds request limits"));
     }
     crate::epub::image::validate(
         bytes,
@@ -1271,7 +1432,7 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    use image::{DynamicImage, Frame, ImageFormat, Rgba, RgbaImage, codecs::gif::GifEncoder};
     use into_markdown_core::{
         Asset, BoundOcrResult, CancellationToken, Document, ExecutionOptions, OcrEngine,
         OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest,
@@ -1295,6 +1456,7 @@ mod tests {
     struct EntryGuardOcr {
         plans: AtomicUsize,
         calls: AtomicUsize,
+        regions: u32,
     }
 
     impl OcrEngine for EntryGuardOcr {
@@ -1328,7 +1490,7 @@ mod tests {
             _: &ExecutionContext,
         ) -> Result<OcrOutputPlan, ConversionError> {
             self.plans.fetch_add(1, Ordering::SeqCst);
-            OcrOutputPlan::try_new(16 * 1024, 1, 128)
+            OcrOutputPlan::try_new(u64::from(self.regions) * 256 + 128, self.regions, 128)
         }
 
         fn recognize_bound<'a>(
@@ -1462,6 +1624,65 @@ mod tests {
         cursor.into_inner()
     }
 
+    fn gif(frame_count: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut encoder = GifEncoder::new(&mut bytes);
+        for value in 0..frame_count {
+            encoder
+                .encode_frame(Frame::new(RgbaImage::from_pixel(
+                    1,
+                    1,
+                    Rgba([u8::try_from(value).unwrap(), 2, 3, 255]),
+                )))
+                .unwrap();
+        }
+        drop(encoder);
+        bytes
+    }
+
+    #[test]
+    fn big_tiff_dimensions_are_read_from_long8_ifd_entries() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"II+\0");
+        bytes.extend_from_slice(&8_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+        for (tag, value) in [(256_u16, 640_u64), (257_u16, 480_u64)] {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&16_u16.to_le_bytes());
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(tiff_dimensions(&bytes), Some((640, 480)));
+    }
+
+    #[test]
+    fn gif_decoded_limit_uses_rgba_bytes_and_memory_uses_working_set() {
+        let bytes = gif(1);
+        let mut options = ConversionOptions::default();
+        options.limits.max_decompressed_bytes = 4;
+        options.limits.max_memory_bytes = 1024 * 1024;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let normalized = normalize_gif(&bytes, Some("one.gif"), &options, &context).unwrap();
+        assert_eq!((normalized.width, normalized.height), (1, 1));
+
+        options.limits.max_decompressed_bytes = 3;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            normalize_gif(&bytes, Some("one.gif"), &options, &context),
+            Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
+        ));
+
+        options.limits.max_decompressed_bytes = 4;
+        options.limits.max_memory_bytes = 19;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            normalize_gif(&bytes, Some("one.gif"), &options, &context),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+    }
+
     fn source_bound_ocr(corrupt_identity: bool) -> Arc<SourceBoundOcr> {
         source_bound_ocr_with_plan(corrupt_identity, 16 * 1024)
     }
@@ -1551,6 +1772,93 @@ mod tests {
             ],
             vec![],
         )
+    }
+
+    #[test]
+    fn auto_policy_skips_animated_gif_before_provider_planning() {
+        let ocr = Arc::new(EntryGuardOcr {
+            plans: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+            regions: 1,
+        });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut source = output();
+        let animated = gif(2);
+        for asset in &mut source.assets {
+            asset.bytes = animated.clone();
+            asset.filename = Some(format!("{}.gif", asset.id.0));
+            asset.media_type = "image/gif".into();
+        }
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        options.limits.max_archive_entries = 0;
+        options.limits.max_total_asset_bytes = 0;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        assert!(matches!(
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context).unwrap(),
+            EnrichmentPlan::Skip
+        ));
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+
+        options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context),
+            Err(ConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn auto_policy_excluded_raster_does_not_consume_enrichment_limits() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let eligible = png();
+        let excluded = gif(2);
+        let mut source = output();
+        let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        blocks.truncate(1);
+        for index in 0..16 {
+            blocks.push(image_node(
+                &format!("excluded-{index}"),
+                "asset-b",
+                "word/media/animated.gif",
+            ));
+        }
+        source.assets[0].bytes = eligible.clone();
+        source.assets[1].bytes = excluded;
+        source.assets[1].filename = Some("animated.gif".into());
+        source.assets[1].media_type = "image/gif".into();
+
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+        options.limits.max_archive_entries = 8;
+        options.limits.max_total_asset_bytes = u64::try_from(eligible.len()).unwrap();
+        options.limits.max_pages = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        let enriched =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 1);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
+        assert!(enriched.diagnostics.is_empty());
+        let Block::Page { blocks, .. } = &enriched.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        assert_eq!(blocks.len(), 18);
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(
+                    |node| matches!(&node.block, Block::Image { asset, .. } if asset.0 == "asset-b")
+                )
+                .count(),
+            16
+        );
     }
 
     #[test]
@@ -1699,8 +2007,11 @@ mod tests {
 
     #[test]
     fn reference_limit_fails_during_preflight_without_provider_or_leases() {
-        let ocr =
-            Arc::new(EntryGuardOcr { plans: AtomicUsize::new(0), calls: AtomicUsize::new(0) });
+        let ocr = Arc::new(EntryGuardOcr {
+            plans: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+            regions: 1,
+        });
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1710,11 +2021,32 @@ mod tests {
         let error = plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context)
             .unwrap_err();
 
-        assert!(matches!(
-            error,
-            ConversionError::ResourceLimit { limit: "max_archive_entries", .. }
-        ));
+        assert!(
+            matches!(&error, ConversionError::ResourceLimit { limit: "max_archive_entries", .. }),
+            "{error:?}"
+        );
         assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn provider_region_bound_is_multiplied_by_eligible_references_before_recognition() {
+        let ocr = Arc::new(EntryGuardOcr {
+            plans: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+            regions: u32::try_from(into_markdown_core::MAX_DOCUMENT_NODES / 2).unwrap(),
+        });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        let error = plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context)
+            .unwrap_err();
+
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "documentNodes", .. }));
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 1);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
@@ -1738,8 +2070,11 @@ mod tests {
                     as fn(&mut ConversionOptions),
             ),
         ] {
-            let ocr =
-                Arc::new(EntryGuardOcr { plans: AtomicUsize::new(0), calls: AtomicUsize::new(0) });
+            let ocr = Arc::new(EntryGuardOcr {
+                plans: AtomicUsize::new(0),
+                calls: AtomicUsize::new(0),
+                regions: 1,
+            });
             let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
             let mut options = ConversionOptions::default();
             options.ocr.policy = OcrPolicy::Always;

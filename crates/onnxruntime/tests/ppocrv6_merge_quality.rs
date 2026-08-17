@@ -93,9 +93,9 @@ mod quality {
         );
         let dictionary = fs::read(runfiles.join("_main/models/ppocrv6_tiny_dict.txt")).unwrap();
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-        let model_root = tempfile::tempdir().unwrap();
-        let manager =
-            Arc::new(ModelManager::embedded(model_root.path().to_path_buf(), None).unwrap());
+        let model_parent = tempfile::tempdir().unwrap();
+        let model_root = model_parent.path().join("models");
+        let manager = Arc::new(ModelManager::embedded(model_root, None).unwrap());
         manager
             .install(
                 "pp-ocrv6-tiny-recognizer-onnx",

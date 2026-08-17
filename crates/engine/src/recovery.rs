@@ -517,6 +517,8 @@ pub(super) async fn convert(
             &context,
         )
         .await?;
+        validate_asset_inventory(&output.document, &output.assets, &request)?;
+        validate_diagnostics(&output.diagnostics)?;
         store.commit(
             token,
             &context,
@@ -952,6 +954,79 @@ mod tests {
 
     struct CountingTitleEnricher(Arc<AtomicUsize>);
 
+    struct ReferencedAssetDroppingEnricher(Arc<AtomicUsize>);
+
+    struct InvalidDiagnosticEnricher(Arc<AtomicUsize>);
+
+    impl OutputEnricher for ReferencedAssetDroppingEnricher {
+        fn id(&self) -> &'static str {
+            "recovery.referenced-asset-dropping-enricher"
+        }
+
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<into_markdown_core::EnrichmentPlan, ConversionError> {
+            Ok(into_markdown_core::EnrichmentPlan::Reserve(64 * 1024))
+        }
+
+        fn enrich<'a>(
+            &'a self,
+            mut output: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            output.assets.clear();
+            Box::pin(async move { Ok(output) })
+        }
+    }
+
+    impl OutputEnricher for InvalidDiagnosticEnricher {
+        fn id(&self) -> &'static str {
+            "recovery.invalid-diagnostic-enricher"
+        }
+
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<into_markdown_core::EnrichmentPlan, ConversionError> {
+            Ok(into_markdown_core::EnrichmentPlan::Reserve(64 * 1024))
+        }
+
+        fn enrich<'a>(
+            &'a self,
+            mut output: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            output.diagnostics.push(Diagnostic {
+                code: String::new(),
+                severity: into_markdown_core::DiagnosticSeverity::Warning,
+                message: "invalid diagnostic".into(),
+                locator: None,
+            });
+            Box::pin(async move { Ok(output) })
+        }
+    }
+
     impl OutputEnricher for CountingTitleEnricher {
         fn id(&self) -> &'static str {
             "recovery.title-enricher"
@@ -1318,6 +1393,30 @@ mod tests {
         builder.build().unwrap()
     }
 
+    fn fixture_engine_with_enricher(
+        output: &ConverterOutput,
+        conversions: Arc<AtomicUsize>,
+        renderer_calls: Arc<AtomicUsize>,
+        enricher: Arc<dyn OutputEnricher>,
+    ) -> Engine {
+        let mut builder =
+            EngineBuilder::new().enricher(enricher).renderer(Arc::new(ControlledRenderer {
+                fail: Arc::new(AtomicBool::new(false)),
+                calls: renderer_calls,
+            }));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(FixtureConverter {
+                conversions,
+                document: output.document.clone(),
+                assets: output.assets.clone(),
+                diagnostics: output.diagnostics.clone(),
+            }));
+        builder.build().unwrap()
+    }
+
     fn fixture_provenance() -> Provenance {
         Provenance {
             kind: into_markdown_core::ProvenanceKind::NativeParser,
@@ -1535,6 +1634,87 @@ mod tests {
     fn assert_unsafe_recovery<T>(result: Result<T, ConversionError>) {
         let Err(error) = result else { panic!("unsafe recovery root was accepted") };
         assert!(matches!(error, ConversionError::Recovery { reason: "unsafePath", .. }), "{error}");
+    }
+
+    #[test]
+    fn enricher_cannot_publish_checkpoint_with_missing_referenced_asset() {
+        let asset_id = AssetId("referenced-image".into());
+        let fixture = ConverterOutput::new(
+            Document {
+                blocks: vec![fixture_node(
+                    "image-node",
+                    Block::Image { asset: asset_id.clone(), alt: Some("diagram".into()) },
+                )],
+                ..Document::default()
+            },
+            vec![Asset {
+                id: asset_id,
+                filename: Some("diagram.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![1],
+                external_uri: None,
+            }],
+            Vec::new(),
+        );
+        let directory = private_tempdir();
+        let token = RecoveryToken::parse("11223344556677889900aabbccddeeff").unwrap();
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let enrichments = Arc::new(AtomicUsize::new(0));
+        let renders = Arc::new(AtomicUsize::new(0));
+        let request = || ConversionRequest::new(InputRef::bytes(b"fixture".as_slice(), Some("x")));
+
+        for expected_attempts in 1..=2 {
+            let store = RecoveryStore::open(directory.path()).unwrap();
+            let engine = fixture_engine_with_enricher(
+                &fixture,
+                Arc::clone(&conversions),
+                Arc::clone(&renders),
+                Arc::new(ReferencedAssetDroppingEnricher(Arc::clone(&enrichments))),
+            );
+            let error =
+                block_on(engine.convert_recoverable(request(), &store, &token)).unwrap_err();
+            assert!(
+                matches!(error, ConversionError::Recovery { reason: "corrupt", .. }),
+                "{error}"
+            );
+            assert!(error.to_string().contains("missing asset referenced-image"), "{error}");
+            assert!(store.inspect(&token).unwrap().is_none());
+            assert_eq!(conversions.load(Ordering::SeqCst), expected_attempts);
+            assert_eq!(enrichments.load(Ordering::SeqCst), expected_attempts);
+            assert_eq!(renders.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn enricher_cannot_publish_checkpoint_with_invalid_diagnostic() {
+        let fixture = fixture();
+        let directory = private_tempdir();
+        let token = RecoveryToken::parse("223344556677889900aabbccddeeff11").unwrap();
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let enrichments = Arc::new(AtomicUsize::new(0));
+        let renders = Arc::new(AtomicUsize::new(0));
+        let request = || ConversionRequest::new(InputRef::bytes(b"fixture".as_slice(), Some("x")));
+
+        for expected_attempts in 1..=2 {
+            let store = RecoveryStore::open(directory.path()).unwrap();
+            let engine = fixture_engine_with_enricher(
+                &fixture,
+                Arc::clone(&conversions),
+                Arc::clone(&renders),
+                Arc::new(InvalidDiagnosticEnricher(Arc::clone(&enrichments))),
+            );
+            let error =
+                block_on(engine.convert_recoverable(request(), &store, &token)).unwrap_err();
+            assert!(
+                matches!(error, ConversionError::Recovery { reason: "corrupt", .. }),
+                "{error}"
+            );
+            assert!(error.to_string().contains("diagnostic code"), "{error}");
+            assert!(store.inspect(&token).unwrap().is_none());
+            assert_eq!(conversions.load(Ordering::SeqCst), expected_attempts);
+            assert_eq!(enrichments.load(Ordering::SeqCst), expected_attempts);
+            assert_eq!(renders.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]

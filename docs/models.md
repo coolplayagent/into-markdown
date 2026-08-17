@@ -32,9 +32,14 @@ commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、官方 ONNX TAR、最终 ONN
   `~/.local/share/into-markdown/models`
 - Windows x86_64：`%LOCALAPPDATA%\into-markdown\models`
 
-Windows x86_64 的目录解析与 source-only 查询可用；在实现并审计“不跟随 reparse point
-打开目录并 flush 目录 handle”前，即使未来清单加入完整 runtime files，Windows 安装
-事务也稳定返回 `componentUnavailable`，不会把空操作当作持久化成功。
+程序化调用方必须把 `ModelManager` 指向专用的 `models` 叶目录，而不是通用临时目录或其父目录。该叶目录首次使用时可以尚不存在，由管理器创建；如果已经存在，它必须已经具有管理器要求的受保护精确 ACL。继承普通 ACL 的 `tempdir` 或共享目录会 fail closed。测试代码也应传入例如 `tempdir/models` 这样的未创建子目录。
+
+Windows x86_64 在固定本地 NTFS/ReFS 上支持安装、删除和崩溃恢复。事务持有经 ACL、
+reparse point 与物理 FileId 校验的根目录 handle；私有文件拒绝 hardlink 与 ADS，发布使用
+同卷 `MoveFileExW(MOVEFILE_WRITE_THROUGH)` no-replace rename。目录 handle 可用时额外执行
+`FlushFileBuffers`；Windows 返回 `ERROR_INVALID_HANDLE` 的文件系统由 write-through rename
+提供 namespace durability。网络盘、可移动盘及其他文件系统稳定返回
+`componentUnavailable`。
 
 ## 安装事务与安全边界
 

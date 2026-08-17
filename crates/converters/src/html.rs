@@ -2710,7 +2710,18 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             )?;
             return self.image_alt_fallback(alt);
         };
-        let estimated = payload.len().saturating_add(3) / 4 * 3;
+        let canonical_padding = if payload.len() % 4 == 0 {
+            if payload.ends_with("==") {
+                2
+            } else if payload.ends_with('=') {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let estimated = payload.len().saturating_add(3) / 4 * 3 - canonical_padding;
         if u64::try_from(estimated).unwrap_or(u64::MAX) > self.limits.max_asset_bytes {
             return Err(ConversionError::ResourceLimit {
                 limit: "max_asset_bytes",
@@ -3788,6 +3799,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, ConversionError::Malformed { .. }));
+    }
+
+    #[test]
+    fn canonical_base64_padding_is_not_counted_as_decoded_asset_bytes() {
+        let gif = (1..=8)
+            .find_map(|width| {
+                let mut bytes = Vec::new();
+                GifEncoder::new(&mut bytes)
+                    .encode_frame(Frame::new(RgbaImage::from_pixel(
+                        width,
+                        1,
+                        image::Rgba([1, 2, 3, 255]),
+                    )))
+                    .unwrap();
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                encoded.ends_with('=').then_some((bytes, encoded))
+            })
+            .expect("a small GIF with canonical base64 padding");
+        let source = format!("<main><img src='data:image/gif;base64,{}' alt='safe'></main>", gif.1);
+        let mut options = ConversionOptions::default();
+        options.limits.max_asset_bytes = u64::try_from(gif.0.len()).unwrap();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let output = convert_html(
+            &ResolvedInput {
+                bytes: Arc::from(source.as_bytes()),
+                metadata: SourceMetadata::default(),
+            },
+            &options,
+            &context,
+        )
+        .unwrap();
+        assert_eq!(output.assets[0].bytes, gif.0);
     }
 
     #[test]

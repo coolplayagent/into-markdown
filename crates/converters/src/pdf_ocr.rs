@@ -1,6 +1,6 @@
 //! PDF-side orchestration of the generic OCR merge and final page layout.
 
-use into_markdown_core::{ConversionError, ConverterOutput, ExecutionContext};
+use into_markdown_core::{ConversionError, ConversionOptions, ConverterOutput, ExecutionContext};
 use into_markdown_ocr::{MergeConfig, OcrPageInput};
 use into_markdown_pdf_layout::{LayoutConfig, reconstruct_document};
 
@@ -49,11 +49,23 @@ pub fn merge_pdf_ocr(
 /// becoming a second, order-dependent text stream.
 pub(crate) fn reconstruct_enriched_pdf(
     mut source: ConverterOutput,
+    options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let document = std::mem::take(&mut source.document);
-    let layout = reconstruct_document(document, &LayoutConfig::default(), context)?;
+    let layout_config = LayoutConfig {
+        limits: into_markdown_pdf_layout::LayoutLimits {
+            max_table_columns: usize::try_from(options.limits.max_table_columns)
+                .unwrap_or(usize::MAX)
+                .min(into_markdown_core::MAX_TABLE_COLUMNS),
+            max_table_cells: usize::try_from(options.limits.max_table_cells)
+                .unwrap_or(usize::MAX)
+                .min(into_markdown_core::MAX_DOCUMENT_NODES),
+            ..into_markdown_pdf_layout::LayoutLimits::default()
+        },
+    };
+    let layout = reconstruct_document(document, &layout_config, context)?;
     let (document, reservation) = layout.into_parts();
     source.document = document;
     if let Some(reservation) = reservation {
@@ -139,5 +151,25 @@ mod tests {
         assert!(output.leased_memory_for(&context) > 0);
         drop(output);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn enriched_relayout_preserves_request_table_limits() {
+        for configure in [
+            (|options: &mut ConversionOptions| options.limits.max_table_columns = 0)
+                as fn(&mut ConversionOptions),
+            (|options: &mut ConversionOptions| options.limits.max_table_cells = 0)
+                as fn(&mut ConversionOptions),
+        ] {
+            let mut options = ConversionOptions::default();
+            configure(&mut options);
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let source = ConverterOutput::new(Document::default(), Vec::new(), Vec::new());
+            assert!(matches!(
+                reconstruct_enriched_pdf(source, &options, &context),
+                Err(ConversionError::ResourceLimit { limit: "pdfLayoutConfig", .. })
+            ));
+        }
     }
 }
