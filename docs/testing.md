@@ -11,27 +11,33 @@ The executable format matrix is split by responsibility so a passing row has
 real parser evidence as well as common-enricher evidence:
 
 - `into-markdown` API tests dynamically create DOCX, PPTX, XLSX, ODT, ODS, ODP,
-  EPUB, RTF, IPYNB, HTML data-image, and nested-ZIP inputs. The PPTX fixture
-  interleaves one repeated image at the start, middle, and end; XLSX is the
-  image-only/no-native-text case; the 256-paragraph DOCX covers normal document
-  volume, all three asset modes, and `Off`.
+  EPUB, RTF, IPYNB, HTML data-image, and nested-ZIP inputs. The six-slide PPTX
+  fixture interleaves one repeated image at the start, middle, end, and inside a
+  group while preserving a table and cached chart. The three-sheet XLSX fixture
+  verifies repeated-image locators in workbook order. A blank image provides
+  the no-text case. The 256-paragraph DOCX covers normal document volume, all
+  three asset modes, and `Off`.
 - Common-enricher tests run every eligible `InputFormat`, reject arbitrary
   CSV/JSON/XML/Text/Feed/Markdown assets, preserve a locator for every repeated
   reference, reject a mismatched normalized-input identity, and fail before OCR
   publication on cancellation or reference/byte/OCR-work budget exhaustion.
 - PDF layout tests merge page-coordinate OCR with native text, remove spatial
   duplicates without deleting OCR evidence, and keep a coordinate-mapped OCR
-  node when there is no native text. The existing generated mixed, scanned,
-  rotated, and text-only PDF smoke fixtures cover page/start/middle/end cases.
-- MSG positive/negative coverage is in
+  node when there is no native text. A dynamically generated API fixture also
+  contains two byte-identical image XObjects and checks one recognition with
+  per-reference publication; that test is runtime-gated by `PDFIUM_LIBRARY` and
+  is not evidence unless the pinned runtime target is actually executed.
+- MSG parser positive/negative coverage is in
   `html_cid_and_by_value_attachment_are_offline_assets` and
   `cid_resources_require_an_exact_reference_and_an_audited_image`; remote HTML
   is never fetched, while audited data/CID or converter-resolved local assets
-  enter the same stage.
+  enter the common stage. These parser tests and the format-wide enricher tests
+  are separate evidence; they do not claim a real MSG API end-to-end run.
 - Legacy DOC/PPT/XLS nested dispatch is exercised by
   `all_legacy_families_use_same_context_nested_dispatch_and_conservative_provenance`.
   The real installed-runtime target remains
-  `manual_native_three_families_enter_real_nested_converters`.
+  `manual_native_three_families_enter_real_nested_converters`; an unexecuted
+  manual target is not counted as runtime evidence.
 - RecoveryStore tests (Unix filesystem semantics) prove enriched converter
   output is atomically checkpointed before rendering and is not enriched again
   after a process restart. Windows gates compile that path; Unix CI executes it.

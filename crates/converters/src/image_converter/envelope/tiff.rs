@@ -157,6 +157,34 @@ pub(super) fn validate(
     Ok(Summary { frames, animated: frames > 1 })
 }
 
+/// Validate the TIFF directory chain and count frames without constructing the
+/// interval graph used by complete validation. This is safe before an engine
+/// reserves the enrichment plan.
+pub(super) fn preflight_validate(
+    bytes: &[u8],
+    max_pages: u32,
+    context: &ExecutionContext,
+) -> Result<Summary, ConversionError> {
+    let (little, layout, mut ifd) = header(bytes)?;
+    scan_all(bytes, context)?;
+    if ifd == 0 {
+        return Err(malformed("TIFF has no image file directory"));
+    }
+    validate_ifd_chain(bytes, layout, little, ifd, max_pages, context)?;
+    let mut frames = 0_u32;
+    while ifd != 0 {
+        context.checkpoint()?;
+        if frames >= max_pages {
+            return Err(limit("max_pages", "TIFF image directory count exceeds max_pages"));
+        }
+        ifd = next_ifd(bytes, layout, little, ifd)?;
+        frames = frames
+            .checked_add(1)
+            .ok_or_else(|| limit("max_pages", "TIFF image directory count overflow"))?;
+    }
+    Ok(Summary { frames, animated: frames > 1 })
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Layout {
     Classic,

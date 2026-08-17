@@ -1275,6 +1275,8 @@ mod tests {
 
     struct PlanGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
 
+    struct LimitPlanGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
+
     struct SkipGuardEnricher(Arc<std::sync::atomic::AtomicUsize>);
 
     impl OutputEnricher for SkipGuardEnricher {
@@ -1332,6 +1334,38 @@ mod tests {
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async move { Ok(output) })
+        }
+    }
+
+    impl OutputEnricher for LimitPlanGuardEnricher {
+        fn id(&self) -> &'static str {
+            "test.limit-plan-guard-enricher"
+        }
+        fn planned_enrichment_bytes(
+            &self,
+            _: &ConverterOutput,
+            _: &str,
+            _: InputFormat,
+            _: &ConversionOptions,
+            _: &Services,
+            _: &ExecutionContext,
+        ) -> Result<EnrichmentPlan, ConversionError> {
+            Err(ConversionError::ResourceLimit {
+                limit: "max_archive_entries",
+                detail: "embedded visual references exceed the request limit".into(),
+            })
+        }
+        fn enrich<'a>(
+            &'a self,
+            _: ConverterOutput,
+            _: &'a str,
+            _: InputFormat,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { unreachable!("failed preflight must never execute the enricher") })
         }
     }
 
@@ -1488,6 +1522,33 @@ mod tests {
         ))
         .unwrap_err();
         assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn output_enricher_limit_preflight_fails_before_entry_without_leases() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let enricher: Arc<dyn OutputEnricher> =
+            Arc::new(LimitPlanGuardEnricher(Arc::clone(&calls)));
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        let error = block_on(invoke_enrichers(
+            &[enricher],
+            ConverterOutput::default(),
+            "test.converter",
+            InputFormat::Text,
+            &ConversionOptions::default(),
+            &Services::default(),
+            &context,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ResourceLimit { limit: "max_archive_entries", .. }
+        ));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(context.reserved_memory_bytes(), 0);
     }

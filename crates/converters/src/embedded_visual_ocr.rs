@@ -171,6 +171,7 @@ fn tiff_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// Allocation-free with respect to image pixels: only envelope dimensions and
 /// provider-declared bounds are inspected before the engine reserves this peak.
+#[allow(clippy::too_many_lines)]
 fn plan_enrichment(
     output: &ConverterOutput,
     input_format: InputFormat,
@@ -184,10 +185,10 @@ fn plan_enrichment(
     {
         return Ok(EnrichmentPlan::Skip);
     }
+    let mut references = 0_u32;
     let mut total = 0_u64;
-    let mut candidates = 0_u32;
     for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        let Some(asset) = output.assets.iter().find(|asset| asset.id == *asset_id) else {
+        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
             return Err(ConversionError::Internal {
                 detail: format!("image node references missing asset {}", asset_id.0),
             });
@@ -195,12 +196,83 @@ fn plan_enrichment(
         if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
             return Ok(());
         }
-        candidates = candidates.checked_add(1).ok_or_else(|| {
-            resource("max_archive_entries", "embedded OCR candidate count overflow")
+        references = references.checked_add(1).ok_or_else(|| {
+            resource("max_archive_entries", "embedded visual reference count is not representable")
         })?;
-        // Treat every reference as unique. This is deliberately conservative:
-        // duplicate identities save inference work but still clone IR/evidence.
+        if references > options.limits.max_archive_entries {
+            return Err(resource(
+                "max_archive_entries",
+                "embedded visual references exceed the request limit",
+            ));
+        }
+        // Each eligible reference can clone OCR IR, evidence, and diagnostics,
+        // even when its source bytes share one provider request.
         checked_add(&mut total, 128 * 1024, "embedded OCR reference plan overflow")?;
+        Ok(())
+    })?;
+    if references == 0 {
+        return Ok(EnrichmentPlan::Skip);
+    }
+
+    let mut candidates = 0_u32;
+    let mut candidate_bytes = 0_u64;
+    for (index, asset) in output.assets.iter().enumerate() {
+        context.checkpoint()?;
+        if asset.bytes.is_empty()
+            || asset.external_uri.is_some()
+            || !supported_raster(asset)
+            || !has_visual_reference(&output.document.blocks, &asset.id, context)?
+        {
+            continue;
+        }
+        candidate_bytes = candidate_bytes
+            .checked_add(u64::try_from(asset.bytes.len()).map_err(|_| {
+                resource("max_total_asset_bytes", "embedded visual byte count is not representable")
+            })?)
+            .ok_or_else(|| resource("max_total_asset_bytes", "embedded visual bytes overflow"))?;
+        if candidate_bytes > options.limits.max_total_asset_bytes {
+            return Err(resource(
+                "max_total_asset_bytes",
+                "embedded visual bytes exceed the request limit",
+            ));
+        }
+        validated_candidate_dimensions(asset, options, context)?;
+        if first_referenced_asset_with_bytes(output, index, context)? {
+            candidates = candidates
+                .checked_add(1)
+                .ok_or_else(|| resource("max_pages", "embedded OCR candidate count overflow"))?;
+            if candidates > options.limits.max_pages {
+                return Err(resource(
+                    "max_pages",
+                    "embedded OCR candidate requests exceed the request limit",
+                ));
+            }
+        }
+    }
+
+    // Only consult provider plans after every knowable input count and envelope
+    // bound has passed, so a provider cannot observe a request that preflight
+    // must reject.
+    // Account hash/map work once per eligible AssetId, but normalization and
+    // provider output once per unique byte identity.
+    for (index, asset) in output.assets.iter().enumerate() {
+        context.checkpoint()?;
+        if asset.bytes.is_empty()
+            || asset.external_uri.is_some()
+            || !supported_raster(asset)
+            || !has_visual_reference(&output.document.blocks, &asset.id, context)?
+        {
+            continue;
+        }
+        checked_add(
+            &mut total,
+            u64::try_from(asset.bytes.len())
+                .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
+            "hash/cache plan overflow",
+        )?;
+        if !first_referenced_asset_with_bytes(output, index, context)? {
+            continue;
+        }
         let dimensions = image_dimensions(&asset.bytes);
         let normalized_peak = if let Some((width, height)) = dimensions {
             u64::from(width)
@@ -212,12 +284,6 @@ fn plan_enrichment(
             64 * 1024
         };
         checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
-        checked_add(
-            &mut total,
-            u64::try_from(asset.bytes.len())
-                .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
-            "hash/cache plan overflow",
-        )?;
         let provider_bound = match (services.ocr.as_deref(), dimensions) {
             (_, None) => 0,
             (Some(engine), Some((width, height))) => {
@@ -239,24 +305,279 @@ fn plan_enrichment(
                 });
             }
         };
+        let reference_copies = visual_reference_count_for_bytes(output, &asset.bytes, context)?;
+        let asset_copies = referenced_asset_count_for_bytes(output, &asset.bytes, context)?;
+        let retained_copies = reference_copies
+            .checked_add(asset_copies)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| resource("max_memory_bytes", "OCR retained-copy count overflow"))?;
         checked_add(
             &mut total,
             provider_bound
-                .checked_mul(2)
+                .checked_mul(retained_copies)
                 .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?,
             "OCR output plan overflow",
         )?;
-        Ok(())
-    })?;
-    if candidates == 0 {
-        return Ok(EnrichmentPlan::Skip);
     }
+    let (occupied_id_bytes, collision_scratch) =
+        planned_node_id_working_set(&output.document.blocks, context)?;
+    checked_add(&mut total, occupied_id_bytes, "occupied OCR node ID plan overflow")?;
+    checked_add(&mut total, collision_scratch, "OCR node ID collision scratch overflow")?;
     checked_add(
         &mut total,
         estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?,
         "embedded OCR validation plan overflow",
     )?;
     Ok(EnrichmentPlan::Reserve(total))
+}
+
+fn visual_reference_count_for_bytes(
+    output: &ConverterOutput,
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<u64, ConversionError> {
+    let mut count = 0_u64;
+    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
+        let Some(asset) = find_asset(&output.assets, asset_id, context)? else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", asset_id.0),
+            });
+        };
+        if !asset.bytes.is_empty()
+            && asset.external_uri.is_none()
+            && supported_raster(asset)
+            && asset.bytes == bytes
+        {
+            count = count.checked_add(1).ok_or_else(|| {
+                resource("max_archive_entries", "embedded visual reference count overflow")
+            })?;
+        }
+        Ok(())
+    })?;
+    Ok(count)
+}
+
+fn referenced_asset_count_for_bytes(
+    output: &ConverterOutput,
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<u64, ConversionError> {
+    let mut count = 0_u64;
+    for asset in &output.assets {
+        context.checkpoint()?;
+        if asset.bytes == bytes
+            && !asset.bytes.is_empty()
+            && asset.external_uri.is_none()
+            && supported_raster(asset)
+            && has_visual_reference(&output.document.blocks, &asset.id, context)?
+        {
+            count = count.checked_add(1).ok_or_else(|| {
+                resource("max_archive_entries", "embedded visual asset count overflow")
+            })?;
+        }
+    }
+    Ok(count)
+}
+
+fn planned_node_id_working_set(
+    nodes: &[BlockNode],
+    context: &ExecutionContext,
+) -> Result<(u64, u64), ConversionError> {
+    let (total, maximum) = planned_node_id_inventory(nodes, context)?;
+    Ok((
+        total,
+        maximum
+            .checked_add(64)
+            .ok_or_else(|| resource("max_memory_bytes", "OCR node ID scratch plan overflow"))?,
+    ))
+}
+
+fn planned_node_id_inventory(
+    nodes: &[BlockNode],
+    context: &ExecutionContext,
+) -> Result<(u64, u64), ConversionError> {
+    let mut total = 0_u64;
+    let mut maximum = 0_u64;
+    for node in nodes {
+        context.checkpoint()?;
+        let length = u64::try_from(node.id.0.len())
+            .map_err(|_| resource("max_memory_bytes", "node ID length is not representable"))?;
+        checked_add(
+            &mut total,
+            length.checked_add(128).ok_or_else(|| {
+                resource("max_memory_bytes", "occupied node ID entry plan overflow")
+            })?,
+            "occupied node ID set plan overflow",
+        )?;
+        maximum = maximum.max(length);
+        let nested = match &node.block {
+            Block::List { items, .. } => {
+                let mut nested_total = 0_u64;
+                let mut nested_max = 0_u64;
+                for item in items {
+                    let (item_total, item_max) = planned_node_id_inventory(&item.blocks, context)?;
+                    checked_add(
+                        &mut nested_total,
+                        item_total,
+                        "occupied node ID set plan overflow",
+                    )?;
+                    nested_max = nested_max.max(item_max);
+                }
+                (nested_total, nested_max)
+            }
+            Block::Table { rows, .. } => {
+                let mut nested_total = 0_u64;
+                let mut nested_max = 0_u64;
+                for row in rows {
+                    for cell in &row.cells {
+                        let (cell_total, cell_max) =
+                            planned_node_id_inventory(&cell.blocks, context)?;
+                        checked_add(
+                            &mut nested_total,
+                            cell_total,
+                            "occupied node ID set plan overflow",
+                        )?;
+                        nested_max = nested_max.max(cell_max);
+                    }
+                }
+                (nested_total, nested_max)
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => planned_node_id_inventory(blocks, context)?,
+            _ => (0, 0),
+        };
+        checked_add(&mut total, nested.0, "occupied node ID set plan overflow")?;
+        maximum = maximum.max(nested.1);
+    }
+    Ok((total, maximum))
+}
+
+fn has_visual_reference(
+    nodes: &[BlockNode],
+    asset_id: &AssetId,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    let mut found = false;
+    for_each_visual_reference(nodes, context, &mut |candidate| {
+        if candidate == asset_id {
+            found = true;
+        }
+        Ok(())
+    })?;
+    Ok(found)
+}
+
+/// Returns true for the first referenced eligible `AssetId` carrying these exact
+/// bytes. Exact byte equality is the OCR input identity; no set allocation is
+/// needed before the engine reserves the enrichment plan.
+fn first_referenced_asset_with_bytes(
+    output: &ConverterOutput,
+    index: usize,
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    let asset = &output.assets[index];
+    for prior in &output.assets[..index] {
+        context.checkpoint()?;
+        if prior.bytes == asset.bytes
+            && !prior.bytes.is_empty()
+            && prior.external_uri.is_none()
+            && supported_raster(prior)
+            && has_visual_reference(&output.document.blocks, &prior.id, context)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn validated_candidate_dimensions(
+    asset: &into_markdown_core::Asset,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<(u32, u32), ConversionError> {
+    if asset.bytes.starts_with(b"GIF87a") || asset.bytes.starts_with(b"GIF89a") {
+        if !asset.media_type.eq_ignore_ascii_case("image/gif") {
+            return Err(ConversionError::Malformed {
+                part: asset.filename.clone(),
+                detail: "embedded raster media type disagrees with its GIF envelope".into(),
+            });
+        }
+        let ((width, height), frames) = crate::epub::image::preflight_info(
+            &asset.bytes,
+            "image/gif",
+            asset.filename.as_deref().unwrap_or("embedded GIF"),
+            context,
+        )?;
+        if frames != 1 {
+            return Err(ConversionError::Unsupported {
+                detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
+            });
+        }
+        let decoded_bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(20))
+            .ok_or_else(|| resource("max_decompressed_bytes", "GIF pixel size overflow"))?;
+        if width == 0 || height == 0 || decoded_bytes > options.limits.max_decompressed_bytes {
+            return Err(resource("max_decompressed_bytes", "GIF dimensions exceed request limits"));
+        }
+        return Ok((width, height));
+    }
+    let raster =
+        format::detect(&asset.bytes, context)?.ok_or_else(|| ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "declared raster asset has an unrecognized envelope".into(),
+        })?;
+    let declared_matches = asset.media_type.eq_ignore_ascii_case(raster.media_type())
+        || raster == format::RasterFormat::Jpeg
+            && asset.media_type.eq_ignore_ascii_case("image/jpg")
+        || raster == format::RasterFormat::Tiff
+            && asset.media_type.eq_ignore_ascii_case("image/x-tiff");
+    if !declared_matches {
+        return Err(ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "embedded raster media type disagrees with its byte envelope".into(),
+        });
+    }
+    let summary = envelope::preflight_validate(raster, &asset.bytes, &options.limits, context)?;
+    if summary.frames != 1 || summary.animated {
+        return Err(ConversionError::Unsupported {
+            detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
+        });
+    }
+    let (width, height) =
+        image_dimensions(&asset.bytes).ok_or_else(|| ConversionError::Malformed {
+            part: asset.filename.clone(),
+            detail: "embedded raster dimensions are unavailable".into(),
+        })?;
+    let decoded_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| resource("max_decompressed_bytes", "embedded visual pixel size overflow"))?;
+    if decoded_bytes > options.limits.max_decompressed_bytes {
+        return Err(resource(
+            "max_decompressed_bytes",
+            "embedded visual pixels exceed the request limit",
+        ));
+    }
+    Ok((width, height))
+}
+
+fn find_asset<'a>(
+    assets: &'a [into_markdown_core::Asset],
+    asset_id: &AssetId,
+    context: &ExecutionContext,
+) -> Result<Option<&'a into_markdown_core::Asset>, ConversionError> {
+    for (index, asset) in assets.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        if asset.id == *asset_id {
+            return Ok(Some(asset));
+        }
+    }
+    Ok(None)
 }
 
 fn for_each_visual_reference(
@@ -330,21 +651,37 @@ async fn enrich(
     if references.is_empty() {
         return Ok(output);
     }
-    let reference_count = u32::try_from(references.len()).map_err(|_| {
-        resource("max_archive_entries", "embedded visual reference count is not representable")
-    })?;
-    if reference_count > options.limits.max_archive_entries {
-        return Err(resource(
-            "max_archive_entries",
-            "embedded visual references exceed the request limit",
-        ));
-    }
 
-    let assets = output
-        .assets
-        .iter()
-        .map(|asset| (asset.id.clone(), asset.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let mut assets = BTreeMap::new();
+    for (index, asset) in output.assets.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        assets.insert(asset.id.clone(), asset.clone());
+    }
+    let mut eligible_reference_count = 0_u32;
+    for (index, reference) in references.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        let Some(asset) = assets.get(&reference.asset) else {
+            return Err(ConversionError::Internal {
+                detail: format!("image node references missing asset {}", reference.asset.0),
+            });
+        };
+        if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
+            continue;
+        }
+        eligible_reference_count = eligible_reference_count.checked_add(1).ok_or_else(|| {
+            resource("max_archive_entries", "embedded visual reference count is not representable")
+        })?;
+        if eligible_reference_count > options.limits.max_archive_entries {
+            return Err(resource(
+                "max_archive_entries",
+                "embedded visual references exceed the request limit",
+            ));
+        }
+    }
     let mut hashes_by_asset = BTreeMap::new();
     let mut unique = BTreeMap::<[u8; 32], AssetId>::new();
     let mut referenced_assets = BTreeSet::new();
@@ -466,22 +803,31 @@ async fn enrich(
     }
 
     let mut contributions_by_asset = BTreeMap::new();
-    for (asset, digest) in hashes_by_asset {
+    for (index, (asset, digest)) in hashes_by_asset.into_iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
         if let Some(contribution) = cache.get(&digest) {
             contributions_by_asset.insert(asset, contribution.clone());
         }
     }
     let mut occupied_ids = BTreeSet::new();
-    collect_node_ids(&output.document.blocks, &mut occupied_ids);
+    collect_node_ids(&output.document.blocks, &mut occupied_ids, context)?;
     output.document.blocks = rebuild_nodes(
         std::mem::take(&mut output.document.blocks),
         &contributions_by_asset,
         &mut occupied_ids,
         context,
     )?;
-    for reference in &references {
+    for (reference_index, reference) in references.iter().enumerate() {
+        if reference_index % 256 == 0 {
+            context.checkpoint()?;
+        }
         if let Some(contribution) = contributions_by_asset.get(&reference.asset) {
-            for diagnostic in &contribution.diagnostics {
+            for (diagnostic_index, diagnostic) in contribution.diagnostics.iter().enumerate() {
+                if diagnostic_index % 256 == 0 {
+                    context.checkpoint()?;
+                }
                 let mut diagnostic = diagnostic.clone();
                 diagnostic.locator = Some(remapped_locator(&reference.provenance.locator));
                 output.diagnostics.push(diagnostic);
@@ -752,29 +1098,55 @@ fn rebuild_nodes(
         rebuilt.push(node);
         if let Some(contribution) = contribution {
             for (ocr_index, template) in contribution.nodes.into_iter().enumerate() {
-                let mut suffix = ocr_index + 1;
-                let fresh_id = loop {
-                    let candidate = NodeId(format!("{}::ocr::{suffix}", source_id.0));
-                    if occupied_ids.insert(candidate.clone()) {
-                        break candidate;
-                    }
-                    suffix = suffix.checked_add(1).ok_or_else(|| {
-                        resource("max_archive_entries", "OCR node ID suffix overflow")
-                    })?;
-                };
-                rebuilt.push(remap_ocr_node(template, fresh_id, &source_provenance));
+                if ocr_index % 256 == 0 {
+                    context.checkpoint()?;
+                }
+                let fresh_id = fresh_ocr_node_id(&source_id, ocr_index + 1, occupied_ids, context)?;
+                rebuilt.push(remap_ocr_node(template, fresh_id, &source_provenance, context)?);
             }
         }
     }
     Ok(rebuilt)
 }
 
-fn remap_ocr_node(mut node: BlockNode, fresh_id: NodeId, source: &Provenance) -> BlockNode {
+fn fresh_ocr_node_id(
+    source_id: &NodeId,
+    mut suffix: usize,
+    occupied_ids: &mut BTreeSet<NodeId>,
+    context: &ExecutionContext,
+) -> Result<NodeId, ConversionError> {
+    let mut collisions = 0_u64;
+    loop {
+        if collisions.is_multiple_of(256) {
+            context.checkpoint()?;
+        }
+        let candidate = NodeId(format!("{}::ocr::{suffix}", source_id.0));
+        if occupied_ids.insert(candidate.clone()) {
+            return Ok(candidate);
+        }
+        collisions = collisions.checked_add(1).ok_or_else(|| {
+            resource("max_archive_entries", "OCR node ID collision count overflow")
+        })?;
+        suffix = suffix
+            .checked_add(1)
+            .ok_or_else(|| resource("max_archive_entries", "OCR node ID suffix overflow"))?;
+    }
+}
+
+fn remap_ocr_node(
+    mut node: BlockNode,
+    fresh_id: NodeId,
+    source: &Provenance,
+    context: &ExecutionContext,
+) -> Result<BlockNode, ConversionError> {
     node.id = fresh_id;
     let ocr_locator = node.provenance.locator.clone();
     node.provenance.locator = remapped_ocr_locator(&source.locator, &ocr_locator);
     if let Block::Paragraph(inlines) = &mut node.block {
-        for inline in inlines {
+        for (inline_index, inline) in inlines.iter_mut().enumerate() {
+            if inline_index % 256 == 0 {
+                context.checkpoint()?;
+            }
             if let Inline::OcrText { provenance, evidence, .. } = inline {
                 let inline_locator = provenance.locator.clone();
                 provenance.locator = remapped_ocr_locator(&source.locator, &inline_locator);
@@ -782,8 +1154,14 @@ fn remap_ocr_node(mut node: BlockNode, fresh_id: NodeId, source: &Provenance) ->
                 if let Some((source_bounds, image_width, image_height)) =
                     coordinate_frame(&source.locator, &inline_locator)
                 {
-                    for region in &mut evidence.regions {
-                        for point in &mut region.polygon {
+                    for (region_index, region) in evidence.regions.iter_mut().enumerate() {
+                        if region_index % 256 == 0 {
+                            context.checkpoint()?;
+                        }
+                        for (point_index, point) in region.polygon.iter_mut().enumerate() {
+                            if point_index % 256 == 0 {
+                                context.checkpoint()?;
+                            }
                             point.x = source_bounds.x + point.x * source_bounds.width / image_width;
                             point.y =
                                 source_bounds.y + point.y * source_bounds.height / image_height;
@@ -793,32 +1171,38 @@ fn remap_ocr_node(mut node: BlockNode, fresh_id: NodeId, source: &Provenance) ->
             }
         }
     }
-    node
+    Ok(node)
 }
 
-fn collect_node_ids(nodes: &[BlockNode], output: &mut BTreeSet<NodeId>) {
+fn collect_node_ids(
+    nodes: &[BlockNode],
+    output: &mut BTreeSet<NodeId>,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
     for node in nodes {
+        context.checkpoint()?;
         output.insert(node.id.clone());
         match &node.block {
             Block::List { items, .. } => {
                 for item in items {
-                    collect_node_ids(&item.blocks, output);
+                    collect_node_ids(&item.blocks, output, context)?;
                 }
             }
             Block::Table { rows, .. } => {
                 for row in rows {
                     for cell in &row.cells {
-                        collect_node_ids(&cell.blocks, output);
+                        collect_node_ids(&cell.blocks, output, context)?;
                     }
                 }
             }
             Block::Footnote { blocks, .. }
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
-            | Block::Sheet { blocks, .. } => collect_node_ids(blocks, output),
+            | Block::Sheet { blocks, .. } => collect_node_ids(blocks, output, context)?,
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn coordinate_frame(
@@ -901,10 +1285,61 @@ mod tests {
 
     struct SourceBoundOcr {
         calls: AtomicUsize,
+        plans: AtomicUsize,
+        planned_bytes: u64,
         corrupt_identity: bool,
     }
 
     struct LegacyBoundOcr(AtomicUsize);
+
+    struct EntryGuardOcr {
+        plans: AtomicUsize,
+        calls: AtomicUsize,
+    }
+
+    impl OcrEngine for EntryGuardOcr {
+        fn id(&self) -> &'static str {
+            "test.ocr.entry-guard"
+        }
+
+        fn recognize<'a>(
+            &'a self,
+            _: OcrRequest<'a>,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { unreachable!("rejected preflight must not recognize") })
+        }
+
+        fn planned_bound_output(
+            &self,
+            _: OcrRequest<'_>,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<OcrOutputPlan, ConversionError> {
+            unreachable!("embedded OCR uses the normalized-PNG plan")
+        }
+
+        fn planned_normalized_png_output(
+            &self,
+            _: u32,
+            _: u32,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<OcrOutputPlan, ConversionError> {
+            self.plans.fetch_add(1, Ordering::SeqCst);
+            OcrOutputPlan::try_new(16 * 1024, 1, 128)
+        }
+
+        fn recognize_bound<'a>(
+            &'a self,
+            _: OcrRequest<'a>,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { unreachable!("rejected preflight must not recognize") })
+        }
+    }
 
     impl OcrEngine for LegacyBoundOcr {
         fn id(&self) -> &'static str {
@@ -971,7 +1406,8 @@ mod tests {
             _: &ConversionOptions,
             _: &ExecutionContext,
         ) -> Result<OcrOutputPlan, ConversionError> {
-            OcrOutputPlan::try_new(16 * 1024, 1, 128)
+            self.plans.fetch_add(1, Ordering::SeqCst);
+            OcrOutputPlan::try_new(self.planned_bytes, 1, 128)
         }
 
         fn recognize_bound<'a>(
@@ -1024,6 +1460,22 @@ mod tests {
         let mut cursor = Cursor::new(Vec::new());
         DynamicImage::ImageRgba8(pixels).write_to(&mut cursor, ImageFormat::Png).unwrap();
         cursor.into_inner()
+    }
+
+    fn source_bound_ocr(corrupt_identity: bool) -> Arc<SourceBoundOcr> {
+        source_bound_ocr_with_plan(corrupt_identity, 16 * 1024)
+    }
+
+    fn source_bound_ocr_with_plan(
+        corrupt_identity: bool,
+        planned_bytes: u64,
+    ) -> Arc<SourceBoundOcr> {
+        Arc::new(SourceBoundOcr {
+            calls: AtomicUsize::new(0),
+            plans: AtomicUsize::new(0),
+            planned_bytes,
+            corrupt_identity,
+        })
     }
 
     fn provenance(part: &str) -> Provenance {
@@ -1103,7 +1555,7 @@ mod tests {
 
     #[test]
     fn duplicate_bytes_are_recognized_once_and_remapped_per_reference() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1166,7 +1618,7 @@ mod tests {
 
     #[test]
     fn duplicate_references_increase_the_preflight_plan() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1191,8 +1643,214 @@ mod tests {
     }
 
     #[test]
+    fn repeated_references_share_page_limit_and_provider_request() {
+        let ocr = source_bound_ocr_with_plan(false, 512 * 1024);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut source = output();
+        let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        *blocks = (0..64)
+            .map(|index| {
+                image_node(
+                    &format!("repeated-{index}"),
+                    "asset-a",
+                    &format!("word/media/repeated-{index}.png"),
+                )
+            })
+            .collect();
+        let asset_bytes = u64::try_from(source.assets[0].bytes.len()).unwrap();
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        options.limits.max_archive_entries = 64;
+        options.limits.max_pages = 1;
+        options.limits.max_total_asset_bytes = asset_bytes;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        let EnrichmentPlan::Reserve(plan) =
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context).unwrap()
+        else {
+            panic!("active plan expected")
+        };
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 1);
+        assert!(plan >= 512 * 1024 * 66);
+        let low_context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: plan - 1,
+                ..options.limits.clone()
+            },
+        );
+        let error = low_context.reserve_memory(plan).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(low_context.reserved_memory_bytes(), 0);
+        let enriched =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
+        let Block::Page { blocks, .. } = &enriched.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        assert_eq!(blocks.len(), 128);
+        drop(enriched);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn reference_limit_fails_during_preflight_without_provider_or_leases() {
+        let ocr =
+            Arc::new(EntryGuardOcr { plans: AtomicUsize::new(0), calls: AtomicUsize::new(0) });
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        options.limits.max_archive_entries = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        let error = plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConversionError::ResourceLimit { limit: "max_archive_entries", .. }
+        ));
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn all_known_input_limits_fail_before_provider_planning_or_leases() {
+        for (expected, configure) in [
+            (
+                "max_total_asset_bytes",
+                (|options: &mut ConversionOptions| options.limits.max_total_asset_bytes = 1)
+                    as fn(&mut ConversionOptions),
+            ),
+            (
+                "max_pages",
+                (|options: &mut ConversionOptions| options.limits.max_pages = 0)
+                    as fn(&mut ConversionOptions),
+            ),
+            (
+                "max_decompressed_bytes",
+                (|options: &mut ConversionOptions| options.limits.max_decompressed_bytes = 1)
+                    as fn(&mut ConversionOptions),
+            ),
+        ] {
+            let ocr =
+                Arc::new(EntryGuardOcr { plans: AtomicUsize::new(0), calls: AtomicUsize::new(0) });
+            let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+            let mut options = ConversionOptions::default();
+            options.ocr.policy = OcrPolicy::Always;
+            configure(&mut options);
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+            let error =
+                plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context)
+                    .unwrap_err();
+
+            assert!(
+                matches!(error, ConversionError::ResourceLimit { limit, .. } if limit == expected),
+                "expected {expected}, got {error}"
+            );
+            assert_eq!(ocr.plans.load(Ordering::SeqCst), 0, "{expected}");
+            assert_eq!(ocr.calls.load(Ordering::SeqCst), 0, "{expected}");
+            assert_eq!(context.reserved_memory_bytes(), 0, "{expected}");
+        }
+    }
+
+    #[test]
+    fn node_id_preprocess_propagates_cancel_and_timeout_without_partial_state() {
+        let nested = vec![BlockNode {
+            id: NodeId("large-page".into()),
+            block: Block::Page {
+                number: 1,
+                blocks: (0..1_024)
+                    .map(|index| BlockNode {
+                        id: NodeId(format!("nested-{index}")),
+                        block: Block::Rule,
+                        provenance: provenance("large/document.xml"),
+                    })
+                    .collect(),
+            },
+            provenance: provenance("large/document.xml"),
+        }];
+        let original = nested.clone();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            ConversionOptions::default().limits,
+        );
+        let mut cancelled_ids = BTreeSet::new();
+        assert!(matches!(
+            collect_node_ids(&nested, &mut cancelled_ids, &cancelled),
+            Err(ConversionError::Cancelled)
+        ));
+        assert!(cancelled_ids.is_empty());
+        assert_eq!(nested, original);
+        assert_eq!(cancelled.reserved_memory_bytes(), 0);
+
+        let timed_out = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+            ConversionOptions::default().limits,
+        );
+        let mut timed_out_ids = BTreeSet::new();
+        assert!(matches!(
+            collect_node_ids(&nested, &mut timed_out_ids, &timed_out),
+            Err(ConversionError::Timeout)
+        ));
+        assert!(timed_out_ids.is_empty());
+        assert_eq!(nested, original);
+        assert_eq!(timed_out.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn node_id_collision_scan_propagates_cancel_and_timeout_transactionally() {
+        let source = NodeId("crowded".into());
+        let occupied = (1..=1_024)
+            .map(|suffix| NodeId(format!("crowded::ocr::{suffix}")))
+            .collect::<BTreeSet<_>>();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            ConversionOptions::default().limits,
+        );
+        let mut cancelled_ids = occupied.clone();
+        assert!(matches!(
+            fresh_ocr_node_id(&source, 1, &mut cancelled_ids, &cancelled),
+            Err(ConversionError::Cancelled)
+        ));
+        assert_eq!(cancelled_ids, occupied);
+        assert_eq!(cancelled.reserved_memory_bytes(), 0);
+
+        let timed_out = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+            ConversionOptions::default().limits,
+        );
+        let mut timed_out_ids = occupied.clone();
+        assert!(matches!(
+            fresh_ocr_node_id(&source, 1, &mut timed_out_ids, &timed_out),
+            Err(ConversionError::Timeout)
+        ));
+        assert_eq!(timed_out_ids, occupied);
+        assert_eq!(timed_out.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
     fn generated_ocr_ids_are_stable_and_never_collide() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1222,7 +1880,7 @@ mod tests {
 
     #[test]
     fn off_and_non_container_formats_are_exact_no_ops() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         for (format, policy) in
             [(InputFormat::Docx, OcrPolicy::Off), (InputFormat::Json, OcrPolicy::Always)]
@@ -1263,7 +1921,7 @@ mod tests {
             InputFormat::Zip,
             InputFormat::OutlookMsg,
         ];
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1282,7 +1940,7 @@ mod tests {
 
     #[test]
     fn arbitrary_data_formats_and_non_local_assets_are_never_guessed() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1308,6 +1966,23 @@ mod tests {
         remote.assets[0].bytes.clear();
         remote.assets[1].media_type = "image/svg+xml".into();
         let expected = remote.document.clone();
+        let mut no_candidate_options = options.clone();
+        no_candidate_options.limits.max_archive_entries = 0;
+        no_candidate_options.limits.max_pages = 0;
+        no_candidate_options.limits.max_total_asset_bytes = 0;
+        let no_candidate_context =
+            ExecutionContext::new(ExecutionOptions::default(), no_candidate_options.limits.clone());
+        assert_eq!(
+            plan_enrichment(
+                &remote,
+                InputFormat::Html,
+                &no_candidate_options,
+                &services,
+                &no_candidate_context,
+            )
+            .unwrap(),
+            EnrichmentPlan::Skip
+        );
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
         let after =
             block_on(enrich(remote, InputFormat::Html, &options, &services, &context)).unwrap();
@@ -1329,7 +2004,7 @@ mod tests {
 
     #[test]
     fn ocr_result_is_rejected_when_it_is_bound_to_different_image_bytes() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: true });
+        let ocr = source_bound_ocr(true);
         let services = Services { ocr: Some(ocr), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
@@ -1342,7 +2017,7 @@ mod tests {
 
     #[test]
     fn resource_limits_and_cancellation_stop_before_ocr_publication() {
-        let ocr = Arc::new(SourceBoundOcr { calls: AtomicUsize::new(0), corrupt_identity: false });
+        let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;

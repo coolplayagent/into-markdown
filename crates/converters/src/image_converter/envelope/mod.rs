@@ -40,6 +40,32 @@ pub(crate) fn validate(
     Ok(summary)
 }
 
+/// Allocation-free envelope and frame-count preflight used before an
+/// enrichment plan has been reserved. Complete BMP interval validation is
+/// deliberately deferred to [`validate`], under the caller's reserved credit.
+pub(crate) fn preflight_validate(
+    format: RasterFormat,
+    bytes: &[u8],
+    limits: &ResourceLimits,
+    context: &ExecutionContext,
+) -> Result<Summary, ConversionError> {
+    context.checkpoint()?;
+    let summary = match format {
+        RasterFormat::Png => png::validate(bytes, limits, context)?,
+        RasterFormat::Jpeg => jpeg::validate(bytes, limits, context)?,
+        RasterFormat::WebP => webp::validate(bytes, limits, context)?,
+        RasterFormat::Tiff => tiff::preflight_validate(bytes, limits.max_pages, context)?,
+        RasterFormat::Bmp => Summary { frames: 1, animated: false },
+    };
+    if summary.frames == 0 || summary.frames > limits.max_pages {
+        return Err(limit(
+            "max_pages",
+            format!("{} image frame(s) > {}", summary.frames, limits.max_pages),
+        ));
+    }
+    Ok(summary)
+}
+
 pub(super) fn malformed(detail: impl Into<String>) -> ConversionError {
     ConversionError::Malformed { part: Some("image".into()), detail: detail.into() }
 }

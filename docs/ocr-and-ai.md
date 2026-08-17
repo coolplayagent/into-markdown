@@ -5,7 +5,10 @@
 The default API engine runs embedded raster OCR after a format converter has
 produced validated IR and before the renderer or a recovery `converted`
 checkpoint is published. It applies to PDF, Office and OpenDocument containers,
-EPUB, MSG, RTF, local/data/CID HTML images, notebooks, and ZIP/nested documents.
+EPUB, MSG, RTF, converter-resolved local/data/CID HTML images, notebooks, and
+ZIP/nested documents. The OCR stage never opens an ordinary HTML path itself;
+only bytes that the converter has already resolved under its resource policy
+are eligible.
 It does not reinterpret arbitrary strings in text, Markdown, CSV, JSON, XML, or
 feeds as images, and it never fetches an external image URI.
 

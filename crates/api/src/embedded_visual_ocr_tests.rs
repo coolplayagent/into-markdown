@@ -254,8 +254,8 @@ fn dynamically_created_rtf_and_notebook_images_use_embedded_ocr() {
 
 #[test]
 fn dynamically_created_pptx_and_xlsx_deduplicate_bytes_but_preserve_references() {
-    assert_dynamic_file_ocr_references(".pptx", &pptx_with_interleaved_picture_references(), 3, 2);
-    assert_dynamic_file_ocr_references(".xlsx", &xlsx_with_two_picture_references(), 2, 2);
+    assert_dynamic_file_ocr_references(".pptx", &pptx_with_interleaved_picture_references(), 4, 2);
+    assert_dynamic_file_ocr_references(".xlsx", &xlsx_with_two_picture_references(), 4, 2);
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn dynamically_created_pdf_merges_native_and_embedded_ocr_geometry_and_deduplica
     let result = block_on(engine.convert(request)).unwrap();
     assert_eq!(ocr.0.load(Ordering::SeqCst), 2);
     assert_eq!(result.markdown.matches("native words").count(), 1);
-    assert_eq!(result.markdown.matches("embedded second").count(), 1);
+    assert_eq!(result.markdown.matches("embedded second").count(), 2);
     assert!(
         result.markdown.find("native words").unwrap()
             < result.markdown.find("embedded second").unwrap()
@@ -307,15 +307,16 @@ fn dynamically_created_pdf_merges_native_and_embedded_ocr_geometry_and_deduplica
 fn pdf_with_native_text_and_two_images() -> Vec<u8> {
     let content = pdf_stream(
         "",
-        b"BT /F1 12 Tf 10 60 Td (native words) Tj ET\nq 20 0 0 12 10 55 cm /Im1 Do Q\nq 20 0 0 12 10 10 cm /Im2 Do Q\n",
+        b"BT /F1 12 Tf 10 60 Td (native words) Tj ET\nq 20 0 0 12 10 55 cm /Im1 Do Q\nq 20 0 0 12 10 30 cm /Im2 Do Q\nq 20 0 0 12 10 10 cm /Im3 Do Q\n",
     );
     let objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R /Im2 7 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R /Im2 7 0 R /Im3 8 0 R >> >> /Contents 4 0 R >>".to_vec(),
         content,
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
         pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[255, 0, 0]),
+        pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[0, 255, 0]),
         pdf_stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[0, 255, 0]),
     ];
     assemble_pdf(&objects)
@@ -381,6 +382,8 @@ fn assert_dynamic_file_ocr_references(
         "{suffix}"
     );
     if suffix == ".pptx" {
+        assert!(result.markdown.contains("table cell"), "PPTX table content must survive");
+        assert!(result.markdown.contains("chart series"), "PPTX chart cache must survive");
         let ocr_positions = result
             .markdown
             .match_indices("text from embedded picture")
@@ -400,6 +403,7 @@ fn assert_dynamic_file_ocr_references(
     let mut ocr_nodes = Vec::new();
     collect_ocr_nodes(&result.document.blocks, &mut ocr_nodes);
     assert_eq!(ocr_nodes.len(), references, "{suffix}: OCR IR reference count");
+    let mut xlsx_locators = Vec::new();
     for node in ocr_nodes {
         assert_eq!(node.provenance.kind, ProvenanceKind::LocalOcr, "{suffix}");
         assert_eq!(node.provenance.provider, "test.api.recognizer", "{suffix}");
@@ -409,9 +413,23 @@ fn assert_dynamic_file_ocr_references(
             assert_eq!(node.provenance.locator.slide, Some(1));
             assert_eq!(node.provenance.locator.part.as_deref(), Some("ppt/slides/slide1.xml"));
         } else if suffix == ".xlsx" {
-            assert_eq!(node.provenance.locator.sheet.as_deref(), Some("Start"));
-            assert_eq!(node.provenance.locator.part.as_deref(), Some("xl/drawings/drawing1.xml"));
+            xlsx_locators.push((
+                node.provenance.locator.sheet.as_deref().unwrap().to_owned(),
+                node.provenance.locator.part.as_deref().unwrap().to_owned(),
+            ));
         }
+    }
+    if suffix == ".xlsx" {
+        assert_eq!(
+            xlsx_locators,
+            [
+                ("Start".into(), "xl/drawings/drawing1.xml".into()),
+                ("Start".into(), "xl/drawings/drawing1.xml".into()),
+                ("Middle".into(), "xl/drawings/drawing2.xml".into()),
+                ("End".into(), "xl/drawings/drawing3.xml".into()),
+            ],
+            "XLSX OCR locators must retain workbook sheet order"
+        );
     }
 }
 
@@ -520,8 +538,9 @@ fn epub_with_png() -> Vec<u8> {
 
 fn pptx_with_interleaved_picture_references() -> Vec<u8> {
     const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="root" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>"#;
-    const SLIDE: &str = r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="2" name="start"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic><p:sp><p:nvSpPr><p:cNvPr id="3" name="before-middle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>before middle</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:nvPicPr><p:cNvPr id="4" name="middle"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic><p:pic><p:nvPicPr><p:cNvPr id="7" name="blank-no-text"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="blank"/></p:blipFill><p:spPr/></p:pic><p:sp><p:nvSpPr><p:cNvPr id="5" name="before-end"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>before end</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:nvPicPr><p:cNvPr id="6" name="end"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic></p:spTree></p:cSld></p:sld>"#;
-    const SLIDE_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image.png"/><Relationship Id="blank" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/blank.png"/></Relationships>"#;
+    const SLIDE: &str = r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="2" name="start"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic><p:sp><p:nvSpPr><p:cNvPr id="3" name="before-middle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>before middle</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:nvPicPr><p:cNvPr id="4" name="middle"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic><p:pic><p:nvPicPr><p:cNvPr id="7" name="blank-no-text"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="blank"/></p:blipFill><p:spPr/></p:pic><p:sp><p:nvSpPr><p:cNvPr id="5" name="before-end"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>before end</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:nvPicPr><p:cNvPr id="6" name="end"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="8" name="Table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><a:graphic><a:graphicData><a:tbl><a:tr><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>table cell</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><a:graphic><a:graphicData><c:chart r:id="chart"/></a:graphicData></a:graphic></p:graphicFrame><p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Nested group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/></a:xfrm></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="11" name="nested image"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic></p:grpSp></p:spTree></p:cSld></p:sld>"#;
+    const SLIDE_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image.png"/><Relationship Id="blank" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/blank.png"/><Relationship Id="chart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#;
+    const CHART: &str = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>chart series</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
     let mut overrides = String::new();
     let mut slide_ids = String::new();
     let mut relationships = String::new();
@@ -529,6 +548,7 @@ fn pptx_with_interleaved_picture_references() -> Vec<u8> {
         ("_rels/.rels".into(), ROOT.as_bytes().to_vec()),
         ("ppt/media/image.png".into(), TEST_PNG.to_vec()),
         ("ppt/media/blank.png".into(), blank_png()),
+        ("ppt/charts/chart1.xml".into(), CHART.as_bytes().to_vec()),
     ];
     for slide in 1..=6 {
         use std::fmt::Write as _;
@@ -548,7 +568,7 @@ fn pptx_with_interleaved_picture_references() -> Vec<u8> {
         }
     }
     let types = format!(
-        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>{overrides}</Types>"#
+        r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>{overrides}</Types>"#
     );
     let presentation = format!(
         r#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>{slide_ids}</p:sldIdLst></p:presentation>"#
@@ -563,16 +583,17 @@ fn pptx_with_interleaved_picture_references() -> Vec<u8> {
 }
 
 fn xlsx_with_two_picture_references() -> Vec<u8> {
-    const TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>"#;
+    const TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/drawings/drawing3.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>"#;
     const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="root" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     const WORKBOOK: &str = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Start" sheetId="1" r:id="sheet1"/><sheet name="Middle" sheetId="2" r:id="sheet2"/><sheet name="End" sheetId="3" r:id="sheet3"/></sheets></workbook>"#;
     const WORKBOOK_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="sheet1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="sheet2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="sheet3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
     const STYLES: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="1"><xf/></cellXfs></styleSheet>"#;
     const SHEET: &str = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="C4"/><sheetData/><drawing r:id="drawing"/></worksheet>"#;
-    const VOLUME_SHEET: &str = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>normal volume sheet</t></is></c></row></sheetData></worksheet>"#;
-    const SHEET_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    const VOLUME_SHEET: &str = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>normal volume sheet</t></is></c></row></sheetData><drawing r:id="drawing"/></worksheet>"#;
     const DRAWING: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="first"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="image"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="blank-no-text"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="blank"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>2</xdr:col><xdr:row>3</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="second"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="image"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
     const DRAWING_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image.png"/><Relationship Id="blank" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/blank.png"/></Relationships>"#;
+    const DRAWING_SINGLE: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="cross-sheet image"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="image"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
+    const DRAWING_SINGLE_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image.png"/></Relationships>"#;
     zip_parts(&[
         ("[Content_Types].xml", TYPES.as_bytes()),
         ("_rels/.rels", ROOT.as_bytes()),
@@ -582,9 +603,15 @@ fn xlsx_with_two_picture_references() -> Vec<u8> {
         ("xl/worksheets/sheet1.xml", SHEET.as_bytes()),
         ("xl/worksheets/sheet2.xml", VOLUME_SHEET.as_bytes()),
         ("xl/worksheets/sheet3.xml", VOLUME_SHEET.as_bytes()),
-        ("xl/worksheets/_rels/sheet1.xml.rels", SHEET_RELS.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#),
+        ("xl/worksheets/_rels/sheet2.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/></Relationships>"#),
+        ("xl/worksheets/_rels/sheet3.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="drawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing3.xml"/></Relationships>"#),
         ("xl/drawings/drawing1.xml", DRAWING.as_bytes()),
         ("xl/drawings/_rels/drawing1.xml.rels", DRAWING_RELS.as_bytes()),
+        ("xl/drawings/drawing2.xml", DRAWING_SINGLE.as_bytes()),
+        ("xl/drawings/_rels/drawing2.xml.rels", DRAWING_SINGLE_RELS.as_bytes()),
+        ("xl/drawings/drawing3.xml", DRAWING_SINGLE.as_bytes()),
+        ("xl/drawings/_rels/drawing3.xml.rels", DRAWING_SINGLE_RELS.as_bytes()),
         ("xl/media/image.png", TEST_PNG),
         ("xl/media/blank.png", blank_png().as_slice()),
     ])
