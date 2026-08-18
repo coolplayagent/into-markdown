@@ -210,18 +210,7 @@ impl WhisperSmallTranscriber {
         params.set_print_special(false);
         params.set_print_timestamps(false);
         params.set_language(language.as_deref());
-        let abort_context = context.clone();
-        params.set_abort_callback_safe(Some(move || abort_context.checkpoint().is_err()));
-        let progress_context = context.clone();
-        params.set_progress_callback_safe(Some(move |progress: i32| {
-            let progress = u64::try_from(progress.clamp(0, 100)).unwrap_or_default();
-            let _ = progress_context.report(
-                ExecutionStage::Ai,
-                Some(progress),
-                Some(100),
-                Some("asr.inference"),
-            );
-        }));
+        install_callbacks(&mut params, context);
         if state.full(params, &samples.values).is_err() {
             context.checkpoint()?;
             return Err(component(PROVIDER_ID, "Whisper inference failed"));
@@ -243,6 +232,21 @@ impl WhisperSmallTranscriber {
             language_confidence,
         })
     }
+}
+
+fn install_callbacks(params: &mut FullParams<'_, '_>, context: &ExecutionContext) {
+    let abort_context = context.clone();
+    params.set_abort_callback_safe(move || abort_context.checkpoint().is_err());
+    let progress_context = context.clone();
+    params.set_progress_callback_safe(move |progress: i32| {
+        let progress = u64::try_from(progress.clamp(0, 100)).unwrap_or_default();
+        let _ = progress_context.report(
+            ExecutionStage::Ai,
+            Some(progress),
+            Some(100),
+            Some("asr.inference"),
+        );
+    });
 }
 
 impl Transcriber for WhisperSmallTranscriber {
@@ -464,5 +468,12 @@ mod tests {
         assert_eq!(context.reserved_memory_bytes(), options.max_native_memory_bytes);
         drop(reservation);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn request_context_callbacks_match_whisper_safe_api() {
+        let context = ExecutionContext::new(Default::default(), ResourceLimits::default());
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        install_callbacks(&mut params, &context);
     }
 }
