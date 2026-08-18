@@ -117,4 +117,11 @@ Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解�
 同一中间件保护任务后端：`POST /api/tasks` 流式接收单文件（受限 display name 位于
 `X-Into-Md-Filename`），`GET /api/tasks/{taskId}` 读取 durable 状态，`DELETE` 请求取消，
 `GET /api/tasks/{taskId}/artifacts/{artifactId}` 仅以 opaque ID 流式下载已验证产物。
-这些路由不实现 #48 SSE 或 #50 文档控制台 UI。
+`GET /api/tasks/{taskId}/events` 返回 `text/event-stream`。每个 `snapshot` 或 `progress`
+事件使用 schemaVersion 1 DTO，包含 task ID、进程代际内单调 sequence、durable status、
+millionths progress、terminal 标记及可选 Engine progress。SSE `id` 为不可猜测的进程代际与
+sequence 组合；同一进程内的 `Last-Event-ID` 从每任务 64 项有界窗口回放。客户端落后于窗口或
+服务重启时，服务发送当前 durable snapshot，保证最终状态不会因断线丢失。心跳 comment 每
+15 秒发送一次。事件广播只使用非阻塞有界队列；慢客户端收到 lag 后以 snapshot 收敛，不占用
+转换线程。关闭浏览器连接只移除观察者，不取消任务；取消必须显式 `DELETE`，它幂等触发同一
+Engine `CancellationToken`。#50 文档控制台 UI 仍不在这些路由范围内。

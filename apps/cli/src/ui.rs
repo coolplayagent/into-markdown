@@ -2,19 +2,23 @@
 
 use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
-use crate::web_tasks::{ArtifactSnapshot, WebTaskBackend, WebTaskError};
+use crate::web_tasks::{
+    ArtifactSnapshot, TaskEventDto, TaskEventKind, WebTaskBackend, WebTaskError,
+};
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures::StreamExt as _;
 use serde::Serialize;
+use std::convert::Infallible;
 use std::future::{Future, IntoFuture as _};
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -41,6 +45,10 @@ const REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(2);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+#[cfg(not(test))]
+const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const SSE_HEARTBEAT: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 struct AppState {
@@ -245,6 +253,7 @@ where
         .route("/status", post(status).fallback(api_method_not_allowed))
         .route("/tasks", post(upload_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
+        .route("/tasks/{id}/events", get(task_events).fallback(api_method_not_allowed))
         .route(
             "/tasks/{id}/artifacts/{key}",
             get(download_artifact).fallback(api_method_not_allowed),
@@ -489,6 +498,107 @@ async fn cancel_task(State(state): State<AppState>, AxumPath(id): AxumPath<Strin
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
+}
+
+fn last_event_cursor(headers: &HeaderMap) -> Result<Option<(String, u64)>, ()> {
+    let name = HeaderName::from_static("last-event-id");
+    let mut values = headers.get_all(name).iter();
+    let Some(value) = values.next() else { return Ok(None) };
+    if values.next().is_some() {
+        return Err(());
+    }
+    let value = value.to_str().map_err(|_| ())?;
+    let (generation, sequence) = value.split_once(':').ok_or(())?;
+    if generation.len() != 32
+        || !generation.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || generation.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(());
+    }
+    let sequence = sequence.parse::<u64>().map_err(|_| ())?;
+    if sequence == 0 {
+        return Err(());
+    }
+    Ok(Some((generation.to_owned(), sequence)))
+}
+
+fn sse_event(event: &TaskEventDto) -> Event {
+    let kind = match event.kind {
+        TaskEventKind::Snapshot => "snapshot",
+        TaskEventKind::Progress => "progress",
+    };
+    let data = serde_json::to_string(event)
+        .unwrap_or_else(|_| "{\"schemaVersion\":1,\"kind\":\"serializationError\"}".into());
+    Event::default().event(kind).id(event.event_id.clone()).data(data)
+}
+
+async fn task_events(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    let Ok(cursor) = last_event_cursor(&headers) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidLastEventId");
+    };
+    let backend = state.tasks.clone();
+    let subscription_backend = backend.clone();
+    let subscription_id = id.clone();
+    let subscription = tokio::task::spawn_blocking(move || {
+        subscription_backend.events(
+            &subscription_id,
+            cursor.as_ref().map(|(generation, sequence)| (generation.as_str(), *sequence)),
+        )
+    })
+    .await;
+    let subscription = match subscription {
+        Ok(Ok(subscription)) => subscription,
+        Ok(Err(error)) => return web_task_rejection(error),
+        Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    };
+    let shutdown = state.shutdown.clone();
+    let stream = futures::stream::unfold(
+        (id, backend, subscription, shutdown),
+        |(id, backend, mut subscription, mut shutdown)| async move {
+            loop {
+                if let Some(event) = subscription.replay.pop_front() {
+                    return Some((
+                        Ok::<Event, Infallible>(sse_event(&event)),
+                        (id, backend, subscription, shutdown),
+                    ));
+                }
+                tokio::select! {
+                    changed = shutdown.changed() => {
+                        let _ = changed;
+                        return None;
+                    }
+                    received = subscription.receiver.recv() => match received {
+                        Ok(event) if event.task_id == id => {
+                            return Some((
+                                Ok::<Event, Infallible>(sse_event(&event)),
+                                (id, backend, subscription, shutdown),
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            let fresh_backend = backend.clone();
+                            let fresh_id = id.clone();
+                            match tokio::task::spawn_blocking(move || fresh_backend.events(&fresh_id, None)).await {
+                                Ok(Ok(fresh)) => subscription = fresh,
+                                _ => return None,
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            }
+        },
+    );
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(SSE_HEARTBEAT).text("heartbeat"))
+        .into_response()
 }
 
 async fn download_artifact(
@@ -870,6 +980,33 @@ mod tests {
         assert_security_headers(response);
     }
 
+    #[test]
+    fn last_event_id_requires_a_canonical_generation_and_positive_sequence() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "last-event-id",
+            HeaderValue::from_static("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:42"),
+        );
+        assert_eq!(
+            last_event_cursor(&headers).unwrap(),
+            Some(("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(), 42))
+        );
+        for invalid in [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:1",
+            "short:1",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:not-a-number",
+        ] {
+            headers.insert("last-event-id", HeaderValue::from_str(invalid).unwrap());
+            assert!(last_event_cursor(&headers).is_err(), "accepted {invalid}");
+        }
+        headers.append(
+            "last-event-id",
+            HeaderValue::from_static("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:2"),
+        );
+        assert!(last_event_cursor(&headers).is_err());
+    }
+
     #[tokio::test]
     async fn real_loopback_server_requires_exact_host_origin_and_session() {
         let (_directory, port, session, shutdown, task) = start().await;
@@ -932,6 +1069,68 @@ mod tests {
         assert_schema_error(&unexpected_type, "HTTP/1.1 415", "unexpectedContentType");
         let unexpected_body = request(port, &format!("POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")).await;
         assert_schema_error(&unexpected_body, "HTTP/1.1 400", "requestBodyNotAllowed");
+        shutdown.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_event_stream_emits_versioned_snapshot_and_rejects_bad_cursor() {
+        let (_directory, port, session, shutdown, task) = start().await;
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://{host}");
+        let uploaded = request(
+            port,
+            &format!(
+                "POST /api/tasks HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Filename: events.txt\r\nContent-Length: 6\r\nConnection: close\r\n\r\nevents"
+            ),
+        )
+        .await;
+        let body = uploaded.split_once("\r\n\r\n").unwrap().1;
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        let id = value["id"].as_str().unwrap();
+
+        let mut stream = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /api/tasks/{id}/events HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut response = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0, "SSE ended before its first event");
+                response.extend_from_slice(&chunk[..read]);
+                if response.windows(b"event: snapshot".len()).any(|part| part == b"event: snapshot")
+                    && response.windows(b"\n\n".len()).any(|part| part == b"\n\n")
+                {
+                    break String::from_utf8(response).unwrap();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.to_ascii_lowercase().contains("content-type: text/event-stream"));
+        assert!(response.contains("\"schemaVersion\":1"), "{response}");
+        assert!(response.contains("\"sequence\":"), "{response}");
+        assert!(response.contains("id: "), "{response}");
+        drop(stream); // Browser close must only release this subscriber.
+
+        let invalid = request(
+            port,
+            &format!(
+                "GET /api/tasks/{id}/events HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nLast-Event-ID: invalid\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&invalid, "HTTP/1.1 400", "invalidLastEventId");
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
     }
