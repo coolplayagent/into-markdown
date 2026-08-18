@@ -122,6 +122,7 @@ fn covers_component(
         "ppocrv6-tiny-recognizer-onnx-model"
         | "ppocrv6-tiny-recognizer-character-table"
         | "ppocrv6-tiny-detector-onnx-model" => "LICENSE",
+        "whisper-small" => "third_party/licenses/whisper-model-MIT.txt",
         _ => return false,
     };
     let expected = fs::read_to_string(repository.join(authority_path)).unwrap_or_default();

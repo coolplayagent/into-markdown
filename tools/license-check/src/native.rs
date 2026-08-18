@@ -254,6 +254,9 @@ fn model_integrity(
     component: &str,
     errors: &mut Vec<String>,
 ) -> Vec<IntegrityEvidence> {
+    if component == "whisper-small" {
+        return whisper_model_integrity(repository, target, errors);
+    }
     let path = if component == "ppocrv6-tiny-detector-onnx-model" {
         "models/ppocrv6-tiny-detector-onnx-authority.json"
     } else {
@@ -312,6 +315,64 @@ fn model_integrity(
         errors.push(format!("{component} SBOM integrity is not bound to download authority"));
     }
     result
+}
+
+fn whisper_model_integrity(
+    repository: &Path,
+    target: &str,
+    errors: &mut Vec<String>,
+) -> Vec<IntegrityEvidence> {
+    let path = "models/manifest.json";
+    let Some(manifest) = read_json(&repository.join(path), errors) else { return Vec::new() };
+    let artifact = manifest
+        .get("bundles")
+        .and_then(Value::as_array)
+        .and_then(|bundles| {
+            bundles.iter().find(|bundle| {
+                bundle.get("id").and_then(Value::as_str) == Some("whisper-small-multilingual")
+            })
+        })
+        .and_then(|bundle| bundle.get("runtime_artifacts"))
+        .and_then(Value::as_array)
+        .and_then(|artifacts| {
+            artifacts.iter().find(|artifact| {
+                artifact.get("id").and_then(Value::as_str) == Some("whisper-small-model")
+            })
+        });
+    let digest = artifact.and_then(|artifact| artifact.get("sha256")).and_then(Value::as_str);
+    let downloads = read_json(&repository.join("third_party/licenses/downloads.json"), errors);
+    let controlled = downloads
+        .as_ref()
+        .and_then(|value| value.get("model_runtime_files"))
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("artifact_id").and_then(Value::as_str) == Some("whisper-small-model")
+            })
+        });
+    if digest.is_none()
+        || controlled.and_then(|item| item.get("sha256")).and_then(Value::as_str) != digest
+    {
+        errors.push(
+            "whisper-small SBOM integrity is not bound to model/download authority".to_owned(),
+        );
+        return Vec::new();
+    }
+    let bytes = fs::read(repository.join(path)).unwrap_or_default();
+    vec![
+        IntegrityEvidence {
+            algorithm: "SHA-256".to_owned(),
+            digest: digest.unwrap_or_default().to_owned(),
+            subject: "whisper-small controlled model file".to_owned(),
+            target: Some(target.to_owned()),
+        },
+        IntegrityEvidence {
+            algorithm: "SHA-256".to_owned(),
+            digest: format!("{:x}", Sha256::digest(bytes)),
+            subject: format!("authority file {path}"),
+            target: Some(target.to_owned()),
+        },
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]

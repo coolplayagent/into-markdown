@@ -209,6 +209,7 @@ fn enrich_inventory_evidence(
             "ppocrv6-tiny-detector-onnx-model" => {
                 Some("models/ppocrv6-tiny-detector-onnx-authority.json")
             }
+            "whisper-small" => Some("models/manifest.json"),
             _ => None,
         };
         if let Some(evidence_path) = evidence_path {

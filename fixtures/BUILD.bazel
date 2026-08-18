@@ -4,6 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "README.md",
+    "asr-quality-authority.json",
     "downloads.json",
     "download.py",
     "download_lib.py",
@@ -17,11 +18,12 @@ filegroup(
     name = "corpus",
     srcs = [
         "README.md",
+        "asr-quality-authority.json",
         "downloads.json",
         "generate.py",
         "manifest.json",
         "pdf-layout-quality-authority.json",
-    ] + glob(["small/**"]),
+    ] + glob(["small/**", "asr-quality/**"]),
 )
 
 # Explicit-only acquisition tool. It requires a caller-selected output directory,

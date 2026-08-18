@@ -31,3 +31,22 @@ rust_test(
         "@crates//:whisper-rs",
     ],
 )
+
+rust_test(
+    name = "asr_quality_test",
+    srcs = ["tests/quality.rs"],
+    crate_root = "tests/quality.rs",
+    data = ["//fixtures:corpus"],
+    edition = "2024",
+    tags = ["manual"],
+    deps = [
+        ":asr",
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "@crates//:futures",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)

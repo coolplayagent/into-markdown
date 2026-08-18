@@ -74,7 +74,6 @@ impl WhisperConfig {
 struct CachedModel {
     context: WhisperContext,
     identity: String,
-    _native_memory: ResourceReservation,
 }
 
 /// Installed, offline Whisper-small provider with a single-flight model cache.
@@ -118,7 +117,6 @@ impl WhisperSmallTranscriber {
             .manager
             .verified_runtime_path(&self.config.model_bundle, "model", context)
             .map_err(|error| model_error(&self.config.model_bundle, error))?;
-        let native_memory = context.reserve_memory(self.config.max_native_memory_bytes)?;
         let mut parameters = WhisperContextParameters::default();
         parameters.use_gpu(false).flash_attn(false);
         let native = WhisperContext::new_with_params(&artifact.path, parameters).map_err(|_| {
@@ -140,7 +138,6 @@ impl WhisperSmallTranscriber {
         *cache = Some(CachedModel {
             context: native,
             identity: format!("{}@sha256:{}", self.config.model_bundle, artifact.sha256),
-            _native_memory: native_memory,
         });
         Ok(cache)
     }
@@ -152,6 +149,9 @@ impl WhisperSmallTranscriber {
     ) -> Result<TranscriptionResult, ConversionError> {
         context.checkpoint()?;
         self.config.validate()?;
+        // The cache is process-wide, but every use must independently prove
+        // that this request's memory budget can accommodate the native model.
+        let _native_memory = context.reserve_memory(self.config.max_native_memory_bytes)?;
         context.report(ExecutionStage::Ai, Some(0), Some(100), Some("asr.normalize"))?;
         let pcm = self.ffmpeg.normalize(
             request.media,

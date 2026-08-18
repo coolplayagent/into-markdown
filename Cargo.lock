@@ -1176,6 +1176,9 @@ dependencies = [
  "into-markdown-core",
  "into-markdown-ffmpeg",
  "into-markdown-ocr",
+ "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
  "whisper-rs",
 ]

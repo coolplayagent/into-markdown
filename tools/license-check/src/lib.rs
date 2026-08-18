@@ -653,6 +653,58 @@ struct OcrGolden {
     maximum_cer: f64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityAuthority {
+    schema_version: u32,
+    model: AsrQualityModel,
+    normalization: AsrQualityNormalization,
+    noise: AsrQualityNoise,
+    fixtures: Vec<AsrQualityFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityModel {
+    bundle: String,
+    sha256: String,
+    runtime: String,
+    beam_size: u32,
+    maximum_threads: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityNormalization {
+    zh: String,
+    en: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityNoise {
+    algorithm: String,
+    seed: u64,
+    snr_db: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityFixture {
+    id: String,
+    path: String,
+    bytes: u64,
+    sha256: String,
+    language: String,
+    reference: String,
+    clear_maximum_error_rate: f64,
+    noise_maximum_error_rate: f64,
+    source_url: String,
+    source_revision: String,
+    license: String,
+    attribution: String,
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ModelDownload {
@@ -1469,6 +1521,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
     let fixture_corpus_text = read(&root.join("fixtures/manifest.json"), errors);
     let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
+    let asr_quality_text = read(&root.join("fixtures/asr-quality-authority.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let recognizer: Option<RecognizerAuthority> =
@@ -1485,6 +1538,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
         parse_json("fixture corpus manifest", &fixture_corpus_text, errors);
     let fixture_downloads: Option<FixtureDownloadManifest> =
         parse_json("fixture download manifest", &fixture_downloads_text, errors);
+    let asr_quality: Option<AsrQualityAuthority> =
+        parse_json("ASR quality authority", &asr_quality_text, errors);
     if let Some(ffmpeg) = &ffmpeg {
         validate_ffmpeg_source(inventory, ffmpeg, errors);
     }
@@ -1519,6 +1574,96 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     }
     if let (Some(corpus), Some(downloads)) = (&fixture_corpus, &fixture_downloads) {
         validate_fixture_corpus(root, inventory, corpus, downloads, errors);
+    }
+    if let Some(authority) = &asr_quality {
+        validate_asr_quality(root, authority, errors);
+    }
+}
+
+fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
+    if authority.schema_version != 1
+        || authority.model.bundle != "whisper-small-multilingual"
+        || authority.model.sha256
+            != "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+        || authority.model.runtime != "whisper-rs 0.16.0 / bundled whisper.cpp CPU"
+        || authority.model.beam_size != 5
+        || authority.model.maximum_threads != 4
+        || authority.normalization.zh
+            != "Unicode alphanumeric code points after whitespace and punctuation removal"
+        || authority.normalization.en != "lowercase Unicode alphanumeric word runs"
+        || authority.noise.algorithm != "lcg-white-noise-v1"
+        || authority.noise.seed != 20_260_818
+        || (authority.noise.snr_db - 10.0).abs() > f64::EPSILON
+    {
+        errors.push(
+            "ASR quality authority has unreviewed model, metric, or noise settings".to_owned(),
+        );
+    }
+    let expected = BTreeMap::from([
+        (
+            "en-clear",
+            (
+                "en",
+                "asr-quality/source/en-clear.wav",
+                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+                352_078,
+                "LicenseRef-Public-Domain",
+                "https://raw.githubusercontent.com/ggml-org/whisper.cpp/1fe009caeda75f69bc864d6370b10674e45a92bd/samples/jfk.wav",
+            ),
+        ),
+        (
+            "zh-clear",
+            (
+                "zh",
+                "asr-quality/source/zh-clear.ogg",
+                "89f0787319dd6856df3cc85fc94c7f9fe6ab5e55255ac7ebc5c913e1610b69ea",
+                18_237,
+                "CC0-1.0",
+                "https://upload.wikimedia.org/wikipedia/commons/d/d1/%E4%B9%A0%E8%BF%91%E5%B9%B3.ogg",
+            ),
+        ),
+    ]);
+    let mut seen = BTreeSet::new();
+    for fixture in &authority.fixtures {
+        let valid_identity = expected.get(fixture.id.as_str()).is_some_and(
+            |(language, path, hash, bytes, license, url)| {
+                fixture.language == *language
+                    && fixture.path == *path
+                    && fixture.sha256 == *hash
+                    && fixture.bytes == *bytes
+                    && fixture.license == *license
+                    && fixture.source_url == *url
+            },
+        );
+        if !seen.insert(fixture.id.as_str())
+            || !valid_identity
+            || !is_safe_relative_path(&fixture.path)
+            || !is_sha256(&fixture.sha256)
+            || fixture.reference.trim().is_empty()
+            || fixture.source_revision.trim().is_empty()
+            || fixture.attribution.trim().is_empty()
+            || (fixture.clear_maximum_error_rate - 0.15).abs() > f64::EPSILON
+            || (fixture.noise_maximum_error_rate - 0.25).abs() > f64::EPSILON
+        {
+            errors.push(format!("ASR quality fixture {} has invalid authority", fixture.id));
+            continue;
+        }
+        let path = root.join("fixtures").join(&fixture.path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| {
+            errors.push(format!("cannot read ASR quality fixture {}: {error}", path.display()));
+            Vec::new()
+        });
+        if u64::try_from(bytes.len()).ok() != Some(fixture.bytes)
+            || sha256_hex(&bytes) != fixture.sha256
+        {
+            errors.push(format!("ASR quality fixture {} size or SHA-256 disagrees", fixture.id));
+        }
+    }
+    if seen != expected.keys().copied().collect() {
+        errors.push(
+            "ASR quality authority must contain exactly the reviewed Chinese and English fixtures"
+                .to_owned(),
+        );
     }
 }
 
@@ -4672,6 +4817,55 @@ filegroup(
         assert_download_mutation_rejected(|item| item.included_in_release = true);
         assert_download_mutation_rejected(|item| item.repository.push_str("_drift"));
         assert_download_mutation_rejected(|item| item.downloaded_file_path.push_str(".drift"));
+    }
+
+    #[test]
+    fn asr_quality_authority_rejects_threshold_and_hash_drift() {
+        let root = repository_root().unwrap();
+        let text = fs::read_to_string(root.join("fixtures/asr-quality-authority.json")).unwrap();
+        let mut authority: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
+        let mut baseline = Vec::new();
+        validate_asr_quality(&root, &authority, &mut baseline);
+        assert!(baseline.is_empty(), "ASR authority baseline: {baseline:?}");
+
+        authority.fixtures[0].clear_maximum_error_rate = 0.16;
+        authority.fixtures[0].sha256 = "0".repeat(64);
+        authority.noise.seed += 1;
+        let mut errors = Vec::new();
+        validate_asr_quality(&root, &authority, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("model, metric, or noise")));
+        assert!(errors.iter().any(|error| error.contains("invalid authority")));
+    }
+
+    #[test]
+    fn media_permission_fixtures_are_complete_and_repository_owned() {
+        let root = repository_root().unwrap();
+        let text = fs::read_to_string(root.join("fixtures/manifest.json")).unwrap();
+        let corpus: FixtureCorpus = serde_json::from_str(&text).unwrap();
+        let media: Vec<_> = corpus
+            .fixtures
+            .iter()
+            .filter(|fixture| matches!(fixture.format.as_str(), "audio" | "video"))
+            .collect();
+        assert_eq!(media.len(), 6);
+        for format in ["audio", "video"] {
+            let scenarios: BTreeSet<_> = media
+                .iter()
+                .filter(|fixture| fixture.format == format)
+                .map(|fixture| fixture.scenario.as_str())
+                .collect();
+            assert_eq!(scenarios, BTreeSet::from(["normal", "corrupt", "limit"]));
+        }
+        let mut errors = Vec::new();
+        for fixture in media {
+            validate_fixture_metadata(fixture, &mut errors);
+            assert_eq!(fixture.license.spdx, "Apache-2.0");
+            assert_eq!(fixture.provenance.kind, "repository-generated");
+            let bytes = fs::read(root.join("fixtures").join(&fixture.path)).unwrap();
+            assert_eq!(u64::try_from(bytes.len()).unwrap(), fixture.bytes);
+            assert_eq!(sha256_hex(&bytes), fixture.sha256);
+        }
+        assert!(errors.is_empty(), "media fixture authority: {errors:?}");
     }
 
     #[test]
