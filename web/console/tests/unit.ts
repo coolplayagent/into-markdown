@@ -3,9 +3,10 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { createApiClient, ApiError, defaultWorkbenchOptions } from "../src/api";
+import { createApiClient, ApiError, defaultWorkbenchOptions, parseTask } from "../src/api";
 import type { ApiClient, TaskRecord } from "../src/api";
 import { App } from "../src/app";
+import { JsonTree, SafeMarkdownPreview } from "../src/preview";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
 import styles from "../src/styles.css";
@@ -64,7 +65,8 @@ const availableApi: ApiClient = {
   async watchTask(_id, _onEvent, signal) {
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   },
-  async download() { return new Blob(); },
+  async preview() { return { text: "", truncated: false, contentType: "text/plain" }; },
+  async download() { return { blob: new Blob(), filename: "result.md" }; },
 };
 
 test("session handoff clears every fragment before returning the in-memory token", () => {
@@ -121,6 +123,8 @@ test("API client rejects malicious and oversized responses without reflecting se
       return true;
     });
   }
+  const maliciousTask = task("succeeded"); maliciousTask.artifacts = [{ storageKey: "b".repeat(32), kind: "asset", byteLen: 1, sha256: "c".repeat(64), filename: "../escape.png" }];
+  assert.throws(() => parseTask(maliciousTask), ApiError);
 });
 
 test("workbench API sends shared conversion options and resumes SSE from Last-Event-ID", async () => {
@@ -154,6 +158,56 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.deepEqual(events, ["running", "succeeded"]);
   const reconnectHeaders = calls[2]![1]!.headers as Record<string, string>;
   assert.equal(reconnectHeaders["Last-Event-ID"], "1");
+});
+
+test("artifact preview is range-bounded and download filename follows safe Content-Disposition", async () => {
+  const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+  const client = createApiClient(token, async (input, init) => {
+    calls.push([input, init]);
+    if ((init?.headers as Record<string, string>).Range) return new Response("preview", { status: 206, headers: { "content-type": "text/markdown; charset=utf-8", "content-range": "bytes 0-6/999999" } });
+    return new Response(new Blob(["complete"]), { headers: { "content-type": "application/octet-stream", "content-disposition": "attachment; filename=\"fallback.bin\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A.md" } });
+  });
+  const preview = await client.preview("a".repeat(32), "b".repeat(32));
+  assert.equal((calls[0]![1]!.headers as Record<string, string>).Range, "bytes=0-262143");
+  assert.deepEqual(preview, { text: "preview", truncated: true, contentType: "text/markdown" });
+  const download = await client.download("a".repeat(32), "b".repeat(32));
+  assert.equal(download.filename, "报告.md"); assert.equal(await download.blob.text(), "complete");
+  const oversized = createApiClient(token, async () => new Response("x".repeat(262_145), { status: 206, headers: { "content-type": "text/markdown" } }));
+  await assert.rejects(oversized.preview("a".repeat(32), "b".repeat(32)), (error: unknown) => error instanceof ApiError && error.code === "responseTooLarge");
+});
+
+test("Markdown preview never creates executable or resource-loading DOM", async () => {
+  const window = installWindow(); const root = createRoot(window.document.getElementById("app")!);
+  const malicious = "# Safe\n<script>globalThis.pwned=1</script>\n![x](file:///etc/passwd)\n<img src=http://evil.invalid/x onerror=alert(1)>\n[jump](javascript:alert(1))";
+  root.render(createElement(SafeMarkdownPreview, { source: malicious }));
+  await waitFor(() => window.document.body.textContent.includes("file:///etc/passwd"));
+  assert.equal(window.document.querySelector("script,img,iframe,object,embed,link,a"), null);
+  assert.equal((globalThis as { pwned?: number }).pwned, undefined);
+  assert.ok(window.document.body.textContent.includes("<script>"));
+  root.render(createElement(SafeMarkdownPreview, { source: Array.from({ length: 2_100 }, () => "line").join("\n") }));
+  await waitFor(() => window.document.body.textContent.includes("preview block limit reached"));
+  root.render(createElement(JsonTree, { value: { provenance: { source: "local" }, blocks: Array.from({ length: 250 }, (_, index) => ({ index })) } }));
+  await waitFor(() => window.document.body.textContent.includes("provenance"));
+  assert.ok(window.document.body.textContent.includes("more entries"));
+  root.unmount();
+});
+
+test("completed workbench exposes accessible artifact preview and resource browser", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const completed = task("succeeded"); completed.artifacts = [
+    { storageKey: "b".repeat(32), kind: "markdown", byteLen: 40, sha256: "c".repeat(64) },
+    { storageKey: "d".repeat(32), kind: "asset", byteLen: 12, sha256: "e".repeat(64), assetId: "image-1", filename: "diagram.png", mediaType: "image/png" },
+  ];
+  const api: ApiClient = { ...availableApi, async listTasks() { return [completed]; }, async preview() { return { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
+  const root = createRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitFor(() => window.document.body.textContent.includes("Preview result.md"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Preview result.md")!.click();
+  await waitFor(() => window.document.body.textContent.includes("file:///secret"));
+  assert.equal(window.document.querySelector(".preview-panel img,.preview-panel script,.preview-panel a"), null);
+  assert.ok(window.document.body.textContent.includes("Resources (1)"));
+  const axe = (await import("axe-core")).default; const result = await axe.run(window.document);
+  assert.deepEqual(result.violations.map((violation) => violation.id), []);
+  root.unmount();
 });
 
 test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry", async () => {

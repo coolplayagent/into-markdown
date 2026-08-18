@@ -643,6 +643,12 @@ impl Read for ArtifactSnapshot {
     }
 }
 
+impl Seek for ArtifactSnapshot {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(position)
+    }
+}
+
 impl Drop for ArtifactSnapshot {
     fn drop(&mut self) {
         let mut disk = lock(&self.shared.disk_bytes);

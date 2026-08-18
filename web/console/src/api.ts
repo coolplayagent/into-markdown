@@ -1,5 +1,6 @@
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_EVENT_BYTES = 64 * 1024;
+export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus }
@@ -8,9 +9,11 @@ export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
   storageKey: string;
   kind: "markdown" | "documentIr" | "diagnostics" | "asset" | "bundle";
-  byteLen: number;
+  byteLen: number; sha256: string; assetId?: string; mediaType?: string;
   filename?: string;
 }
+export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
+export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskRecord {
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
@@ -50,11 +53,21 @@ function parseStatus(value: unknown): StatusResponse {
   return value as unknown as StatusResponse;
 }
 const taskStatuses = new Set<TaskStatus>(["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"]);
+function isArtifact(value: unknown): value is ArtifactReference {
+  return isObject(value) && typeof value.storageKey === "string" && /^[0-9a-f]{32}$/.test(value.storageKey)
+    && ["markdown", "documentIr", "diagnostics", "asset", "bundle"].includes(String(value.kind))
+    && Number.isSafeInteger(value.byteLen) && Number(value.byteLen) >= 0 && typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256)
+    && (value.assetId === undefined || typeof value.assetId === "string" && value.assetId.length <= 255)
+    && (value.filename === undefined || typeof value.filename === "string" && value.filename.length <= 255 && !/[\u0000-\u001f\u007f/\\]/.test(value.filename))
+    && (value.mediaType === undefined || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
+}
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || !taskStatuses.has(value.status as TaskStatus) || !Number.isSafeInteger(value.progressMillionths)
     || Number(value.progressMillionths) < 0 || Number(value.progressMillionths) > 1_000_000
-    || !Array.isArray(value.diagnostics) || !Array.isArray(value.artifacts) || !isObject(value.configuration)) throw new ApiError("invalidResponse");
+    || !Array.isArray(value.diagnostics) || value.diagnostics.length > 1024 || value.diagnostics.some((item) => !isObject(item) || typeof item.code !== "string" || item.code.length > 128)
+    || !Array.isArray(value.artifacts) || value.artifacts.length > 128 || value.artifacts.some((artifact) => !isArtifact(artifact))
+    || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }
 function parseTaskList(value: unknown): TaskRecord[] {
@@ -112,7 +125,17 @@ export interface ApiClient {
   upload(file: File, options: WorkbenchOptions, signal?: AbortSignal): Promise<TaskRecord>;
   cancel(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   watchTask(id: string, onEvent: (event: TaskEvent) => void, signal: AbortSignal): Promise<void>;
-  download(id: string, key: string, signal?: AbortSignal): Promise<Blob>;
+  preview(id: string, key: string, signal?: AbortSignal): Promise<ArtifactPreview>;
+  download(id: string, key: string, signal?: AbortSignal): Promise<ArtifactDownload>;
+}
+async function readBoundedBytes(response: Response, limit: number): Promise<Uint8Array> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) throw new ApiError("responseTooLarge");
+  if (!response.body) throw new ApiError("invalidResponse");
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0;
+  try { while (true) { const result = await reader.read(); if (result.done) break; length += result.value.byteLength; if (length > limit) { await reader.cancel(); throw new ApiError("responseTooLarge"); } chunks.push(result.value); } }
+  finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } return bytes;
 }
 export function createApiClient(session: string, fetcher: typeof fetch = fetch): ApiClient {
   const auth = (): Record<string, string> => ({ "X-Into-Md-Session": session });
@@ -158,11 +181,29 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
         } finally { reader.releaseLock(); }
       }
     },
+    async preview(id, key, signal) {
+      let response: Response;
+      const headers = auth(); headers.Range = `bytes=0-${MAX_PREVIEW_BYTES - 1}`;
+      try { response = await fetcher(`/api/tasks/${id}/artifacts/${key}`, { method: "GET", headers, cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) }); }
+      catch { throw new ApiError("unreachable"); }
+      if (response.status !== 200 && response.status !== 206) throw new ApiError("previewFailed");
+      const bytes = await readBoundedBytes(response, MAX_PREVIEW_BYTES);
+      let text: string; try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new ApiError("invalidPreview"); }
+      const declared = Number(response.headers.get("content-range")?.split("/")[1]);
+      return { text, truncated: response.status === 206 && Number.isFinite(declared) && declared > bytes.byteLength, contentType: response.headers.get("content-type")?.split(";", 1)[0] ?? "application/octet-stream" };
+    },
     async download(id, key, signal) {
       let response: Response;
       try { response = await fetcher(`/api/tasks/${id}/artifacts/${key}`, { method: "GET", headers: auth(), cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) }); }
       catch { throw new ApiError("unreachable"); }
-      if (!response.ok) throw new ApiError("downloadFailed"); return response.blob();
+      if (!response.ok) throw new ApiError("downloadFailed");
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const quoted = disposition.match(/filename="([^"]+)"/i)?.[1];
+      let filename = quoted ?? "download.bin";
+      if (encoded) { try { filename = decodeURIComponent(encoded); } catch { /* keep safe fallback */ } }
+      filename = filename.replaceAll("/", "_").replaceAll("\\", "_").replace(/[\u0000-\u001f\u007f]/g, "_").slice(0, 255) || "download.bin";
+      return { blob: await response.blob(), filename };
     },
   };
   return Object.freeze(client);

@@ -136,6 +136,22 @@ main { width: 100%; max-width: 82rem; padding: clamp(1.5rem, 4vw, 3rem); outline
 .task-actions { justify-content: flex-start; flex-wrap: wrap; }
 .task-actions button { min-height: 2.25rem; padding: .35rem .7rem; }
 .diagnostics { color: var(--error); font: .78rem ui-monospace, monospace; }
+.artifact-actions { display: inline-flex; gap: .35rem; flex-wrap: wrap; }
+.asset-browser, .preview-panel { margin-top: .8rem; border: 1px solid var(--border); border-radius: .65rem; background: var(--surface); }
+.asset-browser summary { cursor: pointer; padding: .65rem .8rem; font-weight: 700; }
+.asset-browser ul { margin: 0; padding: 0 .8rem .8rem; list-style: none; }
+.asset-browser li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .45rem 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.preview-panel { padding: .8rem; max-height: 34rem; overflow: auto; overscroll-behavior: contain; }
+.preview-title { position: sticky; top: -.8rem; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: -.8rem -.8rem .7rem; padding: .65rem .8rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+.preview-title h4 { margin: 0; overflow-wrap: anywhere; }
+.preview-notice, .tree-limit { color: var(--muted); }
+.markdown-preview p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview-heading { margin: 1rem 0 .45rem; font-weight: 800; line-height: 1.25; }
+.preview-heading.h1 { font-size: 1.55rem; }.preview-heading.h2 { font-size: 1.35rem; }.preview-heading.h3 { font-size: 1.15rem; }
+.preview-list-item { padding-left: 1rem; overflow-wrap: anywhere; }
+.preview-panel pre { max-width: 100%; padding: .7rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface); border-radius: .45rem; }
+.json-tree ul { margin: .25rem 0 .25rem 1rem; padding-left: .65rem; border-left: 1px solid var(--border); list-style: none; }
+.json-tree summary { cursor: pointer; color: var(--muted); }.tree-key { font-family: ui-monospace, monospace; font-weight: 700; }.tree-value { overflow-wrap: anywhere; }
 .empty-tasks { margin-top: 1rem; padding: 2rem; text-align: center; }
 .empty-tasks h3 { margin-top: 0; }
 

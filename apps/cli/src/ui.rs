@@ -649,18 +649,36 @@ async fn task_events(
 async fn download_artifact(
     State(state): State<AppState>,
     AxumPath((id, key)): AxumPath<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let Ok(id) = into_markdown::TaskId::parse(id) else {
         return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
     };
     let mut shutdown = state.shutdown.clone();
     let deadline = Instant::now() + REQUEST_TOTAL_TIMEOUT;
-    let (file, reference) =
+    let (mut file, reference) =
         match tokio::task::spawn_blocking(move || state.tasks.artifact(&id, &key)).await {
             Ok(Ok(value)) => value,
             Ok(Err(error)) => return web_task_rejection(error),
             Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
         };
+    let range = match requested_range(&headers, reference.byte_len) {
+        Ok(range) => range,
+        Err(()) => {
+            let mut response = rejection(StatusCode::RANGE_NOT_SATISFIABLE, "invalidRange");
+            response.headers_mut().insert(
+                header::CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes */{}", reference.byte_len))
+                    .expect("bounded artifact length is a valid header"),
+            );
+            return response;
+        }
+    };
+    let (start, end) = range.unwrap_or_else(|| (0, reference.byte_len.saturating_sub(1)));
+    if start > 0 && std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(start)).is_err() {
+        return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendIo");
+    }
+    let response_bytes = if reference.byte_len == 0 { 0 } else { end - start + 1 };
     let slot =
         Arc::new(std::sync::Mutex::new(DownloadSlot { snapshot: Some(file), expired: false }));
     let (timer_sender, timer_receiver) = tokio::sync::oneshot::channel();
@@ -679,67 +697,165 @@ async fn download_artifact(
         }
         expire_download_slot(&timer_slot);
     });
-    let stream = futures::stream::try_unfold((slot, timer_stop), |(slot, timer_stop)| async move {
-        let snapshot = {
-            let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot_guard.expired {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "download deadline expired",
-                ));
-            }
-            slot_guard.snapshot.take().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "download snapshot is unavailable",
-                )
-            })?
-        };
-        let read = tokio::task::spawn_blocking(move || {
-            let mut snapshot = snapshot;
-            let mut bytes = Vec::new();
-            bytes.try_reserve_exact(64 * 1024).map_err(std::io::Error::other)?;
-            bytes.resize(64 * 1024, 0);
-            let read = std::io::Read::read(&mut snapshot, &mut bytes)?;
-            bytes.truncate(read);
-            Ok::<_, std::io::Error>((bytes, snapshot))
-        })
-        .await
-        .map_err(std::io::Error::other)?;
-        let (bytes, snapshot) = read?;
-        {
-            let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot_guard.expired {
-                drop(slot_guard);
-                drop(snapshot);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "download deadline expired",
-                ));
-            }
-            if bytes.is_empty() {
-                drop(slot_guard);
-                drop(snapshot);
+    let stream = futures::stream::try_unfold(
+        (slot, timer_stop, response_bytes),
+        |(slot, timer_stop, remaining)| async move {
+            if remaining == 0 {
                 return Ok(None);
             }
-            slot_guard.snapshot = Some(snapshot);
-        }
-        Ok(Some((Bytes::from(bytes), (slot, timer_stop))))
-    });
-    let content_type = match reference.kind {
+            let snapshot = {
+                let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if slot_guard.expired {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "download deadline expired",
+                    ));
+                }
+                slot_guard.snapshot.take().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "download snapshot is unavailable",
+                    )
+                })?
+            };
+            let read = tokio::task::spawn_blocking(move || {
+                let mut snapshot = snapshot;
+                let mut bytes = Vec::new();
+                let chunk = usize::try_from(remaining.min(64 * 1024)).unwrap_or(64 * 1024);
+                bytes.try_reserve_exact(chunk).map_err(std::io::Error::other)?;
+                bytes.resize(chunk, 0);
+                let read = std::io::Read::read(&mut snapshot, &mut bytes)?;
+                bytes.truncate(read);
+                Ok::<_, std::io::Error>((bytes, snapshot))
+            })
+            .await
+            .map_err(std::io::Error::other)?;
+            let (bytes, snapshot) = read?;
+            {
+                let mut slot_guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if slot_guard.expired {
+                    drop(slot_guard);
+                    drop(snapshot);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "download deadline expired",
+                    ));
+                }
+                if bytes.is_empty() {
+                    drop(slot_guard);
+                    drop(snapshot);
+                    return Ok(None);
+                }
+                slot_guard.snapshot = Some(snapshot);
+            }
+            let remaining = remaining.saturating_sub(bytes.len() as u64);
+            Ok(Some((Bytes::from(bytes), (slot, timer_stop, remaining))))
+        },
+    );
+    let content_type = artifact_content_type(&reference);
+    let mut response = Body::from_stream(stream).into_response();
+    if range.is_some() {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+        response.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{}", reference.byte_len))
+                .expect("bounded artifact range is a valid header"),
+        );
+    }
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Ok(disposition) = HeaderValue::from_str(&content_disposition(&reference)) {
+        response.headers_mut().insert(header::CONTENT_DISPOSITION, disposition);
+    }
+    if let Ok(length) = HeaderValue::from_str(&response_bytes.to_string()) {
+        response.headers_mut().insert(header::CONTENT_LENGTH, length);
+    }
+    response
+}
+
+fn artifact_content_type(reference: &into_markdown::ArtifactReference) -> &str {
+    match reference.kind {
         into_markdown::ArtifactKind::Markdown => "text/markdown; charset=utf-8",
         into_markdown::ArtifactKind::DocumentIr | into_markdown::ArtifactKind::Diagnostics => {
             "application/json"
         }
         into_markdown::ArtifactKind::Bundle => "application/zip",
-        into_markdown::ArtifactKind::Asset => "application/octet-stream",
-    };
-    let mut response = Body::from_stream(stream).into_response();
-    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    if let Ok(length) = HeaderValue::from_str(&reference.byte_len.to_string()) {
-        response.headers_mut().insert(header::CONTENT_LENGTH, length);
+        into_markdown::ArtifactKind::Asset => {
+            reference.media_type.as_deref().unwrap_or("application/octet-stream")
+        }
     }
-    response
+}
+
+fn requested_range(headers: &HeaderMap, length: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(value) = single_ascii_header(headers, header::RANGE) else {
+        return if headers.contains_key(header::RANGE) { Err(()) } else { Ok(None) };
+    };
+    let value = value.strip_prefix("bytes=").ok_or(())?;
+    if value.contains(',') || length == 0 {
+        return Err(());
+    }
+    let (left, right) = value.split_once('-').ok_or(())?;
+    let (start, end) = if left.is_empty() {
+        let suffix = right.parse::<u64>().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        (length.saturating_sub(suffix), length - 1)
+    } else {
+        let start = left.parse::<u64>().map_err(|_| ())?;
+        if start >= length {
+            return Err(());
+        }
+        let end = if right.is_empty() {
+            length - 1
+        } else {
+            right.parse::<u64>().map_err(|_| ())?.min(length - 1)
+        };
+        if end < start {
+            return Err(());
+        }
+        (start, end)
+    };
+    Ok(Some((start, end)))
+}
+
+fn artifact_filename(reference: &into_markdown::ArtifactReference) -> &str {
+    match reference.kind {
+        into_markdown::ArtifactKind::Markdown => "result.md",
+        into_markdown::ArtifactKind::DocumentIr => "document-ir.json",
+        into_markdown::ArtifactKind::Diagnostics => "diagnostics.json",
+        into_markdown::ArtifactKind::Bundle => "result.zip",
+        into_markdown::ArtifactKind::Asset => reference.filename.as_deref().unwrap_or("asset.bin"),
+    }
+}
+
+fn content_disposition(reference: &into_markdown::ArtifactReference) -> String {
+    let filename = artifact_filename(reference);
+    let fallback: String = filename
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || ".-_".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect();
+    let mut encoded = String::new();
+    for byte in filename.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(char::from(*byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1053,6 +1169,50 @@ mod tests {
         assert!(last_event_cursor(&headers).is_err());
     }
 
+    #[test]
+    fn download_ranges_and_names_are_canonical_and_header_safe() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(requested_range(&headers, 10), Ok(None));
+        for (value, expected) in [
+            ("bytes=2-5", (2, 5)),
+            ("bytes=7-", (7, 9)),
+            ("bytes=-3", (7, 9)),
+            ("bytes=0-99", (0, 9)),
+        ] {
+            headers.insert(header::RANGE, HeaderValue::from_str(value).unwrap());
+            assert_eq!(requested_range(&headers, 10), Ok(Some(expected)), "{value}");
+        }
+        for invalid in ["items=0-1", "bytes=", "bytes=3-2", "bytes=10-", "bytes=0-1,3-4"] {
+            headers.insert(header::RANGE, HeaderValue::from_str(invalid).unwrap());
+            assert_eq!(requested_range(&headers, 10), Err(()), "accepted {invalid}");
+        }
+        let reference = into_markdown::ArtifactReference {
+            storage_key: "a".repeat(32),
+            kind: into_markdown::ArtifactKind::Asset,
+            byte_len: 10,
+            sha256: "b".repeat(64),
+            asset_id: Some("asset-1".into()),
+            filename: Some("报告 \"final\".png".into()),
+            media_type: Some("image/png".into()),
+        };
+        let disposition = content_disposition(&reference);
+        assert!(disposition.starts_with("attachment; filename=\"____final_.png\";"));
+        assert!(disposition.contains("filename*=UTF-8''%E6%8A%A5%E5%91%8A%20%22final%22.png"));
+        assert!(!disposition.contains('\r') && !disposition.contains('\n'));
+        assert_eq!(artifact_content_type(&reference), "image/png");
+        let mut reference = reference;
+        for (kind, mime, filename) in [
+            (into_markdown::ArtifactKind::Markdown, "text/markdown; charset=utf-8", "result.md"),
+            (into_markdown::ArtifactKind::DocumentIr, "application/json", "document-ir.json"),
+            (into_markdown::ArtifactKind::Diagnostics, "application/json", "diagnostics.json"),
+            (into_markdown::ArtifactKind::Bundle, "application/zip", "result.zip"),
+        ] {
+            reference.kind = kind;
+            assert_eq!(artifact_content_type(&reference), mime);
+            assert_eq!(artifact_filename(&reference), filename);
+        }
+    }
+
     #[tokio::test]
     async fn real_loopback_server_requires_exact_host_origin_and_session() {
         let (_directory, port, session, shutdown, task) = start().await;
@@ -1192,9 +1352,16 @@ mod tests {
         assert!(!response.contains(&session));
         assert_security_headers(&response);
 
+        let css_asset = crate::ui_assets::ASSETS
+            .iter()
+            .find(|asset| asset.mime.starts_with("text/css"))
+            .unwrap();
         let css = request(
             port,
-            &format!("GET /assets/app.f205ee673998c673.css HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+            &format!(
+                "GET {} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n",
+                css_asset.path
+            ),
         )
         .await;
         assert!(css.starts_with("HTTP/1.1 200"), "{css}");
@@ -1202,13 +1369,7 @@ mod tests {
         assert!(
             css.to_ascii_lowercase().contains("cache-control: public, max-age=31536000, immutable")
         );
-        assert!(
-            css.contains(
-                "ETag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
-            ) || css.contains(
-                "etag: \"f205ee673998c6732c2089d97190ca3ea1e68fd8225d35524231799f8da5889d\""
-            )
-        );
+        assert!(css.to_ascii_lowercase().contains(&format!("etag: \"{}\"", css_asset.sha256)));
         assert!(css.to_ascii_lowercase().contains("x-content-type-options: nosniff"));
         assert!(css.to_ascii_lowercase().contains("content-security-policy: default-src 'none';"));
 
@@ -1231,7 +1392,11 @@ mod tests {
             request(port, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
         assert_schema_error(&bad_host, "HTTP/1.1 400", "invalidHost");
         let bootstrap = std::str::from_utf8(
-            crate::ui_assets::by_path("/assets/bootstrap.63383b893163f97a.js").unwrap().bytes,
+            crate::ui_assets::ASSETS
+                .iter()
+                .find(|asset| asset.path.starts_with("/assets/bootstrap."))
+                .unwrap()
+                .bytes,
         )
         .unwrap();
         assert!(bootstrap.find("replaceState").unwrap() < bootstrap.find("import(").unwrap());
@@ -1288,7 +1453,36 @@ mod tests {
         )
         .await;
         assert!(downloaded.starts_with("HTTP/1.1 200"), "{downloaded}");
+        assert!(downloaded.to_ascii_lowercase().contains("accept-ranges: bytes"));
+        assert!(downloaded.to_ascii_lowercase().contains("content-type: text/markdown"));
+        assert!(
+            downloaded
+                .to_ascii_lowercase()
+                .contains("content-disposition: attachment; filename=\"result.md\"")
+        );
         assert!(downloaded.ends_with("hello\n"), "{downloaded}");
+
+        let partial = request(
+            port,
+            &format!(
+                "GET /api/tasks/{id}/artifacts/{artifact} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nRange: bytes=1-3\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(partial.starts_with("HTTP/1.1 206"), "{partial}");
+        assert!(partial.to_ascii_lowercase().contains("content-range: bytes 1-3/6"));
+        assert!(partial.to_ascii_lowercase().contains("content-length: 3"));
+        assert!(partial.ends_with("ell"), "{partial}");
+
+        let invalid_range = request(
+            port,
+            &format!(
+                "GET /api/tasks/{id}/artifacts/{artifact} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nRange: bytes=99-\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&invalid_range, "HTTP/1.1 416", "invalidRange");
+        assert!(invalid_range.to_ascii_lowercase().contains("content-range: bytes */6"));
 
         let mut disconnected =
             tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();

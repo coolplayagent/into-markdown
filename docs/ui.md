@@ -134,3 +134,22 @@ Engine `CancellationToken`。
 `authorization` 中分别确认；授权位在建任务前消费且不写入 durable request。网络默认关闭，
 host allowlist、输入/内存/临时空间、页数与资源上限都在上传前 fail closed。未携带 Header
 时使用安全默认配置，以兼容已有本地 API 客户端。
+
+## 预览、资源与下载
+
+成功任务公开 Markdown、Document IR、诊断、bundle 和已提取资源的 opaque artifact 引用。
+工作台的 Markdown 预览不使用 `innerHTML`，也不生成链接、图片、iframe、object 或 embed；
+标题、列表、代码块和普通文本只由 React text node 呈现。因此原始 HTML、`javascript:`、
+`file:`、data URI 和远程图片语法都只能显示为不可执行文本，默认不会读取本地或外部资源。
+IR（包括 provenance）与诊断使用限深 12、限节点 1000、单容器最多 200 项的折叠树。
+Markdown 同时最多构造 2000 个展示 block。
+客户端只请求 artifact 的前 256 KiB；大文件明确显示截断提示，不能通过预览路径形成无界 DOM
+或内存增长。二进制资源仅显示可信 manifest 中的文件名、media type 和大小，不在页面中解码。
+
+artifact 下载端点保持 capability-bound snapshot 流式读取，每块最多 64 KiB，并支持一个
+RFC 7233 `bytes` 区间（显式 `206`、`Content-Range`、`Accept-Ranges`）；非法、多区间或越界
+请求稳定返回 `416 invalidRange` 和 `bytes */<length>`。响应按 artifact 类型设置
+`text/markdown`、`application/json`、`application/zip` 或已验证资源 media type。
+`Content-Disposition` 同时提供无控制字符的 ASCII fallback 和 RFC 5987 UTF-8 文件名；文件名
+永不作为路径使用。所有下载仍要求精确 Host、Origin 和 session Header，设置 `no-store`、
+`nosniff`、严格 CSP 与 `no-referrer`。bundle 内部路径继续由发布阶段的固定 manifest 控制。

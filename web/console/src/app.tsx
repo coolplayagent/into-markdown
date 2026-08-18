@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiMode, ApiClient, AssetMode, InputFormat, OcrPolicy, TaskRecord, WorkbenchOptions } from "./api";
+import type { AiMode, ApiClient, ArtifactPreview, ArtifactReference, AssetMode, InputFormat, OcrPolicy, TaskRecord, WorkbenchOptions } from "./api";
 import { defaultWorkbenchOptions } from "./api";
 import { I18nProvider, useI18n } from "./i18n";
 import { RouteLink, Router, useRouter } from "./router";
 import { ThemeProvider, useTheme } from "./theme";
+import { JsonPreview, SafeMarkdownPreview } from "./preview";
 
 const MAX_BATCH_FILES = 100;
 const MAX_BATCH_BYTES = 1024 * 1024 * 1024;
@@ -57,16 +58,21 @@ function TaskCard({ task, name, format, stage, api, onUpdate, onRetry }: {
   task: TaskRecord; name?: string | undefined; format?: string | undefined; stage?: string | undefined; api: ApiClient; onUpdate(task: TaskRecord): void; onRetry(): void;
 }) {
   const { t } = useI18n(); const busy = !TERMINAL.has(task.status); const percent = Math.round(task.progressMillionths / 10_000);
+  const [preview, setPreview] = useState<{ artifact: ArtifactReference; value?: ArtifactPreview; error?: boolean } | null>(null);
   const cancel = async () => { try { onUpdate(await api.cancel(task.id)); } catch { /* SSE remains authoritative */ } };
-  const download = async (key: string, filename: string) => {
-    const blob = await api.download(task.id, key); const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
-    anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
+  const download = async (key: string) => {
+    const result = await api.download(task.id, key); const url = URL.createObjectURL(result.blob); const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url);
   };
+  const openPreview = async (artifact: ArtifactReference) => { setPreview({ artifact }); try { const value = await api.preview(task.id, artifact.storageKey); setPreview({ artifact, value }); } catch { setPreview({ artifact, error: true }); } };
+  const artifactLabel = (artifact: ArtifactReference) => artifact.filename ?? ({ markdown: "result.md", documentIr: "document-ir.json", diagnostics: "diagnostics.json", bundle: "result.zip", asset: artifact.assetId ?? "asset" } as const)[artifact.kind];
   return <article className={`task-card ${task.status}`} aria-labelledby={`task-${task.id}`}>
     <div className="task-top"><div><h3 id={`task-${task.id}`}>{name ?? `${t("restoredTask")} ${task.id.slice(0, 8)}`}</h3><p><span className="status-pill">{t(task.status)}</span>{format ? ` · ${t("detectedFormat")}: ${format}` : ""}{stage ? ` · ${stage}` : ""}</p></div><strong>{percent}%</strong></div>
     <progress max="100" value={percent} aria-label={`${name ?? task.id}: ${percent}%`} />
     {task.diagnostics.length > 0 && <ul className="diagnostics">{task.diagnostics.map((item, index) => <li key={`${item.code}-${index}`}>{item.code}</li>)}</ul>}
-    <div className="task-actions">{busy && <button className="secondary danger" type="button" onClick={() => void cancel()}>{t("cancel")}</button>}{(task.status === "failed" || task.status === "interrupted") && <button type="button" onClick={onRetry}>{t("retry")}</button>}{task.status === "succeeded" && task.artifacts.filter((item) => item.kind === "markdown" || item.kind === "bundle").map((item) => <button className="secondary" type="button" key={item.storageKey} onClick={() => void download(item.storageKey, item.kind === "bundle" ? "result.zip" : "result.md")}>{item.kind === "bundle" ? t("downloadBundle") : t("downloadMarkdown")}</button>)}</div>
+    <div className="task-actions">{busy && <button className="secondary danger" type="button" onClick={() => void cancel()}>{t("cancel")}</button>}{(task.status === "failed" || task.status === "interrupted") && <button type="button" onClick={onRetry}>{t("retry")}</button>}{task.status === "succeeded" && task.artifacts.map((item) => <span className="artifact-actions" key={item.storageKey}>{item.kind !== "asset" && item.kind !== "bundle" && <button className="secondary" type="button" onClick={() => void openPreview(item)}>{t("preview")} {artifactLabel(item)}</button>}<button className="secondary" type="button" onClick={() => void download(item.storageKey)}>{t("download")} {artifactLabel(item)}</button></span>)}</div>
+    {task.status === "succeeded" && task.artifacts.some((item) => item.kind === "asset") && <details className="asset-browser"><summary>{t("resources")} ({task.artifacts.filter((item) => item.kind === "asset").length})</summary><ul>{task.artifacts.filter((item) => item.kind === "asset").map((item) => <li key={item.storageKey}><span>{artifactLabel(item)} · {item.mediaType ?? "application/octet-stream"} · {item.byteLen} B</span><button className="secondary" type="button" onClick={() => void download(item.storageKey)}>{t("download")}</button></li>)}</ul></details>}
+    {preview && <section className="preview-panel" aria-label={`${t("preview")} ${artifactLabel(preview.artifact)}`}><div className="preview-title"><h4>{artifactLabel(preview.artifact)}</h4><button className="icon-button" type="button" aria-label={t("closePreview")} onClick={() => setPreview(null)}>×</button></div>{preview.error ? <p role="alert">{t("previewFailed")}</p> : !preview.value ? <p role="status">{t("loading")}</p> : <>{preview.value.truncated && <p className="preview-notice" role="status">{t("previewTruncated")}</p>}{preview.artifact.kind === "markdown" ? <SafeMarkdownPreview source={preview.value.text} /> : <JsonPreview source={preview.value.text} truncated={preview.value.truncated} />}</>}</section>}
   </article>;
 }
 
@@ -116,8 +122,8 @@ function Workbench({ api }: { api: ApiClient }) {
     <section className="upload-layout" aria-labelledby="upload-heading"><div className="card upload-card"><h2 id="upload-heading">{t("addDocuments")}</h2>
       <div id="upload-zone" className={`drop-zone ${dragging ? "dragging" : ""}`} role="button" tabIndex={0} onClick={() => input.current?.click()} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.current?.click(); } }} onDragEnter={(e) => { e.preventDefault(); setDragging(true); }} onDragOver={(e) => e.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(Array.from(e.dataTransfer.files)); }}>
         <span className="upload-icon" aria-hidden="true">⇧</span><strong>{t("dropFiles")}</strong><span>{t("orChoose")}</span></div>
-      <input ref={input} className="visually-hidden" type="file" multiple onChange={(e) => addFiles(Array.from(e.target.files ?? []))} />
-      <input ref={directory} className="visually-hidden" type="file" multiple {...({ webkitdirectory: "" } as Record<string, string>)} onChange={(e) => addFiles(Array.from(e.target.files ?? []))} />
+      <input ref={input} className="visually-hidden" type="file" multiple aria-label={t("chooseFiles")} onChange={(e) => addFiles(Array.from(e.target.files ?? []))} />
+      <input ref={directory} className="visually-hidden" type="file" multiple aria-label={t("chooseFolder")} {...({ webkitdirectory: "" } as Record<string, string>)} onChange={(e) => addFiles(Array.from(e.target.files ?? []))} />
       <div className="picker-actions"><button className="secondary" type="button" onClick={() => input.current?.click()}>{t("chooseFiles")}</button><button className="secondary" type="button" onClick={() => directory.current?.click()}>{t("chooseFolder")}</button></div>
       {files.length > 0 && <div className="selection"><div className="selection-title"><strong>{t("selectedFiles")} ({files.length})</strong><span>{(selectedBytes / 1048576).toFixed(1)} MiB</span></div><ul>{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.webkitRelativePath || file.name} <small>· {t("detectedFormat")}: {formatForFile(file, options.format)}</small></span><button className="icon-button" type="button" aria-label={`${t("remove")} ${file.name}`} onClick={() => setFiles((current) => current.filter((_, item) => item !== index))}>×</button></li>)}</ul></div>}
     </div><OptionPanel value={options} onChange={setOptions} disabled={uploading} /></section>
