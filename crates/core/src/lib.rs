@@ -44,8 +44,9 @@ pub use ir::{
     TableRow, TimeRange, ValidationLimits,
 };
 pub use layout_quality::{
-    LayoutAudit, LayoutBoundary, LayoutDiff, LayoutDiffKind, LayoutQualityConfig,
-    LayoutQualityReport, SemanticMetrics, audit_semantic_layout,
+    LayoutAudit, LayoutBoundary, LayoutDiff, LayoutDiffKind, LayoutGolden, LayoutGoldenAudit,
+    LayoutGoldenNode, LayoutQualityConfig, LayoutQualityReport, SemanticMetrics, TableTopology,
+    audit_semantic_layout, audit_semantic_layout_golden, capture_semantic_layout_golden,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use ocr_binding::{

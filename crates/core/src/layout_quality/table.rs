@@ -2,11 +2,16 @@ use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id};
 use crate::Block;
 use serde::{Deserialize, Serialize};
 
+/// Exact logical table grid and origin-cell spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct TableTopology {
-    rows: u32,
-    columns: u32,
-    cells: Vec<(u32, u32, u32, u32)>,
+#[serde(rename_all = "camelCase")]
+pub struct TableTopology {
+    /// Logical row count.
+    pub rows: u32,
+    /// Maximum logical column count.
+    pub columns: u32,
+    /// Origin cells as `(row, column, row_span, column_span)`.
+    pub cells: Vec<(u32, u32, u32, u32)>,
 }
 
 pub(super) fn topology(block: &Block) -> Option<TableTopology> {

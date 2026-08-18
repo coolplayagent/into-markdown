@@ -17,7 +17,7 @@ pub(super) fn metrics(golden: &[SemanticNode], actual: &[SemanticNode]) -> Seman
 }
 
 fn identities(nodes: &[SemanticNode]) -> BTreeSet<(&str, &str, &str)> {
-    nodes.iter().map(|node| (node.id.as_str(), node.kind, node.text.as_str())).collect()
+    nodes.iter().map(|node| (node.id.as_str(), node.kind.as_str(), node.text.as_str())).collect()
 }
 
 #[allow(

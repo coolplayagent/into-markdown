@@ -1,1 +1,2 @@
 *.rtf binary
+fixtures/semantic-layout-ir-goldens.json text eol=lf

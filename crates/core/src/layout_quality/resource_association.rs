@@ -9,14 +9,48 @@ pub(super) fn compare(
     actual_assets: &[Asset],
     differences: &mut Vec<LayoutDiff>,
 ) {
+    compare_published(
+        golden_nodes,
+        &published(golden_assets),
+        actual_nodes,
+        &published(actual_assets),
+        differences,
+    );
+    duplicate_assets(actual_assets, differences);
+}
+
+pub(super) fn compare_golden(
+    golden_nodes: &[SemanticNode],
+    golden_assets: &[String],
+    actual_nodes: &[SemanticNode],
+    actual_assets: &[Asset],
+    differences: &mut Vec<LayoutDiff>,
+) {
+    let golden_published = golden_assets.iter().map(String::as_str).collect();
+    let actual_published = published(actual_assets);
+    compare_published(
+        golden_nodes,
+        &golden_published,
+        actual_nodes,
+        &actual_published,
+        differences,
+    );
+    duplicate_assets(actual_assets, differences);
+}
+
+fn compare_published(
+    golden_nodes: &[SemanticNode],
+    golden_published: &BTreeSet<&str>,
+    actual_nodes: &[SemanticNode],
+    actual_published: &BTreeSet<&str>,
+    differences: &mut Vec<LayoutDiff>,
+) {
     let golden_refs = refs(golden_nodes);
     let actual_refs = refs(actual_nodes);
-    let golden_published = published(golden_assets);
-    let actual_published = published(actual_assets);
     let all = golden_refs
-        .union(&golden_published)
+        .union(golden_published)
         .copied()
-        .chain(actual_refs.union(&actual_published).copied())
+        .chain(actual_refs.union(actual_published).copied())
         .collect::<BTreeSet<_>>();
     for id in all {
         let expected = (golden_refs.contains(id), golden_published.contains(id));
@@ -29,6 +63,9 @@ pub(super) fn compare(
             ));
         }
     }
+}
+
+fn duplicate_assets(actual_assets: &[Asset], differences: &mut Vec<LayoutDiff>) {
     let mut seen = BTreeSet::new();
     for asset in actual_assets {
         if !seen.insert(asset.id.0.as_str()) {

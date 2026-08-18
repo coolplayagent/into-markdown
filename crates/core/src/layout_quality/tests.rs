@@ -74,6 +74,7 @@ fn config() -> LayoutQualityConfig {
         coordinate_tolerance: 0.01,
         minimum_precision: 0.95,
         minimum_recall: 0.95,
+        max_field_bytes: 1024 * 1024,
     }
 }
 
@@ -218,4 +219,57 @@ fn invalid_numeric_authority_is_rejected() {
         audit_semantic_layout("invalid", &document, &[], &document, &[], invalid, &context)
             .is_err()
     );
+}
+
+#[test]
+fn large_fields_and_memory_have_exact_fail_closed_boundaries() {
+    let large = "x".repeat(64 * 1024);
+    let document = document(vec![paragraph("large", &large, 10.0)]);
+    let probe = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    let exact_config =
+        LayoutQualityConfig { max_field_bytes: u64::try_from(large.len()).unwrap(), ..config() };
+    let audit =
+        audit_semantic_layout("large-field", &document, &[], &document, &[], exact_config, &probe)
+            .unwrap();
+    let required = probe.reserved_memory_bytes();
+    assert!(required > u64::try_from(large.len()).unwrap());
+    drop(audit);
+    assert_eq!(probe.reserved_memory_bytes(), 0);
+
+    let exact_limits = ResourceLimits { max_memory_bytes: required, ..ResourceLimits::default() };
+    let exact = ExecutionContext::new(ExecutionOptions::default(), exact_limits);
+    let audit =
+        audit_semantic_layout("large-field", &document, &[], &document, &[], exact_config, &exact)
+            .unwrap();
+    assert_eq!(exact.reserved_memory_bytes(), required);
+    drop(audit);
+    assert_eq!(exact.reserved_memory_bytes(), 0);
+
+    let low_limits = ResourceLimits { max_memory_bytes: required - 1, ..ResourceLimits::default() };
+    let low = ExecutionContext::new(ExecutionOptions::default(), low_limits);
+    assert!(matches!(
+        audit_semantic_layout("large-field", &document, &[], &document, &[], exact_config, &low),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(low.reserved_memory_bytes(), 0);
+
+    let too_small = LayoutQualityConfig {
+        max_field_bytes: u64::try_from(large.len() - 1).unwrap(),
+        ..config()
+    };
+    let field_limited =
+        ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    assert!(matches!(
+        audit_semantic_layout(
+            "large-field",
+            &document,
+            &[],
+            &document,
+            &[],
+            too_small,
+            &field_limited
+        ),
+        Err(ConversionError::ResourceLimit { limit: "semanticLayoutFieldBytes", .. })
+    ));
+    assert_eq!(field_limited.reserved_memory_bytes(), 0);
 }

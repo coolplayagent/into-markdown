@@ -12,6 +12,7 @@ exports_files([
     "manifest.json",
     "pdf-layout-quality-authority.json",
     "semantic-layout-quality-authority.json",
+    "semantic-layout-ir-goldens.json",
 ])
 
 filegroup(
@@ -23,6 +24,7 @@ filegroup(
         "manifest.json",
         "pdf-layout-quality-authority.json",
         "semantic-layout-quality-authority.json",
+        "semantic-layout-ir-goldens.json",
     ] + glob(["small/**"]),
 )
 
