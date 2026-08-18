@@ -153,3 +153,24 @@ RFC 7233 `bytes` 区间（显式 `206`、`Content-Range`、`Accept-Ranges`）；
 `Content-Disposition` 同时提供无控制字符的 ASCII fallback 和 RFC 5987 UTF-8 文件名；文件名
 永不作为路径使用。所有下载仍要求精确 Host、Origin 和 session Header，设置 `no-store`、
 `nosniff`、严格 CSP 与 `no-referrer`。bundle 内部路径继续由发布阶段的固定 manifest 控制。
+
+## 任务历史与保留
+
+`GET /api/tasks` 提供按 `(updatedAtMs, id)` 的稳定 newest-first cursor 分页（每页 1–100），
+并可按状态和固定标记筛选。历史卡片可查看详情、重新执行仍保存在本机的离线输入、固定/取消固定，
+或在明确的“不可恢复”确认后永久删除。需要联网、私网或 Provider 的旧任务不会复用一次性授权，
+必须重新上传并再次授权。
+
+默认保留策略为 30 天和 10 GiB：服务启动、接受新上传前和用户确认“立即清理”时，按首次进入
+terminal 状态的持久化时间从最旧的、未固定任务开始删除，直到年龄和容量条件同时满足；恰好
+30 天或总量恰好超过容量边界的任务参与清理，恰好等于容量时不清理。单个未固定任务即可因
+超额被删除；固定项不计为候选，即使因此仍高于目标容量也不会删除；pending/running/converted
+任务永不参与。10 GiB retained-history 目标不超过 14,352 MiB data ceiling；另有四笔单任务
+1,028 MiB 保守 reservation 与 4 MiB SQLite headroom，使并发转换不会突破 14,356 MiB managed
+ceiling。
+
+删除先验证 checkpoint 和 capability-bound 任务树，再把目录以 `taskId.recoveryToken` 原子移动到
+私有 `trash`，事务删除 SQLite 主记录及子记录，最后清除 checkpoint 和隔离目录。SQLite commit
+前失败会原子恢复任务目录；commit 后 `trash` 名称是 durable deletion intent。若中途崩溃，
+下次启动会依据数据库是否仍有该任务来恢复目录或完成清理；任何非私有目录、链接、硬链接、
+异常深度、token 所有权冲突或非 canonical 名称都 fail closed，不会跟随用户路径。

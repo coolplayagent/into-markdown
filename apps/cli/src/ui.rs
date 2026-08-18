@@ -3,7 +3,7 @@
 use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
 use crate::web_tasks::{
-    ArtifactSnapshot, TaskEventDto, TaskEventKind, WebTaskBackend, WebTaskError,
+    ArtifactSnapshot, RetentionPolicy, TaskEventDto, TaskEventKind, WebTaskBackend, WebTaskError,
     decode_web_task_request,
 };
 use axum::Json;
@@ -26,6 +26,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
@@ -111,6 +112,29 @@ struct ComponentDto {
 struct TaskListDto {
     schema_version: u32,
     tasks: Vec<into_markdown::TaskRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<TaskCursorDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskCursorDto {
+    updated_at_ms: i64,
+    id: into_markdown::TaskId,
+}
+
+struct TaskListQuery {
+    limit: Option<u32>,
+    after_updated_at_ms: Option<i64>,
+    after_id: Option<String>,
+    status: Option<into_markdown::TaskStatus>,
+    pinned: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PinTaskDto {
+    pinned: bool,
 }
 
 /// Opens a URL without invoking a command shell.
@@ -263,6 +287,14 @@ where
         .route("/status", post(status).fallback(api_method_not_allowed))
         .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
+        .route("/tasks/{id}/cancel", post(cancel_task).fallback(api_method_not_allowed))
+        .route("/tasks/{id}/retry", post(retry_task).fallback(api_method_not_allowed))
+        .route("/tasks/{id}/pin", post(pin_task).fallback(api_method_not_allowed))
+        .route(
+            "/tasks/{id}/history",
+            axum::routing::delete(delete_task).fallback(api_method_not_allowed),
+        )
+        .route("/tasks/cleanup", post(cleanup_tasks).fallback(api_method_not_allowed))
         .route("/tasks/{id}/events", get(task_events).fallback(api_method_not_allowed))
         .route(
             "/tasks/{id}/artifacts/{key}",
@@ -512,15 +544,84 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn list_tasks(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn list_tasks(State(state): State<AppState>, request: Request) -> Response {
+    let query = match parse_task_list_query(request.uri().query()) {
+        Ok(query) => query,
+        Err(()) => return rejection(StatusCode::BAD_REQUEST, "invalidHistoryQuery"),
+    };
+    let headers = request.headers();
     if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
-    match tokio::task::spawn_blocking(move || state.tasks.list()).await {
-        Ok(Ok(tasks)) => Json(TaskListDto { schema_version: 1, tasks }).into_response(),
+    let after = match (query.after_updated_at_ms, query.after_id) {
+        (None, None) => None,
+        (Some(updated_at_ms), Some(id)) => match into_markdown::TaskId::parse(id) {
+            Ok(id) => Some(into_markdown::TaskCursor { updated_at_ms, id }),
+            Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidCursor"),
+        },
+        _ => return rejection(StatusCode::BAD_REQUEST, "invalidCursor"),
+    };
+    match tokio::task::spawn_blocking(move || {
+        state.tasks.list(query.limit.unwrap_or(25), after.as_ref(), query.status, query.pinned)
+    })
+    .await
+    {
+        Ok(Ok(page)) => Json(TaskListDto {
+            schema_version: 1,
+            tasks: page.tasks,
+            next_cursor: page
+                .next
+                .map(|cursor| TaskCursorDto { updated_at_ms: cursor.updated_at_ms, id: cursor.id }),
+        })
+        .into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
+}
+
+fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
+    let mut query = TaskListQuery {
+        limit: None,
+        after_updated_at_ms: None,
+        after_id: None,
+        status: None,
+        pinned: None,
+    };
+    let Some(value) = value else { return Ok(query) };
+    for field in value.split('&') {
+        let (name, value) = field.split_once('=').ok_or(())?;
+        if value.is_empty() || value.contains('%') || value.contains('+') {
+            return Err(());
+        }
+        match name {
+            "limit" if query.limit.is_none() => query.limit = Some(value.parse().map_err(|_| ())?),
+            "afterUpdatedAtMs" if query.after_updated_at_ms.is_none() => {
+                query.after_updated_at_ms = Some(value.parse().map_err(|_| ())?)
+            }
+            "afterId" if query.after_id.is_none() => query.after_id = Some(value.to_owned()),
+            "pinned" if query.pinned.is_none() => {
+                query.pinned = Some(match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(()),
+                })
+            }
+            "status" if query.status.is_none() => {
+                query.status = Some(match value {
+                    "pending" => into_markdown::TaskStatus::Pending,
+                    "running" => into_markdown::TaskStatus::Running,
+                    "converted" => into_markdown::TaskStatus::Converted,
+                    "succeeded" => into_markdown::TaskStatus::Succeeded,
+                    "failed" => into_markdown::TaskStatus::Failed,
+                    "interrupted" => into_markdown::TaskStatus::Interrupted,
+                    "cancelled" => into_markdown::TaskStatus::Cancelled,
+                    _ => return Err(()),
+                })
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(query)
 }
 
 async fn task_status(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
@@ -540,6 +641,73 @@ async fn cancel_task(State(state): State<AppState>, AxumPath(id): AxumPath<Strin
     };
     match tokio::task::spawn_blocking(move || state.tasks.cancel(&id)).await {
         Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn retry_task(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.retry(&id)).await {
+        Ok(Ok(record)) => (StatusCode::ACCEPTED, Json(record)).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn pin_task(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    request: Request,
+) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    if request.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        != Some("application/json")
+    {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalidContentType");
+    }
+    let bytes = match axum::body::to_bytes(request.into_body(), 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidPinRequest"),
+    };
+    let request: PinTaskDto = match serde_json::from_slice(&bytes) {
+        Ok(request) => request,
+        Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidPinRequest"),
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.set_pinned(&id, request.pinned)).await {
+        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn delete_task(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.delete(&id)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn cleanup_tasks(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(&headers) {
+        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(value) => i64::try_from(value.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "invalidSystemClock"),
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.cleanup(RetentionPolicy::default(), now))
+        .await
+    {
+        Ok(Ok(summary)) => Json(summary).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
@@ -1167,6 +1335,25 @@ mod tests {
             HeaderValue::from_static("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:2"),
         );
         assert!(last_event_cursor(&headers).is_err());
+    }
+
+    #[test]
+    fn history_query_requires_bounded_canonical_filters_and_cursor_pairs() {
+        let id = "a".repeat(32);
+        let query = parse_task_list_query(Some(&format!(
+            "limit=25&afterUpdatedAtMs=42&afterId={id}&status=succeeded&pinned=true"
+        )))
+        .unwrap();
+        assert_eq!(query.limit, Some(25));
+        assert_eq!(query.after_updated_at_ms, Some(42));
+        assert_eq!(query.after_id.as_deref(), Some(id.as_str()));
+        assert_eq!(query.status, Some(into_markdown::TaskStatus::Succeeded));
+        assert_eq!(query.pinned, Some(true));
+        for invalid in
+            ["unknown=x", "limit=1&limit=2", "status=unknown", "pinned=1", "afterId=%2e%2e"]
+        {
+            assert!(parse_task_list_query(Some(invalid)).is_err(), "accepted {invalid}");
+        }
     }
 
     #[test]

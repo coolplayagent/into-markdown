@@ -159,6 +159,25 @@ fn create_get_list_pin_and_legal_state_machine_are_atomic() {
 }
 
 #[test]
+fn terminal_delete_is_atomic_and_protects_active_and_pinned_tasks() {
+    let (_directory, mut store) = store();
+    let active = create(&mut store);
+    assert!(matches!(store.delete_terminal(&active.id, true), Err(TaskStoreError::Conflict(_))));
+    let terminal = store
+        .transition(&active.id, transition(TaskStatus::Pending, TaskStatus::Cancelled, 0))
+        .unwrap();
+    let completed_at = store.completed_at_ms(&terminal.id).unwrap().unwrap();
+    store.set_pinned(&terminal.id, true).unwrap();
+    assert_eq!(store.completed_at_ms(&terminal.id).unwrap(), Some(completed_at));
+    assert!(store.recovery_token_in_use(&terminal.input.recovery_token).unwrap());
+    assert!(matches!(store.delete_terminal(&terminal.id, false), Err(TaskStoreError::Conflict(_))));
+    assert!(store.get(&terminal.id).unwrap().is_some());
+    store.delete_terminal(&terminal.id, true).unwrap();
+    assert!(store.get(&terminal.id).unwrap().is_none());
+    assert!(!store.recovery_token_in_use(&terminal.input.recovery_token).unwrap());
+}
+
+#[test]
 fn illegal_regression_stale_cas_and_invalid_progress_fail_closed() {
     let (_directory, mut write_store) = store();
     let task = create(&mut write_store);
@@ -197,7 +216,7 @@ fn schema_migration_is_idempotent_and_newer_versions_are_rejected() {
     drop(connection);
     assert!(matches!(
         TaskStore::open(directory.path(), BusyControl::default()),
-        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: 3 })
+        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: SCHEMA_VERSION })
     ));
 }
 
@@ -229,7 +248,8 @@ fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
     store
         .connection
         .execute_batch(&format!(
-            "DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
+            "ALTER TABLE tasks DROP COLUMN completed_at_ms;\
+                 DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
                  ALTER TABLE artifacts RENAME TO artifacts_v3;\
                  CREATE TABLE artifacts(\
                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\

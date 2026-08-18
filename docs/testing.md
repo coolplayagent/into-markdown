@@ -1,5 +1,12 @@
 # 测试策略
 
+任务历史/保留的定向门禁包括 `cargo test -p into-markdown-task-store
+terminal_delete_is_atomic_and_protects_active_and_pinned_tasks` 和 `cargo test -p
+into-markdown-cli retention_`。测试覆盖分页/筛选、固定、重试、显式删除、30 天前一毫秒/恰好
+30 天、容量恰好相等/超出一字节、单任务、固定项、managed ceiling 拒绝、并发完成，以及
+SQLite commit 前后注入失败的目录/checkpoint 重启恢复。前端单测覆盖 cursor 编码、筛选、固定/
+重试/删除/立即清理 API、不可恢复提示与键盘/axe 可访问性。
+
 Web 预览与下载的定向门禁为 `cargo test -p into-markdown-cli
 download_ranges_and_names_are_canonical_and_header_safe`、`bazel test
 //web/console:unit_test //web/console:dist_integration_test` 和 `bazel test

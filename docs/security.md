@@ -384,7 +384,7 @@ identity 复核及 fd-relative rename。父目录、目标、临时文件或符�
 
 浏览器文件名仅是最多 255 bytes 的 display metadata；分隔符、控制字符、`.` 和 `..` 均
 拒绝，永不解释为自由路径或 URL。请求 body 逐 chunk 消费，每次实际写入前检查单文件
-512 MiB 与 managed root 8 GiB ceiling；断连会 drop guard 并清理未绑定任务的 incoming
+512 MiB 与 managed root 14,356 MiB ceiling；断连会 drop guard 并清理未绑定任务的 incoming
 capability。数据库不保存输入正文或 Provider secret。
 
 durable 状态机是 `pending -> running -> converted -> succeeded`。RecoveryStore 的
@@ -400,7 +400,8 @@ unlink 临时名称，只从 retained 匿名只读 fd 流式响应；原 publish
 
 通用 TaskStore 的 `succeeded` 继续表示 RecoveryStore checkpoint 已 durable，不把旧 schema
 记录重解释为 Web publication。schema v1/v2 中缺少 AssetId/filename/media-type 的 legacy asset
-会无损迁移并保留 `None`；新 v3 写入必须带完整 canonical metadata。Web 后端另在成功、重启、
+会无损迁移并保留 `None`；v4 另记录首次进入 terminal 状态的时间，固定操作不会重置保留年龄；
+新写入必须带完整 canonical metadata。Web 后端另在成功、重启、
 查询与下载边界要求恰好一份 Markdown/Document IR/diagnostics/bundle、最多 124 assets、唯一
 storage key/AssetId；通用 TaskStore 累计最多 2 GiB，Web profile publication 累计最多
 512 MiB，且 manifest 与 TaskStore 逐字段相同。损坏的非成功
@@ -420,11 +421,12 @@ Web profile 把 request memory 与 temporary 上限约束为 256 MiB、总 asset
 也在 quota mutex 内重新 descriptor-bound 测量 managed tree；若并发 publication 使全树测量
 暂时不可用，则把该 lease 的完整计划计入 `used`。这样未计入
 `used` 的在途写始终由 `reserved` 覆盖，持续满载 worker 也不能复用已落盘 reservation，
-同一全局 8 GiB 空间，同时四个小任务可并行取得运行资源。quota wait 使用有界 timed wait，
+全局 ceiling 精确由 10 GiB retained history、四笔各 1,028 MiB 的 worker reservation 和
+4 MiB SQLite headroom 组成；同时四个任务可取得完整保守运行资源。quota wait 使用有界 timed wait，
 计入 30 分钟总 deadline，并在 cancel/owner shutdown 时唤醒；真实清理会通知等待者，清理失败
 不虚减 quota。
 
-8 GiB managed ceiling 中永久保留 4 MiB 给 TaskStore/SQLite WAL；每次没有 execution lease 的
+14,356 MiB managed ceiling 中永久保留 4 MiB 给 TaskStore/SQLite WAL；每次没有 execution lease 的
 create 或 terminal/recovery mutation 在 quota mutex 内串行预留 1 MiB；没有 execution lease 的
 exact-set success reconciliation 预留完整 4 MiB。每次写入前都以 retained root 重测物理占用与
 所有活跃 reservation，写后再次重测且验证实际增长不超过 reservation。
