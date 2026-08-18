@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "outcomes": [
+    {
+      "family": "docx-docm",
+      "scenario": "normal",
+      "evidence": "docx-normal",
+      "outcomeSha256": "237bb6429b8d6b8f0e35f17780952ab0dd4d2359011682684a3be266a34df9b1",
+      "artifactKind": "ir-gfm",
+      "irSha256": "0dfc6d83790bca4c7f742ceb86422d7b901e74f6131f1a68ca978c31f96fe8a2",
+      "gfmSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006"
+    },
+    {
+      "family": "docx-docm",
+      "scenario": "complex",
+      "evidence": "docx-complex",
+      "outcomeSha256": "e58d2910b53fe6d4df07bcdb2493ee3c5a17d61c6e3c5c0101342a5ff771c462",
+      "artifactKind": "ir-gfm",
+      "irSha256": "6d1ec1d1156106e73fba3082885d9298bd1c50ad0374b22a860b0c85b85c874f",
+      "gfmSha256": "fff9615ad95ec618a8fb8e94f38a43663b660f0700ff1b76a8cdeaff50295d9c"
+    },
+    {
+      "family": "docx-docm",
+      "scenario": "misordered",
+      "evidence": "docx-order",
+      "outcomeSha256": "2ee04854a505a9d6a1f21c0c24ac68339d1fea5f31128d718968d60644ade9a2",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "abedb3eabee6651ca40d6001f5f677d34fadbf4634c3bd9996a97f7fc784a7e7"
+    },
+    {
+      "family": "docx-docm",
+      "scenario": "corrupt",
+      "evidence": "docx-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "docx-docm",
+      "scenario": "resourceBoundary",
+      "evidence": "docx-limit",
+      "outcomeSha256": "47ca3f16b74eebfac026a6dbad0036a76f4a8f8d5366188537b670f341115474",
+      "artifactKind": "stable-error",
+      "errorSha256": "b84d76ac542bf1ae71120a05ef5e7f613b1f81abc35d87b1ef23c8e593e734f2"
+    },
+    {
+      "family": "presentationml",
+      "scenario": "normal",
+      "evidence": "pptx-normal",
+      "outcomeSha256": "f2bc6adf167718ef09be36d88db825b8ed14e440065a61e284d13497e07792aa",
+      "artifactKind": "ir-gfm",
+      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
+      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+    },
+    {
+      "family": "presentationml",
+      "scenario": "complex",
+      "evidence": "pptx-complex",
+      "outcomeSha256": "0e8b399791c22e4ee37e48ba9c2d7884c2b70866ffc82413c036628a3180043f",
+      "artifactKind": "ir-gfm",
+      "irSha256": "d1a3fc3c89cda14a3ac47e103eb5ea1d3e1a943de3a6d868be6e7317ba585630",
+      "gfmSha256": "7af1137d818980baa028a0ac0365aec99a944d8ed304f6d27eacf93a0cfe6caa"
+    },
+    {
+      "family": "presentationml",
+      "scenario": "misordered",
+      "evidence": "pptx-order",
+      "outcomeSha256": "2238e0dabf96281290a82ebb42e5ae9d85fb603373f1ffc07b1ad8f486e1fe41",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "c3fdb121f19b73d2d5cf508e89d2615dbb5163aa56e30f51ca45abdac2141c0e"
+    },
+    {
+      "family": "presentationml",
+      "scenario": "corrupt",
+      "evidence": "pptx-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "presentationml",
+      "scenario": "resourceBoundary",
+      "evidence": "pptx-limit",
+      "outcomeSha256": "991e04f309e34a7e59bd445a6e146732a1f5bdd6f49c92457c123d1bdb2a1042",
+      "artifactKind": "stable-error",
+      "errorSha256": "03635031bd9d5b79f017f0515478726152b14caa8eb4d607785d3a3f7cbb91a9"
+    },
+    {
+      "family": "spreadsheetml-xlsb",
+      "scenario": "normal",
+      "evidence": "xlsx-normal",
+      "outcomeSha256": "c9b35f2d17ab9d60d28ddaa928938ed4b76c8f883a1ee64a29d87599f24d43d8",
+      "artifactKind": "ir-gfm",
+      "irSha256": "596a25175eacbf32388ffbbc9205d46b658ad8125e22a53af1780ffc537b939f",
+      "gfmSha256": "54f31131d817ff48fb79e562d820992c04924d7a2639c3cd8f96ee70ebeed6d4"
+    },
+    {
+      "family": "spreadsheetml-xlsb",
+      "scenario": "complex",
+      "evidence": "xlsx-complex",
+      "outcomeSha256": "f37d0aae3742e6bfca6aba938de06997dd2041772b7e3d28379772d94a3df873",
+      "artifactKind": "ir-gfm",
+      "irSha256": "8db89b24b05e64fb322f15751d5b224e2cfa2f3007e62ea5bc95a8f64e3c68c9",
+      "gfmSha256": "06e9138c41dbc0b2ba6a4635013500131d4dd9f555a62587257be763ac855cfa"
+    },
+    {
+      "family": "spreadsheetml-xlsb",
+      "scenario": "misordered",
+      "evidence": "xlsb-order",
+      "outcomeSha256": "ad1d1c33a88637e403d6ca8593110b9dd221e3f745343a40306827aa5b9fe2c1",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "42c64f72287c73012c70a2ad00fea81f392a52f76e8334b47c296a2da7d88160"
+    },
+    {
+      "family": "spreadsheetml-xlsb",
+      "scenario": "corrupt",
+      "evidence": "xlsx-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "spreadsheetml-xlsb",
+      "scenario": "resourceBoundary",
+      "evidence": "xlsx-limit",
+      "outcomeSha256": "61a76abb4fe1bcb19805ef41697643fbfdd4713b71da33aff62ba6f9b2070028",
+      "artifactKind": "stable-error",
+      "errorSha256": "70f2350a7e1989fb5680a3904412924f2a8553202e46b7cf388b9d5c515149e8"
+    },
+    {
+      "family": "opendocument",
+      "scenario": "normal",
+      "evidence": "odt-normal",
+      "outcomeSha256": "a1b4faeb1223133fb3a47f9e3075dc3c11ce3d8a6aefeb8a77843612c4b83eaf",
+      "artifactKind": "ir-gfm",
+      "irSha256": "0877dc31c19cc002d8432c362a9e60154f29a697d2c587220f91326342fbaa60",
+      "gfmSha256": "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769"
+    },
+    {
+      "family": "opendocument",
+      "scenario": "complex",
+      "evidence": "ods-complex",
+      "outcomeSha256": "96cd39f26199d70bb49492b1dd42012c8b505635b53d241c14a8d264fda4928d",
+      "artifactKind": "ir-gfm",
+      "irSha256": "a201cba7c8eef400c5feb5471c143b79fa1d552c8dbfc74c94609b4b03727a28",
+      "gfmSha256": "d8bf223846629dbb60468011666b5656e8aa1bfd0d11bba700ccfd48336839ea"
+    },
+    {
+      "family": "opendocument",
+      "scenario": "misordered",
+      "evidence": "odp-order",
+      "outcomeSha256": "58d85fd5df1c49e55f8ed7cf3de3d4969df98d323ff2d67f0e0514dedd044f15",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "4b42b3330ef9d1ddcd4da29f696fb6cdbbfacbe333d780d2a84414b4160236a8"
+    },
+    {
+      "family": "opendocument",
+      "scenario": "corrupt",
+      "evidence": "odt-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "opendocument",
+      "scenario": "resourceBoundary",
+      "evidence": "odt-limit",
+      "outcomeSha256": "47ca3f16b74eebfac026a6dbad0036a76f4a8f8d5366188537b670f341115474",
+      "artifactKind": "stable-error",
+      "errorSha256": "b84d76ac542bf1ae71120a05ef5e7f613b1f81abc35d87b1ef23c8e593e734f2"
+    },
+    {
+      "family": "rtf",
+      "scenario": "normal",
+      "evidence": "rtf-normal",
+      "outcomeSha256": "999e646c9dc01ddcdd39fec808e5cd53707bac5e8a99c21bd7c09b599765ccc4",
+      "artifactKind": "ir-gfm",
+      "irSha256": "77edf09f5e507eedcd18b31eae18e1bfc31972d4b92cf423df23d3bc37cd9415",
+      "gfmSha256": "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a"
+    },
+    {
+      "family": "rtf",
+      "scenario": "complex",
+      "evidence": "rtf-complex",
+      "outcomeSha256": "b3da0b1f748dafdeeb89c85bffda1e5f6c3050685043901d74cd02385f2f01c8",
+      "artifactKind": "ir-gfm",
+      "irSha256": "4e82be476c585aeecbcefda8bbcbc560e9814dec0bed7c0527d930f9d01d60cc",
+      "gfmSha256": "fdaf78e01dddecd8b74b20975a0feecb848f1cf4237d0f716b6b8fff1ace0946"
+    },
+    {
+      "family": "rtf",
+      "scenario": "misordered",
+      "evidence": "rtf-order",
+      "outcomeSha256": "9dbe0f5a539ffe90b965f14a389b30ede42f8d89e8028e71d8eb22c8b93eaba8",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "91e62d75a1815fb84edef414a0b2373193ff80a788a0e7c7aa97dc46bc1ddcdb"
+    },
+    {
+      "family": "rtf",
+      "scenario": "corrupt",
+      "evidence": "rtf-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "rtf",
+      "scenario": "resourceBoundary",
+      "evidence": "rtf-limit",
+      "outcomeSha256": "50d9db53c9b9f02a05aea997afd22b4b2e6ce62ec83f1ff44e4b23ad3484c956",
+      "artifactKind": "stable-error",
+      "errorSha256": "b84d76ac542bf1ae71120a05ef5e7f613b1f81abc35d87b1ef23c8e593e734f2"
+    },
+    {
+      "family": "epub",
+      "scenario": "normal",
+      "evidence": "epub-normal",
+      "outcomeSha256": "b6182967bcc8534853a4ba168469958fbbb6c05a6143a7925e32c0bfbe149be0",
+      "artifactKind": "ir-gfm",
+      "irSha256": "3e0b40409a161327f691e6d16d3bffab150ca2b1cad7d0ae86b1e6a5cd620197",
+      "gfmSha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6"
+    },
+    {
+      "family": "epub",
+      "scenario": "complex",
+      "evidence": "epub-adversarial",
+      "outcomeSha256": "c6ff186f885ce02ba55546001ef2f8cc8d9bb491f8e13f7d61240da0dfe789fa",
+      "artifactKind": "ir-gfm",
+      "irSha256": "593fc26eb00df07c2589212c151403eedd61c58d54c9a42a7ae3d383d40de9e0",
+      "gfmSha256": "ba7e8530c4c07ff6fe1215887b1c500af985e86fbaa91075e22d072ed4b1a6a4"
+    },
+    {
+      "family": "epub",
+      "scenario": "misordered",
+      "evidence": "epub-order",
+      "outcomeSha256": "f1f692398a1c81ee754ed64b3dc34b984c364e9cad28bc0149a90849f4cb8556",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "2edcca3c6491f440ddeaebc2e3b52f960609823fc2e373d40172ad3b5e2627fc"
+    },
+    {
+      "family": "epub",
+      "scenario": "corrupt",
+      "evidence": "epub-corrupt",
+      "outcomeSha256": "8cb648450b965784c2b299a882e30805d2c1e323b87baa7e9b9114f689daa427",
+      "artifactKind": "stable-error",
+      "errorSha256": "3bed2cb3a3acf7b6a8ef408420cc682d5520e26976d354254f528c965612054f"
+    },
+    {
+      "family": "epub",
+      "scenario": "resourceBoundary",
+      "evidence": "epub-limit",
+      "outcomeSha256": "2563c70472393c6ab35cc10cc717efc2412c8b01673ec0f5b1bcc03c1dca9dd4",
+      "artifactKind": "stable-error",
+      "errorSha256": "572a6f411280a9ca4d30ed7c6002c1905d3ac8aeccbde632f8669b2ef19da762"
+    },
+    {
+      "family": "legacy-office",
+      "scenario": "normal",
+      "evidence": "legacy-normal",
+      "outcomeSha256": "37e4d8aa972ddf9c7a0f2cb25ade63faa115dac9fbe960dfc779e24daeedb7ce",
+      "artifactKind": "ir-gfm",
+      "irSha256": "d9aa16b5e11e3c56f5005bb6475cb8934d5e85c81b921e00ca7145bd2edb2147",
+      "gfmSha256": "e67ad5e44bcaf6711e7a1784ff51ab7819ce6b0da8b1d88f359843e74ce6ad60"
+    },
+    {
+      "family": "legacy-office",
+      "scenario": "complex",
+      "evidence": "legacy-complex",
+      "outcomeSha256": "ec91d623e937750046ef675051493e70bc138ee9a2b5ea1e7463200254273ba5",
+      "artifactKind": "ir-gfm",
+      "irSha256": "072adda2e832e4c2600a56aa93f409937a11273e3bb3619d90dab620cdd9b6e7",
+      "gfmSha256": "742b5b5d321b377fc201bcdcde0c85727c8895b5e95121de17c94627615912ec"
+    },
+    {
+      "family": "legacy-office",
+      "scenario": "misordered",
+      "evidence": "legacy-order",
+      "outcomeSha256": "cc0392bfed47a970095e07d8d7ac6f98a8626393f3c9e9d4bae0b350845ba376",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "4579288e944136cda6a988ba2cbf7adbe3a058f8bb9eac9ea7e1291da547cfee"
+    },
+    {
+      "family": "legacy-office",
+      "scenario": "corrupt",
+      "evidence": "legacy-adversarial",
+      "outcomeSha256": "8cb648450b965784c2b299a882e30805d2c1e323b87baa7e9b9114f689daa427",
+      "artifactKind": "stable-error",
+      "errorSha256": "3bed2cb3a3acf7b6a8ef408420cc682d5520e26976d354254f528c965612054f"
+    },
+    {
+      "family": "legacy-office",
+      "scenario": "resourceBoundary",
+      "evidence": "legacy-limit",
+      "outcomeSha256": "2563c70472393c6ab35cc10cc717efc2412c8b01673ec0f5b1bcc03c1dca9dd4",
+      "artifactKind": "stable-error",
+      "errorSha256": "572a6f411280a9ca4d30ed7c6002c1905d3ac8aeccbde632f8669b2ef19da762"
+    },
+    {
+      "family": "pdf",
+      "scenario": "normal",
+      "evidence": "pdf-normal",
+      "outcomeSha256": "8514bf0ef9caa42b255ac88aadfd374d379205f236c590dbb1e9c2c0fc493d31",
+      "artifactKind": "native-quality-report",
+      "reportSha256": "d85e6c083256b24c95333d9951c5be6249941fd88079990d01e9b7cc0bc67a97"
+    },
+    {
+      "family": "pdf",
+      "scenario": "complex",
+      "evidence": "pdf-complex",
+      "outcomeSha256": "e990df627e915a44b752ce581f5433084da8c1edf36d2018fb9f612f8196e93b",
+      "artifactKind": "native-quality-report",
+      "reportSha256": "77e73cc0fb6591c19b802404e25afe64003453a0cd49bcee412f2681e6350b4c"
+    },
+    {
+      "family": "pdf",
+      "scenario": "misordered",
+      "evidence": "pdf-order",
+      "outcomeSha256": "760a5d176c742b1e38805ce7aaad2e044a160444b972e99e2ab5d1fd845a4632",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "9c85ab678057ccfad94531ec86df16f9916faf0a15a5f2016bcf2fb55c410eb9"
+    },
+    {
+      "family": "pdf",
+      "scenario": "corrupt",
+      "evidence": "pdf-corrupt",
+      "outcomeSha256": "8cb648450b965784c2b299a882e30805d2c1e323b87baa7e9b9114f689daa427",
+      "artifactKind": "stable-error",
+      "errorSha256": "3bed2cb3a3acf7b6a8ef408420cc682d5520e26976d354254f528c965612054f"
+    },
+    {
+      "family": "pdf",
+      "scenario": "resourceBoundary",
+      "evidence": "pdf-adversarial",
+      "outcomeSha256": "2563c70472393c6ab35cc10cc717efc2412c8b01673ec0f5b1bcc03c1dca9dd4",
+      "artifactKind": "stable-error",
+      "errorSha256": "572a6f411280a9ca4d30ed7c6002c1905d3ac8aeccbde632f8669b2ef19da762"
+    },
+    {
+      "family": "image-ocr",
+      "scenario": "normal",
+      "evidence": "ocr-normal",
+      "outcomeSha256": "014d1331b84aa973f8d0ef0c0d79ffca2987ee103af2edc5ff9537e394f81cbe",
+      "artifactKind": "ir-gfm",
+      "irSha256": "c1354fcd8f5595266ece9a1e9cdd67167fb698c9e66e61344d99f24255282a2a",
+      "gfmSha256": "59a7330c710ee069eba95a401a46573d005ee1ba48548738d9de51706ccc2a87"
+    },
+    {
+      "family": "image-ocr",
+      "scenario": "complex",
+      "evidence": "ocr-complex",
+      "outcomeSha256": "e7949215c3d8fb0846785918ee6a502691aceaed974ce12a3eeb1e3e2d1443e8",
+      "artifactKind": "ir-gfm",
+      "irSha256": "226909312bc49e586fc3175958d9bfbb5cf728650521e1fc436a3b445c5e313a",
+      "gfmSha256": "18313cb568f37f013958d3edce36c79d8b388d77a2edc6882e72d46e2b3eca66"
+    },
+    {
+      "family": "image-ocr",
+      "scenario": "misordered",
+      "evidence": "ocr-order",
+      "outcomeSha256": "02ae80643df1102f97b115dd450358b06c65bdb3cf8b6f7f9262ee88c448032f",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "d81b671692b4ed824f3a5d102547e4f05bdee9def4a7cf50c823531c589f9bf6"
+    },
+    {
+      "family": "image-ocr",
+      "scenario": "corrupt",
+      "evidence": "ocr-corrupt",
+      "outcomeSha256": "8cb648450b965784c2b299a882e30805d2c1e323b87baa7e9b9114f689daa427",
+      "artifactKind": "stable-error",
+      "errorSha256": "3bed2cb3a3acf7b6a8ef408420cc682d5520e26976d354254f528c965612054f"
+    },
+    {
+      "family": "image-ocr",
+      "scenario": "resourceBoundary",
+      "evidence": "ocr-resource",
+      "outcomeSha256": "2563c70472393c6ab35cc10cc717efc2412c8b01673ec0f5b1bcc03c1dca9dd4",
+      "artifactKind": "stable-error",
+      "errorSha256": "572a6f411280a9ca4d30ed7c6002c1905d3ac8aeccbde632f8669b2ef19da762"
+    },
+    {
+      "family": "outlook-msg",
+      "scenario": "normal",
+      "evidence": "msg-normal",
+      "outcomeSha256": "4b3d1706d44e945cb6ef14ced0a9631717f31009a8988a4072e5550a0f2d94ed",
+      "artifactKind": "ir-gfm",
+      "irSha256": "b02e98dc289157fd0dd170f35ea6c6ced02dcca18cc89dc5c2ffe3d955aad2ce",
+      "gfmSha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3"
+    },
+    {
+      "family": "outlook-msg",
+      "scenario": "complex",
+      "evidence": "msg-complex",
+      "outcomeSha256": "8c2e95c6a7bd4b193af0dd5dd974231d455ac8798c9d3f8c8eafd30be16c50df",
+      "artifactKind": "ir-gfm",
+      "irSha256": "41567b59368d211543ce98ea4cb05a7d99b7f74411432aea7b14f7e9f22a47e3",
+      "gfmSha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af"
+    },
+    {
+      "family": "outlook-msg",
+      "scenario": "misordered",
+      "evidence": "msg-order",
+      "outcomeSha256": "b1cfdf55ddeb582043d57f8ef9f94c2b129ccf4a3bce0bec12f085d6abae6649",
+      "artifactKind": "layout-diff-report",
+      "reportSha256": "977cca23dfc83ecd46c27a514cbcd4914f6e88c1e4a9c1a4d14e07155189b6e5"
+    },
+    {
+      "family": "outlook-msg",
+      "scenario": "corrupt",
+      "evidence": "msg-corrupt",
+      "outcomeSha256": "1373a0cf89fb46cce8f963be7bc1099acb1f6fe1bb313827e2def0f1b46689c1",
+      "artifactKind": "stable-error",
+      "errorSha256": "60ec9bb7299d85e0cdd35d4058fabd7cb6bdc9b788c6efde44427e9bb9234e13"
+    },
+    {
+      "family": "outlook-msg",
+      "scenario": "resourceBoundary",
+      "evidence": "msg-limit",
+      "outcomeSha256": "3d65bddfb0c9e4fb30a0b9948d964f962e303ba5da285f3a59a8f3d6d606e4f9",
+      "artifactKind": "stable-error",
+      "errorSha256": "03635031bd9d5b79f017f0515478726152b14caa8eb4d607785d3a3f7cbb91a9"
+    }
+  ]
+}

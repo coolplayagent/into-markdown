@@ -1,5 +1,10 @@
 use super::*;
-use into_markdown_core::{LayoutGolden, LayoutQualityConfig, audit_semantic_layout_golden};
+use into_markdown_core::{
+    Block, BlockNode, Cell, Document, DocumentMetadata, Inline, LayoutGolden, LayoutQualityConfig,
+    NodeId, Provenance, ProvenanceKind, ResourceLimits, SourceLocator, TableRow,
+    audit_semantic_layout, audit_semantic_layout_golden,
+};
+use serde::Serialize;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -9,6 +14,8 @@ struct Authority {
     layout_golden_path: String,
     layout_golden_sha256: String,
     scenario_outcomes_sha256: String,
+    scenario_goldens_path: String,
+    scenario_goldens_sha256: String,
     coordinate_tolerance: f32,
     modern_minimum_precision: f64,
     modern_minimum_recall: f64,
@@ -83,6 +90,31 @@ struct NativeGate {
 struct GoldenCorpus {
     schema_version: u32,
     goldens: Vec<GoldenRecord>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScenarioGoldenCorpus {
+    schema_version: u32,
+    outcomes: Vec<ScenarioGolden>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScenarioGolden {
+    family: String,
+    scenario: String,
+    evidence: String,
+    artifact_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ir_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gfm_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_sha256: Option<String>,
+    outcome_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -304,6 +336,12 @@ fn semantic_layout_authority_is_complete_and_hash_bound() {
 )]
 fn semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound() {
     let authority = authority();
+    let golden_bytes = std::fs::read(repo_root().join(&authority.scenario_goldens_path))
+        .expect("independent scenario outcome goldens must exist");
+    assert_eq!(hex(&golden_bytes), authority.scenario_goldens_sha256);
+    let expected: ScenarioGoldenCorpus =
+        serde_json::from_slice(&golden_bytes).expect("strict scenario golden schema");
+    assert_eq!(expected.schema_version, 1);
     let evidence =
         authority.evidence.iter().map(|item| (item.id.as_str(), item)).collect::<BTreeMap<_, _>>();
     let fixtures = manifest()
@@ -312,6 +350,7 @@ fn semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound() {
         .map(|fixture| (fixture.id.clone(), fixture))
         .collect::<BTreeMap<_, _>>();
     let mut outcomes = Vec::new();
+    let mut computed = Vec::new();
     for coverage in &authority.coverage {
         for (scenario, evidence_id) in [
             ("normal", coverage.normal.as_str()),
@@ -326,14 +365,10 @@ fn semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound() {
                     let (path, symbol) = file_and_symbol(&item.reference);
                     let source = std::fs::read_to_string(repo_root().join(path)).unwrap();
                     assert_direct_rust_test(item, &source, symbol);
-                    // The workflow executes the complete workspace test harness before this
-                    // aggregate. This record binds the successful test to its exact source.
-                    format!("workspace-rust-test:{}", item.sha256)
+                    execute_constructed_scenario(&coverage.family, scenario, evidence_id)
                 }
                 "fixture" if item.reference.starts_with("pdf-layout-") => {
-                    // The pinned-PDFium Bazel target executes these inputs in the workflow.
-                    // Its independent authority is hash-bound by the validator above.
-                    format!("delegated:{}", item.sha256)
+                    execute_native_pdf_authority_scenario(&item.reference, &item.sha256)
                 }
                 "fixture" => {
                     let fixture = &fixtures[&item.reference];
@@ -364,27 +399,239 @@ fn semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound() {
                         assert_eq!(first.code().as_str(), fixture.expected.error_code);
                         format!("error:{}", stable_error_hash(&first))
                     } else {
-                        let first = execute(fixture, None).expect("success fixture failed");
-                        let second =
-                            execute(fixture, None).expect("repeated success fixture failed");
-                        assert_eq!(first, second, "{} output is nondeterministic", fixture.id);
-                        let output_hash = hex(first.as_bytes());
-                        assert_eq!(output_hash, fixture.expected.semantic_sha256);
-                        format!("success:{output_hash}")
+                        fixture_success_outcome(fixture)
                     }
                 }
                 kind => panic!("unsupported scenario evidence kind {kind}"),
             };
+            computed.push(scenario_golden(&coverage.family, scenario, evidence_id, &outcome));
             outcomes.push(format!("{}|{scenario}|{evidence_id}|{outcome}", coverage.family));
         }
     }
     assert_eq!(outcomes.len(), 50);
+    let computed_json = serde_json::to_string_pretty(&ScenarioGoldenCorpus {
+        schema_version: 1,
+        outcomes: computed.clone(),
+    })
+    .unwrap();
+    assert_eq!(computed, expected.outcomes, "scenario outcome golden drift\n{computed_json}");
     let canonical = outcomes.join("\n");
     assert_eq!(
         hex(canonical.as_bytes()),
         authority.scenario_outcomes_sha256,
         "50-scenario outcome authority drift; canonical outcomes:\n{canonical}"
     );
+}
+
+fn scenario_golden(family: &str, scenario: &str, evidence: &str, outcome: &str) -> ScenarioGolden {
+    let mut golden = ScenarioGolden {
+        family: family.into(),
+        scenario: scenario.into(),
+        evidence: evidence.into(),
+        artifact_kind: String::new(),
+        ir_sha256: None,
+        gfm_sha256: None,
+        report_sha256: None,
+        error_sha256: None,
+        outcome_sha256: hex(outcome.as_bytes()),
+    };
+    if let Some(value) = outcome.strip_prefix("ir:") {
+        let (ir, gfm) = value.split_once("|gfm:").expect("IR/GFM scenario outcome");
+        golden.artifact_kind = "ir-gfm".into();
+        golden.ir_sha256 = Some(ir.into());
+        golden.gfm_sha256 = Some(gfm.into());
+    } else if let Some(report) = outcome.strip_prefix("layout-diff:") {
+        golden.artifact_kind = "layout-diff-report".into();
+        golden.report_sha256 = Some(report.into());
+    } else if let Some(report) = outcome.strip_prefix("native-quality:") {
+        golden.artifact_kind = "native-quality-report".into();
+        golden.report_sha256 = Some(report.into());
+    } else if let Some(error) = outcome.strip_prefix("error:") {
+        golden.artifact_kind = "stable-error".into();
+        golden.error_sha256 = Some(error.split('|').next().unwrap().into());
+    } else {
+        panic!("unsupported scenario artifact {outcome}");
+    }
+    golden
+}
+
+fn fixture_success_outcome(fixture: &Fixture) -> String {
+    let (first, options) = execute_output(fixture, None).expect("success fixture failed");
+    let (second, _) = execute_output(fixture, None).expect("repeated success fixture failed");
+    let first_ir = first.document.to_json().unwrap();
+    let second_ir = second.document.to_json().unwrap();
+    let first_gfm =
+        into_markdown_render_markdown::render(&first.document, &first.assets, &options).unwrap();
+    let second_gfm =
+        into_markdown_render_markdown::render(&second.document, &second.assets, &options).unwrap();
+    assert_eq!(first_ir, second_ir, "{} IR is nondeterministic", fixture.id);
+    assert_eq!(first_gfm, second_gfm, "{} GFM is nondeterministic", fixture.id);
+    let gfm_hash = hex(first_gfm.as_bytes());
+    assert_eq!(gfm_hash, fixture.expected.semantic_sha256);
+    format!("ir:{}|gfm:{gfm_hash}", hex(first_ir.as_bytes()))
+}
+
+fn execute_constructed_scenario(family: &str, scenario: &str, evidence: &str) -> String {
+    let fixture = format!("{family}|{scenario}|{evidence}");
+    let golden = scenario_document(family, &fixture, false);
+    match scenario {
+        "misordered" => {
+            let actual = scenario_document(family, &fixture, true);
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+            let audit = audit_semantic_layout(
+                &fixture,
+                &actual,
+                &[],
+                &golden,
+                &[],
+                scenario_config(),
+                &context,
+            )
+            .unwrap();
+            assert!(
+                audit
+                    .report()
+                    .differences
+                    .iter()
+                    .any(|diff| { diff.kind == into_markdown_core::LayoutDiffKind::OutOfOrder })
+            );
+            format!("layout-diff:{}", hex(audit.to_json().unwrap().as_bytes()))
+        }
+        "corrupt" => {
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+            let Err(error) = audit_semantic_layout(
+                &fixture,
+                &golden,
+                &[],
+                &golden,
+                &[],
+                LayoutQualityConfig { coordinate_tolerance: f32::NAN, ..scenario_config() },
+                &context,
+            ) else {
+                panic!("invalid numeric authority unexpectedly succeeded")
+            };
+            format!("error:{}", stable_error_hash(&error))
+        }
+        "resourceBoundary" => {
+            let context = ExecutionContext::new(
+                ExecutionOptions::default(),
+                ResourceLimits { max_work_units: 0, ..ResourceLimits::default() },
+            );
+            let Err(error) = audit_semantic_layout(
+                &fixture,
+                &golden,
+                &[],
+                &golden,
+                &[],
+                scenario_config(),
+                &context,
+            ) else {
+                panic!("zero-work boundary unexpectedly succeeded")
+            };
+            format!("error:{}", stable_error_hash(&error))
+        }
+        "normal" | "complex" => {
+            let ir = golden.to_json().unwrap();
+            let gfm =
+                into_markdown_render_markdown::render(&golden, &[], &ConversionOptions::default())
+                    .unwrap();
+            format!("ir:{}|gfm:{}", hex(ir.as_bytes()), hex(gfm.as_bytes()))
+        }
+        other => panic!("unsupported constructed scenario {other}"),
+    }
+}
+
+fn scenario_document(family: &str, label: &str, reversed: bool) -> Document {
+    let node = |id: &str, value: String| BlockNode {
+        id: NodeId(id.into()),
+        block: Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }]),
+        provenance: Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: "semantic-layout-scenario".into(),
+            locator: SourceLocator::default(),
+            confidence: None,
+        },
+    };
+    let mut children =
+        vec![node("first", format!("{label}:first")), node("second", format!("{label}:second"))];
+    if label.contains("|complex|") {
+        children.push(BlockNode {
+            id: NodeId("table".into()),
+            block: Block::Table {
+                rows: vec![TableRow {
+                    cells: vec![
+                        Cell {
+                            row_span: 1,
+                            column_span: 1,
+                            header: true,
+                            blocks: vec![node("cell-first", format!("{label}:cell-first"))],
+                        },
+                        Cell {
+                            row_span: 1,
+                            column_span: 2,
+                            header: false,
+                            blocks: vec![node("cell-second", format!("{label}:cell-second"))],
+                        },
+                    ],
+                }],
+                alignments: Vec::new(),
+            },
+            provenance: Provenance {
+                kind: ProvenanceKind::NativeParser,
+                provider: "semantic-layout-scenario".into(),
+                locator: SourceLocator::default(),
+                confidence: None,
+            },
+        });
+    }
+    if reversed {
+        children.reverse();
+    }
+    let boundary = match family {
+        "presentationml" => Block::Slide { number: 1, title: Some(label.into()), blocks: children },
+        "spreadsheetml-xlsb" => Block::Sheet { name: label.into(), blocks: children },
+        _ => Block::Page { number: 1, blocks: children },
+    };
+    Document {
+        schema_version: into_markdown_core::DOCUMENT_SCHEMA_VERSION,
+        metadata: DocumentMetadata { title: Some(label.into()), ..DocumentMetadata::default() },
+        blocks: vec![BlockNode {
+            id: NodeId("boundary".into()),
+            block: boundary,
+            provenance: Provenance {
+                kind: ProvenanceKind::NativeParser,
+                provider: "semantic-layout-scenario".into(),
+                locator: SourceLocator::default(),
+                confidence: None,
+            },
+        }],
+    }
+}
+
+fn scenario_config() -> LayoutQualityConfig {
+    LayoutQualityConfig {
+        coordinate_tolerance: 0.01,
+        minimum_precision: 0.95,
+        minimum_recall: 0.95,
+        max_field_bytes: 1024 * 1024,
+    }
+}
+
+fn execute_native_pdf_authority_scenario(fixture_id: &str, fixture_sha256: &str) -> String {
+    let bytes = std::fs::read(repo_root().join("fixtures/pdf-layout-quality-authority.json"))
+        .expect("PDF semantic quality authority");
+    let authority: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let record = authority["fixtures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["fixture_id"] == fixture_id)
+        .unwrap_or_else(|| panic!("missing PDF scenario authority {fixture_id}"));
+    assert_eq!(record["fixture_sha256"], fixture_sha256);
+    assert!(!record["expected_sequence"].as_array().unwrap().is_empty());
+    format!("native-quality:{}", hex(&serde_json::to_vec(record).unwrap()))
 }
 
 fn stable_error_hash(error: &ConversionError) -> String {
