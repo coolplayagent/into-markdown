@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiMode, ApiClient, ArtifactPreview, ArtifactReference, AssetMode, InputFormat, OcrPolicy, TaskRecord, WorkbenchOptions } from "./api";
+import type { AiMode, ApiClient, ArtifactPreview, ArtifactReference, AssetMode, InputFormat, OcrPolicy, TaskCursor, TaskRecord, TaskStatus, WorkbenchOptions } from "./api";
 import { defaultWorkbenchOptions } from "./api";
 import { I18nProvider, useI18n } from "./i18n";
 import { RouteLink, Router, useRouter } from "./router";
@@ -54,8 +54,8 @@ function OptionPanel({ value, onChange, disabled }: { value: WorkbenchOptions; o
   </fieldset>;
 }
 
-function TaskCard({ task, name, format, stage, api, onUpdate, onRetry }: {
-  task: TaskRecord; name?: string | undefined; format?: string | undefined; stage?: string | undefined; api: ApiClient; onUpdate(task: TaskRecord): void; onRetry(): void;
+function TaskCard({ task, name, format, stage, api, onUpdate, onRetry, onDelete }: {
+  task: TaskRecord; name?: string | undefined; format?: string | undefined; stage?: string | undefined; api: ApiClient; onUpdate(task: TaskRecord): void; onRetry(): void; onDelete(): void;
 }) {
   const { t } = useI18n(); const busy = !TERMINAL.has(task.status); const percent = Math.round(task.progressMillionths / 10_000);
   const [preview, setPreview] = useState<{ artifact: ArtifactReference; value?: ArtifactPreview; error?: boolean } | null>(null);
@@ -65,12 +65,15 @@ function TaskCard({ task, name, format, stage, api, onUpdate, onRetry }: {
     anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url);
   };
   const openPreview = async (artifact: ArtifactReference) => { setPreview({ artifact }); try { const value = await api.preview(task.id, artifact.storageKey); setPreview({ artifact, value }); } catch { setPreview({ artifact, error: true }); } };
+  const pin = async () => { try { onUpdate(await api.setPinned(task.id, !task.pinned)); } catch { /* refresh remains available */ } };
+  const removeHistory = async () => { if (!window.confirm(t("deleteWarning"))) return; try { await api.deleteTask(task.id); onDelete(); } catch { /* keep the durable card visible */ } };
   const artifactLabel = (artifact: ArtifactReference) => artifact.filename ?? ({ markdown: "result.md", documentIr: "document-ir.json", diagnostics: "diagnostics.json", bundle: "result.zip", asset: artifact.assetId ?? "asset" } as const)[artifact.kind];
   return <article className={`task-card ${task.status}`} aria-labelledby={`task-${task.id}`}>
-    <div className="task-top"><div><h3 id={`task-${task.id}`}>{name ?? `${t("restoredTask")} ${task.id.slice(0, 8)}`}</h3><p><span className="status-pill">{t(task.status)}</span>{format ? ` · ${t("detectedFormat")}: ${format}` : ""}{stage ? ` · ${stage}` : ""}</p></div><strong>{percent}%</strong></div>
+    <div className="task-top"><div><h3 id={`task-${task.id}`}>{name ?? `${t("restoredTask")} ${task.id.slice(0, 8)}`}</h3><p><span className="status-pill">{t(task.status)}</span>{task.pinned ? ` · ${t("pinned")}` : ""}{format ? ` · ${t("detectedFormat")}: ${format}` : ""}{stage ? ` · ${stage}` : ""}</p><small>{new Date(task.updatedAtMs).toLocaleString()}</small></div><strong>{percent}%</strong></div>
     <progress max="100" value={percent} aria-label={`${name ?? task.id}: ${percent}%`} />
+    <details className="task-details"><summary>{t("taskDetails")}</summary><dl><div><dt>ID</dt><dd><code>{task.id}</code></dd></div><div><dt>{t("created")}</dt><dd>{new Date(task.createdAtMs).toLocaleString()}</dd></div><div><dt>{t("updated")}</dt><dd>{new Date(task.updatedAtMs).toLocaleString()}</dd></div><div><dt>OCR</dt><dd>{task.configuration.ocrEnabled ? t("on") : t("off")}</dd></div></dl></details>
     {task.diagnostics.length > 0 && <ul className="diagnostics">{task.diagnostics.map((item, index) => <li key={`${item.code}-${index}`}>{item.code}</li>)}</ul>}
-    <div className="task-actions">{busy && <button className="secondary danger" type="button" onClick={() => void cancel()}>{t("cancel")}</button>}{(task.status === "failed" || task.status === "interrupted") && <button type="button" onClick={onRetry}>{t("retry")}</button>}{task.status === "succeeded" && task.artifacts.map((item) => <span className="artifact-actions" key={item.storageKey}>{item.kind !== "asset" && item.kind !== "bundle" && <button className="secondary" type="button" onClick={() => void openPreview(item)}>{t("preview")} {artifactLabel(item)}</button>}<button className="secondary" type="button" onClick={() => void download(item.storageKey)}>{t("download")} {artifactLabel(item)}</button></span>)}</div>
+    <div className="task-actions">{busy && <button className="secondary danger" type="button" onClick={() => void cancel()}>{t("cancel")}</button>}{!busy && <><button className="secondary" type="button" aria-pressed={task.pinned} onClick={() => void pin()}>{task.pinned ? t("unpin") : t("pin")}</button><button type="button" onClick={onRetry}>{t("retry")}</button><button className="secondary danger" type="button" onClick={() => void removeHistory()}>{t("deleteTask")}</button></>}{task.status === "succeeded" && task.artifacts.map((item) => <span className="artifact-actions" key={item.storageKey}>{item.kind !== "asset" && item.kind !== "bundle" && <button className="secondary" type="button" onClick={() => void openPreview(item)}>{t("preview")} {artifactLabel(item)}</button>}<button className="secondary" type="button" onClick={() => void download(item.storageKey)}>{t("download")} {artifactLabel(item)}</button></span>)}</div>
     {task.status === "succeeded" && task.artifacts.some((item) => item.kind === "asset") && <details className="asset-browser"><summary>{t("resources")} ({task.artifacts.filter((item) => item.kind === "asset").length})</summary><ul>{task.artifacts.filter((item) => item.kind === "asset").map((item) => <li key={item.storageKey}><span>{artifactLabel(item)} · {item.mediaType ?? "application/octet-stream"} · {item.byteLen} B</span><button className="secondary" type="button" onClick={() => void download(item.storageKey)}>{t("download")}</button></li>)}</ul></details>}
     {preview && <section className="preview-panel" aria-label={`${t("preview")} ${artifactLabel(preview.artifact)}`}><div className="preview-title"><h4>{artifactLabel(preview.artifact)}</h4><button className="icon-button" type="button" aria-label={t("closePreview")} onClick={() => setPreview(null)}>×</button></div>{preview.error ? <p role="alert">{t("previewFailed")}</p> : !preview.value ? <p role="status">{t("loading")}</p> : <>{preview.value.truncated && <p className="preview-notice" role="status">{t("previewTruncated")}</p>}{preview.artifact.kind === "markdown" ? <SafeMarkdownPreview source={preview.value.text} /> : <JsonPreview source={preview.value.text} truncated={preview.value.truncated} />}</>}</section>}
   </article>;
@@ -82,7 +85,8 @@ function Workbench({ api }: { api: ApiClient }) {
   const [files, setFiles] = useState<File[]>([]); const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [names, setNames] = useState<Record<string, string>>({}); const [formats, setFormats] = useState<Record<string, string>>({}); const [stages, setStages] = useState<Record<string, string>>({});
   const [options, setOptions] = useState(defaultWorkbenchOptions); const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false); const [message, setMessage] = useState(""); const [dragging, setDragging] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | "">(""); const [pinnedOnly, setPinnedOnly] = useState(false); const [nextCursor, setNextCursor] = useState<TaskCursor>();
+  const [uploading, setUploading] = useState(false); const [cleaning, setCleaning] = useState(false); const [message, setMessage] = useState(""); const [dragging, setDragging] = useState(false);
   const update = useCallback((task: TaskRecord) => setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].sort((a, b) => b.updatedAtMs - a.updatedAtMs)), []);
   const watch = useCallback((task: TaskRecord) => {
     if (TERMINAL.has(task.status) || watchers.current.has(task.id)) return;
@@ -93,7 +97,8 @@ function Workbench({ api }: { api: ApiClient }) {
       if (event.terminal) void api.getTask(task.id).then(update).finally(() => watchers.current.delete(task.id));
     }, controller.signal).catch(() => { if (!controller.signal.aborted) setMessage(t("streamError")); }).finally(() => watchers.current.delete(task.id));
   }, [api, t, update]);
-  useEffect(() => { const controller = new AbortController(); void api.listTasks(controller.signal).then((restored) => { setTasks(restored); restored.forEach(watch); }, () => setMessage(t("loadTasksError"))).finally(() => setLoading(false)); return () => { controller.abort(); watchers.current.forEach((watcher) => watcher.abort()); watchers.current.clear(); }; }, [api, t, watch]);
+  const loadHistory = useCallback(async (after?: TaskCursor, signal?: AbortSignal) => { const page = await api.listTasks({ limit: 25, ...(after ? { after } : {}), ...(statusFilter ? { status: statusFilter } : {}), ...(pinnedOnly ? { pinned: true } : {}) }, signal); setTasks((current) => after ? [...current, ...page.tasks.filter((task) => !current.some((item) => item.id === task.id))] : page.tasks); setNextCursor(page.nextCursor); }, [api, pinnedOnly, statusFilter]);
+  useEffect(() => { const controller = new AbortController(); setLoading(true); void loadHistory(undefined, controller.signal).catch(() => { if (!controller.signal.aborted) setMessage(t("loadTasksError")); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => { controller.abort(); watchers.current.forEach((watcher) => watcher.abort()); watchers.current.clear(); }; }, [loadHistory, t]);
   useEffect(() => { tasks.forEach(watch); }, [tasks, watch]);
 
   const addFiles = (incoming: File[]) => {
@@ -116,7 +121,17 @@ function Workbench({ api }: { api: ApiClient }) {
     }
     setUploading(false);
   };
-  const retry = (task: TaskRecord) => { const file = filesByTask.current.get(task.id); if (file) { setFiles((current) => [...current, file]); document.getElementById("upload-zone")?.focus(); } else setMessage(t("retryNeedsFile")); };
+  const retry = async (task: TaskRecord) => { try { const retried = await api.retry(task.id); update(retried); watch(retried); } catch { const file = filesByTask.current.get(task.id); if (file) { setFiles((current) => [...current, file]); document.getElementById("upload-zone")?.focus(); } else setMessage(t("retryNeedsFile")); } };
+  const cleanup = async () => {
+    if (!window.confirm(t("cleanupWarning"))) return;
+    setCleaning(true);
+    try {
+      const result = await api.cleanup();
+      await loadHistory();
+      setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
+    } catch { setMessage(t("loadTasksError")); }
+    finally { setCleaning(false); }
+  };
   const selectedBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
   return <><div className="page-heading"><p className="eyebrow">LOCAL WORKBENCH</p><h1>{t("workbench")}</h1><p>{t("workbenchIntro")}</p></div>
     <section className="upload-layout" aria-labelledby="upload-heading"><div className="card upload-card"><h2 id="upload-heading">{t("addDocuments")}</h2>
@@ -128,7 +143,7 @@ function Workbench({ api }: { api: ApiClient }) {
       {files.length > 0 && <div className="selection"><div className="selection-title"><strong>{t("selectedFiles")} ({files.length})</strong><span>{(selectedBytes / 1048576).toFixed(1)} MiB</span></div><ul>{files.map((file, index) => <li key={`${file.name}-${file.lastModified}`}><span>{file.webkitRelativePath || file.name} <small>· {t("detectedFormat")}: {formatForFile(file, options.format)}</small></span><button className="icon-button" type="button" aria-label={`${t("remove")} ${file.name}`} onClick={() => setFiles((current) => current.filter((_, item) => item !== index))}>×</button></li>)}</ul></div>}
     </div><OptionPanel value={options} onChange={setOptions} disabled={uploading} /></section>
     <div className="submit-row"><button type="button" disabled={files.length === 0 || uploading} onClick={() => void submit()}>{uploading ? t("uploading") : `${t("convert")} ${files.length || ""}`}</button><span role="status" aria-live="polite">{message}</span></div>
-    <section className="task-section" aria-labelledby="tasks-heading"><div className="section-heading"><h2 id="tasks-heading">{t("tasks")}</h2><button className="secondary" type="button" onClick={() => void api.listTasks().then(setTasks)}>{t("refresh")}</button></div>{loading ? <p role="status">{t("loading")}</p> : tasks.length === 0 ? <div className="card empty-tasks"><h3>{t("noTasks")}</h3><p>{t("noTasksDetail")}</p></div> : <div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} name={names[task.id]} format={formats[task.id]} stage={stages[task.id]} api={api} onUpdate={update} onRetry={() => retry(task)} />)}</div>}</section>
+    <section className="task-section" aria-labelledby="tasks-heading"><div className="section-heading"><h2 id="tasks-heading">{t("tasks")}</h2><div className="history-controls"><label><span>{t("filterStatus")}</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TaskStatus | "")}><option value="">{t("allStatuses")}</option>{["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"].map((status) => <option key={status} value={status}>{t(status as TaskStatus)}</option>)}</select></label><label className="check"><input type="checkbox" checked={pinnedOnly} onChange={(event) => setPinnedOnly(event.target.checked)} />{t("pinnedOnly")}</label><button className="secondary" type="button" disabled={cleaning} onClick={() => void cleanup()}>{t("cleanup")}</button><button className="secondary" type="button" onClick={() => void loadHistory()}>{t("refresh")}</button></div></div>{loading ? <p role="status">{t("loading")}</p> : tasks.length === 0 ? <div className="card empty-tasks"><h3>{t("noTasks")}</h3><p>{t("noTasksDetail")}</p></div> : <><div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} name={names[task.id]} format={formats[task.id]} stage={stages[task.id]} api={api} onUpdate={update} onRetry={() => void retry(task)} onDelete={() => setTasks((current) => current.filter((item) => item.id !== task.id))} />)}</div>{nextCursor && <button className="secondary load-more" type="button" onClick={() => void loadHistory(nextCursor)}>{t("loadMore")}</button>}</>}</section>
   </>;
 }
 
@@ -139,7 +154,8 @@ function StatusPage({ api }: { api: ApiClient }) {
 }
 function Content({ api }: { api: ApiClient }) {
   const { path } = useRouter(); const { t } = useI18n(); const main = useRef<HTMLElement>(null);
-  useEffect(() => { document.title = `${path === "/status" ? t("status") : t("workbench")} · into-markdown`; main.current?.focus(); }, [path, t]);
+  useEffect(() => { document.title = `${path === "/status" ? t("status") : t("workbench")} · into-markdown`; }, [path, t]);
+  useEffect(() => { main.current?.focus(); }, [path]);
   return <main id="main" ref={main} tabIndex={-1}>{path === "/status" ? <StatusPage api={api} /> : path === "/" || path === "/workbench" ? <Workbench api={api} /> : <section className="card not-found"><p className="error-number">404</p><h1>{t("notFound")}</h1><RouteLink href="/workbench">{t("backWorkbench")}</RouteLink></section>}</main>;
 }
 function Shell({ api }: { api: ApiClient }) { const { t } = useI18n(); return <Router><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header><RouteLink href="/workbench" className="brand" aria-label={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><Preferences /></header><div className="body-shell"><nav aria-label={t("appName")}><RouteLink href="/workbench" className="nav-link">{t("workbench")}</RouteLink><RouteLink href="/status" className="nav-link">{t("status")}</RouteLink></nav><Content api={api} /></div></div></Router>; }

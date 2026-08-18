@@ -250,6 +250,75 @@ impl RecoveryStore {
         }
     }
 
+    /// Verify that every recovery file for a token is safe to remove.
+    ///
+    /// Retention callers use this before committing their task-store deletion,
+    /// so an unsafe checkpoint cannot turn a reversible object quarantine into
+    /// a partially committed deletion.
+    pub fn verify_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        {
+            self.directory.verify_namespace()?;
+            for name in [
+                phase_name(token, TaskPhase::Succeeded),
+                phase_name(token, TaskPhase::Converted),
+                lock_name(token),
+            ] {
+                if let Some(file) = self.directory.open_regular(&name)? {
+                    let stat = rustix::fs::fstat(&file)
+                        .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
+                    if stat.st_nlink != 1 {
+                        return Err(recovery_error(
+                            "unsafePath",
+                            "checkpoint selected for deletion has an external hard link",
+                        ));
+                    }
+                }
+            }
+            self.directory.verify_namespace()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
+    /// Permanently remove every checkpoint and lock owned by one canonical
+    /// token. This is intended for retention after a task reached a terminal
+    /// state; it performs no path construction from caller-controlled text.
+    pub fn purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        {
+            self.verify_purge(token)?;
+            for name in [
+                phase_name(token, TaskPhase::Succeeded),
+                phase_name(token, TaskPhase::Converted),
+                lock_name(token),
+            ] {
+                if let Some(file) = self.directory.open_regular(&name)? {
+                    let stat = rustix::fs::fstat(&file)
+                        .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
+                    if stat.st_nlink != 1 {
+                        return Err(recovery_error(
+                            "unsafePath",
+                            "checkpoint selected for deletion has an external hard link",
+                        ));
+                    }
+                    drop(file);
+                    self.directory.unlink(&name)?;
+                }
+            }
+            self.directory.sync()?;
+            self.directory.verify_namespace()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
     pub(crate) fn lock(
         &self,
         token: &RecoveryToken,

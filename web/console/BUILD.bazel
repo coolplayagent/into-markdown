@@ -48,16 +48,66 @@ js_run_binary(
     tool = ":test_builder",
 )
 
+UNIT_TEST_DATA = [
+    ":node_modules/happy-dom",
+    ":node_modules/axe-core",
+    ":node_modules/react",
+    ":node_modules/react-dom",
+    ":unit_test_bundle",
+]
+
 js_test(
-    name = "unit_test",
-    data = [
-        ":node_modules/happy-dom",
-        ":node_modules/axe-core",
-        ":node_modules/react",
-        ":node_modules/react-dom",
-        ":unit_test_bundle",
-    ],
+    name = "unit_test_core",
+    data = UNIT_TEST_DATA,
     entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "core", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+js_test(
+    name = "unit_test_preview",
+    data = UNIT_TEST_DATA,
+    entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "preview", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+js_test(
+    name = "unit_test_history_actions",
+    data = UNIT_TEST_DATA,
+    entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "history_actions", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+js_test(
+    name = "unit_test_history_cleanup",
+    data = UNIT_TEST_DATA,
+    entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "history_cleanup", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+js_test(
+    name = "unit_test_workbench",
+    data = UNIT_TEST_DATA,
+    entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "workbench", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+js_test(
+    name = "unit_test_accessibility",
+    data = UNIT_TEST_DATA,
+    entry_point = "unit_test_bundle.mjs",
+    env = {"INTO_MD_TEST_GROUP": "accessibility", "NODE_OPTIONS": "--max-old-space-size=512"},
+)
+
+test_suite(
+    name = "unit_test",
+    tests = [
+        ":unit_test_accessibility",
+        ":unit_test_core",
+        ":unit_test_history_actions",
+        ":unit_test_history_cleanup",
+        ":unit_test_preview",
+        ":unit_test_workbench",
+    ],
 )
 
 js_test(

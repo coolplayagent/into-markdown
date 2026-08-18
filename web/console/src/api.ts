@@ -17,8 +17,13 @@ export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskRecord {
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
+  pinned: boolean;
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
 }
+export interface TaskCursor { updatedAtMs: number; id: string }
+export interface TaskPage { tasks: TaskRecord[]; nextCursor?: TaskCursor }
+export interface TaskFilters { limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean }
+export interface CleanupSummary { schemaVersion: 1; deletedTasks: number; reclaimedBytes: number }
 export interface TaskEvent {
   schemaVersion: 1; sequence: number; taskId: string; kind: "snapshot" | "progress";
   status: TaskStatus; progressMillionths: number; terminal: boolean;
@@ -64,15 +69,18 @@ function isArtifact(value: unknown): value is ArtifactReference {
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || !taskStatuses.has(value.status as TaskStatus) || !Number.isSafeInteger(value.progressMillionths)
+    || !Number.isSafeInteger(value.createdAtMs) || !Number.isSafeInteger(value.updatedAtMs) || typeof value.pinned !== "boolean"
     || Number(value.progressMillionths) < 0 || Number(value.progressMillionths) > 1_000_000
     || !Array.isArray(value.diagnostics) || value.diagnostics.length > 1024 || value.diagnostics.some((item) => !isObject(item) || typeof item.code !== "string" || item.code.length > 128)
     || !Array.isArray(value.artifacts) || value.artifacts.length > 128 || value.artifacts.some((artifact) => !isArtifact(artifact))
     || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }
-function parseTaskList(value: unknown): TaskRecord[] {
+function parseTaskList(value: unknown): TaskPage {
   if (!isObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.tasks) || value.tasks.length > 100) throw new ApiError("invalidResponse");
-  return value.tasks.map(parseTask);
+  const next = value.nextCursor;
+  if (next !== undefined && (!isObject(next) || !Number.isSafeInteger(next.updatedAtMs) || typeof next.id !== "string" || !/^[0-9a-f]{32}$/.test(next.id))) throw new ApiError("invalidResponse");
+  return { tasks: value.tasks.map(parseTask), ...(next === undefined ? {} : { nextCursor: next as unknown as TaskCursor }) };
 }
 function parseTaskEvent(value: unknown): TaskEvent {
   if (!isObject(value) || value.schemaVersion !== 1 || typeof value.taskId !== "string" || !taskStatuses.has(value.status as TaskStatus)
@@ -120,10 +128,14 @@ export function taskRequest(options: WorkbenchOptions): unknown {
 }
 
 export interface ApiClient {
-  status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(signal?: AbortSignal): Promise<TaskRecord[]>;
+  status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   upload(file: File, options: WorkbenchOptions, signal?: AbortSignal): Promise<TaskRecord>;
   cancel(id: string, signal?: AbortSignal): Promise<TaskRecord>;
+  retry(id: string, signal?: AbortSignal): Promise<TaskRecord>;
+  setPinned(id: string, pinned: boolean, signal?: AbortSignal): Promise<TaskRecord>;
+  deleteTask(id: string, signal?: AbortSignal): Promise<void>;
+  cleanup(signal?: AbortSignal): Promise<CleanupSummary>;
   watchTask(id: string, onEvent: (event: TaskEvent) => void, signal: AbortSignal): Promise<void>;
   preview(id: string, key: string, signal?: AbortSignal): Promise<ArtifactPreview>;
   download(id: string, key: string, signal?: AbortSignal): Promise<ArtifactDownload>;
@@ -148,13 +160,31 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
   }
   const client: ApiClient = {
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
-    async listTasks(signal) { return parseTaskList(await jsonRequest("/api/tasks", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
+    async listTasks(filters = {}, signal) {
+      const query = new URLSearchParams(); query.set("limit", String(filters.limit ?? 25));
+      if (filters.after) { query.set("afterUpdatedAtMs", String(filters.after.updatedAtMs)); query.set("afterId", filters.after.id); }
+      if (filters.status) query.set("status", filters.status); if (filters.pinned !== undefined) query.set("pinned", String(filters.pinned));
+      return parseTaskList(await jsonRequest(`/api/tasks?${query}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }));
+    },
     async getTask(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
     async upload(file, options, signal) {
       const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options));
       return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
     },
     async cancel(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
+    async retry(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/retry`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
+    async setPinned(id, pinned, signal) { const headers = auth(); headers["Content-Type"] = "application/json"; return parseTask(await jsonRequest(`/api/tasks/${id}/pin`, { method: "POST", headers, body: JSON.stringify({ pinned }), ...(signal ? { signal } : {}) })); },
+    async deleteTask(id, signal) {
+      const response = await fetcher(`/api/tasks/${id}/history`, { method: "DELETE", headers: auth(), cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) });
+      if (response.status !== 204) throw new ApiError("deleteFailed");
+    },
+    async cleanup(signal) {
+      const value = await jsonRequest("/api/tasks/cleanup", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536);
+      if (!isObject(value) || value.schemaVersion !== 1 || !Number.isSafeInteger(value.deletedTasks)
+        || Number(value.deletedTasks) < 0 || !Number.isSafeInteger(value.reclaimedBytes)
+        || Number(value.reclaimedBytes) < 0) throw new ApiError("invalidResponse");
+      return value as unknown as CleanupSummary;
+    },
     async watchTask(id, onEvent, signal) {
       let lastEventId: string | undefined;
       while (!signal.aborted) {

@@ -125,6 +125,14 @@ main { width: 100%; max-width: 82rem; padding: clamp(1.5rem, 4vw, 3rem); outline
 .submit-row [role="status"] { color: var(--error); }
 .task-section { margin-top: 1.5rem; }
 .section-heading h2 { margin: 0; }
+.history-controls { display: flex; align-items: end; justify-content: flex-end; gap: .75rem; flex-wrap: wrap; }
+.history-controls label:not(.check) { min-width: 10rem; }
+.load-more { display: block; margin: 1rem auto 0; }
+.task-details { margin: .65rem 0; }
+.task-details dl { display: grid; gap: .35rem; margin: .5rem 0; }
+.task-details dl div { display: grid; grid-template-columns: minmax(6rem, 1fr) 3fr; gap: .75rem; }
+.task-details dt { color: var(--muted); }
+.task-details dd { margin: 0; overflow-wrap: anywhere; }
 .task-list { display: grid; gap: .75rem; margin-top: 1rem; }
 .task-card { padding: 1rem 1.1rem; border: 1px solid var(--border); border-left: .3rem solid var(--accent); border-radius: .7rem; background: var(--surface); }
 .task-card.failed, .task-card.interrupted { border-left-color: var(--error); }

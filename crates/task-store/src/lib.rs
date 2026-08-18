@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[cfg(unix)]
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 #[cfg(unix)]
 const DATABASE_FILE: &str = "tasks.sqlite3";
 #[cfg(unix)]
@@ -883,7 +883,7 @@ impl TaskStore {
         let updated = now.max(updated.saturating_add(1));
         let changed = transaction
             .execute(
-                "UPDATE tasks SET status=?1, progress=?2, updated_at_ms=?3 WHERE id=?4 AND status=?5 AND progress<=?2",
+                "UPDATE tasks SET status=?1, progress=?2, updated_at_ms=?3, completed_at_ms=CASE WHEN ?1 IN ('succeeded','failed','interrupted','cancelled') THEN ?3 ELSE completed_at_ms END WHERE id=?4 AND status=?5 AND progress<=?2",
                 params![transition.next.as_db(), transition.progress_millionths, updated, id.as_str(), transition.expected.as_db()],
             )
             .map_err(map_sqlite_generic)?;
@@ -932,6 +932,96 @@ impl TaskStore {
             return Err(TaskStoreError::Conflict("task does not exist".into()));
         }
         self.preflight()
+    }
+
+    /// Delete one terminal task and all of its child rows in one transaction.
+    ///
+    /// Active work and pinned tasks are rejected. Callers coordinating external
+    /// objects must quarantine those objects before this commit and restore the
+    /// quarantine if the transaction fails.
+    pub fn delete_terminal(
+        &mut self,
+        id: &TaskId,
+        allow_pinned: bool,
+    ) -> Result<(), TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        let started = Instant::now();
+        let transaction = loop {
+            match self
+                .connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            {
+                Ok(transaction) => break transaction,
+                Err(error) if is_busy(&error) => wait_for_busy(&self.busy, started)?,
+                Err(error) => return Err(map_sqlite_generic(error)),
+            }
+        };
+        let current: Option<(String, i64)> = transaction
+            .query_row("SELECT status, pinned FROM tasks WHERE id=?1", [id.as_str()], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()
+            .map_err(map_sqlite_generic)?;
+        let Some((status, pinned)) = current else {
+            return Err(TaskStoreError::Conflict("task does not exist".into()));
+        };
+        let status = TaskStatus::parse(&status)?;
+        if !matches!(
+            status,
+            TaskStatus::Succeeded
+                | TaskStatus::Failed
+                | TaskStatus::Interrupted
+                | TaskStatus::Cancelled
+        ) {
+            return Err(TaskStoreError::Conflict("active task cannot be deleted".into()));
+        }
+        if pinned == 1 && !allow_pinned {
+            return Err(TaskStoreError::Conflict(
+                "pinned task cannot be retained automatically".into(),
+            ));
+        }
+        transaction
+            .execute("DELETE FROM tasks WHERE id=?1", [id.as_str()])
+            .map_err(map_sqlite_generic)?;
+        transaction.commit().map_err(map_sqlite_generic)?;
+        // A successful commit is the unambiguous coordination point for the
+        // caller's quarantined filesystem objects. Do not perform fallible
+        // work after it and accidentally report that the row still exists.
+        Ok(())
+    }
+
+    /// Return whether a recovery token is still owned by a durable task.
+    ///
+    /// Retention recovery uses this to ensure a forged or stale trash entry
+    /// cannot select the checkpoint of a different live task for deletion.
+    pub fn recovery_token_in_use(&self, token: &str) -> Result<bool, TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        if token.len() != 32 || !token.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(TaskStoreError::UnsafePath("invalid recovery token".into()));
+        }
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks WHERE recovery_token=?1)",
+                [token],
+                |row| row.get(0),
+            )
+            .map_err(|error| self.map_sqlite(error))
+    }
+
+    /// Return the persisted instant at which a task first became terminal.
+    pub fn completed_at_ms(&self, id: &TaskId) -> Result<Option<i64>, TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        self.connection
+            .query_row("SELECT completed_at_ms FROM tasks WHERE id=?1", [id.as_str()], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map(|value| value.flatten())
+            .map_err(|error| self.map_sqlite(error))
     }
 
     /// Reconcile nonterminal tasks against committed `RecoveryStore` metadata.
@@ -1225,7 +1315,7 @@ impl TaskStore {
         let progress = progress.max(i64::from(minimum_progress));
         let changed = transaction
             .execute(
-                "UPDATE tasks SET status=?1, progress=?2, updated_at_ms=?3 WHERE id=?4 AND status=?5",
+                "UPDATE tasks SET status=?1, progress=?2, updated_at_ms=?3, completed_at_ms=CASE WHEN ?1 IN ('succeeded','failed','interrupted','cancelled') THEN ?3 ELSE completed_at_ms END WHERE id=?4 AND status=?5",
                 params![next.as_db(), progress, now, id.as_str(), expected.as_db()],
             )
             .map_err(map_sqlite_generic)?;
@@ -1458,6 +1548,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                    id TEXT PRIMARY KEY CHECK(length(id)=32 AND id NOT GLOB '*[^0-9a-f]*'),\
                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms>=0),\
                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms>=created_at_ms),\
+                   completed_at_ms INTEGER CHECK(completed_at_ms IS NULL OR completed_at_ms>=created_at_ms),\
                    status TEXT NOT NULL CHECK(status IN ('pending','running','converted','succeeded','failed','interrupted','cancelled')),\
                    progress INTEGER NOT NULL CHECK(progress BETWEEN 0 AND 1000000 AND (status!='succeeded' OR progress=1000000)),\
                    input_fingerprint TEXT NOT NULL CHECK(length(input_fingerprint)=64 AND input_fingerprint NOT GLOB '*[^0-9a-f]*'),\
@@ -1485,7 +1576,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                  ) STRICT;\
                  CREATE TRIGGER artifacts_limit BEFORE INSERT ON artifacts WHEN (SELECT count(*) FROM artifacts WHERE task_id=NEW.task_id)>=128 BEGIN SELECT RAISE(ABORT, 'artifact limit'); END;\
                  CREATE TRIGGER artifacts_terminal BEFORE INSERT ON artifacts WHEN (SELECT status FROM tasks WHERE id=NEW.task_id) IN ('failed','interrupted','cancelled') BEGIN SELECT RAISE(ABORT, 'terminal artifact'); END;\
-                 PRAGMA user_version=3;",
+                 PRAGMA user_version=4;",
             )
             .map_err(map_sqlite_generic)?;
         #[cfg(test)]
@@ -1540,6 +1631,20 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                 std::process::abort();
             }
         }
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    let current: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sqlite_generic)?;
+    if current == 3 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        transaction
+            .execute_batch(
+                "ALTER TABLE tasks ADD COLUMN completed_at_ms INTEGER CHECK(completed_at_ms IS NULL OR completed_at_ms>=created_at_ms);\
+                 UPDATE tasks SET completed_at_ms=updated_at_ms WHERE status IN ('succeeded','failed','interrupted','cancelled');\
+                 PRAGMA user_version=4;",
+            )
+            .map_err(map_sqlite_generic)?;
         transaction.commit().map_err(map_sqlite_generic)?;
     }
     Ok(())

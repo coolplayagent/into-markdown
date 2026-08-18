@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import nodeTest, { afterEach } from "node:test";
 import { Window } from "happy-dom";
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -12,9 +12,82 @@ import { takeSession } from "../src/session";
 import styles from "../src/styles.css";
 
 const token = "A".repeat(43);
+const globalNames = ["window", "document", "navigator", "history", "location", "Node", "Element", "HTMLElement", "File"] as const;
+const originalGlobals = new Map(globalNames.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+const activeWindows = new Set<Window>();
+const activeRoots = new Set<ReturnType<typeof createRoot>>();
+const activeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+const testGroups = {
+  preview: new Set([
+    "Markdown preview never creates executable or resource-loading DOM",
+    "completed workbench exposes accessible artifact preview and resource browser",
+  ]),
+  history_actions: new Set([
+    "history controls expose accessible pinning and irreversible deletion confirmation",
+  ]),
+  history_cleanup: new Set([
+    "immediate cleanup requires irreversible confirmation and reports reclaimed capacity",
+  ]),
+  workbench: new Set([
+    "workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry",
+    "API rejection renders a recoverable status error rather than the error boundary",
+    "ErrorBoundary contains provider render errors and focuses its fallback heading",
+  ]),
+  accessibility: new Set([
+    "shell primitives expose keyboard focus and language-safe DOM behavior",
+    "checked CSS color tokens meet WCAG AA normal-text contrast",
+    "real App mount synchronizes language without stealing preference focus",
+    "real mounted App has no axe violations; geometry-incomplete rules are not treated as coverage",
+  ]),
+} as const;
+
+type TestGroup = keyof typeof testGroups | "core";
+const selectedGroup = (process.env.INTO_MD_TEST_GROUP ?? "core") as TestGroup;
+if (!(selectedGroup === "core" || selectedGroup in testGroups)) {
+  throw new Error(`Unknown INTO_MD_TEST_GROUP: ${selectedGroup}`);
+}
+
+function groupFor(name: string): TestGroup {
+  for (const [group, names] of Object.entries(testGroups)) {
+    if ((names as Set<string>).has(name)) return group as keyof typeof testGroups;
+  }
+  return "core";
+}
+
+function test(name: string, fn: () => unknown | Promise<unknown>): void {
+  void nodeTest(name, { skip: groupFor(name) !== selectedGroup }, fn);
+}
+
+function trackedRoot(container: Element): ReturnType<typeof createRoot> {
+  const root = createRoot(container);
+  activeRoots.add(root);
+  return root;
+}
+
+function trackedWindow(window: Window): Window {
+  activeWindows.add(window);
+  return window;
+}
+
+afterEach(async () => {
+  for (const root of activeRoots) root.unmount();
+  activeRoots.clear();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const timer of activeTimers) clearTimeout(timer);
+  activeTimers.clear();
+  for (const window of activeWindows) window.close();
+  activeWindows.clear();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const name of globalNames) {
+    const descriptor = originalGlobals.get(name);
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+    else Reflect.deleteProperty(globalThis, name);
+  }
+});
 
 function installWindow(languages = ["en"]): Window {
-  const window = new Window({ url: "http://127.0.0.1:1/status" });
+  const window = trackedWindow(new Window({ url: "http://127.0.0.1:1/status" }));
   Object.defineProperty(window.navigator, "languages", { value: languages, configurable: true });
   window.document.head.innerHTML = "<title>into-markdown</title>";
   window.document.body.innerHTML = '<div id="app"></div>';
@@ -32,7 +105,13 @@ function waitFor(predicate: () => boolean, timeout = 1_000): Promise<void> {
     const check = () => {
       if (predicate()) resolvePromise();
       else if (Date.now() - started > timeout) reject(new Error("DOM condition timed out"));
-      else setTimeout(check, 5);
+      else {
+        const timer = setTimeout(() => {
+          activeTimers.delete(timer);
+          check();
+        }, 5);
+        activeTimers.add(timer);
+      }
     };
     check();
   });
@@ -47,6 +126,7 @@ async function waitForText(window: Window, value: string): Promise<void> {
 const task = (status: TaskRecord["status"] = "running", id = "a".repeat(32)): TaskRecord => ({
   id, createdAtMs: 1, updatedAtMs: 2, status, progressMillionths: status === "succeeded" ? 1_000_000 : 250_000,
   diagnostics: status === "failed" ? [{ code: "conversionFailed" }] : [], artifacts: [],
+  pinned: false,
   configuration: { schemaVersion: 1, ocrEnabled: true, preserveLayout: true },
 });
 
@@ -58,10 +138,14 @@ const availableApi: ApiClient = {
       documentConsole: { available: true, code: "available", detail: "ok" },
     };
   },
-  async listTasks() { return []; },
+  async listTasks() { return { tasks: [] }; },
   async getTask(id) { return task("running", id); },
   async upload() { return task(); },
   async cancel(id) { return task("cancelled", id); },
+  async retry(id) { return task("pending", id); },
+  async setPinned(id, pinned) { return { ...task("succeeded", id), pinned }; },
+  async deleteTask() {},
+  async cleanup() { return { schemaVersion: 1 as const, deletedTasks: 0, reclaimedBytes: 0 }; },
   async watchTask(_id, _onEvent, signal) {
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   },
@@ -176,8 +260,27 @@ test("artifact preview is range-bounded and download filename follows safe Conte
   await assert.rejects(oversized.preview("a".repeat(32), "b".repeat(32)), (error: unknown) => error instanceof ApiError && error.code === "responseTooLarge");
 });
 
+test("history API paginates, filters, pins, retries and permanently deletes explicitly", async () => {
+  const calls: Array<[string, RequestInit | undefined]> = [];
+  const current = task("succeeded");
+  const client = createApiClient(token, async (input, init) => {
+    calls.push([String(input), init]);
+    if (init?.method === "DELETE") return new Response(null, { status: 204 });
+    if (String(input).startsWith("/api/tasks?")) return new Response(JSON.stringify({ schemaVersion: 1, tasks: [current], nextCursor: { updatedAtMs: 2, id: current.id } }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(current), { headers: { "content-type": "application/json" } });
+  });
+  const page = await client.listTasks({ limit: 1, status: "succeeded", pinned: true, after: { updatedAtMs: 3, id: "b".repeat(32) } });
+  assert.equal(page.nextCursor?.id, current.id);
+  assert.equal(calls[0]![0], `/api/tasks?limit=1&afterUpdatedAtMs=3&afterId=${"b".repeat(32)}&status=succeeded&pinned=true`);
+  await client.setPinned(current.id, true); await client.retry(current.id); await client.deleteTask(current.id);
+  assert.equal(calls[1]![0], `/api/tasks/${current.id}/pin`);
+  assert.equal(calls[1]![1]?.body, JSON.stringify({ pinned: true }));
+  assert.equal(calls[2]![0], `/api/tasks/${current.id}/retry`);
+  assert.equal(calls[3]![0], `/api/tasks/${current.id}/history`);
+});
+
 test("Markdown preview never creates executable or resource-loading DOM", async () => {
-  const window = installWindow(); const root = createRoot(window.document.getElementById("app")!);
+  const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
   const malicious = "# Safe\n<script>globalThis.pwned=1</script>\n![x](file:///etc/passwd)\n<img src=http://evil.invalid/x onerror=alert(1)>\n[jump](javascript:alert(1))";
   root.render(createElement(SafeMarkdownPreview, { source: malicious }));
   await waitFor(() => window.document.body.textContent.includes("file:///etc/passwd"));
@@ -189,7 +292,6 @@ test("Markdown preview never creates executable or resource-loading DOM", async 
   root.render(createElement(JsonTree, { value: { provenance: { source: "local" }, blocks: Array.from({ length: 250 }, (_, index) => ({ index })) } }));
   await waitFor(() => window.document.body.textContent.includes("provenance"));
   assert.ok(window.document.body.textContent.includes("more entries"));
-  root.unmount();
 });
 
 test("completed workbench exposes accessible artifact preview and resource browser", async () => {
@@ -198,8 +300,8 @@ test("completed workbench exposes accessible artifact preview and resource brows
     { storageKey: "b".repeat(32), kind: "markdown", byteLen: 40, sha256: "c".repeat(64) },
     { storageKey: "d".repeat(32), kind: "asset", byteLen: 12, sha256: "e".repeat(64), assetId: "image-1", filename: "diagram.png", mediaType: "image/png" },
   ];
-  const api: ApiClient = { ...availableApi, async listTasks() { return [completed]; }, async preview() { return { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
-  const root = createRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  const api: ApiClient = { ...availableApi, async listTasks() { return { tasks: [completed] }; }, async preview() { return { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitFor(() => window.document.body.textContent.includes("Preview result.md"));
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Preview result.md")!.click();
   await waitFor(() => window.document.body.textContent.includes("file:///secret"));
@@ -207,7 +309,53 @@ test("completed workbench exposes accessible artifact preview and resource brows
   assert.ok(window.document.body.textContent.includes("Resources (1)"));
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document);
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
-  root.unmount();
+});
+
+test("history controls expose accessible pinning and irreversible deletion confirmation", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const completed = task("succeeded"); let pinned = false; let deleted = false; let warning = ""; let listCalls = 0;
+  window.confirm = (message?: string) => { warning = message ?? ""; return true; };
+  const api: ApiClient = {
+    ...availableApi,
+    async listTasks() { listCalls += 1; return { tasks: [completed] }; },
+    async setPinned(id, value) { pinned = value; return { ...completed, id, pinned: value }; },
+    async deleteTask() { deleted = true; },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Task details");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Pin")!.click();
+  await waitFor(() => pinned && window.document.body.textContent.includes("Unpin"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Delete permanently")!.click();
+  await waitFor(() => deleted && window.document.querySelector(".task-card") === null);
+  assert.ok(warning.includes("cannot be undone"));
+  assert.equal(listCalls, 1);
+  assert.equal(window.document.querySelector(".task-card"), null);
+});
+test("immediate cleanup requires irreversible confirmation and reports reclaimed capacity", async () => {
+  const window2 = installWindow();
+  window2.history.replaceState(null, "", "/workbench");
+  let cleanups = 0;
+  let warning = "";
+  window2.confirm = (message) => {
+    warning = message ?? "";
+    return true;
+  };
+  const api = {
+    ...availableApi,
+    async listTasks() { return { tasks: [] }; },
+    async cleanup() {
+      cleanups += 1;
+      return { schemaVersion: 1 as const, deletedTasks: 2, reclaimedBytes: 1572864 };
+    }
+  };
+  const root = trackedRoot(window2.document.getElementById("app")!);
+  root.render(createElement(App, { api }));
+  await waitForText(window2, "No tasks yet");
+  [...window2.document.querySelectorAll("button")].find((button) => button.textContent === "Clean up now")!.click();
+  await waitFor(() => cleanups === 1 && window2.document.body.textContent.includes("1.5 MiB"));
+  assert.ok(warning.includes("cannot be undone"));
+  const axe = (await import("axe-core")).default;
+  assert.deepEqual((await axe.run(window2.document)).violations.map((violation) => violation.id), []);
 });
 
 test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry", async () => {
@@ -216,11 +364,12 @@ test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel 
   const failed = task("failed", "b".repeat(32)); const running = task("running", "c".repeat(32));
   const api: ApiClient = {
     ...availableApi,
-    async listTasks() { return [running, failed]; },
+    async listTasks() { return { tasks: [running, failed] }; },
     async upload() { uploaded += 1; return task("running", "d".repeat(32)); },
     async cancel(id) { cancelled += 1; return task("cancelled", id); },
+    async retry() { throw new ApiError("originalUnavailable"); },
   };
-  const root = createRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitFor(() => window.document.body.textContent.includes("Restored task"), 2_000).catch(() => { throw new Error(window.document.body.textContent); });
   const inputs = [...window.document.querySelectorAll<HTMLInputElement>('input[type="file"]')];
   assert.equal(inputs.length, 2); assert.equal(inputs[0]!.multiple, true); assert.equal(inputs[1]!.hasAttribute("webkitdirectory"), true);
@@ -243,11 +392,10 @@ test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel 
   const many = Array.from({ length: 101 }, (_, index) => new File(["x"], `${index}.txt`));
   const manyDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(manyDrop, "dataTransfer", { value: { files: many } });
   zone.dispatchEvent(manyDrop); await waitForText(window, "at most 100 files");
-  root.unmount();
 });
 
 test("shell primitives expose keyboard focus and language-safe DOM behavior", () => {
-  const window = new Window({ url: "http://127.0.0.1:1/status" });
+  const window = trackedWindow(new Window({ url: "http://127.0.0.1:1/status" }));
   window.document.body.innerHTML = '<a class="skip-link" href="#main">Skip</a><main id="main" tabindex="-1"><h1>Status</h1></main>';
   const link = window.document.querySelector<HTMLAnchorElement>("a")!;
   const main = window.document.querySelector<HTMLElement>("main")!;
@@ -299,7 +447,7 @@ test("checked CSS color tokens meet WCAG AA normal-text contrast", () => {
 
 test("real App mount synchronizes language without stealing preference focus", async () => {
   const window = installWindow(["zh-CN", "en"]);
-  const root = createRoot(window.document.getElementById("app")!);
+  const root = trackedRoot(window.document.getElementById("app")!);
   root.render(createElement(App, { api: availableApi }));
   await waitFor(() => window.document.body.textContent.includes("本地 API 可用"));
   assert.equal(window.document.documentElement.lang, "zh-CN");
@@ -311,12 +459,11 @@ test("real App mount synchronizes language without stealing preference focus", a
   await waitFor(() => window.document.documentElement.lang === "en");
   assert.equal(window.document.activeElement, language);
   assert.match(window.document.title, /Service status/);
-  root.unmount();
 });
 
 test("real mounted App has no axe violations; geometry-incomplete rules are not treated as coverage", async () => {
   const window = installWindow();
-  const root = createRoot(window.document.getElementById("app")!);
+  const root = trackedRoot(window.document.getElementById("app")!);
   root.render(createElement(App, { api: availableApi }));
   await waitFor(() => window.document.body.textContent.includes("Local API available"));
   const axe = (await import("axe-core")).default;
@@ -326,24 +473,23 @@ test("real mounted App has no axe violations; geometry-incomplete rules are not 
   if (incomplete.has("color-contrast")) {
     assert.equal(result.passes.some((item) => item.id === "color-contrast"), false);
   }
-  root.unmount();
 });
 
 test("API rejection renders a recoverable status error rather than the error boundary", async () => {
   const window = installWindow();
-  const root = createRoot(window.document.getElementById("app")!);
+  const root = trackedRoot(window.document.getElementById("app")!);
   root.render(createElement(App, { api: { status: async () => { throw new ApiError("unreachable"); } } }));
   await waitFor(() => window.document.body.textContent.includes("Could not read service status"));
   assert.ok(window.document.querySelector('[role="alert"]'));
   assert.equal(window.document.body.textContent.includes("The page encountered a problem"), false);
   const retry = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Retry");
   assert.ok(retry?.matches("button"));
-  root.unmount();
 });
 
 test("ErrorBoundary contains provider render errors and focuses its fallback heading", async () => {
   const window = installWindow();
   const root = createRoot(window.document.getElementById("app")!, { onCaughtError: () => undefined });
+  activeRoots.add(root);
   function FailingProvider(): never { throw new Error("untrusted provider failure"); }
   root.render(createElement(ErrorBoundary, null, createElement(FailingProvider)));
   await waitFor(() => window.document.body.textContent.includes("The page encountered a problem"));

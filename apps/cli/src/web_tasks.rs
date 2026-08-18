@@ -23,14 +23,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
 const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_GLOBAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const STORE_METADATA_HEADROOM: u64 = 4 * 1024 * 1024;
 const STORE_MUTATION_RESERVATION: u64 = 1024 * 1024;
-const MAX_DATA_BYTES: u64 = MAX_GLOBAL_BYTES - STORE_METADATA_HEADROOM;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_QUEUE: usize = 100_000;
 const MAX_WORKERS: usize = 4;
@@ -43,6 +41,16 @@ const MAX_TASK_DURABLE_GROWTH: u64 = 512 * 1024 * 1024;
 const MAX_TASK_METADATA_GROWTH: u64 = 4 * 1024 * 1024;
 const MAX_TASK_TOTAL_DURABLE_GROWTH: u64 =
     2 * MAX_CHECKPOINT_BYTES + MAX_TASK_DURABLE_GROWTH + MAX_TASK_METADATA_GROWTH;
+const DEFAULT_RETENTION_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const DEFAULT_RETENTION_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+// Retained history plus one conservative durable-growth reservation per worker
+// and an isolated SQLite metadata reserve. This keeps the 10 GiB policy
+// reachable without allowing concurrent work to cross the managed ceiling.
+const MAX_GLOBAL_BYTES: u64 = DEFAULT_RETENTION_BYTES
+    + (MAX_WORKERS as u64 * MAX_TASK_TOTAL_DURABLE_GROWTH)
+    + STORE_METADATA_HEADROOM;
+const MAX_DATA_BYTES: u64 = MAX_GLOBAL_BYTES - STORE_METADATA_HEADROOM;
+const _: () = assert!(DEFAULT_RETENTION_BYTES <= MAX_DATA_BYTES);
 #[cfg(test)]
 thread_local! {
     static SWAP_ROOT_AFTER_TASK_STORE_OPEN: Cell<bool> = const { Cell::new(false) };
@@ -260,7 +268,9 @@ struct Shared {
     objects: SafeDir,
     incoming: SafeDir,
     snapshots: SafeDir,
+    trash: SafeDir,
     task_store: Mutex<TaskStore>,
+    history_mutation: Mutex<()>,
     recovery: RecoveryStore,
     engine: Engine,
     events: EventHub,
@@ -301,7 +311,41 @@ struct Shared {
     dequeue_transition_failures: AtomicUsize,
     #[cfg(test)]
     success_transition_failures: AtomicUsize,
+    #[cfg(test)]
+    retention_failure: AtomicUsize,
     publication_failure: AtomicUsize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetentionPolicy {
+    pub(crate) max_age: Duration,
+    pub(crate) max_bytes: u64,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self { max_age: DEFAULT_RETENTION_AGE, max_bytes: DEFAULT_RETENTION_BYTES }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CleanupSummary {
+    pub(crate) schema_version: u32,
+    pub(crate) deleted_tasks: u32,
+    pub(crate) reclaimed_bytes: u64,
+}
+
+impl Default for CleanupSummary {
+    fn default() -> Self {
+        Self { schema_version: 1, deleted_tasks: 0, reclaimed_bytes: 0 }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TaskHistoryPage {
+    pub(crate) tasks: Vec<TaskRecord>,
+    pub(crate) next: Option<TaskCursor>,
 }
 
 /// Version 1 task-event wire DTO. Event IDs are process-generation scoped;
@@ -630,6 +674,23 @@ fn publication_failure_checkpoint_atomic(
     Ok(())
 }
 
+#[cfg(test)]
+fn retention_failure_checkpoint(shared: &Shared, phase: usize) -> Result<(), WebTaskError> {
+    if shared
+        .retention_failure
+        .compare_exchange(phase, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return Err(WebTaskError::Io(format!("injected retention failure at phase {phase}")));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn retention_failure_checkpoint(_shared: &Shared, _phase: usize) -> Result<(), WebTaskError> {
+    Ok(())
+}
+
 impl ArtifactSnapshot {
     #[cfg(test)]
     fn metadata(&self) -> std::io::Result<fs::Metadata> {
@@ -731,7 +792,7 @@ impl<'a> DiskLease<'a> {
                 .ok_or_else(|| WebTaskError::Limit("global storage accounting overflow".into()))?;
             if required > MAX_DATA_BYTES {
                 return Err(WebTaskError::Limit(
-                    "managed storage reservations exceed 8 GiB".into(),
+                    "managed storage reservations exceed the global ceiling".into(),
                 ));
             }
             if required
@@ -913,16 +974,18 @@ impl WebTaskBackend {
         let objects = open_managed("objects")?;
         let incoming = open_managed("incoming")?;
         let snapshots = open_managed("snapshots")?;
-        for directory in [&objects, &incoming, &snapshots] {
+        let trash = open_managed("trash")?;
+        for directory in [&objects, &incoming, &snapshots, &trash] {
             directory
                 .verify_private_namespace()
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         }
         cleanup_flat_private(&snapshots, "payload")?;
         cleanup_crash_residue(&incoming, &objects)?;
+        recover_retention_trash(&objects, &trash, &task_store, &recovery)?;
         let used = measured_managed_bytes(&root_handle)?;
         if used > MAX_GLOBAL_BYTES {
-            return Err(WebTaskError::Limit("managed storage exceeds 8 GiB".into()));
+            return Err(WebTaskError::Limit("managed storage exceeds the global ceiling".into()));
         }
         let engine =
             into_markdown::default_engine().map_err(|error| WebTaskError::Io(error.to_string()))?;
@@ -931,7 +994,9 @@ impl WebTaskBackend {
             objects,
             incoming,
             snapshots,
+            trash,
             task_store: Mutex::new(task_store),
+            history_mutation: Mutex::new(()),
             recovery,
             engine,
             events: EventHub::new(random_hex()?),
@@ -977,10 +1042,13 @@ impl WebTaskBackend {
             dequeue_transition_failures: AtomicUsize::new(0),
             #[cfg(test)]
             success_transition_failures: AtomicUsize::new(0),
+            #[cfg(test)]
+            retention_failure: AtomicUsize::new(0),
             publication_failure: AtomicUsize::new(0),
         });
         let backend = Self { owner: Arc::new(Owner { shared, workers: Mutex::new(Vec::new()) }) };
         backend.recover()?;
+        backend.cleanup(RetentionPolicy::default(), unix_now_ms()?)?;
         for index in 0..MAX_WORKERS {
             let shared = Arc::clone(&backend.owner.shared);
             let worker = std::thread::Builder::new()
@@ -1008,6 +1076,7 @@ impl WebTaskBackend {
         declared_bytes: Option<u64>,
         request: WebTaskRequest,
     ) -> Result<Upload, WebTaskError> {
+        self.cleanup(RetentionPolicy::default(), unix_now_ms()?)?;
         validate_display_name(display_name)?;
         validate_web_task_request(&request)?;
         self.owner
@@ -1053,9 +1122,228 @@ impl WebTaskBackend {
         Ok(record)
     }
 
-    /// Return the most recently updated durable tasks for page recovery.
-    pub(crate) fn list(&self) -> Result<Vec<TaskRecord>, WebTaskError> {
-        lock(&self.owner.shared.task_store).list(100, None).map_err(Into::into)
+    /// Return a stable, newest-first filtered page.
+    pub(crate) fn list(
+        &self,
+        limit: u32,
+        after: Option<&TaskCursor>,
+        status: Option<TaskStatus>,
+        pinned: Option<bool>,
+    ) -> Result<TaskHistoryPage, WebTaskError> {
+        if limit == 0 || limit > 100 {
+            return Err(WebTaskError::Invalid("history limit must be within 1 and 100".into()));
+        }
+        let mut cursor = after.cloned();
+        let mut matched = Vec::new();
+        matched
+            .try_reserve_exact(usize::try_from(limit).unwrap_or(100) + 1)
+            .map_err(|_| WebTaskError::Limit("history page allocation failed".into()))?;
+        loop {
+            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
+            if page.is_empty() {
+                break;
+            }
+            let last =
+                page.last().ok_or_else(|| WebTaskError::Io("history page vanished".into()))?;
+            cursor = Some(TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() });
+            for record in page {
+                if status.is_none_or(|value| record.status == value)
+                    && pinned.is_none_or(|value| record.pinned == value)
+                {
+                    matched.push(record);
+                    if matched.len() > usize::try_from(limit).unwrap_or(100) {
+                        let extra = matched.pop().expect("matched page has an extra row");
+                        let last = matched.last().expect("non-empty requested history page");
+                        let next =
+                            TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() };
+                        let _ = extra;
+                        return Ok(TaskHistoryPage { tasks: matched, next: Some(next) });
+                    }
+                }
+            }
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(TaskHistoryPage { tasks: matched, next: None })
+    }
+
+    pub(crate) fn set_pinned(&self, id: &TaskId, pinned: bool) -> Result<TaskRecord, WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+            store.set_pinned(id, pinned)?;
+            store.get(id)?.ok_or(WebTaskError::NotFound)
+        })
+    }
+
+    /// Permanently remove one terminal task. The object tree is first moved to
+    /// a private quarantine so a failed DB transaction can restore it.
+    pub(crate) fn delete(&self, id: &TaskId) -> Result<(), WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        self.delete_inner(id, true)
+    }
+
+    fn delete_inner(&self, id: &TaskId, allow_pinned: bool) -> Result<(), WebTaskError> {
+        let mut store = lock(&self.owner.shared.task_store);
+        let record = store.get(id)?.ok_or(WebTaskError::NotFound)?;
+        if !is_terminal(record.status) {
+            return Err(WebTaskError::Conflict("active task cannot be deleted".into()));
+        }
+        if record.pinned && !allow_pinned {
+            return Err(WebTaskError::Conflict("pinned task is retained".into()));
+        }
+        let token = RecoveryToken::parse(record.input.recovery_token)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        self.owner
+            .shared
+            .recovery
+            .verify_purge(&token)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        let object_name = std::ffi::OsStr::new(id.as_str());
+        if self
+            .owner
+            .shared
+            .objects
+            .open_child_private_optional(object_name)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+            .is_none()
+        {
+            return Err(WebTaskError::Unsafe("task object tree is missing".into()));
+        }
+        validate_private_tree(&self.owner.shared.objects, object_name, 0)?;
+        let trash_name = retention_trash_name(id, &token);
+        let trash_name = std::ffi::OsStr::new(&trash_name);
+        self.owner
+            .shared
+            .objects
+            .rename_child_private_to_no_replace(object_name, &self.owner.shared.trash, trash_name)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+
+        if let Err(error) = retention_failure_checkpoint(&self.owner.shared, 1)
+            .and_then(|()| store.delete_terminal(id, allow_pinned).map_err(Into::into))
+        {
+            self.owner
+                .shared
+                .trash
+                .rename_child_private_to_no_replace(
+                    trash_name,
+                    &self.owner.shared.objects,
+                    object_name,
+                )
+                .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
+            return Err(error);
+        }
+        drop(store);
+        // Once the SQLite commit succeeds, the encoded trash entry is the
+        // durable deletion intent. A crash or failure from here is completed
+        // idempotently by `recover_retention_trash` on the next start.
+        retention_failure_checkpoint(&self.owner.shared, 2)?;
+        self.owner
+            .shared
+            .recovery
+            .purge(&token)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        remove_quarantined_task(&self.owner.shared.trash, trash_name)?;
+        let mut disk = lock(&self.owner.shared.disk_bytes);
+        disk.used = measured_managed_bytes(&self.owner.shared.root_handle)?;
+        self.owner.shared.disk_changed.notify_all();
+        Ok(())
+    }
+
+    pub(crate) fn retry(&self, id: &TaskId) -> Result<TaskRecord, WebTaskError> {
+        let (request, bytes) = {
+            // Keep deletion and retention from quarantining the source while
+            // retry authenticates and copies it. Release the lock before the
+            // new upload runs its own automatic retention pass.
+            let _history = lock(&self.owner.shared.history_mutation);
+            let record = self.get(id)?;
+            if !is_terminal(record.status) {
+                return Err(WebTaskError::Conflict("active task cannot be retried".into()));
+            }
+            let task = self
+                .owner
+                .shared
+                .objects
+                .open_child_private(std::ffi::OsStr::new(id.as_str()))
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+            let request = load_persisted_request(&task)?
+                .ok_or_else(|| WebTaskError::Conflict("original request is unavailable".into()))?;
+            let input = task
+                .open_regular_private(std::ffi::OsStr::new("input"))
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+            (request, read_file_bounded(input, MAX_FILE_BYTES)?)
+        };
+        let configured = WebTaskRequest {
+            schema_version: 1,
+            format: request.hint.format,
+            options: request.options,
+            authorization: WebTaskAuthorization::default(),
+        };
+        let mut upload = self.begin_upload_configured(
+            &request.name,
+            Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            configured,
+        )?;
+        upload.write_chunk(&bytes)?;
+        upload.finish()
+    }
+
+    pub(crate) fn cleanup(
+        &self,
+        policy: RetentionPolicy,
+        now_ms: i64,
+    ) -> Result<CleanupSummary, WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        if now_ms < 0 {
+            return Err(WebTaskError::Invalid(
+                "retention clock must not precede Unix epoch".into(),
+            ));
+        }
+        if policy.max_bytes > MAX_DATA_BYTES {
+            return Err(WebTaskError::Invalid(
+                "retention capacity exceeds the managed storage ceiling".into(),
+            ));
+        }
+        let before = measured_managed_bytes(&self.owner.shared.root_handle)?;
+        let age_ms = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
+        let cutoff = now_ms.saturating_sub(age_ms);
+        let mut cursor = None;
+        let mut candidates = Vec::new();
+        loop {
+            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
+            if page.is_empty() {
+                break;
+            }
+            let last = page.last().expect("task page is non-empty");
+            cursor = Some(TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() });
+            for record in
+                page.into_iter().filter(|record| is_terminal(record.status) && !record.pinned)
+            {
+                let completed_at_ms = lock(&self.owner.shared.task_store)
+                    .completed_at_ms(&record.id)?
+                    .ok_or_else(|| {
+                        WebTaskError::Io("terminal task is missing its completion timestamp".into())
+                    })?;
+                candidates.push((completed_at_ms, record));
+            }
+        }
+        candidates
+            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.id.cmp(&right.1.id)));
+        let mut summary = CleanupSummary::default();
+        let mut used = before;
+        for (completed_at_ms, record) in candidates {
+            if completed_at_ms > cutoff && used <= policy.max_bytes {
+                break;
+            }
+            match self.delete_inner(&record.id, false) {
+                Ok(()) => summary.deleted_tasks = summary.deleted_tasks.saturating_add(1),
+                Err(WebTaskError::NotFound | WebTaskError::Conflict(_)) => continue,
+                Err(error) => return Err(error),
+            }
+            used = measured_managed_bytes(&self.owner.shared.root_handle)?;
+        }
+        summary.reclaimed_bytes = before.saturating_sub(used);
+        Ok(summary)
     }
 
     /// Subscribe without holding a conversion or persistence lock. A cursor
@@ -1424,7 +1712,9 @@ impl Upload {
                 .and_then(|used| used.checked_add(global.reserved))
                 .ok_or_else(|| WebTaskError::Limit("global storage accounting overflow".into()))?;
             if next_global > MAX_DATA_BYTES {
-                return Err(WebTaskError::Limit("managed storage exceeds 8 GiB".into()));
+                return Err(WebTaskError::Limit(
+                    "managed storage exceeds the global ceiling".into(),
+                ));
             }
             let file = self
                 .file
@@ -2017,7 +2307,7 @@ fn publish_result(
         let disk = lock(&shared.disk_bytes);
         if disk.used.checked_add(disk.reserved).is_none_or(|total| total > MAX_DATA_BYTES) {
             return Err(WebTaskError::Limit(
-                "artifact publication exceeds the global 8 GiB quota".into(),
+                "artifact publication exceeds the global storage ceiling".into(),
             ));
         }
     }
@@ -2735,7 +3025,7 @@ fn reconcile_managed_usage(shared: &Shared) -> Result<(), WebTaskError> {
     };
     quota.used = measured;
     if quota.used > MAX_GLOBAL_BYTES {
-        return Err(WebTaskError::Limit("managed storage exceeds 8 GiB".into()));
+        return Err(WebTaskError::Limit("managed storage exceeds the global ceiling".into()));
     }
     shared.disk_changed.notify_all();
     Ok(())
@@ -3067,6 +3357,163 @@ fn hex_digest_cancel(
 
 fn measured_managed_bytes(root: &SafeDir) -> Result<u64, WebTaskError> {
     root.measured_tree_bytes(8, 1_000_000).map_err(|error| WebTaskError::Unsafe(error.to_string()))
+}
+
+fn unix_now_ms() -> Result<i64, WebTaskError> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| WebTaskError::Io("system clock precedes Unix epoch".into()))?
+        .as_millis();
+    i64::try_from(milliseconds).map_err(|_| WebTaskError::Limit("system time overflow".into()))
+}
+
+fn recover_retention_trash(
+    objects: &SafeDir,
+    trash: &SafeDir,
+    store: &TaskStore,
+    recovery: &RecoveryStore,
+) -> Result<(), WebTaskError> {
+    for name in trash
+        .names_bounded(MAX_QUEUE + 1)
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+    {
+        let text =
+            name.to_str().ok_or_else(|| WebTaskError::Unsafe("trash entry is not UTF-8".into()))?;
+        let (id, token) = parse_retention_trash_name(text)?;
+        if let Some(record) = store.get(&id)? {
+            if record.input.recovery_token != token.as_str() {
+                return Err(WebTaskError::Unsafe(
+                    "retention trash token does not match its durable task".into(),
+                ));
+            }
+            if objects
+                .open_child_private_optional(std::ffi::OsStr::new(id.as_str()))
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+                .is_some()
+            {
+                return Err(WebTaskError::Unsafe(
+                    "retention recovery found duplicate task objects".into(),
+                ));
+            }
+            trash
+                .rename_child_private_to_no_replace(
+                    &name,
+                    objects,
+                    std::ffi::OsStr::new(id.as_str()),
+                )
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        } else {
+            if store.recovery_token_in_use(token.as_str())? {
+                return Err(WebTaskError::Unsafe(
+                    "retention trash selected a recovery token owned by another task".into(),
+                ));
+            }
+            recovery.purge(&token).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+            remove_private_tree(trash, &name, 0)?;
+        }
+    }
+    Ok(())
+}
+
+fn retention_trash_name(id: &TaskId, token: &RecoveryToken) -> String {
+    format!("{}.{}", id.as_str(), token.as_str())
+}
+
+fn parse_retention_trash_name(value: &str) -> Result<(TaskId, RecoveryToken), WebTaskError> {
+    let (id, token) = value
+        .split_once('.')
+        .ok_or_else(|| WebTaskError::Unsafe("retention trash name is malformed".into()))?;
+    if token.contains('.') {
+        return Err(WebTaskError::Unsafe("retention trash name is malformed".into()));
+    }
+    let id = TaskId::parse(id.to_owned())
+        .map_err(|_| WebTaskError::Unsafe("retention trash task ID is invalid".into()))?;
+    let token = RecoveryToken::parse(token.to_owned())
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    Ok((id, token))
+}
+
+fn remove_quarantined_task(trash: &SafeDir, name: &std::ffi::OsStr) -> Result<(), WebTaskError> {
+    remove_private_tree(trash, name, 0)
+}
+
+fn validate_private_tree(
+    parent: &SafeDir,
+    name: &std::ffi::OsStr,
+    depth: u8,
+) -> Result<(), WebTaskError> {
+    if depth > 3 {
+        return Err(WebTaskError::Unsafe("managed task tree is too deep".into()));
+    }
+    let directory =
+        parent.open_child_private(name).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    for member in
+        directory.names_bounded(1024).map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+    {
+        match directory.open_regular_private(&member) {
+            Ok(file) if link_count(&file.metadata()?) == 1 => {}
+            Ok(_) => {
+                return Err(WebTaskError::Unsafe(
+                    "managed task member has an external hard link".into(),
+                ));
+            }
+            Err(_) => {
+                if directory
+                    .open_child_private_optional(&member)
+                    .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+                    .is_none()
+                {
+                    return Err(WebTaskError::Unsafe(
+                        "managed task member is not a private file or directory".into(),
+                    ));
+                }
+                validate_private_tree(&directory, &member, depth.saturating_add(1))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_private_tree(
+    parent: &SafeDir,
+    name: &std::ffi::OsStr,
+    depth: u8,
+) -> Result<(), WebTaskError> {
+    if depth > 3 {
+        return Err(WebTaskError::Unsafe("managed task tree is too deep".into()));
+    }
+    let directory =
+        parent.open_child_private(name).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    let names =
+        directory.names_bounded(1024).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    for member in names {
+        match directory.open_regular_private(&member) {
+            Ok(file) => {
+                if link_count(&file.metadata()?) != 1 {
+                    return Err(WebTaskError::Unsafe(
+                        "managed task member has an external hard link".into(),
+                    ));
+                }
+                drop(file);
+                directory
+                    .remove_regular_private(&member)
+                    .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+            }
+            Err(_) => {
+                if directory
+                    .open_child_private_optional(&member)
+                    .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+                    .is_none()
+                {
+                    return Err(WebTaskError::Unsafe(
+                        "managed task member is not a private file or directory".into(),
+                    ));
+                }
+                remove_private_tree(&directory, &member, depth.saturating_add(1))?;
+            }
+        }
+    }
+    parent.remove_empty_child_private(name).map_err(|error| WebTaskError::Unsafe(error.to_string()))
 }
 
 fn cleanup_crash_residue(incoming: &SafeDir, objects: &SafeDir) -> Result<(), WebTaskError> {
@@ -3545,6 +3992,228 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_filters_retry_pin_delete_and_retention_are_restart_safe() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let mut first = backend.begin_upload("first.txt", None).unwrap();
+        first.write_chunk(b"first").unwrap();
+        let first = wait_terminal(&backend, &first.finish().unwrap().id);
+        let mut second = backend.begin_upload("second.txt", None).unwrap();
+        second.write_chunk(b"second").unwrap();
+        let second = wait_terminal(&backend, &second.finish().unwrap().id);
+
+        let pinned = backend.set_pinned(&first.id, true).unwrap();
+        assert!(pinned.pinned);
+        let page = backend.list(1, None, Some(TaskStatus::Succeeded), None).unwrap();
+        assert_eq!(page.tasks.len(), 1);
+        assert!(page.next.is_some());
+        let pinned_page = backend.list(25, None, None, Some(true)).unwrap();
+        assert_eq!(pinned_page.tasks.iter().map(|task| &task.id).collect::<Vec<_>>(), [&first.id]);
+
+        let retried = backend.retry(&second.id).unwrap();
+        assert_eq!(wait_terminal(&backend, &retried.id).status, TaskStatus::Succeeded);
+        let retry_token = RecoveryToken::parse(retried.input.recovery_token.clone()).unwrap();
+        assert!(matches!(backend.delete(&retried.id), Ok(())));
+        assert!(matches!(backend.get(&retried.id), Err(WebTaskError::NotFound)));
+        assert!(backend.owner.shared.recovery.inspect(&retry_token).unwrap().is_none());
+
+        let summary = backend
+            .cleanup(
+                RetentionPolicy { max_age: Duration::ZERO, max_bytes: DEFAULT_RETENTION_BYTES },
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+        assert!(summary.deleted_tasks >= 1);
+        assert!(backend.get(&first.id).unwrap().pinned);
+
+        // Simulate interruption after quarantine but before the DB commit.
+        let name = std::ffi::OsStr::new(first.id.as_str());
+        let token = RecoveryToken::parse(first.input.recovery_token.clone()).unwrap();
+        let trash_name = retention_trash_name(&first.id, &token);
+        backend
+            .owner
+            .shared
+            .objects
+            .rename_child_private_to_no_replace(
+                name,
+                &backend.owner.shared.trash,
+                std::ffi::OsStr::new(&trash_name),
+            )
+            .unwrap();
+        drop(backend);
+        let reopened = WebTaskBackend::open(&root).unwrap();
+        assert!(reopened.get(&first.id).unwrap().pinned);
+        assert!(reopened.owner.shared.trash.names_private().unwrap().is_empty());
+        reopened.delete(&first.id).unwrap();
+        assert!(matches!(reopened.get(&first.id), Err(WebTaskError::NotFound)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_age_capacity_pinning_and_ceiling_boundaries_are_exact() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("age")).unwrap();
+        let mut upload = backend.begin_upload("boundary.txt", None).unwrap();
+        upload.write_chunk(b"boundary").unwrap();
+        let terminal = wait_terminal(&backend, &upload.finish().unwrap().id);
+        let completed =
+            lock(&backend.owner.shared.task_store).completed_at_ms(&terminal.id).unwrap().unwrap();
+        let retained_bytes = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
+        let age = Duration::from_secs(30 * 24 * 60 * 60);
+        let age_ms = i64::try_from(age.as_millis()).unwrap();
+        assert_eq!(
+            backend
+                .cleanup(
+                    RetentionPolicy { max_age: age, max_bytes: retained_bytes },
+                    completed + age_ms - 1,
+                )
+                .unwrap()
+                .deleted_tasks,
+            0
+        );
+        assert_eq!(
+            backend
+                .cleanup(
+                    RetentionPolicy { max_age: age, max_bytes: retained_bytes },
+                    completed + age_ms,
+                )
+                .unwrap()
+                .deleted_tasks,
+            1
+        );
+
+        let backend = WebTaskBackend::open(temporary.path().join("capacity")).unwrap();
+        let mut upload = backend.begin_upload("single.txt", None).unwrap();
+        upload.write_chunk(b"single task").unwrap();
+        let terminal = wait_terminal(&backend, &upload.finish().unwrap().id);
+        let completed =
+            lock(&backend.owner.shared.task_store).completed_at_ms(&terminal.id).unwrap().unwrap();
+        let exact = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
+        let young = Duration::from_secs(1);
+        assert_eq!(
+            backend
+                .cleanup(RetentionPolicy { max_age: young, max_bytes: exact }, completed)
+                .unwrap()
+                .deleted_tasks,
+            0
+        );
+        backend.set_pinned(&terminal.id, true).unwrap();
+        let pinned_used = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
+        assert_eq!(
+            backend
+                .cleanup(RetentionPolicy { max_age: young, max_bytes: pinned_used - 1 }, completed,)
+                .unwrap()
+                .deleted_tasks,
+            0
+        );
+        backend.set_pinned(&terminal.id, false).unwrap();
+        let unpinned_used = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
+        assert_eq!(
+            backend
+                .cleanup(
+                    RetentionPolicy { max_age: young, max_bytes: unpinned_used - 1 },
+                    completed,
+                )
+                .unwrap()
+                .deleted_tasks,
+            1
+        );
+        assert!(matches!(
+            backend.cleanup(
+                RetentionPolicy { max_age: Duration::ZERO, max_bytes: MAX_DATA_BYTES + 1 },
+                completed,
+            ),
+            Err(WebTaskError::Invalid(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_failures_before_and_after_commit_recover_durably() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let mut upload = backend.begin_upload("durable.txt", None).unwrap();
+        upload.write_chunk(b"durable").unwrap();
+        let terminal = wait_terminal(&backend, &upload.finish().unwrap().id);
+        let token = RecoveryToken::parse(terminal.input.recovery_token.clone()).unwrap();
+        assert!(backend.owner.shared.recovery.inspect(&token).unwrap().is_some());
+
+        backend.owner.shared.retention_failure.store(1, Ordering::SeqCst);
+        assert!(matches!(backend.delete(&terminal.id), Err(WebTaskError::Io(_))));
+        assert!(backend.get(&terminal.id).is_ok());
+        assert!(backend.owner.shared.trash.names_private().unwrap().is_empty());
+        assert!(backend.owner.shared.recovery.inspect(&token).unwrap().is_some());
+
+        backend.owner.shared.retention_failure.store(2, Ordering::SeqCst);
+        assert!(matches!(backend.delete(&terminal.id), Err(WebTaskError::Io(_))));
+        assert!(matches!(backend.get(&terminal.id), Err(WebTaskError::NotFound)));
+        assert_eq!(backend.owner.shared.trash.names_private().unwrap().len(), 1);
+        assert!(backend.owner.shared.recovery.inspect(&token).unwrap().is_some());
+        drop(backend);
+
+        let reopened = WebTaskBackend::open(&root).unwrap();
+        assert!(reopened.owner.shared.trash.names_private().unwrap().is_empty());
+        assert!(reopened.owner.shared.recovery.inspect(&token).unwrap().is_none());
+        assert!(matches!(reopened.get(&terminal.id), Err(WebTaskError::NotFound)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_never_deletes_a_concurrently_completing_task() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.conversion_gate) = Some(Arc::clone(&gate));
+        let mut upload = backend.begin_upload("active.txt", None).unwrap();
+        upload.write_chunk(b"active").unwrap();
+        let task = upload.finish().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while backend.owner.shared.conversion_entries.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let summary = backend
+            .cleanup(
+                RetentionPolicy { max_age: Duration::ZERO, max_bytes: 0 },
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.deleted_tasks, 0);
+        assert!(!is_terminal(backend.get(&task.id).unwrap().status));
+        gate.wait();
+        assert_eq!(wait_terminal(&backend, &task.id).status, TaskStatus::Succeeded);
+        let summary = backend
+            .cleanup(
+                RetentionPolicy { max_age: Duration::ZERO, max_bytes: 0 },
+                unix_now_ms().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(summary.deleted_tasks, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_delete_refuses_links_without_touching_external_paths_or_database() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let mut upload = backend.begin_upload("safe.txt", None).unwrap();
+        upload.write_chunk(b"safe").unwrap();
+        let terminal = wait_terminal(&backend, &upload.finish().unwrap().id);
+        let outside = temporary.path().join("outside");
+        fs::write(&outside, b"do not delete").unwrap();
+        symlink(&outside, root.join("objects").join(terminal.id.as_str()).join("attacker"))
+            .unwrap();
+        assert!(matches!(backend.delete(&terminal.id), Err(WebTaskError::Unsafe(_))));
+        assert_eq!(fs::read(&outside).unwrap(), b"do not delete");
+        assert!(lock(&backend.owner.shared.task_store).get(&terminal.id).unwrap().is_some());
     }
 
     fn create_pending_without_workers(root: &Path, bytes: &[u8]) -> TaskId {
