@@ -1,7 +1,7 @@
 # 本地 Web 服务
 
 `into-md ui` 提供安全的本机 HTTP 入口和嵌入式 React + TypeScript 控制台壳。控制台
-包含响应式批量转换工作台、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
+包含响应式批量转换工作台、格式/模型/Provider/插件/配置/doctor 管理页、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
 客户端。状态响应把 `localApi.available` 与 `documentConsole.available` 都标为 `true`。
 
 ## 命令与监听
@@ -76,10 +76,20 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 布局。外层响应中间件为所有 method、fallback、2xx 和 4xx 统一添加安全 Header 与
 `no-store`，不依赖具体 handler 正常返回。
 
+`GET /api/admin` 返回 schema 1 的有界管理快照。格式来自 core catalog；模型状态来自
+与 CLI 相同的 `ModelManager`；Provider 只返回脱敏 URL、环境变量名及“是否存在”，永不读取
+或返回环境变量值；配置使用 `LoadedConfig::display_value` 的脱敏结果。插件和 doctor 检查只做
+本地状态检查，快照不会联网。`POST /api/admin` 接受最多 64 KiB、拒绝未知字段的 action DTO，
+并复用 CLI 配置事务与稳定错误码。模型/Provider 联网操作必须在该请求携带
+`authorizeNetwork`；删除等危险操作必须携带 `authorizeDangerous`。这些授权在一次请求后由页面
+清零且不持久化。安全配置编辑器只公开非秘密键，服务端也拒绝 secret、token、password 或
+明文 API key 形态的写入；API key 只能由命名环境变量提供。
+
 ## 控制台与静态资产
 
 `/workbench`（以及 `/`）提供多文件拖放、文件与目录选择、批量选项、队列进度、取消、
-失败重试和产物下载；`/status` 显示本地 API 状态，其他页面显示 404。每批最多 100 个文件、
+失败重试和产物下载；`/formats`、`/models`、`/providers`、`/plugins`、`/configuration` 和
+`/doctor` 覆盖 CLI 管理能力，`/status` 显示本地 API 状态，其他页面显示 404。每批最多 100 个文件、
 总计 1 GiB，单文件上限由批次 Engine 选项控制且不得超过 512 MiB。刷新后通过
 `GET /api/tasks` 恢复最近 100 个 durable 任务；原文件不写入浏览器存储，因此刷新后的失败
 重试要求重新选择。客户端路由 fallback 仅处理带 `Accept: text/html` 的 GET/HEAD，并明确

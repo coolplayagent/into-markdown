@@ -28,7 +28,7 @@ SQLite commit 前后注入失败的目录/checkpoint 重启恢复。前端单测
 
 Web 预览与下载的定向门禁为 `cargo test -p into-markdown-cli
 download_ranges_and_names_are_canonical_and_header_safe`、`bazel test
-//web/console:unit_test //web/console:dist_integration_test` 和 `bazel test
+//web/console:unit_test //web/console:admin_unit_test //web/console:dist_integration_test` 和 `bazel test
 //apps/cli:into_md_test`。前端用恶意 HTML、`javascript:`、`file:` 与远程图片语法验证预览 DOM
 不产生任何可执行或资源加载元素；另验证 256 KiB 截断、IR/provenance 树上限、资源浏览与 axe。
 Unix loopback 集成测试把真实 Markdown artifact 做完整、开放区间和非法区间下载，校验状态、

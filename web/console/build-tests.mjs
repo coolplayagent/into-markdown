@@ -3,7 +3,7 @@ import { build } from "esbuild-wasm";
 await build({
   bundle: true,
   define: { "process.env.NODE_ENV": '"test"' },
-  entryPoints: ["web/console/tests/unit.ts"],
+  entryPoints: [process.argv[3] ?? "web/console/tests/unit.ts"],
   format: "esm",
   jsx: "automatic",
   jsxImportSource: "react",

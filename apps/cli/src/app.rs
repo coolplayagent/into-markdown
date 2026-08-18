@@ -698,7 +698,7 @@ fn run_models(
     }
 }
 
-fn ensure_model_parent() -> Result<(), CliError> {
+pub(crate) fn ensure_model_parent() -> Result<(), CliError> {
     let data_dir = directories::ProjectDirs::from("", "", "into-markdown")
         .map(|directories| directories.data_dir().to_path_buf())
         .ok_or_else(|| {
@@ -715,7 +715,7 @@ fn ensure_model_parent_at(data_dir: &Path) -> Result<(), CliError> {
     fs::create_dir_all(data_dir).map_err(CliError::from)
 }
 
-fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
+pub(crate) fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
     let writable_root = directories::ProjectDirs::from("", "", "into-markdown")
         .map(|directories| directories.data_dir().join("models"))
         .ok_or_else(|| {
@@ -733,7 +733,7 @@ fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
     into_markdown::ModelManager::embedded(writable_root, bundled_root).map_err(CliError::from)
 }
 
-fn model_error(error: into_markdown::ModelManagerError) -> CliError {
+pub(crate) fn model_error(error: into_markdown::ModelManagerError) -> CliError {
     use into_markdown::ModelManagerError;
     match error {
         ModelManagerError::UnknownBundle => CliError::usage(error.to_string()),
@@ -833,44 +833,7 @@ fn run_providers(
             Ok(())
         }
         Some(ProvidersCommand::Test(arguments)) => {
-            let provider =
-                loaded.effective.providers.get(&arguments.name).ok_or_else(|| {
-                    CliError::usage(format!("unknown provider '{}'", arguments.name))
-                })?;
-            let mut options = loaded.options.clone();
-            apply_network_authorization(
-                &mut options,
-                arguments.allow_network,
-                arguments.allow_private_network,
-                &arguments.allow_host,
-            )?;
-            validate_network_url(&provider.base_url, &options, "provider")?;
-            let timeout = std::time::Duration::from_millis(
-                provider.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
-            );
-            let provider_config = TransportProviderConfig::parse(
-                &provider.base_url,
-                &provider.model,
-                &provider.api_key_env,
-                timeout,
-                provider.capabilities.clone(),
-            )?;
-            let client = OpenAiCompatibleClient::new(
-                provider_config,
-                ProviderNetworkPolicy {
-                    allow_network: options.network.enabled,
-                    allow_private_network: !options.network.deny_private_networks,
-                    allowed_hosts: options.network.allowed_hosts.clone(),
-                },
-            );
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions {
-                    timeout: Some(timeout),
-                    ..into_markdown::ExecutionOptions::default()
-                },
-                options.limits,
-            );
-            let result = client.test(&execution)?;
+            let result = test_provider(loaded, &arguments)?;
             if json {
                 write_json(context.stdout, &result)
             } else {
@@ -882,6 +845,51 @@ fn run_providers(
             }
         }
     }
+}
+
+pub(crate) fn test_provider(
+    loaded: &LoadedConfig,
+    arguments: &crate::args::ProviderTestArgs,
+) -> Result<into_markdown::ProviderTestResult, CliError> {
+    let provider = loaded
+        .effective
+        .providers
+        .get(&arguments.name)
+        .ok_or_else(|| CliError::usage(format!("unknown provider '{}'", arguments.name)))?;
+    let mut options = loaded.options.clone();
+    apply_network_authorization(
+        &mut options,
+        arguments.allow_network,
+        arguments.allow_private_network,
+        &arguments.allow_host,
+    )?;
+    validate_network_url(&provider.base_url, &options, "provider")?;
+    let timeout = std::time::Duration::from_millis(
+        provider.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
+    );
+    let provider_config = TransportProviderConfig::parse(
+        &provider.base_url,
+        &provider.model,
+        &provider.api_key_env,
+        timeout,
+        provider.capabilities.clone(),
+    )?;
+    let client = OpenAiCompatibleClient::new(
+        provider_config,
+        ProviderNetworkPolicy {
+            allow_network: options.network.enabled,
+            allow_private_network: !options.network.deny_private_networks,
+            allowed_hosts: options.network.allowed_hosts.clone(),
+        },
+    );
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions {
+            timeout: Some(timeout),
+            ..into_markdown::ExecutionOptions::default()
+        },
+        options.limits,
+    );
+    client.test(&execution).map_err(CliError::from)
 }
 
 fn list_providers(
