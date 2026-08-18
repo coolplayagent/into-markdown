@@ -3,7 +3,8 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { createApiClient, ApiError } from "../src/api";
+import { createApiClient, ApiError, defaultWorkbenchOptions } from "../src/api";
+import type { ApiClient, TaskRecord } from "../src/api";
 import { App } from "../src/app";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
@@ -19,7 +20,7 @@ function installWindow(languages = ["en"]): Window {
   for (const [name, value] of Object.entries({
     window, document: window.document, navigator: window.navigator,
     history: window.history, location: window.location, Node: window.Node,
-    Element: window.Element, HTMLElement: window.HTMLElement,
+    Element: window.Element, HTMLElement: window.HTMLElement, File: window.File,
   })) Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
   return window;
 }
@@ -36,14 +37,34 @@ function waitFor(predicate: () => boolean, timeout = 1_000): Promise<void> {
   });
 }
 
-const availableApi = {
+async function waitForText(window: Window, value: string): Promise<void> {
+  await waitFor(() => window.document.body.textContent.includes(value)).catch(() => {
+    throw new Error(`Missing text ${JSON.stringify(value)} in ${JSON.stringify(window.document.body.textContent)}`);
+  });
+}
+
+const task = (status: TaskRecord["status"] = "running", id = "a".repeat(32)): TaskRecord => ({
+  id, createdAtMs: 1, updatedAtMs: 2, status, progressMillionths: status === "succeeded" ? 1_000_000 : 250_000,
+  diagnostics: status === "failed" ? [{ code: "conversionFailed" }] : [], artifacts: [],
+  configuration: { schemaVersion: 1, ocrEnabled: true, preserveLayout: true },
+});
+
+const availableApi: ApiClient = {
   async status() {
     return {
       schemaVersion: 1 as const,
       localApi: { available: true, code: "available", detail: "ok" },
-      documentConsole: { available: false, code: "componentUnavailable", detail: "not installed" },
+      documentConsole: { available: true, code: "available", detail: "ok" },
     };
   },
+  async listTasks() { return []; },
+  async getTask(id) { return task("running", id); },
+  async upload() { return task(); },
+  async cancel(id) { return task("cancelled", id); },
+  async watchTask(_id, _onEvent, signal) {
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  },
+  async download() { return new Blob(); },
 };
 
 test("session handoff clears every fragment before returning the in-memory token", () => {
@@ -100,6 +121,75 @@ test("API client rejects malicious and oversized responses without reflecting se
       return true;
     });
   }
+});
+
+test("workbench API sends shared conversion options and resumes SSE from Last-Event-ID", async () => {
+  const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+  let stream = 0;
+  const responseTask = task();
+  const client = createApiClient(token, async (input, init) => {
+    calls.push([input, init]);
+    if (String(input).endsWith("/events")) {
+      stream += 1;
+      const status = stream === 1 ? "running" : "succeeded";
+      const terminal = stream !== 1;
+      return new Response(`id: ${stream}\ndata: ${JSON.stringify({ schemaVersion: 1, sequence: stream, taskId: responseTask.id, kind: "progress", status, progressMillionths: terminal ? 1_000_000 : 500_000, terminal, execution: { stage: terminal ? "complete" : "convert", basisPoints: terminal ? 10_000 : 5_000 } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }
+    return new Response(JSON.stringify(responseTask), { headers: { "content-type": "application/json" } });
+  });
+  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkEnabled: true, allowedHosts: ["api.example.com"], authorizeNetwork: true };
+  await client.upload(new File(["pdf"], "报告.pdf"), options);
+  const uploadHeaders = calls[0]![1]!.headers as Record<string, string>;
+  const filename = uploadHeaders["X-Into-Md-Filename-B64"]!;
+  assert.equal(new TextDecoder().decode(Uint8Array.from(atob(filename.replaceAll("-", "+").replaceAll("_", "/")), (char) => char.charCodeAt(0))), "报告.pdf");
+  const encoded = uploadHeaders["X-Into-Md-Request"]!;
+  const request = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(encoded.replaceAll("-", "+").replaceAll("_", "/")), (char) => char.charCodeAt(0)))) as Record<string, any>;
+  assert.equal(request.schemaVersion, 1);
+  assert.equal(request.format, "pdf");
+  assert.equal(request.options.ocr.policy, "always");
+  assert.deepEqual(request.options.network.allowed_hosts, ["api.example.com"]);
+  assert.equal(request.authorization.network, true);
+  const events: string[] = [];
+  await client.watchTask(responseTask.id, (event) => events.push(event.status), new AbortController().signal);
+  assert.deepEqual(events, ["running", "succeeded"]);
+  const reconnectHeaders = calls[2]![1]!.headers as Record<string, string>;
+  assert.equal(reconnectHeaders["Last-Event-ID"], "1");
+});
+
+test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  let cancelled = 0; let uploaded = 0;
+  const failed = task("failed", "b".repeat(32)); const running = task("running", "c".repeat(32));
+  const api: ApiClient = {
+    ...availableApi,
+    async listTasks() { return [running, failed]; },
+    async upload() { uploaded += 1; return task("running", "d".repeat(32)); },
+    async cancel(id) { cancelled += 1; return task("cancelled", id); },
+  };
+  const root = createRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitFor(() => window.document.body.textContent.includes("Restored task"), 2_000).catch(() => { throw new Error(window.document.body.textContent); });
+  const inputs = [...window.document.querySelectorAll<HTMLInputElement>('input[type="file"]')];
+  assert.equal(inputs.length, 2); assert.equal(inputs[0]!.multiple, true); assert.equal(inputs[1]!.hasAttribute("webkitdirectory"), true);
+  const zone = window.document.getElementById("upload-zone")!; let pickerClicks = 0; inputs[0]!.click = () => { pickerClicks += 1; };
+  zone.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  zone.dispatchEvent(new window.KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  assert.equal(pickerClicks, 2);
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["one"], "one.md"), new File(["two"], "two.md")] } });
+  zone.dispatchEvent(drop); await waitForText(window, "Selected (2)");
+  const convert = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Start conversion 2"))!;
+  convert.click(); await waitFor(() => uploaded === 2);
+  const cancel = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
+  cancel.click(); await waitFor(() => cancelled === 1);
+  const retry = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+  retry.click(); await waitForText(window, "select the original file again");
+  const oversized = new File(["x"], "huge.pdf"); Object.defineProperty(oversized, "size", { value: 513 * 1024 * 1024 });
+  const hugeDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(hugeDrop, "dataTransfer", { value: { files: [oversized] } });
+  zone.dispatchEvent(hugeDrop); await waitForText(window, "exceeds the selected per-file limit");
+  const many = Array.from({ length: 101 }, (_, index) => new File(["x"], `${index}.txt`));
+  const manyDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(manyDrop, "dataTransfer", { value: { files: many } });
+  zone.dispatchEvent(manyDrop); await waitForText(window, "at most 100 files");
+  root.unmount();
 });
 
 test("shell primitives expose keyboard focus and language-safe DOM behavior", () => {

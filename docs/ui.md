@@ -1,10 +1,8 @@
 # 本地 Web 服务
 
 `into-md ui` 提供安全的本机 HTTP 入口和嵌入式 React + TypeScript 控制台壳。控制台
-包含响应式布局、服务状态路由、主题、简体中文/英文、错误边界与受约束 API 客户端；
-文档数据库、任务队列、工作台、预览和管理业务不属于此命令。状态响应因此把
-`localApi.available` 标为 `true`，并把 `documentConsole.available` 标为 `false`、
-错误码标为 `componentUnavailable`，不会用占位页面伪装完整产品能力。
+包含响应式批量转换工作台、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
+客户端。状态响应把 `localApi.available` 与 `documentConsole.available` 都标为 `true`。
 
 ## 命令与监听
 
@@ -53,7 +51,7 @@ fragment 不会进入 HTTP request target。外部 content-hash bootstrap 脚本
 
 因此 `localhost`、IPv6、尾点主机、userinfo、`null` Origin、逗号拼接值、重复 Header
 及其他端口都会被拒绝。查询参数、请求体和 Cookie 不能提供授权。静态入口无需会话
-Header，但仍强制精确 Host；未来 API 或事件流必须复用同一中间件。
+Header，但仍强制精确 Host；任务、制品和事件流 API 复用同一中间件。
 
 服务不记录 access log，普通启动诊断只包含不带 fragment 的 origin。显式
 `--no-open` 或浏览器启动失败时，私有 URL 只作为当前终端的人工交接输出；不得把该行
@@ -80,8 +78,11 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 
 ## 控制台与静态资产
 
-`/status` 是当前唯一业务路由，真实显示本地 API 状态以及文档控制台组件不可用的空状态；
-其他页面显示 404。客户端路由 fallback 仅处理带 `Accept: text/html` 的 GET/HEAD，并明确
+`/workbench`（以及 `/`）提供多文件拖放、文件与目录选择、批量选项、队列进度、取消、
+失败重试和产物下载；`/status` 显示本地 API 状态，其他页面显示 404。每批最多 100 个文件、
+总计 1 GiB，单文件上限由批次 Engine 选项控制且不得超过 512 MiB。刷新后通过
+`GET /api/tasks` 恢复最近 100 个 durable 任务；原文件不写入浏览器存储，因此刷新后的失败
+重试要求重新选择。客户端路由 fallback 仅处理带 `Accept: text/html` 的 GET/HEAD，并明确
 排除 `/api` 与 `/assets`。HTML 使用 `no-store`；文件名带内容 SHA-256 前缀的 JavaScript
 与 CSS 使用一年 `immutable` 缓存并带完整 SHA-256 ETag。所有响应都有精确 MIME、
 `nosniff` 与 CSP，不使用 CDN、远程字体或运行时网络。
@@ -114,8 +115,9 @@ Bazel sandbox 中 `generated_assets` 的权威字节，不在工作区重新解�
 路径降级实现。Rust 不使用 build.rs，也不在运行时
 读取源树；四个支持平台的 CLI 都通过 `include_bytes!` 嵌入同一组 checked-in bytes。
 
-同一中间件保护任务后端：`POST /api/tasks` 流式接收单文件（受限 display name 位于
-`X-Into-Md-Filename`），`GET /api/tasks/{taskId}` 读取 durable 状态，`DELETE` 请求取消，
+同一中间件保护任务后端：`POST /api/tasks` 流式接收单文件（UTF-8 display name 以
+base64url 放入 `X-Into-Md-Filename-B64`；旧 ASCII Header 仍兼容），`GET /api/tasks/{taskId}`
+读取 durable 状态，`DELETE` 请求取消，
 `GET /api/tasks/{taskId}/artifacts/{artifactId}` 仅以 opaque ID 流式下载已验证产物。
 `GET /api/tasks/{taskId}/events` 返回 `text/event-stream`。每个 `snapshot` 或 `progress`
 事件使用 schemaVersion 1 DTO，包含 task ID、进程代际内单调 sequence、durable status、
@@ -124,4 +126,11 @@ sequence 组合；同一进程内的 `Last-Event-ID` 从每任务 64 项有界�
 服务重启时，服务发送当前 durable snapshot，保证最终状态不会因断线丢失。心跳 comment 每
 15 秒发送一次。事件广播只使用非阻塞有界队列；慢客户端收到 lag 后以 snapshot 收敛，不占用
 转换线程。关闭浏览器连接只移除观察者，不取消任务；取消必须显式 `DELETE`，它幂等触发同一
-Engine `CancellationToken`。#50 文档控制台 UI 仍不在这些路由范围内。
+Engine `CancellationToken`。
+
+上传可在 `X-Into-Md-Request` 携带 base64url 编码、最大 16 KiB 的 schemaVersion 1 JSON。
+其中 `format` 和 `options` 直接反序列化为 Engine 的 `InputFormat` 与 `ConversionOptions`，
+让 Web 和 CLI 共享 DTO 与服务端校验。联网、私网和 AI/provider 能力必须在本次上传的
+`authorization` 中分别确认；授权位在建任务前消费且不写入 durable request。网络默认关闭，
+host allowlist、输入/内存/临时空间、页数与资源上限都在上传前 fail closed。未携带 Header
+时使用安全默认配置，以兼容已有本地 API 客户端。
