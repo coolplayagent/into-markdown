@@ -8,6 +8,9 @@ download_ranges_and_names_are_canonical_and_header_safe`、`bazel test
 Unix loopback 集成测试把真实 Markdown artifact 做完整、开放区间和非法区间下载，校验状态、
 长度、Content-Range、MIME、Content-Disposition 与安全响应头。
 
+持续 parser/plugin fuzz 的目标矩阵、资源上限、许可绑定、崩溃最小化与
+短跑/24 小时 CI 分层见 [Continuous fuzzing](fuzzing.md)。
+
 Embedded-visual OCR regression tests create real container files dynamically
 instead of committing synthetic office archives. They use a source-bound mock
 OCR provider to verify normalized-input identity, byte deduplication with

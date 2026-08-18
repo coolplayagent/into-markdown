@@ -158,6 +158,11 @@ strip/tile 范围与资源上限验证通过后调用 decoder，不加载系统�
 文件记录作者、SPDX、再分发结论、生成器、获取日期、大小和不可变 SHA-256；license audit
 同时拒绝 manifest 未声明文件和缺失文件。
 
+`fuzz/seeds.json` 只引用上述 manifest 内 Apache-2.0 的仓库生成 fixture，以及两个仓库原创
+plugin TOML seed。持续 fuzz 发现的最小化样本按内容 SHA-256 固定在
+`fuzz/regressions/manifest.json`，标记为仓库 fuzz 过程生成并沿用 Apache-2.0；未经 review
+的外部语料不得进入该目录。
+
 OCR 图片使用固定 Noto Sans CJK SC Regular 字体生成。字体来源固定到 notofonts/noto-cjk
 commit `f8d157532fbfaeda587e826d4cd5b21a49186f7c`，单文件 SHA-256 为
 `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b`，许可为

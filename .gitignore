@@ -9,6 +9,9 @@
 *.swp
 __pycache__/
 *.pyc
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/target/
 
 # Models and native runtimes are fetched by verified Bazel repositories.
 /models/artifacts/

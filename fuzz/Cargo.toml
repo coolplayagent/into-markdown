@@ -1,0 +1,65 @@
+[package]
+name = "into-markdown-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+futures = "0.3.31"
+into-markdown = { path = "../crates/api" }
+into-markdown-cli = { path = "../apps/cli" }
+libfuzzer-sys = "0.4.10"
+
+[[bin]]
+name = "zip"
+path = "fuzz_targets/zip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xml"
+path = "fuzz_targets/xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtf"
+path = "fuzz_targets/rtf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "office"
+path = "fuzz_targets/office.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "media"
+path = "fuzz_targets/media.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_protocol"
+path = "fuzz_targets/plugin_protocol.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,132 @@
+name: Fuzz scheduled campaigns
+
+on:
+  schedule:
+    - cron: "23 2 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  continuous-24h:
+    name: ${{ matrix.target }} / linux / asan / 24h
+    runs-on: [self-hosted, linux, x64, fuzz]
+    timeout-minutes: 1500
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [zip, xml, rtf, pdf, office, media, plugin_protocol]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.1
+      - name: Prepare licensed seed corpus
+        run: python tools/fuzz.py prepare "${{ matrix.target }}"
+      - name: Run 24 hour bounded campaign
+        id: fuzz
+        shell: bash
+        run: |
+          set +e
+          target="${{ matrix.target }}"
+          dictionary="$target"
+          case "$target" in
+            zip|office) dictionary="archive" ;;
+          esac
+          mkdir -p "fuzz/artifacts/$target" "fuzz/reports"
+          cargo fuzz run --sanitizer address "$target" "fuzz/corpus/$target" -- \
+            -max_total_time=86400 -max_len=1048576 -timeout=10 -rss_limit_mb=2048 \
+            -artifact_prefix="fuzz/artifacts/$target/" \
+            -dict="fuzz/dictionaries/$dictionary.dict"
+          status=$?
+          python tools/fuzz.py report "$target" --sanitizer address --status "$status" \
+            --output "fuzz/reports/$target-linux-address.json"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Minimize and promote first failure
+        if: steps.fuzz.outputs.status != '0'
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          artifact="$(find "fuzz/artifacts/$target" -maxdepth 1 -type f ! -name 'minimized-*' | head -n 1)"
+          test -n "$artifact"
+          python tools/fuzz.py minimize "$target" "$artifact" || \
+            python tools/fuzz.py promote "$target" "$artifact"
+      - name: Open regression fixture pull request
+        if: steps.fuzz.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          branch="fuzz-regression/${GITHUB_RUN_ID}-${target}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add fuzz/regressions
+          git commit -m "test(fuzz): archive minimized $target regression"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "test(fuzz): archive $target regression" \
+            --body "Automated minimized regression fixture from scheduled fuzz run ${GITHUB_RUN_ID}. The fixture remains subject to normal review and CI."
+      - name: Archive sanitizer report and raw failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-24h-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            fuzz/reports/*.json
+            fuzz/artifacts/${{ matrix.target }}/
+      - name: Fail campaign after archival
+        if: steps.fuzz.outputs.status != '0'
+        run: exit 1
+
+  platform-differential:
+    name: ${{ matrix.os }} / ${{ matrix.sanitizer }} differential
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            sanitizer: none
+          - os: macos-14
+            sanitizer: address
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.1
+      - name: Run platform differential samples
+        shell: bash
+        run: |
+          mkdir -p fuzz/reports
+          for target in zip xml rtf pdf office media plugin_protocol; do
+            python tools/fuzz.py prepare "$target"
+            mkdir -p "fuzz/artifacts/$target"
+            dictionary="$target"
+            case "$target" in
+              zip|office) dictionary="archive" ;;
+            esac
+            set +e
+            cargo fuzz run --sanitizer "${{ matrix.sanitizer }}" "$target" "fuzz/corpus/$target" -- \
+              -runs=250 -max_len=1048576 -timeout=10 -rss_limit_mb=2048 \
+              -artifact_prefix="fuzz/artifacts/$target/" \
+              -dict="fuzz/dictionaries/$dictionary.dict"
+            status=$?
+            set -e
+            python tools/fuzz.py report "$target" --sanitizer "${{ matrix.sanitizer }}" \
+              --status "$status" --output "fuzz/reports/$target-${{ runner.os }}-${{ matrix.sanitizer }}.json"
+            test "$status" -eq 0
+          done
+      - name: Archive platform reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-platform-${{ matrix.os }}-${{ matrix.sanitizer }}-${{ github.run_id }}
+          path: fuzz/reports/*.json

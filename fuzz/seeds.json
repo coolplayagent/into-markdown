@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "license": "Apache-2.0",
+  "provenance": "repository-generated fixture corpus from Issue #55",
+  "targets": {
+    "zip": [
+      "fixtures/small/docx/normal.docx",
+      "fixtures/small/docx/corrupt.docx",
+      "fixtures/small/odt/mimetype-malicious.odt"
+    ],
+    "xml": [
+      "fixtures/small/xml/normal.xml",
+      "fixtures/small/xml/corrupt.xml",
+      "fixtures/small/xml/malicious.xml",
+      "fixtures/small/xml/limit.xml"
+    ],
+    "rtf": [
+      "fixtures/small/rtf/normal.rtf",
+      "fixtures/small/rtf/corrupt.rtf",
+      "fixtures/small/rtf/malicious.rtf",
+      "fixtures/small/rtf/limit.rtf"
+    ],
+    "pdf": [
+      "fixtures/small/pdf/structures.pdf",
+      "fixtures/small/pdf/rotated.pdf"
+    ],
+    "office": [
+      "fixtures/small/docx/normal.docx",
+      "fixtures/small/pptx/normal.pptx",
+      "fixtures/small/xlsx/normal.xlsx",
+      "fixtures/small/odt/normal.odt",
+      "fixtures/small/ods/normal.ods",
+      "fixtures/small/odp/normal.odp"
+    ],
+    "media": [
+      "fixtures/small/ocr/ocr-english-clear-1.png",
+      "fixtures/small/ocr/ocr-mixed-clear-1.png"
+    ],
+    "plugin_protocol": [
+      "fuzz/seeds/plugin-process.toml",
+      "fuzz/seeds/plugin-wasi.toml"
+    ]
+  }
+}

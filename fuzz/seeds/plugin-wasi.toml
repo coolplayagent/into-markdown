@@ -1,0 +1,7 @@
+schema_version = 1
+
+[plugins.repository-wasi-test]
+source = "./repository-test-plugin.wasm"
+sha256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+protocol = "wasi-v1"
+enabled = false

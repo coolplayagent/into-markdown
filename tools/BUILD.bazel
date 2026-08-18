@@ -1,0 +1,17 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "fuzz",
+    srcs = ["fuzz.py"],
+)
+
+py_test(
+    name = "fuzz_test",
+    srcs = [
+        "fuzz.py",
+        "fuzz_test.py",
+    ],
+    main = "fuzz_test.py",
+)

@@ -1,0 +1,7 @@
+schema_version = 1
+
+[plugins.repository-test]
+source = "./repository-test-plugin"
+sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+protocol = "process-v1"
+enabled = false

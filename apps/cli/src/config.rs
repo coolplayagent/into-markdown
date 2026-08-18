@@ -596,6 +596,23 @@ fn validate_layer(config: &RawConfig) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Exercise the exact plugin configuration parsing and validation boundary.
+///
+/// This is hidden from product documentation and exists so repository-owned
+/// fuzzing does not maintain a second, weaker model of the plugin protocol.
+#[doc(hidden)]
+#[allow(dead_code)]
+pub fn fuzz_plugin_protocol(bytes: &[u8]) {
+    const MAX_FUZZ_CONFIG_BYTES: usize = 1024 * 1024;
+    if bytes.len() > MAX_FUZZ_CONFIG_BYTES {
+        return;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else { return };
+    let Ok(value) = toml::from_str::<toml::Value>(text) else { return };
+    let Ok(config) = value.try_into::<RawConfig>() else { return };
+    let _ = validate_raw(&config);
+}
+
 fn validate_provider(
     name: &str,
     provider: &ProviderConfig,

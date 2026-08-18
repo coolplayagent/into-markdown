@@ -1,0 +1,55 @@
+name: Fuzz short gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  address-sanitizer:
+    name: ${{ matrix.target }} / linux / asan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [zip, xml, rtf, pdf, office, media, plugin_protocol]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.1
+      - name: Prepare licensed seed corpus
+        run: python tools/fuzz.py prepare "${{ matrix.target }}"
+      - name: Run bounded short fuzz gate
+        id: fuzz
+        shell: bash
+        run: |
+          set +e
+          target="${{ matrix.target }}"
+          dictionary="$target"
+          case "$target" in
+            zip|office) dictionary="archive" ;;
+          esac
+          mkdir -p "fuzz/artifacts/$target" "fuzz/reports"
+          cargo fuzz run --sanitizer address "$target" "fuzz/corpus/$target" -- \
+            -max_total_time=60 -max_len=1048576 -timeout=10 -rss_limit_mb=2048 \
+            -artifact_prefix="fuzz/artifacts/$target/" \
+            -dict="fuzz/dictionaries/$dictionary.dict"
+          status=$?
+          python tools/fuzz.py report "$target" --sanitizer address --status "$status" \
+            --output "fuzz/reports/$target-linux-address.json"
+          exit "$status"
+      - name: Archive sanitizer report and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-linux-address-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            fuzz/reports/*.json
+            fuzz/artifacts/${{ matrix.target }}/

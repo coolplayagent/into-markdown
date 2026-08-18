@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "targets": ["zip", "xml", "rtf", "pdf", "office", "media", "plugin_protocol"],
+  "profiles": [
+    {
+      "platform": "linux-x86_64",
+      "sanitizer": "address",
+      "gate": "pull-request-short-and-weekly-24h",
+      "status": "required"
+    },
+    {
+      "platform": "macos-arm64",
+      "sanitizer": "address",
+      "gate": "weekly-differential-short",
+      "status": "required"
+    },
+    {
+      "platform": "linux-x86_64",
+      "sanitizer": "none",
+      "gate": "weekly-differential-short",
+      "status": "required",
+      "note": "coverage differential; AddressSanitizer remains authoritative"
+    },
+    {
+      "platform": "windows-x86_64",
+      "sanitizer": "address",
+      "gate": "cargo regression tests only",
+      "status": "tracked-unsupported",
+      "note": "cargo-fuzz/libFuzzer execution is not a release gate on MSVC; promoted fixtures run in ordinary Windows tests"
+    }
+  ]
+}
