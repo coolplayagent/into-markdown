@@ -3,9 +3,9 @@
   "fixture_manifest_sha256": "f8c0729d3fa62cd34e5369d5667424af937ef563cf2eedb7cb3baba0ee823c2c",
   "layout_golden_path": "fixtures/semantic-layout-ir-goldens.json",
   "layout_golden_sha256": "8bdb11f587ddda22645a1f804be0c33b9c59c7b9cd465df4633012fed3226ae6",
-  "scenario_outcomes_sha256": "c8294f1bcef3584d601698277d469339b1ca958b395077227d48bdad652ef851",
+  "scenario_outcomes_sha256": "4a2f763f062efd39d07c8fcd7c02cdda88720e878470338f20a708a22f0f8f29",
   "scenario_goldens_path": "fixtures/semantic-layout-scenario-goldens.json",
-  "scenario_goldens_sha256": "6e74b6e2403d28b32e8d00bfa3ba09fde3dc199bf40da9e22051968382071cb8",
+  "scenario_goldens_sha256": "8410f701159a96f7c9f2bba2972b7dc2eea89c5994d8a4eac4c0e56e2d02bd1d",
   "coordinate_tolerance": 0.01,
   "modern_minimum_precision": 0.95,
   "modern_minimum_recall": 0.95,
@@ -130,6 +130,6 @@
   "delegated_native_gates": [
     {"family":"pdf","bazel_target":"//crates/converters:pdf_layout_quality","authority":"fixtures/pdf-layout-quality-authority.json","authority_sha256":"c486bf588c71440adc89de7ea72f28e7289f6e1d968cc0e663a88e342dc65bb9"},
     {"family":"image-ocr","bazel_target":"//crates/api:ppocrv6_image_quality","authority":"models/ppocrv6-tiny-recognizer-authority.json","authority_sha256":"dc3adfe5c74d6d896a34f6a63fb91c4c389cbeaa7dfa7fbceb1a58405d6ea6bc"},
-    {"family":"legacy-office","bazel_target":"//crates/legacy-office:legacy_office_test","authority":"third_party/legacy-office/authority.schema.json","authority_sha256":"9e8be83cdb8e75a67679c88f68b70e49a05cc07ec48986369d034122524c8389"}
+    {"family":"legacy-office","bazel_target":"//crates/legacy-office:worker_process_test","authority":"fixtures/legacy-office-quality-authority.json","authority_sha256":"fd2679f1afaec838a4503ae6ad0e91bca0c4e3efd9d8bce295d577d0775a69a7"}
   ]
 }

@@ -58,4 +58,4 @@ jobs:
           bazel test
           //crates/converters:pdf_layout_quality
           //crates/api:ppocrv6_image_quality
-          //crates/legacy-office:legacy_office_test
+          //crates/legacy-office:worker_process_test

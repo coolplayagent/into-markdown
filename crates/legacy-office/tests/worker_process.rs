@@ -252,6 +252,104 @@ fn fixed_worker_protocol_converts_all_families_and_releases_leases() {
 
 #[test]
 #[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
+fn semantic_scenario_reports_match_real_worker_outcomes() {
+    let _guard = process_test_guard();
+    let (_root, runtime) = configured_runtime();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/legacy-office-quality-authority.json"
+    ))
+    .unwrap();
+    let mut reports = Vec::new();
+
+    let mut normalized = Vec::new();
+    for source in [InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls] {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        let package = runtime.convert(b"fixture:normal", source, 1024, &context).unwrap();
+        normalized.push(match package.format {
+            NormalizedFormat::Docx => "docx",
+            NormalizedFormat::Pptx => "pptx",
+            NormalizedFormat::Xlsx => "xlsx",
+        });
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+    reports.push(json!({
+        "scenario": "normal",
+        "report": {
+            "inputs": ["doc", "ppt", "xls"],
+            "normalized": normalized,
+            "runtime": "26.2.4.2-fixture",
+        }
+    }));
+
+    let context = into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+    let package = runtime.convert(b"fixture:normal", InputFormat::Doc, 1024, &context).unwrap();
+    assert!(package.bytes.starts_with(b"PK\x03\x04"));
+    drop(package);
+    reports.push(json!({
+        "scenario": "complex",
+        "report": {
+            "fixture": "fixture:normal",
+            "package": "authority-validated-opc",
+            "leasesReleased": context.reserved_memory_bytes() == 0,
+        }
+    }));
+
+    let context = into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+    let error = runtime
+        .convert(b"fixture:response-then-nonzero", InputFormat::Doc, 1024, &context)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ConversionError::ComponentUnavailable { ref detail, .. } if detail == "workerProtocol"
+    ));
+    reports.push(json!({
+        "scenario": "misordered",
+        "report": {
+            "fixture": "fixture:response-then-nonzero",
+            "error": "componentUnavailable:workerProtocol",
+            "processReaped": context.reserved_memory_bytes() == 0,
+        }
+    }));
+
+    let mut errors = Vec::new();
+    for fixture in [b"fixture:crash".as_slice(), b"fixture:encrypted".as_slice()] {
+        let context =
+            into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+        let error = runtime.convert(fixture, InputFormat::Doc, 1024, &context).unwrap_err();
+        errors.push(error.code().as_str());
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+    reports.push(json!({
+        "scenario": "corrupt",
+        "report": {
+            "fixtures": ["fixture:crash", "fixture:encrypted"],
+            "errors": errors,
+            "processReaped": true,
+        }
+    }));
+
+    let context = into_markdown_core::ExecutionContext::new(ExecutionOptions::default(), limits());
+    let error =
+        runtime.convert(b"fixture:temporary-limit", InputFormat::Doc, 1024, &context).unwrap_err();
+    assert!(matches!(
+        error,
+        ConversionError::ResourceLimit { limit: "legacy_office_worker_temporary", .. }
+    ));
+    reports.push(json!({
+        "scenario": "resourceBoundary",
+        "report": {
+            "fixture": "fixture:temporary-limit",
+            "error": "resourceLimit:legacy_office_worker_temporary",
+            "memoryReleased": context.reserved_memory_bytes() == 0,
+        }
+    }));
+
+    assert_eq!(json!({"schemaVersion": 1, "reports": reports}), expected);
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "Windows fake launch is covered by the injected launcher contract")]
 fn crash_encryption_limit_and_timeout_are_stable_and_reaped() {
     let _guard = process_test_guard();
     let (_root, runtime) = configured_runtime();

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "reports": [
+    {
+      "scenario": "normal",
+      "report": {
+        "inputs": ["doc", "ppt", "xls"],
+        "normalized": ["docx", "pptx", "xlsx"],
+        "runtime": "26.2.4.2-fixture"
+      }
+    },
+    {
+      "scenario": "complex",
+      "report": {
+        "fixture": "fixture:normal",
+        "leasesReleased": true,
+        "package": "authority-validated-opc"
+      }
+    },
+    {
+      "scenario": "misordered",
+      "report": {
+        "error": "componentUnavailable:workerProtocol",
+        "fixture": "fixture:response-then-nonzero",
+        "processReaped": true
+      }
+    },
+    {
+      "scenario": "corrupt",
+      "report": {
+        "errors": ["componentUnavailable", "encrypted"],
+        "fixtures": ["fixture:crash", "fixture:encrypted"],
+        "processReaped": true
+      }
+    },
+    {
+      "scenario": "resourceBoundary",
+      "report": {
+        "error": "resourceLimit:legacy_office_worker_temporary",
+        "fixture": "fixture:temporary-limit",
+        "memoryReleased": true
+      }
+    }
+  ]
+}

@@ -10,9 +10,11 @@ exports_files([
     "download_test.py",
     "generate.py",
     "manifest.json",
+    "legacy-office-quality-authority.json",
     "pdf-layout-quality-authority.json",
     "semantic-layout-quality-authority.json",
     "semantic-layout-ir-goldens.json",
+    "semantic-layout-scenario-goldens.json",
 ])
 
 filegroup(
@@ -22,9 +24,11 @@ filegroup(
         "downloads.json",
         "generate.py",
         "manifest.json",
+        "legacy-office-quality-authority.json",
         "pdf-layout-quality-authority.json",
         "semantic-layout-quality-authority.json",
         "semantic-layout-ir-goldens.json",
+        "semantic-layout-scenario-goldens.json",
     ] + glob(["small/**"]),
 )
 

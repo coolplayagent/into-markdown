@@ -53,6 +53,7 @@ rust_test(
     name = "worker_process_test",
     srcs = ["tests/worker_process.rs"],
     crate_name = "worker_process_test",
+    compile_data = ["//fixtures:legacy-office-quality-authority.json"],
     data = [":legacy_office_test_worker"],
     deps = [
         ":legacy_office",

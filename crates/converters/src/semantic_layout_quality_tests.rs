@@ -1,8 +1,7 @@
 use super::*;
 use into_markdown_core::{
-    Block, BlockNode, Cell, Document, DocumentMetadata, Inline, LayoutGolden, LayoutQualityConfig,
-    NodeId, Provenance, ProvenanceKind, ResourceLimits, SourceLocator, TableRow,
-    audit_semantic_layout, audit_semantic_layout_golden,
+    Asset, Block, BlockNode, Document, LayoutGolden, LayoutQualityConfig, audit_semantic_layout,
+    audit_semantic_layout_golden,
 };
 use serde::Serialize;
 
@@ -365,7 +364,13 @@ fn semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound() {
                     let (path, symbol) = file_and_symbol(&item.reference);
                     let source = std::fs::read_to_string(repo_root().join(path)).unwrap();
                     assert_direct_rust_test(item, &source, symbol);
-                    execute_constructed_scenario(&coverage.family, scenario, evidence_id)
+                    execute_real_rust_scenario(
+                        &coverage.family,
+                        scenario,
+                        evidence_id,
+                        &fixtures,
+                        item,
+                    )
                 }
                 "fixture" if item.reference.starts_with("pdf-layout-") => {
                     execute_native_pdf_authority_scenario(&item.reference, &item.sha256)
@@ -471,21 +476,51 @@ fn fixture_success_outcome(fixture: &Fixture) -> String {
     format!("ir:{}|gfm:{gfm_hash}", hex(first_ir.as_bytes()))
 }
 
-fn execute_constructed_scenario(family: &str, scenario: &str, evidence: &str) -> String {
-    let fixture = format!("{family}|{scenario}|{evidence}");
-    let golden = scenario_document(family, &fixture, false);
+fn execute_real_rust_scenario(
+    family: &str,
+    scenario: &str,
+    evidence: &str,
+    fixtures: &BTreeMap<String, Fixture>,
+    item: &Evidence,
+) -> String {
+    if matches!(family, "legacy-office" | "pdf" | "image-ocr") {
+        return delegated_quality_outcome(family, scenario, item);
+    }
+    let fixture_ids: &[&str] = match (family, scenario) {
+        ("docx-docm", "complex" | "misordered") => &["docx-malicious", "docx-normal"],
+        ("presentationml", "complex" | "misordered") => &["pptx-normal", "potx-normal"],
+        ("spreadsheetml-xlsb", "complex") => &["xlsb-normal"],
+        ("spreadsheetml-xlsb", "misordered") => &["xlsb-normal", "xlsx-normal"],
+        ("opendocument", "misordered") => &["odp-rotation", "odp-normal"],
+        ("rtf", "complex" | "misordered") => &["rtf-malicious", "rtf-normal"],
+        ("epub", "complex" | "misordered" | "corrupt" | "resourceBoundary") => &["epub-normal"],
+        ("outlook-msg", "misordered") => &["msg-attachment-nested", "msg-normal"],
+        _ => panic!("{family}/{scenario} lacks a real converter fixture mapping"),
+    };
+    let selected = fixture_ids.iter().map(|id| &fixtures[*id]).collect::<Vec<_>>();
     match scenario {
         "misordered" => {
-            let actual = scenario_document(family, &fixture, true);
+            let (golden, assets, options) = combined_real_output(&selected);
+            let mut actual = golden.clone();
+            assert!(
+                reverse_first_siblings(&mut actual.blocks),
+                "{family} misordered fixture must expose two converter-produced sibling nodes"
+            );
+            let fixture = format!("{family}|{scenario}|{}", fixture_ids.join("+"));
             let context =
-                ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
             let audit = audit_semantic_layout(
                 &fixture,
                 &actual,
-                &[],
+                &assets,
                 &golden,
-                &[],
-                scenario_config(),
+                &assets,
+                LayoutQualityConfig {
+                    coordinate_tolerance: 0.01,
+                    minimum_precision: 0.95,
+                    minimum_recall: 0.95,
+                    max_field_bytes: 1024 * 1024,
+                },
                 &context,
             )
             .unwrap();
@@ -499,124 +534,179 @@ fn execute_constructed_scenario(family: &str, scenario: &str, evidence: &str) ->
             format!("layout-diff:{}", hex(audit.to_json().unwrap().as_bytes()))
         }
         "corrupt" => {
-            let context =
-                ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-            let Err(error) = audit_semantic_layout(
-                &fixture,
-                &golden,
-                &[],
-                &golden,
-                &[],
-                LayoutQualityConfig { coordinate_tolerance: f32::NAN, ..scenario_config() },
-                &context,
-            ) else {
-                panic!("invalid numeric authority unexpectedly succeeded")
-            };
+            let source = selected[0];
+            let bytes = std::fs::read(repo_root().join("fixtures").join(&source.path)).unwrap();
+            let truncated = &bytes[..bytes.len() / 2];
+            let error = execute_fixture_bytes(source, truncated, None)
+                .expect_err("truncated real EPUB fixture unexpectedly succeeded");
             format!("error:{}", stable_error_hash(&error))
         }
         "resourceBoundary" => {
-            let context = ExecutionContext::new(
-                ExecutionOptions::default(),
-                ResourceLimits { max_work_units: 0, ..ResourceLimits::default() },
-            );
-            let Err(error) = audit_semantic_layout(
-                &fixture,
-                &golden,
-                &[],
-                &golden,
-                &[],
-                scenario_config(),
-                &context,
-            ) else {
-                panic!("zero-work boundary unexpectedly succeeded")
-            };
+            let source = selected[0];
+            let error = execute_output(source, Some(("max_memory_bytes", 0)))
+                .expect_err("real EPUB boundary unexpectedly succeeded");
             format!("error:{}", stable_error_hash(&error))
         }
-        "normal" | "complex" => {
-            let ir = golden.to_json().unwrap();
-            let gfm =
-                into_markdown_render_markdown::render(&golden, &[], &ConversionOptions::default())
-                    .unwrap();
-            format!("ir:{}|gfm:{}", hex(ir.as_bytes()), hex(gfm.as_bytes()))
-        }
-        other => panic!("unsupported constructed scenario {other}"),
+        "complex" => real_success_outcome(&selected),
+        other => panic!("unsupported real Rust scenario {other} for {evidence}"),
     }
 }
 
-fn scenario_document(family: &str, label: &str, reversed: bool) -> Document {
-    let node = |id: &str, value: String| BlockNode {
-        id: NodeId(id.into()),
-        block: Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }]),
-        provenance: Provenance {
-            kind: ProvenanceKind::NativeParser,
-            provider: "semantic-layout-scenario".into(),
-            locator: SourceLocator::default(),
-            confidence: None,
+fn real_success_outcome(fixtures: &[&Fixture]) -> String {
+    let (document, assets, options) = combined_real_output(fixtures);
+    let ir = document.to_json().unwrap();
+    let gfm = into_markdown_render_markdown::render(&document, &assets, &options).unwrap();
+    format!("ir:{}|gfm:{}", hex(ir.as_bytes()), hex(gfm.as_bytes()))
+}
+
+fn combined_real_output(fixtures: &[&Fixture]) -> (Document, Vec<Asset>, ConversionOptions) {
+    let (first, options) = execute_output(fixtures[0], None).expect("real scenario fixture failed");
+    if fixtures.len() == 1 {
+        return (first.document, first.assets, options);
+    }
+    let mut document = first.document;
+    let mut assets = first.assets;
+    for fixture in &fixtures[1..] {
+        let (mut output, _) = execute_output(fixture, None).expect("real scenario fixture failed");
+        prefix_node_ids(&mut output.document.blocks, &fixture.id);
+        document.blocks.extend(output.document.blocks);
+        assets.extend(output.assets);
+    }
+    (document, assets, options)
+}
+
+fn prefix_node_ids(nodes: &mut [BlockNode], prefix: &str) {
+    for node in nodes {
+        node.id.0 = format!("{prefix}:{}", node.id.0);
+        for children in mutable_child_groups(&mut node.block) {
+            prefix_node_ids(children, prefix);
+        }
+    }
+}
+
+fn reverse_first_siblings(nodes: &mut [BlockNode]) -> bool {
+    if nodes.len() >= 2 {
+        nodes.reverse();
+        return true;
+    }
+    nodes
+        .iter_mut()
+        .any(|node| mutable_child_groups(&mut node.block).into_iter().any(reverse_first_siblings))
+}
+
+fn mutable_child_groups(block: &mut Block) -> Vec<&mut [BlockNode]> {
+    match block {
+        Block::List { items, .. } => {
+            items.iter_mut().map(|item| item.blocks.as_mut_slice()).collect()
+        }
+        Block::Table { rows, .. } => rows
+            .iter_mut()
+            .flat_map(|row| row.cells.iter_mut())
+            .map(|cell| cell.blocks.as_mut_slice())
+            .collect(),
+        Block::Footnote { blocks, .. }
+        | Block::Page { blocks, .. }
+        | Block::Slide { blocks, .. }
+        | Block::Sheet { blocks, .. } => vec![blocks.as_mut_slice()],
+        _ => Vec::new(),
+    }
+}
+
+fn delegated_quality_outcome(family: &str, scenario: &str, item: &Evidence) -> String {
+    let authority = authority();
+    let gate = authority
+        .delegated_native_gates
+        .iter()
+        .find(|gate| gate.family == family)
+        .unwrap_or_else(|| panic!("missing delegated gate for {family}"));
+    let report = match family {
+        "pdf" => {
+            let fixture_id = match scenario {
+                "normal" => "pdf-layout-multicolumn",
+                "complex" => "pdf-layout-structures",
+                "misordered" => "pdf-layout-multicolumn",
+                "corrupt" => "pdf-layout-rotated",
+                "resourceBoundary" => "pdf-layout-structures",
+                _ => unreachable!(),
+            };
+            let bytes =
+                std::fs::read(repo_root().join("fixtures/pdf-layout-quality-authority.json"))
+                    .unwrap();
+            let native: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            native["fixtures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|record| record["fixture_id"] == fixture_id)
+                .unwrap_or_else(|| panic!("missing PDF native report {fixture_id}"))
+                .clone()
+        }
+        "image-ocr" => {
+            let bytes =
+                std::fs::read(repo_root().join("models/ppocrv6-tiny-recognizer-authority.json"))
+                    .unwrap();
+            let native: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            serde_json::json!({
+                "scenario": scenario,
+                "qualityGroups": native["quality_groups"],
+            })
+        }
+        "legacy-office" => {
+            let bytes =
+                std::fs::read(repo_root().join("fixtures/legacy-office-quality-authority.json"))
+                    .unwrap();
+            let native: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            native["reports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|record| record["scenario"] == scenario)
+                .unwrap_or_else(|| panic!("missing legacy Office native report {scenario}"))
+                ["report"]
+                .clone()
+        }
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        hex(&std::fs::read(repo_root().join(&gate.authority)).unwrap()),
+        gate.authority_sha256
+    );
+    assert!(!item.reference.is_empty());
+    format!("native-quality:{}", hex(&serde_json::to_vec(&report).unwrap()))
+}
+
+fn execute_fixture_bytes(
+    fixture: &Fixture,
+    bytes: &[u8],
+    limit: Option<(&str, u64)>,
+) -> Result<ConverterOutput, ConversionError> {
+    let format = format(&fixture.format);
+    let mut options = options(limit);
+    if format == InputFormat::Image {
+        options.ocr.policy = OcrPolicy::Off;
+    }
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let input = ResolvedInput {
+        bytes: Arc::from(bytes),
+        metadata: SourceMetadata {
+            name: Some(fixture.id.clone()),
+            media_type: Some(fixture.media_type.clone()),
+            uri: None,
+            size: u64::try_from(bytes.len()).unwrap(),
         },
     };
-    let mut children =
-        vec![node("first", format!("{label}:first")), node("second", format!("{label}:second"))];
-    if label.contains("|complex|") {
-        children.push(BlockNode {
-            id: NodeId("table".into()),
-            block: Block::Table {
-                rows: vec![TableRow {
-                    cells: vec![
-                        Cell {
-                            row_span: 1,
-                            column_span: 1,
-                            header: true,
-                            blocks: vec![node("cell-first", format!("{label}:cell-first"))],
-                        },
-                        Cell {
-                            row_span: 1,
-                            column_span: 2,
-                            header: false,
-                            blocks: vec![node("cell-second", format!("{label}:cell-second"))],
-                        },
-                    ],
-                }],
-                alignments: Vec::new(),
-            },
-            provenance: Provenance {
-                kind: ProvenanceKind::NativeParser,
-                provider: "semantic-layout-scenario".into(),
-                locator: SourceLocator::default(),
-                confidence: None,
-            },
-        });
-    }
-    if reversed {
-        children.reverse();
-    }
-    let boundary = match family {
-        "presentationml" => Block::Slide { number: 1, title: Some(label.into()), blocks: children },
-        "spreadsheetml-xlsb" => Block::Sheet { name: label.into(), blocks: children },
-        _ => Block::Page { number: 1, blocks: children },
+    let requests = Arc::new(RequestCounter::default());
+    let services = Services {
+        ocr: Some(requests.clone()),
+        transcriber: Some(requests.clone()),
+        ai: Some(requests.clone()),
+        nested: Some(Arc::new(HtmlNested)),
     };
-    Document {
-        schema_version: into_markdown_core::DOCUMENT_SCHEMA_VERSION,
-        metadata: DocumentMetadata { title: Some(label.into()), ..DocumentMetadata::default() },
-        blocks: vec![BlockNode {
-            id: NodeId("boundary".into()),
-            block: boundary,
-            provenance: Provenance {
-                kind: ProvenanceKind::NativeParser,
-                provider: "semantic-layout-scenario".into(),
-                locator: SourceLocator::default(),
-                confidence: None,
-            },
-        }],
-    }
-}
-
-fn scenario_config() -> LayoutQualityConfig {
-    LayoutQualityConfig {
-        coordinate_tolerance: 0.01,
-        minimum_precision: 0.95,
-        minimum_recall: 0.95,
-        max_field_bytes: 1024 * 1024,
-    }
+    let converter = converter(format);
+    let candidate = FormatCandidate::explicit(format);
+    let result = block_on(converter.convert(&input, &candidate, &options, &services, &context));
+    assert_eq!(requests.0.load(Ordering::SeqCst), 0);
+    result
 }
 
 fn execute_native_pdf_authority_scenario(fixture_id: &str, fixture_sha256: &str) -> String {
