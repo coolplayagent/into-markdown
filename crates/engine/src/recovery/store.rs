@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::path::{Component, Path};
 #[cfg(unix)]
 use std::sync::Arc;
+#[cfg(all(test, unix))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -162,6 +164,8 @@ impl TaskCheckpoint {
 pub struct RecoveryStore {
     #[cfg(unix)]
     directory: Arc<SafeDirectory>,
+    #[cfg(all(test, unix))]
+    quarantine_failure: Arc<AtomicUsize>,
 }
 
 /// Checkpoint files atomically quarantined for a task-history deletion.
@@ -193,7 +197,11 @@ impl RecoveryStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, ConversionError> {
         #[cfg(unix)]
         {
-            Ok(Self { directory: Arc::new(SafeDirectory::open_or_create(root.into())?) })
+            Ok(Self {
+                directory: Arc::new(SafeDirectory::open_or_create(root.into())?),
+                #[cfg(test)]
+                quarantine_failure: Arc::new(AtomicUsize::new(0)),
+            })
         }
         #[cfg(not(unix))]
         {
@@ -314,8 +322,31 @@ impl RecoveryStore {
                 }
                 moved.push((source, target));
             }
-            self.directory.sync()?;
-            self.verify_quarantined_purge(token)?;
+            let post_move = {
+                #[cfg(test)]
+                match self.quarantine_failure.swap(0, Ordering::SeqCst) {
+                    1 => Err(recovery_error("io", "injected quarantine sync failure")),
+                    2 => Err(recovery_error("unsafePath", "injected quarantine verify failure")),
+                    _ => self.directory.sync().and_then(|()| self.verify_quarantined_purge(token)),
+                }
+                #[cfg(not(test))]
+                self.directory.sync().and_then(|()| self.verify_quarantined_purge(token))
+            };
+            if let Err(error) = post_move {
+                let mut rollback_error = None;
+                for (source, target) in moved.iter().rev() {
+                    if let Err(restore) = self.directory.rename_no_replace(target, source) {
+                        rollback_error.get_or_insert(restore);
+                    }
+                }
+                if let Err(sync) = self.directory.sync() {
+                    rollback_error.get_or_insert(sync);
+                }
+                if let Err(verify) = self.verify_purge(token) {
+                    rollback_error.get_or_insert(verify);
+                }
+                return Err(rollback_error.unwrap_or(error));
+            }
             Ok(RecoveryPurge { token: token.clone() })
         }
         #[cfg(not(unix))]
@@ -390,6 +421,11 @@ impl RecoveryStore {
             }
         }
         self.directory.verify_namespace()
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn test_fail_quarantine_after_move(&self, phase: usize) {
+        self.quarantine_failure.store(phase, Ordering::SeqCst);
     }
 
     /// Permanently remove every checkpoint and lock owned by one canonical

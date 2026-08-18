@@ -1687,7 +1687,7 @@ mod tests {
 
     #[test]
     fn enricher_cannot_publish_checkpoint_with_invalid_diagnostic() {
-        let fixture = fixture();
+        let fixture = ConverterOutput::new(Document::default(), Vec::new(), Vec::new());
         let directory = private_tempdir();
         let token = RecoveryToken::parse("223344556677889900aabbccddeeff11").unwrap();
         let conversions = Arc::new(AtomicUsize::new(0));
@@ -1745,6 +1745,31 @@ mod tests {
         assert_eq!(replay.markdown, result.markdown);
         assert_eq!(conversions.load(Ordering::SeqCst), 1);
         assert_eq!(renders.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn purge_quarantine_post_move_failures_restore_live_names_and_reopen() {
+        for failure in 1..=2 {
+            let directory = private_tempdir();
+            let store = RecoveryStore::open(directory.path()).unwrap();
+            let token = store.create_token().unwrap();
+            let conversions = Arc::new(AtomicUsize::new(0));
+            let renders = Arc::new(AtomicUsize::new(0));
+            let fail = Arc::new(AtomicBool::new(false));
+            let converter = engine(conversions, renders, fail);
+            let request =
+                || ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x")));
+            block_on(converter.convert_recoverable(request(), &store, &token)).unwrap();
+            assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Succeeded);
+
+            store.test_fail_quarantine_after_move(failure);
+            assert!(store.quarantine_purge(&token).is_err());
+            assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Succeeded);
+            drop(store);
+
+            let reopened = RecoveryStore::open(directory.path()).unwrap();
+            assert_eq!(reopened.inspect(&token).unwrap().unwrap().phase, TaskPhase::Succeeded);
+        }
     }
 
     #[test]

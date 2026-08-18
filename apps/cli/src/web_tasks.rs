@@ -1251,12 +1251,20 @@ impl WebTaskBackend {
             gate.wait();
         }
         if let Err(error) = self.owner.shared.recovery.verify_purge(&token) {
-            let _ = self.owner.shared.recovery.restore_purge(checkpoint_purge);
-            let _ = self.owner.shared.trash.rename_child_private_to_no_replace(
-                trash_name,
-                &self.owner.shared.objects,
-                object_name,
-            );
+            self.owner
+                .shared
+                .recovery
+                .restore_purge(checkpoint_purge)
+                .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
+            self.owner
+                .shared
+                .trash
+                .rename_child_private_to_no_replace(
+                    trash_name,
+                    &self.owner.shared.objects,
+                    object_name,
+                )
+                .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
             return Err(WebTaskError::Unsafe(error.to_string()));
         }
 
