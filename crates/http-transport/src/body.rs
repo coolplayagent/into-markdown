@@ -16,6 +16,7 @@ pub(super) struct ChunkNode {
 pub(super) struct ChunkChain {
     head: Option<Box<ChunkNode>>,
     len: usize,
+    reserved_bytes: u64,
 }
 
 impl ChunkChain {
@@ -29,12 +30,13 @@ impl ChunkChain {
             .checked_add(bytes.len())
             .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
         for part in bytes.chunks(IO_CHUNK_BYTES) {
-            budget
-                .grow(
-                    u64::try_from(std::mem::size_of::<ChunkNode>())
-                        .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
-                )
-                .map_err(map_context_error)?;
+            let node_bytes = u64::try_from(std::mem::size_of::<ChunkNode>())
+                .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+            budget.grow(node_bytes).map_err(map_context_error)?;
+            self.reserved_bytes = self
+                .reserved_bytes
+                .checked_add(node_bytes)
+                .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
             let mut node =
                 Box::new(ChunkNode { used: part.len(), bytes: [0_u8; IO_CHUNK_BYTES], next: None });
             node.bytes[..part.len()].copy_from_slice(part);
@@ -43,6 +45,10 @@ impl ChunkChain {
         }
         self.len = next_len;
         Ok(())
+    }
+
+    const fn reserved_bytes(&self) -> u64 {
+        self.reserved_bytes
     }
 
     fn copy_to(&self, output: &mut [u8]) -> Result<(), TransportError> {
@@ -182,11 +188,14 @@ pub(super) fn finalize_body(
 ) -> Result<(Arc<[u8]>, ResourceReservation), TransportError> {
     let WireBody { chunks, mut memory } = body;
     let wire_len = chunks.len;
+    let wire_chunk_bytes = chunks.reserved_bytes();
     let wire_len_u64 = u64::try_from(wire_len)
         .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
     memory.grow(wire_len_u64).map_err(map_context_error)?;
     let mut wire = vec![0_u8; wire_len].into_boxed_slice();
     chunks.copy_to(&mut wire)?;
+    drop(chunks);
+    memory.shrink(wire_chunk_bytes).map_err(map_context_error)?;
     check_operation(context, deadline)?;
     let decoded = match encoding {
         ContentEncoding::Identity => wire,
@@ -209,6 +218,9 @@ pub(super) fn finalize_body(
                 }
                 chain.push(&buffer[..read], &mut memory)?;
             }
+            drop(decoder);
+            drop(wire);
+            memory.shrink(wire_len_u64).map_err(map_context_error)?;
             memory
                 .grow(
                     u64::try_from(chain.len)
@@ -217,6 +229,9 @@ pub(super) fn finalize_body(
                 .map_err(map_context_error)?;
             let mut output = vec![0_u8; chain.len].into_boxed_slice();
             chain.copy_to(&mut output)?;
+            let decoded_chunk_bytes = chain.reserved_bytes();
+            drop(chain);
+            memory.shrink(decoded_chunk_bytes).map_err(map_context_error)?;
             output
         }
     };
@@ -227,7 +242,6 @@ pub(super) fn finalize_body(
         .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
     let reservation = context.reserve_memory(final_len).map_err(map_context_error)?;
     let bytes = Arc::<[u8]>::from(decoded);
-    drop(chunks);
     drop(memory);
     Ok((bytes, reservation))
 }
