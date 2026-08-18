@@ -1719,6 +1719,79 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn administration_snapshot_reuses_session_boundary_and_actions_require_grants() {
+        let (_directory, port, session, shutdown, task) = start().await;
+        let host = format!("127.0.0.1:{port}");
+        let origin = format!("http://{host}");
+        let snapshot = request(
+            port,
+            &format!(
+                "GET /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(snapshot.starts_with("HTTP/1.1 200"), "{snapshot}");
+        assert_security_headers(&snapshot);
+        let snapshot_body = snapshot.split_once("\r\n\r\n").unwrap().1;
+        let snapshot_dto: serde_json::Value = serde_json::from_str(snapshot_body).unwrap();
+        assert_eq!(snapshot_dto["schemaVersion"], 1);
+        assert!(snapshot_dto["formats"].as_array().is_some_and(|value| !value.is_empty()));
+        assert!(snapshot_dto["models"]["defaultBundle"].is_string());
+        assert!(snapshot_dto["models"]["entries"].is_array());
+        assert!(snapshot_dto["providers"].is_array());
+        assert!(snapshot_dto["plugins"].is_array());
+        assert!(snapshot_dto["configuration"].is_object());
+        assert!(snapshot_dto["profiles"].is_array());
+        assert!(snapshot_dto["doctor"].as_array().is_some_and(|value| !value.is_empty()));
+        assert!(!snapshot.contains(&session), "session leaked in admin snapshot");
+        let lowercase_snapshot = snapshot.to_ascii_lowercase();
+        for secret_field in ["\"apikey\":", "\"password\":", "\"secret\":", "\"token\":"] {
+            assert!(!lowercase_snapshot.contains(secret_field), "{snapshot}");
+        }
+
+        let body = r#"{"schemaVersion":1,"action":"model.install","target":"pp-ocrv6-tiny-zh-en"}"#;
+        let denied = request(
+            port,
+            &format!(
+                "POST /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+        .await;
+        assert_schema_error(&denied, "HTTP/1.1 403", "networkAuthorizationRequired");
+
+        let unauthenticated = request(
+            port,
+            &format!(
+                "GET /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&unauthenticated, "HTTP/1.1 401", "invalidSession");
+
+        let invalid_origin = request(
+            port,
+            &format!(
+                "GET /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: http://localhost:{port}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&invalid_origin, "HTTP/1.1 403", "invalidOrigin");
+
+        let invalid_host = request(
+            port,
+            &format!(
+                "GET /api/admin HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&invalid_host, "HTTP/1.1 400", "invalidHost");
+        shutdown.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn task_event_stream_emits_versioned_snapshot_and_rejects_bad_cursor() {
         let (_directory, port, session, shutdown, task) = start().await;
         let host = format!("127.0.0.1:{port}");
