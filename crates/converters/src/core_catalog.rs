@@ -8,7 +8,7 @@ pub use super::core_catalog_authority::{
 use super::{
     ContentFormatDetector, DelimitedTextConverter, DocxConverter, EpubConverter, FeedConverter,
     HintFormatDetector, HtmlConverter, HttpSourceResolver, ImageConverter, LegacyOfficeConverter,
-    LocalFileSourceResolver, MarkdownConverter, MemorySourceResolver, MsgConverter,
+    LocalFileSourceResolver, MarkdownConverter, MediaConverter, MemorySourceResolver, MsgConverter,
     NotebookConverter, OdfConverter, PdfConverter, PresentationConverter, RtfConverter,
     StdinSourceResolver, StructuredDataConverter, TextConverter, WorkbookConverter, ZipConverter,
 };
@@ -29,6 +29,10 @@ pub(crate) const LEGACY_OFFICE: RuntimeRequirement = RuntimeRequirement {
 const OCR: RuntimeRequirement = RuntimeRequirement {
     component: "onnxruntime",
     install_hint: "run `into-md models install pp-ocrv6-tiny-zh-en` and configure the pinned ONNX Runtime worker",
+};
+const ASR: RuntimeRequirement = RuntimeRequirement {
+    component: "whisper-small",
+    install_hint: "run `into-md models install whisper-small-multilingual` and install the pinned LGPL FFmpeg runtime",
 };
 
 const AVAILABLE: FormatStatus = FormatStatus::Available;
@@ -59,6 +63,8 @@ const FORMATS: &[FormatDescriptor] = &[
     format(InputFormat::Image, "image", &["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp"]),
     format(InputFormat::Zip, "container", &["zip"]),
     format(InputFormat::OutlookMsg, "message", &["msg"]),
+    format(InputFormat::Audio, "media", &["wav", "mp3", "m4a", "flac", "ogg"]),
+    format(InputFormat::Video, "media", &["mp4", "mkv", "webm", "avi", "mov"]),
 ];
 
 const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
@@ -86,6 +92,8 @@ const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(21, None),
     catalog(22, None),
     catalog(23, None),
+    catalog(24, Some(ASR)),
+    catalog(25, Some(ASR)),
 ];
 
 const fn format(
@@ -160,9 +168,16 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
         &[InputFormat::Csv, InputFormat::Tsv],
     ),
     component("builtin.converter.text", CapabilityKind::Converter, 100, &[InputFormat::Text]),
+    runtime_converter(
+        "builtin.converter.media-transcript",
+        255,
+        &[InputFormat::Audio, InputFormat::Video],
+        ASR,
+    ),
     runtime("runtime.pdfium", PDFIUM),
     runtime("runtime.ocr", OCR),
     runtime("runtime.legacy-office", LEGACY_OFFICE),
+    runtime("runtime.asr", ASR),
 ];
 
 const fn component(
@@ -493,6 +508,7 @@ fn register_converter_by_id(
         "builtin.converter.markdown-gfm" => Arc::new(MarkdownConverter),
         "builtin.converter.delimited-text" => Arc::new(DelimitedTextConverter),
         "builtin.converter.text" => Arc::new(TextConverter),
+        "builtin.converter.media-transcript" => Arc::new(MediaConverter),
         _ => return catalog_error(format!("no core converter factory for {id}")),
     };
     register_converter(registry, converter)
@@ -599,11 +615,13 @@ mod tests {
     }
 
     #[test]
-    fn plugins_and_media_are_absent_from_core_release_inventory() {
+    fn plugins_and_remote_media_are_absent_from_core_release_inventory() {
         assert!(FORMAT_CATALOG.iter().all(|entry| !matches!(
             entry.descriptor.format,
-            InputFormat::Audio | InputFormat::Video | InputFormat::YouTube | InputFormat::Wikipedia
+            InputFormat::YouTube | InputFormat::Wikipedia
         )));
+        assert!(FORMAT_CATALOG.iter().any(|entry| entry.descriptor.format == InputFormat::Audio));
+        assert!(FORMAT_CATALOG.iter().any(|entry| entry.descriptor.format == InputFormat::Video));
         assert!(CAPABILITIES.iter().all(
             |entry| !entry.id.contains("mediawiki") && entry.source != CapabilitySource::Plugin
         ));
@@ -618,7 +636,7 @@ mod tests {
             authority.entries_sha256,
             format!("{:x}", Sha256::digest(serde_json::to_vec(&authority.entries).unwrap()))
         );
-        assert_eq!(authority.optional_runtimes.len(), 3);
+        assert_eq!(authority.optional_runtimes.len(), 4);
         assert_eq!(
             authority.optional_runtimes_sha256,
             format!(

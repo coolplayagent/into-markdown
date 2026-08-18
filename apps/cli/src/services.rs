@@ -3,8 +3,8 @@
 use crate::config::LoadedConfig;
 use crate::error::CliError;
 use into_markdown::{
-    AiMode, ConversionError, ExecutionContext, ExecutionOptions, InstalledOcrConfig, OcrPolicy,
-    OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
+    AiMode, ConversionError, ExecutionContext, ExecutionOptions, InstalledAsrConfig,
+    InstalledOcrConfig, OcrPolicy, OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
 };
 use std::path::{Path, PathBuf};
@@ -55,7 +55,34 @@ fn assemble_at(
     if loaded.options.ai.image_description != AiMode::Off {
         services.ai = assemble_image_description(loaded)?;
     }
+    if loaded.options.ai.audio_transcription != AiMode::Off {
+        services.transcriber = Some(assemble_asr(loaded, &context, executable)?);
+    }
     Ok(services)
+}
+
+fn assemble_asr(
+    loaded: &LoadedConfig,
+    context: &ExecutionContext,
+    executable: &Path,
+) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
+    let directory = executable
+        .parent()
+        .ok_or_else(|| CliError::component("current executable has no distribution directory"))?;
+    let ffmpeg_root = directory.join("ffmpeg");
+    into_markdown::installed_asr_service(
+        &InstalledAsrConfig {
+            writable_model_root: writable_model_root()?,
+            bundled_model_root: bundled_model_root(directory),
+            ffmpeg_trusted_root: ffmpeg_root.clone(),
+            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
+            ffmpeg_authority: ffmpeg_root.join("authority.json"),
+            model_bundle: loaded.options.asr.model_bundle.clone(),
+        },
+        &loaded.options,
+        context,
+    )
+    .map_err(CliError::from)
 }
 
 fn can_degrade_ocr(policy: OcrPolicy, error: &into_markdown::ConversionError) -> bool {
@@ -148,6 +175,10 @@ fn canonical_executable() -> Result<PathBuf, String> {
 
 const fn worker_name() -> &'static str {
     if cfg!(windows) { "onnxruntime-worker.exe" } else { "onnxruntime-worker" }
+}
+
+const fn ffmpeg_name() -> &'static str {
+    if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
 }
 
 #[cfg(test)]

@@ -284,13 +284,13 @@ fn validate_catalog_runtime_authority(
         .iter()
         .filter_map(|capability| capability.runtime.map(|runtime| runtime.component))
         .collect();
-    let expected = BTreeSet::from(["legacy-office", "onnxruntime", "pdfium"]);
+    let expected = BTreeSet::from(["legacy-office", "onnxruntime", "pdfium", "whisper-small"]);
     if catalog != expected {
         errors.push(format!(
             "core runtime catalog differs from license projection authority: {catalog:?}"
         ));
     }
-    for id in OCR_RUNTIME_COMPONENTS.into_iter().chain(["pdfium"]) {
+    for id in OCR_RUNTIME_COMPONENTS.into_iter().chain(["pdfium", "whisper-small"]) {
         if by_id
             .get(id)
             .is_none_or(|component| component.status != "reviewed" || !component.release_eligible)

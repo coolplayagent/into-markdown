@@ -17,8 +17,10 @@ pub(crate) fn validate_manifest_authority(manifest: &ModelManifest) -> Result<()
         || bundle.upstream_version
             != format!("PP-OCRv6 tiny / PaddleOCR {}", expected.upstream_commit)
         || bundle.runtime_format != "onnx"
-        || bundle.character_set.status != "available"
-        || bundle.character_set.source_artifact_id != "ppocrv6-tiny-recognizer-onnx-source"
+        || bundle.character_set.as_ref().is_none_or(|character_set| {
+            character_set.status != "available"
+                || character_set.source_artifact_id != "ppocrv6-tiny-recognizer-onnx-source"
+        })
         || bundle.source_artifacts.len() != 1
         || bundle.runtime_artifacts.len() != 2
     {

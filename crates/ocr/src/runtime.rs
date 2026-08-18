@@ -2228,7 +2228,7 @@ mod tests {
     fn current_manifest_is_stably_unavailable() {
         let temporary = tempfile::tempdir().unwrap();
         let manager = Arc::new(
-            super::super::ModelManager::embedded(temporary.path().to_path_buf(), None).unwrap(),
+            super::super::ModelManager::embedded(temporary.path().join("models"), None).unwrap(),
         );
         let error = ManifestModelResolver::new(manager)
             .resolve("pp-ocrv6-tiny-recognizer-onnx", &context())

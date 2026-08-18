@@ -82,6 +82,7 @@ pub struct ConversionConfig {
     pub text: TextConfig,
     pub delimited_text: DelimitedTextConfig,
     pub ocr: OcrConfig,
+    pub asr: AsrConfig,
     pub ai: AiConfig,
     pub network: NetworkConfig,
     pub limits: LimitsConfig,
@@ -111,6 +112,18 @@ pub struct OcrConfig {
     pub model_bundle: Option<String>,
     pub languages: Vec<String>,
     pub minimum_confidence: Option<f32>,
+}
+
+/// Partial local ASR configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AsrConfig {
+    pub model_bundle: Option<String>,
+    pub language: Option<String>,
+    pub max_threads: Option<u16>,
+    pub max_duration_ms: Option<u64>,
+    pub max_segments: Option<u32>,
+    pub max_native_memory_bytes: Option<u64>,
 }
 
 /// Partial AI routing configuration.
@@ -460,6 +473,24 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     if let Some(confidence) = config.ocr.minimum_confidence {
         validate_confidence(confidence)?;
         options.ocr.minimum_confidence = confidence;
+    }
+    if let Some(value) = &config.asr.model_bundle {
+        options.asr.model_bundle.clone_from(value);
+    }
+    if let Some(value) = &config.asr.language {
+        options.asr.language = Some(value.clone());
+    }
+    if let Some(value) = config.asr.max_threads {
+        options.asr.max_threads = value;
+    }
+    if let Some(value) = config.asr.max_duration_ms {
+        options.asr.max_duration_ms = value;
+    }
+    if let Some(value) = config.asr.max_segments {
+        options.asr.max_segments = value;
+    }
+    if let Some(value) = config.asr.max_native_memory_bytes {
+        options.asr.max_native_memory_bytes = value;
     }
     let ai = &config.ai;
     if let Some(mode) = ai.vision_ocr {

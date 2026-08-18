@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "asr",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_asr",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "@crates//:whisper-rs",
+    ],
+)
+
+rust_test(
+    name = "asr_test",
+    crate = ":asr",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "@crates//:futures",
+        "@crates//:tempfile",
+        "@crates//:whisper-rs",
+    ],
+)

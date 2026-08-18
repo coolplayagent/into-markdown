@@ -29,6 +29,37 @@ impl Default for OcrOptions {
     }
 }
 
+/// Local speech-recognition settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AsrOptions {
+    /// Installed multilingual Whisper bundle.
+    pub model_bundle: String,
+    /// Optional BCP-47 language hint; absence enables model detection.
+    pub language: Option<String>,
+    /// Maximum native decoder threads.
+    pub max_threads: u16,
+    /// Maximum decoded media duration accepted by ASR.
+    pub max_duration_ms: u64,
+    /// Maximum timed transcript segments retained in the IR.
+    pub max_segments: u32,
+    /// Conservative native model and decoder memory reservation.
+    pub max_native_memory_bytes: u64,
+}
+
+impl Default for AsrOptions {
+    fn default() -> Self {
+        Self {
+            model_bundle: "whisper-small-multilingual".into(),
+            language: None,
+            max_threads: 4,
+            max_duration_ms: 600_000,
+            max_segments: 10_000,
+            max_native_memory_bytes: 900 * 1024 * 1024,
+        }
+    }
+}
+
 /// Routing mode for each optional AI capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -275,6 +306,8 @@ pub struct ConversionOptions {
     pub delimited_text: DelimitedTextOptions,
     /// Local OCR policy.
     pub ocr: OcrOptions,
+    /// Local speech-recognition policy.
+    pub asr: AsrOptions,
     /// Optional AI capability policies.
     pub ai: AiOptions,
     /// Explicit network permissions and SSRF controls.

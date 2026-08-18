@@ -298,6 +298,8 @@ const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
 struct ModelManifest {
     schema_version: u64,
     default_bundle: String,
+    #[serde(default)]
+    default_asr_bundle: Option<String>,
     bundles: Vec<ModelBundle>,
 }
 
@@ -314,7 +316,7 @@ struct ModelBundle {
     languages: Vec<String>,
     platforms: Vec<String>,
     runtime_format: String,
-    character_set: ModelCharacterSet,
+    character_set: Option<ModelCharacterSet>,
     runtime_artifacts: Vec<ModelRuntimeArtifact>,
     source_artifacts: Vec<ModelArtifact>,
 }
@@ -2725,7 +2727,7 @@ fn validate_model_manifest(
     downloads: &DownloadManifest,
     errors: &mut Vec<String>,
 ) {
-    if !matches!(manifest.schema_version, 1 | 2) {
+    if !matches!(manifest.schema_version, 1..=3) {
         errors.push("unsupported model manifest schema_version".to_owned());
     }
     if manifest.schema_version == 1
@@ -2740,7 +2742,7 @@ fn validate_model_manifest(
     }
     let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
     validate_default_model_bundle(manifest, &bundles, errors);
-    if manifest.schema_version == 2 {
+    if manifest.schema_version >= 2 {
         validate_model_components(manifest, &bundles, errors);
     }
 
@@ -3216,18 +3218,19 @@ fn collect_model_artifacts<'a>(
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
             "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+            "asr-model" => BTreeSet::from(["model"]),
             _ => BTreeSet::new(),
         };
         if roles.keys().copied().collect::<BTreeSet<_>>() != required_roles {
             errors.push(format!(
-                "OCR model bundle {} must have exactly the required source roles",
+                "model bundle {} must have exactly the required source roles",
                 bundle.id
             ));
         }
         for required_role in required_roles {
             if !roles.contains_key(required_role) {
                 errors.push(format!(
-                    "OCR model bundle {} lacks required role {required_role}",
+                    "model bundle {} lacks required role {required_role}",
                     bundle.id
                 ));
             }
@@ -3250,7 +3253,7 @@ fn validate_runtime_bundle<'a>(
     if !is_safe_model_id(&bundle.id)
         || !matches!(
             bundle.kind.as_str(),
-            "ocr-pipeline" | "detector-component" | "recognizer-component"
+            "ocr-pipeline" | "detector-component" | "recognizer-component" | "asr-model"
         )
     {
         errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
@@ -3270,17 +3273,27 @@ fn validate_runtime_bundle<'a>(
     {
         errors.push(format!("model bundle {} has incomplete metadata", bundle.id));
     }
-    if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
-        || bundle.kind != "detector-component"
-            && !bundle.source_artifacts.iter().any(|item| {
-                item.id == bundle.character_set.source_artifact_id
-                    && item.role == "recognizer-and-dictionary"
-            })
-    {
+    let character_set_complete = bundle.character_set.as_ref().is_some_and(|character_set| {
+        matches!(character_set.status.as_str(), "planned" | "available")
+            && (bundle.kind == "detector-component"
+                || bundle.source_artifacts.iter().any(|item| {
+                    item.id == character_set.source_artifact_id
+                        && item.role == "recognizer-and-dictionary"
+                }))
+    });
+    if bundle.kind == "asr-model" {
+        if bundle.character_set.is_some() {
+            errors.push(format!("ASR bundle {} must not declare a character set", bundle.id));
+        }
+    } else if !character_set_complete {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
     let installable = bundle.availability == "available"
-        && bundle.character_set.status == "available"
+        && (bundle.kind == "asr-model"
+            || bundle
+                .character_set
+                .as_ref()
+                .is_some_and(|character_set| character_set.status == "available"))
         && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline");
     if (bundle.availability == "available") != installable {
         errors.push(format!(
@@ -3322,6 +3335,7 @@ fn validate_runtime_bundle<'a>(
         "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
         "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+        "asr-model" => BTreeSet::from(["model"]),
         _ => BTreeSet::new(),
     };
     if !bundle.runtime_artifacts.is_empty() && runtime_roles != expected_runtime_roles {
@@ -3424,6 +3438,20 @@ fn validate_default_model_bundle(
                 manifest.default_bundle
             ));
         }
+    }
+    if manifest.schema_version >= 3 {
+        match manifest.default_asr_bundle.as_deref().and_then(|id| bundles.get(id).copied()) {
+            Some(bundle)
+                if bundle.kind == "asr-model"
+                    && bundle.availability == "available"
+                    && bundle.runtime_artifacts.iter().any(|artifact| artifact.role == "model") => {
+            }
+            _ => errors.push(
+                "model manifest schema 3 requires an available default ASR model bundle".to_owned(),
+            ),
+        }
+    } else if manifest.default_asr_bundle.is_some() {
+        errors.push("legacy model manifest must not declare default_asr_bundle".to_owned());
     }
 }
 
@@ -3677,12 +3705,12 @@ mod tests {
                 "x86_64-pc-windows-msvc".to_owned(),
             ],
             runtime_format: "onnx".to_owned(),
-            character_set: ModelCharacterSet {
+            character_set: Some(ModelCharacterSet {
                 status: "planned".to_owned(),
                 source_artifact_id: source_artifacts
                     .last()
                     .map_or_else(|| "absent".to_owned(), |artifact| artifact.id.clone()),
-            },
+            }),
             runtime_artifacts: vec![],
             source_artifacts,
         }
@@ -3725,6 +3753,7 @@ mod tests {
         let manifest = ModelManifest {
             schema_version: 1,
             default_bundle: "default".to_owned(),
+            default_asr_bundle: None,
             bundles: vec![bundle("default", version, vec![detector, recognizer])],
         };
         (manifest, inventory, downloads)

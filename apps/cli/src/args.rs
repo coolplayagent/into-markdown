@@ -172,6 +172,22 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "0..1")]
     pub ocr_min_confidence: Option<f32>,
 
+    /// Local Whisper model bundle ID.
+    #[arg(long, value_name = "BUNDLE_ID")]
+    pub asr_model: Option<String>,
+
+    /// ASR language hint; absence enables model detection.
+    #[arg(long, value_name = "BCP47")]
+    pub asr_language: Option<String>,
+
+    /// Maximum local ASR decoder threads.
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..=8))]
+    pub asr_threads: Option<u16>,
+
+    /// Maximum decoded media duration accepted by ASR.
+    #[arg(long, value_name = "MILLISECONDS")]
+    pub asr_max_duration_ms: Option<u64>,
+
     /// Set one AI capability mode as CAPABILITY=MODE; may be repeated.
     #[arg(long, value_name = "CAPABILITY=MODE")]
     pub ai: Vec<String>,

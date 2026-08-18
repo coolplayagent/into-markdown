@@ -1312,6 +1312,12 @@ pub struct TranscriptionResult {
     pub segments: Vec<BlockNode>,
     /// Provider/model ID.
     pub provider: String,
+    /// Exact model identity.
+    pub model: String,
+    /// Detected or explicitly selected BCP-47 language.
+    pub language: Option<String>,
+    /// Language-detection confidence when detection was used.
+    pub language_confidence: Option<f32>,
 }
 
 /// Local or remote speech-to-text provider.

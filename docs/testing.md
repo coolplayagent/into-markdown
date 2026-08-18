@@ -465,3 +465,15 @@ bazel test --config=macos_arm64 //crates/onnxruntime:ppocrv6_merge_quality
 ```
 
 其它受支持产品配置使用对应 platform config 显式执行。
+
+## 本地 ASR 验收
+
+Whisper 单元测试覆盖语言 hint 规范化、配置边界、模型缺失/损坏稳定错误、内存 reservation，
+media converter 测试覆盖 `TimedSegment`、模型/语言 metadata 以及缺服务失败。真实 native
+门禁必须在带 CMake、C/C++ 编译器和 libclang 的 runner 上编译 `into-markdown-asr`；
+`whisper-rs` 构建并静态链接其 bundled `whisper.cpp`，不能用 fake transcriber 代替该门禁。
+
+真实质量语料由后续统一质量 authority 管理：清晰中文按 NFC 后字符 CER、清晰英文按
+Unicode word token WER 必须各不高于 15%；对应常见噪声样本必须各不高于 25%。质量运行还要
+断言每段时间戳单调、有界，语言检测结果正确，所有置信度有限且位于 `[0,1]`。这些阈值不可
+由普通单元测试、接口 stub 或只验证模型 hash 的测试宣称满足。

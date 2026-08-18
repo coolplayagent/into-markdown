@@ -1270,6 +1270,7 @@ fn apply_conversion_overrides(
     loaded: &mut LoadedConfig,
 ) -> Result<(), CliError> {
     apply_ocr_overrides(arguments, &mut loaded.options)?;
+    apply_asr_overrides(arguments, &mut loaded.options)?;
     apply_text_overrides(arguments, &mut loaded.options);
     apply_network_overrides(arguments, &mut loaded.options)?;
     apply_limit_overrides(arguments, &mut loaded.options);
@@ -1279,6 +1280,25 @@ fn apply_conversion_overrides(
         loaded.ocr_languages.clone_from(&arguments.ocr_language);
     }
     apply_ai_provider_overrides(arguments, loaded)
+}
+
+fn apply_asr_overrides(
+    arguments: &ConversionArgs,
+    options: &mut ConversionOptions,
+) -> Result<(), CliError> {
+    if let Some(bundle) = &arguments.asr_model {
+        options.asr.model_bundle.clone_from(bundle);
+    }
+    if let Some(language) = &arguments.asr_language {
+        options.asr.language = Some(language.clone());
+    }
+    if let Some(threads) = arguments.asr_threads {
+        options.asr.max_threads = threads;
+    }
+    if let Some(duration) = arguments.asr_max_duration_ms {
+        options.asr.max_duration_ms = duration;
+    }
+    into_markdown::WhisperConfig::try_from(&options.asr).map(drop).map_err(CliError::from)
 }
 
 fn apply_ocr_overrides(

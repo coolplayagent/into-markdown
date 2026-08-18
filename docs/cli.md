@@ -152,6 +152,11 @@ into-md <INPUT...>
 --ocr-language <BCP47>
 --ocr-min-confidence <0..1>
 
+--asr-model <BUNDLE_ID>
+--asr-language <WHISPER_LANGUAGE>
+--asr-threads <1..8>
+--asr-max-duration-ms <MILLISECONDS>
+
 --ai <CAPABILITY=MODE>
 --ai-provider <NAME>
 --ai-model <MODEL>
@@ -170,8 +175,15 @@ audio-transcription
 markdown-postprocess
 ```
 
-每项能力的模式为 `off`、`fallback`、`prefer` 或 `only`，默认全部关闭。启用任意
-AI 能力必须选择已配置 Provider，并在本次调用显式传入 `--allow-network`。
+每项能力的模式为 `off`、`fallback`、`prefer` 或 `only`，默认全部关闭。
+`audio-transcription` 启用随包的离线 Whisper small，不需要 Provider 或网络授权；它要求
+已验证的模型和发布物内固定 FFmpeg runtime。其他 AI 能力必须选择已配置 Provider，并在
+本次调用显式传入 `--allow-network`。
+
+音频与视频输入先由经 authority 校验的 FFmpeg 转成 16 kHz 单声道 PCM，再由 CPU-only
+Whisper 生成带毫秒时间范围、语言、语言置信度和 token 平均置信度的统一 IR 节点。
+未指定 `--asr-language` 时执行模型语言检测。线程最多 8，默认时长上限 10 分钟；取消、
+总 deadline、内存、时长和 segment 上限贯穿解码及推理。转换过程不会安装模型。
 
 ### 网络与资源边界
 
