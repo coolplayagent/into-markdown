@@ -216,7 +216,7 @@ fn schema_migration_is_idempotent_and_newer_versions_are_rejected() {
     drop(connection);
     assert!(matches!(
         TaskStore::open(directory.path(), BusyControl::default()),
-        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: 3 })
+        Err(TaskStoreError::UnsupportedVersion { found: 99, supported: SCHEMA_VERSION })
     ));
 }
 
@@ -248,7 +248,8 @@ fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
     store
         .connection
         .execute_batch(&format!(
-            "DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
+            "ALTER TABLE tasks DROP COLUMN completed_at_ms;\
+                 DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
                  ALTER TABLE artifacts RENAME TO artifacts_v3;\
                  CREATE TABLE artifacts(\
                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\

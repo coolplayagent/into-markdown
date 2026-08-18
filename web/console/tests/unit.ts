@@ -279,6 +279,20 @@ test("history API paginates, filters, pins, retries and permanently deletes expl
   assert.equal(calls[3]![0], `/api/tasks/${current.id}/history`);
 });
 
+test("history delete preserves bounded server errors and normalizes network failures", async () => {
+  const id = "a".repeat(32);
+  const server = createApiClient(token, async () => new Response(JSON.stringify({ code: "notFound" }), {
+    status: 404, headers: { "content-type": "application/json" },
+  }));
+  await assert.rejects(server.deleteTask(id), (error: unknown) => error instanceof ApiError && error.code === "notFound");
+  const network = createApiClient(token, async () => { throw new TypeError("offline"); });
+  await assert.rejects(network.deleteTask(id), (error: unknown) => error instanceof ApiError && error.code === "unreachable");
+  const oversized = createApiClient(token, async () => new Response(JSON.stringify({ code: "x".repeat(70_000) }), {
+    status: 500, headers: { "content-type": "application/json" },
+  }));
+  await assert.rejects(oversized.deleteTask(id), (error: unknown) => error instanceof ApiError && error.code === "responseTooLarge");
+});
+
 test("Markdown preview never creates executable or resource-loading DOM", async () => {
   const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
   const malicious = "# Safe\n<script>globalThis.pwned=1</script>\n![x](file:///etc/passwd)\n<img src=http://evil.invalid/x onerror=alert(1)>\n[jump](javascript:alert(1))";

@@ -313,6 +313,10 @@ struct Shared {
     success_transition_failures: AtomicUsize,
     #[cfg(test)]
     retention_failure: AtomicUsize,
+    #[cfg(test)]
+    retention_quarantine_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
+    #[cfg(test)]
+    history_scan_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
     publication_failure: AtomicUsize,
 }
 
@@ -1044,6 +1048,10 @@ impl WebTaskBackend {
             success_transition_failures: AtomicUsize::new(0),
             #[cfg(test)]
             retention_failure: AtomicUsize::new(0),
+            #[cfg(test)]
+            retention_quarantine_gate: Mutex::new(None),
+            #[cfg(test)]
+            history_scan_gate: Mutex::new(None),
             publication_failure: AtomicUsize::new(0),
         });
         let backend = Self { owner: Arc::new(Owner { shared, workers: Mutex::new(Vec::new()) }) };
@@ -1138,10 +1146,18 @@ impl WebTaskBackend {
         matched
             .try_reserve_exact(usize::try_from(limit).unwrap_or(100) + 1)
             .map_err(|_| WebTaskError::Limit("history page allocation failed".into()))?;
+        let store = lock(&self.owner.shared.task_store);
         loop {
-            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
+            let page = store.list(100, cursor.as_ref())?;
             if page.is_empty() {
                 break;
+            }
+            #[cfg(test)]
+            if cursor.is_none()
+                && let Some(gate) = { lock(&self.owner.shared.history_scan_gate).clone() }
+            {
+                gate.wait();
+                gate.wait();
             }
             let last =
                 page.last().ok_or_else(|| WebTaskError::Io("history page vanished".into()))?;
@@ -1171,6 +1187,7 @@ impl WebTaskBackend {
     pub(crate) fn set_pinned(&self, id: &TaskId, pinned: bool) -> Result<TaskRecord, WebTaskError> {
         let _history = lock(&self.owner.shared.history_mutation);
         metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+            store.get(id)?.ok_or(WebTaskError::NotFound)?;
             store.set_pinned(id, pinned)?;
             store.get(id)?.ok_or(WebTaskError::NotFound)
         })
@@ -1194,11 +1211,6 @@ impl WebTaskBackend {
         }
         let token = RecoveryToken::parse(record.input.recovery_token)
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        self.owner
-            .shared
-            .recovery
-            .verify_purge(&token)
-            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         let object_name = std::ffi::OsStr::new(id.as_str());
         if self
             .owner
@@ -1218,10 +1230,44 @@ impl WebTaskBackend {
             .objects
             .rename_child_private_to_no_replace(object_name, &self.owner.shared.trash, trash_name)
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        let checkpoint_purge = match self.owner.shared.recovery.quarantine_purge(&token) {
+            Ok(purge) => purge,
+            Err(error) => {
+                self.owner
+                    .shared
+                    .trash
+                    .rename_child_private_to_no_replace(
+                        trash_name,
+                        &self.owner.shared.objects,
+                        object_name,
+                    )
+                    .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
+                return Err(WebTaskError::Unsafe(error.to_string()));
+            }
+        };
+        #[cfg(test)]
+        if let Some(gate) = { lock(&self.owner.shared.retention_quarantine_gate).clone() } {
+            gate.wait();
+            gate.wait();
+        }
+        if let Err(error) = self.owner.shared.recovery.verify_purge(&token) {
+            let _ = self.owner.shared.recovery.restore_purge(checkpoint_purge);
+            let _ = self.owner.shared.trash.rename_child_private_to_no_replace(
+                trash_name,
+                &self.owner.shared.objects,
+                object_name,
+            );
+            return Err(WebTaskError::Unsafe(error.to_string()));
+        }
 
         if let Err(error) = retention_failure_checkpoint(&self.owner.shared, 1)
             .and_then(|()| store.delete_terminal(id, allow_pinned).map_err(Into::into))
         {
+            self.owner
+                .shared
+                .recovery
+                .restore_purge(checkpoint_purge)
+                .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
             self.owner
                 .shared
                 .trash
@@ -1241,7 +1287,7 @@ impl WebTaskBackend {
         self.owner
             .shared
             .recovery
-            .purge(&token)
+            .finish_purge(checkpoint_purge)
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         remove_quarantined_task(&self.owner.shared.trash, trash_name)?;
         let mut disk = lock(&self.owner.shared.disk_bytes);
@@ -1309,24 +1355,31 @@ impl WebTaskBackend {
         let cutoff = now_ms.saturating_sub(age_ms);
         let mut cursor = None;
         let mut candidates = Vec::new();
+        let store = lock(&self.owner.shared.task_store);
         loop {
-            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
+            let page = store.list(100, cursor.as_ref())?;
             if page.is_empty() {
                 break;
+            }
+            #[cfg(test)]
+            if cursor.is_none()
+                && let Some(gate) = { lock(&self.owner.shared.history_scan_gate).clone() }
+            {
+                gate.wait();
+                gate.wait();
             }
             let last = page.last().expect("task page is non-empty");
             cursor = Some(TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() });
             for record in
                 page.into_iter().filter(|record| is_terminal(record.status) && !record.pinned)
             {
-                let completed_at_ms = lock(&self.owner.shared.task_store)
-                    .completed_at_ms(&record.id)?
-                    .ok_or_else(|| {
-                        WebTaskError::Io("terminal task is missing its completion timestamp".into())
-                    })?;
+                let completed_at_ms = store.completed_at_ms(&record.id)?.ok_or_else(|| {
+                    WebTaskError::Io("terminal task is missing its completion timestamp".into())
+                })?;
                 candidates.push((completed_at_ms, record));
             }
         }
+        drop(store);
         candidates
             .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.id.cmp(&right.1.id)));
         let mut summary = CleanupSummary::default();
@@ -1538,17 +1591,21 @@ impl WebTaskBackend {
 
     fn recover(&self) -> Result<(), WebTaskError> {
         let mut cursor = None;
+        let mut records = Vec::new();
+        let store = lock(&self.owner.shared.task_store);
         loop {
-            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
+            let page = store.list(100, cursor.as_ref())?;
             if page.is_empty() {
                 break;
             }
             let last =
                 page.last().ok_or_else(|| WebTaskError::Io("recovery page vanished".into()))?;
             cursor = Some(TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() });
-            for record in page {
-                self.recover_record(record)?;
-            }
+            records.extend(page);
+        }
+        drop(store);
+        for record in records {
+            self.recover_record(record)?;
         }
         Ok(())
     }
@@ -3381,6 +3438,11 @@ fn recover_retention_trash(
             name.to_str().ok_or_else(|| WebTaskError::Unsafe("trash entry is not UTF-8".into()))?;
         let (id, token) = parse_retention_trash_name(text)?;
         if let Some(record) = store.get(&id)? {
+            if !is_terminal(record.status) {
+                return Err(WebTaskError::Unsafe(
+                    "retention trash refers to an active task".into(),
+                ));
+            }
             if record.input.recovery_token != token.as_str() {
                 return Err(WebTaskError::Unsafe(
                     "retention trash token does not match its durable task".into(),
@@ -3395,6 +3457,10 @@ fn recover_retention_trash(
                     "retention recovery found duplicate task objects".into(),
                 ));
             }
+            validate_private_tree(trash, &name, 0)?;
+            recovery
+                .restore_quarantined_purge(&token)
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             trash
                 .rename_child_private_to_no_replace(
                     &name,
@@ -3408,6 +3474,9 @@ fn recover_retention_trash(
                     "retention trash selected a recovery token owned by another task".into(),
                 ));
             }
+            recovery
+                .remove_quarantined_purge(&token)
+                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             recovery.purge(&token).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             remove_private_tree(trash, &name, 0)?;
         }
@@ -4053,6 +4122,49 @@ mod tests {
         assert!(matches!(reopened.get(&first.id), Err(WebTaskError::NotFound)));
     }
 
+    #[test]
+    fn history_scan_keeps_one_store_snapshot_across_the_hundred_row_boundary() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let mut ids = Vec::new();
+        {
+            let mut store = lock(&backend.owner.shared.task_store);
+            for _ in 0..101 {
+                let token = backend.owner.shared.recovery.create_token().unwrap();
+                let record = store
+                    .create(NewTask {
+                        input: InputReference {
+                            schema_version: 1,
+                            input_fingerprint: "a".repeat(64),
+                            options_fingerprint: "b".repeat(64),
+                            byte_len: 1,
+                            recovery_token: token.as_str().to_owned(),
+                        },
+                        configuration: ConfigurationSnapshot::default(),
+                    })
+                    .unwrap();
+                ids.push(record.id);
+            }
+        }
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.history_scan_gate) = Some(Arc::clone(&gate));
+        let listing = backend.clone();
+        let list_thread = std::thread::spawn(move || listing.list(100, None, None, None));
+        gate.wait();
+        let pinning = backend.clone();
+        let oldest = ids.first().unwrap().clone();
+        let pin_thread = std::thread::spawn(move || pinning.set_pinned(&oldest, true));
+        gate.wait();
+        let page = list_thread.join().unwrap().unwrap();
+        assert_eq!(page.tasks.len(), 100);
+        assert!(page.next.is_some());
+        assert!(pin_thread.join().unwrap().unwrap().pinned);
+        assert!(matches!(
+            backend.set_pinned(&TaskId::parse("f".repeat(32)).unwrap(), true),
+            Err(WebTaskError::NotFound)
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn retention_age_capacity_pinning_and_ceiling_boundaries_are_exact() {
@@ -4154,13 +4266,114 @@ mod tests {
         assert!(matches!(backend.delete(&terminal.id), Err(WebTaskError::Io(_))));
         assert!(matches!(backend.get(&terminal.id), Err(WebTaskError::NotFound)));
         assert_eq!(backend.owner.shared.trash.names_private().unwrap().len(), 1);
-        assert!(backend.owner.shared.recovery.inspect(&token).unwrap().is_some());
+        assert!(backend.owner.shared.recovery.inspect(&token).unwrap().is_none());
         drop(backend);
 
         let reopened = WebTaskBackend::open(&root).unwrap();
         assert!(reopened.owner.shared.trash.names_private().unwrap().is_empty());
         assert!(reopened.owner.shared.recovery.inspect(&token).unwrap().is_none());
         assert!(matches!(reopened.get(&terminal.id), Err(WebTaskError::NotFound)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_recovery_rejects_active_rows_and_unsafe_quarantine_trees() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        for case in ["active", "regular-root", "symlink", "public-child", "hardlink"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("backend");
+            let backend = WebTaskBackend::open(&root).unwrap();
+            let active_gate = (case == "active").then(|| Arc::new(std::sync::Barrier::new(2)));
+            if let Some(gate) = &active_gate {
+                *lock(&backend.owner.shared.conversion_gate) = Some(Arc::clone(gate));
+            }
+            let mut upload = backend.begin_upload("quarantine.txt", None).unwrap();
+            upload.write_chunk(b"quarantine").unwrap();
+            let task = upload.finish().unwrap();
+            if case == "active" {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while backend.owner.shared.conversion_entries.load(Ordering::SeqCst) == 0 {
+                    assert!(Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+            }
+            let record = if case == "active" { task } else { wait_terminal(&backend, &task.id) };
+            let token = RecoveryToken::parse(record.input.recovery_token.clone()).unwrap();
+            let trash_name = retention_trash_name(&record.id, &token);
+            backend
+                .owner
+                .shared
+                .objects
+                .rename_child_private_to_no_replace(
+                    std::ffi::OsStr::new(record.id.as_str()),
+                    &backend.owner.shared.trash,
+                    std::ffi::OsStr::new(&trash_name),
+                )
+                .unwrap();
+            let quarantined = root.join("trash").join(&trash_name);
+            let outside = temporary.path().join("outside");
+            fs::write(&outside, b"outside remains").unwrap();
+            match case {
+                "active" => {}
+                "regular-root" => {
+                    fs::remove_dir_all(&quarantined).unwrap();
+                    fs::write(&quarantined, b"not a directory").unwrap();
+                }
+                "symlink" => symlink(&outside, quarantined.join("attacker")).unwrap(),
+                "public-child" => {
+                    let child = quarantined.join("public");
+                    fs::create_dir(&child).unwrap();
+                    fs::set_permissions(&child, fs::Permissions::from_mode(0o777)).unwrap();
+                }
+                "hardlink" => fs::hard_link(&outside, quarantined.join("attacker")).unwrap(),
+                _ => unreachable!(),
+            }
+            let result = {
+                let store = lock(&backend.owner.shared.task_store);
+                recover_retention_trash(
+                    &backend.owner.shared.objects,
+                    &backend.owner.shared.trash,
+                    &store,
+                    &backend.owner.shared.recovery,
+                )
+            };
+            assert!(matches!(result, Err(WebTaskError::Unsafe(_))), "case {case}: {result:?}");
+            assert_eq!(fs::read(&outside).unwrap(), b"outside remains");
+            assert!(lock(&backend.owner.shared.task_store).get(&record.id).unwrap().is_some());
+            if let Some(gate) = active_gate {
+                gate.wait();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_checkpoint_replacement_before_commit_never_deletes_the_database_row() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let mut upload = backend.begin_upload("race.txt", None).unwrap();
+        upload.write_chunk(b"race").unwrap();
+        let terminal = wait_terminal(&backend, &upload.finish().unwrap().id);
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.retention_quarantine_gate) = Some(Arc::clone(&gate));
+        let deleting = backend.clone();
+        let id = terminal.id.clone();
+        let thread = std::thread::spawn(move || deleting.delete(&id));
+        gate.wait();
+        let outside = temporary.path().join("outside-checkpoint");
+        fs::write(&outside, b"outside remains").unwrap();
+        let token = terminal.input.recovery_token;
+        fs::hard_link(
+            &outside,
+            root.join("recovery").join(format!("{token}.succeeded.checkpoint")),
+        )
+        .unwrap();
+        gate.wait();
+        assert!(matches!(thread.join().unwrap(), Err(WebTaskError::Unsafe(_))));
+        assert!(lock(&backend.owner.shared.task_store).get(&terminal.id).unwrap().is_some());
+        assert_eq!(fs::read(&outside).unwrap(), b"outside remains");
     }
 
     #[cfg(unix)]
@@ -5158,12 +5371,16 @@ mod tests {
             }
         }
         let backend = WebTaskBackend::open(&root).unwrap();
-        for id in &submitted {
-            let record = wait_terminal(&backend, id);
-            assert_eq!(record.status, TaskStatus::Succeeded, "{record:?}");
+        {
+            let mut queue = lock(&backend.owner.shared.queue);
+            queue.stopped = true;
+            let recovered = queue.jobs.len() + lock(&backend.owner.shared.dequeue_order).len();
+            assert_eq!(recovered, submitted.len());
+            backend.owner.shared.queue_changed.notify_all();
         }
-        let dequeued = lock(&backend.owner.shared.dequeue_order);
-        assert_eq!(dequeued.len(), submitted.len());
+        for worker in lock(&backend.owner.workers).drain(..) {
+            worker.join().unwrap();
+        }
     }
 
     #[test]
@@ -5550,9 +5767,14 @@ mod tests {
         create_private_child(&outside).unwrap();
         fs::rename(root.join("objects"), root.join("objects-moved")).unwrap();
         symlink(&outside, root.join("objects")).unwrap();
-        let mut upload = backend.begin_upload("swap.txt", None).unwrap();
-        upload.write_chunk(b"never outside").unwrap();
-        assert!(matches!(upload.finish(), Err(WebTaskError::Unsafe(_))));
+        match backend.begin_upload("swap.txt", None) {
+            Ok(mut upload) => {
+                upload.write_chunk(b"never outside").unwrap();
+                assert!(matches!(upload.finish(), Err(WebTaskError::Unsafe(_))));
+            }
+            Err(WebTaskError::Unsafe(_)) => {}
+            Err(error) => panic!("unexpected replacement failure: {error:?}"),
+        }
         assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
     }
 

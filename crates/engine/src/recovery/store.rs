@@ -164,6 +164,12 @@ pub struct RecoveryStore {
     directory: Arc<SafeDirectory>,
 }
 
+/// Checkpoint files atomically quarantined for a task-history deletion.
+#[derive(Debug)]
+pub struct RecoveryPurge {
+    token: RecoveryToken,
+}
+
 /// Keeps a task lock and decoded-payload memory charge alive.
 #[derive(Debug)]
 pub(crate) struct LoadedCheckpoint<T> {
@@ -282,6 +288,108 @@ impl RecoveryStore {
             let _ = token;
             Err(platform_unavailable())
         }
+    }
+
+    /// Atomically move every checkpoint name out of the live token namespace.
+    /// The returned intent must be restored if the coordinating database
+    /// transaction fails, or finished after it commits.
+    pub fn quarantine_purge(
+        &self,
+        token: &RecoveryToken,
+    ) -> Result<RecoveryPurge, ConversionError> {
+        #[cfg(unix)]
+        {
+            self.verify_purge(token)?;
+            let mut moved: Vec<(String, String)> = Vec::new();
+            for source in purge_names(token) {
+                if self.directory.open_regular(&source)?.is_none() {
+                    continue;
+                }
+                let target = purge_quarantine_name(&source);
+                if let Err(error) = self.directory.rename_no_replace(&source, &target) {
+                    for (source, target) in moved.into_iter().rev() {
+                        let _ = self.directory.rename_no_replace(&target, &source);
+                    }
+                    return Err(error);
+                }
+                moved.push((source, target));
+            }
+            self.directory.sync()?;
+            self.verify_quarantined_purge(token)?;
+            Ok(RecoveryPurge { token: token.clone() })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
+    /// Restore a pre-commit checkpoint quarantine.
+    pub fn restore_purge(&self, purge: RecoveryPurge) -> Result<(), ConversionError> {
+        self.restore_quarantined_purge(&purge.token)
+    }
+
+    /// Permanently remove a post-commit checkpoint quarantine.
+    pub fn finish_purge(&self, purge: RecoveryPurge) -> Result<(), ConversionError> {
+        self.remove_quarantined_purge(&purge.token)
+    }
+
+    /// Restore checkpoint quarantine left by a crash before the DB commit.
+    pub fn restore_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        {
+            self.verify_quarantined_purge(token)?;
+            for source in purge_names(token) {
+                let target = purge_quarantine_name(&source);
+                if self.directory.open_regular(&target)?.is_some() {
+                    self.directory.rename_no_replace(&target, &source)?;
+                }
+            }
+            self.directory.sync()?;
+            self.directory.verify_namespace()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
+    /// Remove checkpoint quarantine left by a crash after the DB commit.
+    pub fn remove_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        {
+            self.verify_quarantined_purge(token)?;
+            for source in purge_names(token) {
+                self.directory.unlink(&purge_quarantine_name(&source))?;
+            }
+            self.directory.sync()?;
+            self.directory.verify_namespace()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
+    #[cfg(unix)]
+    fn verify_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        self.directory.verify_namespace()?;
+        for source in purge_names(token) {
+            if let Some(file) = self.directory.open_regular(&purge_quarantine_name(&source))? {
+                let stat = rustix::fs::fstat(&file)
+                    .map_err(|error| recovery_io("inspect quarantined checkpoint", error))?;
+                if stat.st_nlink != 1 {
+                    return Err(recovery_error(
+                        "unsafePath",
+                        "quarantined checkpoint has an external hard link",
+                    ));
+                }
+            }
+        }
+        self.directory.verify_namespace()
     }
 
     /// Permanently remove every checkpoint and lock owned by one canonical
@@ -969,6 +1077,17 @@ impl SafeDirectory {
         }
     }
 
+    fn rename_no_replace(&self, source: &str, target: &str) -> Result<(), ConversionError> {
+        rustix::fs::renameat_with(
+            &self.fd,
+            source,
+            &self.fd,
+            target,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(|error| recovery_io("quarantine checkpoint", error))
+    }
+
     fn sync(&self) -> Result<(), ConversionError> {
         rustix::fs::fsync(&self.fd).map_err(|error| recovery_io("sync checkpoint directory", error))
     }
@@ -1093,6 +1212,20 @@ fn phase_name(token: &RecoveryToken, phase: TaskPhase) -> String {
 #[cfg(unix)]
 fn lock_name(token: &RecoveryToken) -> String {
     format!("{}.lock", token.as_str())
+}
+
+#[cfg(unix)]
+fn purge_names(token: &RecoveryToken) -> [String; 3] {
+    [
+        phase_name(token, TaskPhase::Succeeded),
+        phase_name(token, TaskPhase::Converted),
+        lock_name(token),
+    ]
+}
+
+#[cfg(unix)]
+fn purge_quarantine_name(source: &str) -> String {
+    format!(".{source}.retention-trash")
 }
 
 fn hex(bytes: &[u8]) -> String {

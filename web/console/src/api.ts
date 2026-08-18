@@ -175,8 +175,13 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
     async retry(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/retry`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async setPinned(id, pinned, signal) { const headers = auth(); headers["Content-Type"] = "application/json"; return parseTask(await jsonRequest(`/api/tasks/${id}/pin`, { method: "POST", headers, body: JSON.stringify({ pinned }), ...(signal ? { signal } : {}) })); },
     async deleteTask(id, signal) {
-      const response = await fetcher(`/api/tasks/${id}/history`, { method: "DELETE", headers: auth(), cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) });
-      if (response.status !== 204) throw new ApiError("deleteFailed");
+      let response: Response;
+      try { response = await fetcher(`/api/tasks/${id}/history`, { method: "DELETE", headers: auth(), cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) }); }
+      catch (error) { if (error instanceof DOMException && error.name === "AbortError") throw error; throw new ApiError("unreachable"); }
+      if (response.status === 204) return;
+      if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") throw new ApiError("invalidResponse");
+      const value = await readBoundedJson(response, 65536);
+      throw new ApiError(requestCode(value));
     },
     async cleanup(signal) {
       const value = await jsonRequest("/api/tasks/cleanup", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536);
