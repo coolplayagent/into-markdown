@@ -104,6 +104,8 @@ impl Default for NetworkOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResourceLimits {
+    /// Maximum deterministic CPU work units consumed by bounded local traversals.
+    pub max_work_units: u64,
     /// Maximum source bytes.
     pub max_input_bytes: u64,
     /// Maximum decompressed bytes across an archive.
@@ -147,6 +149,7 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
+            max_work_units: 100_000_000,
             max_input_bytes: 512 * 1024 * 1024,
             max_decompressed_bytes: 1024 * 1024 * 1024,
             max_archive_entries: 100_000,

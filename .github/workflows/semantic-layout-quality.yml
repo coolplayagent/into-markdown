@@ -1,0 +1,61 @@
+name: semantic-layout-quality
+
+on:
+  pull_request:
+    paths:
+      - "crates/core/**"
+      - "crates/converters/**"
+      - "crates/render-markdown/**"
+      - "fixtures/**"
+      - ".github/workflows/semantic-layout-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-ir-gfm:
+    name: canonical IR/GFM (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-24.04
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+          - platform: macos-aarch64
+            os: macos-14
+          - platform: windows-x86_64
+            os: windows-2025
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Execute every referenced non-native Rust test
+        run: cargo test --locked --workspace --all-targets --no-fail-fast
+      - name: Validate the semantic-layout authority
+        run: cargo test --locked -p into-markdown-converters semantic_layout_authority_is_complete_and_hash_bound
+      - name: Execute all 50 hash-bound scenario outcomes
+        run: cargo test --locked -p into-markdown-converters semantic_layout_fifty_scenario_outcomes_are_executable_and_hash_bound
+      - name: Verify independent canonical IR and GFM bytes
+        run: cargo test --locked -p into-markdown-converters real_cross_format_converters_match_ir_and_gfm_goldens
+      - name: Exercise bounded layout comparison
+        run: cargo test --locked -p into-markdown-core layout_quality
+
+  delegated-native-quality:
+    name: delegated native semantic quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: semantic-layout-native
+          repository-cache: true
+      - name: Execute pinned PDF, OCR, and legacy Office quality targets
+        run: >-
+          bazel test
+          //crates/converters:pdf_layout_quality
+          //crates/api:ppocrv6_image_quality
+          //crates/legacy-office:legacy_office_test

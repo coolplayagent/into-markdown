@@ -1,5 +1,5 @@
 use super::{LayoutDiff, LayoutDiffKind, SemanticNode};
-use crate::Asset;
+use crate::{Asset, ConversionError, ExecutionContext};
 use std::collections::BTreeSet;
 
 pub(super) fn compare(
@@ -8,7 +8,15 @@ pub(super) fn compare(
     actual_nodes: &[SemanticNode],
     actual_assets: &[Asset],
     differences: &mut Vec<LayoutDiff>,
-) {
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    consume_comparison_work(
+        golden_nodes.len(),
+        golden_assets.len(),
+        actual_nodes.len(),
+        actual_assets.len(),
+        context,
+    )?;
     compare_published(
         golden_nodes,
         &published(golden_assets),
@@ -17,6 +25,7 @@ pub(super) fn compare(
         differences,
     );
     duplicate_assets(actual_assets, differences);
+    Ok(())
 }
 
 pub(super) fn compare_golden(
@@ -25,7 +34,15 @@ pub(super) fn compare_golden(
     actual_nodes: &[SemanticNode],
     actual_assets: &[Asset],
     differences: &mut Vec<LayoutDiff>,
-) {
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    consume_comparison_work(
+        golden_nodes.len(),
+        golden_assets.len(),
+        actual_nodes.len(),
+        actual_assets.len(),
+        context,
+    )?;
     let golden_published = golden_assets.iter().map(String::as_str).collect();
     let actual_published = published(actual_assets);
     compare_published(
@@ -36,6 +53,29 @@ pub(super) fn compare_golden(
         differences,
     );
     duplicate_assets(actual_assets, differences);
+    Ok(())
+}
+
+fn consume_comparison_work(
+    golden_nodes: usize,
+    golden_assets: usize,
+    actual_nodes: usize,
+    actual_assets: usize,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    // `published`, `refs`, union/reporting, and duplicate detection each walk
+    // their inputs; charge each pass instead of treating the comparison as one.
+    let units = golden_nodes
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(actual_nodes.checked_mul(2)?))
+        .and_then(|value| value.checked_add(golden_assets.checked_mul(2)?))
+        .and_then(|value| value.checked_add(actual_assets.checked_mul(3)?))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| ConversionError::ResourceLimit {
+            limit: "semanticLayoutWorkingSet",
+            detail: "resource-association work overflow".into(),
+        })?;
+    context.consume_work(units)
 }
 
 fn compare_published(

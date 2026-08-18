@@ -205,6 +205,7 @@ struct ExecutionShared {
     limits: ResourceLimits,
     memory_bytes: AtomicU64,
     temporary_bytes: AtomicU64,
+    work_units: AtomicU64,
 }
 
 #[derive(Default)]
@@ -268,6 +269,7 @@ impl ExecutionContext {
             limits,
             memory_bytes: AtomicU64::new(0),
             temporary_bytes: AtomicU64::new(0),
+            work_units: AtomicU64::new(0),
         });
         if let Some(deadline) = timer_deadline {
             let weak = Arc::downgrade(&shared);
@@ -410,6 +412,36 @@ impl ExecutionContext {
     /// Returns a cancellation, timeout, or resource-limit error.
     pub fn reserve_memory(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
         self.reserve(ResourceKind::Memory, bytes)
+    }
+
+    /// Consume deterministic local-work units from this request.
+    ///
+    /// Work accounting is shared by cloned and credited contexts. The charge is
+    /// monotonic because completed CPU work cannot be released like memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation, timeout, overflow, or `max_work_units` exhaustion.
+    pub fn consume_work(&self, units: u64) -> Result<(), ConversionError> {
+        self.checkpoint()?;
+        let result =
+            self.shared.work_units.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(units).filter(|next| *next <= self.shared.limits.max_work_units)
+            });
+        if result.is_err() {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_work_units",
+                detail: format!("request work exceeds {} units", self.shared.limits.max_work_units),
+            });
+        }
+        Ok(())
+    }
+
+    /// Current monotonic work consumption for exact boundary tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn consumed_work_units(&self) -> u64 {
+        self.shared.work_units.load(Ordering::Acquire)
     }
 
     /// Current live memory reservations for boundary and lifecycle audits.
@@ -1871,6 +1903,39 @@ mod tests {
         drop(credit);
         drop(parent);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn work_budget_is_exact_monotonic_and_shared_by_clones() {
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_work_units: 3, ..ResourceLimits::default() },
+        );
+        let clone = context.clone();
+
+        context.consume_work(1).unwrap();
+        clone.consume_work(2).unwrap();
+        assert_eq!(context.consumed_work_units(), 3);
+        assert!(matches!(
+            clone.consume_work(1),
+            Err(ConversionError::ResourceLimit { limit: "max_work_units", .. })
+        ));
+        assert_eq!(context.consumed_work_units(), 3);
+    }
+
+    #[test]
+    fn work_budget_overflow_fails_without_wrapping_or_consuming() {
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_work_units: u64::MAX, ..ResourceLimits::default() },
+        );
+
+        context.consume_work(u64::MAX).unwrap();
+        assert!(matches!(
+            context.consume_work(1),
+            Err(ConversionError::ResourceLimit { limit: "max_work_units", .. })
+        ));
+        assert_eq!(context.consumed_work_units(), u64::MAX);
     }
 
     #[test]

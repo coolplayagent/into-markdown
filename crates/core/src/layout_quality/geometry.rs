@@ -1,12 +1,19 @@
-use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id};
-use crate::Rect;
+use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id, working_overflow};
+use crate::{ConversionError, ExecutionContext, Rect};
 
 pub(super) fn compare(
     golden: &[SemanticNode],
     actual: &[SemanticNode],
     tolerance: f32,
     differences: &mut Vec<LayoutDiff>,
-) {
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let units = golden
+        .len()
+        .checked_add(actual.len())
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(working_overflow)?;
+    context.consume_work(units)?;
     let actual = by_id(actual);
     for expected in golden {
         let Some(observed) = actual.get(expected.id.as_str()) else { continue };
@@ -20,6 +27,7 @@ pub(super) fn compare(
             });
         }
     }
+    Ok(())
 }
 
 fn same(expected: Option<Rect>, actual: Option<Rect>, tolerance: f32) -> bool {

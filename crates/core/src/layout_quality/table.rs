@@ -1,5 +1,5 @@
-use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id};
-use crate::Block;
+use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id, working_overflow};
+use crate::{Block, ConversionError, ExecutionContext};
 use serde::{Deserialize, Serialize};
 
 /// Exact logical table grid and origin-cell spans.
@@ -14,14 +14,19 @@ pub struct TableTopology {
     pub cells: Vec<(u32, u32, u32, u32)>,
 }
 
-pub(super) fn topology(block: &Block) -> Option<TableTopology> {
-    let Block::Table { rows, .. } = block else { return None };
+pub(super) fn topology(
+    block: &Block,
+    context: &ExecutionContext,
+) -> Result<Option<TableTopology>, ConversionError> {
+    let Block::Table { rows, .. } = block else { return Ok(None) };
     let mut occupied = Vec::<u32>::new();
     let mut cells = Vec::new();
     let mut width = 0_u32;
     for (row_index, row) in rows.iter().enumerate() {
+        context.consume_work(1)?;
         let mut column = 0_usize;
         for cell in &row.cells {
+            context.consume_work(1)?;
             while occupied.get(column).is_some_and(|remaining| *remaining > 0) {
                 column += 1;
             }
@@ -41,18 +46,26 @@ pub(super) fn topology(block: &Block) -> Option<TableTopology> {
             *remaining = remaining.saturating_sub(1);
         }
     }
-    Some(TableTopology {
+    Ok(Some(TableTopology {
         rows: u32::try_from(rows.len()).unwrap_or(u32::MAX),
         columns: width,
         cells,
-    })
+    }))
 }
 
 pub(super) fn compare(
     golden: &[SemanticNode],
     actual: &[SemanticNode],
     differences: &mut Vec<LayoutDiff>,
-) {
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let units = golden
+        .len()
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(actual.len()))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(working_overflow)?;
+    context.consume_work(units)?;
     let actual = by_id(actual);
     for expected in golden.iter().filter(|node| node.table.is_some()) {
         let Some(observed) = actual.get(expected.id.as_str()) else { continue };
@@ -66,4 +79,5 @@ pub(super) fn compare(
             });
         }
     }
+    Ok(())
 }

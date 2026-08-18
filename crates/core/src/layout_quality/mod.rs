@@ -20,13 +20,19 @@ use crate::{
     ResourceReservation,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::size_of,
+};
 
-const CHECKPOINT_NODES: usize = 128;
-const NODE_HIGH_WATER_BYTES: u64 = 1_536;
-const ASSET_HIGH_WATER_BYTES: u64 = 512;
 const REPORT_BASE_BYTES: u64 = 16 * 1024;
 const FIELD_COPY_HIGH_WATER: u64 = 8;
+const TOPOLOGY_CELL_BYTES: u64 = size_of::<(u32, u32, u32, u32)>() as u64;
+const TOPOLOGY_SLOT_BYTES: u64 = size_of::<u32>() as u64;
+const NODE_STRUCT_BYTES: u64 = size_of::<SemanticNode>() as u64;
+const DIFF_STRUCT_BYTES: u64 = size_of::<LayoutDiff>() as u64;
+const INDEX_ENTRY_BYTES: u64 = size_of::<(&str, &SemanticNode)>() as u64 * 4;
+const STACK_ENTRY_BYTES: u64 = size_of::<(*const BlockNode, usize, usize)>() as u64;
 
 /// Source boundary containing one semantic node.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -280,6 +286,14 @@ pub fn audit_semantic_layout(
         actual_plan.nodes.checked_add(golden_plan.nodes).ok_or_else(working_overflow)?;
     let total_assets =
         actual_assets.len().checked_add(golden_assets.len()).ok_or_else(working_overflow)?;
+    let topology_cells = actual_plan
+        .topology_cells
+        .checked_add(golden_plan.topology_cells)
+        .ok_or_else(working_overflow)?;
+    let topology_slots = actual_plan
+        .topology_slots
+        .checked_add(golden_plan.topology_slots)
+        .ok_or_else(working_overflow)?;
     let fixture_bytes = checked_field(fixture.len(), config.max_field_bytes)?;
     let mut field_bytes = actual_plan
         .field_bytes
@@ -291,36 +305,39 @@ pub fn audit_semantic_layout(
             .checked_add(checked_field(asset.id.0.len(), config.max_field_bytes)?)
             .ok_or_else(working_overflow)?;
     }
-    let bytes = u64::try_from(total_nodes)
-        .ok()
-        .and_then(|value| value.checked_mul(NODE_HIGH_WATER_BYTES))
-        .and_then(|value| {
-            value
-                .checked_add(u64::try_from(total_assets).ok()?.checked_mul(ASSET_HIGH_WATER_BYTES)?)
-        })
-        .and_then(|value| value.checked_add(field_bytes.checked_mul(FIELD_COPY_HIGH_WATER)?))
-        .and_then(|value| value.checked_add(REPORT_BASE_BYTES))
-        .ok_or_else(working_overflow)?;
-    let reservation = context.reserve_memory(bytes)?;
+    let reservation = context.reserve_memory(planned_bytes(
+        total_nodes,
+        total_assets,
+        topology_cells,
+        topology_slots,
+        field_bytes,
+    )?)?;
 
     let actual_nodes = collect_nodes(&actual.blocks, actual_plan.nodes, context)?;
     let golden_nodes = collect_nodes(&golden.blocks, golden_plan.nodes, context)?;
     let mut differences = Vec::new();
-    reading_order::compare(&golden_nodes, &actual_nodes, &mut differences);
-    paragraph_list::compare(&golden_nodes, &actual_nodes, &mut differences);
-    table::compare(&golden_nodes, &actual_nodes, &mut differences);
-    geometry::compare(&golden_nodes, &actual_nodes, config.coordinate_tolerance, &mut differences);
+    reading_order::compare(&golden_nodes, &actual_nodes, &mut differences, context)?;
+    paragraph_list::compare(&golden_nodes, &actual_nodes, &mut differences, context)?;
+    table::compare(&golden_nodes, &actual_nodes, &mut differences, context)?;
+    geometry::compare(
+        &golden_nodes,
+        &actual_nodes,
+        config.coordinate_tolerance,
+        &mut differences,
+        context,
+    )?;
     resource_association::compare(
         &golden_nodes,
         golden_assets,
         &actual_nodes,
         actual_assets,
         &mut differences,
-    );
+        context,
+    )?;
     differences.sort();
     differences.dedup();
     context.checkpoint()?;
-    let metrics = quality_metrics::metrics(&golden_nodes, &actual_nodes);
+    let metrics = quality_metrics::metrics(&golden_nodes, &actual_nodes, context)?;
     Ok(LayoutAudit {
         report: LayoutQualityReport {
             fixture: fixture.to_owned(),
@@ -356,7 +373,13 @@ pub fn capture_semantic_layout_golden(
             .checked_add(checked_field(asset.id.0.len(), config.max_field_bytes)?)
             .ok_or_else(working_overflow)?;
     }
-    let bytes = planned_bytes(plan.nodes, assets.len(), plan.field_bytes)?;
+    let bytes = planned_bytes(
+        plan.nodes,
+        assets.len(),
+        plan.topology_cells,
+        plan.topology_slots,
+        plan.field_bytes,
+    )?;
     let reservation = context.reserve_memory(bytes)?;
     let nodes = collect_nodes(&document.blocks, plan.nodes, context)?;
     let mut golden_assets = Vec::new();
@@ -399,36 +422,56 @@ pub fn audit_semantic_layout_golden(
     }
     let mut actual_plan = ClonePlan::default();
     plan_nodes(&actual.blocks, None, None, config.max_field_bytes, context, &mut actual_plan)?;
-    let golden_fields = plan_golden(golden, config.max_field_bytes, context)?;
+    let golden_plan = plan_golden(golden, config.max_field_bytes, context)?;
     let fixture_bytes = checked_field(fixture.len(), config.max_field_bytes)?;
     let field_bytes = actual_plan
         .field_bytes
-        .checked_add(golden_fields)
+        .checked_add(golden_plan.field_bytes)
         .and_then(|value| value.checked_add(fixture_bytes))
         .ok_or_else(working_overflow)?;
     let node_count =
         actual_plan.nodes.checked_add(golden.nodes.len()).ok_or_else(working_overflow)?;
     let asset_count =
         actual_assets.len().checked_add(golden.assets.len()).ok_or_else(working_overflow)?;
-    let reservation =
-        context.reserve_memory(planned_bytes(node_count, asset_count, field_bytes)?)?;
+    let topology_cells = actual_plan
+        .topology_cells
+        .checked_add(golden_plan.topology_cells)
+        .ok_or_else(working_overflow)?;
+    let topology_slots = actual_plan
+        .topology_slots
+        .checked_add(golden_plan.topology_slots)
+        .ok_or_else(working_overflow)?;
+    let reservation = context.reserve_memory(planned_bytes(
+        node_count,
+        asset_count,
+        topology_cells,
+        topology_slots,
+        field_bytes,
+    )?)?;
     let actual_nodes = collect_nodes(&actual.blocks, actual_plan.nodes, context)?;
     let mut differences = Vec::new();
-    reading_order::compare(&golden.nodes, &actual_nodes, &mut differences);
-    paragraph_list::compare(&golden.nodes, &actual_nodes, &mut differences);
-    table::compare(&golden.nodes, &actual_nodes, &mut differences);
-    geometry::compare(&golden.nodes, &actual_nodes, config.coordinate_tolerance, &mut differences);
+    reading_order::compare(&golden.nodes, &actual_nodes, &mut differences, context)?;
+    paragraph_list::compare(&golden.nodes, &actual_nodes, &mut differences, context)?;
+    table::compare(&golden.nodes, &actual_nodes, &mut differences, context)?;
+    geometry::compare(
+        &golden.nodes,
+        &actual_nodes,
+        config.coordinate_tolerance,
+        &mut differences,
+        context,
+    )?;
     resource_association::compare_golden(
         &golden.nodes,
         &golden.assets,
         &actual_nodes,
         actual_assets,
         &mut differences,
-    );
+        context,
+    )?;
     differences.sort();
     differences.dedup();
     context.checkpoint()?;
-    let metrics = quality_metrics::metrics(&golden.nodes, &actual_nodes);
+    let metrics = quality_metrics::metrics(&golden.nodes, &actual_nodes, context)?;
     Ok(LayoutAudit {
         report: LayoutQualityReport {
             fixture: fixture.to_owned(),
@@ -445,12 +488,11 @@ fn plan_golden(
     golden: &LayoutGolden,
     max_field_bytes: u64,
     context: &ExecutionContext,
-) -> Result<u64, ConversionError> {
-    let mut bytes = 0_u64;
-    for (index, node) in golden.nodes.iter().enumerate() {
-        if index.is_multiple_of(CHECKPOINT_NODES) {
-            context.checkpoint()?;
-        }
+) -> Result<ClonePlan, ConversionError> {
+    let mut plan = ClonePlan::default();
+    for node in &golden.nodes {
+        context.consume_work(1)?;
+        plan.nodes = plan.nodes.checked_add(1).ok_or_else(working_overflow)?;
         for field in [
             Some(node.id.as_str()),
             Some(node.kind.as_str()),
@@ -465,26 +507,53 @@ fn plan_golden(
         .into_iter()
         .flatten()
         {
-            bytes = bytes
+            plan.field_bytes = plan
+                .field_bytes
                 .checked_add(checked_field(field.len(), max_field_bytes)?)
+                .ok_or_else(working_overflow)?;
+        }
+        if let Some(topology) = &node.table {
+            let cells = u64::try_from(topology.cells.len()).map_err(|_| working_overflow())?;
+            context.consume_work(cells)?;
+            plan.topology_cells =
+                plan.topology_cells.checked_add(cells).ok_or_else(working_overflow)?;
+            plan.topology_slots = plan
+                .topology_slots
+                .checked_add(u64::from(topology.columns))
                 .ok_or_else(working_overflow)?;
         }
     }
     for asset in &golden.assets {
-        bytes = bytes
+        context.consume_work(1)?;
+        plan.field_bytes = plan
+            .field_bytes
             .checked_add(checked_field(asset.len(), max_field_bytes)?)
             .ok_or_else(working_overflow)?;
     }
-    Ok(bytes)
+    Ok(plan)
 }
 
-fn planned_bytes(nodes: usize, assets: usize, field_bytes: u64) -> Result<u64, ConversionError> {
+fn planned_bytes(
+    nodes: usize,
+    assets: usize,
+    topology_cells: u64,
+    topology_slots: u64,
+    field_bytes: u64,
+) -> Result<u64, ConversionError> {
     u64::try_from(nodes)
         .ok()
-        .and_then(|value| value.checked_mul(NODE_HIGH_WATER_BYTES))
         .and_then(|value| {
-            value.checked_add(u64::try_from(assets).ok()?.checked_mul(ASSET_HIGH_WATER_BYTES)?)
+            value.checked_mul(
+                NODE_STRUCT_BYTES + DIFF_STRUCT_BYTES * 7 + INDEX_ENTRY_BYTES + STACK_ENTRY_BYTES,
+            )
         })
+        .and_then(|value| {
+            value.checked_add(
+                u64::try_from(assets).ok()?.checked_mul(size_of::<String>() as u64 * 4)?,
+            )
+        })
+        .and_then(|value| value.checked_add(topology_cells.checked_mul(TOPOLOGY_CELL_BYTES * 2)?))
+        .and_then(|value| value.checked_add(topology_slots.checked_mul(TOPOLOGY_SLOT_BYTES * 2)?))
         .and_then(|value| value.checked_add(field_bytes.checked_mul(FIELD_COPY_HIGH_WATER)?))
         .and_then(|value| value.checked_add(REPORT_BASE_BYTES))
         .ok_or_else(working_overflow)
@@ -503,9 +572,7 @@ fn collect_nodes(
         stack.push((node, None, None));
     }
     while let Some((node, parent, inherited_boundary)) = stack.pop() {
-        if output.len().is_multiple_of(CHECKPOINT_NODES) {
-            context.checkpoint()?;
-        }
+        context.consume_work(1)?;
         let own_boundary = boundary(node).or(inherited_boundary.clone());
         let semantic = SemanticNode {
             id: node.id.0.clone(),
@@ -514,7 +581,7 @@ fn collect_nodes(
             parent: parent.clone(),
             boundary: own_boundary.clone(),
             bounds: node.provenance.locator.bounds,
-            table: table::topology(&node.block),
+            table: table::topology(&node.block, context)?,
             asset: match &node.block {
                 Block::Image { asset, .. } => Some(asset.0.clone()),
                 _ => None,
@@ -535,6 +602,8 @@ fn collect_nodes(
 struct ClonePlan {
     nodes: usize,
     field_bytes: u64,
+    topology_cells: u64,
+    topology_slots: u64,
 }
 
 fn plan_nodes(
@@ -545,11 +614,25 @@ fn plan_nodes(
     context: &ExecutionContext,
     plan: &mut ClonePlan,
 ) -> Result<(), ConversionError> {
-    for node in nodes {
-        plan.nodes = plan.nodes.checked_add(1).ok_or_else(working_overflow)?;
-        if plan.nodes.is_multiple_of(CHECKPOINT_NODES) {
-            context.checkpoint()?;
+    struct Task<'a> {
+        node: &'a BlockNode,
+        parent_id_bytes: Option<u64>,
+        inherited_sheet_bytes: Option<u64>,
+        depth: u16,
+    }
+    let mut stack = Vec::new();
+    for node in nodes.iter().rev() {
+        stack.push(Task { node, parent_id_bytes, inherited_sheet_bytes, depth: 1 });
+    }
+    while let Some(Task { node, parent_id_bytes, inherited_sheet_bytes, depth }) = stack.pop() {
+        context.consume_work(1)?;
+        if depth > context.resource_limits().max_nesting_depth {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_nesting_depth",
+                detail: format!("semantic layout depth {depth} exceeds request limit"),
+            });
         }
+        plan.nodes = plan.nodes.checked_add(1).ok_or_else(working_overflow)?;
         let id_bytes = checked_field(node.id.0.len(), max_field_bytes)?;
         let text_bytes = checked_field(semantic_text_len(&node.block)?, max_field_bytes)?;
         let sheet_bytes = match &node.block {
@@ -570,38 +653,72 @@ fn plan_nodes(
             .ok_or_else(working_overflow)?;
         match &node.block {
             Block::List { items, .. } => {
-                for item in items {
-                    plan_nodes(
-                        &item.blocks,
-                        Some(id_bytes),
-                        sheet_bytes,
-                        max_field_bytes,
-                        context,
-                        plan,
-                    )?;
+                context
+                    .consume_work(u64::try_from(items.len()).map_err(|_| working_overflow())?)?;
+                for child in items.iter().flat_map(|item| &item.blocks).rev() {
+                    stack.push(Task {
+                        node: child,
+                        parent_id_bytes: Some(id_bytes),
+                        inherited_sheet_bytes: sheet_bytes,
+                        depth: depth.saturating_add(1),
+                    });
                 }
             }
             Block::Table { rows, .. } => {
-                for cell in rows.iter().flat_map(|row| &row.cells) {
-                    plan_nodes(
-                        &cell.blocks,
-                        Some(id_bytes),
-                        sheet_bytes,
-                        max_field_bytes,
-                        context,
-                        plan,
-                    )?;
+                plan_table_topology(rows, context, plan)?;
+                for child in
+                    rows.iter().flat_map(|row| &row.cells).flat_map(|cell| &cell.blocks).rev()
+                {
+                    stack.push(Task {
+                        node: child,
+                        parent_id_bytes: Some(id_bytes),
+                        inherited_sheet_bytes: sheet_bytes,
+                        depth: depth.saturating_add(1),
+                    });
                 }
             }
             Block::Footnote { blocks, .. }
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                plan_nodes(blocks, Some(id_bytes), sheet_bytes, max_field_bytes, context, plan)?;
+                for child in blocks.iter().rev() {
+                    stack.push(Task {
+                        node: child,
+                        parent_id_bytes: Some(id_bytes),
+                        inherited_sheet_bytes: sheet_bytes,
+                        depth: depth.saturating_add(1),
+                    });
+                }
             }
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn plan_table_topology(
+    rows: &[crate::TableRow],
+    context: &ExecutionContext,
+    plan: &mut ClonePlan,
+) -> Result<(), ConversionError> {
+    let cells = rows.iter().try_fold(0_u64, |count, row| {
+        count
+            .checked_add(u64::try_from(row.cells.len()).map_err(|_| working_overflow())?)
+            .ok_or_else(working_overflow)
+    })?;
+    context.consume_work(
+        u64::try_from(rows.len())
+            .map_err(|_| working_overflow())?
+            .checked_add(cells)
+            .ok_or_else(working_overflow)?,
+    )?;
+    plan.topology_cells = plan.topology_cells.checked_add(cells).ok_or_else(working_overflow)?;
+    let slots = rows.iter().try_fold(0_u64, |count, row| {
+        row.cells.iter().try_fold(count, |count, cell| {
+            count.checked_add(u64::from(cell.column_span)).ok_or_else(working_overflow)
+        })
+    })?;
+    plan.topology_slots = plan.topology_slots.checked_add(slots).ok_or_else(working_overflow)?;
     Ok(())
 }
 

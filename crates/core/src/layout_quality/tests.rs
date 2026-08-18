@@ -273,3 +273,113 @@ fn large_fields_and_memory_have_exact_fail_closed_boundaries() {
     ));
     assert_eq!(field_limited.reserved_memory_bytes(), 0);
 }
+
+#[test]
+fn layout_plan_and_collection_have_exact_work_boundaries() {
+    let document = document(vec![paragraph("one", "First", 10.0), table("table")]);
+    let probe = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    let audit =
+        audit_semantic_layout("work", &document, &[], &document, &[], config(), &probe).unwrap();
+    let required = probe.consumed_work_units();
+    assert!(required > 1, "checkpoints are not work accounting");
+    drop(audit);
+
+    let exact = ExecutionContext::new(
+        ExecutionOptions::default(),
+        ResourceLimits { max_work_units: required, ..ResourceLimits::default() },
+    );
+    let audit =
+        audit_semantic_layout("work", &document, &[], &document, &[], config(), &exact).unwrap();
+    assert_eq!(exact.consumed_work_units(), required);
+    drop(audit);
+    assert_eq!(exact.reserved_memory_bytes(), 0);
+
+    let limited = ExecutionContext::new(
+        ExecutionOptions::default(),
+        ResourceLimits { max_work_units: required - 1, ..ResourceLimits::default() },
+    );
+    assert!(matches!(
+        audit_semantic_layout("work", &document, &[], &document, &[], config(), &limited),
+        Err(ConversionError::ResourceLimit { limit: "max_work_units", .. })
+    ));
+    assert_eq!(limited.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn layout_depth_timeout_and_cancel_fail_without_a_lease() {
+    let leaf = paragraph("leaf", "deep", 1.0);
+    let nested = node(
+        "outer",
+        Block::Page {
+            number: 1,
+            blocks: vec![node("middle", Block::Page { number: 2, blocks: vec![leaf] }, None)],
+        },
+        None,
+    );
+    let document = Document {
+        schema_version: crate::DOCUMENT_SCHEMA_VERSION,
+        metadata: DocumentMetadata::default(),
+        blocks: vec![nested],
+    };
+    let depth_limited = ExecutionContext::new(
+        ExecutionOptions::default(),
+        ResourceLimits { max_nesting_depth: 2, ..ResourceLimits::default() },
+    );
+    assert!(matches!(
+        audit_semantic_layout("depth", &document, &[], &document, &[], config(), &depth_limited),
+        Err(ConversionError::ResourceLimit { limit: "max_nesting_depth", .. })
+    ));
+    assert_eq!(depth_limited.reserved_memory_bytes(), 0);
+
+    let timeout = ExecutionContext::new(
+        ExecutionOptions {
+            timeout: Some(std::time::Duration::ZERO),
+            ..ExecutionOptions::default()
+        },
+        ResourceLimits::default(),
+    );
+    assert!(matches!(
+        audit_semantic_layout("timeout", &document, &[], &document, &[], config(), &timeout),
+        Err(ConversionError::Timeout)
+    ));
+    assert_eq!(timeout.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn huge_table_topology_is_independently_memory_accounted() {
+    fn table_document(cell_count: usize) -> Document {
+        let cells = (0..cell_count)
+            .map(|_| Cell { row_span: 1, column_span: 1, header: false, blocks: Vec::new() })
+            .collect();
+        document(vec![node(
+            "huge-table",
+            Block::Table { rows: vec![TableRow { cells }], alignments: Vec::new() },
+            None,
+        )])
+    }
+    let small = table_document(1);
+    let small_context =
+        ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    let small_audit =
+        audit_semantic_layout("table", &small, &[], &small, &[], config(), &small_context).unwrap();
+    let small_bytes = small_context.reserved_memory_bytes();
+    drop(small_audit);
+
+    let huge = table_document(16_384);
+    let probe = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    let audit = audit_semantic_layout("table", &huge, &[], &huge, &[], config(), &probe).unwrap();
+    let required = probe.reserved_memory_bytes();
+    assert!(required >= small_bytes + 16_383 * TOPOLOGY_CELL_BYTES * 4);
+    drop(audit);
+    assert_eq!(probe.reserved_memory_bytes(), 0);
+
+    let limited = ExecutionContext::new(
+        ExecutionOptions::default(),
+        ResourceLimits { max_memory_bytes: required - 1, ..ResourceLimits::default() },
+    );
+    assert!(matches!(
+        audit_semantic_layout("table", &huge, &[], &huge, &[], config(), &limited),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(limited.reserved_memory_bytes(), 0);
+}

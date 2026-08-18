@@ -1,10 +1,20 @@
-use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id, duplicate_ids};
+use super::{LayoutDiff, LayoutDiffKind, SemanticNode, by_id, duplicate_ids, working_overflow};
+use crate::{ConversionError, ExecutionContext};
 
 pub(super) fn compare(
     golden: &[SemanticNode],
     actual: &[SemanticNode],
     differences: &mut Vec<LayoutDiff>,
-) {
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    // Charge every full traversal below: index/scan/filter/report construction.
+    let units = golden
+        .len()
+        .checked_mul(5)
+        .and_then(|value| value.checked_add(actual.len().checked_mul(6)?))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(working_overflow)?;
+    context.consume_work(units)?;
     let golden_by_id = by_id(golden);
     let actual_by_id = by_id(actual);
     for id in duplicate_ids(actual) {
@@ -66,4 +76,5 @@ pub(super) fn compare(
             actual: observed.join(","),
         });
     }
+    Ok(())
 }
