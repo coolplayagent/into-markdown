@@ -378,6 +378,15 @@ error 不改 task。
 source build；没有对应目标 native runner 时，交叉编译只证明 toolchain/source/link
 compatibility，不能替代 Windows reparse/DACL 或 Linux filesystem runtime 测试。
 
+## Web 任务事件流
+
+事件总线单测固定 schemaVersion 1 与单调 sequence，覆盖 `Last-Event-ID` 精确回放、超过 64 项
+窗口后的 snapshot 收敛、慢 receiver/已关闭 receiver 不阻塞 publisher，以及进程代际改变时从
+durable terminal record 恢复。Unix Web 后端测试用 conversion barrier 确定性覆盖浏览器关闭不
+取消任务、重连仍取得 succeeded final event，以及 running cancel 与完成的竞争和重复 DELETE
+幂等性。真实 loopback HTTP 测试同时检查 SSE content type、event/id/data framing、版本字段及
+非法/重复 `Last-Event-ID` 的稳定错误。
+
 旧 Office native runtime、PDF、ZIP 与 EPUB 的小型二进制攻击图在各自 process/converter/API
 测试中程序生成，不复制 Office 或网络样本。旧 Office 测试 worker 是仓库源码构建的受控
 协议端点，authority 仍对它执行 exact tree/hash/license/ABI 校验；定向测试覆盖 DOC→DOCX、

@@ -5,8 +5,9 @@ use crate::transaction::SafeDir;
 use into_markdown::{
     ArtifactKind, ArtifactReference, BusyControl, CancellationToken, ConfigurationSnapshot,
     ConversionOptions, ConversionRequest, DiagnosticCode, Engine, ExecutionOptions, FormatHint,
-    InputRef, InputReference, NewTask, RecoveryStore, RecoveryToken, TaskCursor, TaskDiagnostic,
-    TaskId, TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
+    InputRef, InputReference, NewTask, ProgressEvent, ProgressListener, RecoveryStore,
+    RecoveryToken, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus, TaskStore,
+    TaskStoreError, TaskTransition,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -20,9 +21,10 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 
 const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_GLOBAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -32,6 +34,8 @@ const MAX_DATA_BYTES: u64 = MAX_GLOBAL_BYTES - STORE_METADATA_HEADROOM;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_QUEUE: usize = 100_000;
 const MAX_WORKERS: usize = 4;
+const EVENT_REPLAY_CAPACITY: usize = 64;
+const EVENT_BROADCAST_CAPACITY: usize = 128;
 const COPY_CHUNK: usize = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TASK_DURABLE_GROWTH: u64 = 512 * 1024 * 1024;
@@ -111,6 +115,7 @@ struct Shared {
     task_store: Mutex<TaskStore>,
     recovery: RecoveryStore,
     engine: Engine,
+    events: EventHub,
     queue: Mutex<QueueState>,
     queue_changed: Condvar,
     disk_bytes: Mutex<DiskQuota>,
@@ -149,6 +154,196 @@ struct Shared {
     #[cfg(test)]
     success_transition_failures: AtomicUsize,
     publication_failure: AtomicUsize,
+}
+
+/// Version 1 task-event wire DTO. Event IDs are process-generation scoped;
+/// `sequence` is monotonic within one task and generation.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TaskEventDto {
+    pub(crate) schema_version: u32,
+    pub(crate) sequence: u64,
+    pub(crate) task_id: TaskId,
+    pub(crate) kind: TaskEventKind,
+    pub(crate) status: TaskStatus,
+    pub(crate) progress_millionths: u32,
+    pub(crate) terminal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) execution: Option<ProgressEvent>,
+    #[serde(skip)]
+    pub(crate) event_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TaskEventKind {
+    Snapshot,
+    Progress,
+}
+
+struct TaskEventLog {
+    next_sequence: u64,
+    terminal: bool,
+    latest_record: TaskRecord,
+    events: VecDeque<Arc<TaskEventDto>>,
+}
+
+struct EventHubState {
+    logs: BTreeMap<TaskId, TaskEventLog>,
+}
+
+struct EventHub {
+    generation: String,
+    state: Mutex<EventHubState>,
+    sender: broadcast::Sender<Arc<TaskEventDto>>,
+}
+
+pub(crate) struct TaskEventSubscription {
+    pub(crate) replay: VecDeque<Arc<TaskEventDto>>,
+    pub(crate) receiver: broadcast::Receiver<Arc<TaskEventDto>>,
+}
+
+impl EventHub {
+    fn new(generation: String) -> Self {
+        let (sender, _) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
+        Self { generation, state: Mutex::new(EventHubState { logs: BTreeMap::new() }), sender }
+    }
+
+    fn event(
+        &self,
+        log: &mut TaskEventLog,
+        record: &TaskRecord,
+        kind: TaskEventKind,
+        progress_millionths: u32,
+        execution: Option<ProgressEvent>,
+    ) -> Arc<TaskEventDto> {
+        let sequence = log.next_sequence;
+        log.next_sequence = log.next_sequence.saturating_add(1);
+        Arc::new(TaskEventDto {
+            schema_version: 1,
+            sequence,
+            task_id: record.id.clone(),
+            kind,
+            status: record.status,
+            progress_millionths,
+            terminal: is_terminal(record.status),
+            execution,
+            event_id: format!("{}:{sequence}", self.generation),
+        })
+    }
+
+    fn append(&self, log: &mut TaskEventLog, event: Arc<TaskEventDto>) {
+        log.terminal |= event.terminal;
+        if log.events.len() == EVENT_REPLAY_CAPACITY {
+            log.events.pop_front();
+        }
+        log.events.push_back(Arc::clone(&event));
+        // `broadcast::Sender::send` never waits for receivers. A lagging or
+        // closed browser is repaired from the bounded log/current snapshot.
+        let _ = self.sender.send(event);
+    }
+
+    fn publish_snapshot(&self, record: &TaskRecord) {
+        let mut state = lock(&self.state);
+        let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            next_sequence: 1,
+            terminal: false,
+            latest_record: record.clone(),
+            events: VecDeque::new(),
+        });
+        if record.updated_at_ms < log.latest_record.updated_at_ms
+            || (log.terminal && !is_terminal(record.status))
+        {
+            return;
+        }
+        log.latest_record = record.clone();
+        let event =
+            self.event(log, record, TaskEventKind::Snapshot, record.progress_millionths, None);
+        self.append(log, event);
+    }
+
+    fn publish_progress(&self, record: &TaskRecord, progress: ProgressEvent) {
+        let mut state = lock(&self.state);
+        let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            next_sequence: 1,
+            terminal: false,
+            latest_record: record.clone(),
+            events: VecDeque::new(),
+        });
+        if log.terminal {
+            return;
+        }
+        let progress_millionths = u32::from(progress.basis_points) * 100;
+        let event =
+            self.event(log, record, TaskEventKind::Progress, progress_millionths, Some(progress));
+        self.append(log, event);
+    }
+
+    fn subscribe(&self, record: &TaskRecord, cursor: Option<(&str, u64)>) -> TaskEventSubscription {
+        let mut state = lock(&self.state);
+        let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            next_sequence: 1,
+            terminal: false,
+            latest_record: record.clone(),
+            events: VecDeque::new(),
+        });
+        if record.updated_at_ms > log.latest_record.updated_at_ms {
+            log.latest_record = record.clone();
+        }
+        let replayable = cursor.is_some_and(|(generation, sequence)| {
+            generation == self.generation
+                && sequence < log.next_sequence
+                && log
+                    .events
+                    .front()
+                    .is_none_or(|first| sequence.saturating_add(1) >= first.sequence)
+        });
+        let replay = if replayable {
+            let sequence = cursor.map_or(0, |(_, sequence)| sequence);
+            log.events.iter().filter(|event| event.sequence > sequence).cloned().collect()
+        } else {
+            let current = log.latest_record.clone();
+            let event = self.event(
+                log,
+                &current,
+                TaskEventKind::Snapshot,
+                current.progress_millionths,
+                None,
+            );
+            self.append(log, Arc::clone(&event));
+            VecDeque::from([event])
+        };
+        // Subscribe while the hub lock is still held, after any reset snapshot
+        // was appended. This avoids both a publication race and delivering the
+        // reset event twice (from replay and from broadcast).
+        let receiver = self.sender.subscribe();
+        TaskEventSubscription { replay, receiver }
+    }
+}
+
+struct EventProgressListener {
+    shared: Weak<Shared>,
+    id: TaskId,
+}
+
+impl ProgressListener for EventProgressListener {
+    fn on_progress(&self, event: ProgressEvent) {
+        let Some(shared) = self.shared.upgrade() else { return };
+        let Ok(Some(record)) = lock(&shared.task_store).get(&self.id) else { return };
+        if !is_terminal(record.status) {
+            shared.events.publish_progress(&record, event);
+        }
+    }
+}
+
+fn is_terminal(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Succeeded
+            | TaskStatus::Failed
+            | TaskStatus::Interrupted
+            | TaskStatus::Cancelled
+    )
 }
 
 struct DiskQuota {
@@ -585,6 +780,7 @@ impl WebTaskBackend {
             task_store: Mutex::new(task_store),
             recovery,
             engine,
+            events: EventHub::new(random_hex()?),
             queue: Mutex::new(QueueState::default()),
             queue_changed: Condvar::new(),
             disk_bytes: Mutex::new(DiskQuota {
@@ -689,6 +885,18 @@ impl WebTaskBackend {
             validate_web_success(&self.owner.shared, &record)?;
         }
         Ok(record)
+    }
+
+    /// Subscribe without holding a conversion or persistence lock. A cursor
+    /// from another process generation (or one that fell behind the bounded
+    /// replay window) receives a fresh durable snapshot.
+    pub(crate) fn events(
+        &self,
+        id: &TaskId,
+        cursor: Option<(&str, u64)>,
+    ) -> Result<TaskEventSubscription, WebTaskError> {
+        let record = self.get(id)?;
+        Ok(self.owner.shared.events.subscribe(&record, cursor))
     }
 
     /// Cancel queued/running work. Terminal tasks are left unchanged.
@@ -1195,6 +1403,7 @@ impl Upload {
             }
             return Err(error);
         }
+        self.backend.owner.shared.events.publish_snapshot(&record);
         Ok(record)
     }
 }
@@ -1328,7 +1537,7 @@ impl Drop for ActiveWorker<'_> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn run_job(shared: &Shared, job: &Job) {
+fn run_job(shared: &Arc<Shared>, job: &Job) {
     let mut registered_waiter = RegisteredDiskWaiter { shared, ticket: job.admission_ticket };
     #[cfg(test)]
     if let Some(gate) = { lock(&shared.pre_acquire_gate).clone() } {
@@ -1438,7 +1647,10 @@ fn run_job(shared: &Shared, job: &Job) {
         request.execution = ExecutionOptions {
             cancellation: job.cancellation.clone(),
             timeout: Some(deadline.saturating_duration_since(Instant::now())),
-            progress_listener: None,
+            progress_listener: Some(Arc::new(EventProgressListener {
+                shared: Arc::downgrade(shared),
+                id: job.id.clone(),
+            })),
         };
         let converted = futures::executor::block_on(shared.engine.convert_recoverable(
             request,
@@ -1454,7 +1666,7 @@ fn run_job(shared: &Shared, job: &Job) {
         })?;
         let current = lock(&shared.task_store).get(&job.id)?.ok_or(WebTaskError::NotFound)?;
         if current.status == TaskStatus::Running {
-            lock(&shared.task_store).transition(
+            let converted_record = lock(&shared.task_store).transition(
                 &job.id,
                 TaskTransition {
                     expected: TaskStatus::Running,
@@ -1464,6 +1676,7 @@ fn run_job(shared: &Shared, job: &Job) {
                     artifacts: Vec::new(),
                 },
             )?;
+            shared.events.publish_snapshot(&converted_record);
         }
         if job.cancellation.is_cancelled() {
             return Err(WebTaskError::Cancelled);
@@ -1529,7 +1742,8 @@ fn promote_published_success(
                     },
                 )?)
             });
-            if transition.is_ok() {
+            if let Ok(record) = transition {
+                shared.events.publish_snapshot(&record);
                 return Ok(());
             }
         }
@@ -1588,7 +1802,8 @@ fn retry_dequeued_transition(shared: &Shared, id: &TaskId, transition: &TaskTran
             std::thread::yield_now();
             continue;
         }
-        if lock(&shared.task_store).transition(id, transition.clone()).is_ok() {
+        if let Ok(record) = lock(&shared.task_store).transition(id, transition.clone()) {
+            shared.events.publish_snapshot(&record);
             return true;
         }
         std::thread::yield_now();
@@ -2228,13 +2443,13 @@ fn terminal_transition(
     next: TaskStatus,
     code: DiagnosticCode,
 ) -> Result<(), WebTaskError> {
-    metadata_store_mutation(shared, STORE_MUTATION_RESERVATION, |store| {
+    let changed = metadata_store_mutation(shared, STORE_MUTATION_RESERVATION, |store| {
         let record = store.get(id)?.ok_or(WebTaskError::NotFound)?;
         if matches!(
             record.status,
             TaskStatus::Pending | TaskStatus::Running | TaskStatus::Converted
         ) {
-            store.transition(
+            return Ok(Some(store.transition(
                 id,
                 TaskTransition {
                     expected: record.status,
@@ -2243,10 +2458,14 @@ fn terminal_transition(
                     diagnostics: vec![TaskDiagnostic { code }],
                     artifacts: Vec::new(),
                 },
-            )?;
+            )?));
         }
-        Ok(())
-    })
+        Ok(None)
+    })?;
+    if let Some(record) = changed {
+        shared.events.publish_snapshot(&record);
+    }
+    Ok(())
 }
 
 fn metadata_store_mutation<T>(
@@ -2899,6 +3118,145 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event_record(status: TaskStatus, progress_millionths: u32) -> TaskRecord {
+        TaskRecord {
+            id: TaskId::parse("11111111111111111111111111111111").unwrap(),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            status,
+            progress_millionths,
+            input: InputReference {
+                schema_version: 1,
+                input_fingerprint: "22".repeat(32),
+                options_fingerprint: "33".repeat(32),
+                byte_len: 1,
+                recovery_token: "44444444444444444444444444444444".into(),
+            },
+            configuration: ConfigurationSnapshot::default(),
+            diagnostics: Vec::new(),
+            artifacts: Vec::new(),
+            pinned: false,
+        }
+    }
+
+    fn progress(basis_points: u16) -> ProgressEvent {
+        ProgressEvent {
+            stage: into_markdown::ExecutionStage::Converting,
+            basis_points,
+            completed_units: None,
+            total_units: None,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn event_hub_replays_last_event_id_and_resets_gaps_without_blocking_publishers() {
+        let generation = "aa".repeat(16);
+        let hub = EventHub::new(generation.clone());
+        let record = event_record(TaskStatus::Running, 1);
+        let mut initial = hub.subscribe(&record, None);
+        let first = initial.replay.pop_front().unwrap();
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.event_id, format!("{generation}:1"));
+
+        hub.publish_progress(&record, progress(5_000));
+        let mut replay = hub.subscribe(&record, Some((&generation, 1)));
+        let second = replay.replay.pop_front().unwrap();
+        assert_eq!(second.sequence, 2);
+        assert!(matches!(second.kind, TaskEventKind::Progress));
+        assert_eq!(second.progress_millionths, 500_000);
+
+        // A receiver that never drains cannot backpressure this loop. Once it
+        // falls outside the replay window, reconnect gets a current snapshot.
+        for basis_points in 0..1_000 {
+            hub.publish_progress(&record, progress(basis_points));
+        }
+        drop(initial);
+        let mut reset = hub.subscribe(&record, Some((&generation, 1)));
+        let reset = reset.replay.pop_front().unwrap();
+        assert!(matches!(reset.kind, TaskEventKind::Snapshot));
+        assert!(reset.sequence > EVENT_REPLAY_CAPACITY as u64);
+    }
+
+    #[test]
+    fn event_hub_restart_cursor_yields_durable_terminal_snapshot() {
+        let first_generation = "aa".repeat(16);
+        let first_hub = EventHub::new(first_generation.clone());
+        let pending = event_record(TaskStatus::Pending, 0);
+        let first = first_hub.subscribe(&pending, None).replay.pop_front().unwrap();
+
+        let second_hub = EventHub::new("bb".repeat(16));
+        let terminal = event_record(TaskStatus::Succeeded, 1_000_000);
+        let mut resumed =
+            second_hub.subscribe(&terminal, Some((&first_generation, first.sequence)));
+        let snapshot = resumed.replay.pop_front().unwrap();
+        assert!(matches!(snapshot.kind, TaskEventKind::Snapshot));
+        assert!(snapshot.terminal);
+        assert_eq!(snapshot.status, TaskStatus::Succeeded);
+        assert_ne!(snapshot.event_id, first.event_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn browser_disconnect_does_not_cancel_and_last_event_id_replays_final_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.conversion_gate) = Some(Arc::clone(&gate));
+        let mut upload = backend.begin_upload("resume.txt", None).unwrap();
+        upload.write_chunk(b"resume after browser close").unwrap();
+        let task = upload.finish().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while backend.owner.shared.conversion_entries.load(Ordering::SeqCst) != 1 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+
+        let mut browser = backend.events(&task.id, None).unwrap();
+        let observed = browser.replay.pop_back().unwrap();
+        let (generation, sequence) = observed.event_id.split_once(':').unwrap();
+        let generation = generation.to_owned();
+        let sequence = sequence.parse::<u64>().unwrap();
+        drop(browser); // Closing an SSE connection is observation-only.
+
+        *lock(&backend.owner.shared.conversion_gate) = None;
+        gate.wait();
+        assert_eq!(wait_terminal(&backend, &task.id).status, TaskStatus::Succeeded);
+
+        let resumed = backend.events(&task.id, Some((&generation, sequence))).unwrap();
+        assert!(
+            resumed
+                .replay
+                .iter()
+                .any(|event| event.terminal && event.status == TaskStatus::Succeeded),
+            "terminal event was not retained for reconnect"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_cancel_is_idempotent_and_reaches_the_engine_token() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.conversion_gate) = Some(Arc::clone(&gate));
+        let mut upload = backend.begin_upload("cancel-race.txt", None).unwrap();
+        upload.write_chunk(b"cancel race").unwrap();
+        let task = upload.finish().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while backend.owner.shared.conversion_entries.load(Ordering::SeqCst) != 1 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Running);
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Running);
+        *lock(&backend.owner.shared.conversion_gate) = None;
+        gate.wait();
+        assert_eq!(wait_terminal(&backend, &task.id).status, TaskStatus::Cancelled);
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Cancelled);
+    }
 
     struct ShortWriter {
         bytes: Vec<u8>,
