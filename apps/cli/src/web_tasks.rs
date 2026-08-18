@@ -3,11 +3,11 @@
 use crate::output;
 use crate::transaction::SafeDir;
 use into_markdown::{
-    ArtifactKind, ArtifactReference, BusyControl, CancellationToken, ConfigurationSnapshot,
+    AiMode, ArtifactKind, ArtifactReference, BusyControl, CancellationToken, ConfigurationSnapshot,
     ConversionOptions, ConversionRequest, DiagnosticCode, Engine, ExecutionOptions, FormatHint,
-    InputRef, InputReference, NewTask, ProgressEvent, ProgressListener, RecoveryStore,
-    RecoveryToken, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus, TaskStore,
-    TaskStoreError, TaskTransition,
+    InputFormat, InputRef, InputReference, NewTask, OcrPolicy, ProgressEvent, ProgressListener,
+    RecoveryStore, RecoveryToken, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus,
+    TaskStore, TaskStoreError, TaskTransition,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,7 @@ const MAX_QUEUE: usize = 100_000;
 const MAX_WORKERS: usize = 4;
 const EVENT_REPLAY_CAPACITY: usize = 64;
 const EVENT_BROADCAST_CAPACITY: usize = 128;
+const MAX_ALLOWED_HOSTS: usize = 64;
 const COPY_CHUNK: usize = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TASK_DURABLE_GROWTH: u64 = 512 * 1024 * 1024;
@@ -60,8 +61,155 @@ pub enum WebTaskError {
     NotFound,
     #[error("task state conflict: {0}")]
     Conflict(String),
+    #[error("invalid task request: {0}")]
+    Invalid(String),
     #[error("backend I/O failed: {0}")]
     Io(String),
+}
+
+/// One-time grants accompanying a Web upload. Grants are checked before task
+/// creation and deliberately excluded from the persisted request descriptor.
+#[derive(Clone, Debug, Default, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WebTaskAuthorization {
+    pub(crate) network: bool,
+    pub(crate) private_network: bool,
+    pub(crate) provider: bool,
+}
+
+/// Versioned browser request using the same `FormatHint` and
+/// `ConversionOptions` types as the CLI and Engine.
+#[derive(Clone, Debug, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WebTaskRequest {
+    pub(crate) schema_version: u32,
+    pub(crate) format: Option<InputFormat>,
+    pub(crate) options: ConversionOptions,
+    pub(crate) authorization: WebTaskAuthorization,
+}
+
+impl Default for WebTaskRequest {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            format: None,
+            options: web_options(),
+            authorization: WebTaskAuthorization::default(),
+        }
+    }
+}
+
+pub(crate) fn decode_web_task_request(bytes: &[u8]) -> Result<WebTaskRequest, WebTaskError> {
+    if bytes.len() > 16 * 1024 {
+        return Err(WebTaskError::Limit("task request exceeds 16 KiB".into()));
+    }
+    validate_json_shape(bytes, 16, 512, 4 * 1024)?;
+    let request: WebTaskRequest = serde_json::from_slice(bytes)
+        .map_err(|_| WebTaskError::Invalid("task request JSON is invalid".into()))?;
+    validate_web_task_request(&request)?;
+    Ok(request)
+}
+
+fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskError> {
+    if request.schema_version != 1 {
+        return Err(WebTaskError::Invalid("task request schemaVersion must be 1".into()));
+    }
+    let options = &request.options;
+    if !options.ocr.minimum_confidence.is_finite()
+        || !(0.0..=1.0).contains(&options.ocr.minimum_confidence)
+    {
+        return Err(WebTaskError::Invalid("OCR confidence must be within 0 and 1".into()));
+    }
+    let limits = &options.limits;
+    if limits.max_input_bytes == 0 || limits.max_input_bytes > MAX_FILE_BYTES {
+        return Err(WebTaskError::Invalid("max_input_bytes must be within 1 and 512 MiB".into()));
+    }
+    if limits.max_memory_bytes == 0 || limits.max_memory_bytes > MAX_CHECKPOINT_BYTES {
+        return Err(WebTaskError::Invalid("max_memory_bytes must be within 1 and 256 MiB".into()));
+    }
+    if limits.max_temporary_bytes == 0 || limits.max_temporary_bytes > MAX_CHECKPOINT_BYTES {
+        return Err(WebTaskError::Invalid(
+            "max_temporary_bytes must be within 1 and 256 MiB".into(),
+        ));
+    }
+    if limits.max_asset_bytes > 64 * 1024 * 1024
+        || limits.max_total_asset_bytes > 128 * 1024 * 1024
+        || limits.max_pages == 0
+        || limits.max_pages > 10_000
+        || limits.max_decompressed_bytes == 0
+        || limits.max_decompressed_bytes > 1024 * 1024 * 1024
+        || limits.max_archive_entries == 0
+        || limits.max_archive_entries > 100_000
+        || limits.max_archive_depth == 0
+        || limits.max_archive_depth > 16
+        || limits.max_archive_entry_bytes == 0
+        || limits.max_archive_entry_bytes > 256 * 1024 * 1024
+        || limits.max_archive_compression_ratio == 0
+        || limits.max_archive_compression_ratio > 100
+        || limits.max_nesting_depth == 0
+        || limits.max_nesting_depth > 256
+        || limits.max_table_rows == 0
+        || limits.max_table_rows > 100_000
+        || limits.max_table_columns == 0
+        || limits.max_table_columns > 16_384
+        || limits.max_table_cells == 0
+        || limits.max_table_cells > 1_000_000
+        || limits.max_field_bytes == 0
+        || limits.max_field_bytes > 16 * 1024 * 1024
+        || limits.max_feed_entries == 0
+        || limits.max_feed_entries > 10_000
+        || limits.max_feed_text_bytes == 0
+        || limits.max_feed_text_bytes > 64 * 1024 * 1024
+        || limits.max_feed_html_bytes == 0
+        || limits.max_feed_html_bytes > 64 * 1024 * 1024
+    {
+        return Err(WebTaskError::Invalid("resource limits exceed the Web profile".into()));
+    }
+    if options.output.flavor != "gfm"
+        || options.output.asset_directory_suffix != "_assets"
+        || options.output.asset_uri_prefix.is_some()
+    {
+        return Err(WebTaskError::Invalid("unsupported Web output policy".into()));
+    }
+    if options.network.max_redirects > 3
+        || options.network.allowed_hosts.len() > MAX_ALLOWED_HOSTS
+        || options.network.allowed_hosts.iter().any(|host| {
+            host.is_empty()
+                || host.len() > 253
+                || !host.is_ascii()
+                || host.contains(['/', ':', '@', '?', '#'])
+        })
+    {
+        return Err(WebTaskError::Invalid("network host allowlist is invalid".into()));
+    }
+    if options.network.enabled && !request.authorization.network {
+        return Err(WebTaskError::Invalid("network access lacks this-upload authorization".into()));
+    }
+    if !options.network.deny_private_networks
+        && (!options.network.enabled || !request.authorization.private_network)
+    {
+        return Err(WebTaskError::Invalid(
+            "private-network access lacks this-upload authorization".into(),
+        ));
+    }
+    let ai = &options.ai;
+    let uses_ai = [
+        ai.vision_ocr,
+        ai.image_description,
+        ai.layout_repair,
+        ai.table_repair,
+        ai.formula_repair,
+        ai.audio_transcription,
+        ai.markdown_postprocess,
+    ]
+    .into_iter()
+    .any(|mode| mode != AiMode::Off);
+    if uses_ai && !request.authorization.provider {
+        return Err(WebTaskError::Invalid(
+            "AI use lacks this-upload Provider authorization".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl From<std::io::Error> for WebTaskError {
@@ -844,7 +992,18 @@ impl WebTaskBackend {
         display_name: &str,
         declared_bytes: Option<u64>,
     ) -> Result<Upload, WebTaskError> {
+        self.begin_upload_configured(display_name, declared_bytes, WebTaskRequest::default())
+    }
+
+    /// Begin one upload with a validated shared conversion request.
+    pub(crate) fn begin_upload_configured(
+        &self,
+        display_name: &str,
+        declared_bytes: Option<u64>,
+        request: WebTaskRequest,
+    ) -> Result<Upload, WebTaskError> {
         validate_display_name(display_name)?;
+        validate_web_task_request(&request)?;
         self.owner
             .shared
             .incoming
@@ -873,6 +1032,7 @@ impl WebTaskBackend {
             nonce,
             file: Some(file),
             name,
+            request,
             bytes: 0,
             committed: false,
         })
@@ -885,6 +1045,11 @@ impl WebTaskBackend {
             validate_web_success(&self.owner.shared, &record)?;
         }
         Ok(record)
+    }
+
+    /// Return the most recently updated durable tasks for page recovery.
+    pub(crate) fn list(&self) -> Result<Vec<TaskRecord>, WebTaskError> {
+        lock(&self.owner.shared.task_store).list(100, None).map_err(Into::into)
     }
 
     /// Subscribe without holding a conversion or persistence lock. A cursor
@@ -1228,6 +1393,7 @@ pub struct Upload {
     nonce: String,
     file: Option<File>,
     name: String,
+    request: WebTaskRequest,
     bytes: u64,
     committed: bool,
 }
@@ -1299,11 +1465,17 @@ impl Upload {
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&payload)?;
         let bytes = read_file_bounded(payload, MAX_FILE_BYTES)?;
-        let options = web_options();
-        let hint = FormatHint { filename: Some(self.name.clone()), ..FormatHint::default() };
+        let options = self.request.options.clone();
+        let hint = FormatHint {
+            format: self.request.format,
+            filename: Some(self.name.clone()),
+            ..FormatHint::default()
+        };
         let (input_fingerprint, options_fingerprint) =
             Engine::recoverable_fingerprints(&bytes, Some(&self.name), &hint, &options)
                 .map_err(|error| WebTaskError::Io(error.to_string()))?;
+        let ocr_enabled = options.ocr.policy != OcrPolicy::Off;
+        let preserve_layout = options.ai.layout_repair != AiMode::Off;
         let persisted =
             PersistedRequest { schema_version: 1, name: self.name.clone(), hint, options };
         let request_json = bounded_json(&persisted, 64 * 1024, "persisted request")?;
@@ -1333,7 +1505,12 @@ impl Upload {
                         byte_len: self.bytes,
                         recovery_token: token.as_str().to_owned(),
                     },
-                    configuration: ConfigurationSnapshot::default(),
+                    configuration: ConfigurationSnapshot {
+                        schema_version: 1,
+                        output_format: into_markdown::OutputFormat::Markdown,
+                        ocr_enabled,
+                        preserve_layout,
+                    },
                 })?)
             },
         )?;
@@ -3118,6 +3295,61 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_task_request_uses_shared_options_and_requires_one_time_grants() {
+        let mut request = WebTaskRequest::default();
+        request.format = Some(InputFormat::Pdf);
+        request.options.ocr.policy = OcrPolicy::Always;
+        request.options.network.enabled = true;
+        request.options.network.allowed_hosts = vec!["api.example.com".into()];
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert!(matches!(decode_web_task_request(&bytes), Err(WebTaskError::Invalid(_))));
+
+        request.authorization.network = true;
+        let decoded = decode_web_task_request(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(decoded.format, Some(InputFormat::Pdf));
+        assert_eq!(decoded.options.ocr.policy, OcrPolicy::Always);
+        assert_eq!(decoded.options.network.allowed_hosts, ["api.example.com"]);
+
+        request.options.network.deny_private_networks = false;
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
+        ));
+        request.authorization.private_network = true;
+        assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn web_task_request_rejects_ungranted_provider_and_unsafe_limits() {
+        let mut request = WebTaskRequest::default();
+        request.options.ai.markdown_postprocess = AiMode::Prefer;
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
+        ));
+        request.authorization.provider = true;
+        assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+
+        request.options.limits.max_input_bytes = MAX_FILE_BYTES + 1;
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn web_task_request_rejects_unknown_or_oversized_envelopes() {
+        assert!(matches!(
+            decode_web_task_request(br#"{"schemaVersion":1,"unexpected":true}"#),
+            Err(WebTaskError::Invalid(_))
+        ));
+        assert!(matches!(
+            decode_web_task_request(&vec![b' '; 16 * 1024 + 1]),
+            Err(WebTaskError::Limit(_))
+        ));
+    }
 
     fn event_record(status: TaskStatus, progress_millionths: u32) -> TaskRecord {
         TaskRecord {

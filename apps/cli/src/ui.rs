@@ -4,6 +4,7 @@ use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
 use crate::web_tasks::{
     ArtifactSnapshot, TaskEventDto, TaskEventKind, WebTaskBackend, WebTaskError,
+    decode_web_task_request,
 };
 use axum::Json;
 use axum::Router;
@@ -30,6 +31,8 @@ use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 
 const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
+const TASK_REQUEST_HEADER: HeaderName = HeaderName::from_static("x-into-md-request");
+const TASK_FILENAME_HEADER: HeaderName = HeaderName::from_static("x-into-md-filename-b64");
 const SESSION_FRAGMENT: &str = "into-md-session";
 const SESSION_BYTES: usize = 32;
 const SESSION_ENCODED_LEN: usize = 43;
@@ -101,6 +104,13 @@ struct ComponentDto {
     available: bool,
     code: &'static str,
     detail: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskListDto {
+    schema_version: u32,
+    tasks: Vec<into_markdown::TaskRecord>,
 }
 
 /// Opens a URL without invoking a command shell.
@@ -251,7 +261,7 @@ where
     };
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
-        .route("/tasks", post(upload_task).fallback(api_method_not_allowed))
+        .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/events", get(task_events).fallback(api_method_not_allowed))
         .route(
@@ -401,9 +411,9 @@ async fn status(headers: HeaderMap) -> Response {
             detail: "loopback API security boundary is active",
         },
         document_console: ComponentDto {
-            available: false,
-            code: "componentUnavailable",
-            detail: "document console is not included in this command",
+            available: true,
+            code: "available",
+            detail: "local upload and conversion workbench is active",
         },
     })
     .into_response()
@@ -417,19 +427,43 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let Some(name) =
-        request.headers().get("x-into-md-filename").and_then(|value| value.to_str().ok())
-    else {
+    let name = if let Some(encoded) =
+        single_ascii_header(request.headers(), TASK_FILENAME_HEADER.clone())
+    {
+        match URL_SAFE_NO_PAD.decode(encoded).ok().and_then(|bytes| String::from_utf8(bytes).ok()) {
+            Some(name) => name,
+            None => return rejection(StatusCode::BAD_REQUEST, "invalidFilename"),
+        }
+    } else if let Some(name) =
+        single_ascii_header(request.headers(), HeaderName::from_static("x-into-md-filename"))
+    {
+        name.to_owned()
+    } else {
         return rejection(StatusCode::BAD_REQUEST, "missingFilename");
     };
+    let task_request = match single_ascii_header(request.headers(), TASK_REQUEST_HEADER.clone()) {
+        None => crate::web_tasks::WebTaskRequest::default(),
+        Some(encoded) => {
+            let decoded = match URL_SAFE_NO_PAD.decode(encoded) {
+                Ok(decoded) => decoded,
+                Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidTaskOptions"),
+            };
+            match decode_web_task_request(&decoded) {
+                Ok(request) => request,
+                Err(error) => return web_task_rejection(error),
+            }
+        }
+    };
     let backend = state.tasks.clone();
-    let name = name.to_owned();
-    let mut upload =
-        match tokio::task::spawn_blocking(move || backend.begin_upload(&name, declared)).await {
-            Ok(Ok(upload)) => upload,
-            Ok(Err(error)) => return web_task_rejection(error),
-            Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
-        };
+    let mut upload = match tokio::task::spawn_blocking(move || {
+        backend.begin_upload_configured(&name, declared, task_request)
+    })
+    .await
+    {
+        Ok(Ok(upload)) => upload,
+        Ok(Err(error)) => return web_task_rejection(error),
+        Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    };
     let mut stream = request.into_body().into_data_stream();
     loop {
         let chunk = tokio::select! {
@@ -473,6 +507,17 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
     };
     match finished {
         Ok(Ok(record)) => (StatusCode::ACCEPTED, Json(record)).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn list_tasks(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(&headers) {
+        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    match tokio::task::spawn_blocking(move || state.tasks.list()).await {
+        Ok(Ok(tasks)) => Json(TaskListDto { schema_version: 1, tasks }).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
@@ -705,6 +750,7 @@ fn web_task_rejection(error: WebTaskError) -> Response {
         WebTaskError::Cancelled => (StatusCode::CONFLICT, "cancelled"),
         WebTaskError::NotFound => (StatusCode::NOT_FOUND, "notFound"),
         WebTaskError::Conflict(_) => (StatusCode::CONFLICT, "taskConflict"),
+        WebTaskError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalidTaskOptions"),
         WebTaskError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backendIo"),
     };
     rejection(status, code)
