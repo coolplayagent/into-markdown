@@ -857,6 +857,12 @@ fn postprocess(
         if source.iter().any(|point| !point.0.is_finite() || !point.1.is_finite()) {
             return Err(ocr("invalidDetectionGeometry"));
         }
+        // Border-clamped or subpixel model quads can collapse into sliver
+        // polygons that recognition would reject as a hard crop error; they are
+        // detector noise and are skipped like the geometric filters above.
+        if !usable_source_quad(source) {
+            continue;
+        }
         let (crop_width, crop_height) = crop_dimensions(source)?;
         let dx = source[1].0 - source[0].0;
         let dy = source[1].1 - source[0].1;
@@ -1361,6 +1367,21 @@ fn crop_dimensions(polygon: [(f32, f32); 4]) -> Result<(u32, u32), ConversionErr
     let left = distance(polygon[0], polygon[3])?;
     let right = distance(polygon[1], polygon[2])?;
     Ok((rounded_axis(top, bottom)?, rounded_axis(left, right)?))
+}
+
+/// Signed shoelace area of a source-space polygon, computed with the same
+/// widening and vertex walk as recognition's crop validation so the detector
+/// only emits regions the recognizer accepts.
+fn source_polygon_area(polygon: [(f32, f32); 4]) -> f64 {
+    polygon.iter().enumerate().fold(0.0_f64, |sum, (index, &(x, y))| {
+        let (next_x, next_y) = polygon[(index + 1) % 4];
+        sum + f64::from(x) * f64::from(next_y) - f64::from(next_x) * f64::from(y)
+    })
+}
+
+fn usable_source_quad(polygon: [(f32, f32); 4]) -> bool {
+    let area = source_polygon_area(polygon);
+    area.is_finite() && area.abs() > 1.0
 }
 
 fn is_convex_quad(quad: [[f64; 2]; 4]) -> bool {
@@ -1949,6 +1970,34 @@ mod tests {
             crop_dimensions(too_wide),
             Err(ConversionError::Ocr { ref detail, .. }) if detail == "invalidDetectionGeometry"
         ));
+    }
+
+    #[test]
+    fn source_polygon_area_matches_recognition_vertex_walk() {
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let collapsed_height = [(437.0, 21.0), (439.0, 21.0), (439.0, 21.0), (437.0, 21.0)];
+        let tall_sliver = [(241.0, 28.0), (242.0, 28.0), (242.0, 31.0), (241.0, 31.0)];
+        let band = [(29.0, 0.0), (639.0, 0.0), (639.0, 119.0), (29.0, 119.0)];
+        assert_eq!(source_polygon_area(unit).to_bits(), 2.0_f64.to_bits());
+        assert_eq!(source_polygon_area(collapsed_height).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(source_polygon_area(tall_sliver).to_bits(), 6.0_f64.to_bits());
+        assert_eq!(source_polygon_area(band).to_bits(), 145_180.0_f64.to_bits());
+    }
+
+    #[test]
+    fn usable_source_quad_rejects_degenerate_slivers_only() {
+        let collapsed_height = [(437.0, 21.0), (439.0, 21.0), (439.0, 21.0), (437.0, 21.0)];
+        let collapsed_line = [(0.0, 5.0), (10.0, 5.0), (10.0, 5.0), (0.0, 5.0)];
+        let zero_area_bowtie = [(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)];
+        let unit = [(157.0, 20.0), (158.0, 20.0), (158.0, 21.0), (157.0, 21.0)];
+        let tall_sliver = [(241.0, 28.0), (242.0, 28.0), (242.0, 31.0), (241.0, 31.0)];
+        let band = [(29.0, 0.0), (639.0, 0.0), (639.0, 119.0), (29.0, 119.0)];
+        assert!(!usable_source_quad(collapsed_height));
+        assert!(!usable_source_quad(collapsed_line));
+        assert!(!usable_source_quad(zero_area_bowtie));
+        assert!(usable_source_quad(unit));
+        assert!(usable_source_quad(tall_sliver));
+        assert!(usable_source_quad(band));
     }
 
     #[test]
