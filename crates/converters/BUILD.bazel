@@ -134,3 +134,18 @@ rust_test(
         },
     }),
 )
+
+# Explicit cross-format release gate. Direct invocation deliberately resolves
+# the hash-pinned native repositories used by its manual members.
+test_suite(
+    name = "semantic_layout_quality_gate",
+    tests = [
+        ":converters_test",
+        ":pdf_layout_quality",
+        "//crates/api:ppocrv6_image_quality",
+        "//crates/legacy-office:legacy_office_test",
+        "//crates/onnxruntime:ppocrv6_merge_quality",
+    ],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)

@@ -231,6 +231,14 @@ fn execute(
     fixture: &Fixture,
     limit: Option<(&str, u64)>,
 ) -> Result<String, into_markdown_core::ConversionError> {
+    let (output, options) = execute_output(fixture, limit)?;
+    into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+}
+
+fn execute_output(
+    fixture: &Fixture,
+    limit: Option<(&str, u64)>,
+) -> Result<(ConverterOutput, ConversionOptions), into_markdown_core::ConversionError> {
     let fixture_root = std::env::var_os("TEST_SRCDIR").map_or_else(
         || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
         |runfiles| {
@@ -287,8 +295,7 @@ fn execute(
         "fixture {} attempted an optional service request",
         fixture.id
     );
-    let output = conversion_result?;
-    into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+    Ok((conversion_result?, options))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -396,3 +403,6 @@ fn corpus_contracts_execute_through_real_converters() {
     }
     assert!(failures.is_empty(), "corpus contract failures:\n{}", failures.join("\n"));
 }
+
+#[path = "semantic_layout_quality_tests.rs"]
+mod semantic_layout_quality_tests;

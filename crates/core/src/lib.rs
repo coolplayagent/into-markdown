@@ -11,6 +11,7 @@ mod execution;
 mod format;
 mod input;
 mod ir;
+mod layout_quality;
 mod nested;
 mod ocr_binding;
 mod options;
@@ -41,6 +42,10 @@ pub use ir::{
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
     OcrSourceRegion, Provenance, ProvenanceKind, Rect, SourceLocator, SourcePoint, TableAlignment,
     TableRow, TimeRange, ValidationLimits,
+};
+pub use layout_quality::{
+    LayoutAudit, LayoutBoundary, LayoutDiff, LayoutDiffKind, LayoutQualityConfig,
+    LayoutQualityReport, SemanticMetrics, audit_semantic_layout,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use ocr_binding::{

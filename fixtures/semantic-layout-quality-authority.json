@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "fixture_manifest_sha256": "f8c0729d3fa62cd34e5369d5667424af937ef563cf2eedb7cb3baba0ee823c2c",
+  "coordinate_tolerance": 0.01,
+  "modern_minimum_precision": 0.95,
+  "modern_minimum_recall": 0.95,
+  "degraded_minimum_precision": 0.90,
+  "degraded_minimum_recall": 0.90,
+  "required_scenarios": ["normal", "complex", "misordered", "corrupt", "resourceBoundary"],
+  "coverage": [
+    {"family":"docx-docm","normal":"docx-normal","complex":"docx converter tables/lists/footnotes unit suite","misordered":"layout-quality outOfOrder counterexample","corrupt":"docx-corrupt","resource_boundary":"docx-limit"},
+    {"family":"presentationml","normal":"pptx-normal","complex":"presentation inheritance/transform/notes/chart suite","misordered":"embedded_visual_ocr start/middle/end suite","corrupt":"pptx-corrupt","resource_boundary":"pptx-limit"},
+    {"family":"spreadsheetml-xlsb","normal":"xlsx-normal,xlsm-normal,xlsb-normal","complex":"workbook merged-cell/nested-content suite","misordered":"layout-quality outOfOrder counterexample","corrupt":"xlsx-corrupt,xlsb-corrupt","resource_boundary":"xlsx-limit,xlsb-limit"},
+    {"family":"opendocument","normal":"odt-normal,ods-normal,odp-normal","complex":"odt-implicit-nested-list,ods-span-nested,odp-rotation","misordered":"ODF stable package/document traversal suite","corrupt":"odt-corrupt,ods-corrupt,odp-corrupt","resource_boundary":"odt-limit,ods-limit,odp-limit"},
+    {"family":"rtf","normal":"rtf-normal","complex":"RTF list/table/field parser suite","misordered":"layout-quality outOfOrder counterexample","corrupt":"rtf-corrupt","resource_boundary":"rtf-limit"},
+    {"family":"epub","normal":"epub-normal","complex":"EPUB spine/footnote/nested HTML suite","misordered":"EPUB spine authority suite","corrupt":"EPUB malformed-package unit suite","resource_boundary":"EPUB nested conversion limits suite"},
+    {"family":"legacy-office","normal":"legacy_office_test worker conversion","complex":"worker_process_test protocol suite","misordered":"layout-quality outOfOrder counterexample","corrupt":"legacy_office_test malformed worker output","resource_boundary":"legacy_office_test bounded frame/deadline suite"},
+    {"family":"pdf","normal":"pdf-layout-multicolumn","complex":"pdf-layout-structures","misordered":"pdf-layout columns/table authority","corrupt":"PDFium fail-closed converter suite","resource_boundary":"pdf-layout budget/cancellation suite"},
+    {"family":"image-ocr","normal":"ocr-quality clear corpus","complex":"ocr-quality mixed corpus","misordered":"ocr merge source-region order suite","corrupt":"image decoder corrupt suite","resource_boundary":"ocr merge budget/cancellation suite"},
+    {"family":"outlook-msg","normal":"msg-normal","complex":"msg-cid,msg-attachment-nested,msg-rtf","misordered":"MSG body/CID/attachment association suite","corrupt":"msg-corrupt","resource_boundary":"msg-limit"}
+  ],
+  "goldens": [
+    {"fixture_id":"docx-normal","family":"docx-docm","fixture_sha256":"886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0","ir_sha256":"0dfc6d83790bca4c7f742ceb86422d7b901e74f6131f1a68ca978c31f96fe8a2","gfm_sha256":"75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006"},
+    {"fixture_id":"pptx-normal","family":"presentationml","fixture_sha256":"763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7","ir_sha256":"f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e","gfm_sha256":"0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"},
+    {"fixture_id":"xlsx-normal","family":"spreadsheetml-xlsb","fixture_sha256":"254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab","ir_sha256":"596a25175eacbf32388ffbbc9205d46b658ad8125e22a53af1780ffc537b939f","gfm_sha256":"54f31131d817ff48fb79e562d820992c04924d7a2639c3cd8f96ee70ebeed6d4"},
+    {"fixture_id":"xlsm-normal","family":"spreadsheetml-xlsb","fixture_sha256":"bc835f5adc98fd23300792388ad79f361b1829a71b5dee360010c41efc6c19b9","ir_sha256":"760653d1d4a8062d8a2744da3ce9a7ed1a7aaac348b09ca057f50b302e61e1cb","gfm_sha256":"78361dfef27119e9b1600879712ab0cf3b9196b14a908d1980b8780cc23e0751"},
+    {"fixture_id":"xlsb-normal","family":"spreadsheetml-xlsb","fixture_sha256":"12d75c9ade6db25935024bb38e069d1c976cbdce959686abbb249b1e624460c0","ir_sha256":"927f78b6e20913202e49035fa354abed9a10625718b6265e21512953bfbd3ea2","gfm_sha256":"4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee"},
+    {"fixture_id":"odt-normal","family":"opendocument","fixture_sha256":"c5ca1f895d25bde3866a7adae32a7225b3f0f35d458d04533643029b28e65c9f","ir_sha256":"0877dc31c19cc002d8432c362a9e60154f29a697d2c587220f91326342fbaa60","gfm_sha256":"b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769"},
+    {"fixture_id":"ods-span-nested","family":"opendocument","fixture_sha256":"eaff5236c0d61cc75f737fddce0e58742ce22c69b383965d33eaa7835bb1e583","ir_sha256":"a201cba7c8eef400c5feb5471c143b79fa1d552c8dbfc74c94609b4b03727a28","gfm_sha256":"d8bf223846629dbb60468011666b5656e8aa1bfd0d11bba700ccfd48336839ea"},
+    {"fixture_id":"odp-rotation","family":"opendocument","fixture_sha256":"bf24b8461f48539672cffa0dccd3f6836f9a5fcb2e3abaebf26acac72bcc6e2f","ir_sha256":"a831a760de71ff55abdd3aa91d74e2fb407f0bdca7a6b7b1a5c45c02d1056db0","gfm_sha256":"f8d0336401a5dd25e4428cdcc547114b31d96c34dd46f51857e0b4379b9685c0"},
+    {"fixture_id":"rtf-normal","family":"rtf","fixture_sha256":"420e8ecd1fe836c52e5d67dd444972a8e999646294ddb500a382670c1664f49b","ir_sha256":"77edf09f5e507eedcd18b31eae18e1bfc31972d4b92cf423df23d3bc37cd9415","gfm_sha256":"192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a"},
+    {"fixture_id":"epub-normal","family":"epub","fixture_sha256":"530c1d404445613151a822dbb5d14ac1b0bec17a86cfe332be501f5b06c96d5b","ir_sha256":"3e0b40409a161327f691e6d16d3bffab150ca2b1cad7d0ae86b1e6a5cd620197","gfm_sha256":"5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6"},
+    {"fixture_id":"msg-cid","family":"outlook-msg","fixture_sha256":"bdef7184ee867bb40384b38dd7c05bac212fb89ee68baeac40d42e147668d0f3","ir_sha256":"41567b59368d211543ce98ea4cb05a7d99b7f74411432aea7b14f7e9f22a47e3","gfm_sha256":"9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af"},
+    {"fixture_id":"msg-attachment-nested","family":"outlook-msg","fixture_sha256":"cf045c0d06df7b2289ad36202eea5190d90435d0ca8bf0e13969887ec4483b32","ir_sha256":"2575fada812f52d0b62b8096c2705afc4f1a503777b290341b55317b6052eda9","gfm_sha256":"8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a"}
+  ],
+  "delegated_native_gates": [
+    {"family":"pdf","bazel_target":"//crates/converters:pdf_layout_quality","authority":"fixtures/pdf-layout-quality-authority.json","authority_sha256":"c486bf588c71440adc89de7ea72f28e7289f6e1d968cc0e663a88e342dc65bb9"},
+    {"family":"image-ocr","bazel_target":"//crates/api:ppocrv6_image_quality","authority":"models/ppocrv6-tiny-recognizer-authority.json","authority_sha256":"dc3adfe5c74d6d896a34f6a63fb91c4c389cbeaa7dfa7fbceb1a58405d6ea6bc"},
+    {"family":"legacy-office","bazel_target":"//crates/legacy-office:legacy_office_test","authority":"third_party/legacy-office/authority.schema.json","authority_sha256":"9e8be83cdb8e75a67679c88f68b70e49a05cc07ec48986369d034122524c8389"}
+  ]
+}

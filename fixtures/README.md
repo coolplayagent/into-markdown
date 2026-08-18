@@ -11,7 +11,16 @@ case-folding behavior.
 RTF samples are repository-authored ASCII source files produced directly by `generate.py`; they do
 not contain copied Office documents. Their English/Chinese text, corruption, exact depth boundary,
 and inert object/local-file field scenarios are licensed with the rest of the corpus under
-Apache-2.0 and bound to byte and semantic hashes in the manifest.
+Apache-2.0 and bound to byte and semantic hashes in the manifest. `.gitattributes` classifies RTF
+as binary so checkout newline conversion cannot change those authority bytes on Windows.
+
+`semantic-layout-quality-authority.json` is the cross-format layout gate. It binds real converter
+fixtures to canonical Document IR and GFM SHA-256 values, declares the only allowed coordinate
+tolerance (`0.01` source units) and its negative boundary test, records normal/complex/misordered/
+corrupt/resource-boundary coverage for every core family, and hash-binds the separate PDF, OCR and
+legacy Office native authorities. Run the complete explicit gate with
+`bazel test //crates/converters:semantic_layout_quality_gate`; ordinary wildcard builds remain
+offline and do not resolve native runtimes.
 
 The corpus covers every format marked `available` by the product format registry. The converter
 test reads the same manifest, compares that registry dynamically, and runs each non-OCR fixture

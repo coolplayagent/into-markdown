@@ -109,6 +109,13 @@ renderer。几何继承和 group transform 在 converter 内确定性合成，�
 编号写入每个 material node 的 SourceLocator。转换期间的 package/parser/geometry/codec 峰值
 在物化前由 request context 预留；返回时同一 reservation 经中央 retained estimator 认证并
 收缩为 opaque output lease，typed IR 校验也在独立 working-set preflight 后执行。
+
+跨格式语义布局回归不在 renderer 中修补结构。core 的 layout-quality 窄接口只消费已经
+验证的 Document IR 与资源清单，并按 geometry、reading-order、paragraph/list、table、
+resource-association、quality-metrics 六个独立 pass 比较 hash-bound golden。比较使用
+`ExecutionContext` checkpoint 和内存租约；取消、超时或预算失败不返回部分报告，租约随
+失败路径释放。成功报告按差异类型、fixture、page/slide/sheet 和 node/asset ID 排序，因此
+可跨平台逐字节比较。
 旧 Office 兼容层是另一条独立、单向依赖链：`crates/legacy-office` 拥有 runtime authority、
 length-prefixed protocol、父进程生命周期、平台 sandbox 与窄 LibreOfficeKit C ABI；
 `crates/converters::legacy_office` 只负责 DOC/PPT/XLS probe、调用 worker、nested OOXML dispatch
