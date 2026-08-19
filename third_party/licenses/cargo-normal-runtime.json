@@ -21,11 +21,14 @@
     "crates/render-markdown/Cargo.toml": "d5cf0e875d12baaf6e78a0befa0efcb3ac04234d2bb6d8c11324ca18394fb0c8",
     "crates/task-store/Cargo.toml": "0f9f0c0de64be5afdf8d4c4b4092da75877af8b340c015273101c465db1188fd",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
-    "third_party/whisper-rs-0.16.0/Cargo.toml": "9c392ab507ae28d70752dd1f5bf147170e68fe9d0fda9294936639b85ab67e86",
+    "third_party/whisper-rs-0.16.0/Cargo.toml": "225e6bca4268aeba3129615708af389fca34293a9d01d0f9045dd96a348bf215",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
     "tools/installed-smoke/Cargo.toml": "e58acf5c57c564037cee75d29e777570d432153391d285cf4ed5ef5f16ed04e9",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
   },
+  "local_runtime_packages": [
+    "whisper-rs@0.16.0"
+  ],
   "normal_registry_packages": [
     "ab_glyph@0.2.32",
     "ab_glyph_rasterizer@0.1.10",

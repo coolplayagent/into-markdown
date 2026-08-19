@@ -858,7 +858,7 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
         read(&root.join("third_party/licenses/npm-inventory.json"), &mut errors);
     let lock_text = read(&root.join("Cargo.lock"), &mut errors);
     let pnpm_lock_text = read(&root.join("pnpm-lock.yaml"), &mut errors);
-    let workspace_packages = validate_workspace_metadata(root, &mut errors);
+    let (workspace_packages, reviewed_source_less) = validate_workspace_metadata(root, &mut errors);
 
     let policy: Option<Policy> = parse_json("policy.json", &policy_text, &mut errors);
     let inventory: Option<Inventory> = parse_json("inventory.json", &inventory_text, &mut errors);
@@ -867,7 +867,14 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
 
     if let Some(policy) = &policy {
         validate_policy(policy, &mut errors);
-        validate_rust_lock(&lock_text, &approvals_text, &workspace_packages, policy, &mut errors);
+        validate_rust_lock(
+            &lock_text,
+            &approvals_text,
+            &workspace_packages,
+            &reviewed_source_less,
+            policy,
+            &mut errors,
+        );
         if let Some(npm_inventory) = &npm_inventory {
             validate_npm_lock(&pnpm_lock_text, npm_inventory, policy, release, &mut errors);
             validate_npm_release_metadata(root, npm_inventory, &mut errors);
@@ -1396,6 +1403,7 @@ fn validate_rust_lock(
     lock: &str,
     approvals: &str,
     workspace_packages: &BTreeSet<(String, String)>,
+    reviewed_source_less: &BTreeSet<(String, String)>,
     policy: &Policy,
     errors: &mut Vec<String>,
 ) {
@@ -1424,6 +1432,9 @@ fn validate_rust_lock(
                 errors.push(format!(
                     "source-less package {name}@{version} is not an exact workspace member"
                 ));
+            }
+            if reviewed_source_less.contains(&key) {
+                locked.insert(key);
             }
             continue;
         }
@@ -1691,8 +1702,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "a9f6ef559232e915c398dd16087541223380e35867e4b1fe12db4d90100ea6dd";
-    const TREE_SHA256: &str = "957873c5d69ec22b46a82e699b496a5ed52ae992f95c7a8eeff277b555fb8fa1";
+        "1cf3ec6b97e84651d2d8078ff30d267dd703f4a0fe9ecc3900ccb648b7e73259";
+    const TREE_SHA256: &str = "4f0dec02899efbea4d475058d4d9150b337cf88dc31c076aa19631ae12c6155f";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
@@ -3785,14 +3796,15 @@ fn validate_model_artifact(
 fn validate_workspace_metadata(
     root: &Path,
     errors: &mut Vec<String>,
-) -> BTreeSet<(String, String)> {
+) -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
     let mut packages = BTreeSet::new();
+    let mut reviewed_source_less = BTreeSet::new();
     let root_text = read(&root.join("Cargo.toml"), errors);
     let manifest: TomlValue = match toml::from_str(&root_text) {
         Ok(value) => value,
         Err(error) => {
             errors.push(format!("invalid workspace Cargo.toml: {error}"));
-            return packages;
+            return (packages, reviewed_source_less);
         }
     };
     let package = manifest.get("workspace").and_then(|value| value.get("package"));
@@ -3818,7 +3830,15 @@ fn validate_workspace_metadata(
                     errors.push(format!("{member}/Cargo.toml has no package table"));
                     continue;
                 };
-                if member_package
+                if member.starts_with("third_party/") {
+                    if member_package.get("license").and_then(TomlValue::as_str).is_none()
+                        || member_package.get("publish").and_then(TomlValue::as_bool) != Some(false)
+                    {
+                        errors.push(format!(
+                            "{member}/Cargo.toml must declare a license and publish = false"
+                        ));
+                    }
+                } else if member_package
                     .get("license")
                     .and_then(|license| license.get("workspace"))
                     .and_then(TomlValue::as_bool)
@@ -3850,11 +3870,14 @@ fn validate_workspace_metadata(
                 if !packages.insert((name.to_owned(), version.to_owned())) {
                     errors.push(format!("duplicate workspace package {name}@{version}"));
                 }
+                if member.starts_with("third_party/") {
+                    reviewed_source_less.insert((name.to_owned(), version.to_owned()));
+                }
             }
             Err(error) => errors.push(format!("invalid {member}/Cargo.toml: {error}")),
         }
     }
-    packages
+    (packages, reviewed_source_less)
 }
 
 #[cfg(test)]
@@ -4297,7 +4320,14 @@ source = "git+https://example.invalid/new"
 checksum = "not-a-hash"
 "#;
         let mut errors = Vec::new();
-        validate_rust_lock(lock, "old\t1.0.0\tMIT\n", &BTreeSet::new(), &policy(), &mut errors);
+        validate_rust_lock(
+            lock,
+            "old\t1.0.0\tMIT\n",
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &policy(),
+            &mut errors,
+        );
         assert!(errors.iter().any(|error| error.contains("unreviewed source")));
         assert!(errors.iter().any(|error| error.contains("unreviewed Rust dependency new@1.0.0")));
         assert!(errors.iter().any(|error| error.contains("stale Rust approval old@1.0.0")));
@@ -4315,7 +4345,7 @@ version = "9.9.9"
 "#;
         let workspace = BTreeSet::from([("workspace".to_owned(), "0.0.0".to_owned())]);
         let mut errors = Vec::new();
-        validate_rust_lock(lock, "", &workspace, &policy(), &mut errors);
+        validate_rust_lock(lock, "", &workspace, &BTreeSet::new(), &policy(), &mut errors);
         assert!(errors.iter().any(|error| {
             error.contains("malicious-path-dependency@9.9.9")
                 && error.contains("not an exact workspace member")

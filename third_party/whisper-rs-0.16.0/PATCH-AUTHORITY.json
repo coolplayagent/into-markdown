@@ -7,5 +7,5 @@
   "crates_io_sha256": "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6",
   "patch_scope": "Own abort/progress callback allocations in FullParams and release them on every drop path",
   "tree_digest_algorithm": "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)",
-  "tree_sha256": "957873c5d69ec22b46a82e699b496a5ed52ae992f95c7a8eeff277b555fb8fa1"
+  "tree_sha256": "4f0dec02899efbea4d475058d4d9150b337cf88dc31c076aa19631ae12c6155f"
 }

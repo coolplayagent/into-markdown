@@ -22,7 +22,8 @@ autobenches = false
 description = "Rust bindings for whisper.cpp"
 documentation = "https://docs.rs/whisper-rs"
 readme = "README.md"
-license.workspace = true
+license = "Unlicense"
+publish = false
 repository = "https://codeberg.org/tazz4843/whisper-rs"
 
 [features]
