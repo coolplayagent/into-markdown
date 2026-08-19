@@ -175,7 +175,9 @@ impl WhisperSmallTranscriber {
             .context
             .create_state()
             .map_err(|_| component(PROVIDER_ID, "Whisper decoder state could not be created"))?;
-        let threads = usize::from(self.config.max_threads);
+        let threads = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(usize::from(self.config.max_threads));
         let requested_language = request
             .language
             .map(normalize_language)
@@ -202,7 +204,7 @@ impl WhisperSmallTranscriber {
         };
         let mut params =
             FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
-        params.set_n_threads(i32::from(self.config.max_threads));
+        params.set_n_threads(i32::try_from(threads).map_err(|_| resource("asrConfiguration"))?);
         params.set_translate(false);
         params.set_no_timestamps(false);
         params.set_print_progress(false);
@@ -236,7 +238,12 @@ impl WhisperSmallTranscriber {
 
 fn install_callbacks(params: &mut FullParams<'_, '_>, context: &ExecutionContext) {
     let abort_context = context.clone();
-    params.set_abort_callback_safe(move || abort_context.checkpoint().is_err());
+    // `whisper-rs` 0.16.0 dispatches this callback through a boxed trait-object
+    // user-data pointer but instantiates its trampoline with the caller's type.
+    // Supplying that exact trait-object type keeps the two layouts identical.
+    let abort_callback: Box<dyn FnMut() -> bool> =
+        Box::new(move || abort_context.checkpoint().is_err());
+    params.set_abort_callback_safe(abort_callback);
     let progress_context = context.clone();
     params.set_progress_callback_safe(move |progress: i32| {
         let progress = u64::try_from(progress.clamp(0, 100)).unwrap_or_default();

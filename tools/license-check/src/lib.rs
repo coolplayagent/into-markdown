@@ -697,6 +697,7 @@ struct AsrQualityFixture {
     sha256: String,
     language: String,
     reference: String,
+    accepted_references: Vec<String>,
     clear_maximum_error_rate: f64,
     noise_maximum_error_rate: f64,
     source_url: String,
@@ -1581,7 +1582,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
 }
 
 fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
-    if authority.schema_version != 1
+    if authority.schema_version != 2
         || authority.model.bundle != "whisper-small-multilingual"
         || authority.model.sha256
             != "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
@@ -1635,8 +1636,17 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
                     && fixture.source_url == *url
             },
         );
+        let valid_references = match fixture.id.as_str() {
+            "zh-clear" => {
+                fixture.reference == "习近平"
+                    && fixture.accepted_references == ["習近平".to_owned()]
+            }
+            "en-clear" => fixture.accepted_references.is_empty(),
+            _ => false,
+        };
         if !seen.insert(fixture.id.as_str())
             || !valid_identity
+            || !valid_references
             || !is_safe_relative_path(&fixture.path)
             || !is_sha256(&fixture.sha256)
             || fixture.reference.trim().is_empty()
@@ -4827,6 +4837,12 @@ filegroup(
         let mut baseline = Vec::new();
         validate_asr_quality(&root, &authority, &mut baseline);
         assert!(baseline.is_empty(), "ASR authority baseline: {baseline:?}");
+
+        let mut unreviewed_reference: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
+        unreviewed_reference.fixtures[1].accepted_references.push("almost right".to_owned());
+        let mut reference_errors = Vec::new();
+        validate_asr_quality(&root, &unreviewed_reference, &mut reference_errors);
+        assert!(reference_errors.iter().any(|error| error.contains("invalid authority")));
 
         authority.fixtures[0].clear_maximum_error_rate = 0.16;
         authority.fixtures[0].sha256 = "0".repeat(64);

@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "model": {
     "bundle": "whisper-small-multilingual",
     "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
@@ -24,6 +24,7 @@
       "sha256": "89f0787319dd6856df3cc85fc94c7f9fe6ab5e55255ac7ebc5c913e1610b69ea",
       "language": "zh",
       "reference": "习近平",
+      "accepted_references": ["習近平"],
       "clear_maximum_error_rate": 0.15,
       "noise_maximum_error_rate": 0.25,
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/d/d1/%E4%B9%A0%E8%BF%91%E5%B9%B3.ogg",
@@ -38,6 +39,7 @@
       "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
       "language": "en",
       "reference": "And so my fellow Americans ask not what your country can do for you ask what you can do for your country",
+      "accepted_references": [],
       "clear_maximum_error_rate": 0.15,
       "noise_maximum_error_rate": 0.25,
       "source_url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/1fe009caeda75f69bc864d6370b10674e45a92bd/samples/jfk.wav",

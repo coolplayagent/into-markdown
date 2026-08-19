@@ -48,6 +48,7 @@ struct FixtureAuthority {
     sha256: String,
     language: String,
     reference: String,
+    accepted_references: Vec<String>,
     clear_maximum_error_rate: f64,
     noise_maximum_error_rate: f64,
     source_url: String,
@@ -76,6 +77,8 @@ struct CaseReport {
     language: String,
     metric: &'static str,
     reference: String,
+    reference_sha256: String,
+    candidate_reference_sha256: Vec<String>,
     reference_units: usize,
     errors: usize,
     error_rate: f64,
@@ -93,6 +96,13 @@ fn metric_and_threshold_fail_closed() {
     assert!(threshold(0, 3, 0.15).is_ok());
     assert!(threshold(0, 0, 0.15).is_err());
     assert!(threshold(0, 3, f64::NAN).is_err());
+    let (errors, units, selected) =
+        minimum_zh_error("習近平", &["习近平".to_owned(), "習近平".to_owned()]).unwrap();
+    assert_eq!((errors, units, selected), (0, 3, 1));
+    let (errors, _, _) =
+        minimum_zh_error("習近帄", &["习近平".to_owned(), "習近平".to_owned()]).unwrap();
+    assert_eq!(errors, 1, "a non-equivalent character must remain an error");
+    assert!(minimum_zh_error("习近平", &[]).is_err());
 }
 
 #[test]
@@ -103,7 +113,7 @@ fn whisper_small_multilingual_quality() {
         &std::fs::read(fixture_root.join("asr-quality-authority.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(authority.schema_version, 1);
+    assert_eq!(authority.schema_version, 2);
     assert_eq!(authority.model.beam_size, 5);
     assert!(authority.model.runtime.contains("whisper.cpp"));
     assert_eq!(authority.noise.algorithm, "lcg-white-noise-v1");
@@ -141,6 +151,7 @@ fn whisper_small_multilingual_quality() {
     assert_eq!(verified.sha256, authority.model.sha256);
 
     let mut cases = Vec::new();
+    let mut failures = Vec::new();
     for fixture in &authority.fixtures {
         assert!(!fixture.source_url.is_empty());
         assert!(!fixture.source_revision.is_empty());
@@ -149,14 +160,13 @@ fn whisper_small_multilingual_quality() {
         let clear = std::fs::read(fixture_root.join(&fixture.path)).unwrap();
         assert_eq!(u64::try_from(clear.len()).unwrap(), fixture.bytes);
         assert_eq!(format!("{:x}", Sha256::digest(&clear)), fixture.sha256);
-        evaluate(
-            &transcriber,
-            fixture,
-            "clear",
-            &clear,
-            fixture.clear_maximum_error_rate,
-            &mut cases,
-        );
+        match evaluate(&transcriber, fixture, "clear", &clear, fixture.clear_maximum_error_rate) {
+            Ok(report) => cases.push(report),
+            Err((report, failure)) => {
+                cases.push(report);
+                failures.push(failure);
+            }
+        }
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let pcm = runtime
             .normalize(
@@ -177,20 +187,19 @@ fn whisper_small_multilingual_quality() {
             authority.noise.seed ^ stable_seed(&fixture.id),
             authority.noise.snr_db,
         );
-        evaluate(
-            &transcriber,
-            fixture,
-            "noise",
-            &noisy,
-            fixture.noise_maximum_error_rate,
-            &mut cases,
-        );
+        match evaluate(&transcriber, fixture, "noise", &noisy, fixture.noise_maximum_error_rate) {
+            Ok(report) => cases.push(report),
+            Err((report, failure)) => {
+                cases.push(report);
+                failures.push(failure);
+            }
+        }
     }
     cases.sort_by(|left, right| {
         (&left.fixture, left.condition).cmp(&(&right.fixture, right.condition))
     });
     let report = QualityReport {
-        schema_version: 1,
+        schema_version: 2,
         model: format!("{}@sha256:{}", authority.model.bundle, authority.model.sha256),
         runtime: authority.model.runtime,
         beam_size: authority.model.beam_size,
@@ -205,6 +214,7 @@ fn whisper_small_multilingual_quality() {
         std::fs::write(path, &encoded).unwrap();
     }
     println!("{}", String::from_utf8(encoded).unwrap());
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
 fn evaluate(
@@ -213,8 +223,7 @@ fn evaluate(
     condition: &'static str,
     media: &[u8],
     maximum: f64,
-    reports: &mut Vec<CaseReport>,
-) {
+) -> Result<CaseReport, (CaseReport, String)> {
     let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
     let result = block_on(transcriber.transcribe(
         TranscriptionRequest {
@@ -251,33 +260,61 @@ fn evaluate(
             }
         }
     }
-    let (errors, units) = if fixture.language == "zh" {
-        let reference = zh_units(&fixture.reference);
-        let actual = zh_units(&transcript);
-        (levenshtein(&reference, &actual), reference.len())
+    let mut references = Vec::with_capacity(fixture.accepted_references.len() + 1);
+    references.push(fixture.reference.clone());
+    references.extend(fixture.accepted_references.iter().cloned());
+    let (errors, units, selected) = if fixture.language == "zh" {
+        minimum_zh_error(&transcript, &references).expect("authority references are non-empty")
     } else {
-        let reference = en_units(&fixture.reference);
+        assert!(fixture.accepted_references.is_empty());
+        let reference = en_units(&references[0]);
         let actual = en_units(&transcript);
-        (levenshtein(&reference, &actual), reference.len())
+        (levenshtein(&reference, &actual), reference.len(), 0)
     };
-    let rate = threshold(errors, units, maximum).unwrap_or_else(|rate| {
-        panic!(
-            "{} {condition} error rate {rate:.6} exceeds {maximum:.6}; transcript={transcript:?}",
-            fixture.id
-        )
-    });
-    reports.push(CaseReport {
+    let selected_reference = references[selected].clone();
+    let evaluation = threshold(errors, units, maximum);
+    let rate = evaluation.as_ref().copied().unwrap_or_else(|rate| *rate);
+    let report = CaseReport {
         fixture: fixture.id.clone(),
         condition,
         language: fixture.language.clone(),
         metric: if fixture.language == "zh" { "cer" } else { "wer" },
-        reference: fixture.reference.clone(),
+        reference_sha256: format!("{:x}", Sha256::digest(selected_reference.as_bytes())),
+        candidate_reference_sha256: references
+            .iter()
+            .map(|reference| format!("{:x}", Sha256::digest(reference.as_bytes())))
+            .collect(),
+        reference: selected_reference,
         reference_units: units,
         errors,
         error_rate: rate,
         maximum_error_rate: maximum,
         transcript: transcript.trim().to_owned(),
-    });
+    };
+    match evaluation {
+        Ok(_) => Ok(report),
+        Err(rate) => Err((
+            report,
+            format!(
+                "{} {condition} error rate {rate:.6} exceeds {maximum:.6}; transcript={transcript:?}",
+                fixture.id
+            ),
+        )),
+    }
+}
+
+fn minimum_zh_error(actual: &str, references: &[String]) -> Result<(usize, usize, usize), ()> {
+    let actual = zh_units(actual);
+    references
+        .iter()
+        .enumerate()
+        .filter_map(|(index, reference)| {
+            let reference = zh_units(reference);
+            (!reference.is_empty())
+                .then(|| (levenshtein(&reference, &actual), reference.len(), index))
+        })
+        .min_by_key(|&(errors, units, index)| (errors, units, index))
+        .ok_or(())
 }
 
 fn threshold(errors: usize, units: usize, maximum: f64) -> Result<f64, f64> {
