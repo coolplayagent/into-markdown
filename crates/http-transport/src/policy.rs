@@ -152,8 +152,11 @@ pub(super) fn parse_content_type(value: &str) -> Result<String, TransportError> 
         return Err(TransportError::new(TransportErrorKind::InvalidMessage));
     }
     for parameter in value.split(';').skip(1) {
+        let parameter = parameter.trim();
+        if parameter.is_empty() {
+            continue;
+        }
         let (name, raw) = parameter
-            .trim()
             .split_once('=')
             .ok_or_else(|| TransportError::new(TransportErrorKind::InvalidMessage))?;
         if name.is_empty() || !name.bytes().all(is_token) || !valid_parameter_value(raw) {
@@ -173,8 +176,13 @@ pub(super) fn parse_content_disposition(value: &str) -> Result<Option<String>, T
     let mut extended = None;
     let mut names = BTreeSet::new();
     for parameter in parts {
+        let parameter = parameter.trim();
+        // Empty segments carry no parameter name or value and cannot bypass
+        // any check; legal servers emit one after a trailing delimiter.
+        if parameter.is_empty() {
+            continue;
+        }
         let (name, raw) = parameter
-            .trim()
             .split_once('=')
             .ok_or_else(|| TransportError::new(TransportErrorKind::InvalidMessage))?;
         let name = name.to_ascii_lowercase();

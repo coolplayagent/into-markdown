@@ -46,8 +46,12 @@ reparse point 与物理 FileId 校验的根目录 handle；私有文件拒绝 ha
 只有显式安装调用才是模型下载授权。只有清单中经审核的最终 runtime files
 才能进入安装事务；传输层还必须逐跳执行 HTTPS、固定 host、重定向次数、响应大小、
 DNS 和地址边界，连接固定到已验证地址并保留原始 TLS SNI/Host。library manager 接受
-显式 `ModelFetcher`；CLI 当前没有 transport，因此 `models install` 不创建连接并返回
-`componentUnavailable`。
+显式 `ModelFetcher`；CLI 的 `models install` 使用固定下载 authority 的 transport，
+不读取任何代理环境变量时按直连执行。设置 `INTO_MD_HTTPS_PROXY`（回退 `HTTPS_PROXY`、
+`https_proxy`）后，HTTPS 下载经该 `http://` CONNECT 代理建立端到端隧道：origin 的
+host allowlist、DNS/地址校验、重定向重授权与最终 SHA-256 全部不变，代理凭证只进入
+`Proxy-Authorization` 头并在输出中脱敏；`INTO_MD_NO_PROXY`（回退 `NO_PROXY`、
+`no_proxy`）按 `*`、精确 host 或域后缀豁免直连。非法代理值在下载前以稳定配置错误拒绝。
 
 归档型 artifact 的 fetch stream 必须是原始官方 TAR，不能伪装成已解压文件。管理器先按
 归档 authority 检查获取类型，再在同一受预算边界内验证整包大小与 SHA-256、TAR header

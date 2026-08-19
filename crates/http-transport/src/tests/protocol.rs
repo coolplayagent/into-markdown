@@ -18,6 +18,34 @@ fn strict_http_head_accepts_exact_content_metadata() {
 }
 
 #[test]
+fn trailing_delimiter_semicolons_remain_accepted_as_empty_parameters() {
+    let head = parse(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Type: application/octet-stream;\r\nContent-Disposition: inline; filename*=UTF-8''ggml-small.bin; filename=\"ggml-small.bin\";\r\n\r\n",
+    )
+    .unwrap();
+    assert_eq!(head.media_type.as_deref(), Some("application/octet-stream"));
+    assert_eq!(head.filename.as_deref(), Some("ggml-small.bin"));
+}
+
+#[test]
+fn transfer_deadline_scales_with_the_exact_wire_budget_and_fails_closed() {
+    let now = Instant::now();
+    let tiny = transfer_deadline(now, FetchLimits { max_wire_bytes: 0, max_decoded_bytes: 0 })
+        .unwrap();
+    assert!(tiny >= now + DEFAULT_REQUEST_TIMEOUT);
+    assert!(tiny <= now + DEFAULT_REQUEST_TIMEOUT + Duration::from_millis(50));
+    let large = transfer_deadline(
+        now,
+        FetchLimits { max_wire_bytes: 487_601_967, max_decoded_bytes: 487_601_967 },
+    )
+    .unwrap();
+    // 487,601,967 bytes / 1024 = 476,173 ms allowed on top of the base.
+    assert!(large >= now + DEFAULT_REQUEST_TIMEOUT + Duration::from_millis(476_173));
+    assert!(large <= now + DEFAULT_REQUEST_TIMEOUT + Duration::from_millis(476_174));
+    assert!(large > tiny, "the deadline must grow with the authorized wire budget");
+}
+
+#[test]
 fn ambiguous_and_active_http_syntax_is_rejected() {
     for raw in [
         b"HTTP/1.1 2000 OK\r\nContent-Length: 0\r\n\r\n".as_slice(),

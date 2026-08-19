@@ -358,12 +358,21 @@ Clone、不可 Debug/Display 的请求局部对象持有，Authorization 请求�
 错误、JSON 输出、日志和配置没有响应自由文本或密钥字段。
 
 传输固定使用 Rustls 0.23.32、ring、socket2 0.6.5 和 webpki-roots 1.0.3 的 Mozilla 根集合，四个目标平台
-使用同一根策略；不读取平台证书库、HTTP(S)_PROXY、PATH 或代理环境变量。DNS 在有界工作
+使用同一根策略；传输库本身不读取平台证书库、HTTP(S)_PROXY、PATH 或代理环境变量。DNS 在有界工作
 线程池及有界队列解析；空结果、超量/超容量/端口不符结果，或同时包含公网与未授权私网地址
 均 fail closed。连接只使用已检查的具体
 SocketAddr，Host 与 TLS SNI 使用同一个 canonical hostname。HTTP 只允许已显式双重授权的
 非公网地址；公网 Provider 必须使用 HTTPS。重定向和 protocol upgrade 均拒绝，因此
 Authorization 不会跨 origin 转发。
+
+模型下载的 CLI 层是唯一的代理入口：操作者可用 `INTO_MD_HTTPS_PROXY`（回退到 curl 风格的
+`HTTPS_PROXY`、`https_proxy`）显式注入一个 `http://[user:pass@]host:port` 的 CONNECT 代理，
+并用 `INTO_MD_NO_PROXY`（回退 `NO_PROXY`、`no_proxy`）按 `*`、精确 host 或域后缀豁免。
+代理仅承载策略已独立授权并解析的 HTTPS origin 隧道；TLS 仍在 origin 端到端终止，SNI 与
+证书校验对象不变，WebPKI 根集合不放宽，代理凭证只进入 `Proxy-Authorization` 头且在任何
+输出与 provenance 中脱敏。明文 HTTP origin 永不进入隧道，保持原直连公网限定路径；库的
+确定性测试不受环境变量影响（默认客户端行为不变）。代理响应头复用同一严格 HTTP/1.1
+parser，2xx 以外的 CONNECT 应答、head 后的提前隧道字节（smuggling）与畸形应答均稳定拒绝。
 
 HTTP/1.1 parser 对 header、header 数量、Content-Length、chunk、压缩体、解压体和 JSON
 结构设硬限，拒绝 obs-fold、重复长度、CL/TE 冲突、未知 transfer/content encoding、trailer、

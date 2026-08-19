@@ -6,7 +6,8 @@ use super::{
 use std::io;
 use std::thread;
 
-pub(super) struct SystemDnsResolver;
+/// Bounded system resolver backed by the platform `getaddrinfo` workflow.
+pub struct SystemDnsResolver;
 
 impl DnsResolver for SystemDnsResolver {
     fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {

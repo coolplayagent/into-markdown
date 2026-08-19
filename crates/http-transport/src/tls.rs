@@ -1,8 +1,9 @@
 use super::{
-    Arc, ExecutionContext, Instant, OnceLock, ServerName, TcpStream, TransportError,
-    TransportErrorKind, check_operation,
+    Arc, ExecutionContext, Instant, OnceLock, ServerName, TransportError, TransportErrorKind,
+    check_operation,
 };
 use std::io;
+use std::io::{Read, Write};
 
 pub(super) fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
@@ -17,12 +18,12 @@ pub(super) fn tls_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-pub(super) fn tls_connect(
-    mut stream: TcpStream,
+pub(super) fn tls_handshake<S: Read + Write>(
+    mut stream: S,
     host: &str,
     context: &ExecutionContext,
     deadline: Instant,
-) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>, TransportError> {
+) -> Result<rustls::StreamOwned<rustls::ClientConnection, S>, TransportError> {
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|_| TransportError::new(TransportErrorKind::InvalidMessage))?;
     let mut connection = rustls::ClientConnection::new(tls_config(), server_name)

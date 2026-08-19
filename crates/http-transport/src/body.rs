@@ -19,6 +19,18 @@ pub(super) struct ChunkChain {
     reserved_bytes: u64,
 }
 
+impl Drop for ChunkChain {
+    fn drop(&mut self) {
+        // Large transfers chain tens of thousands of 8 KiB nodes; the
+        // compiler-generated recursive drop would overflow the stack.
+        let mut current = self.head.take();
+        while let Some(mut node) = current {
+            current = node.next.take();
+            drop(node);
+        }
+    }
+}
+
 impl ChunkChain {
     fn push(
         &mut self,
