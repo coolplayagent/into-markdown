@@ -283,22 +283,45 @@ fn validate_manifest_hashes(
             continue;
         }
         match std::fs::read(repository.join(relative)) {
-            Ok(contents) => {
-                let actual = format!("{:x}", Sha256::digest(contents));
-                if expected.len() != 64
-                    || !expected
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-                    || actual != *expected
-                {
-                    errors.push(format!("Cargo normal-runtime authority is stale for {path}"));
+            Ok(contents) => match canonical_manifest_sha256(&contents) {
+                Ok(actual) => {
+                    if expected.len() != 64
+                        || !expected
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                        || actual != *expected
+                    {
+                        errors.push(format!("Cargo normal-runtime authority is stale for {path}"));
+                    }
                 }
-            }
+                Err(error) => errors.push(format!(
+                    "Cargo normal-runtime manifest {path} is not canonical UTF-8 text: {error}"
+                )),
+            },
             Err(error) => {
                 errors.push(format!("cannot read Cargo normal-runtime manifest {path}: {error}"));
             }
         }
     }
+}
+
+fn canonical_manifest_sha256(contents: &[u8]) -> Result<String, &'static str> {
+    std::str::from_utf8(contents).map_err(|_| "invalid UTF-8")?;
+    let mut normalized = Vec::with_capacity(contents.len());
+    let mut index = 0;
+    while index < contents.len() {
+        if contents[index] == b'\r' {
+            if contents.get(index + 1) != Some(&b'\n') {
+                return Err("isolated carriage return");
+            }
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(contents[index]);
+            index += 1;
+        }
+    }
+    Ok(format!("{:x}", Sha256::digest(normalized)))
 }
 
 fn parse_partition(
@@ -325,4 +348,42 @@ fn parse_partition(
         }
     }
     packages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_manifest_sha256, validate_manifest_hashes};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn manifest_hash_accepts_lf_and_crlf_but_rejects_other_drift() {
+        let nonce =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("cargo-manifest-hash-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Cargo.toml");
+        let lf = b"[package]\nname = \"fixture\"\n";
+        let expected = canonical_manifest_sha256(lf).unwrap();
+        let paths = BTreeSet::from(["Cargo.toml".to_owned()]);
+        let manifests = BTreeMap::from([("Cargo.toml".to_owned(), expected)]);
+
+        for contents in [lf.as_slice(), b"[package]\r\nname = \"fixture\"\r\n".as_slice()] {
+            std::fs::write(&path, contents).unwrap();
+            let mut errors = Vec::new();
+            validate_manifest_hashes(&root, &paths, &manifests, &mut errors);
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+
+        for contents in [
+            b"[package]\rname = \"fixture\"\n".as_slice(),
+            b"[package]\nname = \"mutated\"\n".as_slice(),
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            let mut errors = Vec::new();
+            validate_manifest_hashes(&root, &paths, &manifests, &mut errors);
+            assert!(!errors.is_empty());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
