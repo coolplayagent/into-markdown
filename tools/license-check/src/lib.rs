@@ -667,6 +667,7 @@ struct AsrQualityAuthority {
 #[serde(deny_unknown_fields)]
 struct AsrQualityModel {
     bundle: String,
+    bytes: u64,
     sha256: String,
     runtime: String,
     beam_size: u32,
@@ -704,6 +705,20 @@ struct AsrQualityFixture {
     source_revision: String,
     license: String,
     attribution: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WhisperRsPatchAuthority {
+    schema_version: u32,
+    package: String,
+    version: String,
+    upstream_repository: String,
+    upstream_commit: String,
+    crates_io_sha256: String,
+    patch_scope: String,
+    tree_digest_algorithm: String,
+    tree_sha256: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -1582,8 +1597,26 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
 }
 
 fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
+    validate_whisper_rs_patch(root, errors);
+    const REVIEWED_AUTHORITY_SHA256: &str =
+        "83e6941eabdfbc3e6127c6fb50af80b6768f50dc0ad13e85739db78592cafab7";
+    let authority_path = root.join("fixtures/asr-quality-authority.json");
+    match fs::read(&authority_path) {
+        Ok(bytes)
+            if std::str::from_utf8(&bytes).is_ok_and(|text| {
+                let canonical = text.replace("\r\n", "\n");
+                !canonical.contains('\r')
+                    && sha256_hex(canonical.as_bytes()) == REVIEWED_AUTHORITY_SHA256
+            }) => {}
+        Ok(_) => errors.push("ASR quality authority SHA-256 is not reviewed".to_owned()),
+        Err(error) => errors.push(format!(
+            "cannot read ASR quality authority {}: {error}",
+            authority_path.display()
+        )),
+    }
     if authority.schema_version != 2
         || authority.model.bundle != "whisper-small-multilingual"
+        || authority.model.bytes != 487_601_967
         || authority.model.sha256
             != "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
         || authority.model.runtime != "whisper-rs 0.16.0 / bundled whisper.cpp CPU"
@@ -1600,57 +1633,37 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
             "ASR quality authority has unreviewed model, metric, or noise settings".to_owned(),
         );
     }
-    let expected = BTreeMap::from([
-        (
-            "en-clear",
-            (
-                "en",
-                "asr-quality/source/en-clear.wav",
-                "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
-                352_078,
-                "LicenseRef-Public-Domain",
-                "https://raw.githubusercontent.com/ggml-org/whisper.cpp/1fe009caeda75f69bc864d6370b10674e45a92bd/samples/jfk.wav",
-            ),
-        ),
-        (
-            "zh-clear",
-            (
-                "zh",
-                "asr-quality/source/zh-clear.ogg",
-                "89f0787319dd6856df3cc85fc94c7f9fe6ab5e55255ac7ebc5c913e1610b69ea",
-                18_237,
-                "CC0-1.0",
-                "https://upload.wikimedia.org/wikipedia/commons/d/d1/%E4%B9%A0%E8%BF%91%E5%B9%B3.ogg",
-            ),
-        ),
-    ]);
     let mut seen = BTreeSet::new();
+    let mut languages = BTreeSet::new();
     for fixture in &authority.fixtures {
-        let valid_identity = expected.get(fixture.id.as_str()).is_some_and(
-            |(language, path, hash, bytes, license, url)| {
-                fixture.language == *language
-                    && fixture.path == *path
-                    && fixture.sha256 == *hash
-                    && fixture.bytes == *bytes
-                    && fixture.license == *license
-                    && fixture.source_url == *url
-            },
-        );
-        let valid_references = match fixture.id.as_str() {
-            "zh-clear" => {
-                fixture.reference == "习近平"
-                    && fixture.accepted_references == ["習近平".to_owned()]
-            }
-            "en-clear" => fixture.accepted_references.is_empty(),
-            _ => false,
-        };
+        languages.insert(fixture.language.as_str());
+        let primary_units = normalized_asr_reference(&fixture.language, &fixture.reference);
+        let mut unique_references = primary_units.iter().cloned().collect::<BTreeSet<_>>();
+        let valid_references = primary_units.is_some()
+            && fixture.accepted_references.len() <= 3
+            && fixture.accepted_references.iter().all(|reference| {
+                normalized_asr_reference(&fixture.language, reference).is_some_and(|normalized| {
+                    normalized.len() == primary_units.as_ref().map_or(0, Vec::len)
+                        && unique_references.insert(normalized)
+                })
+            });
+        let valid_source = url::Url::parse(&fixture.source_url).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.fragment().is_none()
+        });
         if !seen.insert(fixture.id.as_str())
-            || !valid_identity
             || !valid_references
+            || !valid_source
             || !is_safe_relative_path(&fixture.path)
             || !is_sha256(&fixture.sha256)
+            || fixture.bytes == 0
+            || fixture.id.trim().is_empty()
             || fixture.reference.trim().is_empty()
             || fixture.source_revision.trim().is_empty()
+            || fixture.license.trim().is_empty()
             || fixture.attribution.trim().is_empty()
             || (fixture.clear_maximum_error_rate - 0.15).abs() > f64::EPSILON
             || (fixture.noise_maximum_error_rate - 0.25).abs() > f64::EPSILON
@@ -1669,12 +1682,130 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
             errors.push(format!("ASR quality fixture {} size or SHA-256 disagrees", fixture.id));
         }
     }
-    if seen != expected.keys().copied().collect() {
+    if seen.len() != 2 || languages != BTreeSet::from(["en", "zh"]) {
         errors.push(
-            "ASR quality authority must contain exactly the reviewed Chinese and English fixtures"
-                .to_owned(),
+            "ASR quality authority must define one fixture per supported language".to_owned(),
         );
     }
+}
+
+fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
+    const AUTHORITY_SHA256: &str =
+        "a9f6ef559232e915c398dd16087541223380e35867e4b1fe12db4d90100ea6dd";
+    const TREE_SHA256: &str = "957873c5d69ec22b46a82e699b496a5ed52ae992f95c7a8eeff277b555fb8fa1";
+    let directory = root.join("third_party/whisper-rs-0.16.0");
+    let authority_path = directory.join("PATCH-AUTHORITY.json");
+    let bytes = match fs::read(&authority_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            errors.push(format!("cannot read whisper-rs patch authority: {error}"));
+            return;
+        }
+    };
+    let Some(canonical) = lf_normalized_utf8(&bytes) else {
+        errors.push("whisper-rs patch authority is not canonical UTF-8".to_owned());
+        return;
+    };
+    let authority: WhisperRsPatchAuthority = match serde_json::from_slice(&bytes) {
+        Ok(authority) => authority,
+        Err(error) => {
+            errors.push(format!("invalid whisper-rs patch authority: {error}"));
+            return;
+        }
+    };
+    if sha256_hex(canonical.as_bytes()) != AUTHORITY_SHA256
+        || authority.schema_version != 1
+        || authority.package != "whisper-rs"
+        || authority.version != "0.16.0"
+        || authority.upstream_repository != "https://codeberg.org/tazz4843/whisper-rs"
+        || authority.upstream_commit != "7558e1b72f54f2f22a53589afb77e65681834c36"
+        || authority.crates_io_sha256
+            != "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
+        || authority.patch_scope
+            != "Own abort/progress callback allocations in FullParams and release them on every drop path"
+        || authority.tree_digest_algorithm
+            != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
+        || authority.tree_sha256 != TREE_SHA256
+    {
+        errors.push("whisper-rs patch source authority is not reviewed".to_owned());
+        return;
+    }
+    match whisper_rs_tree_digest(&directory) {
+        Ok(digest) if digest == TREE_SHA256 => {}
+        Ok(_) => errors.push("whisper-rs vendored tree SHA-256 is not reviewed".to_owned()),
+        Err(error) => errors.push(format!("cannot hash whisper-rs vendored tree: {error}")),
+    }
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let asr_cargo = fs::read_to_string(root.join("crates/asr/Cargo.toml")).unwrap_or_default();
+    let bazel = fs::read_to_string(root.join("crates/asr/BUILD.bazel")).unwrap_or_default();
+    if !cargo.contains("\"third_party/whisper-rs-0.16.0\"")
+        || !asr_cargo.contains(
+            "whisper-rs = { path = \"../../third_party/whisper-rs-0.16.0\", default-features = false }",
+        )
+        || bazel.matches("//third_party/whisper-rs-0.16.0:whisper_rs").count() != 2
+        || bazel.contains("@crates//:whisper-rs")
+    {
+        errors.push("Cargo/Bazel do not bind the reviewed whisper-rs patch".to_owned());
+    }
+}
+
+fn whisper_rs_tree_digest(directory: &Path) -> std::io::Result<String> {
+    let mut pending = vec![directory.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(current)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(std::io::Error::other("symlink in vendored tree"));
+            }
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() && entry.file_name() != "PATCH-AUTHORITY.json" {
+                files.push(entry.path());
+            }
+        }
+    }
+    files.sort_by_key(|path| path.strip_prefix(directory).unwrap_or(path).to_path_buf());
+    let mut tree = Sha256::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(directory)
+            .map_err(std::io::Error::other)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes = fs::read(&path)?;
+        let canonical = lf_normalized_utf8(&bytes)
+            .ok_or_else(|| std::io::Error::other("non-UTF-8 file in vendored tree"))?;
+        tree.update(relative.as_bytes());
+        tree.update([0]);
+        tree.update(sha256_hex(canonical.as_bytes()).as_bytes());
+        tree.update(b"\n");
+    }
+    Ok(format!("{:x}", tree.finalize()))
+}
+
+fn lf_normalized_utf8(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let canonical = text.replace("\r\n", "\n");
+    (!canonical.contains('\r')).then_some(canonical)
+}
+
+fn normalized_asr_reference(language: &str, value: &str) -> Option<Vec<String>> {
+    let units: Vec<String> = match language {
+        "zh" => value
+            .chars()
+            .filter(|value| value.is_alphanumeric())
+            .map(|value| value.to_string())
+            .collect(),
+        "en" => value
+            .split(|value: char| !value.is_alphanumeric())
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase)
+            .collect(),
+        _ => return None,
+    };
+    (!units.is_empty()).then_some(units)
 }
 
 fn validate_fixture_corpus(
@@ -4838,11 +4969,31 @@ filegroup(
         validate_asr_quality(&root, &authority, &mut baseline);
         assert!(baseline.is_empty(), "ASR authority baseline: {baseline:?}");
 
-        let mut unreviewed_reference: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
-        unreviewed_reference.fixtures[1].accepted_references.push("almost right".to_owned());
-        let mut reference_errors = Vec::new();
-        validate_asr_quality(&root, &unreviewed_reference, &mut reference_errors);
-        assert!(reference_errors.iter().any(|error| error.contains("invalid authority")));
+        for index in 0..authority.fixtures.len() {
+            let mut unreviewed_reference: AsrQualityAuthority =
+                serde_json::from_str(&text).unwrap();
+            let fixture = &mut unreviewed_reference.fixtures[index];
+            let normalized_duplicate = if fixture.language == "zh" {
+                fixture
+                    .reference
+                    .chars()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join("，")
+            } else {
+                fixture.reference.to_uppercase()
+            };
+            fixture.accepted_references.push(normalized_duplicate);
+            let mut reference_errors = Vec::new();
+            validate_asr_quality(&root, &unreviewed_reference, &mut reference_errors);
+            assert!(reference_errors.iter().any(|error| error.contains("invalid authority")));
+
+            let mut empty_reference: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
+            empty_reference.fixtures[index].accepted_references.push("  ".to_owned());
+            let mut empty_errors = Vec::new();
+            validate_asr_quality(&root, &empty_reference, &mut empty_errors);
+            assert!(empty_errors.iter().any(|error| error.contains("invalid authority")));
+        }
 
         authority.fixtures[0].clear_maximum_error_rate = 0.16;
         authority.fixtures[0].sha256 = "0".repeat(64);

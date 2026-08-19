@@ -14,7 +14,7 @@ rust_library(
         "//crates/core",
         "//crates/ffmpeg",
         "//crates/ocr",
-        "@crates//:whisper-rs",
+        "//third_party/whisper-rs-0.16.0:whisper_rs",
     ],
 )
 
@@ -28,7 +28,7 @@ rust_test(
         "//crates/ocr",
         "@crates//:futures",
         "@crates//:tempfile",
-        "@crates//:whisper-rs",
+        "//third_party/whisper-rs-0.16.0:whisper_rs",
     ],
 )
 

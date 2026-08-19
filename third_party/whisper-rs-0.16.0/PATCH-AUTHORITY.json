@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "package": "whisper-rs",
+  "version": "0.16.0",
+  "upstream_repository": "https://codeberg.org/tazz4843/whisper-rs",
+  "upstream_commit": "7558e1b72f54f2f22a53589afb77e65681834c36",
+  "crates_io_sha256": "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6",
+  "patch_scope": "Own abort/progress callback allocations in FullParams and release them on every drop path",
+  "tree_digest_algorithm": "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)",
+  "tree_sha256": "957873c5d69ec22b46a82e699b496a5ed52ae992f95c7a8eeff277b555fb8fa1"
+}

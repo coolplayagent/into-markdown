@@ -238,12 +238,7 @@ impl WhisperSmallTranscriber {
 
 fn install_callbacks(params: &mut FullParams<'_, '_>, context: &ExecutionContext) {
     let abort_context = context.clone();
-    // `whisper-rs` 0.16.0 dispatches this callback through a boxed trait-object
-    // user-data pointer but instantiates its trampoline with the caller's type.
-    // Supplying that exact trait-object type keeps the two layouts identical.
-    let abort_callback: Box<dyn FnMut() -> bool> =
-        Box::new(move || abort_context.checkpoint().is_err());
-    params.set_abort_callback_safe(abort_callback);
+    params.set_abort_callback_safe(move || abort_context.checkpoint().is_err());
     let progress_context = context.clone();
     params.set_progress_callback_safe(move |progress: i32| {
         let progress = u64::try_from(progress.clamp(0, 100)).unwrap_or_default();
@@ -482,5 +477,26 @@ mod tests {
         let context = ExecutionContext::new(Default::default(), ResourceLimits::default());
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         install_callbacks(&mut params, &context);
+    }
+
+    #[test]
+    fn request_callbacks_release_captured_resources_when_params_drop() {
+        for _ in 0..256 {
+            let abort_resource = Arc::new(());
+            let abort_weak = Arc::downgrade(&abort_resource);
+            let progress_resource = Arc::new(());
+            let progress_weak = Arc::downgrade(&progress_resource);
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_abort_callback_safe(move || {
+                let _resource = &abort_resource;
+                false
+            });
+            params.set_progress_callback_safe(move |_| {
+                let _resource = &progress_resource;
+            });
+            drop(params);
+            assert!(abort_weak.upgrade().is_none());
+            assert!(progress_weak.upgrade().is_none());
+        }
     }
 }

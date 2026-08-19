@@ -1,0 +1,15 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "whisper_rs",
+    srcs = glob(["src/**/*.rs"]),
+    crate_features = [],
+    crate_name = "whisper_rs",
+    edition = "2021",
+    deps = [
+        "@crates//:libc",
+        "@crates//:whisper-rs-sys",
+    ],
+)

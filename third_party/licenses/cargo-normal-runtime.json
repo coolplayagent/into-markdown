@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "582750b71ea02f50a682e87bed3db6f94ebd2482db26dccd93bdcf36b32be494",
+  "cargo_lock_sha256": "e7f7ada5f4fd29665092793b6809e06ea0f6ddb381e7bdda1a3d5ff76c6b34d1",
   "workspace_manifest_sha256": {
-    "Cargo.toml": "6a3ea2a269a0e968d04d340bb27b3f3ad4d6e1442653e422d026e380a23026c7",
+    "Cargo.toml": "c0d0695622ff61f65cce90a97a3a4ca60704368ee8961d7903798621df3ad08c",
     "apps/cli/Cargo.toml": "76641f48b1fde33ccbdaacfdf1e8d81134a86ff9e8086736a09f3af9eaaae1ed",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
     "crates/api/Cargo.toml": "af363402eefd58f0f418712a9e9cff3ae3d3a7f0a79ba34c9416610b0970785c",
-    "crates/asr/Cargo.toml": "71b19630570b068eac74c7183e590fc6a91ceffe84ee53d3937e0d0ccb0517a7",
+    "crates/asr/Cargo.toml": "d171a82914e2ce96216a3abb4621dd2e7f00e3fabdfcfc2e4418838731a2fc34",
     "crates/converters/Cargo.toml": "b540ff4f207ba1ecca8bafb497cd7202ced9ca7b032f8e0a63b859fc75179c9c",
     "crates/core/Cargo.toml": "7c93a33a5e435723ab22262f9200637134d6047cf39fa1f162976cb1a643226f",
     "crates/engine/Cargo.toml": "ff378c6ce7bf735e71601c52ce9e6aa4e50b560d6eb8d20f1e136749e7dedb3b",
@@ -21,6 +21,7 @@
     "crates/render-markdown/Cargo.toml": "d5cf0e875d12baaf6e78a0befa0efcb3ac04234d2bb6d8c11324ca18394fb0c8",
     "crates/task-store/Cargo.toml": "0f9f0c0de64be5afdf8d4c4b4092da75877af8b340c015273101c465db1188fd",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
+    "third_party/whisper-rs-0.16.0/Cargo.toml": "9c392ab507ae28d70752dd1f5bf147170e68fe9d0fda9294936639b85ab67e86",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
     "tools/installed-smoke/Cargo.toml": "e58acf5c57c564037cee75d29e777570d432153391d285cf4ed5ef5f16ed04e9",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
@@ -278,7 +279,6 @@
     "webpki-roots@1.0.3",
     "weezl@0.1.12",
     "whisper-rs-sys@0.15.0",
-    "whisper-rs@0.16.0",
     "wide@0.7.33",
     "winapi-util@0.1.11",
     "windows-link@0.2.1",

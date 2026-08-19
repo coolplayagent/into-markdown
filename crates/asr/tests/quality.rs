@@ -8,6 +8,7 @@ use into_markdown_ffmpeg::{FfmpegRuntime, MediaLimits};
 use into_markdown_ocr::ModelManager;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ struct Authority {
 #[serde(deny_unknown_fields)]
 struct ModelAuthority {
     bundle: String,
+    bytes: u64,
     sha256: String,
     runtime: String,
     beam_size: u32,
@@ -60,7 +62,9 @@ struct FixtureAuthority {
 #[derive(Serialize)]
 struct QualityReport {
     schema_version: u32,
+    authority_sha256: String,
     model: String,
+    model_bytes: u64,
     runtime: String,
     beam_size: u32,
     maximum_threads: u16,
@@ -109,12 +113,11 @@ fn metric_and_threshold_fail_closed() {
 #[ignore = "requires the pinned Whisper model and audited FFmpeg runtime"]
 fn whisper_small_multilingual_quality() {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-    let authority: Authority = serde_json::from_slice(
-        &std::fs::read(fixture_root.join("asr-quality-authority.json")).unwrap(),
-    )
-    .unwrap();
+    let authority_bytes = std::fs::read(fixture_root.join("asr-quality-authority.json")).unwrap();
+    let authority: Authority = serde_json::from_slice(&authority_bytes).unwrap();
     assert_eq!(authority.schema_version, 2);
     assert_eq!(authority.model.beam_size, 5);
+    assert_eq!(authority.model.bytes, 487_601_967);
     assert!(authority.model.runtime.contains("whisper.cpp"));
     assert_eq!(authority.noise.algorithm, "lcg-white-noise-v1");
     assert!(authority.normalization.is_object());
@@ -149,6 +152,8 @@ fn whisper_small_multilingual_quality() {
         )
         .unwrap();
     assert_eq!(verified.sha256, authority.model.sha256);
+    assert_eq!(verified.size, 487_601_967);
+    assert_eq!(verified.size, authority.model.bytes);
 
     let mut cases = Vec::new();
     let mut failures = Vec::new();
@@ -198,9 +203,18 @@ fn whisper_small_multilingual_quality() {
     cases.sort_by(|left, right| {
         (&left.fixture, left.condition).cmp(&(&right.fixture, right.condition))
     });
+    let unique_cases: BTreeSet<_> =
+        cases.iter().map(|case| (case.fixture.as_str(), case.condition)).collect();
+    assert_eq!(cases.len(), 4, "quality authority must produce exactly four cases");
+    assert_eq!(unique_cases.len(), 4, "quality cases must be unique");
     let report = QualityReport {
         schema_version: 2,
+        authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(String::from_utf8(authority_bytes).unwrap().replace("\r\n", "\n"))
+        ),
         model: format!("{}@sha256:{}", authority.model.bundle, authority.model.sha256),
+        model_bytes: authority.model.bytes,
         runtime: authority.model.runtime,
         beam_size: authority.model.beam_size,
         maximum_threads: authority.model.maximum_threads,

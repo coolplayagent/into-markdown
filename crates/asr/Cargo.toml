@@ -10,7 +10,7 @@ license.workspace = true
 into-markdown-core = { path = "../core" }
 into-markdown-ffmpeg = { path = "../ffmpeg" }
 into-markdown-ocr = { path = "../ocr" }
-whisper-rs.workspace = true
+whisper-rs = { path = "../../third_party/whisper-rs-0.16.0", default-features = false }
 
 [dev-dependencies]
 futures.workspace = true

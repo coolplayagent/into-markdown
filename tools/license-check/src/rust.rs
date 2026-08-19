@@ -196,6 +196,11 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
                     format!("//crates/{rest}:{name}")
                 };
                 pending.push(normalized);
+            } else if let Some(rest) = dependency.strip_prefix("//") {
+                let package = rest.split_once(':').map_or(rest, |(package, _)| package);
+                if repository.join(package).join("Cargo.toml").is_file() {
+                    pending.push(dependency.to_owned());
+                }
             }
         }
     }
