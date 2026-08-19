@@ -1,3 +1,4 @@
+use crate::body::ChunkNode;
 use crate::*;
 use std::io::{self, Read, Write};
 
@@ -72,6 +73,30 @@ fn exact_identity_boundary_decodes_and_keeps_source_lease() {
     .unwrap();
     assert_eq!(&*bytes, b"data");
     drop(lease);
+}
+
+#[test]
+fn whisper_small_identity_peak_fits_the_default_execution_budget() {
+    const MODEL_BYTES: u64 = 487_601_967;
+    let node_bytes = u64::try_from(std::mem::size_of::<ChunkNode>()).unwrap();
+    let chunks = MODEL_BYTES.div_ceil(u64::try_from(IO_CHUNK_BYTES).unwrap());
+    let chain_bytes = chunks.checked_mul(node_bytes).unwrap();
+    let read_peak = chain_bytes.checked_add(MODEL_BYTES).unwrap();
+    let arc_peak = MODEL_BYTES.checked_mul(2).unwrap();
+    let required = read_peak.max(arc_peak);
+    assert!(required <= into_markdown_core::ResourceLimits::default().max_memory_bytes);
+
+    let exact = context(required);
+    let mut wire = exact.reserve_memory(chain_bytes).unwrap();
+    wire.grow(MODEL_BYTES).unwrap();
+    wire.shrink(chain_bytes).unwrap();
+    let final_bytes = exact.reserve_memory(MODEL_BYTES).unwrap();
+    drop(final_bytes);
+    drop(wire);
+
+    let below = context(required - 1);
+    let mut wire = below.reserve_memory(chain_bytes).unwrap();
+    assert!(wire.grow(MODEL_BYTES).is_err());
 }
 
 fn decode_raw(raw: Vec<u8>, limits: FetchLimits) -> Result<Arc<[u8]>, TransportError> {

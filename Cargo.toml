@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "apps/cli",
     "crates/ai",
+    "crates/asr",
     "crates/api",
     "crates/converters",
     "crates/core",
@@ -20,6 +21,7 @@ members = [
     "tools/asset-update",
     "tools/license-check",
     "tools/installed-smoke",
+    "third_party/whisper-rs-0.16.0",
 ]
 
 [workspace.package]

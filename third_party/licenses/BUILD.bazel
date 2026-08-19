@@ -1,4 +1,5 @@
 exports_files([
+    "whisper-model-MIT.txt",
     "BSL-1.0.txt",
     "calamine-MIT.txt",
     "cargo-normal-runtime.json",

@@ -279,6 +279,15 @@ fn install_base_materials(
             "onnxruntime-cpu",
         );
     }
+    if inputs.component_ids.iter().any(|id| id == "whisper-small") {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/whisper-model-MIT.txt",
+            "third_party/licenses/whisper-model-MIT.txt",
+            vec!["whisper-small".to_owned()],
+            &["MIT"],
+        );
+    }
 }
 
 fn push_text_material(
@@ -358,6 +367,64 @@ fn empty_projection_contract_is_valid_on_every_platform() {
         let projection = serde_json::to_string(&minimal_projection(target)).unwrap();
         verify_archive_projection(&root(), &projection).unwrap();
     }
+}
+
+#[test]
+fn full_offline_whisper_projection_is_hash_and_license_bound() {
+    let selected = vec!["whisper-small".to_owned()];
+    let mut files = vec![ArchiveFile {
+        path: "share/into-markdown/models/ggml-small.bin".into(),
+        bytes: 487_601_967,
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
+        kind: ArchiveFileKind::Component,
+        component_id: Some("whisper-small".into()),
+        embedded_components: vec![],
+    }];
+    let mut errors = Vec::new();
+    crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
+    assert!(errors.is_empty(), "whisper projection baseline: {errors:?}");
+    let evidence =
+        crate::native::integrity(&root(), "x86_64-unknown-linux-gnu", "whisper-small", &mut errors);
+    assert_eq!(evidence.len(), 2);
+    assert!(errors.is_empty(), "whisper SBOM evidence: {errors:?}");
+
+    let mut projection = ArchiveProjection {
+        schema_version: 1,
+        target: "x86_64-unknown-linux-gnu".into(),
+        components: selected.clone(),
+        files: files.clone(),
+        license_materials: vec![],
+        ffmpeg_evidence: None,
+    };
+    push_text_material(
+        &mut projection,
+        "share/into-markdown/licenses/whisper-model-MIT.txt",
+        "third_party/licenses/whisper-model-MIT.txt",
+        selected.clone(),
+        &["MIT"],
+    );
+    let component = crate::schema::Component {
+        id: "whisper-small".into(),
+        kind: "model".into(),
+        status: "reviewed".into(),
+        included_in_release: false,
+        release_eligible: true,
+        manual_only: false,
+        required_in_core: false,
+        version: Some("pinned".into()),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp".into()),
+        license: Some("MIT".into()),
+        obligations: Some("preserve license".into()),
+        integrity: vec![],
+        authority: "models/manifest.json".into(),
+    };
+    crate::materials::validate(&root(), &projection, &[&component], &mut errors);
+    assert!(errors.is_empty(), "whisper license material: {errors:?}");
+
+    files[0].sha256 = "0".repeat(64);
+    let mut errors = Vec::new();
+    crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("whisper-small model")));
 }
 
 #[test]

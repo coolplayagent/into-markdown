@@ -46,3 +46,10 @@ filegroup(
     ],
     tags = ["manual"],
 )
+
+# Explicit/manual target: ordinary builds and tests never download Whisper.
+filegroup(
+    name = "whisper_small_runtime_file",
+    srcs = ["@whisper_small_model//file"],
+    tags = ["manual"],
+)

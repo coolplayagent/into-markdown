@@ -298,6 +298,8 @@ const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
 struct ModelManifest {
     schema_version: u64,
     default_bundle: String,
+    #[serde(default)]
+    default_asr_bundle: Option<String>,
     bundles: Vec<ModelBundle>,
 }
 
@@ -314,7 +316,7 @@ struct ModelBundle {
     languages: Vec<String>,
     platforms: Vec<String>,
     runtime_format: String,
-    character_set: ModelCharacterSet,
+    character_set: Option<ModelCharacterSet>,
     runtime_artifacts: Vec<ModelRuntimeArtifact>,
     source_artifacts: Vec<ModelArtifact>,
 }
@@ -651,6 +653,74 @@ struct OcrGolden {
     maximum_cer: f64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityAuthority {
+    schema_version: u32,
+    model: AsrQualityModel,
+    normalization: AsrQualityNormalization,
+    noise: AsrQualityNoise,
+    fixtures: Vec<AsrQualityFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityModel {
+    bundle: String,
+    bytes: u64,
+    sha256: String,
+    runtime: String,
+    beam_size: u32,
+    maximum_threads: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityNormalization {
+    zh: String,
+    en: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityNoise {
+    algorithm: String,
+    seed: u64,
+    snr_db: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AsrQualityFixture {
+    id: String,
+    path: String,
+    bytes: u64,
+    sha256: String,
+    language: String,
+    reference: String,
+    accepted_references: Vec<String>,
+    clear_maximum_error_rate: f64,
+    noise_maximum_error_rate: f64,
+    source_url: String,
+    source_revision: String,
+    license: String,
+    attribution: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WhisperRsPatchAuthority {
+    schema_version: u32,
+    package: String,
+    version: String,
+    upstream_repository: String,
+    upstream_commit: String,
+    crates_io_sha256: String,
+    patch_scope: String,
+    tree_digest_algorithm: String,
+    tree_sha256: String,
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ModelDownload {
@@ -788,7 +858,7 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
         read(&root.join("third_party/licenses/npm-inventory.json"), &mut errors);
     let lock_text = read(&root.join("Cargo.lock"), &mut errors);
     let pnpm_lock_text = read(&root.join("pnpm-lock.yaml"), &mut errors);
-    let workspace_packages = validate_workspace_metadata(root, &mut errors);
+    let (workspace_packages, reviewed_source_less) = validate_workspace_metadata(root, &mut errors);
 
     let policy: Option<Policy> = parse_json("policy.json", &policy_text, &mut errors);
     let inventory: Option<Inventory> = parse_json("inventory.json", &inventory_text, &mut errors);
@@ -797,7 +867,14 @@ fn audit(root: &Path, release: bool) -> Result<(), Vec<String>> {
 
     if let Some(policy) = &policy {
         validate_policy(policy, &mut errors);
-        validate_rust_lock(&lock_text, &approvals_text, &workspace_packages, policy, &mut errors);
+        validate_rust_lock(
+            &lock_text,
+            &approvals_text,
+            &workspace_packages,
+            &reviewed_source_less,
+            policy,
+            &mut errors,
+        );
         if let Some(npm_inventory) = &npm_inventory {
             validate_npm_lock(&pnpm_lock_text, npm_inventory, policy, release, &mut errors);
             validate_npm_release_metadata(root, npm_inventory, &mut errors);
@@ -1326,6 +1403,7 @@ fn validate_rust_lock(
     lock: &str,
     approvals: &str,
     workspace_packages: &BTreeSet<(String, String)>,
+    reviewed_source_less: &BTreeSet<(String, String)>,
     policy: &Policy,
     errors: &mut Vec<String>,
 ) {
@@ -1354,6 +1432,9 @@ fn validate_rust_lock(
                 errors.push(format!(
                     "source-less package {name}@{version} is not an exact workspace member"
                 ));
+            }
+            if reviewed_source_less.contains(&key) {
+                locked.insert(key);
             }
             continue;
         }
@@ -1467,6 +1548,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
     let fixture_corpus_text = read(&root.join("fixtures/manifest.json"), errors);
     let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
+    let asr_quality_text = read(&root.join("fixtures/asr-quality-authority.json"), errors);
     let ort: Option<OrtManifest> = parse_json("ONNX Runtime manifest", &ort_text, errors);
     let models: Option<ModelManifest> = parse_json("model manifest", &models_text, errors);
     let recognizer: Option<RecognizerAuthority> =
@@ -1483,6 +1565,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
         parse_json("fixture corpus manifest", &fixture_corpus_text, errors);
     let fixture_downloads: Option<FixtureDownloadManifest> =
         parse_json("fixture download manifest", &fixture_downloads_text, errors);
+    let asr_quality: Option<AsrQualityAuthority> =
+        parse_json("ASR quality authority", &asr_quality_text, errors);
     if let Some(ffmpeg) = &ffmpeg {
         validate_ffmpeg_source(inventory, ffmpeg, errors);
     }
@@ -1518,6 +1602,221 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     if let (Some(corpus), Some(downloads)) = (&fixture_corpus, &fixture_downloads) {
         validate_fixture_corpus(root, inventory, corpus, downloads, errors);
     }
+    if let Some(authority) = &asr_quality {
+        validate_asr_quality(root, authority, errors);
+    }
+}
+
+fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
+    validate_whisper_rs_patch(root, errors);
+    const REVIEWED_AUTHORITY_SHA256: &str =
+        "83e6941eabdfbc3e6127c6fb50af80b6768f50dc0ad13e85739db78592cafab7";
+    let authority_path = root.join("fixtures/asr-quality-authority.json");
+    match fs::read(&authority_path) {
+        Ok(bytes)
+            if std::str::from_utf8(&bytes).is_ok_and(|text| {
+                let canonical = text.replace("\r\n", "\n");
+                !canonical.contains('\r')
+                    && sha256_hex(canonical.as_bytes()) == REVIEWED_AUTHORITY_SHA256
+            }) => {}
+        Ok(_) => errors.push("ASR quality authority SHA-256 is not reviewed".to_owned()),
+        Err(error) => errors.push(format!(
+            "cannot read ASR quality authority {}: {error}",
+            authority_path.display()
+        )),
+    }
+    if authority.schema_version != 2
+        || authority.model.bundle != "whisper-small-multilingual"
+        || authority.model.bytes != 487_601_967
+        || authority.model.sha256
+            != "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+        || authority.model.runtime != "whisper-rs 0.16.0 / bundled whisper.cpp CPU"
+        || authority.model.beam_size != 5
+        || authority.model.maximum_threads != 4
+        || authority.normalization.zh
+            != "Unicode alphanumeric code points after whitespace and punctuation removal"
+        || authority.normalization.en != "lowercase Unicode alphanumeric word runs"
+        || authority.noise.algorithm != "lcg-white-noise-v1"
+        || authority.noise.seed != 20_260_818
+        || (authority.noise.snr_db - 10.0).abs() > f64::EPSILON
+    {
+        errors.push(
+            "ASR quality authority has unreviewed model, metric, or noise settings".to_owned(),
+        );
+    }
+    let mut seen = BTreeSet::new();
+    let mut languages = BTreeSet::new();
+    for fixture in &authority.fixtures {
+        languages.insert(fixture.language.as_str());
+        let primary_units = normalized_asr_reference(&fixture.language, &fixture.reference);
+        let mut unique_references = primary_units.iter().cloned().collect::<BTreeSet<_>>();
+        let valid_references = primary_units.is_some()
+            && fixture.accepted_references.len() <= 3
+            && fixture.accepted_references.iter().all(|reference| {
+                normalized_asr_reference(&fixture.language, reference).is_some_and(|normalized| {
+                    normalized.len() == primary_units.as_ref().map_or(0, Vec::len)
+                        && unique_references.insert(normalized)
+                })
+            });
+        let valid_source = url::Url::parse(&fixture.source_url).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.fragment().is_none()
+        });
+        if !seen.insert(fixture.id.as_str())
+            || !valid_references
+            || !valid_source
+            || !is_safe_relative_path(&fixture.path)
+            || !is_sha256(&fixture.sha256)
+            || fixture.bytes == 0
+            || fixture.id.trim().is_empty()
+            || fixture.reference.trim().is_empty()
+            || fixture.source_revision.trim().is_empty()
+            || fixture.license.trim().is_empty()
+            || fixture.attribution.trim().is_empty()
+            || (fixture.clear_maximum_error_rate - 0.15).abs() > f64::EPSILON
+            || (fixture.noise_maximum_error_rate - 0.25).abs() > f64::EPSILON
+        {
+            errors.push(format!("ASR quality fixture {} has invalid authority", fixture.id));
+            continue;
+        }
+        let path = root.join("fixtures").join(&fixture.path);
+        let bytes = fs::read(&path).unwrap_or_else(|error| {
+            errors.push(format!("cannot read ASR quality fixture {}: {error}", path.display()));
+            Vec::new()
+        });
+        if u64::try_from(bytes.len()).ok() != Some(fixture.bytes)
+            || sha256_hex(&bytes) != fixture.sha256
+        {
+            errors.push(format!("ASR quality fixture {} size or SHA-256 disagrees", fixture.id));
+        }
+    }
+    if seen.len() != 2 || languages != BTreeSet::from(["en", "zh"]) {
+        errors.push(
+            "ASR quality authority must define one fixture per supported language".to_owned(),
+        );
+    }
+}
+
+fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
+    const AUTHORITY_SHA256: &str =
+        "1cf3ec6b97e84651d2d8078ff30d267dd703f4a0fe9ecc3900ccb648b7e73259";
+    const TREE_SHA256: &str = "4f0dec02899efbea4d475058d4d9150b337cf88dc31c076aa19631ae12c6155f";
+    let directory = root.join("third_party/whisper-rs-0.16.0");
+    let authority_path = directory.join("PATCH-AUTHORITY.json");
+    let bytes = match fs::read(&authority_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            errors.push(format!("cannot read whisper-rs patch authority: {error}"));
+            return;
+        }
+    };
+    let Some(canonical) = lf_normalized_utf8(&bytes) else {
+        errors.push("whisper-rs patch authority is not canonical UTF-8".to_owned());
+        return;
+    };
+    let authority: WhisperRsPatchAuthority = match serde_json::from_slice(&bytes) {
+        Ok(authority) => authority,
+        Err(error) => {
+            errors.push(format!("invalid whisper-rs patch authority: {error}"));
+            return;
+        }
+    };
+    if sha256_hex(canonical.as_bytes()) != AUTHORITY_SHA256
+        || authority.schema_version != 1
+        || authority.package != "whisper-rs"
+        || authority.version != "0.16.0"
+        || authority.upstream_repository != "https://codeberg.org/tazz4843/whisper-rs"
+        || authority.upstream_commit != "7558e1b72f54f2f22a53589afb77e65681834c36"
+        || authority.crates_io_sha256
+            != "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
+        || authority.patch_scope
+            != "Own abort/progress callback allocations in FullParams and release them on every drop path"
+        || authority.tree_digest_algorithm
+            != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
+        || authority.tree_sha256 != TREE_SHA256
+    {
+        errors.push("whisper-rs patch source authority is not reviewed".to_owned());
+        return;
+    }
+    match whisper_rs_tree_digest(&directory) {
+        Ok(digest) if digest == TREE_SHA256 => {}
+        Ok(_) => errors.push("whisper-rs vendored tree SHA-256 is not reviewed".to_owned()),
+        Err(error) => errors.push(format!("cannot hash whisper-rs vendored tree: {error}")),
+    }
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let asr_cargo = fs::read_to_string(root.join("crates/asr/Cargo.toml")).unwrap_or_default();
+    let bazel = fs::read_to_string(root.join("crates/asr/BUILD.bazel")).unwrap_or_default();
+    if !cargo.contains("\"third_party/whisper-rs-0.16.0\"")
+        || !asr_cargo.contains(
+            "whisper-rs = { path = \"../../third_party/whisper-rs-0.16.0\", default-features = false }",
+        )
+        || bazel.matches("//third_party/whisper-rs-0.16.0:whisper_rs").count() != 2
+        || bazel.contains("@crates//:whisper-rs")
+    {
+        errors.push("Cargo/Bazel do not bind the reviewed whisper-rs patch".to_owned());
+    }
+}
+
+fn whisper_rs_tree_digest(directory: &Path) -> std::io::Result<String> {
+    let mut pending = vec![directory.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(current)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(std::io::Error::other("symlink in vendored tree"));
+            }
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() && entry.file_name() != "PATCH-AUTHORITY.json" {
+                files.push(entry.path());
+            }
+        }
+    }
+    files.sort_by_key(|path| path.strip_prefix(directory).unwrap_or(path).to_path_buf());
+    let mut tree = Sha256::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(directory)
+            .map_err(std::io::Error::other)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes = fs::read(&path)?;
+        let canonical = lf_normalized_utf8(&bytes)
+            .ok_or_else(|| std::io::Error::other("non-UTF-8 file in vendored tree"))?;
+        tree.update(relative.as_bytes());
+        tree.update([0]);
+        tree.update(sha256_hex(canonical.as_bytes()).as_bytes());
+        tree.update(b"\n");
+    }
+    Ok(format!("{:x}", tree.finalize()))
+}
+
+fn lf_normalized_utf8(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let canonical = text.replace("\r\n", "\n");
+    (!canonical.contains('\r')).then_some(canonical)
+}
+
+fn normalized_asr_reference(language: &str, value: &str) -> Option<Vec<String>> {
+    let units: Vec<String> = match language {
+        "zh" => value
+            .chars()
+            .filter(|value| value.is_alphanumeric())
+            .map(|value| value.to_string())
+            .collect(),
+        "en" => value
+            .split(|value: char| !value.is_alphanumeric())
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase)
+            .collect(),
+        _ => return None,
+    };
+    (!units.is_empty()).then_some(units)
 }
 
 fn validate_fixture_corpus(
@@ -2725,7 +3024,7 @@ fn validate_model_manifest(
     downloads: &DownloadManifest,
     errors: &mut Vec<String>,
 ) {
-    if !matches!(manifest.schema_version, 1 | 2) {
+    if !matches!(manifest.schema_version, 1..=3) {
         errors.push("unsupported model manifest schema_version".to_owned());
     }
     if manifest.schema_version == 1
@@ -2740,7 +3039,7 @@ fn validate_model_manifest(
     }
     let (artifacts, bundles) = collect_model_artifacts(manifest, downloads, errors);
     validate_default_model_bundle(manifest, &bundles, errors);
-    if manifest.schema_version == 2 {
+    if manifest.schema_version >= 2 {
         validate_model_components(manifest, &bundles, errors);
     }
 
@@ -3216,18 +3515,19 @@ fn collect_model_artifacts<'a>(
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
             "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+            "asr-model" => BTreeSet::from(["model"]),
             _ => BTreeSet::new(),
         };
         if roles.keys().copied().collect::<BTreeSet<_>>() != required_roles {
             errors.push(format!(
-                "OCR model bundle {} must have exactly the required source roles",
+                "model bundle {} must have exactly the required source roles",
                 bundle.id
             ));
         }
         for required_role in required_roles {
             if !roles.contains_key(required_role) {
                 errors.push(format!(
-                    "OCR model bundle {} lacks required role {required_role}",
+                    "model bundle {} lacks required role {required_role}",
                     bundle.id
                 ));
             }
@@ -3250,7 +3550,7 @@ fn validate_runtime_bundle<'a>(
     if !is_safe_model_id(&bundle.id)
         || !matches!(
             bundle.kind.as_str(),
-            "ocr-pipeline" | "detector-component" | "recognizer-component"
+            "ocr-pipeline" | "detector-component" | "recognizer-component" | "asr-model"
         )
     {
         errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
@@ -3270,17 +3570,27 @@ fn validate_runtime_bundle<'a>(
     {
         errors.push(format!("model bundle {} has incomplete metadata", bundle.id));
     }
-    if !matches!(bundle.character_set.status.as_str(), "planned" | "available")
-        || bundle.kind != "detector-component"
-            && !bundle.source_artifacts.iter().any(|item| {
-                item.id == bundle.character_set.source_artifact_id
-                    && item.role == "recognizer-and-dictionary"
-            })
-    {
+    let character_set_complete = bundle.character_set.as_ref().is_some_and(|character_set| {
+        matches!(character_set.status.as_str(), "planned" | "available")
+            && (bundle.kind == "detector-component"
+                || bundle.source_artifacts.iter().any(|item| {
+                    item.id == character_set.source_artifact_id
+                        && item.role == "recognizer-and-dictionary"
+                }))
+    });
+    if bundle.kind == "asr-model" {
+        if bundle.character_set.is_some() {
+            errors.push(format!("ASR bundle {} must not declare a character set", bundle.id));
+        }
+    } else if !character_set_complete {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
     let installable = bundle.availability == "available"
-        && bundle.character_set.status == "available"
+        && (bundle.kind == "asr-model"
+            || bundle
+                .character_set
+                .as_ref()
+                .is_some_and(|character_set| character_set.status == "available"))
         && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline");
     if (bundle.availability == "available") != installable {
         errors.push(format!(
@@ -3322,6 +3632,7 @@ fn validate_runtime_bundle<'a>(
         "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
         "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+        "asr-model" => BTreeSet::from(["model"]),
         _ => BTreeSet::new(),
     };
     if !bundle.runtime_artifacts.is_empty() && runtime_roles != expected_runtime_roles {
@@ -3425,6 +3736,20 @@ fn validate_default_model_bundle(
             ));
         }
     }
+    if manifest.schema_version >= 3 {
+        match manifest.default_asr_bundle.as_deref().and_then(|id| bundles.get(id).copied()) {
+            Some(bundle)
+                if bundle.kind == "asr-model"
+                    && bundle.availability == "available"
+                    && bundle.runtime_artifacts.iter().any(|artifact| artifact.role == "model") => {
+            }
+            _ => errors.push(
+                "model manifest schema 3 requires an available default ASR model bundle".to_owned(),
+            ),
+        }
+    } else if manifest.default_asr_bundle.is_some() {
+        errors.push("legacy model manifest must not declare default_asr_bundle".to_owned());
+    }
 }
 
 fn validate_model_artifact(
@@ -3471,14 +3796,15 @@ fn validate_model_artifact(
 fn validate_workspace_metadata(
     root: &Path,
     errors: &mut Vec<String>,
-) -> BTreeSet<(String, String)> {
+) -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
     let mut packages = BTreeSet::new();
+    let mut reviewed_source_less = BTreeSet::new();
     let root_text = read(&root.join("Cargo.toml"), errors);
     let manifest: TomlValue = match toml::from_str(&root_text) {
         Ok(value) => value,
         Err(error) => {
             errors.push(format!("invalid workspace Cargo.toml: {error}"));
-            return packages;
+            return (packages, reviewed_source_less);
         }
     };
     let package = manifest.get("workspace").and_then(|value| value.get("package"));
@@ -3504,7 +3830,15 @@ fn validate_workspace_metadata(
                     errors.push(format!("{member}/Cargo.toml has no package table"));
                     continue;
                 };
-                if member_package
+                if member.starts_with("third_party/") {
+                    if member_package.get("license").and_then(TomlValue::as_str).is_none()
+                        || member_package.get("publish").and_then(TomlValue::as_bool) != Some(false)
+                    {
+                        errors.push(format!(
+                            "{member}/Cargo.toml must declare a license and publish = false"
+                        ));
+                    }
+                } else if member_package
                     .get("license")
                     .and_then(|license| license.get("workspace"))
                     .and_then(TomlValue::as_bool)
@@ -3536,11 +3870,14 @@ fn validate_workspace_metadata(
                 if !packages.insert((name.to_owned(), version.to_owned())) {
                     errors.push(format!("duplicate workspace package {name}@{version}"));
                 }
+                if member.starts_with("third_party/") {
+                    reviewed_source_less.insert((name.to_owned(), version.to_owned()));
+                }
             }
             Err(error) => errors.push(format!("invalid {member}/Cargo.toml: {error}")),
         }
     }
-    packages
+    (packages, reviewed_source_less)
 }
 
 #[cfg(test)]
@@ -3677,12 +4014,12 @@ mod tests {
                 "x86_64-pc-windows-msvc".to_owned(),
             ],
             runtime_format: "onnx".to_owned(),
-            character_set: ModelCharacterSet {
+            character_set: Some(ModelCharacterSet {
                 status: "planned".to_owned(),
                 source_artifact_id: source_artifacts
                     .last()
                     .map_or_else(|| "absent".to_owned(), |artifact| artifact.id.clone()),
-            },
+            }),
             runtime_artifacts: vec![],
             source_artifacts,
         }
@@ -3725,6 +4062,7 @@ mod tests {
         let manifest = ModelManifest {
             schema_version: 1,
             default_bundle: "default".to_owned(),
+            default_asr_bundle: None,
             bundles: vec![bundle("default", version, vec![detector, recognizer])],
         };
         (manifest, inventory, downloads)
@@ -3982,7 +4320,14 @@ source = "git+https://example.invalid/new"
 checksum = "not-a-hash"
 "#;
         let mut errors = Vec::new();
-        validate_rust_lock(lock, "old\t1.0.0\tMIT\n", &BTreeSet::new(), &policy(), &mut errors);
+        validate_rust_lock(
+            lock,
+            "old\t1.0.0\tMIT\n",
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &policy(),
+            &mut errors,
+        );
         assert!(errors.iter().any(|error| error.contains("unreviewed source")));
         assert!(errors.iter().any(|error| error.contains("unreviewed Rust dependency new@1.0.0")));
         assert!(errors.iter().any(|error| error.contains("stale Rust approval old@1.0.0")));
@@ -4000,7 +4345,7 @@ version = "9.9.9"
 "#;
         let workspace = BTreeSet::from([("workspace".to_owned(), "0.0.0".to_owned())]);
         let mut errors = Vec::new();
-        validate_rust_lock(lock, "", &workspace, &policy(), &mut errors);
+        validate_rust_lock(lock, "", &workspace, &BTreeSet::new(), &policy(), &mut errors);
         assert!(errors.iter().any(|error| {
             error.contains("malicious-path-dependency@9.9.9")
                 && error.contains("not an exact workspace member")
@@ -4643,6 +4988,81 @@ filegroup(
         assert_download_mutation_rejected(|item| item.included_in_release = true);
         assert_download_mutation_rejected(|item| item.repository.push_str("_drift"));
         assert_download_mutation_rejected(|item| item.downloaded_file_path.push_str(".drift"));
+    }
+
+    #[test]
+    fn asr_quality_authority_rejects_threshold_and_hash_drift() {
+        let root = repository_root().unwrap();
+        let text = fs::read_to_string(root.join("fixtures/asr-quality-authority.json")).unwrap();
+        let mut authority: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
+        let mut baseline = Vec::new();
+        validate_asr_quality(&root, &authority, &mut baseline);
+        assert!(baseline.is_empty(), "ASR authority baseline: {baseline:?}");
+
+        for index in 0..authority.fixtures.len() {
+            let mut unreviewed_reference: AsrQualityAuthority =
+                serde_json::from_str(&text).unwrap();
+            let fixture = &mut unreviewed_reference.fixtures[index];
+            let normalized_duplicate = if fixture.language == "zh" {
+                fixture
+                    .reference
+                    .chars()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join("，")
+            } else {
+                fixture.reference.to_uppercase()
+            };
+            fixture.accepted_references.push(normalized_duplicate);
+            let mut reference_errors = Vec::new();
+            validate_asr_quality(&root, &unreviewed_reference, &mut reference_errors);
+            assert!(reference_errors.iter().any(|error| error.contains("invalid authority")));
+
+            let mut empty_reference: AsrQualityAuthority = serde_json::from_str(&text).unwrap();
+            empty_reference.fixtures[index].accepted_references.push("  ".to_owned());
+            let mut empty_errors = Vec::new();
+            validate_asr_quality(&root, &empty_reference, &mut empty_errors);
+            assert!(empty_errors.iter().any(|error| error.contains("invalid authority")));
+        }
+
+        authority.fixtures[0].clear_maximum_error_rate = 0.16;
+        authority.fixtures[0].sha256 = "0".repeat(64);
+        authority.noise.seed += 1;
+        let mut errors = Vec::new();
+        validate_asr_quality(&root, &authority, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("model, metric, or noise")));
+        assert!(errors.iter().any(|error| error.contains("invalid authority")));
+    }
+
+    #[test]
+    fn media_permission_fixtures_are_complete_and_repository_owned() {
+        let root = repository_root().unwrap();
+        let text = fs::read_to_string(root.join("fixtures/manifest.json")).unwrap();
+        let corpus: FixtureCorpus = serde_json::from_str(&text).unwrap();
+        let media: Vec<_> = corpus
+            .fixtures
+            .iter()
+            .filter(|fixture| matches!(fixture.format.as_str(), "audio" | "video"))
+            .collect();
+        assert_eq!(media.len(), 6);
+        for format in ["audio", "video"] {
+            let scenarios: BTreeSet<_> = media
+                .iter()
+                .filter(|fixture| fixture.format == format)
+                .map(|fixture| fixture.scenario.as_str())
+                .collect();
+            assert_eq!(scenarios, BTreeSet::from(["normal", "corrupt", "limit"]));
+        }
+        let mut errors = Vec::new();
+        for fixture in media {
+            validate_fixture_metadata(fixture, &mut errors);
+            assert_eq!(fixture.license.spdx, "Apache-2.0");
+            assert_eq!(fixture.provenance.kind, "repository-generated");
+            let bytes = fs::read(root.join("fixtures").join(&fixture.path)).unwrap();
+            assert_eq!(u64::try_from(bytes.len()).unwrap(), fixture.bytes);
+            assert_eq!(sha256_hex(&bytes), fixture.sha256);
+        }
+        assert!(errors.is_empty(), "media fixture authority: {errors:?}");
     }
 
     #[test]

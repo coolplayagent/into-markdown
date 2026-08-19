@@ -89,9 +89,9 @@ pub(crate) fn load(
             kind: "rust-library".to_owned(),
             status: "reviewed".to_owned(),
             included_in_release: false,
-            release_eligible: required.contains(&key),
+            release_eligible: required.registry.contains(&key),
             manual_only: false,
-            required_in_core: required.contains(&key),
+            required_in_core: required.registry.contains(&key),
             version: Some(key.1.clone()),
             source: Some(format!("https://crates.io/crates/{}/{}", key.0, key.1)),
             license: Some(license.clone()),
@@ -109,6 +109,37 @@ pub(crate) fn load(
                 }])
                 .unwrap_or_default(),
             authority: "Cargo.lock + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json".to_owned(),
+        });
+    }
+    for (key, package) in required.local {
+        locked.insert(key.clone());
+        let Some(license) = approved.get(&key) else {
+            errors.push(format!("unreviewed local Cargo release component {}@{}", key.0, key.1));
+            continue;
+        };
+        if *license != package.license {
+            errors.push(format!(
+                "local Cargo release component {}@{} license differs: authority={license}, metadata={}",
+                key.0, key.1, package.license
+            ));
+        }
+        components.push(Component {
+            id: format!("cargo:{}@{}", key.0, key.1),
+            kind: "rust-library".to_owned(),
+            status: "reviewed".to_owned(),
+            included_in_release: false,
+            release_eligible: true,
+            manual_only: false,
+            required_in_core: true,
+            version: Some(key.1.clone()),
+            source: Some("https://codeberg.org/tazz4843/whisper-rs".to_owned()),
+            license: Some(license.clone()),
+            obligations: Some(
+                "Preserve the concluded vendored license and reviewed source provenance."
+                    .to_owned(),
+            ),
+            integrity: Vec::new(),
+            authority: "Cargo.lock + vendored Cargo.toml + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json".to_owned(),
         });
     }
     for stale in approved.keys().filter(|key| !locked.contains(*key)) {
@@ -196,6 +227,11 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
                     format!("//crates/{rest}:{name}")
                 };
                 pending.push(normalized);
+            } else if let Some(rest) = dependency.strip_prefix("//") {
+                let package = rest.split_once(':').map_or(rest, |(package, _)| package);
+                if repository.join(package).join("Cargo.toml").is_file() {
+                    pending.push(dependency.to_owned());
+                }
             }
         }
     }
@@ -450,7 +486,7 @@ fn cargo_package_name(path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoLock, attribute, contains_unquoted, named_rule_body, strip_comments,
+        CargoLock, attribute, contains_unquoted, load, named_rule_body, strip_comments,
         validate_bazel_runtime_graph,
     };
     use std::fs;
@@ -654,5 +690,23 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             serde_json::Value::String("0".repeat(64));
         let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
         assert!(errors.iter().any(|error| error.contains("apps/cli/Cargo.toml")));
+    }
+
+    #[test]
+    fn local_runtime_license_authority_is_fail_closed() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
+        let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        authority["local_runtime_packages"] = serde_json::json!([]);
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
+        assert!(errors.iter().any(|error| error.contains("local runtime authority")));
+
+        let approvals = fs::read_to_string(root.join("third_party/licenses/rust-lock.tsv"))
+            .unwrap()
+            .replace("whisper-rs\t0.16.0\tUnlicense", "whisper-rs\t0.16.0\tApache-2.0");
+        let mut errors = Vec::new();
+        load(&root, &lock_text, &approvals, &authority_text, &mut errors);
+        assert!(errors.iter().any(|error| {
+            error.contains("local Cargo release component whisper-rs@0.16.0 license differs")
+        }));
     }
 }

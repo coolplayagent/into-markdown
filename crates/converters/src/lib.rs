@@ -13,6 +13,7 @@ mod html;
 mod image_converter;
 mod legacy_office;
 mod markdown;
+mod media;
 mod msg;
 mod notebook;
 mod odf;
@@ -50,6 +51,7 @@ pub use into_markdown_pdf_layout::{
 };
 pub use legacy_office::LegacyOfficeConverter;
 pub use markdown::MarkdownConverter;
+pub use media::MediaConverter;
 pub use msg::MsgConverter;
 pub use notebook::NotebookConverter;
 pub use odf::OdfConverter;

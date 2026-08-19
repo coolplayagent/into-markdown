@@ -94,3 +94,23 @@ python3 fixtures/generate.py --presentation-only
 
 The PP-OCRv6 tiny recognizer archive is only a fixed, manual dependency authority for the OCR
 quality consumer. This corpus neither embeds the model nor implements recognition or CER execution.
+
+## ASR quality authority
+
+`asr-quality-authority.json` pins the exact Whisper small multilingual model, `whisper-rs` /
+whisper.cpp CPU runtime, beam width, thread ceiling, normalization rules, deterministic 10 dB SNR
+noise generator, and the 15% clean / 25% noisy CER and WER limits. The ignored
+`//crates/asr:asr_quality_test` target exercises the production FFmpeg normalization and Whisper
+inference path, validates detected language, timestamps and confidence, and emits a stable sorted
+JSON report. Set `INTO_MD_ASR_MODEL_ROOT`, `INTO_MD_ASR_FFMPEG_ROOT`,
+`INTO_MD_ASR_FFMPEG_EXECUTABLE`, and `INTO_MD_ASR_FFMPEG_AUTHORITY`, then run:
+
+```sh
+cargo test -p into-markdown-asr --test quality whisper_small_multilingual_quality -- --ignored --nocapture
+```
+
+The English recording is the United States government JFK inaugural-address sample mirrored at a
+pinned whisper.cpp commit and is recorded as `LicenseRef-Public-Domain`. The Chinese pronunciation
+sample is the pinned Wikimedia Commons revision by Ngguls under CC0-1.0. Exact URLs, revisions,
+attribution, sizes, and SHA-256 values are fail-closed in the license audit. No network access is
+used by the test, and neither fixture is included in release payloads.

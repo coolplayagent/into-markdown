@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "50df58f9903f0d2f213da982fd3a620c694fa707cc8a03d1c859b773650e7559",
+    "sha256": "cf39a16b060e1bdf37e56d33f8a61f9b2df816d481a7a482f5c9069b23d7e8f7",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -13,6 +13,7 @@
     "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd"
   },
   "available_formats": [
+    "audio",
     "csv",
     "doc",
     "docx",
@@ -33,12 +34,104 @@
     "rtf",
     "text",
     "tsv",
+    "video",
     "xls",
     "xlsx",
     "xml",
     "zip"
   ],
   "fixtures": [
+    {
+      "id": "audio-corrupt",
+      "format": "audio",
+      "scenario": "corrupt",
+      "path": "small/audio/corrupt.wav",
+      "bytes": 11,
+      "sha256": "0fbc6df9946117782f889e0f404437152e97ca5a20fbdd92b46096eda6359a01",
+      "media_type": "audio/wav",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated RIFF/WAVE header"
+      }
+    },
+    {
+      "id": "audio-limit",
+      "format": "audio",
+      "scenario": "limit",
+      "path": "small/audio/limit.wav",
+      "bytes": 364,
+      "sha256": "e7531525a8818a3b06dc5c4e09269c351688352352117dc6caa3bba02d876112",
+      "media_type": "audio/wav",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "input byte ceiling crosses the exact WAV boundary",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 363,
+          "passing_value": 364,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        }
+      }
+    },
+    {
+      "id": "audio-normal",
+      "format": "audio",
+      "scenario": "normal",
+      "path": "small/audio/normal.wav",
+      "bytes": 364,
+      "sha256": "e7531525a8818a3b06dc5c4e09269c351688352352117dc6caa3bba02d876112",
+      "media_type": "audio/wav",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "description": "repository-generated bounded PCM WAV"
+      }
+    },
     {
       "id": "csv-corrupt",
       "format": "csv",
@@ -2893,6 +2986,97 @@
         "error_code": "",
         "semantic_sha256": "800366d08763acec506041dafe98faef619db37fe74dc52b76a640b8a520d3e2",
         "description": "header and two rows"
+      }
+    },
+    {
+      "id": "video-corrupt",
+      "format": "video",
+      "scenario": "corrupt",
+      "path": "small/video/corrupt.mp4",
+      "bytes": 12,
+      "sha256": "c43403fe022af967a0b859d3e14ea12d6633f4c8ad475816b0c55d85896e8e35",
+      "media_type": "video/mp4",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "truncated ISO BMFF ftyp box"
+      }
+    },
+    {
+      "id": "video-limit",
+      "format": "video",
+      "scenario": "limit",
+      "path": "small/video/limit.mp4",
+      "bytes": 40,
+      "sha256": "39ec5d3d7ae89251821a8ff40d44f743fecf335ab437909b8522491c4147d198",
+      "media_type": "video/mp4",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "input byte ceiling crosses the exact ISO BMFF boundary",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 39,
+          "passing_value": 40,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        }
+      }
+    },
+    {
+      "id": "video-normal",
+      "format": "video",
+      "scenario": "normal",
+      "path": "small/video/normal.mp4",
+      "bytes": 40,
+      "sha256": "39ec5d3d7ae89251821a8ff40d44f743fecf335ab437909b8522491c4147d198",
+      "media_type": "video/mp4",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "description": "repository-generated empty ISO BMFF movie"
       }
     },
     {

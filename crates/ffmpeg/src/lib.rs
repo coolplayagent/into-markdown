@@ -115,6 +115,13 @@ struct Authority {
     binary_architecture: String,
     dependencies: Vec<String>,
     toolchain: String,
+    source_sha256: String,
+    source_signature_sha256: String,
+    signing_key_fingerprint: String,
+    build_policy_sha256: String,
+    config_log_sha256: String,
+    relink_bytes: u64,
+    relink_sha256: String,
 }
 
 /// Resource policy for one normalization request.
@@ -237,6 +244,19 @@ impl FfmpegRuntime {
             || !authority.dependencies.iter().map(String::as_str).eq(expected_dependencies())
             || authority.toolchain.is_empty()
             || authority.toolchain.len() > AUTHORITY_STRING_LIMIT
+            || authority.source_sha256
+                != "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+            || authority.source_signature_sha256
+                != "0a0963fccd70597838073f3e31b20f4a4d8cc2b5e577472c9a5a1f22624246f8"
+            || authority.signing_key_fingerprint != "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+            || authority.build_policy_sha256
+                != format!(
+                    "{:x}",
+                    Sha256::digest(include_bytes!("../../../third_party/ffmpeg/build-policy.json"))
+                )
+            || authority.config_log_sha256.len() != 64
+            || authority.relink_bytes == 0
+            || authority.relink_sha256.len() != 64
         {
             return Err(LoadError::Authority);
         }
@@ -610,8 +630,8 @@ fn expected_dependencies() -> impl Iterator<Item = &'static str> {
         "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
         "/usr/lib/libSystem.B.dylib",
     ];
-    const LINUX_X64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
-    const LINUX_ARM64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
+    const LINUX_X64: [&str; 2] = ["libc.so.6", "libm.so.6"];
+    const LINUX_ARM64: [&str; 2] = ["libc.so.6", "libm.so.6"];
     const WINDOWS: [&str; 4] = ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"];
     let values: &'static [&'static str] = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => &MACOS,
@@ -625,7 +645,11 @@ fn expected_dependencies() -> impl Iterator<Item = &'static str> {
 
 fn validate_binary(bytes: &[u8], authority: &Authority) -> Result<(), LoadError> {
     let file = object::File::parse(bytes).map_err(|_| LoadError::BuildConfiguration)?;
-    if file.kind() != ObjectKind::Executable {
+    if file.kind() != ObjectKind::Executable
+        && !(file.kind() == ObjectKind::Dynamic
+            && file.format() == BinaryFormat::Elf
+            && file.entry() != 0)
+    {
         return Err(LoadError::BuildConfiguration);
     }
     let format = match file.format() {

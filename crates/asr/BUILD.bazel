@@ -1,0 +1,52 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "asr",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_asr",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "//third_party/whisper-rs-0.16.0:whisper_rs",
+    ],
+)
+
+rust_test(
+    name = "asr_test",
+    crate = ":asr",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "@crates//:futures",
+        "@crates//:tempfile",
+        "//third_party/whisper-rs-0.16.0:whisper_rs",
+    ],
+)
+
+rust_test(
+    name = "asr_quality_test",
+    srcs = ["tests/quality.rs"],
+    crate_root = "tests/quality.rs",
+    data = ["//fixtures:corpus"],
+    edition = "2024",
+    tags = ["manual"],
+    deps = [
+        ":asr",
+        "//crates/core",
+        "//crates/ffmpeg",
+        "//crates/ocr",
+        "@crates//:futures",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)

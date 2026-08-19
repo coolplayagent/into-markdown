@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+mod asr_service;
 mod ocr_service;
 
 #[cfg(test)]
@@ -10,11 +11,13 @@ mod image_ai_tests;
 #[cfg(test)]
 mod embedded_visual_ocr_tests;
 
+pub use asr_service::{InstalledAsrConfig, installed_asr_service};
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
     ProviderError, ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
 };
+pub use into_markdown_asr::{WhisperConfig, WhisperSmallTranscriber};
 pub use into_markdown_converters::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
     CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
@@ -30,7 +33,7 @@ pub use into_markdown_engine::{
 pub use into_markdown_ocr::{
     AcquiredModelArtifact, ArchiveMember, CharacterSet, DataDirectoryEnvironment, ModelAcquisition,
     ModelArtifact, ModelBundle, ModelFetcher, ModelManager, ModelManagerError, ModelManifest,
-    ModelStatus, ProductTarget, RuntimeArtifact, model_data_directory,
+    ModelStatus, ProductTarget, RuntimeArtifact, VerifiedModelArtifact, model_data_directory,
 };
 pub use into_markdown_ocr::{
     MergeConfig as OcrMergeConfig, MergeLimits as OcrMergeLimits, OcrPageInput,

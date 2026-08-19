@@ -101,6 +101,17 @@
       "obligations": "If acquired, verify the official archive and exact ONNX/config members; preserve Apache-2.0 and exclude model bytes from release artifacts."
     },
     {
+      "id": "whisper-small-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": false,
+      "version": "OpenAI Whisper small / whisper.cpp c521a4b02f422512d734391fdf08bb08c0862f68",
+      "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin",
+      "license": "MIT",
+      "obligations": "If acquired, verify the exact model size and SHA-256, preserve the MIT license, and never include it in ordinary test outputs."
+    },
+    {
       "id": "ppocrv6-tiny-recognizer-onnx-quality",
       "kind": "fixture-input",
       "status": "reviewed",
@@ -145,6 +156,17 @@
       "source": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
       "license": "LGPL-2.1-or-later",
       "obligations": "Build only from pinned signed source with GPL, version3, nonfree, external libraries, autodetection, and networking disabled; distributors preserve notices, corresponding source, and relinking/replacement rights."
+    },
+    {
+      "id": "whisper-small",
+      "kind": "model",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "OpenAI Whisper small / whisper.cpp model commit c521a4b02f422512d734391fdf08bb08c0862f68",
+      "source": "https://huggingface.co/ggerganov/whisper.cpp/commit/c521a4b02f422512d734391fdf08bb08c0862f68",
+      "license": "MIT",
+      "obligations": "Preserve the Whisper model MIT license and bind distributed ggml-small.bin bytes to the reviewed commit, exact size, SHA-256, and model authority."
     },
     {
       "id": "ppocrv6-tiny-detector-onnx-model",

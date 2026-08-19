@@ -769,6 +769,47 @@ def write_msg_fixtures(root: Path) -> list[dict[str, object]]:
     ]
 
 
+def pcm_wav(samples: bytes, sample_rate: int = 16_000) -> bytes:
+    if len(samples) % 2:
+        raise ValueError("S16LE samples must be aligned")
+    return (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(samples))
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
+        + b"data"
+        + struct.pack("<I", len(samples))
+        + samples
+    )
+
+
+def mp4_box(kind: bytes, payload: bytes) -> bytes:
+    if len(kind) != 4:
+        raise ValueError("MP4 box kind must be four bytes")
+    return struct.pack(">I", len(payload) + 8) + kind + payload
+
+
+def media_fixtures(root: Path) -> list[dict[str, object]]:
+    wav = pcm_wav(b"\0\0" * 160)
+    mp4 = (
+        mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2")
+        + mp4_box(b"moov", b"")
+        + mp4_box(b"mdat", b"")
+    )
+    definitions = [
+        ("audio-normal", "audio", "normal", "small/audio/normal.wav", wav, "audio/wav", expected("success", "repository-generated bounded PCM WAV", semantic="\n")),
+        ("audio-corrupt", "audio", "corrupt", "small/audio/corrupt.wav", b"RIFF\x08\0\0\0WAV", "audio/wav", expected("error", "truncated RIFF/WAVE header", error_code="malformed")),
+        ("audio-limit", "audio", "limit", "small/audio/limit.wav", wav, "audio/wav", limit_expected("input byte ceiling crosses the exact WAV boundary", "max_input_bytes", len(wav) - 1, len(wav), "max_input_bytes", "\n")),
+        ("video-normal", "video", "normal", "small/video/normal.mp4", mp4, "video/mp4", expected("success", "repository-generated empty ISO BMFF movie", semantic="\n")),
+        ("video-corrupt", "video", "corrupt", "small/video/corrupt.mp4", b"\0\0\0\x18ftypisom", "video/mp4", expected("error", "truncated ISO BMFF ftyp box", error_code="malformed")),
+        ("video-limit", "video", "limit", "small/video/limit.mp4", mp4, "video/mp4", limit_expected("input byte ceiling crosses the exact ISO BMFF boundary", "max_input_bytes", len(mp4) - 1, len(mp4), "max_input_bytes", "\n")),
+    ]
+    return [
+        generated_fixture(root, fixture_id, format_name, scenario, relative, data, media_type, result)
+        for fixture_id, format_name, scenario, relative, data, media_type, result in definitions
+    ]
+
+
 def presentation_fixtures(root: Path) -> list[dict[str, object]]:
     normal = presentationml()
     corrupt = presentationml(corrupt_relationship=True)
@@ -1648,6 +1689,11 @@ def main() -> None:
         help="regenerate repository-authored PDF layout fixtures and their manifest records",
     )
     parser.add_argument(
+        "--media-only",
+        action="store_true",
+        help="regenerate repository-authored audio/video permission fixtures and authority records",
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="regenerate in a temporary directory and require byte equality with checked-in authority",
@@ -1721,9 +1767,26 @@ def main() -> None:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         return
+    if args.media_only:
+        if args.verify:
+            parser.error("--media-only cannot be combined with --verify")
+        manifest_path = output_root / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["fixtures"] = [
+            fixture for fixture in manifest["fixtures"] if fixture["format"] not in {"audio", "video"}
+        ] + media_fixtures(output_root)
+        manifest["fixtures"].sort(key=lambda item: str(item["id"]))
+        manifest["available_formats"] = sorted(
+            set(manifest["available_formats"]) | {"audio", "video"}
+        )
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return
     if args.font is None:
         parser.error(
-            "--font is required unless --refresh-odf, --msg-only, --presentation-only, or --pdf-only is selected"
+            "--font is required unless a scoped fixture refresh option is selected"
         )
     if not args.verify:
         build(output_root, args.font.resolve())

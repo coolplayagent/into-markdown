@@ -5,7 +5,7 @@
 文件的权威 URL、SHA-256、文件名和字节数清单。运行时会交叉校验两份随包清单，
 未知 schema 字段、重复 ID、路径分隔符、清单漂移或不完整元数据都会 fail closed。
 
-清单 schema 2 区分完整 pipeline 与可独立安装的组件。`pp-ocrv6-tiny-zh-en`
+清单 schema 3 进一步加入本地 ASR bundle；schema 2 区分完整 pipeline 与可独立安装的组件。`pp-ocrv6-tiny-zh-en`
 仍是 source-only 的 `ocr-pipeline`，显示为 `planned` / `unavailable`；
 `pp-ocrv6-tiny-recognizer-onnx` 是 `available` 的 `recognizer-component`，绑定 PaddleOCR
 commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、官方 ONNX TAR、最终 ONNX、配置文件和
@@ -93,3 +93,17 @@ pipeline 的 source 角色必须包含 `detector` 与 `recognizer-and-dictionary
 0/65、繁体 6/65、英文 1/185、混排 1/116，对应 CER 上限分别为 5%、10%、5%、8%。
 显式 native quality target 必须同时复核字符数、错误数和阈值；修改 golden、归一化规则、
 隐式模型 fallback 或降低阈值都不能把模型漂移伪装成通过。
+
+## Whisper small 多语种模型
+
+`whisper-small-multilingual` 是可安装的 `asr-model`。它固定到
+`ggerganov/whisper.cpp` 的 Hugging Face 模型仓库 commit
+`c521a4b02f422512d734391fdf08bb08c0862f68`，最终 `ggml-small.bin` 的精确大小为
+487601967 字节，SHA-256 为
+`1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`，许可证为 MIT。
+普通转换只读取 `ModelManager` 已完成并重新校验的安装目录，不下载、不搜索 PATH，也不
+接受任意模型路径。完整离线包可以把同一 bundle 放进只读 bundled model root；标准包由
+用户显式执行 `into-md models install whisper-small-multilingual` 后使用。
+
+加载后 runtime 还会验证模型声明为 multilingual 且类型为 `small`。缺失、损坏、hash
+漂移或类型不符均稳定返回 `componentUnavailable`，不会 fallback 到网络服务或其他模型。

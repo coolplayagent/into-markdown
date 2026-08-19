@@ -128,7 +128,8 @@ pub struct ModelBundle {
     pub languages: Vec<String>,
     pub platforms: Vec<String>,
     pub runtime_format: String,
-    pub character_set: CharacterSet,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_set: Option<CharacterSet>,
     pub runtime_artifacts: Vec<RuntimeArtifact>,
     pub source_artifacts: Vec<ModelArtifact>,
 }
@@ -143,6 +144,8 @@ fn pipeline_bundle_kind() -> String {
 pub struct ModelManifest {
     pub schema_version: u32,
     pub default_bundle: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_asr_bundle: Option<String>,
     pub bundles: Vec<ModelBundle>,
 }
 
@@ -298,7 +301,7 @@ impl ModelManifest {
         let components = take_component_bindings(&mut raw)?;
         let manifest: Self = serde_json::from_value(raw.clone())
             .map_err(|error| invalid_manifest(format!("invalid model JSON: {error}")))?;
-        if manifest.schema_version == 2
+        if manifest.schema_version >= 2
             && raw
                 .get("bundles")
                 .and_then(serde_json::Value::as_array)
@@ -311,7 +314,7 @@ impl ModelManifest {
         let onnxruntime: OrtManifest = serde_json::from_str(onnxruntime)
             .map_err(|error| invalid_manifest(format!("invalid ONNX Runtime JSON: {error}")))?;
         manifest.validate_against(&downloads, &onnxruntime)?;
-        if manifest.schema_version == 2 {
+        if matches!(manifest.schema_version, 2 | 3) {
             detector_model::validate_manifest_authority(&manifest, &components)?;
             recognition::model_authority::validate_manifest_authority(&manifest)?;
         }
@@ -323,7 +326,7 @@ impl ModelManifest {
         downloads: &DownloadManifest,
         onnxruntime: &OrtManifest,
     ) -> Result<(), ConversionError> {
-        if !matches!(self.schema_version, 1 | 2) || downloads.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2 | 3) || downloads.schema_version != 1 {
             return Err(invalid_manifest("unsupported schema version"));
         }
         if self.schema_version == 1
@@ -348,7 +351,7 @@ impl ModelManifest {
             }
             if !matches!(
                 bundle.kind.as_str(),
-                "ocr-pipeline" | "detector-component" | "recognizer-component"
+                "ocr-pipeline" | "detector-component" | "recognizer-component" | "asr-model"
             ) || !matches!(bundle.availability.as_str(), "planned" | "available")
             {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
@@ -369,7 +372,12 @@ impl ModelManifest {
                 return Err(invalid_manifest(format!("{} has incomplete metadata", bundle.id)));
             }
             validate_bundle_roles(bundle)?;
-            if !matches!(bundle.character_set.status.as_str(), "planned" | "available") {
+            let is_asr = bundle.kind == "asr-model";
+            if is_asr != bundle.character_set.is_none()
+                || bundle.character_set.as_ref().is_some_and(|character_set| {
+                    !matches!(character_set.status.as_str(), "planned" | "available")
+                })
+            {
                 return Err(invalid_manifest(format!(
                     "{} has invalid character set status",
                     bundle.id
@@ -404,9 +412,9 @@ impl ModelManifest {
                     }
                 }
             }
-            if bundle.kind != "detector-component"
+            if !matches!(bundle.kind.as_str(), "detector-component" | "asr-model")
                 && !bundle.source_artifacts.iter().any(|item| {
-                    item.id == bundle.character_set.source_artifact_id
+                    item.id == bundle.character_set.as_ref().unwrap().source_artifact_id
                         && item.role == "recognizer-and-dictionary"
                 })
             {
@@ -441,7 +449,11 @@ impl ModelManifest {
                 }
             }
             let installable = bundle.availability == "available"
-                && bundle.character_set.status == "available"
+                && (is_asr
+                    || bundle
+                        .character_set
+                        .as_ref()
+                        .is_some_and(|value| value.status == "available"))
                 && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline");
             if (bundle.availability == "available") != installable {
                 return Err(invalid_manifest(format!(
@@ -452,6 +464,23 @@ impl ModelManifest {
         }
         if !bundle_ids.contains(self.default_bundle.as_str()) {
             return Err(invalid_manifest("default bundle is absent"));
+        }
+        if self.schema_version == 3 {
+            let Some(default_asr) = self.default_asr_bundle.as_deref() else {
+                return Err(invalid_manifest("default ASR bundle is absent"));
+            };
+            if self
+                .bundles
+                .iter()
+                .find(|bundle| bundle.id == default_asr)
+                .is_none_or(|bundle| bundle.kind != "asr-model")
+            {
+                return Err(invalid_manifest("default ASR bundle is invalid"));
+            }
+        } else if self.default_asr_bundle.is_some()
+            || self.bundles.iter().any(|bundle| bundle.kind == "asr-model")
+        {
+            return Err(invalid_manifest("ASR bundles require model schema 3"));
         }
         if sources.len() != source_ids.len() || runtimes.len() != runtime_ids.len() {
             return Err(invalid_manifest(
@@ -643,6 +672,7 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
         "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
         "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
+        "asr-model" => BTreeSet::from(["model"]),
         _ => return Err(invalid_manifest(format!("{} has invalid kind", bundle.id))),
     };
     let source_roles: BTreeSet<_> =
@@ -670,6 +700,7 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
             "ocr-pipeline" => BTreeSet::from(["detector", "recognizer-and-dictionary"]),
             "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
+            "asr-model" => BTreeSet::from(["model"]),
             _ => unreachable!(),
         };
         let runtime_roles: BTreeSet<_> =
@@ -956,6 +987,17 @@ pub struct ModelStatus {
     pub path: Option<PathBuf>,
 }
 
+/// One runtime file whose enclosing install state and bytes were reverified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedModelArtifact {
+    /// Protected canonical model path.
+    pub path: PathBuf,
+    /// Expected complete-file SHA-256.
+    pub sha256: String,
+    /// Expected complete-file length.
+    pub size: u64,
+}
+
 /// Offline manager for model query, verification, and removal.
 pub struct ModelManager {
     manifest: ModelManifest,
@@ -1143,6 +1185,32 @@ impl ModelManager {
             return Err(ModelManagerError::ComponentUnavailable);
         }
         self.verify(id)?.path.ok_or(ModelManagerError::NotInstalled)
+    }
+
+    /// Reverify an installed runtime file and return its immutable authority.
+    ///
+    /// Consumers which must pass a path to a native loader should verify the
+    /// bundle again immediately after loading and discard the native object if
+    /// the install state changed.
+    pub fn verified_runtime_path(
+        &self,
+        id: &str,
+        role: &str,
+        context: &ExecutionContext,
+    ) -> Result<VerifiedModelArtifact, ModelManagerError> {
+        let bundle = self.require_installable(id)?;
+        let artifact = bundle
+            .runtime_artifacts
+            .iter()
+            .find(|artifact| artifact.role == role)
+            .ok_or(ModelManagerError::ComponentUnavailable)?;
+        let status = self.verify_with_context(id, context)?;
+        let directory = status.path.ok_or(ModelManagerError::NotInstalled)?;
+        Ok(VerifiedModelArtifact {
+            path: directory.join(&artifact.file_name),
+            sha256: artifact.sha256.clone(),
+            size: artifact.size,
+        })
     }
 
     pub(crate) fn verified_runtime_artifact(
@@ -1786,7 +1854,8 @@ enum InstallFault {
 
 fn is_installable(bundle: &ModelBundle) -> bool {
     bundle.availability == "available"
-        && bundle.character_set.status == "available"
+        && (bundle.kind == "asr-model"
+            || bundle.character_set.as_ref().is_some_and(|value| value.status == "available"))
         && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline")
 }
 
@@ -2441,7 +2510,7 @@ mod tests {
     fn embedded_manifest_declares_only_the_bound_available_pipeline() {
         let manifest = ModelManifest::embedded().unwrap();
         assert_eq!(manifest.default_bundle, detector_model::PIPELINE_ID);
-        assert_eq!(manifest.bundles.len(), 3);
+        assert_eq!(manifest.bundles.len(), 4);
         let pipeline = &manifest.bundles[0];
         assert_eq!(pipeline.kind, "ocr-pipeline");
         assert_eq!(pipeline.availability, "available");
@@ -2452,6 +2521,8 @@ mod tests {
         assert!(manifest.bundles[1..].iter().all(
             |bundle| bundle.availability == "available" && !bundle.runtime_artifacts.is_empty()
         ));
+        assert_eq!(manifest.bundles[3].kind, "asr-model");
+        assert_eq!(manifest.default_asr_bundle.as_deref(), Some("whisper-small-multilingual"));
     }
 
     #[test]
@@ -2459,8 +2530,8 @@ mod tests {
         let models = include_str!("../../../models/manifest.json");
         let downloads = include_str!("../../../third_party/licenses/downloads.json");
         let unknown = models.replacen(
-            "\"schema_version\": 2",
-            "\"schema_version\": 2, \"surprise\": true",
+            "\"schema_version\": 3",
+            "\"schema_version\": 3, \"surprise\": true",
             1,
         );
         assert!(ModelManifest::from_authorities(&unknown, downloads).is_err());
@@ -2728,7 +2799,7 @@ mod tests {
         let bundle =
             manifest.bundles.iter_mut().find(|bundle| bundle.id == TEST_INSTALL_ID).unwrap();
         bundle.availability = "available".into();
-        bundle.character_set.status = "available".into();
+        bundle.character_set.as_mut().unwrap().status = "available".into();
         bundle.runtime_artifacts = vec![RuntimeArtifact {
             id: "test-runtime".into(),
             role: "detector".into(),

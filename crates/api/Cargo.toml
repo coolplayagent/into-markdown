@@ -8,9 +8,11 @@ license.workspace = true
 
 [dependencies]
 into-markdown-ai = { path = "../ai" }
+into-markdown-asr = { path = "../asr" }
 into-markdown-converters = { path = "../converters" }
 into-markdown-core = { path = "../core" }
 into-markdown-engine = { path = "../engine" }
+into-markdown-ffmpeg = { path = "../ffmpeg" }
 into-markdown-ocr = { path = "../ocr" }
 into-markdown-onnxruntime = { path = "../onnxruntime" }
 into-markdown-render-markdown = { path = "../render-markdown" }

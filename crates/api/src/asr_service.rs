@@ -1,0 +1,103 @@
+//! Explicit assembly of the installed offline Whisper-small pipeline.
+
+use crate::{ConversionError, ConversionOptions, ExecutionContext, Transcriber};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Explicit local paths required to assemble production ASR.
+#[derive(Debug, Clone)]
+pub struct InstalledAsrConfig {
+    /// Writable model root managed by `into-md models`.
+    pub writable_model_root: PathBuf,
+    /// Optional read-only model root included by a full offline package.
+    pub bundled_model_root: Option<PathBuf>,
+    /// Trusted directory containing the audited FFmpeg artifact.
+    pub ffmpeg_trusted_root: PathBuf,
+    /// Exact FFmpeg executable below the trusted root.
+    pub ffmpeg_executable: PathBuf,
+    /// Generated FFmpeg artifact authority JSON.
+    pub ffmpeg_authority: PathBuf,
+    /// Selected embedded ASR model bundle.
+    pub model_bundle: String,
+}
+
+/// Assemble an installed CPU-only Whisper-small service without networking.
+pub fn installed_asr_service(
+    config: &InstalledAsrConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn Transcriber>, ConversionError> {
+    context.checkpoint()?;
+    let manager = Arc::new(into_markdown_ocr::ModelManager::embedded(
+        config.writable_model_root.clone(),
+        config.bundled_model_root.clone(),
+    )?);
+    if manager.manifest().default_asr_bundle.as_deref() != Some(&config.model_bundle) {
+        return Err(ConversionError::ComponentUnavailable {
+            component: config.model_bundle.clone(),
+            detail: "selected ASR bundle is not the reviewed default".into(),
+        });
+    }
+    manager.verify_with_context(&config.model_bundle, context).map_err(|error| match error {
+        into_markdown_ocr::ModelManagerError::Execution(error) => error,
+        error => ConversionError::ComponentUnavailable {
+            component: config.model_bundle.clone(),
+            detail: format!(
+                "installed Whisper model verification failed ({error}); install it with `into-md models install {}`",
+                config.model_bundle
+            ),
+        },
+    })?;
+    let authority = fs::read(&config.ffmpeg_authority).map_err(|error| {
+        ConversionError::ComponentUnavailable {
+            component: "ffmpeg-lgpl".into(),
+            detail: format!("FFmpeg artifact authority is unavailable: {error}"),
+        }
+    })?;
+    let runtime = into_markdown_ffmpeg::FfmpegRuntime::load(
+        &config.ffmpeg_trusted_root,
+        &config.ffmpeg_executable,
+        &authority,
+    )
+    .map_err(|error| ConversionError::ComponentUnavailable {
+        component: "ffmpeg-lgpl".into(),
+        detail: format!("installed FFmpeg runtime is unavailable: {error}"),
+    })?;
+    let mut asr_options = options.asr.clone();
+    asr_options.model_bundle.clone_from(&config.model_bundle);
+    let whisper_config = into_markdown_asr::WhisperConfig::try_from(&asr_options)?;
+    let transcriber = into_markdown_asr::WhisperSmallTranscriber::new(
+        manager,
+        Arc::new(runtime),
+        whisper_config,
+    )?;
+    Ok(Arc::new(transcriber))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ErrorCode, ExecutionOptions, ResourceLimits};
+
+    #[test]
+    fn missing_model_fails_before_ffmpeg_authority_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let config = InstalledAsrConfig {
+            writable_model_root: root.path().join("models"),
+            bundled_model_root: None,
+            ffmpeg_trusted_root: root.path().join("ffmpeg"),
+            ffmpeg_executable: root.path().join("ffmpeg/missing"),
+            ffmpeg_authority: root.path().join("ffmpeg/missing-authority.json"),
+            model_bundle: "whisper-small-multilingual".into(),
+        };
+        let error = match installed_asr_service(&config, &ConversionOptions::default(), &context) {
+            Ok(_) => panic!("missing model unexpectedly assembled"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
+        assert!(error.to_string().contains("models install whisper-small-multilingual"));
+        assert!(!error.to_string().contains("missing-authority"));
+    }
+}

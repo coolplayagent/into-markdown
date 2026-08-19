@@ -154,6 +154,7 @@ fn manifest() -> Manifest {
 fn format(value: &str) -> InputFormat {
     match value {
         "csv" => InputFormat::Csv,
+        "audio" => InputFormat::Audio,
         "docx" => InputFormat::Docx,
         "epub" => InputFormat::Epub,
         "feed" => InputFormat::Feed,
@@ -173,6 +174,7 @@ fn format(value: &str) -> InputFormat {
         "wikipedia" => InputFormat::Wikipedia,
         "xlsx" => InputFormat::Xlsx,
         "xml" => InputFormat::Xml,
+        "video" => InputFormat::Video,
         unknown => panic!("fixture uses unknown converter format {unknown}"),
     }
 }
@@ -195,6 +197,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Wikipedia => Box::new(MediaWikiConverter),
         InputFormat::Xlsx => Box::new(WorkbookConverter),
         InputFormat::Pptx => Box::new(PresentationConverter),
+        InputFormat::Audio | InputFormat::Video => Box::new(MediaConverter),
         unsupported => panic!("no corpus converter for {unsupported}"),
     }
 }
@@ -314,7 +317,7 @@ fn corpus_available_formats_match_the_product_registry() {
 fn corpus_contracts_execute_through_real_converters() {
     let mut failures = Vec::new();
     for fixture in manifest().fixtures {
-        if matches!(fixture.format.as_str(), "ocr-image" | "pdf") {
+        if matches!(fixture.format.as_str(), "ocr-image" | "pdf" | "audio" | "video") {
             continue;
         }
         let _ = (
