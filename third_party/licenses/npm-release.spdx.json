@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "into-markdown-web-console-df15bea6ba01ebe9",
-  "documentNamespace": "https://github.com/coolplayagent/into-markdown/spdx/web-console/sha256-df15bea6ba01ebe92e9d795d02506a58363bcfe97aa7843ed5fbae503a36b485",
+  "name": "into-markdown-web-console-8dad1c1a48a1e296",
+  "documentNamespace": "https://github.com/coolplayagent/into-markdown/spdx/web-console/sha256-8dad1c1a48a1e296fb9d9a33a3e033ecbd66f0b25fb6b0d5d9438060ebe5ae9d",
   "creationInfo": {
     "created": "2026-08-13T00:00:00Z",
     "creators": ["Organization: into-markdown contributors"]
@@ -57,8 +57,8 @@
   "files": [
     {
       "SPDXID": "SPDXRef-File-console-app",
-      "fileName": "./web/console/dist/assets/app.df15bea6ba01ebe9.js",
-      "checksums": [{"algorithm":"SHA256","checksumValue":"df15bea6ba01ebe92e9d795d02506a58363bcfe97aa7843ed5fbae503a36b485"}],
+      "fileName": "./web/console/dist/assets/app.8dad1c1a48a1e296.js",
+      "checksums": [{"algorithm":"SHA256","checksumValue":"8dad1c1a48a1e296fb9d9a33a3e033ecbd66f0b25fb6b0d5d9438060ebe5ae9d"}],
       "licenseConcluded": "NOASSERTION",
       "licenseInfoInFiles": ["ISC", "MIT"],
       "copyrightText": "NOASSERTION"

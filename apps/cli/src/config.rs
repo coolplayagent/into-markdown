@@ -14,6 +14,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static CONFIG_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn config_generation() -> u64 {
+    CONFIG_GENERATION.load(Ordering::Acquire)
+}
 
 #[cfg(test)]
 thread_local! {
@@ -634,18 +641,15 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
     parse_conflict(config.conversion.output.conflict.as_deref())?;
     for (id, plugin) in &config.plugins {
         validate_id("plugin", id)?;
-        if !matches!(plugin.protocol.as_str(), "process-v1" | "wasi-v1") {
+        if !plugin.protocol.is_empty()
+            && !matches!(plugin.protocol.as_str(), "process-v1" | "wasi-v1")
+        {
             return Err(CliError::config(format!(
                 "plugin '{id}' protocol must be process-v1 or wasi-v1"
             )));
         }
         if let Some(hash) = &plugin.sha256 {
             validate_sha256(hash)?;
-        }
-        if plugin.signing_key_id.is_empty() != plugin.signing_key_sha256.is_empty() {
-            return Err(CliError::config(format!(
-                "plugin '{id}' signing key id and fingerprint must be configured together"
-            )));
         }
         if !plugin.signing_key_sha256.is_empty() {
             validate_sha256(&plugin.signing_key_sha256)?;
@@ -658,6 +662,18 @@ fn validate_raw(config: &RawConfig) -> Result<(), CliError> {
     validate_common(config)?;
     for (name, provider) in &config.providers {
         validate_provider(name, provider, true)?;
+    }
+    for (id, plugin) in &config.plugins {
+        if !matches!(plugin.protocol.as_str(), "process-v1" | "wasi-v1") {
+            return Err(CliError::config(format!(
+                "plugin '{id}' protocol must be process-v1 or wasi-v1"
+            )));
+        }
+        if plugin.signing_key_id.is_empty() != plugin.signing_key_sha256.is_empty() {
+            return Err(CliError::config(format!(
+                "plugin '{id}' signing key id and fingerprint must be configured together"
+            )));
+        }
     }
     Ok(())
 }
@@ -1052,6 +1068,23 @@ pub fn set_default_provider(scope: Scope, cwd: &Path, name: &str) -> Result<Path
     })
 }
 
+/// Check that an exact scope contains a self-contained provider definition.
+/// Global defaults must remain usable when no project overlay is present.
+pub(crate) fn has_complete_provider_in_scope(
+    scope: Scope,
+    cwd: &Path,
+    name: &str,
+) -> Result<bool, CliError> {
+    let snapshot = scope_snapshot(scope, cwd)?;
+    let raw: RawConfig = snapshot
+        .document
+        .try_into()
+        .map_err(|error| CliError::config(format!("scope configuration is invalid: {error}")))?;
+    let Some(provider) = raw.providers.get(name) else { return Ok(false) };
+    validate_provider(name, provider, true)?;
+    Ok(true)
+}
+
 pub(crate) fn compare_and_set_plugin_exact_locked(
     lock: &ConfigMutationGuard,
     path: &Path,
@@ -1094,12 +1127,83 @@ pub(crate) fn compare_and_set_plugin_exact_locked(
 }
 
 /// Read plugins from exactly one scope without applying project/profile shadowing.
+#[cfg(test)]
 pub fn plugins_in_scope(
     scope: Scope,
     cwd: &Path,
 ) -> Result<BTreeMap<String, PluginConfig>, CliError> {
     let path = scope_path(scope, cwd)?;
     plugins_at_path(&path)
+}
+
+/// Read profile objects from exactly one configuration scope.
+pub fn profiles_in_scope(
+    scope: Scope,
+    cwd: &Path,
+) -> Result<BTreeMap<String, toml::Value>, CliError> {
+    let path = scope_path(scope, cwd)?;
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let value = read_layer_value(&path)?;
+    Ok(value
+        .get("profiles")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect())
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ScopeSnapshot {
+    pub(crate) document: toml::Value,
+    authority: crate::transaction::ConfigExpectedAuthority,
+}
+
+/// Read the complete semantic document plus physical file identity for one
+/// scope. Atomic A→B→A replacement changes identity even when bytes return to
+/// their original value, so administration cannot accept a mixed generation.
+pub(crate) fn scope_snapshot(scope: Scope, cwd: &Path) -> Result<ScopeSnapshot, CliError> {
+    let lock = lock_scope(scope, cwd)?;
+    let target =
+        lock.config.file_name().ok_or_else(|| CliError::config("configuration has no name"))?;
+    match lock.directory.symlink_metadata(target) {
+        Ok(_) => {
+            let (document, authority) = read_layer_value_locked_with_authority(&lock)?;
+            Ok(ScopeSnapshot { document, authority })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ScopeSnapshot {
+            document: empty_table(),
+            authority: crate::transaction::ConfigExpectedAuthority { identity: None, sha256: None },
+        }),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Return whether a recorded, unprofiled configuration source is the same
+/// physical file as an exact scope. Comparing open-file identities avoids
+/// path spelling, symlink-alias, Windows case and `#` delimiter ambiguity.
+pub(crate) fn source_is_exact_scope(
+    source: &str,
+    scope: Scope,
+    cwd: &Path,
+) -> Result<bool, CliError> {
+    let scope_path = scope_path(scope, cwd)?;
+    let source_file = match File::open(Path::new(source)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let scope_file = match File::open(scope_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if !source_file.metadata()?.is_file() || !scope_file.metadata()?.is_file() {
+        return Ok(false);
+    }
+    Ok(config_file_identity(&source_file)? == config_file_identity(&scope_file)?)
 }
 
 pub(crate) fn plugins_in_exact_locked(
@@ -1126,6 +1230,7 @@ pub(crate) fn plugins_in_exact_locked(
     Ok(parsed.plugins)
 }
 
+#[cfg(test)]
 fn plugins_at_path(path: &Path) -> Result<BTreeMap<String, PluginConfig>, CliError> {
     if !path.exists() {
         return Ok(BTreeMap::new());
@@ -1205,6 +1310,7 @@ fn mutate_path_locked(
         }
     }
     atomic_write_locked(lock, &path, text.as_bytes(), true, Some(&expected))?;
+    CONFIG_GENERATION.fetch_add(1, Ordering::AcqRel);
     Ok(path.to_owned())
 }
 
@@ -1663,6 +1769,12 @@ fn redact_value(value: &mut toml::Value, key: Option<&str>) {
         }
         _ => {}
     }
+}
+
+pub(crate) fn redacted_value(value: &toml::Value) -> toml::Value {
+    let mut value = value.clone();
+    redact_value(&mut value, None);
+    value
 }
 
 fn is_secret_key(key: &str) -> bool {
@@ -2139,4 +2251,14 @@ fn pinned_config_cas_rejects_content_mutation_before_publish() {
         .is_err()
     );
     assert_eq!(fs::read(path).unwrap(), racer, "racer content was overwritten");
+}
+
+#[test]
+fn physical_scope_source_does_not_treat_hash_as_a_profile_delimiter() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project#literal");
+    fs::create_dir(&project).unwrap();
+    set(Scope::Project, &project, "cli.jobs", "1").unwrap();
+    let source = project_config_path(&project).unwrap();
+    assert!(source_is_exact_scope(&source.to_string_lossy(), Scope::Project, &project).unwrap());
 }

@@ -170,8 +170,8 @@ const availableApi: ApiClient = {
   },
   async preview() { return { text: "", truncated: false, contentType: "text/plain" }; },
   async download() { return { blob: new Blob(), filename: "result.md" }; },
-  async admin() { return { schemaVersion: 1, formats: [], models: { defaultBundle: "default", entries: [] }, providers: [], plugins: [], configuration: {}, profiles: [], doctor: [] }; },
-  async adminAction() { return this.admin(); },
+  async admin() { return { schemaVersion: 1, formats: [], models: { defaultBundle: "default", entries: [] }, providers: [], plugins: [], configuration: {}, profiles: [], doctor: [], configurationReadOnly: false }; },
+  async adminAction() { return {}; },
 };
 
 test("session handoff clears every fragment and survives only in the current tab", () => {

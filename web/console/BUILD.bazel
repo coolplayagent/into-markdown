@@ -118,6 +118,7 @@ test_suite(
     name = "unit_test",
     tests = [
         ":unit_test_accessibility",
+        ":admin_unit_test",
         ":unit_test_core",
         ":unit_test_history_actions",
         ":unit_test_history_cleanup",

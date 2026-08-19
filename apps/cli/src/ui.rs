@@ -9,7 +9,7 @@ use crate::web_tasks::{
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as AxumPath, Request, State};
+use axum::extract::{FromRef, Path as AxumPath, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::time::{Duration, Instant};
 
 const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
@@ -55,6 +55,12 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const SSE_HEARTBEAT: Duration = Duration::from_millis(100);
+const ADMIN_GRANT_TTL: Duration = Duration::from_secs(30);
+
+struct AdminGrant {
+    binding: Vec<u8>,
+    expires: Instant,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -63,6 +69,32 @@ struct AppState {
     session: Arc<str>,
     tasks: WebTaskBackend,
     shutdown: watch::Receiver<bool>,
+    cwd: PathBuf,
+    test_user_data_anchor: Option<PathBuf>,
+    admin_config: crate::admin::AdminConfigContext,
+    admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
+    admin_gate: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+struct AdminState {
+    cwd: PathBuf,
+    test_user_data_anchor: Option<PathBuf>,
+    admin_config: crate::admin::AdminConfigContext,
+    admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
+    admin_gate: Arc<Semaphore>,
+}
+
+impl FromRef<AppState> for AdminState {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            cwd: state.cwd.clone(),
+            test_user_data_anchor: state.test_user_data_anchor.clone(),
+            admin_config: state.admin_config.clone(),
+            admin_grants: state.admin_grants.clone(),
+            admin_gate: state.admin_gate.clone(),
+        }
+    }
 }
 
 struct DownloadSlot {
@@ -216,6 +248,7 @@ fn browser_command() -> (&'static str, &'static [&'static str]) {
 /// Runs the CLI service until Ctrl-C.
 pub async fn run_cli(
     arguments: UiArgs,
+    admin_config: crate::admin::AdminConfigContext,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<(), CliError> {
@@ -237,7 +270,7 @@ pub async fn run_cli(
     let launch_url = format!("{origin}/#{SESSION_FRAGMENT}={session}");
     announce_and_open(&SystemBrowser, arguments.no_open, &origin, &launch_url, stdout, stderr)?;
 
-    serve(listener, session, tasks, async {
+    serve(listener, session, tasks, std::env::current_dir()?, None, admin_config, async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await
@@ -276,6 +309,9 @@ async fn serve<F>(
     listener: TcpListener,
     session: String,
     tasks: WebTaskBackend,
+    cwd: PathBuf,
+    test_user_data_anchor: Option<PathBuf>,
+    admin_config: crate::admin::AdminConfigContext,
     shutdown: F,
 ) -> Result<(), CliError>
 where
@@ -294,10 +330,17 @@ where
         session: session.into(),
         tasks,
         shutdown: shutdown_receiver.clone(),
+        cwd,
+        test_user_data_anchor,
+        admin_config,
+        admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        admin_gate: Arc::new(Semaphore::new(1)),
     };
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
         .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
+        .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
+        .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
         .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/cancel", post(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/retry", post(retry_task).fallback(api_method_not_allowed))
@@ -493,6 +536,119 @@ async fn status(headers: HeaderMap) -> Response {
         speaker_diarization,
     })
     .into_response()
+}
+
+async fn admin_snapshot(State(state): State<AdminState>) -> Response {
+    let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
+    };
+    let cwd = state.cwd.clone();
+    let anchor = state.test_user_data_anchor.clone();
+    let config = state.admin_config.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::admin::snapshot(&cwd, &config, anchor.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(snapshot)) => Json(snapshot).into_response(),
+        Ok(Err(error)) => admin_error(&error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn admin_grant(State(state): State<AdminState>, request: Request) -> Response {
+    let Ok(action) = bounded_admin_action(request).await else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidRequest");
+    };
+    let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
+    };
+    if !action.authorize_dangerous && !action.authorize_network {
+        return rejection(StatusCode::BAD_REQUEST, "authorizationPurposeRequired");
+    }
+    let grant = match new_session() {
+        Ok(grant) => grant,
+        Err(error) => return admin_error(&error),
+    };
+    let binding = match admin_action_binding(&action) {
+        Ok(binding) => binding,
+        Err(error) => return admin_error(&error),
+    };
+    let mut grants = state.admin_grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+    grants.retain(|_, candidate| candidate.expires > now);
+    if grants.len() >= 64 {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "authorizationGrantLimit");
+    }
+    grants.insert(grant.clone(), AdminGrant { binding, expires: now + ADMIN_GRANT_TTL });
+    Json(serde_json::json!({"schemaVersion": 1, "grant": grant})).into_response()
+}
+
+async fn admin_action(State(state): State<AdminState>, request: Request) -> Response {
+    let Ok(action) = bounded_admin_action(request).await else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidRequest");
+    };
+    let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
+    };
+    if action.authorize_dangerous || action.authorize_network {
+        let Some(token) = action.authorization_grant.as_deref() else {
+            return rejection(StatusCode::FORBIDDEN, "authorizationGrantRequired");
+        };
+        let candidate = state
+            .admin_grants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(token);
+        let Ok(binding) = admin_action_binding(&action) else {
+            return rejection(StatusCode::BAD_REQUEST, "invalidRequest");
+        };
+        if !candidate
+            .is_some_and(|grant| grant.expires > Instant::now() && grant.binding == binding)
+        {
+            return rejection(StatusCode::FORBIDDEN, "authorizationGrantInvalid");
+        }
+    } else if action.authorization_grant.is_some() {
+        return rejection(StatusCode::BAD_REQUEST, "unexpectedAuthorizationGrant");
+    }
+    let cwd = state.cwd.clone();
+    let anchor = state.test_user_data_anchor.clone();
+    let config = state.admin_config.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::admin::apply(&cwd, &config, &action, anchor.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Err(error)) => admin_error(&error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn bounded_admin_action(request: Request) -> Result<crate::admin::AdminAction, ()> {
+    const MAX_ADMIN_BODY: usize = 16 * 1024;
+    if single_ascii_header(request.headers(), header::CONTENT_TYPE) != Some("application/json") {
+        return Err(());
+    }
+    let body = axum::body::to_bytes(request.into_body(), MAX_ADMIN_BODY).await.map_err(|_| ())?;
+    serde_json::from_slice(&body).map_err(|_| ())
+}
+
+fn admin_action_binding(action: &crate::admin::AdminAction) -> Result<Vec<u8>, CliError> {
+    let mut action = action.clone();
+    action.authorization_grant = None;
+    serde_json::to_vec(&action)
+        .map_err(|_| CliError::internal("administration authorization binding failed"))
+}
+
+fn admin_error(error: &CliError) -> Response {
+    let status = match error.exit_code() {
+        2 => StatusCode::BAD_REQUEST,
+        5 => StatusCode::FORBIDDEN,
+        4 => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(serde_json::json!({"schemaVersion": 1, "code": error.code()}))).into_response()
 }
 
 fn diarization_runtime_status() -> ComponentDto {
@@ -1486,9 +1642,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let backend = WebTaskBackend::open(directory.path().join("backend")).unwrap();
         let (sender, receiver) = oneshot::channel();
-        let task = tokio::spawn(serve(listener, session.clone(), backend, async {
-            let _ = receiver.await;
-        }));
+        let task = tokio::spawn(serve(
+            listener,
+            session.clone(),
+            backend,
+            directory.path().to_owned(),
+            Some(directory.path().join("user-data")),
+            crate::admin::AdminConfigContext::default(),
+            async {
+                let _ = receiver.await;
+            },
+        ));
         (directory, port, session, sender, task)
     }
 
@@ -1505,6 +1669,74 @@ mod tests {
         assert!(response.contains("\"schemaVersion\":1"), "{response}");
         assert!(response.contains(&format!("\"code\":\"{code}\"")), "{response}");
         assert_security_headers(response);
+    }
+
+    #[tokio::test]
+    async fn administration_gate_bounds_snapshot_grant_and_action_and_releases() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AdminState {
+            cwd: directory.path().to_owned(),
+            test_user_data_anchor: Some(directory.path().join("user-data")),
+            admin_config: crate::admin::AdminConfigContext::default(),
+            admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            admin_gate: Arc::new(Semaphore::new(1)),
+        };
+        let body = serde_json::json!({
+            "schemaVersion": 1,
+            "action": "model.remove",
+            "target": "fixture",
+            "authorizeDangerous": true
+        })
+        .to_string();
+        let request = || {
+            Request::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap()
+        };
+        let granted = admin_grant(State(state.clone()), request()).await;
+        assert_eq!(granted.status(), StatusCode::OK);
+        let granted = axum::body::to_bytes(granted.into_body(), 4096).await.unwrap();
+        let token = serde_json::from_slice::<serde_json::Value>(&granted).unwrap()["grant"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let authorized_body = serde_json::json!({
+            "schemaVersion": 1,
+            "action": "model.remove",
+            "target": "fixture",
+            "authorizeDangerous": true,
+            "authorizationGrant": token,
+        })
+        .to_string();
+        let authorized_request = || {
+            Request::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(authorized_body.clone()))
+                .unwrap()
+        };
+        let permit = state.admin_gate.clone().acquire_owned().await.unwrap();
+        assert_eq!(
+            admin_snapshot(State(state.clone())).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            admin_grant(State(state.clone()), request()).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            admin_action(State(state.clone()), authorized_request()).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        drop(permit);
+        assert_ne!(
+            admin_action(State(state.clone()), authorized_request()).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            admin_action(State(state), authorized_request()).await.status(),
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[test]
@@ -1759,6 +1991,91 @@ mod tests {
         )
         .await;
         assert_schema_error(&denied, "HTTP/1.1 403", "networkAuthorizationRequired");
+
+        let dangerous = serde_json::json!({
+            "schemaVersion": 1,
+            "action": "plugin.remove",
+            "scope": "project",
+            "target": "missing-plugin",
+            "authorizeDangerous": true
+        });
+        let dangerous_body = serde_json::to_string(&dangerous).unwrap();
+        let granted = request(
+            port,
+            &format!(
+                "POST /api/admin/grant HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{dangerous_body}",
+                dangerous_body.len()
+            ),
+        )
+        .await;
+        assert!(granted.starts_with("HTTP/1.1 200"), "{granted}");
+        let grant =
+            serde_json::from_str::<serde_json::Value>(granted.split_once("\r\n\r\n").unwrap().1)
+                .unwrap()["grant"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+        let mut authorized = dangerous.clone();
+        authorized["authorizationGrant"] = grant.clone().into();
+        let authorized_body = serde_json::to_string(&authorized).unwrap();
+        let authorized_request = format!(
+            "POST /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{authorized_body}",
+            authorized_body.len()
+        );
+        let (first, concurrent_replay) =
+            tokio::join!(request(port, &authorized_request), request(port, &authorized_request));
+        let codes = [first.as_str(), concurrent_replay.as_str()];
+        assert_eq!(codes.iter().filter(|value| value.contains("notFound")).count(), 1);
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|value| {
+                    value.contains("authorizationGrantInvalid") || value.contains("adminBusy")
+                })
+                .count(),
+            1
+        );
+        let replay = request(port, &authorized_request).await;
+        assert_schema_error(&replay, "HTTP/1.1 403", "authorizationGrantInvalid");
+
+        for (field, mutation) in [
+            ("scope", serde_json::json!("global")),
+            ("target", serde_json::json!("other-plugin")),
+            ("source", serde_json::json!("https://example.invalid/plugin.zip")),
+            ("sha256", serde_json::json!("0".repeat(64))),
+            ("signingKeyId", serde_json::json!("other-key")),
+            ("signingKeySha256", serde_json::json!("1".repeat(64))),
+            ("authorizeNetwork", serde_json::json!(true)),
+        ] {
+            let granted = request(
+                port,
+                &format!(
+                    "POST /api/admin/grant HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{dangerous_body}",
+                    dangerous_body.len()
+                ),
+            )
+            .await;
+            let token = serde_json::from_str::<serde_json::Value>(
+                granted.split_once("\r\n\r\n").unwrap().1,
+            )
+            .unwrap()["grant"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let mut changed = dangerous.clone();
+            changed[field] = mutation;
+            changed["authorizationGrant"] = token.into();
+            let changed_body = serde_json::to_string(&changed).unwrap();
+            let response = request(
+                port,
+                &format!(
+                    "POST /api/admin HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{changed_body}",
+                    changed_body.len()
+                ),
+            )
+            .await;
+            assert_schema_error(&response, "HTTP/1.1 403", "authorizationGrantInvalid");
+        }
 
         let unauthenticated = request(
             port,
@@ -2030,9 +2347,17 @@ mod tests {
         let backend = WebTaskBackend::open(directory.path().join("backend")).unwrap();
         let retained = backend.clone();
         let (sender, receiver) = oneshot::channel();
-        let server = tokio::spawn(serve(listener, session.clone(), backend, async {
-            let _ = receiver.await;
-        }));
+        let server = tokio::spawn(serve(
+            listener,
+            session.clone(),
+            backend,
+            directory.path().to_owned(),
+            Some(directory.path().join("user-data")),
+            crate::admin::AdminConfigContext::default(),
+            async {
+                let _ = receiver.await;
+            },
+        ));
         let host = format!("127.0.0.1:{port}");
         let origin = format!("http://{host}");
 
@@ -2113,9 +2438,17 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         let server_session = session.clone();
         let server_backend = retained.clone();
-        let server = tokio::spawn(serve(listener, server_session, server_backend, async {
-            let _ = receiver.await;
-        }));
+        let server = tokio::spawn(serve(
+            listener,
+            server_session,
+            server_backend,
+            directory.path().to_owned(),
+            Some(directory.path().join("user-data")),
+            crate::admin::AdminConfigContext::default(),
+            async {
+                let _ = receiver.await;
+            },
+        ));
         let host = format!("127.0.0.1:{port}");
         let origin = format!("http://{host}");
         let mut slow_reader =
