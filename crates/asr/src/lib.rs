@@ -126,6 +126,10 @@ impl WhisperSmallTranscriber {
             .manager
             .verified_runtime_path(&self.config.model_bundle, "model", context)
             .map_err(|error| model_error(&self.config.model_bundle, error))?;
+        // Native Whisper diagnostics must not corrupt CLI JSON stderr or Web
+        // progress streams. With logging backends disabled this audited hook
+        // is a process-wide no-op sink and is safe to install repeatedly.
+        whisper_rs::install_logging_hooks();
         let mut parameters = WhisperContextParameters::default();
         parameters.use_gpu(false).flash_attn(false);
         let native = WhisperContext::new_with_params(&artifact.path, parameters).map_err(|_| {

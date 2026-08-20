@@ -14,11 +14,15 @@ from common import ReleaseError, authority, regular_files, run, sha256
 
 ALLOWED_HOSTS = {
     "download.documentfoundation.org",
+    "cdn-lfs-us-1.hf.co",
+    "ffmpeg.org",
     "github.com",
+    "huggingface.co",
     "objects.githubusercontent.com",
     "paddle-model-ecology.bj.bcebos.com",
     "raw.githubusercontent.com",
     "release-assets.githubusercontent.com",
+    "us.aws.cdn.hf.co",
 }
 
 

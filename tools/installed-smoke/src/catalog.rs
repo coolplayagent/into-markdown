@@ -145,6 +145,7 @@ mod tests {
             rust_library: temporary.path().to_owned(),
             manifest: executable.clone(),
             fixtures: temporary.path().to_owned(),
+            audio_fixture: executable.clone(),
             temp_root: temporary.path().to_owned(),
             report: temporary.path().join("report"),
             archive_sha256: "a".repeat(64),

@@ -117,6 +117,11 @@ pub(crate) fn run(
             executor,
         ),
     );
+    record(
+        cases,
+        "audio-transcription-runtime",
+        media_conversion(request, root, authority, projection, &doctor, executor),
+    );
     for (id, fixture, golden) in [
         (
             "legacy-doc-runtime",
@@ -146,6 +151,110 @@ pub(crate) fn run(
         return Err("smoke run cancelled".into());
     }
     Ok(())
+}
+
+fn media_conversion(
+    request: &ValidatedRequest,
+    root: &Path,
+    authority: &CoreCatalogAuthority,
+    projection: &ArchiveProjection,
+    doctor: &BTreeMap<String, DoctorEntry>,
+    executor: &dyn Executor,
+) -> Result<(), String> {
+    let entry = authority
+        .entries
+        .iter()
+        .find(|entry| entry.format == "audio")
+        .ok_or_else(|| "audio format is absent from catalog authority".to_owned())?;
+    let runtime = authority
+        .optional_runtimes
+        .iter()
+        .find(|entry| entry.component == "whisper-small")
+        .ok_or_else(|| "ASR runtime is absent from catalog authority".to_owned())?;
+    if entry.runtime_component.as_deref() != Some(runtime.component.as_str())
+        || entry.install_hint.as_deref() != Some(runtime.install_hint.as_str())
+    {
+        return Err("audio format and ASR runtime authority disagree".into());
+    }
+    let path = &request.audio_fixture;
+    let path_string = path.display().to_string();
+    let available = doctor.get("runtime.asr").is_some_and(|entry| entry.status == "ok");
+    let projected = runtime_is_projected(projection, "whisper-small")?;
+    if projected && !available {
+        return Err("projected ASR runtime is unavailable after installation".into());
+    }
+    if available {
+        for (extra, expect_diarization) in [
+            (vec!["--ai", "audio-transcription=only"], false),
+            (vec!["--diarize", "--expected-speakers", "1"], true),
+        ] {
+            let mut arguments = vec![
+                path_string.as_str(),
+                "--no-config",
+                "--emit",
+                "result-json",
+                "--log-format",
+                "json",
+            ];
+            arguments.extend(extra);
+            let output = cli(request, root, &arguments, &[], executor)?;
+            let dto: serde_json::Value = serde_json::from_slice(&output.stdout)
+                .map_err(|error| format!("audio result DTO is invalid: {error}"))?;
+            if output.exit_code != Some(0) {
+                return Err("available ASR runtime returned a nonzero exit".into());
+            }
+            if !output.stderr.is_empty() {
+                return Err("available ASR runtime polluted JSON stderr".into());
+            }
+            if dto["schemaVersion"] != 1 {
+                return Err("available ASR runtime returned an unsupported DTO".into());
+            }
+            if !dto["document"]["blocks"].as_array().is_some_and(|blocks| !blocks.is_empty()) {
+                return Err("available ASR runtime produced no transcript blocks".into());
+            }
+            if dto["document"]["metadata"]["properties"]["media.model"]
+                .as_str()
+                .is_none_or(str::is_empty)
+            {
+                return Err("available ASR runtime omitted its model identity".into());
+            }
+            if expect_diarization
+                && dto["document"]["metadata"]["properties"]["media.diarizer"]
+                    .as_str()
+                    .is_none_or(str::is_empty)
+            {
+                return Err("available diarization runtime omitted its model identity".into());
+            }
+        }
+        return Ok(());
+    }
+    let output = cli(
+        request,
+        root,
+        &[
+            path_string.as_str(),
+            "--no-config",
+            "--ai",
+            "audio-transcription=only",
+            "--log-format",
+            "json",
+        ],
+        &[],
+        executor,
+    )?;
+    let event: serde_json::Value = serde_json::from_slice(&output.stderr)
+        .map_err(|_| "missing ASR runtime error is not JSON")?;
+    let hint = runtime.install_hint.split('`').nth(1).unwrap_or(&runtime.install_hint);
+    if output.exit_code == Some(9)
+        && output.stdout.is_empty()
+        && event["code"] == "componentUnavailable"
+        && event["exitCode"] == 9
+        && event["message"].as_str().is_some_and(|message| message.contains(hint))
+    {
+        Ok(())
+    } else {
+        Err("missing ASR runtime did not return its exact setup contract".into())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -439,6 +548,14 @@ fn runtime_is_projected(
     projection: &ArchiveProjection,
     runtime_component: &str,
 ) -> Result<bool, String> {
+    if runtime_component == "whisper-small" {
+        let ffmpeg = projection.components.iter().any(|value| value == "ffmpeg");
+        let whisper = projection.components.iter().any(|value| value == "whisper-small");
+        if whisper && !ffmpeg {
+            return Err("archive projection contains a Whisper model without FFmpeg".into());
+        }
+        return Ok(ffmpeg && whisper);
+    }
     let required: &[&str] = match runtime_component {
         "pdfium" => &["pdfium"],
         "onnxruntime" => &[
@@ -471,6 +588,7 @@ fn doctor_id(component: &str) -> Result<&str, String> {
         "onnxruntime" => Ok("runtime.ocr"),
         "legacy-office" => Ok("runtime.legacy-office"),
         "pdfium" => Ok("runtime.pdfium"),
+        "whisper-small" => Ok("runtime.asr"),
         _ => Err("catalog authority contains an unknown optional runtime".into()),
     }
 }
@@ -612,6 +730,16 @@ mod tests {
             runtime_is_projected(&incomplete, "onnxruntime").unwrap_err(),
             "archive projection contains an incomplete optional runtime"
         );
+
+        assert!(!runtime_is_projected(&projection(&["ffmpeg"]), "whisper-small").unwrap());
+        assert!(
+            runtime_is_projected(&projection(&["ffmpeg", "whisper-small"]), "whisper-small")
+                .unwrap()
+        );
+        assert_eq!(
+            runtime_is_projected(&projection(&["whisper-small"]), "whisper-small").unwrap_err(),
+            "archive projection contains a Whisper model without FFmpeg"
+        );
     }
 
     fn fixture_request(relative: &str) -> (tempfile::TempDir, ValidatedRequest) {
@@ -630,6 +758,7 @@ mod tests {
             rust_library,
             manifest: placeholder.clone(),
             fixtures: fixture_root.canonicalize().unwrap(),
+            audio_fixture: fixture.canonicalize().unwrap(),
             temp_root: PathBuf::new(),
             report: PathBuf::new(),
             archive_sha256: "a".repeat(64),

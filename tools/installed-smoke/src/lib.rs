@@ -205,12 +205,15 @@ mod tests {
         fs::write(&manifest, serde_json::to_vec(&projection).unwrap()).unwrap();
         let temp_root = temporary.path().join("empty-temp");
         let report = temporary.path().join("report.json");
+        let audio_fixture = temporary.path().join("licensed-speech.wav");
         fs::create_dir(&temp_root).unwrap();
+        fs::write(&audio_fixture, b"external fixture").unwrap();
         let request = SmokeRequest {
             install_root: install,
             into_md: binary.clone(),
             rust_library: rust.clone(),
             manifest,
+            audio_fixture,
             fixtures,
             temp_root: temp_root.clone(),
             report: report.clone(),
@@ -223,7 +226,7 @@ mod tests {
         };
         let missing_library_request = request.clone();
         let formats = serde_json::to_vec(&authority.entries).unwrap();
-        let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.legacy-office","status":"missing","detail":"install legacy Office"}]"#.to_vec();
+        let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.legacy-office","status":"missing","detail":"install legacy Office"},{"id":"runtime.asr","status":"missing","detail":"run into-md setup media"}]"#.to_vec();
         let markdown = [
             b"Alpha \xe4\xb8\xad\xe6\x96\x87 line  \nSecond line\n".to_vec(),
             b"Corpus Alpha \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
@@ -254,6 +257,11 @@ mod tests {
         outputs.push_back(ok(b"Installed ZIP smoke\n".to_vec()));
         outputs.push_back(CommandOutput { exit_code: Some(9), stdout: vec![], stderr: pdf });
         outputs.push_back(CommandOutput { exit_code: Some(9), stdout: vec![], stderr: image });
+        outputs.push_back(CommandOutput {
+            exit_code: Some(9),
+            stdout: vec![],
+            stderr: br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup media"}"#.to_vec(),
+        });
         let legacy = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the authority-verified legacy Office runtime for this platform"}"#.to_vec();
         for _ in 0..3 {
             outputs.push_back(CommandOutput {

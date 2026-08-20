@@ -48,7 +48,7 @@ test -s "$src/COPYING.LGPLv2.1"
 grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1"
 
 case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args= ;;
+  Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args='--extra-cflags=-mmacosx-version-min=14.0 --extra-ldflags=-mmacosx-version-min=14.0' ;;
   Linux-x86_64) target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args= ;;
   Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
   MINGW*-x86_64|MSYS*-x86_64) command -v cl >/dev/null; command -v objdump >/dev/null; target=x86_64-pc-windows-msvc; format=pe; arch=x86_64; toolchain_args='--toolchain=msvc --disable-x86asm' ;;

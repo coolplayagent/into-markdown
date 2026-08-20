@@ -44,7 +44,7 @@ pub fn installed_asr_service(
         error => ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
             detail: format!(
-                "installed Whisper model verification failed ({error}); install it with `into-md models install {}`",
+                "installed Whisper model verification failed ({error}); run `into-md setup media` or install it with `into-md models install {}`",
                 config.model_bundle
             ),
         },
@@ -97,6 +97,7 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
+        assert!(error.to_string().contains("into-md setup media"));
         assert!(error.to_string().contains("models install whisper-small-multilingual"));
         assert!(!error.to_string().contains("missing-authority"));
     }

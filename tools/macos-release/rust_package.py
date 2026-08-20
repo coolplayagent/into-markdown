@@ -32,14 +32,14 @@ def materialize(destination: pathlib.Path) -> None:
         source = pathlib.Path(package["manifest_path"]).parent
         if source == api:
             continue
-        if source.parent != ROOT / "crates":
-            raise ReleaseError(f"Rust package escapes the project crate root: {source}")
-        shutil.copytree(source, destination / "crates" / source.name, ignore=shutil.ignore_patterns("target"))
+        relative = local_package_path(source)
+        shutil.copytree(source, destination / relative, ignore=shutil.ignore_patterns("target"))
     for relative in [
         "models/manifest.json",
         "models/ppocrv6-tiny-detector-authority.json",
         "models/ppocrv6-tiny-detector-onnx-authority.json",
         "models/ppocrv6-tiny-recognizer-authority.json",
+        "third_party/ffmpeg/build-policy.json",
         "third_party/licenses/downloads.json",
         "third_party/onnxruntime/manifest.json",
         "third_party/pdfium/manifest.json",
@@ -58,7 +58,8 @@ def materialize(destination: pathlib.Path) -> None:
     workspace = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     dependencies = workspace.split("[workspace.dependencies]\n", 1)[1].split("\n[workspace.lints.rust]", 1)[0]
     members = sorted(
-        f'    "crates/{pathlib.Path(package["manifest_path"]).parent.name}",' for package in local
+        f'    "{local_package_path(pathlib.Path(package["manifest_path"]).parent).as_posix()}",'
+        for package in local
         if pathlib.Path(package["manifest_path"]).parent != api
     )
     combined = (
@@ -80,3 +81,11 @@ def materialize(destination: pathlib.Path) -> None:
         cwd=destination,
     )
     run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"], cwd=destination)
+
+
+def local_package_path(source: pathlib.Path) -> pathlib.Path:
+    if source.parent == ROOT / "crates":
+        return pathlib.Path("crates") / source.name
+    if source == ROOT / "third_party/whisper-rs-0.16.0":
+        return pathlib.Path("third_party/whisper-rs-0.16.0")
+    raise ReleaseError(f"Rust package escapes the reviewed project roots: {source}")

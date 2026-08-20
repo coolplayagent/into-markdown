@@ -2,7 +2,14 @@
   "schema_version": 1,
   "ffmpeg_version": "8.1.2",
   "targets": {
-    "aarch64-apple-darwin": null,
+    "aarch64-apple-darwin": {
+      "authority_sha256": "f9bf5072012cecc1d9904b47b59c6d7b61455a7bee4a961a888eb24d428a90ff",
+      "executable_bytes": 2547896,
+      "executable_sha256": "a50095bf845be367fbe81240e9e2472ef187d07096cde5be31810ecac5e8294d",
+      "config_log_sha256": "3756545e917a484a01a02cc44e73f8cc49cc54e5fb24656c5e53fc5740318132",
+      "relink_bytes": 6249472,
+      "relink_sha256": "a854b4379c314c9ad3105525eb9420d5fda4575083dc4f48663d21dd20f159e3"
+    },
     "x86_64-unknown-linux-gnu": null,
     "aarch64-unknown-linux-gnu": null,
     "x86_64-pc-windows-msvc": null

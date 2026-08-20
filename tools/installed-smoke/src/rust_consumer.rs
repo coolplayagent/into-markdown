@@ -121,7 +121,7 @@ fn compile_and_run(
         })?;
         if output.exit_code != Some(0) {
             let diagnostics = String::from_utf8_lossy(&output.stderr);
-            let tail = diagnostics.char_indices().rev().nth(180).map_or(0, |(index, _)| index);
+            let tail = diagnostics.char_indices().rev().nth(4_096).map_or(0, |(index, _)| index);
             return Err(format!(
                 "offline external consumer compilation failed (exit {:?}): {}",
                 output.exit_code,
@@ -161,13 +161,50 @@ fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<
         let linker = Path::new("/usr/bin/clang")
             .canonicalize()
             .map_err(|_| "fixed macOS linker is unavailable".to_owned())?;
-        if !linker.is_file() {
+        let cxx = Path::new("/usr/bin/clang++")
+            .canonicalize()
+            .map_err(|_| "fixed macOS C++ compiler is unavailable".to_owned())?;
+        if !linker.is_file() || !cxx.is_file() {
             return Err("fixed macOS linker is not a regular file".into());
         }
+        let cmake = [
+            "/opt/homebrew/bin/cmake",
+            "/usr/local/bin/cmake",
+            "/Applications/CMake.app/Contents/bin/cmake",
+        ]
+        .into_iter()
+        .find_map(|candidate| Path::new(candidate).canonicalize().ok())
+        .filter(|candidate| candidate.is_file())
+        .ok_or_else(|| "CMake is required to verify the installed Rust package".to_owned())?;
+        let sdk_output = std::process::Command::new("/usr/bin/xcrun")
+            .args(["--sdk", "macosx", "--show-sdk-path"])
+            .env_clear()
+            .output()
+            .map_err(|_| "fixed macOS SDK lookup failed".to_owned())?;
+        let sdk = std::str::from_utf8(&sdk_output.stdout)
+            .ok()
+            .map(str::trim)
+            .filter(|value| sdk_output.status.success() && !value.is_empty())
+            .map(Path::new)
+            .and_then(|value| value.canonicalize().ok())
+            .filter(|value| value.is_dir())
+            .ok_or_else(|| "fixed macOS SDK is unavailable".to_owned())?;
+        let compiler_flags = format!("-isysroot {} -mmacosx-version-min=14.0", sdk.display());
         environment.insert(
             "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER".into(),
             linker.display().to_string(),
         );
+        environment.extend(BTreeMap::from([
+            ("BINDGEN_EXTRA_CLANG_ARGS".into(), compiler_flags.clone()),
+            ("CC".into(), linker.display().to_string()),
+            ("CFLAGS".into(), compiler_flags.clone()),
+            ("CMAKE".into(), cmake.display().to_string()),
+            ("CXX".into(), cxx.display().to_string()),
+            ("CXXFLAGS".into(), compiler_flags),
+            ("MACOSX_DEPLOYMENT_TARGET".into(), "14.0".into()),
+            ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
+            ("SDKROOT".into(), sdk.display().to_string()),
+        ]));
     }
     Ok(())
 }
@@ -390,6 +427,7 @@ mod tests {
             rust_library: library.canonicalize().unwrap(),
             manifest: executable.clone(),
             fixtures: install.clone(),
+            audio_fixture: executable.clone(),
             temp_root: temporary.path().to_owned(),
             report: temporary.path().join("report"),
             archive_sha256: "a".repeat(64),

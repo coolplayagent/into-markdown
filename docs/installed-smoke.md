@@ -12,6 +12,11 @@ The runner requires an immutable installation root containing:
   and a complete Cargo vendor directory;
 - the selected fixtures below `share/into-markdown/smoke/fixtures/`.
 
+The adapter also supplies `--audio-fixture` as a separate, license-authorized speech sample. It is
+not copied into the release archive; the macOS workflow uses the exact public-domain English sample
+bound by `fixtures/asr-quality-authority.json`. A full package must produce at least one transcript
+block from it and publish both ASR and diarization model identities.
+
 Every binary, Rust package file, vendor file, authority file, and fixture must be bound by the #60
 archive projection with its exact size and SHA-256. The manifest itself is passed separately because
 it cannot contain its own digest. The archive SHA-256 is supplied by the platform workflow and is
@@ -36,7 +41,7 @@ together cannot manufacture a different production catalog.
 
 The CLI cases cover version and independently authorized formats, Markdown and result DTO output,
 file and stdin conversion, malformed input and stable exits, representative DOCX, EPUB, MSG, RTF,
-ZIP, PDF, and image OCR inputs. Optional runtimes either convert successfully when `doctor` reports
+ZIP, PDF, image OCR, and real speech inputs. Optional runtimes either convert successfully when `doctor` reports
 them ready or return `componentUnavailable`, exit 9, and the catalog installation guidance. The Rust
 case compiles and runs an external in-memory text conversion and reads the stable DTO.
 
@@ -49,6 +54,7 @@ installed-smoke \
   --rust-library /absolute/install/lib/into-markdown-rust \
   --manifest /absolute/install/archive-manifest.json \
   --fixtures /absolute/install/share/into-markdown/smoke/fixtures \
+  --audio-fixture /absolute/licensed-speech.wav \
   --temp-root /absolute/empty-temp \
   --report /absolute/report.json \
   --archive-sha256 <lowercase-sha256> \

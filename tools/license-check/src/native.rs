@@ -254,8 +254,17 @@ fn model_integrity(
     component: &str,
     errors: &mut Vec<String>,
 ) -> Vec<IntegrityEvidence> {
-    if component == "whisper-small" {
-        return whisper_model_integrity(repository, target, errors);
+    if let Some((bundle, artifact)) = match component {
+        "whisper-small" => Some(("whisper-small-multilingual", "whisper-small-model")),
+        "silero-vad-half-onnx-model" => {
+            Some(("silero-vad-3dspeaker-eres2net", "silero-vad-half-onnx-model"))
+        }
+        "3dspeaker-eres2net-base-onnx-model" => {
+            Some(("silero-vad-3dspeaker-eres2net", "3dspeaker-eres2net-base-onnx-model"))
+        }
+        _ => None,
+    } {
+        return manifest_model_integrity(repository, target, component, bundle, artifact, errors);
     }
     let path = if component == "ppocrv6-tiny-detector-onnx-model" {
         "models/ppocrv6-tiny-detector-onnx-authority.json"
@@ -317,9 +326,12 @@ fn model_integrity(
     result
 }
 
-fn whisper_model_integrity(
+fn manifest_model_integrity(
     repository: &Path,
     target: &str,
+    component: &str,
+    bundle_id: &str,
+    artifact_id: &str,
     errors: &mut Vec<String>,
 ) -> Vec<IntegrityEvidence> {
     let path = "models/manifest.json";
@@ -328,16 +340,16 @@ fn whisper_model_integrity(
         .get("bundles")
         .and_then(Value::as_array)
         .and_then(|bundles| {
-            bundles.iter().find(|bundle| {
-                bundle.get("id").and_then(Value::as_str) == Some("whisper-small-multilingual")
-            })
+            bundles
+                .iter()
+                .find(|bundle| bundle.get("id").and_then(Value::as_str) == Some(bundle_id))
         })
         .and_then(|bundle| bundle.get("runtime_artifacts"))
         .and_then(Value::as_array)
         .and_then(|artifacts| {
-            artifacts.iter().find(|artifact| {
-                artifact.get("id").and_then(Value::as_str) == Some("whisper-small-model")
-            })
+            artifacts
+                .iter()
+                .find(|artifact| artifact.get("id").and_then(Value::as_str) == Some(artifact_id))
         });
     let digest = artifact.and_then(|artifact| artifact.get("sha256")).and_then(Value::as_str);
     let downloads = read_json(&repository.join("third_party/licenses/downloads.json"), errors);
@@ -346,16 +358,14 @@ fn whisper_model_integrity(
         .and_then(|value| value.get("model_runtime_files"))
         .and_then(Value::as_array)
         .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("artifact_id").and_then(Value::as_str) == Some("whisper-small-model")
-            })
+            items
+                .iter()
+                .find(|item| item.get("artifact_id").and_then(Value::as_str) == Some(artifact_id))
         });
     if digest.is_none()
         || controlled.and_then(|item| item.get("sha256")).and_then(Value::as_str) != digest
     {
-        errors.push(
-            "whisper-small SBOM integrity is not bound to model/download authority".to_owned(),
-        );
+        errors.push(format!("{component} SBOM integrity is not bound to model/download authority"));
         return Vec::new();
     }
     let bytes = fs::read(repository.join(path)).unwrap_or_default();
@@ -363,7 +373,7 @@ fn whisper_model_integrity(
         IntegrityEvidence {
             algorithm: "SHA-256".to_owned(),
             digest: digest.unwrap_or_default().to_owned(),
-            subject: "whisper-small controlled model file".to_owned(),
+            subject: format!("{component} controlled model file"),
             target: Some(target.to_owned()),
         },
         IntegrityEvidence {

@@ -191,6 +191,28 @@
       "obligations": "Preserve the Whisper model MIT license and bind distributed ggml-small.bin bytes to the reviewed commit, exact size, SHA-256, and model authority."
     },
     {
+      "id": "silero-vad-half-onnx-model",
+      "kind": "model",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "Silero VAD v6.2.1",
+      "source": "https://github.com/snakers4/silero-vad/tree/v6.2.1",
+      "license": "MIT",
+      "obligations": "Full offline packages only. Preserve the Silero MIT license and bind silero_vad_half.onnx to the reviewed tag, exact size, SHA-256, and model authority."
+    },
+    {
+      "id": "3dspeaker-eres2net-base-onnx-model",
+      "kind": "model",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models",
+      "license": "Apache-2.0",
+      "obligations": "Full offline packages only. Preserve Apache-2.0 and the 3D-Speaker and sherpa-onnx attribution, and bind 3dspeaker_eres2net_base.onnx to its exact size, SHA-256, and model authority."
+    },
+    {
       "id": "ppocrv6-tiny-detector-onnx-model",
       "kind": "model",
       "status": "reviewed",

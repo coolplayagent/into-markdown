@@ -102,7 +102,7 @@ pub fn installed_diarization_service(
         component: "onnxruntime-worker".into(),
         detail: format!("installed ONNX worker is unavailable: {error}"),
     })?;
-    let resolver = into_markdown_asr::DiarizationModelResolver::new(Arc::clone(&manager));
+    let resolver = into_markdown_asr::DiarizationModelResolver::new(Arc::clone(&manager), context)?;
     let runtime = into_markdown_ocr::OnnxRuntime::new(
         Arc::new(resolver),
         Arc::new(factory),

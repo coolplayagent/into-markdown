@@ -23,6 +23,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - name: Build audited LGPL FFmpeg runtime
+        env:
+          FFMPEG_AUDIT_NETWORK: "1"
+          FFMPEG_AUDIT_OUTPUT_DIR: ${{ runner.temp }}/ffmpeg-audit
+        run: |
+          brew install gnupg
+          ./tools/ffmpeg-build-audit.sh
       - name: Build fixed macOS archive
         env:
           PROFILE: ${{ inputs.profile }}
@@ -33,6 +40,7 @@ jobs:
               --output "$RUNNER_TEMP/stage-$PROFILE-$sample" \
               --cache "$RUNNER_TEMP/release-cache" \
               --build-root "$RUNNER_TEMP/build-$PROFILE-$sample" \
+              --ffmpeg-artifacts "$RUNNER_TEMP/ffmpeg-audit" \
               --archive "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-$sample.tar.gz"
           done
           cmp "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-a.tar.gz" \
@@ -63,6 +71,7 @@ jobs:
             --rust-library "$installed/lib/into-markdown-rust" \
             --manifest "$installed/archive-manifest.json" \
             --fixtures "$installed/share/into-markdown/smoke/fixtures" \
+            --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" \
             --temp-root "$RUNNER_TEMP/smoke-$PROFILE" \
             --report "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-smoke.json" \
             --archive-sha256 "$archive_sha" \

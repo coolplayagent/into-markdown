@@ -76,25 +76,25 @@ The audit and the local Bzlmod extension share
 `third_party/licenses/downloads.json`, so every managed artifact's URL and hash
 has one structured download source of truth.
 
-The optional meeting pipeline acquires its models only through the explicit
-`setup media` / `models install` flow; ordinary builds, tests, and conversions
-never download them. Silero VAD v6.2.1 is MIT-licensed, Copyright (c)
+The standard package acquires meeting models only through the explicit `setup media` /
+`models install` flow; the full offline package includes the exact reviewed model bytes.
+Ordinary builds, tests, and conversions never download them. Silero VAD v6.2.1 is MIT-licensed, Copyright (c)
 2020-present Silero Team, with the complete text preserved in
 `third_party/licenses/silero-vad-MIT.txt`. The 3D-Speaker ERes2Net model is
 Apache-2.0; the complete license text is the repository `LICENSE`. Both ONNX
 files are bound to exact HTTPS authorities, sizes, and SHA-256 values in
-`models/manifest.json` and `third_party/licenses/downloads.json`. Neither model
-is copied into the current release archives.
+`models/manifest.json` and `third_party/licenses/downloads.json`. Their full-package
+projection also binds file ownership, license material, and SBOM integrity.
 
 PDFium `153.0.7999.0` (`chromium/7999`) is reviewed and hash-pinned for four
 platforms, but remains a manual input and is not in current release outputs. Its
 redistribution archives include the upstream BSD license and a `licenses/` directory
 for bundled permissive dependencies; both must be preserved if distributed.
 
-FFmpeg, LibreOffice, Wasmtime, generated models, and distribution fonts remain
-machine-readable `planned` entries. No version, build configuration, source, or
-compliance conclusion is asserted for them. In particular, a future FFmpeg entry must document a reproducible
-LGPL-compatible configuration and prove that GPL/nonfree components are off.
+FFmpeg 8.1.2 is built from pinned signed source with a reviewed LGPL-compatible
+configuration, GPL/nonfree/network/external-library support disabled, and exact executable,
+authority, corresponding-source, and relink evidence. LibreOffice and Wasmtime retain their
+separate reviewed release boundaries; generated models and distribution fonts remain planned.
 
 Noto Sans CJK SC Regular is a hash-pinned, manual fixture-generator input under
 OFL-1.1. The complete license text is in `third_party/licenses/OFL-1.1.txt`.
