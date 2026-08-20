@@ -39,8 +39,10 @@ pub struct AsrOptions {
     pub language: Option<String>,
     /// Maximum native decoder threads.
     pub max_threads: u16,
-    /// Maximum decoded media duration accepted by ASR.
-    pub max_duration_ms: u64,
+    /// Optional decoded-media duration ceiling. Absence means that duration is
+    /// governed only by the request's input, temporary-storage, output, and
+    /// execution budgets.
+    pub max_duration_ms: Option<u64>,
     /// Maximum timed transcript segments retained in the IR.
     pub max_segments: u32,
     /// Conservative native model and decoder memory reservation.
@@ -53,9 +55,34 @@ impl Default for AsrOptions {
             model_bundle: "whisper-small-multilingual".into(),
             language: None,
             max_threads: 4,
-            max_duration_ms: 600_000,
-            max_segments: 10_000,
+            max_duration_ms: None,
+            max_segments: 100_000,
             max_native_memory_bytes: 900 * 1024 * 1024,
+        }
+    }
+}
+
+/// Local anonymous speaker-diarization settings for media transcription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiarizationOptions {
+    /// Assign stable anonymous speaker IDs to timed transcript segments.
+    pub enabled: bool,
+    /// Optional expected speaker count. Absence enables bounded automatic discovery.
+    pub expected_speakers: Option<u16>,
+    /// Installed, reviewed VAD and speaker-embedding bundle.
+    pub model_bundle: String,
+    /// Maximum anonymous speaker clusters retained for one transcript.
+    pub max_speakers: u16,
+}
+
+impl Default for DiarizationOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            expected_speakers: None,
+            model_bundle: "silero-vad-3dspeaker-eres2net".into(),
+            max_speakers: 16,
         }
     }
 }
@@ -309,6 +336,9 @@ pub struct ConversionOptions {
     /// Local speech-recognition policy.
     #[serde(default)]
     pub asr: AsrOptions,
+    /// Optional anonymous speaker diarization for media transcripts.
+    #[serde(default)]
+    pub diarization: DiarizationOptions,
     /// Optional AI capability policies.
     pub ai: AiOptions,
     /// Explicit network permissions and SSRF controls.

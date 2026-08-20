@@ -3,9 +3,13 @@ import nodeTest, { afterEach } from "node:test";
 import { Window } from "happy-dom";
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { createApiClient, ApiError, defaultWorkbenchOptions, parseTask } from "../src/api";
+import {
+  createApiClient, ApiError, defaultMeetingOptions, defaultWorkbenchOptions, meetingTaskRequest,
+  parseTask,
+} from "../src/api";
 import type { ApiClient, TaskRecord } from "../src/api";
 import { App } from "../src/app";
+import { requestMicrophone, requestSystemAudio } from "../src/meeting-page";
 import { JsonTree, SafeMarkdownPreview } from "../src/preview";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
@@ -22,6 +26,7 @@ const testGroups = {
   preview: new Set([
     "Markdown preview never creates executable or resource-loading DOM",
     "result dialog provides reading and source views with a closed details drawer",
+    "meeting speaker names rerender artifacts through generation CAS without rerunning transcription",
   ]),
   history_actions: new Set([
     "recent history opens a result dialog with irreversible task actions",
@@ -36,8 +41,8 @@ const testGroups = {
     "workbench separates the current batch from scrollable recent history",
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
-    "workbench disables audio when its verified runtime is unavailable",
-    "workbench enables audio by default and only requests ASR for media files",
+    "meeting recording is an independent route and media never enters the document workbench",
+    "meeting page keeps recording primary and setup feedback beside transcript controls",
     "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
     "ErrorBoundary contains provider render errors and focuses its fallback heading",
@@ -134,7 +139,7 @@ async function waitForText(window: Window, value: string): Promise<void> {
 const task = (status: TaskRecord["status"] = "running", id = "a".repeat(32)): TaskRecord => ({
   id, createdAtMs: 1, updatedAtMs: 2, status, progressMillionths: status === "succeeded" ? 1_000_000 : 250_000,
   diagnostics: status === "failed" ? [{ code: "conversionFailed" }] : [], artifacts: [],
-  pinned: false,
+  pinned: false, artifactGeneration: 0, workflow: "conversion",
   configuration: { schemaVersion: 1, ocrEnabled: true, preserveLayout: true },
 });
 
@@ -145,14 +150,18 @@ const availableApi: ApiClient = {
       localApi: { available: true, code: "available", detail: "ok" },
       documentConsole: { available: true, code: "available", detail: "ok" },
       audioTranscription: { available: false, code: "componentUnavailable", detail: "setup" },
+      speakerDiarization: { available: false, code: "componentUnavailable", detail: "setup" },
     };
   },
   async listTasks() { return { tasks: [] }; },
   async getTask(id) { return task("running", id); },
   async upload() { return task(); },
+  async uploadMeeting() { return { ...task(), workflow: "meetingTranscript" }; },
   async cancel(id) { return task("cancelled", id); },
   async retry(id) { return task("pending", id); },
   async setPinned(id, pinned) { return { ...task("succeeded", id), pinned }; },
+  async speakerLabels() { return { schemaVersion: 1 as const, artifactGeneration: 0, speakers: [] }; },
+  async relabelSpeakers(id) { return { ...task("succeeded", id), workflow: "meetingTranscript" }; },
   async deleteTask() {},
   async cleanup() { return { schemaVersion: 1 as const, deletedTasks: 0, reclaimedBytes: 0 }; },
   async watchTask(_id, _onEvent, signal) {
@@ -162,7 +171,13 @@ const availableApi: ApiClient = {
   async download() { return { blob: new Blob(), filename: "result.md" }; },
 };
 
-test("session handoff clears every fragment before returning the in-memory token", () => {
+test("session handoff clears every fragment and survives only in the current tab", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
   for (const hash of [
     `#into-md-session=${token}`,
     "",
@@ -170,14 +185,80 @@ test("session handoff clears every fragment before returning the in-memory token
     `#into-md-session=${token}&next=evil`,
     `#other=${token}`,
   ]) {
+    values.clear();
     const calls: unknown[][] = [];
     const session = takeSession(
       { hash, pathname: "/status", search: "?language=en" },
       { replaceState: (...args: unknown[]) => { calls.push(args); } },
+      storage,
     );
     assert.deepEqual(calls, [[null, "", "/status?language=en"]]);
     assert.equal(session, hash === `#into-md-session=${token}` ? token : null);
   }
+  assert.equal(takeSession(
+    { hash: `#into-md-session=${token}`, pathname: "/meetings", search: "" },
+    { replaceState() {} }, storage,
+  ), token);
+  assert.equal(takeSession(
+    { hash: "", pathname: "/meetings", search: "" },
+    { replaceState() {} }, storage,
+  ), token);
+  assert.equal(takeSession(
+    { hash: "#bad", pathname: "/meetings", search: "" },
+    { replaceState() {} }, storage,
+  ), null);
+  assert.equal(takeSession(
+    { hash: "", pathname: "/meetings", search: "" },
+    { replaceState() {} }, storage,
+  ), null);
+});
+
+test("microphone requests time out without leaking a stream that resolves late", async () => {
+  const window = installWindow();
+  let resolveStream!: (stream: MediaStream) => void;
+  const pending = new Promise<MediaStream>((resolve) => { resolveStream = resolve; });
+  let stopped = 0;
+  const lateStream = { getTracks: () => [{ stop: () => { stopped += 1; } }] } as unknown as MediaStream;
+  Object.defineProperty(window.navigator, "mediaDevices", {
+    configurable: true, value: { getUserMedia: () => pending },
+  });
+  await assert.rejects(requestMicrophone({ audio: true }, 5),
+    (error: unknown) => error instanceof DOMException && error.name === "TimeoutError");
+  resolveStream(lateStream);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stopped, 1);
+});
+
+test("computer audio capture rejects a share without audio and releases every shared track", async () => {
+  const window = installWindow();
+  let stopped = 0;
+  let constraints: DisplayMediaStreamOptions | undefined;
+  const shared = {
+    getAudioTracks: () => [],
+    getTracks: () => [{ stop: () => { stopped += 1; } }, { stop: () => { stopped += 1; } }],
+  } as unknown as MediaStream;
+  Object.defineProperty(window.navigator, "mediaDevices", {
+    configurable: true,
+    value: { getDisplayMedia: async (value: DisplayMediaStreamOptions) => { constraints = value; return shared; } },
+  });
+  await assert.rejects(requestSystemAudio(50),
+    (error: unknown) => error instanceof DOMException && error.name === "NotFoundError");
+  assert.deepEqual(constraints, { audio: true, video: true });
+  assert.equal(stopped, 2);
+});
+
+test("meeting upload format prefers the recorder MIME type over ambiguous extensions", () => {
+  const window = installWindow();
+  const format = (file: File) => {
+    const request = meetingTaskRequest(file, defaultMeetingOptions) as {
+      format: "audio" | "video";
+    };
+    return request.format;
+  };
+  assert.equal(format(new window.File(["audio"], "recording.webm", { type: "audio/webm" })), "audio");
+  assert.equal(format(new window.File(["audio"], "recording.mp4", { type: "audio/mp4" })), "audio");
+  assert.equal(format(new window.File(["video"], "camera.webm", { type: "video/webm" })), "video");
+  assert.equal(format(new window.File(["video"], "camera.webm")), "video");
 });
 
 test("API client sends only the strict POST contract and validates bounded DTOs", async () => {
@@ -233,11 +314,11 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
       stream += 1;
       const status = stream === 1 ? "running" : "succeeded";
       const terminal = stream !== 1;
-      return new Response(`id: ${stream}\ndata: ${JSON.stringify({ schemaVersion: 1, sequence: stream, taskId: responseTask.id, kind: "progress", status, progressMillionths: terminal ? 1_000_000 : 500_000, terminal, execution: { stage: terminal ? "complete" : "convert", basisPoints: terminal ? 10_000 : 5_000 } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+      return new Response(`id: ${stream}\ndata: ${JSON.stringify({ schemaVersion: 1, sequence: stream, taskId: responseTask.id, kind: "progress", status, progressMillionths: terminal ? 1_000_000 : 500_000, terminal, execution: { stage: terminal ? "completed" : "converting", basisPoints: terminal ? 10_000 : 5_000, completedUnits: terminal ? 1 : 5, totalUnits: terminal ? 1 : 10, message: null } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
     }
     return new Response(JSON.stringify(responseTask), { headers: { "content-type": "application/json" } });
   });
-  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const, audioTranscription: true };
+  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const };
   const batchId = "d".repeat(32);
   await client.upload(new File(["pdf"], "报告.pdf"), options, batchId);
   const uploadHeaders = calls[0]![1]!.headers as Record<string, string>;
@@ -251,13 +332,13 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.equal(request.options.ocr.policy, "always");
   assert.deepEqual(request.options.asr, {
     model_bundle: "whisper-small-multilingual", language: null, max_threads: 4,
-    max_duration_ms: 600_000, max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024,
+    max_duration_ms: null, max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024,
   });
-  assert.equal(request.options.ai.audio_transcription, "only");
+  assert.equal(request.options.ai.audio_transcription, "off");
   assert.deepEqual(request.options.network, { enabled: true, max_redirects: 3, deny_private_networks: false, allowed_hosts: [] });
   assert.equal(request.authorization.network, true);
   assert.equal(request.authorization.privateNetwork, true);
-  assert.equal(request.authorization.provider, true);
+  assert.equal(request.authorization.provider, false);
   const events: string[] = [];
   await client.watchTask(responseTask.id, (event) => events.push(event.status), new AbortController().signal);
   assert.deepEqual(events, ["running", "succeeded"]);
@@ -370,6 +451,52 @@ test("result dialog provides reading and source views with a closed details draw
   await waitFor(() => window.document.body.textContent.includes("Resources (1)"));
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document);
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
+});
+
+test("meeting speaker names rerender artifacts through generation CAS without rerunning transcription", async () => {
+  const window = installWindow();
+  const completed = { ...task("succeeded"), workflow: "meetingTranscript" as const,
+    displayName: "meeting.webm", format: "audio" as const };
+  completed.artifacts = [
+    { storageKey: "b".repeat(32), kind: "markdown", byteLen: 40, sha256: "c".repeat(64) },
+  ];
+  window.history.replaceState(null, "", `/meetings/results/${completed.id}`);
+  let generation = 0;
+  let name = "Speaker 1";
+  let relabel: [number, Record<string, string>] | undefined;
+  let transcriptUploads = 0;
+  const api: ApiClient = {
+    ...availableApi,
+    async getTask() { return { ...completed, artifactGeneration: generation }; },
+    async listTasks() { return { tasks: [completed] }; },
+    async preview() { return { text: `# Transcript\n\n[00:00] ${name}: Hello`, truncated: false, contentType: "text/markdown" }; },
+    async speakerLabels() { return { schemaVersion: 1, artifactGeneration: generation,
+      speakers: [{ id: "speaker-1", name }] }; },
+    async relabelSpeakers(_id, expectedGeneration, speakers) {
+      relabel = [expectedGeneration, speakers];
+      assert.equal(expectedGeneration, generation);
+      name = speakers["speaker-1"]!; generation += 1;
+      return { ...completed, artifactGeneration: generation };
+    },
+    async uploadMeeting() { transcriptUploads += 1; return completed; },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!);
+  root.render(createElement(App, { api }));
+  await waitForText(window, "Speaker names");
+  const input = window.document.querySelector<HTMLInputElement>(".speaker-editor input")!;
+  input.focus();
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "张三");
+  input.dispatchEvent(new window.InputEvent("input", { bubbles: true, data: "张三", inputType: "insertText" }));
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  const save = [...window.document.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent === "Save names")!;
+  await waitFor(() => save.disabled === false);
+  save.click();
+  await waitForText(window, "Speaker names and downloadable artifacts were updated.");
+  assert.deepEqual(relabel, [0, { "speaker-1": "张三" }]);
+  assert.equal(generation, 1);
+  assert.equal(transcriptUploads, 0);
+  assert.ok(window.document.body.textContent.includes("张三: Hello"));
 });
 
 test("recent history opens a result dialog with irreversible task actions", async () => {
@@ -576,54 +703,60 @@ test("workbench presents network access as one bounded switch", async () => {
   assert.equal(toggle.checked, true);
 });
 
-test("workbench enables audio by default and only requests ASR for media files", async () => {
+test("meeting recording is an independent route and media never enters the document workbench", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const uploads: Array<[string, boolean]> = [];
   const api: ApiClient = {
     ...availableApi,
-    async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" } }; },
-    async upload(file, options) {
-      uploads.push([file.name, options.audioTranscription]);
-      return task("running", String(uploads.length).repeat(32));
+    async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" }, speakerDiarization: { available: true, code: "available", detail: "ready" } }; },
+    async uploadMeeting(file, options) {
+      uploads.push([file.name, options.diarize]);
+      return { ...task("running", "b".repeat(32)), workflow: "meetingTranscript" };
     },
     async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "Ready");
-  const audioToggle = [...window.document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-    .find((input) => input.closest(".audio-capability"));
-  await waitFor(() => audioToggle?.checked === true && audioToggle.disabled === false);
-  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(drop, "dataTransfer", {
-    value: { files: [new File(["doc"], "contract.md"), new File(["audio"], "recording.m4a")] },
-  });
-  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
-  await waitForText(window, "Selected (2)");
-  [...window.document.querySelectorAll("button")]
-    .find((button) => button.textContent === "Start conversion (2)")!
-    .click();
-  await waitFor(() => uploads.length === 2);
-  assert.deepEqual(uploads, [["contract.md", false], ["recording.m4a", true]]);
-});
-
-test("workbench disables audio when its verified runtime is unavailable", async () => {
-  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
-  let requestedAsr: boolean | undefined;
-  const api: ApiClient = { ...availableApi, async upload(_file, options) { requestedAsr = options.audioTranscription; return task("running"); }, async watchTask() {} };
-  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "Prepare");
-  const audioToggle = window.document.querySelector<HTMLInputElement>(".audio-capability input[type=checkbox]")!;
-  await waitFor(() => audioToggle.disabled && !audioToggle.checked);
-  assert.ok(audioToggle.closest(".switch")?.classList.contains("unavailable"));
-  audioToggle.click();
-  assert.equal(audioToggle.checked, false);
+  await waitForText(window, "Add documents");
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["audio"], "recording.m4a")] } });
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
-  await waitForText(window, "Selected (1)");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitFor(() => requestedAsr !== undefined);
-  assert.equal(requestedAsr, false);
+  await waitForText(window, "recording.m4a");
+  assert.equal(window.document.body.textContent.includes("Selected (1)"), false);
+  [...window.document.querySelectorAll("a")]
+    .find((link) => link.textContent === "Meeting notes")!
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await waitForText(window, "Record meeting");
+  assert.equal(window.document.getElementById("upload-zone"), null);
+  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent?.includes("Start recording")));
+  const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.m4a", { type: "audio/mp4" })] });
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitForText(window, "meeting.m4a");
+  [...window.document.querySelectorAll("button")]
+    .find((button) => button.textContent?.includes("Create transcript"))!
+    .click();
+  await waitFor(() => uploads.length === 1);
+  assert.deepEqual(uploads, [["meeting.m4a", true]]);
+});
+
+test("meeting page keeps recording primary and setup feedback beside transcript controls", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/meetings");
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
+  await waitForText(window, "Record meeting");
+  await waitForText(window, "Prepare audio components");
+  const start = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Start recording"));
+  const prepare = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Prepare audio components"));
+  assert.ok(start?.closest(".recorder-console"));
+  assert.ok(prepare?.closest(".meeting-options"));
+  const source = window.document.querySelector<HTMLSelectElement>(".recording-source select")!;
+  assert.deepEqual([...source.options].map((option) => option.textContent), [
+    "Microphone only", "Computer audio only", "Microphone + computer audio",
+  ]);
+  source.value = "system"; source.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitForText(window, "Video is never saved.");
+  const diarize = window.document.querySelector<HTMLInputElement>('.meeting-options input[type="checkbox"]')!;
+  assert.equal(diarize.disabled, true);
+  assert.equal(diarize.checked, false);
 });
 
 test("workbench reports the bounded upload rejection code", async () => {

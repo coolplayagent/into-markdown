@@ -269,6 +269,7 @@ fn execute(
     let services = Services {
         ocr: Some(requests.clone()),
         transcriber: Some(requests.clone()),
+        diarizer: None,
         ai: Some(requests.clone()),
         nested: Some(Arc::new(HtmlNested)),
     };

@@ -112,6 +112,28 @@
       "obligations": "If acquired, verify the exact model size and SHA-256, preserve the MIT license, and never include it in ordinary test outputs."
     },
     {
+      "id": "silero-vad-half-onnx-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": false,
+      "version": "Silero VAD v6.2.1 / 3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
+      "source": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
+      "license": "MIT",
+      "obligations": "If acquired, verify the exact ONNX size and SHA-256, preserve third_party/licenses/silero-vad-MIT.txt, and never download it during ordinary builds or tests."
+    },
+    {
+      "id": "3dspeaker-eres2net-base-onnx-source",
+      "kind": "model-source",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": false,
+      "version": "Silero VAD v6.2.1 / 3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "license": "Apache-2.0",
+      "obligations": "If acquired, verify the exact ONNX size and SHA-256, preserve the complete Apache-2.0 text in LICENSE plus 3D-Speaker and sherpa-onnx attribution, and never download it during ordinary builds or tests."
+    },
+    {
       "id": "ppocrv6-tiny-recognizer-onnx-quality",
       "kind": "fixture-input",
       "status": "reviewed",

@@ -188,6 +188,14 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "MILLISECONDS")]
     pub asr_max_duration_ms: Option<u64>,
 
+    /// Assign stable anonymous speaker labels in media transcripts.
+    #[arg(long)]
+    pub diarize: bool,
+
+    /// Expected number of speakers; absence enables bounded automatic discovery.
+    #[arg(long, value_name = "N", requires = "diarize", value_parser = clap::value_parser!(u16).range(1..=64))]
+    pub expected_speakers: Option<u16>,
+
     /// Set one AI capability mode as CAPABILITY=MODE; may be repeated.
     #[arg(long, value_name = "CAPABILITY=MODE")]
     pub ai: Vec<String>,
@@ -298,6 +306,10 @@ pub enum Command {
     Formats(FormatsArgs),
     /// Inspect and manage local OCR model bundles.
     Models(ModelsArgs),
+    /// Prepare optional local runtime components.
+    Setup(SetupArgs),
+    /// Re-render and relabel existing meeting transcripts.
+    Transcript(TranscriptArgs),
     /// Configure and inspect AI providers.
     Providers(ProvidersArgs),
     /// Inspect and manage isolated extensions.
@@ -310,6 +322,50 @@ pub enum Command {
     Completions(CompletionsArgs),
     /// Print detailed build version information.
     Version(VersionArgs),
+}
+
+/// `setup` arguments.
+#[derive(Debug, Args)]
+pub struct SetupArgs {
+    #[command(subcommand)]
+    pub command: SetupCommand,
+}
+
+/// Optional component preparation operations.
+#[derive(Debug, Subcommand)]
+pub enum SetupCommand {
+    /// Install and verify local media transcription components.
+    Media {
+        /// Allow development transport without TLS certificate validation.
+        #[arg(long)]
+        insecure: bool,
+        /// Permit pinned HTTPS hosts that resolve through a private local network route.
+        #[arg(long)]
+        allow_private_network: bool,
+    },
+}
+
+/// `transcript` arguments.
+#[derive(Debug, Args)]
+pub struct TranscriptArgs {
+    #[command(subcommand)]
+    pub command: TranscriptCommand,
+}
+
+/// Existing-transcript operations.
+#[derive(Debug, Subcommand)]
+pub enum TranscriptCommand {
+    /// Apply speaker display names and re-render Markdown without running ASR.
+    Relabel {
+        /// Existing `document-ir.json`.
+        document_ir: PathBuf,
+        /// `SPEAKER_ID=DISPLAY_NAME`; may be repeated.
+        #[arg(long = "speaker", value_name = "ID=NAME", required = true)]
+        speakers: Vec<String>,
+        /// Markdown output path.
+        #[arg(short, long, value_name = "PATH")]
+        output: PathBuf,
+    },
 }
 
 /// `ui` local service arguments.
@@ -402,6 +458,9 @@ pub enum ModelsCommand {
         id: String,
         #[arg(long)]
         insecure: bool,
+        /// Permit the pinned HTTPS host to resolve through a private local network route.
+        #[arg(long)]
+        allow_private_network: bool,
     },
     /// Verify installed model files without networking.
     Verify {
@@ -835,5 +894,44 @@ mod tests {
         let input = Cli::try_parse_from(["into-md", "--", "ui"]).unwrap();
         assert!(input.command.is_none());
         assert_eq!(input.conversion.inputs, [OsString::from("ui")]);
+    }
+
+    #[test]
+    fn meeting_diarization_flags_are_bounded_and_require_diarization() {
+        let command = Cli::try_parse_from([
+            "into-md",
+            "meeting.mp3",
+            "--diarize",
+            "--expected-speakers",
+            "12",
+        ])
+        .unwrap();
+        assert!(command.conversion.diarize);
+        assert_eq!(command.conversion.expected_speakers, Some(12));
+        assert!(
+            Cli::try_parse_from(["into-md", "meeting.mp3", "--expected-speakers", "2",]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "into-md",
+                "meeting.mp3",
+                "--diarize",
+                "--expected-speakers",
+                "65",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn media_setup_private_route_requires_an_explicit_flag() {
+        let command =
+            Cli::try_parse_from(["into-md", "setup", "media", "--allow-private-network"]).unwrap();
+        assert!(matches!(
+            command.command,
+            Some(Command::Setup(SetupArgs {
+                command: SetupCommand::Media { insecure: false, allow_private_network: true },
+            }))
+        ));
     }
 }

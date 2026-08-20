@@ -34,6 +34,57 @@ fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
 }
 
 #[test]
+fn real_cli_relabels_a_meeting_ir_without_running_transcription() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let input = root.join("document-ir.json");
+    let output = root.join("meeting.md");
+    let range = into_markdown::TimeRange { start_ms: 1_000, end_ms: 2_000 };
+    let document = into_markdown::Document {
+        blocks: vec![into_markdown::BlockNode {
+            id: into_markdown::NodeId("segment-1".into()),
+            block: into_markdown::Block::TimedSegment {
+                range,
+                speaker: Some("speaker-1".into()),
+                speaker_confidence: Some(0.9),
+                tokens: Vec::new(),
+                content: vec![into_markdown::Inline::Text {
+                    value: "hello".into(),
+                    marks: Vec::new(),
+                }],
+            },
+            provenance: into_markdown::Provenance {
+                kind: into_markdown::ProvenanceKind::AiProvider,
+                provider: "test/model@sha256:abcd".into(),
+                locator: into_markdown::SourceLocator {
+                    time: Some(range),
+                    ..into_markdown::SourceLocator::default()
+                },
+                confidence: Some(0.8),
+            },
+        }],
+        ..into_markdown::Document::default()
+    };
+    std::fs::write(&input, document.to_json().unwrap()).unwrap();
+    let result = Command::new(binary())
+        .args([
+            "--no-config",
+            "transcript",
+            "relabel",
+            input.to_str().unwrap(),
+            "--speaker",
+            "speaker-1=张三",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let markdown = std::fs::read_to_string(output).unwrap();
+    assert_eq!(markdown, "`00:00:01.000 – 00:00:02.000` **张三:** hello\n");
+}
+
+#[test]
 fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network_policy() {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("provider.toml");

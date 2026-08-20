@@ -14,14 +14,19 @@ const PADDLE_DETECTOR_URL: &str = "https://paddle-model-ecology.bj.bcebos.com/pa
 const PADDLE_RECOGNIZER_URL: &str = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar";
 const PADDLE_DICTIONARY_URL: &str = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt";
 const WHISPER_SMALL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin";
+const SILERO_VAD_URL: &str = "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx";
+const SPEAKER_EMBEDDING_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx";
 const WHISPER_SMALL_XET_HASH: &str =
     "edd29d67e70b000132af65205b99bb774b77abc13d10103e14f80ce2242913e1";
+const SPEAKER_RELEASE_ASSET_PATH: &str =
+    "/github-production-release-asset/531380835/c6df7da2-6160-4068-8ec2-915efeea9128";
 /// Audited Hugging Face xet bridge domains that may serve one pinned object.
 const WHISPER_SMALL_XET_BRIDGES: &[&str] = &["cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"];
 
 #[derive(Default)]
 pub(crate) struct PinnedModelFetcher {
     client: HttpClient,
+    allow_private_network: bool,
 }
 
 impl PinnedModelFetcher {
@@ -31,8 +36,12 @@ impl PinnedModelFetcher {
     ///
     /// Returns the offending variable name and reason when a proxy variable
     /// is set but invalid; no download is attempted in that case.
-    pub(crate) fn from_environment(insecure: bool) -> Result<Self, (&'static str, String)> {
-        crate::proxy_env::model_fetch_client(insecure).map(|client| Self { client })
+    pub(crate) fn from_environment(
+        insecure: bool,
+        allow_private_network: bool,
+    ) -> Result<Self, (&'static str, String)> {
+        crate::proxy_env::model_fetch_client(insecure)
+            .map(|client| Self { client, allow_private_network })
     }
 }
 
@@ -68,7 +77,7 @@ impl ModelFetcher for PinnedModelFetcher {
             .client
             .get(
                 &artifact.url,
-                &network_policy(&artifact.url)?,
+                &network_policy(&artifact.url, self.allow_private_network)?,
                 FetchLimits { max_wire_bytes: wire_limit, max_decoded_bytes: expected_bytes },
                 context,
             )
@@ -87,6 +96,24 @@ fn validate_fetch_identity(
     final_url: &str,
     redirects: &[RedirectHop],
 ) -> Result<(), ModelManagerError> {
+    if source == SPEAKER_EMBEDDING_URL {
+        let [redirect] = redirects else {
+            return Err(unexpected_redirect());
+        };
+        let final_url = url::Url::parse(final_url).map_err(|_| unexpected_redirect())?;
+        if final_url.scheme() != "https"
+            || final_url.host_str() != Some("release-assets.githubusercontent.com")
+            || final_url.port().is_some()
+            || final_url.path() != SPEAKER_RELEASE_ASSET_PATH
+            || final_url.fragment().is_some()
+            || redirect.from != SPEAKER_EMBEDDING_URL
+            || redirect.to != final_url.as_str()
+            || !matches!(redirect.status, 301 | 302 | 303 | 307 | 308)
+        {
+            return Err(unexpected_redirect());
+        }
+        return Ok(());
+    }
     if source != WHISPER_SMALL_URL {
         if redirects.is_empty() && final_url == source {
             return Ok(());
@@ -129,12 +156,15 @@ fn unexpected_redirect() -> ModelManagerError {
     })
 }
 
-fn network_policy(url: &str) -> Result<NetworkPolicy, ModelManagerError> {
+fn network_policy(
+    url: &str,
+    allow_private_network: bool,
+) -> Result<NetworkPolicy, ModelManagerError> {
     let (allowed_hosts, max_redirects) = match url {
         PADDLE_DETECTOR_URL | PADDLE_RECOGNIZER_URL => {
             (vec!["paddle-model-ecology.bj.bcebos.com".into()], 0)
         }
-        PADDLE_DICTIONARY_URL => (vec!["raw.githubusercontent.com".into()], 0),
+        PADDLE_DICTIONARY_URL | SILERO_VAD_URL => (vec!["raw.githubusercontent.com".into()], 0),
         WHISPER_SMALL_URL => (
             vec![
                 "huggingface.co".into(),
@@ -143,18 +173,16 @@ fn network_policy(url: &str) -> Result<NetworkPolicy, ModelManagerError> {
             ],
             1,
         ),
+        SPEAKER_EMBEDDING_URL => {
+            (vec!["github.com".into(), "release-assets.githubusercontent.com".into()], 1)
+        }
         _ => {
             return Err(ModelManagerError::Corrupt(
                 "runtime artifact URL is not a pinned download authority".into(),
             ));
         }
     };
-    Ok(NetworkPolicy {
-        allow_network: true,
-        allow_private_network: false,
-        allowed_hosts,
-        max_redirects,
-    })
+    Ok(NetworkPolicy { allow_network: true, allow_private_network, allowed_hosts, max_redirects })
 }
 
 struct LeasedReader {
@@ -274,12 +302,12 @@ mod tests {
     ) -> (PinnedModelFetcher, Arc<ScriptedConnector>) {
         let connector = Arc::new(ScriptedConnector::new(responses));
         let client = HttpClient::with_components(Arc::new(PublicDns), connector.clone());
-        (PinnedModelFetcher { client }, connector)
+        (PinnedModelFetcher { client, allow_private_network: false }, connector)
     }
 
     #[test]
     fn pinned_authorities_reject_lookalike_and_mutated_whisper_urls() {
-        let policy = network_policy(WHISPER_SMALL_URL).unwrap();
+        let policy = network_policy(WHISPER_SMALL_URL, false).unwrap();
         assert_eq!(
             policy.allowed_hosts,
             ["huggingface.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"]
@@ -287,11 +315,56 @@ mod tests {
         assert_eq!(policy.max_redirects, 1);
         assert!(
             network_policy(
-                &WHISPER_SMALL_URL.replace("huggingface.co", "huggingface.co.evil.test")
+                &WHISPER_SMALL_URL.replace("huggingface.co", "huggingface.co.evil.test"),
+                false,
             )
             .is_err()
         );
-        assert!(network_policy(&WHISPER_SMALL_URL.replace("ggml-small.bin", "other.bin")).is_err());
+        assert!(
+            network_policy(&WHISPER_SMALL_URL.replace("ggml-small.bin", "other.bin"), false,)
+                .is_err()
+        );
+        assert!(network_policy(WHISPER_SMALL_URL, true).unwrap().allow_private_network);
+    }
+
+    #[test]
+    fn diarization_authorities_allow_only_the_pinned_sources_and_release_asset() {
+        let silero = network_policy(SILERO_VAD_URL, false).unwrap();
+        assert_eq!(silero.allowed_hosts, ["raw.githubusercontent.com"]);
+        assert_eq!(silero.max_redirects, 0);
+
+        let speaker = network_policy(SPEAKER_EMBEDDING_URL, false).unwrap();
+        assert_eq!(speaker.allowed_hosts, ["github.com", "release-assets.githubusercontent.com"]);
+        assert_eq!(speaker.max_redirects, 1);
+        assert!(network_policy(&SPEAKER_EMBEDDING_URL.replace("k2-fsa", "other"), false).is_err());
+
+        let release = format!(
+            "https://release-assets.githubusercontent.com{SPEAKER_RELEASE_ASSET_PATH}?signature=short-lived"
+        );
+        let redirect =
+            format!("HTTP/1.1 302 Found\r\nLocation: {release}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes();
+        let body = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata".to_vec();
+        let (fetcher, connector) = scripted_fetcher([redirect, body]);
+        let mut acquired = fetcher.open(&artifact(SPEAKER_EMBEDDING_URL, 4), &context()).unwrap();
+        let mut bytes = Vec::new();
+        acquired.bytes.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"data");
+        assert_eq!(
+            *connector.hosts.lock().unwrap(),
+            ["github.com", "release-assets.githubusercontent.com"]
+        );
+
+        let changed_asset = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com{SPEAKER_RELEASE_ASSET_PATH}-changed?signature=x\r\nContent-Length: 0\r\n\r\n"
+        )
+        .into_bytes();
+        let body = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata".to_vec();
+        let (fetcher, _) = scripted_fetcher([changed_asset, body]);
+        assert!(matches!(
+            fetcher.open(&artifact(SPEAKER_EMBEDDING_URL, 4), &context()),
+            Err(ModelManagerError::Execution(ConversionError::Network { .. }))
+        ));
     }
 
     #[test]

@@ -3,7 +3,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
-export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus }
+export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export type TaskStatus = "pending" | "running" | "converted" | "succeeded" | "failed" | "interrupted" | "cancelled";
 export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
@@ -17,10 +17,13 @@ export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskRecord {
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
-  pinned: boolean;
+  pinned: boolean; artifactGeneration: number;
   displayName?: string | null; format?: InputFormat | null; batchId?: string | null;
+  workflow: "conversion" | "meetingTranscript";
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
 }
+export interface SpeakerLabel { id: string; name: string }
+export interface SpeakerLabels { schemaVersion: 1; artifactGeneration: number; speakers: SpeakerLabel[] }
 export interface TaskCursor { updatedAtMs: number; id: string }
 export interface TaskPage { tasks: TaskRecord[]; nextCursor?: TaskCursor }
 export interface TaskFilters { limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean; batchId?: string }
@@ -28,7 +31,8 @@ export interface CleanupSummary { schemaVersion: 1; deletedTasks: number; reclai
 export interface TaskEvent {
   schemaVersion: 1; sequence: number; taskId: string; kind: "snapshot" | "progress";
   status: TaskStatus; progressMillionths: number; terminal: boolean;
-  execution?: { stage: string; basisPoints: number; message?: string | null };
+  execution?: { stage: string; basisPoints: number; completedUnits: number | null;
+    totalUnits: number | null; message: string | null };
 }
 export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
 const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
@@ -40,12 +44,21 @@ export interface WorkbenchOptions {
   format: InputFormat | null; ocrPolicy: OcrPolicy; ocrConfidence: number; aiMode: AiMode;
   assetMode: AssetMode; includeProvenance: boolean; maxInputMiB: number; maxMemoryMiB: number;
   maxTemporaryMiB: number; maxPages: number; networkMode: NetworkMode; authorizeProvider: boolean;
-  audioTranscription: boolean;
 }
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
   includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: true,
+  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false,
+};
+export interface MeetingOptions {
+  diarize: boolean;
+  expectedSpeakers: number | null;
+  maxInputMiB: number;
+  maxMemoryMiB: number;
+  maxTemporaryMiB: number;
+}
+export const defaultMeetingOptions: MeetingOptions = {
+  diarize: true, expectedSpeakers: null, maxInputMiB: 512, maxMemoryMiB: 1536, maxTemporaryMiB: 4096,
 };
 
 export class ApiError extends Error {
@@ -57,7 +70,8 @@ function isComponent(value: unknown): value is ComponentStatus {
 }
 function parseStatus(value: unknown): StatusResponse {
   if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)
-    || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)) throw new ApiError("invalidResponse");
+    || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)
+    || value.speakerDiarization !== undefined && !isComponent(value.speakerDiarization)) throw new ApiError("invalidResponse");
   return value as unknown as StatusResponse;
 }
 const taskStatuses = new Set<TaskStatus>(["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"]);
@@ -73,6 +87,7 @@ export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || !taskStatuses.has(value.status as TaskStatus) || !Number.isSafeInteger(value.progressMillionths)
     || !Number.isSafeInteger(value.createdAtMs) || !Number.isSafeInteger(value.updatedAtMs) || typeof value.pinned !== "boolean"
+    || !Number.isSafeInteger(value.artifactGeneration) || Number(value.artifactGeneration) < 0
     || Number(value.progressMillionths) < 0 || Number(value.progressMillionths) > 1_000_000
     || !Array.isArray(value.diagnostics) || value.diagnostics.length > 1024 || value.diagnostics.some((item) => !isObject(item) || typeof item.code !== "string" || item.code.length > 128)
     || !Array.isArray(value.artifacts) || value.artifacts.length > 128 || value.artifacts.some((artifact) => !isArtifact(artifact))
@@ -81,6 +96,7 @@ export function parseTask(value: unknown): TaskRecord {
     || value.format !== undefined && value.format !== null && !inputFormats.has(value.format as InputFormat)
     || value.batchId !== undefined && value.batchId !== null
       && (typeof value.batchId !== "string" || !/^[0-9a-f]{32}$/.test(value.batchId))
+    || value.workflow !== "conversion" && value.workflow !== "meetingTranscript"
     || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }
@@ -93,7 +109,17 @@ function parseTaskList(value: unknown): TaskPage {
 function parseTaskEvent(value: unknown): TaskEvent {
   if (!isObject(value) || value.schemaVersion !== 1 || typeof value.taskId !== "string" || !taskStatuses.has(value.status as TaskStatus)
     || (value.kind !== "snapshot" && value.kind !== "progress") || !Number.isSafeInteger(value.sequence)
-    || !Number.isSafeInteger(value.progressMillionths) || typeof value.terminal !== "boolean") throw new ApiError("invalidEvent");
+    || Number(value.sequence) < 0 || !/^[0-9a-f]{32}$/.test(value.taskId)
+    || !Number.isSafeInteger(value.progressMillionths) || Number(value.progressMillionths) < 0
+    || Number(value.progressMillionths) > 1_000_000 || typeof value.terminal !== "boolean"
+    || value.execution !== undefined && (!isObject(value.execution)
+      || !["resolving", "detecting", "probing", "converting", "ocr", "ai", "rendering", "completed"].includes(String(value.execution.stage))
+      || !Number.isSafeInteger(value.execution.basisPoints) || Number(value.execution.basisPoints) < 0
+      || Number(value.execution.basisPoints) > 10_000
+      || value.execution.completedUnits !== null && !Number.isSafeInteger(value.execution.completedUnits)
+      || value.execution.totalUnits !== null && !Number.isSafeInteger(value.execution.totalUnits)
+      || value.execution.message !== null && (typeof value.execution.message !== "string"
+        || value.execution.message.length > 256 || /[\u0000-\u001f\u007f]/.test(value.execution.message)))) throw new ApiError("invalidEvent");
   return value as unknown as TaskEvent;
 }
 async function readBoundedJson(response: Response, limit = MAX_RESPONSE_BYTES): Promise<unknown> {
@@ -122,12 +148,13 @@ function mib(value: number): number { return Math.round(value * 1024 * 1024); }
 export function taskRequest(options: WorkbenchOptions, batchId?: string): unknown {
   const ai = options.aiMode;
   const unrestrictedNetwork = options.networkMode === "unrestricted";
-  return { schemaVersion: 1, format: options.format, ...(batchId ? { batchId } : {}), options: {
+  return { schemaVersion: 1, workflow: "conversion", format: options.format, ...(batchId ? { batchId } : {}), options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
-    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: 600_000,
-      max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024 },
-    ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: options.audioTranscription ? "only" : "off", markdown_postprocess: ai },
+    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: null,
+      max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
+    diarization: { enabled: false, expected_speakers: null, model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },
+    ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: "off", markdown_postprocess: ai },
     network: { enabled: unrestrictedNetwork, max_redirects: 3, deny_private_networks: !unrestrictedNetwork, allowed_hosts: [] },
     limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
       max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
@@ -137,16 +164,44 @@ export function taskRequest(options: WorkbenchOptions, batchId?: string): unknow
       max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: options.includeProvenance,
       asset_mode: options.assetMode, asset_uri_prefix: null },
-  }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider || options.audioTranscription } };
+  }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider } };
+}
+
+export function meetingTaskRequest(file: File, options: MeetingOptions): unknown {
+  const inferred = file.type.startsWith("video/") ? "video"
+    : file.type.startsWith("audio/") ? "audio"
+      : /\.(mp4|mkv|webm|avi|mov)$/i.test(file.name) ? "video" : "audio";
+  return { schemaVersion: 1, workflow: "meetingTranscript", format: inferred, options: {
+    text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
+    ocr: { policy: "off", model_bundle: null, minimum_confidence: 0.7 },
+    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: null,
+      max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
+    diarization: { enabled: options.diarize, expected_speakers: options.expectedSpeakers,
+      model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },
+    ai: { vision_ocr: "off", image_description: "off", layout_repair: "off", table_repair: "off",
+      formula_repair: "off", audio_transcription: "only", markdown_postprocess: "off" },
+    network: { enabled: false, max_redirects: 3, deny_private_networks: true, allowed_hosts: [] },
+    limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
+      max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
+      max_pages: 10000, max_asset_bytes: 67108864, max_total_asset_bytes: 134217728,
+      max_memory_bytes: mib(options.maxMemoryMiB), max_temporary_bytes: mib(options.maxTemporaryMiB), max_table_rows: 100000,
+      max_table_columns: 16384, max_table_cells: 1000000, max_field_bytes: 16777216, max_feed_entries: 10000,
+      max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
+    output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: true,
+      asset_mode: "extract", asset_uri_prefix: null },
+  }, authorization: { network: false, privateNetwork: false, provider: false } };
 }
 
 export interface ApiClient {
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
+  uploadMeeting(file: File, options: MeetingOptions, signal?: AbortSignal): Promise<TaskRecord>;
   cancel(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   retry(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   setPinned(id: string, pinned: boolean, signal?: AbortSignal): Promise<TaskRecord>;
+  speakerLabels(id: string, signal?: AbortSignal): Promise<SpeakerLabels>;
+  relabelSpeakers(id: string, expectedGeneration: number, speakers: Record<string, string>, signal?: AbortSignal): Promise<TaskRecord>;
   deleteTask(id: string, signal?: AbortSignal): Promise<void>;
   cleanup(signal?: AbortSignal): Promise<CleanupSummary>;
   watchTask(id: string, onEvent: (event: TaskEvent) => void, signal: AbortSignal): Promise<void>;
@@ -185,9 +240,28 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
       const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options, batchId));
       return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
     },
+    async uploadMeeting(file, options, signal) {
+      const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(meetingTaskRequest(file, options));
+      return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
+    },
     async cancel(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async retry(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/retry`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async setPinned(id, pinned, signal) { const headers = auth(); headers["Content-Type"] = "application/json"; return parseTask(await jsonRequest(`/api/tasks/${id}/pin`, { method: "POST", headers, body: JSON.stringify({ pinned }), ...(signal ? { signal } : {}) })); },
+    async speakerLabels(id, signal) {
+      const value = await jsonRequest(`/api/tasks/${id}/speakers`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536);
+      if (!isObject(value) || value.schemaVersion !== 1 || !Number.isSafeInteger(value.artifactGeneration)
+        || Number(value.artifactGeneration) < 0 || !Array.isArray(value.speakers) || value.speakers.length > 64
+        || value.speakers.some((speaker) => !isObject(speaker) || typeof speaker.id !== "string"
+          || !/^speaker-(?:[1-9]|[1-5][0-9]|6[0-4])$/.test(speaker.id) || typeof speaker.name !== "string"
+          || speaker.name.length === 0 || speaker.name.length > 80 || speaker.name.trim() !== speaker.name
+          || /[\u0000-\u001f\u007f]/.test(speaker.name))) throw new ApiError("invalidResponse");
+      return value as unknown as SpeakerLabels;
+    },
+    async relabelSpeakers(id, expectedGeneration, speakers, signal) {
+      const headers = auth(); headers["Content-Type"] = "application/json";
+      return parseTask(await jsonRequest(`/api/tasks/${id}/speakers`, { method: "POST", headers,
+        body: JSON.stringify({ expectedGeneration, speakers }), ...(signal ? { signal } : {}) }, 65536));
+    },
     async deleteTask(id, signal) {
       let response: Response;
       try { response = await fetcher(`/api/tasks/${id}/history`, { method: "DELETE", headers: auth(), cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) }); }

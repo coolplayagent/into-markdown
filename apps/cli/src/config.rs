@@ -484,7 +484,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
         options.asr.max_threads = value;
     }
     if let Some(value) = config.asr.max_duration_ms {
-        options.asr.max_duration_ms = value;
+        options.asr.max_duration_ms = Some(value);
     }
     if let Some(value) = config.asr.max_segments {
         options.asr.max_segments = value;

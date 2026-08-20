@@ -325,6 +325,8 @@ struct ModelManifest {
     default_bundle: String,
     #[serde(default)]
     default_asr_bundle: Option<String>,
+    #[serde(default)]
+    default_diarization_bundle: Option<String>,
     bundles: Vec<ModelBundle>,
 }
 
@@ -3382,7 +3384,10 @@ fn validate_model_components(
 
 fn validate_schema2_kind_presence(models: &str, errors: &mut Vec<String>) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(models) else { return };
-    if value.get("schema_version").and_then(serde_json::Value::as_u64) == Some(2)
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|version| version >= 2)
         && value
             .get("bundles")
             .and_then(serde_json::Value::as_array)
@@ -3777,6 +3782,7 @@ fn collect_model_artifacts<'a>(
             "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
             "asr-model" => BTreeSet::from(["model"]),
+            "diarization-model" => BTreeSet::from(["vad", "speaker-embedding"]),
             _ => BTreeSet::new(),
         };
         if roles.keys().copied().collect::<BTreeSet<_>>() != required_roles {
@@ -3811,7 +3817,11 @@ fn validate_runtime_bundle<'a>(
     if !is_safe_model_id(&bundle.id)
         || !matches!(
             bundle.kind.as_str(),
-            "ocr-pipeline" | "detector-component" | "recognizer-component" | "asr-model"
+            "ocr-pipeline"
+                | "detector-component"
+                | "recognizer-component"
+                | "asr-model"
+                | "diarization-model"
         )
     {
         errors.push(format!("model bundle {:?} has unsafe ID", bundle.id));
@@ -3839,15 +3849,16 @@ fn validate_runtime_bundle<'a>(
                         && item.role == "recognizer-and-dictionary"
                 }))
     });
-    if bundle.kind == "asr-model" {
+    if matches!(bundle.kind.as_str(), "asr-model" | "diarization-model") {
         if bundle.character_set.is_some() {
-            errors.push(format!("ASR bundle {} must not declare a character set", bundle.id));
+            errors
+                .push(format!("audio model bundle {} must not declare a character set", bundle.id));
         }
     } else if !character_set_complete {
         errors.push(format!("model bundle {} has invalid character-set provenance", bundle.id));
     }
     let installable = bundle.availability == "available"
-        && (bundle.kind == "asr-model"
+        && (matches!(bundle.kind.as_str(), "asr-model" | "diarization-model")
             || bundle
                 .character_set
                 .as_ref()
@@ -3894,6 +3905,7 @@ fn validate_runtime_bundle<'a>(
         "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
         "asr-model" => BTreeSet::from(["model"]),
+        "diarization-model" => BTreeSet::from(["vad", "speaker-embedding"]),
         _ => BTreeSet::new(),
     };
     if !bundle.runtime_artifacts.is_empty() && runtime_roles != expected_runtime_roles {
@@ -4008,8 +4020,24 @@ fn validate_default_model_bundle(
                 "model manifest schema 3 requires an available default ASR model bundle".to_owned(),
             ),
         }
-    } else if manifest.default_asr_bundle.is_some() {
-        errors.push("legacy model manifest must not declare default_asr_bundle".to_owned());
+        match manifest.default_diarization_bundle.as_deref().and_then(|id| bundles.get(id).copied())
+        {
+            Some(bundle)
+                if bundle.kind == "diarization-model"
+                    && bundle.availability == "available"
+                    && bundle.runtime_artifacts.iter().any(|artifact| artifact.role == "vad")
+                    && bundle
+                        .runtime_artifacts
+                        .iter()
+                        .any(|artifact| artifact.role == "speaker-embedding") => {}
+            _ => errors.push(
+                "model manifest schema 3 requires an available default diarization model bundle"
+                    .to_owned(),
+            ),
+        }
+    } else if manifest.default_asr_bundle.is_some() || manifest.default_diarization_bundle.is_some()
+    {
+        errors.push("legacy model manifest must not declare audio model defaults".to_owned());
     }
 }
 
@@ -4324,6 +4352,7 @@ mod tests {
             schema_version: 1,
             default_bundle: "default".to_owned(),
             default_asr_bundle: None,
+            default_diarization_bundle: None,
             bundles: vec![bundle("default", version, vec![detector, recognizer])],
         };
         (manifest, inventory, downloads)
@@ -4819,9 +4848,7 @@ version = "9.9.9"
         let mut errors = Vec::new();
         validate_model_manifest(&inventory, &manifest, &downloads, &mut errors);
         assert!(errors.iter().any(|error| {
-            error.contains(
-                "OCR model bundle incomplete lacks required role recognizer-and-dictionary",
-            )
+            error.contains("model bundle incomplete lacks required role recognizer-and-dictionary")
         }));
     }
 
@@ -4955,7 +4982,7 @@ version = "9.9.9"
         validate_schema2_kind_presence(&missing, &mut errors);
         assert_eq!(errors, ["model manifest schema 2 bundles require explicit kind"]);
 
-        let legacy = missing.replacen("\"schema_version\": 2", "\"schema_version\": 1", 1);
+        let legacy = missing.replacen("\"schema_version\": 3", "\"schema_version\": 1", 1);
         let mut legacy_errors = Vec::new();
         validate_schema2_kind_presence(&legacy, &mut legacy_errors);
         assert!(legacy_errors.is_empty());

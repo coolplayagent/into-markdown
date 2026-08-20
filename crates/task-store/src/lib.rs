@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[cfg(unix)]
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 #[cfg(unix)]
 const DATABASE_FILE: &str = "tasks.sqlite3";
 #[cfg(unix)]
@@ -248,7 +248,9 @@ impl<'de> Deserialize<'de> for TaskId {
     }
 }
 
-/// Durable task state. Terminal values cannot transition again.
+/// Durable task state. Terminal values cannot use ordinary transitions; a
+/// caller may explicitly requeue a failed, interrupted, or cancelled task
+/// after authenticating its retained input and recovery checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
@@ -491,6 +493,8 @@ pub struct TaskRecord {
     pub diagnostics: Vec<TaskDiagnostic>,
     /// Bounded external artifact index.
     pub artifacts: Vec<ArtifactReference>,
+    /// Monotonic generation of the currently published artifact set.
+    pub artifact_generation: u64,
     /// Whether the user pinned this task against future retention policy.
     pub pinned: bool,
 }
@@ -531,6 +535,8 @@ pub struct TaskCursor {
 /// Result of restart reconciliation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileSummary {
+    /// Tasks with a valid media chunk checkpoint that remain resumable.
+    pub resumable: u32,
     /// Tasks promoted from a valid converted checkpoint.
     pub converted: u32,
     /// Reserved compatibility counter. Recovery alone never proves artifact publication.
@@ -543,6 +549,7 @@ pub struct ReconcileSummary {
 
 #[derive(Clone, Copy)]
 enum ReconcileOutcome {
+    Resumable,
     Converted,
     Interrupted,
     Failed,
@@ -702,7 +709,7 @@ impl TaskStore {
         let base = self
             .connection
             .query_row(
-                "SELECT created_at_ms, updated_at_ms, status, progress, input_fingerprint, options_fingerprint, recovery_token, input_bytes, config_json, pinned FROM tasks WHERE id=?1",
+                "SELECT created_at_ms, updated_at_ms, status, progress, input_fingerprint, options_fingerprint, recovery_token, input_bytes, config_json, artifact_generation, pinned FROM tasks WHERE id=?1",
                 [id.as_str()],
                 |row| {
                     Ok((
@@ -716,6 +723,7 @@ impl TaskStore {
                         row.get::<_, i64>(7)?,
                         row.get::<_, String>(8)?,
                         row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
                     ))
                 },
             )
@@ -731,6 +739,7 @@ impl TaskStore {
             recovery_token,
             input_bytes,
             configuration,
+            artifact_generation,
             pinned,
         )) = base
         else {
@@ -761,6 +770,8 @@ impl TaskStore {
         validate_configuration(&configuration)?;
         let diagnostics = self.load_diagnostics(id)?;
         let artifacts = self.load_artifacts(id)?;
+        let artifact_generation = u64::try_from(artifact_generation)
+            .map_err(|_| TaskStoreError::Corrupt("artifact generation is invalid".into()))?;
         Ok(Some(TaskRecord {
             id: id.clone(),
             created_at_ms: created,
@@ -772,12 +783,103 @@ impl TaskStore {
             configuration,
             diagnostics,
             artifacts,
+            artifact_generation,
             pinned: match pinned {
                 0 => false,
                 1 => true,
                 _ => return Err(TaskStoreError::Corrupt("task pinned marker is invalid".into())),
             },
         }))
+    }
+
+    /// Replace the complete artifact set of a succeeded task with generation CAS.
+    ///
+    /// This is used for metadata-only rerenders such as anonymous speaker relabeling.
+    /// The task remains succeeded and conversion is not run again.
+    pub fn replace_succeeded_artifacts(
+        &mut self,
+        id: &TaskId,
+        expected_generation: u64,
+        artifacts: Vec<ArtifactReference>,
+    ) -> Result<TaskRecord, TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        if artifacts.is_empty() || artifacts.len() > MAX_ARTIFACTS {
+            return Err(TaskStoreError::Limit(
+                "replacement artifact count must be within 1 and 128".into(),
+            ));
+        }
+        if i64::try_from(expected_generation).is_err() {
+            return Err(TaskStoreError::Limit("artifact generation exceeds SQLite range".into()));
+        }
+        let total = artifacts.iter().try_fold(0_u64, |total, artifact| {
+            validate_artifact(artifact)?;
+            total.checked_add(artifact.byte_len).ok_or_else(|| {
+                TaskStoreError::Limit("artifact byte length total overflowed".into())
+            })
+        })?;
+        if total > MAX_ARTIFACT_BYTES {
+            return Err(TaskStoreError::Limit("task artifact bytes exceed 2 GiB".into()));
+        }
+        let now = utc_now_ms()?;
+        let started = Instant::now();
+        let transaction = loop {
+            match self
+                .connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            {
+                Ok(transaction) => break transaction,
+                Err(error) if is_busy(&error) => wait_for_busy(&self.busy, started)?,
+                Err(error) => return Err(map_sqlite_generic(error)),
+            }
+        };
+        let current: Option<(String, i64, i64)> = transaction
+            .query_row(
+                "SELECT status, artifact_generation, updated_at_ms FROM tasks WHERE id=?1",
+                [id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(map_sqlite_generic)?;
+        let Some((status, generation, updated)) = current else {
+            return Err(TaskStoreError::Conflict("task does not exist".into()));
+        };
+        if TaskStatus::parse(&status)? != TaskStatus::Succeeded
+            || generation != i64::try_from(expected_generation).unwrap_or(i64::MAX)
+        {
+            return Err(TaskStoreError::Conflict(
+                "artifact generation compare-and-set was rejected".into(),
+            ));
+        }
+        let next_generation = generation
+            .checked_add(1)
+            .ok_or_else(|| TaskStoreError::Limit("artifact generation overflowed".into()))?;
+        transaction
+            .execute("DELETE FROM artifacts WHERE task_id=?1", [id.as_str()])
+            .map_err(map_sqlite_generic)?;
+        for artifact in artifacts {
+            transaction
+                .execute(
+                    "INSERT INTO artifacts(task_id, storage_key, kind, byte_len, sha256, asset_id, filename, media_type) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![id.as_str(), artifact.storage_key, artifact.kind.as_db(), artifact.byte_len, artifact.sha256, artifact.asset_id, artifact.filename, artifact.media_type],
+                )
+                .map_err(map_sqlite_generic)?;
+        }
+        let updated = now.max(updated.saturating_add(1));
+        let changed = transaction
+            .execute(
+                "UPDATE tasks SET artifact_generation=?1, updated_at_ms=?2 WHERE id=?3 AND status='succeeded' AND artifact_generation=?4",
+                params![next_generation, updated, id.as_str(), generation],
+            )
+            .map_err(map_sqlite_generic)?;
+        if changed != 1 {
+            return Err(TaskStoreError::Conflict(
+                "artifact generation compare-and-set lost a race".into(),
+            ));
+        }
+        transaction.commit().map_err(map_sqlite_generic)?;
+        self.preflight()?;
+        self.get(id)?.ok_or_else(|| TaskStoreError::Corrupt("updated task disappeared".into()))
     }
 
     /// List a stable newest-first page. The maximum page size is 100.
@@ -934,6 +1036,64 @@ impl TaskStore {
         self.preflight()
     }
 
+    /// Atomically clear terminal diagnostics and return a task to `Pending`.
+    ///
+    /// The caller must first authenticate the retained input and a compatible
+    /// recovery checkpoint. Successful tasks and any task with artifacts are
+    /// never eligible for this operation.
+    pub fn requeue_terminal(&mut self, id: &TaskId) -> Result<TaskRecord, TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        let now = utc_now_ms()?;
+        let started = Instant::now();
+        let transaction = loop {
+            match self
+                .connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            {
+                Ok(transaction) => break transaction,
+                Err(error) if is_busy(&error) => wait_for_busy(&self.busy, started)?,
+                Err(error) => return Err(map_sqlite_generic(error)),
+            }
+        };
+        let current: Option<(String, i64)> = transaction
+            .query_row(
+                "SELECT status, (SELECT count(*) FROM artifacts WHERE task_id=tasks.id) FROM tasks WHERE id=?1",
+                [id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(map_sqlite_generic)?;
+        let Some((status, artifacts)) = current else {
+            return Err(TaskStoreError::Conflict("task does not exist".into()));
+        };
+        let status = TaskStatus::parse(&status)?;
+        if !matches!(status, TaskStatus::Failed | TaskStatus::Interrupted | TaskStatus::Cancelled)
+            || artifacts != 0
+        {
+            return Err(TaskStoreError::Conflict(
+                "only terminal tasks without artifacts can be requeued".into(),
+            ));
+        }
+        transaction
+            .execute("DELETE FROM diagnostics WHERE task_id=?1", [id.as_str()])
+            .map_err(map_sqlite_generic)?;
+        let changed = transaction
+            .execute(
+                "UPDATE tasks SET status='pending', progress=0, completed_at_ms=NULL, updated_at_ms=max(?1, updated_at_ms + 1) WHERE id=?2 AND status=?3",
+                params![now, id.as_str(), status.as_db()],
+            )
+            .map_err(map_sqlite_generic)?;
+        if changed != 1 {
+            return Err(TaskStoreError::Conflict(
+                "task state changed before it was requeued".into(),
+            ));
+        }
+        transaction.commit().map_err(map_sqlite_generic)?;
+        self.preflight()?;
+        self.get(id)?.ok_or_else(|| TaskStoreError::Corrupt("requeued task disappeared".into()))
+    }
+
     /// Delete one terminal task and all of its child rows in one transaction.
     ///
     /// Active work and pinned tasks are rejected. Callers coordinating external
@@ -1020,7 +1180,7 @@ impl TaskStore {
                 row.get(0)
             })
             .optional()
-            .map(|value| value.flatten())
+            .map(Option::flatten)
             .map_err(|error| self.map_sqlite(error))
     }
 
@@ -1086,6 +1246,9 @@ impl TaskStore {
                     Ok(Some(checkpoint)) if checkpoint.phase == TaskPhase::Converted => {
                         (TaskStatus::Converted, 900_000, None, ReconcileOutcome::Converted)
                     }
+                    Ok(Some(checkpoint)) if checkpoint.phase == TaskPhase::Media => {
+                        (status, record.progress_millionths, None, ReconcileOutcome::Resumable)
+                    }
                     Ok(None) => (
                         TaskStatus::Interrupted,
                         0,
@@ -1112,6 +1275,7 @@ impl TaskStore {
                 };
                 if self.reconcile_transition(&id, status, next, progress, diagnostic)? {
                     match outcome {
+                        ReconcileOutcome::Resumable => summary.resumable += 1,
                         ReconcileOutcome::Converted => summary.converted += 1,
                         ReconcileOutcome::Interrupted => summary.interrupted += 1,
                         ReconcileOutcome::Failed => summary.failed += 1,
@@ -1556,6 +1720,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                    recovery_token TEXT NOT NULL UNIQUE CHECK(length(recovery_token)=32 AND recovery_token NOT GLOB '*[^0-9a-f]*'),\
                    input_bytes INTEGER NOT NULL CHECK(input_bytes>=0),\
                    config_json TEXT NOT NULL CHECK(length(config_json)<=16384),\
+                   artifact_generation INTEGER NOT NULL DEFAULT 0 CHECK(artifact_generation>=0),\
                    pinned INTEGER NOT NULL CHECK(pinned IN (0,1))\
                  ) STRICT;\
                  CREATE INDEX tasks_order ON tasks(updated_at_ms DESC, id DESC);\
@@ -1576,7 +1741,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                  ) STRICT;\
                  CREATE TRIGGER artifacts_limit BEFORE INSERT ON artifacts WHEN (SELECT count(*) FROM artifacts WHERE task_id=NEW.task_id)>=128 BEGIN SELECT RAISE(ABORT, 'artifact limit'); END;\
                  CREATE TRIGGER artifacts_terminal BEFORE INSERT ON artifacts WHEN (SELECT status FROM tasks WHERE id=NEW.task_id) IN ('failed','interrupted','cancelled') BEGIN SELECT RAISE(ABORT, 'terminal artifact'); END;\
-                 PRAGMA user_version=4;",
+                 PRAGMA user_version=5;",
             )
             .map_err(map_sqlite_generic)?;
         #[cfg(test)]
@@ -1643,6 +1808,19 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                 "ALTER TABLE tasks ADD COLUMN completed_at_ms INTEGER CHECK(completed_at_ms IS NULL OR completed_at_ms>=created_at_ms);\
                  UPDATE tasks SET completed_at_ms=updated_at_ms WHERE status IN ('succeeded','failed','interrupted','cancelled');\
                  PRAGMA user_version=4;",
+            )
+            .map_err(map_sqlite_generic)?;
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    let current: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sqlite_generic)?;
+    if current == 4 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        transaction
+            .execute_batch(
+                "ALTER TABLE tasks ADD COLUMN artifact_generation INTEGER NOT NULL DEFAULT 0 CHECK(artifact_generation>=0);\
+                 PRAGMA user_version=5;",
             )
             .map_err(map_sqlite_generic)?;
         transaction.commit().map_err(map_sqlite_generic)?;

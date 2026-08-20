@@ -178,7 +178,7 @@ fn whisper_small_multilingual_quality() {
                 &clear,
                 MediaLimits {
                     max_input_bytes: fixture.bytes,
-                    max_duration_ms: 60_000,
+                    max_duration_ms: Some(60_000),
                     sample_rate: 16_000,
                     channels: 1,
                     ..MediaLimits::default()

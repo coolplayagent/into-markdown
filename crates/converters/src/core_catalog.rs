@@ -32,7 +32,7 @@ const OCR: RuntimeRequirement = RuntimeRequirement {
 };
 const ASR: RuntimeRequirement = RuntimeRequirement {
     component: "whisper-small",
-    install_hint: "run `into-md models install whisper-small-multilingual` and install the pinned LGPL FFmpeg runtime",
+    install_hint: "use a complete package with the pinned LGPL FFmpeg runtime, then run `into-md setup media` to install and verify the media models",
 };
 
 const AVAILABLE: FormatStatus = FormatStatus::Available;

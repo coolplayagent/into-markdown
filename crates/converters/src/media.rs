@@ -1,7 +1,7 @@
 use into_markdown_core::{
-    Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, Document,
-    ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
-    TranscriptionRequest,
+    Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, Diagnostic,
+    DiagnosticSeverity, DiarizationRequest, Document, ExecutionContext, FormatCandidate,
+    InputFormat, ProbeOutcome, ResolvedInput, Services, TranscriptionRequest,
 };
 
 const MEDIA_FORMATS: &[InputFormat] = &[InputFormat::Audio, InputFormat::Video];
@@ -80,7 +80,7 @@ impl Converter for MediaConverter {
                     InputFormat::Video => "video/octet-stream",
                     _ => unreachable!(),
                 });
-            let result = transcriber
+            let mut result = transcriber
                 .transcribe(
                     TranscriptionRequest {
                         media: &input.bytes,
@@ -107,10 +107,88 @@ impl Converter for MediaConverter {
                     detail: "transcriber returned an invalid media-node contract".into(),
                 });
             }
+            let mut diarization_identity = None;
+            if options.diarization.enabled {
+                let diarizer = services.diarizer.as_ref().ok_or_else(|| {
+                    ConversionError::ComponentUnavailable {
+                        component: "speaker-diarization".into(),
+                        detail: format!(
+                            "offline speaker diarization requires `into-md models install {}`",
+                            options.diarization.model_bundle
+                        ),
+                    }
+                })?;
+                let diarization_result = diarizer
+                    .diarize(
+                        DiarizationRequest {
+                            media: &input.bytes,
+                            media_type,
+                            segments: &result.segments,
+                            expected_speakers: options.diarization.expected_speakers,
+                            max_speakers: options.diarization.max_speakers,
+                        },
+                        context,
+                    )
+                    .await?;
+                if diarization_result.provider != diarizer.id()
+                    || diarization_result.model.is_empty()
+                    || diarization_result.segments.len()
+                        > usize::try_from(options.asr.max_segments).unwrap_or(usize::MAX)
+                    || diarization_result.segments.iter().any(|node| match &node.block {
+                        Block::TimedSegment { speaker, speaker_confidence, tokens, .. } => {
+                            speaker.as_deref().is_some_and(|speaker| {
+                                !valid_anonymous_speaker(speaker, options.diarization.max_speakers)
+                            }) || speaker_confidence.is_some_and(|value| {
+                                !value.is_finite() || !(0.0..=1.0).contains(&value)
+                            }) || speaker.is_none() && speaker_confidence.is_some()
+                                || tokens.iter().any(|token| {
+                                    token.speaker.as_deref().is_some_and(|speaker| {
+                                        !valid_anonymous_speaker(
+                                            speaker,
+                                            options.diarization.max_speakers,
+                                        )
+                                    }) || token.speaker.is_none()
+                                        && token.speaker_confidence.is_some()
+                                })
+                        }
+                        _ => true,
+                    })
+                {
+                    return Err(ConversionError::Ai {
+                        provider: diarizer.id().into(),
+                        detail: "diarizer returned an invalid media-node contract".into(),
+                    });
+                }
+                result.segments = diarization_result.segments;
+                diarization_identity =
+                    Some((diarization_result.provider, diarization_result.model));
+            }
             let mut document = Document::default();
             document.blocks = result.segments;
+            let diagnostics = if options.diarization.enabled {
+                document
+                    .blocks
+                    .iter()
+                    .filter_map(|node| match &node.block {
+                        Block::TimedSegment { speaker: None, .. } => Some(Diagnostic {
+                            code: "media.speakerAssignmentAmbiguous".into(),
+                            severity: DiagnosticSeverity::Warning,
+                            message: "No anonymous speaker was assigned because the local evidence was ambiguous.".into(),
+                            locator: Some(node.provenance.locator.clone()),
+                        }),
+                        _ => None,
+                    })
+                    .take(1_024)
+                    .collect()
+            } else {
+                Vec::new()
+            };
             document.metadata.properties.insert("media.transcriber".into(), result.provider);
             document.metadata.properties.insert("media.model".into(), result.model);
+            if let Some((provider, model)) = diarization_identity {
+                document.metadata.properties.insert("media.diarizer".into(), provider);
+                document.metadata.properties.insert("media.diarizationModel".into(), model);
+            }
             if let Some(language) = result.language {
                 document.metadata.properties.insert("media.language".into(), language);
             }
@@ -120,9 +198,18 @@ impl Converter for MediaConverter {
                     .properties
                     .insert("media.languageConfidence".into(), format!("{confidence:.6}"));
             }
-            Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
+            Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
         })
     }
+}
+
+fn valid_anonymous_speaker(value: &str, maximum: u16) -> bool {
+    value.strip_prefix("speaker-").is_some_and(|number| {
+        !number.is_empty()
+            && !number.starts_with('0')
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+            && number.parse::<u16>().is_ok_and(|number| (1..=maximum).contains(&number))
+    })
 }
 
 #[cfg(test)]
@@ -154,6 +241,8 @@ mod tests {
                         block: Block::TimedSegment {
                             range,
                             speaker: None,
+                            speaker_confidence: None,
+                            tokens: Vec::new(),
                             content: vec![Inline::Text {
                                 value: "hello".into(),
                                 marks: Vec::new(),
@@ -201,6 +290,15 @@ mod tests {
         assert_eq!(output.document.blocks.len(), 1);
         assert_eq!(output.document.metadata.properties["media.language"], "en");
         assert_eq!(output.document.metadata.properties["media.model"], "model@sha256:abcd");
+    }
+
+    #[test]
+    fn anonymous_speaker_ids_are_canonical_and_bounded() {
+        assert!(valid_anonymous_speaker("speaker-1", 16));
+        assert!(valid_anonymous_speaker("speaker-16", 16));
+        for invalid in ["speaker-0", "speaker-01", "speaker-17", "speaker-x", "Speaker 1"] {
+            assert!(!valid_anonymous_speaker(invalid, 16));
+        }
     }
 
     #[test]

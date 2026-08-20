@@ -9,7 +9,7 @@ use into_markdown::{
     ProgressEvent, ProgressListener, RecoveryStore, RecoveryToken, TaskCursor, TaskDiagnostic,
     TaskId, TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::cell::Cell;
@@ -37,6 +37,8 @@ const EVENT_BROADCAST_CAPACITY: usize = 128;
 const MAX_ALLOWED_HOSTS: usize = 64;
 const COPY_CHUNK: usize = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_WEB_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_WEB_TEMPORARY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_TASK_DURABLE_GROWTH: u64 = 512 * 1024 * 1024;
 const MAX_TASK_METADATA_GROWTH: u64 = 4 * 1024 * 1024;
 const MAX_TASK_TOTAL_DURABLE_GROWTH: u64 =
@@ -85,12 +87,25 @@ pub(crate) struct WebTaskAuthorization {
     pub(crate) provider: bool,
 }
 
+/// Product surface that created a browser task. This is persisted with the
+/// authenticated descriptor so document conversions and meeting transcripts
+/// can share one durable queue without mixing their histories.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum WebWorkflow {
+    #[default]
+    Conversion,
+    MeetingTranscript,
+}
+
 /// Versioned browser request using the same `FormatHint` and
 /// `ConversionOptions` types as the CLI and Engine.
 #[derive(Clone, Debug, serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct WebTaskRequest {
     pub(crate) schema_version: u32,
+    #[serde(default)]
+    pub(crate) workflow: WebWorkflow,
     pub(crate) format: Option<InputFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
@@ -102,6 +117,7 @@ impl Default for WebTaskRequest {
     fn default() -> Self {
         Self {
             schema_version: 1,
+            workflow: WebWorkflow::Conversion,
             format: None,
             batch_id: None,
             options: web_options(),
@@ -130,17 +146,25 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
         return Err(WebTaskError::Invalid("OCR confidence must be within 0 and 1".into()));
     }
     validate_web_asr_options(&options.asr)?;
+    let diarization = &options.diarization;
+    if diarization.model_bundle != "silero-vad-3dspeaker-eres2net"
+        || !(1..=64).contains(&diarization.max_speakers)
+        || diarization
+            .expected_speakers
+            .is_some_and(|expected| expected == 0 || expected > diarization.max_speakers)
+        || !diarization.enabled && diarization.expected_speakers.is_some()
+    {
+        return Err(WebTaskError::Invalid("unsupported Web diarization policy".into()));
+    }
     let limits = &options.limits;
     if limits.max_input_bytes == 0 || limits.max_input_bytes > MAX_FILE_BYTES {
         return Err(WebTaskError::Invalid("max_input_bytes must be within 1 and 512 MiB".into()));
     }
-    if limits.max_memory_bytes == 0 || limits.max_memory_bytes > MAX_CHECKPOINT_BYTES {
-        return Err(WebTaskError::Invalid("max_memory_bytes must be within 1 and 256 MiB".into()));
+    if limits.max_memory_bytes == 0 || limits.max_memory_bytes > MAX_WEB_MEMORY_BYTES {
+        return Err(WebTaskError::Invalid("max_memory_bytes exceeds the Web profile".into()));
     }
-    if limits.max_temporary_bytes == 0 || limits.max_temporary_bytes > MAX_CHECKPOINT_BYTES {
-        return Err(WebTaskError::Invalid(
-            "max_temporary_bytes must be within 1 and 256 MiB".into(),
-        ));
+    if limits.max_temporary_bytes == 0 || limits.max_temporary_bytes > MAX_WEB_TEMPORARY_BYTES {
+        return Err(WebTaskError::Invalid("max_temporary_bytes exceeds the Web profile".into()));
     }
     if limits.max_asset_bytes > 64 * 1024 * 1024
         || limits.max_total_asset_bytes > 128 * 1024 * 1024
@@ -209,7 +233,6 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
         ai.layout_repair,
         ai.table_repair,
         ai.formula_repair,
-        ai.audio_transcription,
         ai.markdown_postprocess,
     ]
     .into_iter()
@@ -218,6 +241,19 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
         return Err(WebTaskError::Invalid(
             "AI use lacks this-upload Provider authorization".into(),
         ));
+    }
+    if request.workflow == WebWorkflow::MeetingTranscript
+        && (!matches!(request.format, Some(InputFormat::Audio | InputFormat::Video))
+            || ai.audio_transcription == AiMode::Off
+            || options.ocr.policy != OcrPolicy::Off
+            || ai.vision_ocr != AiMode::Off
+            || ai.image_description != AiMode::Off
+            || ai.layout_repair != AiMode::Off
+            || ai.table_repair != AiMode::Off
+            || ai.formula_repair != AiMode::Off
+            || ai.markdown_postprocess != AiMode::Off)
+    {
+        return Err(WebTaskError::Invalid("meeting transcript policy is inconsistent".into()));
     }
     Ok(())
 }
@@ -241,7 +277,17 @@ fn valid_batch_id(value: &str) -> bool {
 }
 
 fn validate_web_asr_options(options: &AsrOptions) -> Result<(), WebTaskError> {
-    if options == &AsrOptions::default() {
+    if options.model_bundle == "whisper-small-multilingual"
+        && options.language.as_ref().is_none_or(|language| {
+            !language.is_empty()
+                && language.len() <= 35
+                && language.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && (1..=8).contains(&options.max_threads)
+        && options.max_duration_ms != Some(0)
+        && (1..=100_000).contains(&options.max_segments)
+        && (256 * 1024 * 1024..=2 * 1024 * 1024 * 1024).contains(&options.max_native_memory_bytes)
+    {
         Ok(())
     } else {
         Err(WebTaskError::Invalid("unsupported Web ASR policy".into()))
@@ -270,6 +316,8 @@ impl From<TaskStoreError> for WebTaskError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedRequest {
     schema_version: u32,
+    #[serde(default)]
+    workflow: WebWorkflow,
     name: String,
     hint: FormatHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,12 +331,28 @@ struct PersistedRequest {
 pub(crate) struct WebTaskRecord {
     #[serde(flatten)]
     pub(crate) record: TaskRecord,
+    pub(crate) workflow: WebWorkflow,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) format: Option<InputFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpeakerLabels {
+    pub(crate) schema_version: u32,
+    pub(crate) artifact_generation: u64,
+    pub(crate) speakers: Vec<SpeakerLabel>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SpeakerLabel {
+    pub(crate) id: String,
+    pub(crate) name: String,
 }
 
 #[derive(Debug)]
@@ -481,6 +545,20 @@ impl EventHub {
         // `broadcast::Sender::send` never waits for receivers. A lagging or
         // closed browser is repaired from the bounded log/current snapshot.
         let _ = self.sender.send(event);
+    }
+
+    fn restart(&self, record: &TaskRecord) {
+        let mut state = lock(&self.state);
+        let next_sequence = state.logs.get(&record.id).map_or(1, |log| log.next_sequence);
+        state.logs.insert(
+            record.id.clone(),
+            TaskEventLog {
+                next_sequence,
+                terminal: false,
+                latest_record: record.clone(),
+                events: VecDeque::new(),
+            },
+        );
     }
 
     fn publish_snapshot(&self, record: &TaskRecord) {
@@ -1180,6 +1258,7 @@ impl WebTaskBackend {
         let request = self.persisted_request(&record.id)?;
         Ok(WebTaskRecord {
             record,
+            workflow: request.as_ref().map_or(WebWorkflow::Conversion, |value| value.workflow),
             display_name: request.as_ref().map(|request| request.name.clone()),
             format: request.as_ref().and_then(|request| request.hint.format),
             batch_id: request.and_then(|request| request.batch_id),
@@ -1407,6 +1486,9 @@ impl WebTaskBackend {
     }
 
     pub(crate) fn retry(&self, id: &TaskId) -> Result<TaskRecord, WebTaskError> {
+        if let Some(record) = self.resume_cancelled_media(id)? {
+            return Ok(record);
+        }
         let (request, bytes) = {
             // Keep deletion and retention from quarantining the source while
             // retry authenticates and copies it. Release the lock before the
@@ -1431,6 +1513,7 @@ impl WebTaskBackend {
         };
         let configured = WebTaskRequest {
             schema_version: 1,
+            workflow: request.workflow,
             format: request.hint.format,
             batch_id: None,
             options: request.options,
@@ -1443,6 +1526,88 @@ impl WebTaskBackend {
         )?;
         upload.write_chunk(&bytes)?;
         upload.finish()
+    }
+
+    fn resume_cancelled_media(&self, id: &TaskId) -> Result<Option<TaskRecord>, WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        let record = self.get(id)?;
+        if record.status != TaskStatus::Cancelled {
+            return Ok(None);
+        }
+        let token = RecoveryToken::parse(record.input.recovery_token.clone())
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        let Some(checkpoint) = self
+            .owner
+            .shared
+            .recovery
+            .inspect(&token)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        if checkpoint.phase != into_markdown::TaskPhase::Media
+            || !constant_time_equal(&checkpoint.input_fingerprint, &record.input.input_fingerprint)
+            || !constant_time_equal(
+                &checkpoint.options_fingerprint,
+                &record.input.options_fingerprint,
+            )
+        {
+            return Ok(None);
+        }
+        let task = self
+            .owner
+            .shared
+            .objects
+            .open_child_private(std::ffi::OsStr::new(id.as_str()))
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        validate_private_directory_handle(&task)?;
+        let input_file = task
+            .open_regular_private(std::ffi::OsStr::new("input"))
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        validate_private_file(&input_file)?;
+        let input = read_file_bounded(input_file, MAX_FILE_BYTES)?;
+        let request = load_persisted_request(&task)?
+            .ok_or_else(|| WebTaskError::Conflict("original request is unavailable".into()))?;
+        if request.workflow != WebWorkflow::MeetingTranscript {
+            return Ok(None);
+        }
+        let (input_fingerprint, options_fingerprint) = Engine::recoverable_fingerprints(
+            &input,
+            Some(&request.name),
+            &request.hint,
+            &request.options,
+        )
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        if u64::try_from(input.len()).unwrap_or(u64::MAX) != record.input.byte_len
+            || !constant_time_equal(&input_fingerprint, &record.input.input_fingerprint)
+            || !constant_time_equal(&options_fingerprint, &record.input.options_fingerprint)
+        {
+            return Err(WebTaskError::Unsafe(
+                "cancelled media input no longer matches its recovery checkpoint".into(),
+            ));
+        }
+        let resumed =
+            metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+                Ok(store.requeue_terminal(id)?)
+            })?;
+        self.owner.shared.events.restart(&resumed);
+        if let Err(error) = self.enqueue(Job {
+            id: resumed.id.clone(),
+            token,
+            request,
+            cancellation: CancellationToken::new(),
+            admission_ticket: None,
+        }) {
+            terminal_transition(
+                &self.owner.shared,
+                &resumed.id,
+                TaskStatus::Interrupted,
+                DiagnosticCode::RecoveryCheckpointMissing,
+            )?;
+            return Err(error);
+        }
+        self.owner.shared.events.publish_snapshot(&resumed);
+        Ok(Some(resumed))
     }
 
     pub(crate) fn cleanup(
@@ -1461,7 +1626,7 @@ impl WebTaskBackend {
                 "retention capacity exceeds the managed storage ceiling".into(),
             ));
         }
-        let before = measured_managed_bytes(&self.owner.shared.root_handle)?;
+        let before = measured_live_managed_bytes(&self.owner.shared.root_handle)?;
         let age_ms = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
         let cutoff = now_ms.saturating_sub(age_ms);
         let mut cursor = None;
@@ -1504,7 +1669,7 @@ impl WebTaskBackend {
                 Err(WebTaskError::NotFound | WebTaskError::Conflict(_)) => continue,
                 Err(error) => return Err(error),
             }
-            used = measured_managed_bytes(&self.owner.shared.root_handle)?;
+            used = measured_live_managed_bytes(&self.owner.shared.root_handle)?;
         }
         summary.reclaimed_bytes = before.saturating_sub(used);
         Ok(summary)
@@ -1559,8 +1724,9 @@ impl WebTaskBackend {
         }
         let reference = record
             .artifacts
-            .into_iter()
+            .iter()
             .find(|artifact| artifact.storage_key == key)
+            .cloned()
             .ok_or(WebTaskError::NotFound)?;
         self.owner
             .shared
@@ -1575,7 +1741,7 @@ impl WebTaskBackend {
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         task.verify_private_namespace().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         let published = task
-            .open_child_private(std::ffi::OsStr::new("published"))
+            .open_child_private(std::ffi::OsStr::new(&publication_directory_name(&record)))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         published
             .verify_private_namespace()
@@ -1681,6 +1847,191 @@ impl WebTaskBackend {
         ))
     }
 
+    /// Apply anonymous speaker display names and atomically publish a rerendered artifact set.
+    pub(crate) fn relabel_speakers(
+        &self,
+        id: &TaskId,
+        expected_generation: u64,
+        assignments: &BTreeMap<String, String>,
+    ) -> Result<TaskRecord, WebTaskError> {
+        if assignments.is_empty() || assignments.len() > 64 {
+            return Err(WebTaskError::Invalid(
+                "speaker assignments must contain between 1 and 64 entries".into(),
+            ));
+        }
+        let _history = lock(&self.owner.shared.history_mutation);
+        let record = lock(&self.owner.shared.task_store).get(id)?.ok_or(WebTaskError::NotFound)?;
+        if record.status != TaskStatus::Succeeded {
+            return Err(WebTaskError::Conflict(
+                "speaker labels can only be changed on a succeeded task".into(),
+            ));
+        }
+        if record.artifact_generation != expected_generation {
+            return Err(WebTaskError::Conflict("artifact generation changed".into()));
+        }
+        let task = self
+            .owner
+            .shared
+            .objects
+            .open_child_private(std::ffi::OsStr::new(id.as_str()))
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        validate_private_directory_handle(&task)?;
+        // A crash between publishing the next generation and committing its
+        // TaskStore CAS can leave an unselected canonical directory behind.
+        // Remove it before rendering so a retry can never adopt stale labels.
+        cleanup_unselected_publications(&task, &record)?;
+        let request = self
+            .persisted_request(id)?
+            .ok_or_else(|| WebTaskError::Conflict("original task request is unavailable".into()))?;
+        if request.workflow != WebWorkflow::MeetingTranscript {
+            return Err(WebTaskError::Conflict(
+                "speaker labels are only available for meeting transcripts".into(),
+            ));
+        }
+        if record.artifacts.iter().any(|artifact| artifact.kind == ArtifactKind::Asset) {
+            return Err(WebTaskError::Unsafe(
+                "meeting transcript unexpectedly contains binary assets".into(),
+            ));
+        }
+        let ir = record
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::DocumentIr)
+            .ok_or_else(|| WebTaskError::Conflict("document IR artifact is unavailable".into()))?;
+        if ir.byte_len > MAX_TASK_DURABLE_GROWTH {
+            return Err(WebTaskError::Limit("document IR exceeds the rerender limit".into()));
+        }
+        let (mut snapshot, _) = self.artifact(id, &ir.storage_key)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(usize::try_from(ir.byte_len).map_err(|_| {
+                WebTaskError::Limit("document IR exceeds the addressable memory limit".into())
+            })?)
+            .map_err(|_| WebTaskError::Limit("document IR allocation failed".into()))?;
+        snapshot.read_to_end(&mut bytes)?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != ir.byte_len {
+            return Err(WebTaskError::Unsafe("document IR snapshot length changed".into()));
+        }
+        let mut document: into_markdown::Document = serde_json::from_slice(&bytes)
+            .map_err(|_| WebTaskError::Unsafe("document IR artifact is invalid".into()))?;
+        drop(snapshot);
+        drop(bytes);
+        document.validate().map_err(|error| {
+            WebTaskError::Unsafe(format!("document IR validation failed: {error}"))
+        })?;
+        let diagnostics = load_diagnostics_artifact(self, id, &record)?;
+        let provenance = document_provenance(&document)?;
+        let speaker_ids = document_speaker_ids(&document);
+        for (speaker, label) in assignments {
+            validate_speaker_assignment(speaker, label)?;
+            if !speaker_ids.contains(speaker) {
+                return Err(WebTaskError::Invalid(format!(
+                    "speaker assignment refers to unknown ID {speaker}"
+                )));
+            }
+            document
+                .metadata
+                .properties
+                .insert(format!("media.speaker.{speaker}.label"), label.clone());
+        }
+        let markdown = into_markdown::render_markdown(&document, &[], &request.options)
+            .map_err(|error| WebTaskError::Io(format!("rerender meeting transcript: {error}")))?;
+        let result = into_markdown::ConversionResult::new(
+            document,
+            markdown,
+            Vec::new(),
+            diagnostics,
+            provenance,
+        );
+        let next_generation = expected_generation
+            .checked_add(1)
+            .ok_or_else(|| WebTaskError::Limit("artifact generation overflowed".into()))?;
+        let directory_name = format!("published-{next_generation}");
+        let cancellation = CancellationToken::new();
+        let artifacts =
+            publish_result_named(&self.owner.shared, id, &result, &cancellation, &directory_name)?;
+        let replaced =
+            metadata_store_mutation(&self.owner.shared, MAX_TASK_METADATA_GROWTH, |store| {
+                Ok(store.replace_succeeded_artifacts(id, expected_generation, artifacts.clone())?)
+            });
+        let record = match replaced {
+            Ok(record) => record,
+            Err(error) => {
+                if let Ok(task) =
+                    self.owner.shared.objects.open_child_private(std::ffi::OsStr::new(id.as_str()))
+                    && let Ok(directory) =
+                        task.open_child_private(std::ffi::OsStr::new(&directory_name))
+                {
+                    let _ = remove_private_files(&directory);
+                    let _ = task.remove_empty_child_private(std::ffi::OsStr::new(&directory_name));
+                }
+                return Err(error);
+            }
+        };
+        let prior_directory = if expected_generation == 0 {
+            "published".to_owned()
+        } else {
+            format!("published-{expected_generation}")
+        };
+        if let Ok(task) =
+            self.owner.shared.objects.open_child_private(std::ffi::OsStr::new(id.as_str()))
+            && let Ok(Some(directory)) =
+                task.open_child_private_optional(std::ffi::OsStr::new(&prior_directory))
+        {
+            let _ = remove_private_files(&directory);
+            let _ = task.remove_empty_child_private(std::ffi::OsStr::new(&prior_directory));
+        }
+        self.owner.shared.events.publish_snapshot(&record);
+        Ok(record)
+    }
+
+    pub(crate) fn speaker_labels(&self, id: &TaskId) -> Result<SpeakerLabels, WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        let record = self.get(id)?;
+        if record.status != TaskStatus::Succeeded {
+            return Err(WebTaskError::Conflict("speaker labels require a succeeded task".into()));
+        }
+        let request = self
+            .persisted_request(id)?
+            .ok_or_else(|| WebTaskError::Conflict("original task request is unavailable".into()))?;
+        if request.workflow != WebWorkflow::MeetingTranscript {
+            return Err(WebTaskError::Conflict(
+                "speaker labels are only available for meeting transcripts".into(),
+            ));
+        }
+        let ir = record
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::DocumentIr)
+            .ok_or_else(|| WebTaskError::Conflict("document IR artifact is unavailable".into()))?;
+        if ir.byte_len > MAX_TASK_DURABLE_GROWTH {
+            return Err(WebTaskError::Limit("document IR exceeds the label-list limit".into()));
+        }
+        let (mut snapshot, _) = self.artifact(id, &ir.storage_key)?;
+        let document: into_markdown::Document = serde_json::from_reader(&mut snapshot)
+            .map_err(|_| WebTaskError::Unsafe("document IR artifact is invalid".into()))?;
+        document.validate().map_err(|error| {
+            WebTaskError::Unsafe(format!("document IR validation failed: {error}"))
+        })?;
+        let speakers = document_speaker_ids(&document)
+            .into_iter()
+            .map(|id| {
+                let name = document
+                    .metadata
+                    .properties
+                    .get(&format!("media.speaker.{id}.label"))
+                    .cloned()
+                    .unwrap_or_else(|| default_speaker_name(&id));
+                SpeakerLabel { id, name }
+            })
+            .collect();
+        Ok(SpeakerLabels {
+            schema_version: 1,
+            artifact_generation: record.artifact_generation,
+            speakers,
+        })
+    }
+
     fn enqueue(&self, job: Job) -> Result<(), WebTaskError> {
         let mut queue = lock(&self.owner.shared.queue);
         while queue.jobs.len() >= MAX_QUEUE && !queue.stopped {
@@ -1732,7 +2083,7 @@ impl WebTaskBackend {
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             validate_private_directory_handle(&task)?;
             let published = task
-                .open_child_private(std::ffi::OsStr::new("published"))
+                .open_child_private(std::ffi::OsStr::new(&publication_directory_name(&record)))
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             validate_private_directory_handle(&published)?;
             let artifacts = validate_manifest_handle(&published)?;
@@ -1741,6 +2092,7 @@ impl WebTaskBackend {
                     "published artifact manifest does not match TaskStore".into(),
                 ));
             }
+            cleanup_unselected_publications(&task, &record)?;
             return Ok(());
         }
         if matches!(
@@ -1837,7 +2189,7 @@ fn validate_web_success(shared: &Shared, record: &TaskRecord) -> Result<(), WebT
         .open_child_private(std::ffi::OsStr::new(record.id.as_str()))
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     let published = task
-        .open_child_private(std::ffi::OsStr::new("published"))
+        .open_child_private(std::ffi::OsStr::new(&publication_directory_name(record)))
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     let artifacts = validate_manifest_handle(&published)?;
     if !artifact_sets_equal(&artifacts, &record.artifacts) {
@@ -1942,6 +2294,7 @@ impl Upload {
         let preserve_layout = options.ai.layout_repair != AiMode::Off;
         let persisted = PersistedRequest {
             schema_version: 1,
+            workflow: self.request.workflow,
             name: self.name.clone(),
             hint,
             batch_id: self.request.batch_id.clone(),
@@ -2117,7 +2470,14 @@ fn worker(shared: Arc<Shared>) {
             {
                 reconcile_or_fail(&shared, &job.id);
             }
-            lock(&shared.queue).cancellations.remove(&job.id);
+            let mut queue = lock(&shared.queue);
+            if queue
+                .cancellations
+                .get(&job.id)
+                .is_some_and(|current| current.same_instance(&job.cancellation))
+            {
+                queue.cancellations.remove(&job.id);
+            }
         }
     }
 }
@@ -2284,13 +2644,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 "task input or persisted request changed after authentication".into(),
             ));
         }
-        let mut request = ConversionRequest::new(InputRef::bytes(
-            Arc::<[u8]>::from(bytes),
-            Some(persisted.name.clone()),
-        ));
-        request.hint = persisted.hint;
-        request.options = persisted.options;
-        request.execution = ExecutionOptions {
+        let execution = ExecutionOptions {
             cancellation: job.cancellation.clone(),
             timeout: Some(deadline.saturating_duration_since(Instant::now())),
             progress_listener: Some(Arc::new(EventProgressListener {
@@ -2298,7 +2652,25 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 id: job.id.clone(),
             })),
         };
-        let converted = futures::executor::block_on(shared.engine.convert_recoverable(
+        let meeting_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
+            let services = crate::services::assemble_web_media(&persisted.options, &execution)
+                .map_err(|error| WebTaskError::Io(error.to_string()))?;
+            Some(
+                into_markdown::default_engine_with_services(services)
+                    .map_err(|error| WebTaskError::Io(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let engine = meeting_engine.as_ref().unwrap_or(&shared.engine);
+        let mut request = ConversionRequest::new(InputRef::bytes(
+            Arc::<[u8]>::from(bytes),
+            Some(persisted.name.clone()),
+        ));
+        request.hint = persisted.hint;
+        request.options = persisted.options;
+        request.execution = execution;
+        let converted = futures::executor::block_on(engine.convert_recoverable(
             request,
             &shared.recovery,
             &job.token,
@@ -2474,6 +2846,25 @@ fn publish_result(
     result: &into_markdown::ConversionResult,
     cancellation: &CancellationToken,
 ) -> Result<Vec<ArtifactReference>, WebTaskError> {
+    publish_result_named(shared, id, result, cancellation, "published")
+}
+
+#[allow(clippy::too_many_lines)]
+fn publish_result_named(
+    shared: &Shared,
+    id: &TaskId,
+    result: &into_markdown::ConversionResult,
+    cancellation: &CancellationToken,
+    publication_name: &str,
+) -> Result<Vec<ArtifactReference>, WebTaskError> {
+    if publication_name != "published"
+        && publication_name
+            .strip_prefix("published-")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_none()
+    {
+        return Err(WebTaskError::Invalid("artifact publication name is invalid".into()));
+    }
     cancelled(cancellation)?;
     let markdown = result.markdown.as_bytes();
     {
@@ -2494,7 +2885,7 @@ fn publish_result(
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     validate_private_directory_handle(&task)?;
     if let Some(published) = task
-        .open_child_private_optional(std::ffi::OsStr::new("published"))
+        .open_child_private_optional(std::ffi::OsStr::new(publication_name))
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
     {
         return validate_manifest_handle_cancel(&published, Some(cancellation));
@@ -2611,7 +3002,7 @@ fn publish_result(
     let renamed = publication_failure_checkpoint(shared, 4).and_then(|()| {
         task.rename_child_private_no_replace(
             std::ffi::OsStr::new(&stage_name),
-            std::ffi::OsStr::new("published"),
+            std::ffi::OsStr::new(publication_name),
         )
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))
     });
@@ -2624,6 +3015,108 @@ fn publish_result(
     crash_hook("after-published-rename");
     let _ = staged_bytes;
     Ok(entries)
+}
+
+fn publication_directory_name(record: &TaskRecord) -> String {
+    if record.artifact_generation == 0 {
+        "published".into()
+    } else {
+        format!("published-{}", record.artifact_generation)
+    }
+}
+
+fn cleanup_unselected_publications(
+    task: &SafeDir,
+    record: &TaskRecord,
+) -> Result<(), WebTaskError> {
+    let selected = publication_directory_name(record);
+    let names = task.names_private().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    for name in names {
+        let Some(text) = name.to_str() else {
+            return Err(WebTaskError::Unsafe("task member name is not UTF-8".into()));
+        };
+        let publication_generation = if text == "published" {
+            Some(0)
+        } else {
+            text.strip_prefix("published-")
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|generation| *generation > 0)
+                .filter(|generation| format!("published-{generation}") == text)
+        };
+        if publication_generation.is_none() || text == selected {
+            continue;
+        }
+        let directory = task
+            .open_child_private(&name)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        remove_private_files(&directory)?;
+        directory.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        task.remove_empty_child_private(&name)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    }
+    task.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))
+}
+
+fn validate_speaker_assignment(speaker: &str, label: &str) -> Result<(), WebTaskError> {
+    let number = speaker
+        .strip_prefix("speaker-")
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|value| (1..=64).contains(value));
+    if number.is_none()
+        || label.is_empty()
+        || label.chars().count() > 80
+        || label.trim() != label
+        || label.chars().any(char::is_control)
+    {
+        return Err(WebTaskError::Invalid("speaker assignment is invalid".into()));
+    }
+    Ok(())
+}
+
+fn default_speaker_name(speaker: &str) -> String {
+    speaker
+        .strip_prefix("speaker-")
+        .and_then(|value| value.parse::<u8>().ok())
+        .map_or_else(|| speaker.to_owned(), |value| format!("Speaker {value}"))
+}
+
+fn document_speaker_ids(document: &into_markdown::Document) -> Vec<String> {
+    fn visit(
+        blocks: &[into_markdown::BlockNode],
+        seen: &mut std::collections::BTreeSet<String>,
+        values: &mut Vec<String>,
+    ) {
+        for node in blocks {
+            match &node.block {
+                into_markdown::Block::TimedSegment { speaker: Some(speaker), .. } => {
+                    if seen.insert(speaker.clone()) {
+                        values.push(speaker.clone());
+                    }
+                }
+                into_markdown::Block::List { items, .. } => {
+                    for item in items {
+                        visit(&item.blocks, seen, values);
+                    }
+                }
+                into_markdown::Block::Table { rows, .. } => {
+                    for row in rows {
+                        for cell in &row.cells {
+                            visit(&cell.blocks, seen, values);
+                        }
+                    }
+                }
+                into_markdown::Block::Footnote { blocks, .. }
+                | into_markdown::Block::Page { blocks, .. }
+                | into_markdown::Block::Slide { blocks, .. }
+                | into_markdown::Block::Sheet { blocks, .. } => visit(blocks, seen, values),
+                _ => {}
+            }
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ordered = Vec::new();
+    visit(&document.blocks, &mut seen, &mut ordered);
+    ordered
 }
 
 #[derive(Serialize, serde::Deserialize)]
@@ -2645,6 +3138,98 @@ struct ArtifactManifest<'a> {
 struct DiagnosticsArtifact<'a> {
     schema_version: u32,
     diagnostics: &'a [into_markdown::Diagnostic],
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnedDiagnosticsArtifact {
+    schema_version: u32,
+    diagnostics: Vec<into_markdown::Diagnostic>,
+}
+
+fn load_diagnostics_artifact(
+    backend: &WebTaskBackend,
+    id: &TaskId,
+    record: &TaskRecord,
+) -> Result<Vec<into_markdown::Diagnostic>, WebTaskError> {
+    let Some(reference) =
+        record.artifacts.iter().find(|artifact| artifact.kind == ArtifactKind::Diagnostics)
+    else {
+        // Successful records created before diagnostics became a required Web
+        // artifact remain relabelable. They had no durable diagnostics to keep.
+        return Ok(Vec::new());
+    };
+    if reference.byte_len > into_markdown::MAX_DTO_JSON_BYTES as u64 {
+        return Err(WebTaskError::Limit("diagnostics exceed the rerender limit".into()));
+    }
+    let (mut snapshot, _) = backend.artifact(id, &reference.storage_key)?;
+    let length = usize::try_from(reference.byte_len)
+        .map_err(|_| WebTaskError::Limit("diagnostics exceed addressable memory".into()))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| WebTaskError::Limit("diagnostics allocation failed".into()))?;
+    snapshot.read_to_end(&mut bytes)?;
+    if bytes.len() != length {
+        return Err(WebTaskError::Unsafe("diagnostics snapshot length changed".into()));
+    }
+    validate_json_shape(
+        &bytes,
+        into_markdown::MAX_DTO_DEPTH,
+        into_markdown::MAX_DTO_VALUES,
+        into_markdown::MAX_DTO_TOTAL_STRING_BYTES,
+    )?;
+    let artifact: OwnedDiagnosticsArtifact = serde_json::from_slice(&bytes)
+        .map_err(|_| WebTaskError::Unsafe("diagnostics artifact is invalid".into()))?;
+    if artifact.schema_version != 1
+        || artifact.diagnostics.len() > into_markdown::MAX_DTO_DIAGNOSTICS
+    {
+        return Err(WebTaskError::Unsafe("diagnostics artifact is incompatible".into()));
+    }
+    Ok(artifact.diagnostics)
+}
+
+fn document_provenance(
+    document: &into_markdown::Document,
+) -> Result<Vec<into_markdown::Provenance>, WebTaskError> {
+    fn visit(
+        blocks: &[into_markdown::BlockNode],
+        values: &mut Vec<into_markdown::Provenance>,
+    ) -> Result<(), WebTaskError> {
+        for node in blocks {
+            if values.len() >= into_markdown::MAX_DTO_PROVENANCE {
+                return Err(WebTaskError::Limit("provenance inventory exceeds its limit".into()));
+            }
+            values
+                .try_reserve(1)
+                .map_err(|_| WebTaskError::Limit("provenance allocation failed".into()))?;
+            values.push(node.provenance.clone());
+            match &node.block {
+                into_markdown::Block::List { items, .. } => {
+                    for item in items {
+                        visit(&item.blocks, values)?;
+                    }
+                }
+                into_markdown::Block::Table { rows, .. } => {
+                    for row in rows {
+                        for cell in &row.cells {
+                            visit(&cell.blocks, values)?;
+                        }
+                    }
+                }
+                into_markdown::Block::Footnote { blocks, .. }
+                | into_markdown::Block::Page { blocks, .. }
+                | into_markdown::Block::Slide { blocks, .. }
+                | into_markdown::Block::Sheet { blocks, .. } => visit(blocks, values)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    let mut values = Vec::new();
+    visit(&document.blocks, &mut values)?;
+    Ok(values)
 }
 
 fn validate_manifest_handle(directory: &SafeDir) -> Result<Vec<ArtifactReference>, WebTaskError> {
@@ -3169,23 +3754,7 @@ fn metadata_store_mutation<T>(
 }
 
 fn measured_metadata_bytes(shared: &Shared) -> Result<u64, WebTaskError> {
-    let mut last_error = None;
-    for _ in 0..8 {
-        match measured_managed_bytes(&shared.root_handle) {
-            Ok(measured) => return Ok(measured),
-            Err(error) => {
-                last_error = Some(error);
-                // An active descriptor-bound stage may atomically rename or
-                // remove a member between readdir and stat. The quota lock
-                // prevents new reservations, and the active mutation finishes
-                // without this lock, so a bounded retry distinguishes that
-                // race from a persistent unsafe namespace.
-                std::thread::yield_now();
-            }
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| WebTaskError::Unsafe("managed storage measurement failed".into())))
+    measured_live_managed_bytes(&shared.root_handle)
 }
 
 #[cfg(test)]
@@ -3533,6 +4102,27 @@ fn hex_digest_cancel(
 
 fn measured_managed_bytes(root: &SafeDir) -> Result<u64, WebTaskError> {
     root.measured_tree_bytes(8, 1_000_000).map_err(|error| WebTaskError::Unsafe(error.to_string()))
+}
+
+fn measured_live_managed_bytes(root: &SafeDir) -> Result<u64, WebTaskError> {
+    let mut last_error = None;
+    for attempt in 0..64 {
+        match measured_managed_bytes(root) {
+            Ok(measured) => return Ok(measured),
+            Err(error) => {
+                last_error = Some(error);
+                // A descriptor-bound upload or publication may atomically
+                // rename a member between readdir, stat, and open. Restart the
+                // complete scan after a short bounded pause so the mutation can
+                // finish. Persistent unsafe namespace state still fails closed.
+                if attempt != 63 {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| WebTaskError::Unsafe("managed storage measurement failed".into())))
 }
 
 fn unix_now_ms() -> Result<i64, WebTaskError> {
@@ -4010,7 +4600,24 @@ mod tests {
         assert_eq!(decoded.options.asr, AsrOptions::default());
 
         let mut request = WebTaskRequest::default();
-        request.options.asr.max_threads += 1;
+        request.options.asr.max_duration_ms = Some(60_000);
+        assert_eq!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap())
+                .unwrap()
+                .options
+                .asr
+                .max_duration_ms,
+            Some(60_000)
+        );
+        request.options.asr.max_duration_ms = None;
+        assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+        request.options.asr.max_duration_ms = Some(0);
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
+        ));
+        request.options.asr.max_duration_ms = None;
+        request.options.asr.max_threads = 9;
         assert!(matches!(
             decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
             Err(WebTaskError::Invalid(_))
@@ -4034,6 +4641,7 @@ mod tests {
             configuration: ConfigurationSnapshot::default(),
             diagnostics: Vec::new(),
             artifacts: Vec::new(),
+            artifact_generation: 0,
             pinned: false,
         }
     }
@@ -4093,6 +4701,29 @@ mod tests {
         assert!(snapshot.terminal);
         assert_eq!(snapshot.status, TaskStatus::Succeeded);
         assert_ne!(snapshot.event_id, first.event_id);
+    }
+
+    #[test]
+    fn event_hub_can_restart_the_same_task_after_a_terminal_cancellation() {
+        let generation = "aa".repeat(16);
+        let hub = EventHub::new(generation.clone());
+        let cancelled = event_record(TaskStatus::Cancelled, 450_000);
+        hub.publish_snapshot(&cancelled);
+        let terminal = hub.subscribe(&cancelled, None).replay.pop_back().unwrap();
+        assert!(terminal.terminal);
+
+        let mut pending = event_record(TaskStatus::Pending, 0);
+        pending.updated_at_ms = cancelled.updated_at_ms + 1;
+        hub.restart(&pending);
+        hub.publish_snapshot(&pending);
+        let resumed = hub
+            .subscribe(&pending, Some((&generation, terminal.sequence)))
+            .replay
+            .pop_back()
+            .unwrap();
+        assert_eq!(resumed.status, TaskStatus::Pending);
+        assert!(!resumed.terminal);
+        assert!(resumed.sequence > terminal.sequence);
     }
 
     #[cfg(unix)]
@@ -4205,6 +4836,167 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn meeting_speaker_relabel_is_metadata_only_generation_cas_and_atomic_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.conversion_gate) = Some(Arc::clone(&gate));
+        let mut request = WebTaskRequest {
+            workflow: WebWorkflow::MeetingTranscript,
+            format: Some(InputFormat::Audio),
+            ..WebTaskRequest::default()
+        };
+        request.options.ocr.policy = OcrPolicy::Off;
+        request.options.ai.audio_transcription = AiMode::Only;
+        let mut upload =
+            backend.begin_upload_configured("meeting.wav", Some(4), request.clone()).unwrap();
+        upload.write_chunk(b"RIFF").unwrap();
+        let task = upload.finish().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while backend.owner.shared.conversion_entries.load(Ordering::SeqCst) != 1 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+
+        let range = into_markdown::TimeRange { start_ms: 1_000, end_ms: 2_000 };
+        let document = into_markdown::Document {
+            blocks: vec![into_markdown::BlockNode {
+                id: into_markdown::NodeId("segment-1".into()),
+                block: into_markdown::Block::TimedSegment {
+                    range,
+                    speaker: Some("speaker-1".into()),
+                    speaker_confidence: Some(0.9),
+                    tokens: Vec::new(),
+                    content: vec![into_markdown::Inline::Text {
+                        value: "hello".into(),
+                        marks: Vec::new(),
+                    }],
+                },
+                provenance: into_markdown::Provenance {
+                    kind: into_markdown::ProvenanceKind::AiProvider,
+                    provider: "test/model@sha256:abcd".into(),
+                    locator: into_markdown::SourceLocator {
+                        time: Some(range),
+                        ..into_markdown::SourceLocator::default()
+                    },
+                    confidence: Some(0.8),
+                },
+            }],
+            ..into_markdown::Document::default()
+        };
+        let original_node = document.blocks[0].clone();
+        let original_provenance = original_node.provenance.clone();
+        let original_diagnostic = into_markdown::Diagnostic {
+            code: "speakerAssignmentAmbiguous".into(),
+            severity: into_markdown::DiagnosticSeverity::Warning,
+            message: "speaker could not be assigned reliably".into(),
+            locator: Some(into_markdown::SourceLocator {
+                time: Some(range),
+                ..into_markdown::SourceLocator::default()
+            }),
+        };
+        let markdown = into_markdown::render_markdown(&document, &[], &request.options).unwrap();
+        let result = into_markdown::ConversionResult::new(
+            document,
+            markdown,
+            Vec::new(),
+            vec![original_diagnostic.clone()],
+            vec![original_provenance.clone()],
+        );
+        let converted = lock(&backend.owner.shared.task_store)
+            .transition(
+                &task.id,
+                TaskTransition {
+                    expected: TaskStatus::Running,
+                    next: TaskStatus::Converted,
+                    progress_millionths: 900_000,
+                    diagnostics: Vec::new(),
+                    artifacts: Vec::new(),
+                },
+            )
+            .unwrap();
+        backend.owner.shared.events.publish_snapshot(&converted);
+        let artifacts =
+            publish_result(&backend.owner.shared, &task.id, &result, &CancellationToken::new())
+                .unwrap();
+        promote_published_success(&backend.owner.shared, &task.id, &artifacts).unwrap();
+
+        let labels = backend.speaker_labels(&task.id).unwrap();
+        assert_eq!(labels.artifact_generation, 0);
+        assert_eq!(labels.speakers[0].name, "Speaker 1");
+        let retry_orphan = root.join("objects").join(task.id.as_str()).join("published-1");
+        create_private_child(&retry_orphan).unwrap();
+        write_private(&retry_orphan.join("orphan"), b"stale failed relabel").unwrap();
+        let assignments = BTreeMap::from([("speaker-1".to_owned(), "张三".to_owned())]);
+        let relabeled = backend.relabel_speakers(&task.id, 0, &assignments).unwrap();
+        assert!(!retry_orphan.join("orphan").exists());
+        assert_eq!(relabeled.status, TaskStatus::Succeeded);
+        assert_eq!(relabeled.artifact_generation, 1);
+        assert!(matches!(
+            backend.relabel_speakers(&task.id, 0, &assignments),
+            Err(WebTaskError::Conflict(_))
+        ));
+        let labels = backend.speaker_labels(&task.id).unwrap();
+        assert_eq!(labels.speakers[0].name, "张三");
+        let markdown = relabeled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::Markdown)
+            .unwrap();
+        let (mut snapshot, _) = backend.artifact(&task.id, &markdown.storage_key).unwrap();
+        let mut rendered = String::new();
+        snapshot.read_to_string(&mut rendered).unwrap();
+        assert!(rendered.contains("张三"));
+        let ir = relabeled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::DocumentIr)
+            .unwrap();
+        let (snapshot, _) = backend.artifact(&task.id, &ir.storage_key).unwrap();
+        let rerendered: into_markdown::Document = serde_json::from_reader(snapshot).unwrap();
+        assert_eq!(rerendered.blocks[0], original_node);
+        assert_eq!(rerendered.metadata.properties["media.speaker.speaker-1.label"], "张三");
+        let diagnostics = relabeled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::Diagnostics)
+            .unwrap();
+        let (snapshot, _) = backend.artifact(&task.id, &diagnostics.storage_key).unwrap();
+        let diagnostics: OwnedDiagnosticsArtifact = serde_json::from_reader(snapshot).unwrap();
+        assert_eq!(diagnostics.schema_version, 1);
+        assert_eq!(diagnostics.diagnostics, vec![original_diagnostic]);
+        let bundle = relabeled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == ArtifactKind::Bundle)
+            .unwrap();
+        let (snapshot, _) = backend.artifact(&task.id, &bundle.storage_key).unwrap();
+        let mut archive = zip::ZipArchive::new(snapshot).unwrap();
+        let mut provenance = String::new();
+        archive.by_name("provenance.json").unwrap().read_to_string(&mut provenance).unwrap();
+        let provenance = into_markdown::ProvenanceListDto::from_bundle_json(
+            &provenance,
+            into_markdown::DTO_SCHEMA_VERSION,
+        )
+        .unwrap();
+        assert_eq!(provenance.provenance.len(), 1);
+        assert_eq!(provenance.provenance[0].provider, original_provenance.provider);
+
+        let orphan = root.join("objects").join(task.id.as_str()).join("published-2");
+        create_private_child(&orphan).unwrap();
+        write_private(&orphan.join("orphan"), b"uncommitted generation").unwrap();
+
+        *lock(&backend.owner.shared.conversion_gate) = None;
+        gate.wait();
+        drop(backend);
+        let reopened = WebTaskBackend::open(&root).unwrap();
+        assert!(!orphan.exists());
+        assert_eq!(reopened.get(&task.id).unwrap().artifact_generation, 1);
     }
 
     #[cfg(unix)]

@@ -25,7 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -100,6 +100,7 @@ struct StatusDto {
     local_api: ComponentDto,
     document_console: ComponentDto,
     audio_transcription: ComponentDto,
+    speaker_diarization: ComponentDto,
 }
 
 #[derive(Clone, Serialize)]
@@ -139,6 +140,13 @@ struct TaskListQuery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PinTaskDto {
     pinned: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RelabelSpeakersDto {
+    expected_generation: u64,
+    speakers: std::collections::BTreeMap<String, String>,
 }
 
 /// Opens a URL without invoking a command shell.
@@ -294,6 +302,10 @@ where
         .route("/tasks/{id}/cancel", post(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/retry", post(retry_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/pin", post(pin_task).fallback(api_method_not_allowed))
+        .route(
+            "/tasks/{id}/speakers",
+            get(speaker_labels).post(relabel_speakers).fallback(api_method_not_allowed),
+        )
         .route(
             "/tasks/{id}/history",
             axum::routing::delete(delete_task).fallback(api_method_not_allowed),
@@ -451,12 +463,20 @@ async fn status(headers: HeaderMap) -> Response {
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
-    let audio_transcription =
-        tokio::task::spawn_blocking(audio_runtime_status).await.unwrap_or(ComponentDto {
-            available: false,
-            code: "componentUnavailable",
-            detail: "audio runtime verification did not complete",
-        });
+    let (audio_transcription, speaker_diarization) = tokio::join!(
+        tokio::task::spawn_blocking(audio_runtime_status),
+        tokio::task::spawn_blocking(diarization_runtime_status),
+    );
+    let audio_transcription = audio_transcription.unwrap_or(ComponentDto {
+        available: false,
+        code: "componentUnavailable",
+        detail: "audio runtime verification did not complete",
+    });
+    let speaker_diarization = speaker_diarization.unwrap_or(ComponentDto {
+        available: false,
+        code: "componentUnavailable",
+        detail: "speaker diarization runtime verification did not complete",
+    });
     Json(StatusDto {
         schema_version: 1,
         local_api: ComponentDto {
@@ -470,29 +490,66 @@ async fn status(headers: HeaderMap) -> Response {
             detail: "local upload and conversion workbench is active",
         },
         audio_transcription,
+        speaker_diarization,
     })
     .into_response()
 }
 
-fn audio_runtime_status() -> ComponentDto {
-    static STATUS: OnceLock<ComponentDto> = OnceLock::new();
-    STATUS
-        .get_or_init(|| {
-            if crate::services::verify_asr_runtime().is_ok() {
-                ComponentDto {
-                    available: true,
-                    code: "available",
-                    detail: "Whisper model and pinned LGPL FFmpeg runtime passed local verification",
-                }
-            } else {
-                ComponentDto {
-                    available: false,
-                    code: "componentUnavailable",
-                    detail: "install whisper-small-multilingual and the pinned LGPL FFmpeg runtime",
-                }
+fn diarization_runtime_status() -> ComponentDto {
+    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
+    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
+        if crate::services::verify_diarization_runtime().is_ok() {
+            ComponentDto {
+                available: true,
+                code: "available",
+                detail: "Silero VAD and 3D-Speaker ERes2Net passed local verification",
             }
-        })
-        .clone()
+        } else {
+            ComponentDto {
+                available: false,
+                code: "componentUnavailable",
+                detail: "install silero-vad-3dspeaker-eres2net and the pinned local runtimes",
+            }
+        }
+    })
+}
+
+fn audio_runtime_status() -> ComponentDto {
+    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
+    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
+        if crate::services::verify_asr_runtime().is_ok() {
+            ComponentDto {
+                available: true,
+                code: "available",
+                detail: "Whisper model and pinned LGPL FFmpeg runtime passed local verification",
+            }
+        } else {
+            ComponentDto {
+                available: false,
+                code: "componentUnavailable",
+                detail: "install whisper-small-multilingual and the pinned LGPL FFmpeg runtime",
+            }
+        }
+    })
+}
+
+fn cached_runtime_status(
+    cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>>,
+    revision: u128,
+    verify: impl FnOnce() -> ComponentDto,
+) -> ComponentDto {
+    let mut cache = cache
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached_revision, status)) = cache.as_ref()
+        && (status.available || *cached_revision == revision)
+    {
+        return status.clone();
+    }
+    let status = verify();
+    *cache = Some((revision, status.clone()));
+    status
 }
 
 async fn upload_task(State(state): State<AppState>, request: Request) -> Response {
@@ -776,6 +833,51 @@ async fn pin_task(
     .await
     {
         Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn relabel_speakers(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    request: Request,
+) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    if request.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        != Some("application/json")
+    {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalidContentType");
+    }
+    let bytes = match axum::body::to_bytes(request.into_body(), 16 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidSpeakerLabels"),
+    };
+    let request: RelabelSpeakersDto = match serde_json::from_slice(&bytes) {
+        Ok(request) => request,
+        Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidSpeakerLabels"),
+    };
+    match tokio::task::spawn_blocking(move || {
+        let record =
+            state.tasks.relabel_speakers(&id, request.expected_generation, &request.speakers)?;
+        state.tasks.web_record(record)
+    })
+    .await
+    {
+        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(error)) => web_task_rejection(error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
+}
+
+async fn speaker_labels(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Ok(id) = into_markdown::TaskId::parse(id) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
+    };
+    match tokio::task::spawn_blocking(move || state.tasks.speaker_labels(&id)).await {
+        Ok(Ok(labels)) => Json(labels).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
@@ -1360,7 +1462,6 @@ fn unsafe_data_dir(message: impl Into<String>) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::sync::oneshot;
 
@@ -1404,6 +1505,33 @@ mod tests {
         assert!(response.contains("\"schemaVersion\":1"), "{response}");
         assert!(response.contains(&format!("\"code\":\"{code}\"")), "{response}");
         assert_security_headers(response);
+    }
+
+    #[test]
+    fn runtime_status_cache_invalidates_unavailable_after_setup_and_pins_available_results() {
+        let unavailable_cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>> =
+            Box::leak(Box::new(OnceLock::new()));
+        let unavailable_calls = std::sync::atomic::AtomicUsize::new(0);
+        let unavailable = || {
+            unavailable_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ComponentDto { available: false, code: "componentUnavailable", detail: "missing" }
+        };
+        assert!(!cached_runtime_status(unavailable_cache, 7, unavailable).available);
+        assert!(!cached_runtime_status(unavailable_cache, 7, unavailable).available);
+        assert_eq!(unavailable_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!cached_runtime_status(unavailable_cache, 8, unavailable).available);
+        assert_eq!(unavailable_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let available_cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>> =
+            Box::leak(Box::new(OnceLock::new()));
+        let available_calls = std::sync::atomic::AtomicUsize::new(0);
+        let available = || {
+            available_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ComponentDto { available: true, code: "available", detail: "ready" }
+        };
+        assert!(cached_runtime_status(available_cache, 7, available).available);
+        assert!(cached_runtime_status(available_cache, 8, available).available);
+        assert_eq!(available_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

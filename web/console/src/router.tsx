@@ -33,7 +33,7 @@ export function useRouter(): RouterValue {
   return value;
 }
 
-export function RouteLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
+export function RouteLink({ href, children, className, ariaLabel }: { href: string; children: ReactNode; className?: string; ariaLabel?: string }) {
   const { navigate } = useRouter();
   const activate = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
@@ -41,5 +41,5 @@ export function RouteLink({ href, children, className }: { href: string; childre
       navigate(href);
     }
   };
-  return <a href={href} className={className} onClick={activate}>{children}</a>;
+  return <a href={href} className={className} aria-label={ariaLabel} onClick={activate}>{children}</a>;
 }

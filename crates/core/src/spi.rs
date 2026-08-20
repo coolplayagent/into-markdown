@@ -611,6 +611,20 @@ pub fn estimate_retained_output(
     Ok(total.0)
 }
 
+/// Conservatively estimate a second owned copy of an IR block vector.
+///
+/// Long-form media providers use this before cloning partial transcript state
+/// into an atomic checkpoint, so checkpoint construction remains inside the
+/// request's memory budget.
+#[doc(hidden)]
+pub fn estimate_retained_blocks(blocks: &Vec<BlockNode>) -> Result<u64, ConversionError> {
+    let mut total = RetainedCounter::default();
+    total.vec::<BlockNode>(blocks.len())?;
+    retained_blocks(blocks, &mut total, false)?;
+    total.add(1_024)?;
+    Ok(total.0)
+}
+
 /// Conservatively measure a complete final result, including Markdown and the
 /// concrete provenance inventory capacity.
 #[doc(hidden)]
@@ -752,10 +766,25 @@ pub fn estimate_validation_working_set(
             add(total, node.id.0.len())?; // cloned into the node-ID B-tree
             add(total, strings_in_provenance(&node.provenance)?)?;
             match &node.block {
-                crate::Block::Paragraph(values)
-                | crate::Block::Heading { content: values, .. }
-                | crate::Block::TimedSegment { content: values, .. } => {
+                crate::Block::Paragraph(values) | crate::Block::Heading { content: values, .. } => {
                     visit_inlines(values, 1, total, inline_count)?;
+                }
+                crate::Block::TimedSegment { tokens, content, .. } => {
+                    *inline_count = inline_count.saturating_add(tokens.len());
+                    if *inline_count > crate::MAX_DOCUMENT_INLINES {
+                        return Err(ConversionError::ResourceLimit {
+                            limit: "documentInlines",
+                            detail: format!("{} > {}", *inline_count, crate::MAX_DOCUMENT_INLINES),
+                        });
+                    }
+                    for token in tokens {
+                        add(total, PATH_AND_TREE_NODE_HIGH_WATER)?;
+                        add(total, token.text.len())?;
+                        if let Some(speaker) = &token.speaker {
+                            add(total, speaker.len())?;
+                        }
+                    }
+                    visit_inlines(content, 1, total, inline_count)?;
                 }
                 crate::Block::List { items, .. } => {
                     for item in items {
@@ -999,8 +1028,13 @@ fn retained_block(
             total.vec::<BlockNode>(blocks.capacity())?;
             retained_blocks(blocks, total, clone_provenance)?;
         }
-        Block::TimedSegment { speaker, content, .. } => {
+        Block::TimedSegment { speaker, tokens, content, .. } => {
             total.string_opt(speaker.as_ref())?;
+            total.vec::<crate::TimedToken>(tokens.capacity())?;
+            for token in tokens {
+                total.string(&token.text)?;
+                total.string_opt(token.speaker.as_ref())?;
+            }
             retained_inlines(content, total)?;
         }
         Block::Rule => {}
@@ -1332,6 +1366,44 @@ pub trait Transcriber: Send + Sync {
     ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>>;
 }
 
+/// Borrowed input for anonymous speaker diarization of an existing transcript.
+#[derive(Debug, Clone, Copy)]
+pub struct DiarizationRequest<'a> {
+    /// Encoded source media bytes.
+    pub media: &'a [u8],
+    /// Canonical source media type.
+    pub media_type: &'a str,
+    /// Time-aligned transcript nodes to label or split.
+    pub segments: &'a [BlockNode],
+    /// Optional fixed number of anonymous speakers.
+    pub expected_speakers: Option<u16>,
+    /// Hard upper bound for automatic online clustering.
+    pub max_speakers: u16,
+}
+
+/// Result of local anonymous speaker diarization.
+#[derive(Debug, Clone, Default)]
+pub struct DiarizationResult {
+    /// Time-aligned nodes with stable anonymous speaker IDs and confidence.
+    pub segments: Vec<BlockNode>,
+    /// Stable provider ID.
+    pub provider: String,
+    /// Exact VAD and embedding model identity.
+    pub model: String,
+}
+
+/// Offline anonymous speaker diarization provider.
+pub trait Diarizer: Send + Sync {
+    /// Stable provider ID.
+    fn id(&self) -> &'static str;
+    /// Label and, when needed, split an existing timed transcript.
+    fn diarize<'a>(
+        &'a self,
+        request: DiarizationRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<DiarizationResult, ConversionError>>;
+}
+
 /// Optional AI operation exposed by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1537,6 +1609,8 @@ pub struct Services {
     pub ocr: Option<Arc<dyn OcrEngine>>,
     /// Speech transcription implementation.
     pub transcriber: Option<Arc<dyn Transcriber>>,
+    /// Anonymous speaker diarization implementation.
+    pub diarizer: Option<Arc<dyn Diarizer>>,
     /// AI provider.
     pub ai: Option<Arc<dyn AiProvider>>,
     /// Request-authority-preserving dispatcher for already-resolved container members.
@@ -1555,6 +1629,7 @@ mod tests {
         let _: Option<&dyn MarkdownRenderer> = None;
         let _: Option<&dyn OcrEngine> = None;
         let _: Option<&dyn Transcriber> = None;
+        let _: Option<&dyn Diarizer> = None;
         let _: Option<&dyn AiProvider> = None;
         let _: Option<&dyn TensorRuntime> = None;
     }

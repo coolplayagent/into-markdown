@@ -4,12 +4,13 @@ use crate::config::LoadedConfig;
 use crate::error::CliError;
 use into_markdown::{
     AiMode, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions,
-    InstalledAsrConfig, InstalledOcrConfig, OcrPolicy, OpenAiCompatibleClient,
-    OpenAiImageDescriptionProvider, ProviderConfig as TransportProviderConfig,
-    ProviderNetworkPolicy, Services,
+    InstalledAsrConfig, InstalledDiarizationConfig, InstalledOcrConfig, OcrPolicy,
+    OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
+    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 pub(crate) fn assemble(
     loaded: &LoadedConfig,
@@ -17,6 +18,29 @@ pub(crate) fn assemble(
 ) -> Result<Services, CliError> {
     let executable = canonical_executable().map_err(CliError::component)?;
     assemble_at(loaded, execution, &executable)
+}
+
+/// Assemble the exact local media services required by one durable Web meeting
+/// request. The helper verifies installed components and never downloads them.
+pub(crate) fn assemble_web_media(
+    options: &ConversionOptions,
+    execution: &ExecutionOptions,
+) -> Result<Services, CliError> {
+    let executable = canonical_executable().map_err(CliError::component)?;
+    let context = ExecutionContext::new(execution.clone(), options.limits.clone());
+    let mut services = Services {
+        transcriber: Some(assemble_asr_options(options, &context, &executable)?),
+        ..Services::default()
+    };
+    if options.diarization.enabled {
+        let directory = executable.parent().ok_or_else(|| {
+            CliError::component("current executable has no distribution directory")
+        })?;
+        services.diarizer = Some(
+            assemble_diarization_config(options, directory, &context).map_err(CliError::from)?,
+        );
+    }
+    Ok(services)
 }
 
 /// Verify the exact local OCR distribution used by conversion without any
@@ -68,6 +92,33 @@ pub(crate) fn verify_asr_runtime() -> Result<(), ConversionError> {
     .map(drop)
 }
 
+/// Verify the exact offline diarization distribution used by the meeting page.
+pub(crate) fn verify_diarization_runtime() -> Result<(), ConversionError> {
+    let executable = canonical_executable().map_err(|detail| {
+        ConversionError::ComponentUnavailable { component: "speaker-diarization".into(), detail }
+    })?;
+    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
+        component: "speaker-diarization".into(),
+        detail: "current executable has no distribution directory".into(),
+    })?;
+    let mut options = ConversionOptions::default();
+    options.diarization.enabled = true;
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    assemble_diarization_config(&options, directory, &context).map(drop)
+}
+
+/// Revision of the writable media-model root used to invalidate a cached
+/// unavailable status after an explicit `setup media` installation.
+pub(crate) fn media_model_revision() -> u128 {
+    let Ok(root) = writable_model_root() else { return 0 };
+    let Ok(metadata) = std::fs::metadata(root) else { return 0 };
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(1, |duration| duration.as_nanos().saturating_add(1))
+}
+
 fn assemble_at(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
@@ -88,11 +139,53 @@ fn assemble_at(
     if loaded.options.ai.audio_transcription != AiMode::Off {
         services.transcriber = Some(assemble_asr(loaded, &context, executable)?);
     }
+    if loaded.options.diarization.enabled {
+        let directory = executable.parent().ok_or_else(|| {
+            CliError::component("current executable has no distribution directory")
+        })?;
+        services.diarizer = Some(
+            assemble_diarization_config(&loaded.options, directory, &context)
+                .map_err(CliError::from)?,
+        );
+    }
     Ok(services)
+}
+
+fn assemble_diarization_config(
+    options: &ConversionOptions,
+    directory: &Path,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn into_markdown::Diarizer>, ConversionError> {
+    let runtime_root = directory.join("onnxruntime");
+    let runtime_library = into_markdown::expected_ocr_runtime_library(&runtime_root)?;
+    let ffmpeg_root = directory.join("ffmpeg");
+    into_markdown::installed_diarization_service(
+        &InstalledDiarizationConfig {
+            writable_model_root: writable_model_root()?,
+            bundled_model_root: bundled_model_root(directory),
+            runtime_trusted_root: runtime_root,
+            runtime_library,
+            worker_executable: directory.join(worker_name()),
+            ffmpeg_trusted_root: ffmpeg_root.clone(),
+            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
+            ffmpeg_authority: ffmpeg_root.join("authority.json"),
+            model_bundle: options.diarization.model_bundle.clone(),
+        },
+        options,
+        context,
+    )
 }
 
 fn assemble_asr(
     loaded: &LoadedConfig,
+    context: &ExecutionContext,
+    executable: &Path,
+) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
+    assemble_asr_options(&loaded.options, context, executable)
+}
+
+fn assemble_asr_options(
+    options: &ConversionOptions,
     context: &ExecutionContext,
     executable: &Path,
 ) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
@@ -107,9 +200,9 @@ fn assemble_asr(
             ffmpeg_trusted_root: ffmpeg_root.clone(),
             ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
             ffmpeg_authority: ffmpeg_root.join("authority.json"),
-            model_bundle: loaded.options.asr.model_bundle.clone(),
+            model_bundle: options.asr.model_bundle.clone(),
         },
-        &loaded.options,
+        options,
         context,
     )
     .map_err(CliError::from)

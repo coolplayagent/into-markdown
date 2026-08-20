@@ -2,6 +2,7 @@
   "schema_version": 3,
   "default_bundle": "pp-ocrv6-tiny-zh-en",
   "default_asr_bundle": "whisper-small-multilingual",
+  "default_diarization_bundle": "silero-vad-3dspeaker-eres2net",
   "bundles": [
     {
       "id": "pp-ocrv6-tiny-zh-en",
@@ -240,6 +241,71 @@
           "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
           "format": "ggml",
           "license": "MIT"
+        }
+      ]
+    },
+    {
+      "id": "silero-vad-3dspeaker-eres2net",
+      "kind": "diarization-model",
+      "availability": "available",
+      "upstream_version": "Silero VAD v6.2.1 / 3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
+      "languages": ["multilingual"],
+      "platforms": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ],
+      "runtime_format": "onnx",
+      "components": [],
+      "runtime_artifacts": [
+        {
+          "id": "silero-vad-half-onnx-model",
+          "role": "vad",
+          "file_name": "silero_vad_half.onnx",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
+          "sha256": "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769",
+          "size": 1280395,
+          "platforms": [
+            "aarch64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc"
+          ],
+          "license": "MIT"
+        },
+        {
+          "id": "3dspeaker-eres2net-base-onnx-model",
+          "role": "speaker-embedding",
+          "file_name": "3dspeaker_eres2net_base.onnx",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+          "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+          "size": 39593761,
+          "platforms": [
+            "aarch64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc"
+          ],
+          "license": "Apache-2.0"
+        }
+      ],
+      "source_artifacts": [
+        {
+          "id": "silero-vad-half-onnx-source",
+          "role": "vad",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
+          "sha256": "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769",
+          "format": "onnx",
+          "license": "MIT"
+        },
+        {
+          "id": "3dspeaker-eres2net-base-onnx-source",
+          "role": "speaker-embedding",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+          "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+          "format": "onnx",
+          "license": "Apache-2.0"
         }
       ]
     }

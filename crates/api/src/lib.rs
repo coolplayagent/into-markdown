@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 mod asr_service;
+mod diarization_service;
 mod ocr_service;
 
 #[cfg(test)]
@@ -12,6 +13,7 @@ mod image_ai_tests;
 mod embedded_visual_ocr_tests;
 
 pub use asr_service::{InstalledAsrConfig, installed_asr_service};
+pub use diarization_service::{InstalledDiarizationConfig, installed_diarization_service};
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
@@ -930,6 +932,7 @@ mod tests {
         let services = Services {
             ocr: Some(service_calls.clone()),
             transcriber: Some(service_calls.clone()),
+            diarizer: None,
             ai: Some(service_calls.clone()),
             nested: None,
         };

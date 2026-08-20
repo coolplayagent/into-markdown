@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, CircleAlert, FolderOpen, LoaderCircle, Plus, Sparkles, Square, Trash2, UploadCloud, X,
 } from "lucide-react";
-import type { ApiClient, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
+import type { ApiClient, TaskRecord, WorkbenchOptions } from "./api";
 import { ApiError, defaultWorkbenchOptions } from "./api";
-import { AdvancedSettings, AudioSetupDialog, CapabilityStrip, OptionPanel } from "./conversion-controls";
+import { AdvancedSettings, CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
 import {
@@ -43,19 +43,11 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [messageScope, setMessageScope] = useState<MessageScope>("source");
   const [dragging, setDragging] = useState(false);
   const [advanced, setAdvanced] = useState(false);
-  const [audioSetup, setAudioSetup] = useState(false);
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
-  const [audioStatus, setAudioStatus] = useState<ComponentStatus>();
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
   const [cleaning, setCleaning] = useState(false);
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
-
-  useEffect(() => {
-    if (audioStatus && !audioStatus.available) {
-      setOptions((current) => current.audioTranscription ? { ...current, audioTranscription: false } : current);
-    }
-  }, [audioStatus]);
 
   const updateTask = useCallback((id: string, update: (task: TaskRecord) => TaskRecord) => {
     setEntries((current) => current.map((entry) => entry.task?.id === id ? { ...entry, task: update(entry.task) } : entry));
@@ -92,17 +84,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   useEffect(() => {
     const controller = new AbortController();
     void api.listTasks({ limit: 100 }, controller.signal)
-      .then((page) => setRecentTasks(page.tasks))
+      .then((page) => setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")))
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setMessageScope("source");
           setMessage(t("loadTasksError"));
         }
       });
-    void api.status(controller.signal).then(
-      (value) => setAudioStatus(value.audioTranscription),
-      () => {},
-    );
     return () => controller.abort();
   }, [api, batchFinished, t]);
 
@@ -160,11 +148,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     setMessage("");
     for (const entry of entries) {
       try {
-        const format = formatForName(entry.file.name, options.format);
-        const task = await api.upload(entry.file, {
-          ...options,
-          audioTranscription: audioStatus?.available === true && options.audioTranscription && (format === "audio" || format === "video"),
-        }, nextBatchId);
+        const task = await api.upload(entry.file, options, nextBatchId);
         setEntries((current) => current.map((item) => item.key === entry.key ? { ...item, task, stage: task.status } : item));
         watch(entry.key, task);
       } catch (error) {
@@ -188,7 +172,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     try {
       const result = await api.cleanup();
       const page = await api.listTasks({ limit: 100 });
-      setRecentTasks(page.tasks);
+      setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion"));
       setMessageScope("source");
       setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
     } catch {
@@ -232,14 +216,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         </div>
       </section>
       <div className="control-column">
-        <CapabilityStrip value={options} onChange={setOptions} audioStatus={audioStatus} onPrepareAudio={() => setAudioSetup(true)} />
+        <CapabilityStrip />
         <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} onOpenAdvanced={() => setAdvanced(true)} />
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
     </div>
     <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} />
-    <AudioSetupDialog status={audioStatus} open={audioSetup} onClose={() => setAudioSetup(false)} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }
