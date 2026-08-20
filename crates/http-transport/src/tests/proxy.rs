@@ -146,6 +146,7 @@ fn routed_factory(proxy: ProxyConfig, no_proxy: NoProxyList, response: &[u8]) ->
         no_proxy,
         Arc::clone(&dns) as Arc<dyn DnsResolver>,
         Arc::clone(&connector) as Arc<dyn ConnectionFactory>,
+        false,
     );
     TunnelRig { factory, request, connector, dns }
 }

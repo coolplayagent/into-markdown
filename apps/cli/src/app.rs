@@ -384,10 +384,10 @@ fn run_models(
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id }) => {
+        Some(ModelsCommand::Install { id, insecure }) => {
             let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
             manager.require_installable(id).map_err(model_error)?;
-            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment()
+            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(insecure)
                 .map_err(|(variable, reason)| {
                     CliError::config(format!("invalid {variable}: {reason}"))
                 })?;

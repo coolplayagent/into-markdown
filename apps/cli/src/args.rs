@@ -398,7 +398,11 @@ pub enum ModelsCommand {
         json: bool,
     },
     /// Download and atomically install a hash-pinned model bundle.
-    Install { id: Option<String> },
+    Install {
+        id: Option<String>,
+        #[arg(long)]
+        insecure: bool,
+    },
     /// Verify installed model files without networking.
     Verify {
         id: Option<String>,

@@ -235,6 +235,7 @@ pub struct RoutedConnectionFactory {
     no_proxy: NoProxyList,
     resolver: Arc<dyn DnsResolver>,
     inner: Arc<dyn ConnectionFactory>,
+    insecure: bool,
 }
 
 impl RoutedConnectionFactory {
@@ -244,8 +245,9 @@ impl RoutedConnectionFactory {
         proxy: ProxyConfig,
         no_proxy: NoProxyList,
         resolver: Arc<dyn DnsResolver>,
+        insecure: bool,
     ) -> Self {
-        Self { proxy, no_proxy, resolver, inner: Arc::new(DirectConnectionFactory) }
+        Self { proxy, no_proxy, resolver, inner: Arc::new(DirectConnectionFactory { insecure }), insecure }
     }
 
     /// Construct with an injected proxy transport for deterministic tests.
@@ -255,8 +257,9 @@ impl RoutedConnectionFactory {
         no_proxy: NoProxyList,
         resolver: Arc<dyn DnsResolver>,
         inner: Arc<dyn ConnectionFactory>,
+        insecure: bool,
     ) -> Self {
-        Self { proxy, no_proxy, resolver, inner }
+        Self { proxy, no_proxy, resolver, inner, insecure }
     }
 
     pub(super) fn tunnel_stream(
@@ -332,7 +335,7 @@ impl ConnectionFactory for RoutedConnectionFactory {
             return self.inner.connect(scheme, host, address, context, deadline);
         }
         let stream = self.tunnel_stream(host, address.port(), context, deadline)?;
-        tls_handshake(stream, host, context, deadline).map(|stream| Box::new(stream) as _)
+        tls_handshake(stream, host, context, deadline, self.insecure).map(|stream| Box::new(stream) as _)
     }
 }
 

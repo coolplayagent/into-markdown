@@ -41,7 +41,22 @@ impl ChunkChain {
             .len
             .checked_add(bytes.len())
             .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
-        for part in bytes.chunks(IO_CHUNK_BYTES) {
+        let mut remaining = bytes;
+        // Coalesce into the head node's unused capacity so that a proxy
+        // forwarding many small chunks does not waste a full 8 KiB node
+        // per chunk and inflate the memory budget past its limit.
+        if !remaining.is_empty() {
+            if let Some(node) = self.head.as_deref_mut() {
+                let space = IO_CHUNK_BYTES - node.used;
+                if space > 0 {
+                    let take = remaining.len().min(space);
+                    node.bytes[node.used..node.used + take].copy_from_slice(&remaining[..take]);
+                    node.used += take;
+                    remaining = &remaining[take..];
+                }
+            }
+        }
+        for part in remaining.chunks(IO_CHUNK_BYTES) {
             let node_bytes = u64::try_from(std::mem::size_of::<ChunkNode>())
                 .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
             budget.grow(node_bytes).map_err(map_context_error)?;

@@ -31,8 +31,8 @@ impl PinnedModelFetcher {
     ///
     /// Returns the offending variable name and reason when a proxy variable
     /// is set but invalid; no download is attempted in that case.
-    pub(crate) fn from_environment() -> Result<Self, (&'static str, String)> {
-        crate::proxy_env::model_fetch_client().map(|client| Self { client })
+    pub(crate) fn from_environment(insecure: bool) -> Result<Self, (&'static str, String)> {
+        crate::proxy_env::model_fetch_client(insecure).map(|client| Self { client })
     }
 }
 
@@ -63,12 +63,13 @@ impl ModelFetcher for PinnedModelFetcher {
                 ));
             }
         };
+        let wire_limit = expected_bytes.saturating_mul(101).saturating_div(100);
         let fetched = self
             .client
             .get(
                 &artifact.url,
                 &network_policy(&artifact.url)?,
-                FetchLimits { max_wire_bytes: expected_bytes, max_decoded_bytes: expected_bytes },
+                FetchLimits { max_wire_bytes: wire_limit, max_decoded_bytes: expected_bytes },
                 context,
             )
             .map_err(map_transport)?;

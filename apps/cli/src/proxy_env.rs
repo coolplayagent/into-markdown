@@ -78,15 +78,23 @@ fn route_from(
 ///
 /// Returns the offending variable name and reason when a proxy variable is
 /// set but invalid; no network access happens in that case.
-pub(crate) fn model_fetch_client() -> Result<HttpClient, (&'static str, String)> {
+pub(crate) fn model_fetch_client(cli_insecure: bool) -> Result<HttpClient, (&'static str, String)> {
+    let env_insecure = std::env::var_os("INTO_MD_INSECURE")
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| !value.is_empty() && value != "0");
+    let insecure = cli_insecure || env_insecure;
     match download_route() {
-        DownloadRoute::Direct => Ok(HttpClient::default()),
+        DownloadRoute::Direct => Ok(HttpClient::with_insecure(
+            Arc::new(SystemDnsResolver),
+            insecure,
+        )),
         DownloadRoute::Proxy { proxy, no_proxy, .. } => Ok(HttpClient::with_components(
             Arc::new(SystemDnsResolver),
             Arc::new(RoutedConnectionFactory::new(
                 proxy,
                 no_proxy,
                 Arc::new(SystemDnsResolver),
+                insecure,
             )),
         )),
         DownloadRoute::Invalid { variable, reason } => Err((variable, reason)),

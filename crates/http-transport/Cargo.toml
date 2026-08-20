@@ -10,6 +10,7 @@ license.workspace = true
 flate2.workspace = true
 into-markdown-core = { path = "../core" }
 rustls.workspace = true
+rustls-native-certs.workspace = true
 socket2.workspace = true
 unicode-normalization.workspace = true
 url.workspace = true

@@ -13,3 +13,6 @@ __pycache__/
 # Models and native runtimes are fetched by verified Bazel repositories.
 /models/artifacts/
 /third_party/onnxruntime/artifacts/
+
+# codegraph index cache
+.codegraph/

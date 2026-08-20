@@ -202,7 +202,7 @@ impl std::fmt::Debug for HttpClient {
 
 impl Default for HttpClient {
     fn default() -> Self {
-        Self { resolver: Arc::new(SystemDnsResolver), connector: Arc::new(DirectConnectionFactory) }
+        Self { resolver: Arc::new(SystemDnsResolver), connector: Arc::new(DirectConnectionFactory::default()) }
     }
 }
 
@@ -210,7 +210,14 @@ impl HttpClient {
     /// Construct a direct client with an injected bounded DNS resolver.
     #[must_use]
     pub fn with_resolver(resolver: Arc<dyn DnsResolver>) -> Self {
-        Self { resolver, connector: Arc::new(DirectConnectionFactory) }
+        Self { resolver, connector: Arc::new(DirectConnectionFactory::default()) }
+    }
+
+    /// Construct a direct client with an injected DNS resolver and explicit
+    /// TLS verification mode.
+    #[must_use]
+    pub fn with_insecure(resolver: Arc<dyn DnsResolver>, insecure: bool) -> Self {
+        Self { resolver, connector: Arc::new(DirectConnectionFactory { insecure }) }
     }
 
     /// Construct an injected client without performing I/O.
