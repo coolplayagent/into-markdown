@@ -50,9 +50,11 @@ deny 列表命中、清单重复、缺字段，或被纳入发布但仍为 `plan
 完整的兼容义务结论并更新精确版本清单。
 
 npm 审计同样拒绝锁新增而未审核、清单孤儿、integrity 漂移、范围与发布标记冲突。
-React、React DOM 与 Scheduler 的 MIT 代码进入嵌入式控制台生产资产；发布归档必须保留
-其版权与 MIT 许可声明。三者 exact npm tarball 的 `LICENSE` 内容相同，仓库逐字节保存为
-`third_party/licenses/npm/react-MIT.txt`；清单记录各自 tarball 来源、完整文件 SHA-256 与
+React、React DOM 与 Scheduler 的 MIT 代码进入嵌入式控制台生产资产；Lucide React
+图标代码按 ISC 分发，其中列出的 Feather 衍生图标继续保留 MIT 声明。发布归档必须保留
+两组版权与完整许可文本。React 三者 exact npm tarball 的 `LICENSE` 内容相同，仓库逐字节保存为
+`third_party/licenses/npm/react-MIT.txt`；Lucide 的 ISC 与 Feather MIT 合并上游文本保存为
+`third_party/licenses/npm/lucide-ISC-MIT.txt`。清单记录各自 tarball 来源、完整文件 SHA-256 与
 版权文本。发布审计重新计算许可文件和生产 app 的 SHA-256，并要求 release inventory、
 SPDX packages、asset-manifest 与 app bytes 双向完全一致；许可文件删除/漂移、SBOM 包删除/
 新增、重复 SPDXID、悬空 relationship 与资产漂移均失败。TypeScript、esbuild-wasm 与类型包只用于构建，happy-dom 与

@@ -13,7 +13,7 @@
     "noUnusedParameters": true,
     "strict": true,
     "target": "ES2022",
-    "types": []
+    "types": ["react", "react-dom"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

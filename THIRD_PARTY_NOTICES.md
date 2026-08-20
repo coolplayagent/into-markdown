@@ -54,11 +54,15 @@ The embedded Web console is built from the integrity-pinned `pnpm-lock.yaml`.
 distinguishes runtime, build, and test scope. React, React DOM, and Scheduler
 are MIT-licensed runtime code included in the minified console asset; their MIT
 copyright and complete license text are preserved at
-`third_party/licenses/npm/react-MIT.txt` and must accompany distributions.
+`third_party/licenses/npm/react-MIT.txt`. Lucide React icons are distributed
+under ISC, with the listed Feather-derived icons retaining their MIT notice;
+the complete combined upstream text is preserved at
+`third_party/licenses/npm/lucide-ISC-MIT.txt`. Both texts must accompany
+distributions.
 `third_party/licenses/npm-release.spdx.json` describes the exact content-hashed
-production JavaScript and its three runtime packages. The release audit verifies
+production JavaScript and its four runtime packages. The release audit verifies
 that SPDX graph, the checked asset bytes, the inventory, and the upstream license
-file in both directions. Both the SBOM and complete MIT text are mandatory members
+files in both directions. The SBOM and both complete license texts are mandatory members
 of the root `//:release_license_files` distribution set. Build and test
 packages are not copied into the CLI release. `axe-core` is MPL-2.0 and is used
 only by the accessibility test: its source package and CI/cache artifacts retain

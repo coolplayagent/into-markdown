@@ -7,5 +7,10 @@ strictPeerDependencies: true
 
 onlyBuiltDependencies: []
 
+packageExtensions:
+  lucide-react@*:
+    peerDependencies:
+      '@types/react': ^19.0.0
+
 allowBuilds:
   esbuild: set this to true or false
