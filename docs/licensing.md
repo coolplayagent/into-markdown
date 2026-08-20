@@ -139,6 +139,18 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
 都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
 
+## Wasmtime WASI runtime
+
+The optional WASI plugin host fixes Wasmtime, `wasmtime-wasi`, and
+`wasmtime-wasi-io` at 39.0.1. `third_party/wasmtime/source.json` binds the
+crates.io checksums, upstream `v39.0.1` commit, enabled features, supported host
+targets, and the preserved Apache-2.0 WITH LLVM-exception text. The complete
+transitive lock graph has explicit conclusions in `rust-lock.tsv`; the CLI
+normal-runtime projection remains fail-closed and does not claim Wasmtime is in
+the release until plugin registration makes it reachable. Upgrades require a
+new source, unsafe/build-script, WASI capability, four-platform, license, and
+SBOM audit.
+
 ## Bundled SQLite
 
 任务库固定 `rusqlite 0.37.0`、`libsqlite3-sys 0.35.0` 及 `bundled` feature。该 crate 自带并由

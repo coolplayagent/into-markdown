@@ -1,0 +1,74 @@
+name: WASI runtime four-platform gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/wasi-runtime.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/core/**"
+      - "crates/plugin-wasi/**"
+      - "third_party/licenses/**"
+      - "third_party/wasmtime/**"
+      - "tools/license-check/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/wasi-runtime.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/core/**"
+      - "crates/plugin-wasi/**"
+      - "third_party/licenses/**"
+      - "third_party/wasmtime/**"
+      - "tools/license-check/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-wasip2
+      - name: Verify native host and reproducible guest component
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          rustc -vV | grep -F "host: $EXPECTED_TARGET"
+          python crates/plugin-wasi/tests/verify_fixture.py --rebuild
+      - name: Run real Preview 2 capability and resource gates
+        shell: bash
+        run: cargo test --locked -p into-markdown-plugin-wasi --test runtime -j1
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: wasi-${{ matrix.target }}
+          repository-cache: true
+      - name: Run the same component through Bazel
+        shell: bash
+        run: >-
+          bazel test //crates/plugin-wasi:plugin_wasi_runtime_test
+          --jobs=1
+          --local_resources=memory=4096
+          --test_output=errors

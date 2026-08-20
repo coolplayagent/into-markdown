@@ -49,7 +49,7 @@ struct Component {
     obligations: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct Inventory {
     schema_version: u64,
     components: Vec<Component>,
@@ -284,6 +284,31 @@ struct FfmpegFixture {
     url: String,
     bytes: u64,
     sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WasmtimeSource {
+    schema_version: u64,
+    version: String,
+    upstream_repository: String,
+    upstream_tag: String,
+    upstream_commit: String,
+    license: String,
+    license_file: String,
+    license_sha256: String,
+    crates: Vec<WasmtimeCrate>,
+    supported_targets: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WasmtimeCrate {
+    name: String,
+    version: String,
+    checksum: String,
+    default_features: bool,
+    features: Vec<String>,
 }
 
 const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
@@ -1584,6 +1609,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let pdfium_text = read(&root.join("third_party/pdfium/manifest.json"), errors);
     let ffmpeg_text = read(&root.join("third_party/ffmpeg/source.json"), errors);
     let ffmpeg_fixtures_text = read(&root.join("third_party/ffmpeg/fixtures.json"), errors);
+    let wasmtime_text = read(&root.join("third_party/wasmtime/source.json"), errors);
     let fixture_corpus_text = read(&root.join("fixtures/manifest.json"), errors);
     let fixture_downloads_text = read(&root.join("fixtures/downloads.json"), errors);
     let asr_quality_text = read(&root.join("fixtures/asr-quality-authority.json"), errors);
@@ -1599,6 +1625,8 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     let ffmpeg: Option<FfmpegSource> = parse_json("FFmpeg source manifest", &ffmpeg_text, errors);
     let ffmpeg_fixtures: Option<FfmpegFixtures> =
         parse_json("FFmpeg fixture policy", &ffmpeg_fixtures_text, errors);
+    let wasmtime: Option<WasmtimeSource> =
+        parse_json("Wasmtime source authority", &wasmtime_text, errors);
     let fixture_corpus: Option<FixtureCorpus> =
         parse_json("fixture corpus manifest", &fixture_corpus_text, errors);
     let fixture_downloads: Option<FixtureDownloadManifest> =
@@ -1610,6 +1638,9 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
     }
     if let Some(fixtures) = &ffmpeg_fixtures {
         validate_ffmpeg_fixtures(fixtures, errors);
+    }
+    if let Some(wasmtime) = &wasmtime {
+        validate_wasmtime_source(root, inventory, wasmtime, errors);
     }
 
     if let (Some(ort), Some(downloads)) = (&ort, &downloads) {
@@ -2704,6 +2735,198 @@ fn validate_ffmpeg_fixtures(manifest: &FfmpegFixtures, errors: &mut Vec<String>)
         })
     {
         errors.push("FFmpeg transient fixture policy is incomplete or distributable".to_owned());
+    }
+}
+
+fn validate_wasmtime_source(
+    root: &Path,
+    inventory: &Inventory,
+    source: &WasmtimeSource,
+    errors: &mut Vec<String>,
+) {
+    let expected_targets: BTreeSet<_> =
+        SUPPORTED_MODEL_TARGETS.into_iter().map(str::to_owned).collect();
+    let actual_targets: BTreeSet<_> = source.supported_targets.iter().cloned().collect();
+    if source.schema_version != 1
+        || source.version != "39.0.1"
+        || source.upstream_repository != "https://github.com/bytecodealliance/wasmtime"
+        || source.upstream_tag != "v39.0.1"
+        || source.upstream_commit != "0163804870a2149c113a31a58da4635f79fc25ec"
+        || source.license != "Apache-2.0 WITH LLVM-exception"
+        || source.supported_targets.len() != expected_targets.len()
+        || actual_targets != expected_targets
+    {
+        errors.push("Wasmtime source authority has unsupported provenance or targets".to_owned());
+    }
+    let Some(component) = exact_component(inventory, "wasmtime", errors) else { return };
+    if component.kind != "rust-runtime"
+        || component.status != "reviewed"
+        || component.included_in_release
+        || !component.release_eligible
+        || component.version.as_deref() != Some(source.version.as_str())
+        || component.license.as_deref() != Some(source.license.as_str())
+        || component.source.as_deref()
+            != Some(
+                "https://github.com/bytecodealliance/wasmtime/tree/0163804870a2149c113a31a58da4635f79fc25ec",
+            )
+    {
+        errors.push("Wasmtime inventory and source authority disagree".to_owned());
+    }
+    if source.license_file != "third_party/licenses/wasmtime-Apache-2.0-LLVM-exception.txt"
+        || !is_sha256(&source.license_sha256)
+    {
+        errors.push("Wasmtime license authority has unsafe fields".to_owned());
+    } else {
+        match fs::read(root.join(&source.license_file)) {
+            Ok(bytes)
+                if lf_normalized_utf8(&bytes)
+                    .is_some_and(|text| sha256_hex(text.as_bytes()) == source.license_sha256) => {}
+            Ok(_) => errors.push("Wasmtime license file digest differs from authority".to_owned()),
+            Err(error) => errors.push(format!("cannot read Wasmtime license file: {error}")),
+        }
+    }
+
+    let expected_features = BTreeMap::from([
+        ("wasmtime", (false, BTreeSet::from(["component-model", "cranelift", "runtime", "std"]))),
+        ("wasmtime-wasi", (false, BTreeSet::from(["p2"]))),
+        ("wasmtime-wasi-io", (true, BTreeSet::new())),
+    ]);
+    let mut crates = BTreeMap::new();
+    for item in &source.crates {
+        let features: BTreeSet<_> = item.features.iter().map(String::as_str).collect();
+        if item.version != source.version
+            || !is_sha256(&item.checksum)
+            || item.features.len() != features.len()
+            || expected_features.get(item.name.as_str()) != Some(&(item.default_features, features))
+            || crates.insert(item.name.as_str(), item).is_some()
+        {
+            errors.push(format!("Wasmtime crate authority is invalid for {}", item.name));
+        }
+    }
+    if crates.keys().copied().collect::<BTreeSet<_>>()
+        != expected_features.keys().copied().collect::<BTreeSet<_>>()
+    {
+        errors
+            .push("Wasmtime source authority must contain exactly three runtime crates".to_owned());
+    }
+
+    let cargo_text = read(&root.join("Cargo.toml"), errors);
+    let cargo: Option<TomlValue> = toml::from_str(&cargo_text)
+        .map_err(|error| errors.push(format!("invalid Cargo.toml for Wasmtime authority: {error}")))
+        .ok();
+    if let Some(dependencies) = cargo
+        .as_ref()
+        .and_then(|value| value.get("workspace"))
+        .and_then(|value| value.get("dependencies"))
+        .and_then(TomlValue::as_table)
+    {
+        let pinned_version = format!("={}", source.version);
+        for (name, (default_features, features)) in &expected_features {
+            let Some(value) = dependencies.get(*name) else {
+                errors.push(format!("Cargo.toml lacks pinned {name}"));
+                continue;
+            };
+            let valid = if let Some(version) = value.as_str() {
+                *default_features && features.is_empty() && version == pinned_version
+            } else if let Some(table) = value.as_table() {
+                table.get("version").and_then(TomlValue::as_str) == Some(pinned_version.as_str())
+                    && table.get("default-features").and_then(TomlValue::as_bool)
+                        == Some(*default_features)
+                    && table
+                        .get("features")
+                        .and_then(TomlValue::as_array)
+                        .map(|items| {
+                            items.iter().filter_map(TomlValue::as_str).collect::<BTreeSet<_>>()
+                                == *features
+                        })
+                        .unwrap_or(features.is_empty())
+            } else {
+                false
+            };
+            if !valid {
+                errors.push(format!("Cargo.toml {name} differs from Wasmtime source authority"));
+            }
+        }
+    } else {
+        errors.push("Cargo.toml lacks workspace dependency authority".to_owned());
+    }
+
+    let lock_text = read(&root.join("Cargo.lock"), errors);
+    let lock: Option<TomlValue> = toml::from_str(&lock_text)
+        .map_err(|error| errors.push(format!("invalid Cargo.lock for Wasmtime authority: {error}")))
+        .ok();
+    for item in source.crates.iter() {
+        let matches: Vec<_> = lock
+            .as_ref()
+            .and_then(|value| value.get("package"))
+            .and_then(TomlValue::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|package| {
+                package.get("name").and_then(TomlValue::as_str) == Some(item.name.as_str())
+                    && package.get("version").and_then(TomlValue::as_str)
+                        == Some(item.version.as_str())
+            })
+            .collect();
+        if !matches.iter().any(|package| {
+            package.get("source").and_then(TomlValue::as_str)
+                == Some("registry+https://github.com/rust-lang/crates.io-index")
+                && package.get("checksum").and_then(TomlValue::as_str)
+                    == Some(item.checksum.as_str())
+        }) || matches.len() != 1
+        {
+            errors.push(format!("Cargo.lock differs from Wasmtime authority for {}", item.name));
+        }
+    }
+}
+
+#[cfg(test)]
+mod wasmtime_authority_tests {
+    use super::{Inventory, WasmtimeSource, validate_wasmtime_source};
+
+    fn fixture() -> (std::path::PathBuf, Inventory, WasmtimeSource) {
+        let root = super::repository_root().unwrap();
+        let inventory = serde_json::from_str(
+            &std::fs::read_to_string(root.join("third_party/licenses/inventory.json")).unwrap(),
+        )
+        .unwrap();
+        let source = serde_json::from_str(
+            &std::fs::read_to_string(root.join("third_party/wasmtime/source.json")).unwrap(),
+        )
+        .unwrap();
+        (root, inventory, source)
+    }
+
+    #[test]
+    fn wasmtime_authority_binds_lock_features_license_and_targets() {
+        let (root, inventory, source) = fixture();
+        let mut errors = Vec::new();
+        validate_wasmtime_source(&root, &inventory, &source, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let mut checksum = source.clone();
+        checksum.crates[0].checksum = "0".repeat(64);
+        let mut errors = Vec::new();
+        validate_wasmtime_source(&root, &inventory, &checksum, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("Cargo.lock")));
+
+        let mut features = source.clone();
+        features.crates[0].features.push("cache".into());
+        let mut errors = Vec::new();
+        validate_wasmtime_source(&root, &inventory, &features, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("crate authority")));
+
+        let mut license = source.clone();
+        license.license_sha256 = "0".repeat(64);
+        let mut errors = Vec::new();
+        validate_wasmtime_source(&root, &inventory, &license, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("license file digest")));
+
+        let mut targets = source;
+        targets.supported_targets.pop();
+        let mut errors = Vec::new();
+        validate_wasmtime_source(&root, &inventory, &targets, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("provenance or targets")));
     }
 }
 

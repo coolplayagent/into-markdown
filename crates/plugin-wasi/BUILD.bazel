@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "plugin_wasi",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_plugin_wasi",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "@crates//:bytes",
+        "@crates//:cap-primitives",
+        "@crates//:cap-std",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:wasmtime",
+        "@crates//:wasmtime-wasi",
+        "@crates//:wasmtime-wasi-io",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "plugin_wasi_runtime_test",
+    srcs = ["tests/runtime.rs"],
+    crate_name = "plugin_wasi_runtime_test",
+    edition = "2024",
+    compile_data = glob(["tests/fixtures/**"]),
+    deps = [
+        ":plugin_wasi",
+        "//crates/core",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+    ],
+)

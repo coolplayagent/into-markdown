@@ -120,6 +120,11 @@ table_repair = "prefer"
 formula_repair = "prefer"
 ```
 
+该配置只表达安装选择，不自动授予 ambient 权限。WASI host 还要求由受信安装/调用层提供
+固定 runtime/target、fuel、memory、output/resource 上限，以及逐项 preopen、clock、random
+和 literal-IP TCP grant；缺少的能力保持拒绝。完整清单和协议见
+[`wasi-plugins.md`](wasi-plugins.md)。
+
 配置中的 `allowed_hosts`、重定向和私网策略只能收窄权限，不能启用网络。上例调用
 本机 Provider 时仍需：
 

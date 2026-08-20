@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "version": "39.0.1",
+  "upstream_repository": "https://github.com/bytecodealliance/wasmtime",
+  "upstream_tag": "v39.0.1",
+  "upstream_commit": "0163804870a2149c113a31a58da4635f79fc25ec",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "license_file": "third_party/licenses/wasmtime-Apache-2.0-LLVM-exception.txt",
+  "license_sha256": "a6c48161a09acc75a0e25503bab66a731eb5fba5392ed4bb4743e4ba5085327a",
+  "crates": [
+    {
+      "name": "wasmtime",
+      "version": "39.0.1",
+      "checksum": "511bc19c2d48f338007dc941cb40c833c4707023fdaf9ec9b97cf1d5a62d26bb",
+      "default_features": false,
+      "features": ["component-model", "cranelift", "runtime", "std"]
+    },
+    {
+      "name": "wasmtime-wasi",
+      "version": "39.0.1",
+      "checksum": "517604b1ce13a56ae3e360217095d7d4db90e84deaa3fba078877c2b80cc5851",
+      "default_features": false,
+      "features": ["p2"]
+    },
+    {
+      "name": "wasmtime-wasi-io",
+      "version": "39.0.1",
+      "checksum": "7ec66fc94ceb9497d62a3d082bd2cce10348975795516553df4cd89f7d5fc14b",
+      "default_features": true,
+      "features": []
+    }
+  ],
+  "supported_targets": [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ]
+}

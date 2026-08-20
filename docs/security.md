@@ -1,5 +1,9 @@
 # 安全模型
 
+WASI 插件是非信任输入边界：固定 runtime/hash、默认无 ambient 能力、显式 capability、
+fuel/epoch/memory/output/resource 限制，以及统一 IR/provenance 重验共同生效。详细威胁模型、
+稳定错误和真实 guest 门禁见 [`wasi-plugins.md`](wasi-plugins.md)。
+
 本地 Web 入口的权威威胁边界与请求校验规则见[本地 Web 服务](ui.md)。该入口只监听
 IPv4 回环地址，不把转换网络授权扩展到 Web 服务，也不接受配置文件提供监听地址或
 会话秘密。
