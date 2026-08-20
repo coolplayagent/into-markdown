@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Braces, CheckCircle2, ChevronDown, CircleAlert, Code2, Download, Eye, FileJson, Info,
   LoaderCircle, MoreHorizontal, Package, Pin, PinOff, RotateCcw, Trash2, X,
@@ -69,9 +70,9 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
   const retry = async () => { if (task) { const next = await api.retry(task.id); onSelectTask(next.id); } };
   const remove = async () => { if (!task || !window.confirm(t("deleteWarning"))) return; await api.deleteTask(task.id); onTaskRemoved(task.id); onClose(); };
 
-  return <div className="result-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+  return createPortal(<div className="result-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <section className="result-dialog" role="dialog" aria-modal="true" aria-labelledby="result-title">
-    <header className="result-header">
+    <div className="result-header">
       <div className="result-toolbar-main">
         <div className="result-identity">
           <span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span>
@@ -91,7 +92,7 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
         {batch.slice(0, 6).map((item) => <button key={item.id} type="button" aria-current={item.id === taskId ? "page" : undefined} onClick={() => onSelectTask(item.id)}>{taskName(item, item.id.slice(0, 8))}</button>)}
         {batch.length > 6 && <label className="select-shell batch-select"><span className="visually-hidden">{t("moreBatchResults")}</span><select value={taskId} onChange={(event) => onSelectTask(event.target.value)}>{batch.map((item) => <option key={item.id} value={item.id}>{taskName(item, item.id.slice(0, 8))}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></label>}
       </nav>}
-    </header>
+    </div>
 
     <div className={`result-body ${drawer ? "drawer-open" : ""}`}>
       <div className="result-document-scroll" tabIndex={-1} role="document">
@@ -102,5 +103,5 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
       {drawer && task && <aside className="result-drawer" aria-label={t("detailsAndResources")}><div className="drawer-heading"><h2>{t("detailsAndResources")}</h2><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={() => setDrawer(false)}><X size={18} aria-hidden="true" /></button></div><section><h3>{t("taskDetails")}</h3><dl><div><dt>ID</dt><dd><code>{task.id}</code></dd></div><div><dt>{t("created")}</dt><dd>{new Date(task.createdAtMs).toLocaleString()}</dd></div><div><dt>{t("updated")}</dt><dd>{new Date(task.updatedAtMs).toLocaleString()}</dd></div><div><dt>OCR</dt><dd>{task.configuration.ocrEnabled ? t("on") : t("off")}</dd></div></dl></section><section><h3>{t("resources")} ({assets.length})</h3>{assets.length === 0 ? <p className="muted">{t("noResources")}</p> : <ul className="drawer-list">{assets.map((artifact) => <li key={artifact.storageKey}><div><strong>{artifactLabel(artifact)}</strong><small>{artifact.mediaType ?? "application/octet-stream"} · {bytesLabel(artifact.byteLen)}</small></div><button className="icon-button" type="button" aria-label={`${t("download")} ${artifactLabel(artifact)}`} onClick={() => void downloadArtifact(api, task, artifact.storageKey)}><Download size={16} aria-hidden="true" /></button></li>)}</ul>}</section><section><h3>{t("diagnostics")}</h3>{task.diagnostics.length === 0 ? <p className="muted">{t("noDiagnostics")}</p> : <ul className="diagnostic-list">{task.diagnostics.map((item, index) => <li key={`${item.code}-${index}`}>{item.code}</li>)}</ul>}</section><section><h3>{t("otherArtifacts")}</h3><div className="artifact-actions">{task.artifacts.filter((artifact) => artifact.kind !== "markdown" && artifact.kind !== "asset").map((artifact) => <button className="secondary" type="button" key={artifact.storageKey} onClick={() => void downloadArtifact(api, task, artifact.storageKey)}>{artifact.kind === "bundle" ? <Package size={16} aria-hidden="true" /> : artifact.kind === "documentIr" ? <Braces size={16} aria-hidden="true" /> : <FileJson size={16} aria-hidden="true" />}{artifactLabel(artifact)}</button>)}</div></section></aside>}
     </div>
   </section>
-  </div>;
+  </div>, document.body);
 }

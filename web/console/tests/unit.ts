@@ -34,6 +34,7 @@ const testGroups = {
     "workbench uses a scrollable queue for all recent history",
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
+    "workbench disables audio when its verified runtime is unavailable",
     "workbench enables audio by default and only requests ASR for media files",
     "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
@@ -352,6 +353,7 @@ test("result dialog provides reading and source views with a closed details draw
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitFor(() => previewCalls === 1 && window.document.body.textContent.includes("Quarterly report"));
   assert.ok(window.document.querySelector('.result-dialog[role="dialog"]'));
+  assert.equal(window.document.querySelector(".result-dialog-backdrop")?.parentElement, window.document.body, "the viewport dialog must escape animated route containers");
   assert.ok(window.document.body.textContent.includes("Add documents"), "the workbench remains mounted behind the result");
   assert.equal(window.document.querySelector(".result-drawer"), null, "details must not compete with the document by default");
   assert.ok(window.document.querySelector(".preview-table-scroll table"));
@@ -509,6 +511,7 @@ test("workbench enables audio by default and only requests ASR for media files",
   const uploads: Array<[string, boolean]> = [];
   const api: ApiClient = {
     ...availableApi,
+    async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" } }; },
     async upload(file, options) {
       uploads.push([file.name, options.audioTranscription]);
       return task("running", String(uploads.length).repeat(32));
@@ -516,10 +519,10 @@ test("workbench enables audio by default and only requests ASR for media files",
     async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "Prepare");
+  await waitForText(window, "Ready");
   const audioToggle = [...window.document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
     .find((input) => input.closest(".audio-capability"));
-  assert.equal(audioToggle?.checked, true);
+  await waitFor(() => audioToggle?.checked === true && audioToggle.disabled === false);
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", {
     value: { files: [new File(["doc"], "contract.md"), new File(["audio"], "recording.m4a")] },
@@ -531,6 +534,26 @@ test("workbench enables audio by default and only requests ASR for media files",
     .click();
   await waitFor(() => uploads.length === 2);
   assert.deepEqual(uploads, [["contract.md", false], ["recording.m4a", true]]);
+});
+
+test("workbench disables audio when its verified runtime is unavailable", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  let requestedAsr: boolean | undefined;
+  const api: ApiClient = { ...availableApi, async upload(_file, options) { requestedAsr = options.audioTranscription; return task("running"); }, async watchTask() {} };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Prepare");
+  const audioToggle = window.document.querySelector<HTMLInputElement>(".audio-capability input[type=checkbox]")!;
+  await waitFor(() => audioToggle.disabled && !audioToggle.checked);
+  assert.ok(audioToggle.closest(".switch")?.classList.contains("unavailable"));
+  audioToggle.click();
+  assert.equal(audioToggle.checked, false);
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["audio"], "recording.m4a")] } });
+  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
+  await waitForText(window, "Selected (1)");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitFor(() => requestedAsr !== undefined);
+  assert.equal(requestedAsr, false);
 });
 
 test("workbench reports the bounded upload rejection code", async () => {

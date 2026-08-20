@@ -28,6 +28,7 @@ function SegmentedControl<T extends string>({
 
 export function CapabilityStrip({ value, onChange, audioStatus, onPrepareAudio }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; audioStatus?: ComponentStatus | undefined; onPrepareAudio(): void }) {
   const { t } = useI18n();
+  const audioReady = audioStatus?.available === true;
   return <section className="capability-strip" aria-label={t("capabilities")}>
     <div className="capability-item">
       <span className="capability-icon"><FileText size={21} aria-hidden="true" /></span>
@@ -47,7 +48,7 @@ export function CapabilityStrip({ value, onChange, audioStatus, onPrepareAudio }
             ? <button className="capability-setup-link" type="button" onClick={onPrepareAudio}><CircleAlert size={14} aria-hidden="true" />{t("prepareDependencies")}</button>
             : <span className="neutral"><CircleAlert size={14} aria-hidden="true" />{t("checkingSystem")}</span>}
       </div>
-      <label className="switch compact-switch"><span className="visually-hidden">{t("audioTranscription")}</span><input type="checkbox" checked={value.audioTranscription} onChange={(event) => onChange({ ...value, audioTranscription: event.target.checked })} /><span aria-hidden="true" /></label>
+      <label className={`switch compact-switch ${audioReady ? "" : "unavailable"}`}><span className="visually-hidden">{t("audioTranscription")}</span><input type="checkbox" checked={audioReady && value.audioTranscription} disabled={!audioReady} onChange={(event) => onChange({ ...value, audioTranscription: event.target.checked })} /><span aria-hidden="true" /></label>
     </div>
   </section>;
 }

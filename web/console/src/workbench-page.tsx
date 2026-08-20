@@ -48,6 +48,12 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
 
+  useEffect(() => {
+    if (audioStatus && !audioStatus.available) {
+      setOptions((current) => current.audioTranscription ? { ...current, audioTranscription: false } : current);
+    }
+  }, [audioStatus]);
+
   const updateTask = useCallback((id: string, update: (task: TaskRecord) => TaskRecord) => {
     setEntries((current) => current.map((entry) => entry.task?.id === id ? { ...entry, task: update(entry.task) } : entry));
   }, []);
@@ -137,7 +143,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         const format = formatForName(entry.file.name, options.format);
         const task = await api.upload(entry.file, {
           ...options,
-          audioTranscription: options.audioTranscription && (format === "audio" || format === "video"),
+          audioTranscription: audioStatus?.available === true && options.audioTranscription && (format === "audio" || format === "video"),
         }, nextBatchId);
         setEntries((current) => current.map((item) => item.key === entry.key ? { ...item, task, stage: task.status } : item));
         watch(entry.key, task);
