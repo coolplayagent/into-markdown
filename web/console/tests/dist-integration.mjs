@@ -94,6 +94,8 @@ test("checked-in bootstrap completes hash clear, dynamic import, mount, and auth
   await waitFor(() => window.document.body.textContent.includes("System ready"));
   assert.equal(window.location.hash, "");
   assert.equal(window.document.documentElement.outerHTML.includes(token), false);
+  assert.equal(window.localStorage.length, 0);
+  assert.equal(window.sessionStorage.getItem("into-md.session"), token);
   assert.equal(request[1].headers["X-Into-Md-Session"], token);
 });
 

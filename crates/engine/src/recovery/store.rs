@@ -70,6 +70,8 @@ impl RecoveryToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskPhase {
+    /// Long-form media conversion has committed at least one resumable chunk.
+    Media,
     /// Conversion produced validated IR and may resume at rendering.
     Converted,
     /// The complete result was atomically committed.
@@ -80,6 +82,7 @@ pub enum TaskPhase {
 impl TaskPhase {
     fn file_label(self) -> &'static str {
         match self {
+            Self::Media => "media",
             Self::Converted => "converted",
             Self::Succeeded => "succeeded",
         }
@@ -87,6 +90,7 @@ impl TaskPhase {
 
     fn stages(self) -> &'static [&'static str] {
         match self {
+            Self::Media => &["media"],
             Self::Converted => &["converted"],
             Self::Succeeded => &["converted", "rendered", "succeeded"],
         }
@@ -247,7 +251,7 @@ impl RecoveryStore {
         #[cfg(unix)]
         {
             self.directory.verify_namespace()?;
-            for phase in [TaskPhase::Succeeded, TaskPhase::Converted] {
+            for phase in [TaskPhase::Succeeded, TaskPhase::Converted, TaskPhase::Media] {
                 if let Some(file) = self.directory.open_regular(&phase_name(token, phase))? {
                     let metadata = inspect_file(file, token, phase)?;
                     self.directory.verify_namespace()?;
@@ -273,11 +277,7 @@ impl RecoveryStore {
         #[cfg(unix)]
         {
             self.directory.verify_namespace()?;
-            for name in [
-                phase_name(token, TaskPhase::Succeeded),
-                phase_name(token, TaskPhase::Converted),
-                lock_name(token),
-            ] {
+            for name in purge_names(token) {
                 if let Some(file) = self.directory.open_regular(&name)? {
                     let stat = rustix::fs::fstat(&file)
                         .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
@@ -435,11 +435,7 @@ impl RecoveryStore {
         #[cfg(unix)]
         {
             self.verify_purge(token)?;
-            for name in [
-                phase_name(token, TaskPhase::Succeeded),
-                phase_name(token, TaskPhase::Converted),
-                lock_name(token),
-            ] {
+            for name in purge_names(token) {
                 if let Some(file) = self.directory.open_regular(&name)? {
                     let stat = rustix::fs::fstat(&file)
                         .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
@@ -504,7 +500,7 @@ impl RecoveryStore {
         #[cfg(unix)]
         {
             self.directory.verify_namespace()?;
-            for phase in [TaskPhase::Succeeded, TaskPhase::Converted] {
+            for phase in [TaskPhase::Succeeded, TaskPhase::Converted, TaskPhase::Media] {
                 let Some(mut file) = self.directory.open_regular(&phase_name(token, phase))? else {
                     continue;
                 };
@@ -574,14 +570,80 @@ impl RecoveryStore {
         phase: TaskPhase,
         payload: &T,
     ) -> Result<(), ConversionError> {
+        self.commit_inner(
+            token,
+            context,
+            input_fingerprint,
+            options_fingerprint,
+            phase,
+            payload,
+            false,
+        )
+    }
+
+    pub(crate) fn replace_media<T: Serialize>(
+        &self,
+        token: &RecoveryToken,
+        context: &ExecutionContext,
+        input_fingerprint: &str,
+        options_fingerprint: &str,
+        payload: &T,
+    ) -> Result<(), ConversionError> {
+        self.commit_inner(
+            token,
+            context,
+            input_fingerprint,
+            options_fingerprint,
+            TaskPhase::Media,
+            payload,
+            true,
+        )
+    }
+
+    pub(crate) fn remove_media(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
+        #[cfg(unix)]
+        {
+            self.directory.unlink(&phase_name(token, TaskPhase::Media))?;
+            self.directory.sync()?;
+            self.directory.verify_namespace()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = token;
+            Err(platform_unavailable())
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_inner<T: Serialize>(
+        &self,
+        token: &RecoveryToken,
+        context: &ExecutionContext,
+        input_fingerprint: &str,
+        options_fingerprint: &str,
+        phase: TaskPhase,
+        payload: &T,
+        replace: bool,
+    ) -> Result<(), ConversionError> {
         #[cfg(unix)]
         {
             self.directory.verify_namespace()?;
-            if self.directory.open_regular(&phase_name(token, phase))?.is_some() {
+            let existing = self.directory.open_regular(&phase_name(token, phase))?;
+            if !replace && existing.is_some() {
                 return Err(recovery_error(
                     "conflict",
                     "a checkpoint already occupies this task phase",
                 ));
+            }
+            if let Some(file) = existing {
+                let stat = rustix::fs::fstat(&file)
+                    .map_err(|error| recovery_io("inspect replaced checkpoint", error))?;
+                if stat.st_nlink != 1 {
+                    return Err(recovery_error(
+                        "unsafePath",
+                        "checkpoint selected for replacement has an external hard link",
+                    ));
+                }
             }
             let mut nonce = [0_u8; 8];
             getrandom::fill(&mut nonce).map_err(|error| {
@@ -624,9 +686,13 @@ impl RecoveryStore {
                 writer.sync_all()?;
                 drop(writer);
                 self.directory.verify_namespace()?;
-                self.directory.link_no_replace(&temporary, &target)?;
-                self.directory.sync()?;
-                self.directory.unlink(&temporary)?;
+                if replace {
+                    self.directory.rename_replace(&temporary, &target)?;
+                } else {
+                    self.directory.link_no_replace(&temporary, &target)?;
+                    self.directory.sync()?;
+                    self.directory.unlink(&temporary)?;
+                }
                 self.directory.sync()?;
                 self.directory.verify_namespace()
             })();
@@ -1124,6 +1190,11 @@ impl SafeDirectory {
         .map_err(|error| recovery_io("quarantine checkpoint", error))
     }
 
+    fn rename_replace(&self, source: &str, target: &str) -> Result<(), ConversionError> {
+        rustix::fs::renameat(&self.fd, source, &self.fd, target)
+            .map_err(|error| recovery_io("replace media checkpoint", error))
+    }
+
     fn sync(&self) -> Result<(), ConversionError> {
         rustix::fs::fsync(&self.fd).map_err(|error| recovery_io("sync checkpoint directory", error))
     }
@@ -1251,10 +1322,11 @@ fn lock_name(token: &RecoveryToken) -> String {
 }
 
 #[cfg(unix)]
-fn purge_names(token: &RecoveryToken) -> [String; 3] {
+fn purge_names(token: &RecoveryToken) -> [String; 4] {
     [
         phase_name(token, TaskPhase::Succeeded),
         phase_name(token, TaskPhase::Converted),
+        phase_name(token, TaskPhase::Media),
         lock_name(token),
     ]
 }

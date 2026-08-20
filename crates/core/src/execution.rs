@@ -117,6 +117,13 @@ impl CancellationToken {
         Self::default()
     }
 
+    /// Whether two handles refer to the same cancellation generation.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     /// Request cancellation and wake the currently polled pipeline operation.
     pub fn cancel(&self) {
         if !self.state.cancelled.swap(true, Ordering::AcqRel) {
@@ -205,6 +212,7 @@ struct ExecutionShared {
     limits: ResourceLimits,
     memory_bytes: AtomicU64,
     temporary_bytes: AtomicU64,
+    media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
 }
 
 #[derive(Default)]
@@ -221,6 +229,9 @@ struct ProgressState {
     started: bool,
     completed: bool,
     sequence: u64,
+    completed_units: Option<u64>,
+    total_units: Option<u64>,
+    message: Option<String>,
 }
 
 impl fmt::Debug for ExecutionContext {
@@ -268,6 +279,7 @@ impl ExecutionContext {
             limits,
             memory_bytes: AtomicU64::new(0),
             temporary_bytes: AtomicU64::new(0),
+            media_checkpoint: Mutex::new(None),
         });
         if let Some(deadline) = timer_deadline {
             let weak = Arc::downgrade(&shared);
@@ -325,6 +337,53 @@ impl ExecutionContext {
         Ok(())
     }
 
+    /// Install the durable media checkpoint seam for one recoverable request.
+    #[doc(hidden)]
+    pub fn install_media_checkpoint_backend(
+        &self,
+        backend: Arc<dyn crate::MediaCheckpointBackend>,
+    ) -> Result<(), ConversionError> {
+        let mut current = lock_unpoisoned(&self.shared.media_checkpoint);
+        if current.is_some() {
+            return Err(ConversionError::Internal {
+                detail: "media checkpoint backend was installed more than once".into(),
+            });
+        }
+        *current = Some(backend);
+        Ok(())
+    }
+
+    /// Load the latest durable media checkpoint when conversion is recoverable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when cancellation wins or the checkpoint backend rejects the read.
+    pub fn load_media_checkpoint(
+        &self,
+    ) -> Result<Option<crate::RecoveredMediaCheckpoint>, ConversionError> {
+        self.checkpoint()?;
+        let backend = lock_unpoisoned(&self.shared.media_checkpoint).clone();
+        backend.map_or(Ok(None), |backend| backend.load(self))
+    }
+
+    /// Atomically commit one long-form media processing boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the checkpoint is invalid, cancellation wins, or persistence fails.
+    pub fn commit_media_checkpoint(
+        &self,
+        checkpoint: &crate::MediaCheckpoint,
+    ) -> Result<(), ConversionError> {
+        self.checkpoint()?;
+        checkpoint.validate()?;
+        let backend = lock_unpoisoned(&self.shared.media_checkpoint).clone();
+        if let Some(backend) = backend {
+            backend.commit(checkpoint, self)?;
+        }
+        self.checkpoint()
+    }
+
     /// Remaining time before the request deadline, when one exists.
     ///
     /// The returned duration is derived from the same monotonic clock used by
@@ -357,6 +416,7 @@ impl ExecutionContext {
         message: Option<impl Into<String>>,
     ) -> Result<(), ConversionError> {
         self.checkpoint()?;
+        let message = message.map(Into::into);
         let stage_fraction = u16::try_from(match (completed_units, total_units) {
             (Some(completed), Some(total)) if total > 0 => {
                 u128::from(completed.min(total)) * 1_000 / u128::from(total)
@@ -377,6 +437,9 @@ impl ExecutionContext {
         if progress.started
             && progress.stage == Some(stage)
             && basis_points == progress.basis_points
+            && progress.completed_units == completed_units
+            && progress.total_units == total_units
+            && progress.message == message
         {
             return Ok(());
         }
@@ -384,19 +447,16 @@ impl ExecutionContext {
         progress.rank = stage.rank();
         progress.stage = Some(stage);
         progress.basis_points = basis_points;
+        progress.completed_units = completed_units;
+        progress.total_units = total_units;
+        progress.message.clone_from(&message);
         progress.completed = stage == ExecutionStage::Completed;
         progress.sequence = progress.sequence.saturating_add(1);
         let sequence = progress.sequence;
         if let Some(dispatcher) = &self.shared.dispatcher {
             dispatcher.publish(
                 sequence,
-                ProgressEvent {
-                    stage,
-                    basis_points,
-                    completed_units,
-                    total_units,
-                    message: message.map(Into::into),
-                },
+                ProgressEvent { stage, basis_points, completed_units, total_units, message },
             );
         }
         drop(progress);
@@ -539,6 +599,17 @@ impl ExecutionContext {
     #[must_use]
     pub fn reserved_temporary_bytes(&self) -> u64 {
         self.shared.temporary_bytes.load(Ordering::Acquire)
+    }
+
+    /// Remaining request temporary storage available to a bounded streaming
+    /// producer before it starts native work.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn available_temporary_bytes(&self) -> u64 {
+        self.shared
+            .limits
+            .max_temporary_bytes
+            .saturating_sub(self.shared.temporary_bytes.load(Ordering::Acquire))
     }
 
     /// Create an automatically cleaned temporary file charged as bytes are written.
@@ -1685,6 +1756,32 @@ mod tests {
         let recorded = lock_unpoisoned(&events);
         assert_eq!(recorded[0].basis_points, 999);
         assert!(recorded.iter().any(|event| event.stage == ExecutionStage::Ocr));
+        assert!(recorded.windows(2).all(|pair| pair[0].basis_points <= pair[1].basis_points));
+    }
+
+    #[test]
+    fn unknown_total_progress_publishes_new_completed_units_at_the_same_fraction() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = Arc::new(RecordingListener {
+            events: Arc::clone(&events),
+            delay: Duration::ZERO,
+            panic_once: AtomicBool::new(false),
+        });
+        let context = ExecutionContext::new(
+            ExecutionOptions { progress_listener: Some(listener), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        context.report(ExecutionStage::Ai, Some(16_000), None, Some("asr.normalize")).unwrap();
+        context.report(ExecutionStage::Ai, Some(32_000), None, Some("asr.normalize")).unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        while lock_unpoisoned(&events).last().and_then(|event| event.completed_units)
+            != Some(32_000)
+            && Instant::now() < limit
+        {
+            std::thread::yield_now();
+        }
+        let recorded = lock_unpoisoned(&events);
+        assert_eq!(recorded.last().and_then(|event| event.completed_units), Some(32_000));
         assert!(recorded.windows(2).all(|pair| pair[0].basis_points <= pair[1].basis_points));
     }
 

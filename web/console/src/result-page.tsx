@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Braces, CheckCircle2, ChevronDown, CircleAlert, Code2, Download, Eye, FileJson, Info,
-  LoaderCircle, MoreHorizontal, Package, Pin, PinOff, RotateCcw, Trash2, X,
+  LoaderCircle, MoreHorizontal, Package, Pin, PinOff, RotateCcw, Save, Trash2, Users, X,
 } from "lucide-react";
-import type { ApiClient, ArtifactPreview, TaskRecord } from "./api";
+import type { ApiClient, ArtifactPreview, SpeakerLabels, TaskRecord } from "./api";
 import { DismissibleMenu } from "./dismissible-menu";
 import { SafeMarkdownPreview } from "./preview";
 import { useI18n } from "./i18n";
@@ -13,12 +13,13 @@ import {
   taskName,
 } from "./task-ui";
 
-export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved }: {
+export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved, onTaskUpdated }: {
   api: ApiClient;
   taskId: string;
   onSelectTask(taskId: string): void;
   onClose(): void;
   onTaskRemoved(taskId: string): void;
+  onTaskUpdated?(task: TaskRecord): void;
 }) {
   const { t } = useI18n();
   const [task, setTask] = useState<TaskRecord | null>(null);
@@ -28,11 +29,15 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
   const [mode, setMode] = useState<"rendered" | "source">("rendered");
   const [drawer, setDrawer] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [speakerLabels, setSpeakerLabels] = useState<SpeakerLabels | null>(null);
+  const [speakerEdits, setSpeakerEdits] = useState<Record<string, string>>({});
+  const [speakerMessage, setSpeakerMessage] = useState("");
+  const [savingSpeakers, setSavingSpeakers] = useState(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true); setPreview(null); setPreviewError(false);
+    setLoading(true); setPreview(null); setPreviewError(false); setSpeakerLabels(null); setSpeakerEdits({}); setSpeakerMessage("");
     const current = await api.getTask(taskId, signal);
-    setTask(current);
+    setTask(current); onTaskUpdated?.(current);
     setDrawer(current.status === "failed" || current.status === "interrupted");
     if (current.batchId) {
       const page = await api.listTasks({ limit: 100, batchId: current.batchId }, signal);
@@ -43,8 +48,15 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
       try { setPreview(await api.preview(current.id, markdown.storageKey, signal)); }
       catch { if (!signal?.aborted) setPreviewError(true); }
     }
+    if (current.workflow === "meetingTranscript" && current.status === "succeeded") {
+      try {
+        const labels = await api.speakerLabels(current.id, signal);
+        setSpeakerLabels(labels);
+        setSpeakerEdits(Object.fromEntries(labels.speakers.map((speaker) => [speaker.id, speaker.name])));
+      } catch { if (!signal?.aborted) setSpeakerMessage(t("speakerLabelsLoadFailed")); }
+    }
     setLoading(false);
-  }, [api, taskId]);
+  }, [api, onTaskUpdated, taskId, t]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -53,16 +65,16 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
   }, [load]);
 
   const watchedTaskId = task?.id;
-  const watchedTaskStatus = task?.status;
+  const watchedTaskActive = task ? !TERMINAL.has(task.status) : false;
   useEffect(() => {
-    if (!watchedTaskId || !watchedTaskStatus || TERMINAL.has(watchedTaskStatus)) return;
+    if (!watchedTaskId || !watchedTaskActive) return;
     const controller = new AbortController();
     void api.watchTask(watchedTaskId, (event) => {
       setTask((current) => current ? { ...current, status: event.status, progressMillionths: event.progressMillionths, updatedAtMs: Date.now() } : current);
       if (event.terminal) void load();
     }, controller.signal);
     return () => controller.abort();
-  }, [api, load, watchedTaskId, watchedTaskStatus]);
+  }, [api, load, watchedTaskActive, watchedTaskId]);
 
   const markdown = task?.artifacts.find((artifact) => artifact.kind === "markdown");
   const title = task ? taskName(task, `${t("restoredTask")} ${task.id.slice(0, 8)}`) : t("loadingPreview");
@@ -73,8 +85,32 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
     : null;
 
   const pin = async () => { if (task) setTask(await api.setPinned(task.id, !task.pinned)); };
-  const retry = async () => { if (task) { const next = await api.retry(task.id); onSelectTask(next.id); } };
+  const retry = async () => {
+    if (!task) return;
+    const next = await api.retry(task.id);
+    setTask(next); setPreview(null); setPreviewError(false); setDrawer(false);
+    setSpeakerLabels(null); setSpeakerEdits({}); setSpeakerMessage("");
+    onTaskUpdated?.(next); onSelectTask(next.id);
+  };
   const remove = async () => { if (!task || !window.confirm(t("deleteWarning"))) return; await api.deleteTask(task.id); onTaskRemoved(task.id); onClose(); };
+  const saveSpeakers = async () => {
+    if (!task || !speakerLabels) return;
+    const changed = Object.fromEntries(speakerLabels.speakers
+      .filter((speaker) => speakerEdits[speaker.id] !== speaker.name)
+      .map((speaker) => [speaker.id, speakerEdits[speaker.id]?.trim() ?? ""]));
+    if (Object.keys(changed).length === 0) return;
+    if (Object.values(changed).some((value) => value.length === 0 || value.length > 80
+      || /[\u0000-\u001f\u007f]/.test(value))) {
+      setSpeakerMessage(t("invalidSpeakerName")); return;
+    }
+    setSavingSpeakers(true); setSpeakerMessage("");
+    try {
+      await api.relabelSpeakers(task.id, speakerLabels.artifactGeneration, changed);
+      await load(); setSpeakerMessage(t("speakerNamesSaved"));
+    } catch { setSpeakerMessage(t("speakerNamesSaveFailed")); }
+    finally { setSavingSpeakers(false); }
+  };
+  const speakersChanged = speakerLabels?.speakers.some((speaker) => speakerEdits[speaker.id] !== speaker.name) ?? false;
 
   return createPortal(<div className="result-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <section className="result-dialog" role="dialog" aria-modal="true" aria-labelledby="result-title">
@@ -102,6 +138,13 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
 
     <div className={`result-body ${drawer ? "drawer-open" : ""}`}>
       <div className="result-document-scroll" tabIndex={-1} role="document">
+        {task?.workflow === "meetingTranscript" && speakerLabels && speakerLabels.speakers.length > 0 && <section className="speaker-editor" aria-labelledby="speaker-editor-title">
+          <div><Users size={18} aria-hidden="true" /><div><strong id="speaker-editor-title">{t("speakerNames")}</strong><small>{t("speakerNamesHint")}</small></div></div>
+          <div className="speaker-editor-fields">{speakerLabels.speakers.map((speaker) => <label key={speaker.id}><span>{speaker.id.replace("speaker-", "Speaker ")}</span><input value={speakerEdits[speaker.id] ?? ""} maxLength={80} onInput={(event) => { const value = event.currentTarget.value; setSpeakerEdits((current) => ({ ...current, [speaker.id]: value })); }} /></label>)}</div>
+          <button className="secondary" type="button" disabled={!speakersChanged || savingSpeakers} onClick={() => void saveSpeakers()}>{savingSpeakers ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}{t("saveSpeakerNames")}</button>
+          {speakerMessage && <p className="speaker-editor-message" role="status">{speakerMessage}</p>}
+        </section>}
+        {task?.workflow === "meetingTranscript" && speakerMessage && !speakerLabels && <p className="speaker-editor-message standalone" role="status">{speakerMessage}</p>}
         <article className="document-canvas">
           {loading ? <div className="preview-loading" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" />{t("loadingPreview")}</div> : previewError ? <div className="result-empty" role="alert"><CircleAlert size={25} aria-hidden="true" /><h2>{t("previewFailed")}</h2></div> : !preview ? <div className="result-empty" role={failureMessage ? "alert" : undefined}>{failureMessage ? <CircleAlert size={25} aria-hidden="true" /> : <Code2 size={25} aria-hidden="true" />}<h2>{failureMessage ?? t("noMarkdownResult")}</h2></div> : <>{preview.truncated && <p className="preview-notice" role="status">{t("previewTruncated")}</p>}{mode === "rendered" ? <SafeMarkdownPreview source={preview.text} /> : <pre className="markdown-source"><code>{preview.text}</code></pre>}</>}
         </article>

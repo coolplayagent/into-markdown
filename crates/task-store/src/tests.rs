@@ -159,6 +159,41 @@ fn create_get_list_pin_and_legal_state_machine_are_atomic() {
 }
 
 #[test]
+fn succeeded_artifact_replacement_is_generation_cas_and_keeps_success_state() {
+    let (_directory, mut store) = store();
+    let task = create(&mut store);
+    store
+        .transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 100_000))
+        .unwrap();
+    store
+        .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 900_000))
+        .unwrap();
+    let succeeded = store.transition(&task.id, succeeded_transition()).unwrap();
+    assert_eq!(succeeded.artifact_generation, 0);
+
+    let replacement = succeeded
+        .artifacts
+        .iter()
+        .enumerate()
+        .map(|(index, artifact)| ArtifactReference {
+            storage_key: format!("{:032x}", index + 16),
+            sha256: format!("{:064x}", index + 16),
+            ..artifact.clone()
+        })
+        .collect::<Vec<_>>();
+    let replaced = store.replace_succeeded_artifacts(&task.id, 0, replacement.clone()).unwrap();
+    assert_eq!(replaced.status, TaskStatus::Succeeded);
+    assert_eq!(replaced.progress_millionths, 1_000_000);
+    assert_eq!(replaced.artifact_generation, 1);
+    assert_eq!(replaced.artifacts, replacement);
+    assert!(matches!(
+        store.replace_succeeded_artifacts(&task.id, 0, replaced.artifacts.clone()),
+        Err(TaskStoreError::Conflict(_))
+    ));
+    assert_eq!(store.get(&task.id).unwrap().unwrap().artifact_generation, 1);
+}
+
+#[test]
 fn terminal_delete_is_atomic_and_protects_active_and_pinned_tasks() {
     let (_directory, mut store) = store();
     let active = create(&mut store);
@@ -175,6 +210,41 @@ fn terminal_delete_is_atomic_and_protects_active_and_pinned_tasks() {
     store.delete_terminal(&terminal.id, true).unwrap();
     assert!(store.get(&terminal.id).unwrap().is_none());
     assert!(!store.recovery_token_in_use(&terminal.input.recovery_token).unwrap());
+}
+
+#[test]
+fn explicit_requeue_clears_terminal_diagnostics_but_preserves_identity() {
+    let (_directory, mut store) = store();
+    let task = create(&mut store);
+    let cancelled = store
+        .transition(
+            &task.id,
+            TaskTransition {
+                expected: TaskStatus::Pending,
+                next: TaskStatus::Cancelled,
+                progress_millionths: 420_000,
+                diagnostics: vec![TaskDiagnostic { code: DiagnosticCode::Cancelled }],
+                artifacts: Vec::new(),
+            },
+        )
+        .unwrap();
+    let first_completed_at = store.completed_at_ms(&task.id).unwrap().unwrap();
+    let requeued = store.requeue_terminal(&task.id).unwrap();
+    assert_eq!(requeued.id, cancelled.id);
+    assert_eq!(requeued.input.recovery_token, cancelled.input.recovery_token);
+    assert_eq!(requeued.status, TaskStatus::Pending);
+    assert_eq!(requeued.progress_millionths, 0);
+    assert!(requeued.diagnostics.is_empty());
+    assert!(requeued.updated_at_ms > cancelled.updated_at_ms);
+    assert_eq!(store.completed_at_ms(&task.id).unwrap(), None);
+    assert!(matches!(store.requeue_terminal(&task.id), Err(TaskStoreError::Conflict(_))));
+    store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 0)).unwrap();
+    store
+        .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 900_000))
+        .unwrap();
+    let succeeded = store.transition(&task.id, succeeded_transition()).unwrap();
+    assert_eq!(succeeded.status, TaskStatus::Succeeded);
+    assert!(store.completed_at_ms(&task.id).unwrap().unwrap() > first_completed_at);
 }
 
 #[test]
@@ -249,6 +319,7 @@ fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
         .connection
         .execute_batch(&format!(
             "ALTER TABLE tasks DROP COLUMN completed_at_ms;\
+                 ALTER TABLE tasks DROP COLUMN artifact_generation;\
                  DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
                  ALTER TABLE artifacts RENAME TO artifacts_v3;\
                  CREATE TABLE artifacts(\

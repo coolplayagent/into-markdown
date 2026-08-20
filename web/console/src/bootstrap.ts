@@ -2,7 +2,7 @@ import { takeSession } from "./session";
 import { renderStartupFailure } from "./startup-failure";
 declare const INTO_MD_APP_MODULE: string;
 
-const session = takeSession(window.location, window.history);
+const session = takeSession(window.location, window.history, window.sessionStorage);
 if (session === null) {
   renderStartupFailure("handoff");
 } else {

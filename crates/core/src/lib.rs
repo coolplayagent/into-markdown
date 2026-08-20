@@ -11,6 +11,7 @@ mod execution;
 mod format;
 mod input;
 mod ir;
+mod media_checkpoint;
 mod nested;
 mod ocr_binding;
 mod options;
@@ -40,7 +41,11 @@ pub use ir::{
     ListItem, ListKind, MAX_DOCUMENT_DEPTH, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_JSON_BYTES,
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
     OcrSourceRegion, Provenance, ProvenanceKind, Rect, SourceLocator, SourcePoint, TableAlignment,
-    TableRow, TimeRange, ValidationLimits,
+    TableRow, TimeRange, TimedToken, ValidationLimits,
+};
+pub use media_checkpoint::{
+    MEDIA_CHECKPOINT_SCHEMA_VERSION, MediaCheckpoint, MediaCheckpointBackend, MediaCheckpointStage,
+    MediaSpeakerCluster, NormalizedAudioIdentity, RecoveredMediaCheckpoint,
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use ocr_binding::{
@@ -48,17 +53,19 @@ pub use ocr_binding::{
 };
 pub use options::{
     AiMode, AiOptions, AsrOptions, AssetMode, ConversionOptions, DelimitedTextOptions,
-    NetworkOptions, OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode, ResourceLimits,
-    TableHeaderMode, TextDecodingMode, TextOptions,
+    DiarizationOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode,
+    ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
 };
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
-    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, DocumentPatch,
-    EnrichmentPlan, FormatDetector, MarkdownRenderer, OcrEngine, OcrRequest, OutputEnricher,
-    PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime, Transcriber,
-    TranscriptionRequest, TranscriptionResult,
+    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult,
+    DiarizationRequest, DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, FormatDetector,
+    MarkdownRenderer, OcrEngine, OcrRequest, OutputEnricher, PatchOperation, ProbeOutcome,
+    Services, SourceResolver, Tensor, TensorRuntime, Transcriber, TranscriptionRequest,
+    TranscriptionResult,
 };
 #[doc(hidden)]
 pub use spi::{
-    estimate_retained_output, estimate_retained_result, estimate_validation_working_set,
+    estimate_retained_blocks, estimate_retained_output, estimate_retained_result,
+    estimate_validation_working_set,
 };

@@ -5,6 +5,7 @@ import { I18nProvider, useI18n } from "./i18n";
 import { RouteLink, Router, useRouter } from "./router";
 import { ThemeProvider, useTheme } from "./theme";
 import { WorkbenchPage } from "./workbench-page";
+import { MeetingPage } from "./meeting-page";
 
 function Preferences() {
   const { locale, setLocale, t } = useI18n();
@@ -31,19 +32,24 @@ function Content({ api }: { api: ApiClient }) {
   const { path } = useRouter();
   const { t } = useI18n();
   const main = useRef<HTMLElement>(null);
-  const result = /^\/results\/([0-9a-f]{32})$/.exec(path);
+  const meetingResult = /^\/meetings\/results\/([0-9a-f]{32})$/.exec(path);
+  const workbenchResult = /^\/results\/([0-9a-f]{32})$/.exec(path);
+  const meeting = path === "/meetings" || Boolean(meetingResult);
   useEffect(() => {
-    document.title = `${t("workbench")} · into-markdown`;
-  }, [t]);
+    document.title = `${t(meeting ? "meetingNotes" : "workbench")} · into-markdown`;
+  }, [meeting, t]);
   useEffect(() => { main.current?.focus(); }, [path]);
   return <main id="main" ref={main} tabIndex={-1}>
-    <div className="route-surface"><WorkbenchPage api={api} initialTaskId={result?.[1]} /></div>
+    <div className="route-surface">{meeting
+      ? <MeetingPage api={api} initialTaskId={meetingResult?.[1]} />
+      : <WorkbenchPage api={api} initialTaskId={workbenchResult?.[1]} />}</div>
   </main>;
 }
 
 function Shell({ api }: { api: ApiClient }) {
   const { t } = useI18n();
-  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" aria-label={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><span /><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
+  const { path } = useRouter();
+  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
 }
 
 export function App({ api }: { api: ApiClient }) {

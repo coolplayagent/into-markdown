@@ -13,8 +13,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionRequest, ConversionResult,
     ConverterOutput, Diagnostic, Document, ErrorCode, ExecutionContext, ExecutionStage,
-    ProbeOutcome, Provenance, ResourceReservation, SourceLocator, SourceMetadata,
-    canonical_external_asset_uri, estimate_retained_result, estimate_validation_working_set,
+    MediaCheckpoint, MediaCheckpointBackend, ProbeOutcome, Provenance, RecoveredMediaCheckpoint,
+    ResourceReservation, SourceLocator, SourceMetadata, canonical_external_asset_uri,
+    estimate_retained_result, estimate_validation_working_set,
 };
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
 use sha2::{Digest, Sha256};
@@ -24,6 +25,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 enum CheckpointPayloadWire {
+    Media {
+        checkpoint: MediaCheckpoint,
+    },
     Converted {
         document: Document,
         assets: Vec<CheckpointAssetWire>,
@@ -39,6 +43,7 @@ enum CheckpointPayloadWire {
 }
 
 enum CheckpointPayload {
+    Media(MediaCheckpoint),
     Converted {
         document: Document,
         assets: Vec<Asset>,
@@ -67,6 +72,9 @@ struct CheckpointAssetWire {
 #[derive(Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 enum CheckpointPayloadRef<'a> {
+    Media {
+        checkpoint: &'a MediaCheckpoint,
+    },
     Converted {
         document: &'a Document,
         assets: CheckpointAssetsRef<'a>,
@@ -140,6 +148,7 @@ impl CheckpointPayloadWire {
         request: &ConversionRequest,
     ) -> Result<CheckpointPayload, ConversionError> {
         Ok(match self {
+            Self::Media { checkpoint } => CheckpointPayload::Media(checkpoint),
             Self::Converted { document, assets, diagnostics } => CheckpointPayload::Converted {
                 document,
                 assets: decode_checkpoint_assets(assets, context, memory, request)?,
@@ -155,6 +164,57 @@ impl CheckpointPayloadWire {
                 }
             }
         })
+    }
+}
+
+struct RecoveryMediaCheckpointBackend {
+    store: RecoveryStore,
+    token: RecoveryToken,
+    input_fingerprint: String,
+    options_fingerprint: String,
+}
+
+impl MediaCheckpointBackend for RecoveryMediaCheckpointBackend {
+    fn load(
+        &self,
+        context: &ExecutionContext,
+    ) -> Result<Option<RecoveredMediaCheckpoint>, ConversionError> {
+        let Some(store::LoadedCheckpoint { metadata, payload, memory }) =
+            self.store.load::<CheckpointPayloadWire>(&self.token, context)?
+        else {
+            return Ok(None);
+        };
+        if metadata.input_fingerprint != self.input_fingerprint
+            || metadata.options_fingerprint != self.options_fingerprint
+        {
+            return Err(recovery_error("incompatible", "media checkpoint fingerprints changed"));
+        }
+        let CheckpointPayloadWire::Media { checkpoint } = payload else {
+            return Ok(None);
+        };
+        if metadata.phase != TaskPhase::Media {
+            return Err(recovery_error(
+                "corrupt",
+                "media checkpoint payload does not match its phase",
+            ));
+        }
+        checkpoint.validate()?;
+        Ok(Some(RecoveredMediaCheckpoint::new(checkpoint, memory)))
+    }
+
+    fn commit(
+        &self,
+        checkpoint: &MediaCheckpoint,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        checkpoint.validate()?;
+        self.store.replace_media(
+            &self.token,
+            context,
+            &self.input_fingerprint,
+            &self.options_fingerprint,
+            &CheckpointPayloadRef::Media { checkpoint },
+        )
     }
 }
 
@@ -349,6 +409,12 @@ pub(super) async fn convert(
             return Err(recovery_error("incompatible", "conversion configuration changed"));
         }
     }
+    context.install_media_checkpoint_backend(Arc::new(RecoveryMediaCheckpointBackend {
+        store: store.clone(),
+        token: token.clone(),
+        input_fingerprint: input_fingerprint.clone(),
+        options_fingerprint: options_fingerprint.clone(),
+    }))?;
     let existing = match store.load::<CheckpointPayloadWire>(token, &context)? {
         Some(store::LoadedCheckpoint { metadata, payload, mut memory }) => {
             let payload = payload.decode(&context, &mut memory, &request)?;
@@ -417,6 +483,25 @@ pub(super) async fn convert(
             let result = validate_recovered_success(engine, &request, &context, result).await?;
             context.report(ExecutionStage::Completed, Some(1), Some(1), Some("resumed"))?;
             return Ok(result);
+        }
+        existing => existing,
+    };
+
+    let existing = match existing {
+        Some(store::LoadedCheckpoint {
+            payload: CheckpointPayload::Media(checkpoint),
+            metadata,
+            memory,
+        }) => {
+            if metadata.phase != TaskPhase::Media {
+                return Err(recovery_error(
+                    "corrupt",
+                    "media checkpoint payload does not match its phase",
+                ));
+            }
+            checkpoint.validate()?;
+            drop(memory);
+            None
         }
         existing => existing,
     };
@@ -531,6 +616,7 @@ pub(super) async fn convert(
                 diagnostics: &output.diagnostics,
             },
         )?;
+        store.remove_media(token)?;
         output
     };
 
@@ -889,8 +975,9 @@ mod tests {
     use crate::EngineBuilder;
     use into_markdown_core::{
         BoxFuture, ConversionOptions, Converter, ExecutionOptions, FormatCandidate, FormatDetector,
-        FormatHint, Inline, InputFormat, InputRef, MarkdownRenderer, OutputEnricher, ResolvedInput,
-        ResourceLimits, Services, SourceResolver,
+        FormatHint, Inline, InputFormat, InputRef, MEDIA_CHECKPOINT_SCHEMA_VERSION,
+        MarkdownRenderer, MediaCheckpointStage, NormalizedAudioIdentity, OutputEnricher,
+        ResolvedInput, ResourceLimits, Services, SourceResolver, TimeRange,
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{fs, fs::File, io::Write as _, path::Path};
@@ -951,6 +1038,11 @@ mod tests {
     }
 
     struct CountingConverter(Arc<AtomicUsize>);
+
+    struct MediaCheckpointingConverter {
+        fail_once: Arc<AtomicBool>,
+        recovered: Arc<AtomicBool>,
+    }
 
     struct CountingTitleEnricher(Arc<AtomicUsize>);
 
@@ -1103,6 +1195,101 @@ mod tests {
             Box::pin(async move {
                 let mut document = Document::default();
                 document.metadata.title = Some(title);
+                Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
+            })
+        }
+    }
+
+    impl Converter for MediaCheckpointingConverter {
+        fn id(&self) -> &'static str {
+            "recovery.media-checkpointing-converter"
+        }
+
+        fn supported_formats(&self) -> &'static [InputFormat] {
+            &[InputFormat::Text]
+        }
+
+        fn probe<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+            Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+        }
+
+        fn planned_output_bytes(
+            &self,
+            _: &ResolvedInput,
+            _: &FormatCandidate,
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(256 * 1024)
+        }
+
+        fn convert<'a>(
+            &'a self,
+            _: &'a ResolvedInput,
+            _: &'a FormatCandidate,
+            _: &'a ConversionOptions,
+            _: &'a Services,
+            context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+            Box::pin(async move {
+                if let Some(checkpoint) = context.load_media_checkpoint()? {
+                    let checkpoint = checkpoint.into_state();
+                    assert_eq!(checkpoint.next_window_start_frame, 100);
+                    self.recovered.store(true, Ordering::SeqCst);
+                } else {
+                    let range = TimeRange { start_ms: 0, end_ms: 1_000 };
+                    context.commit_media_checkpoint(&MediaCheckpoint {
+                        schema_version: MEDIA_CHECKPOINT_SCHEMA_VERSION,
+                        audio: NormalizedAudioIdentity {
+                            sha256: "a".repeat(64),
+                            frames: 1_000,
+                            sample_rate: 16_000,
+                            channels: 1,
+                        },
+                        stage: MediaCheckpointStage::Transcribing,
+                        next_window_start_frame: 100,
+                        segments: vec![BlockNode {
+                            id: into_markdown_core::NodeId("media-1".into()),
+                            block: Block::TimedSegment {
+                                range,
+                                speaker: None,
+                                speaker_confidence: None,
+                                tokens: Vec::new(),
+                                content: vec![Inline::Text {
+                                    value: "partial".into(),
+                                    marks: Vec::new(),
+                                }],
+                            },
+                            provenance: Provenance {
+                                kind: into_markdown_core::ProvenanceKind::AiProvider,
+                                provider: "test/model".into(),
+                                locator: SourceLocator {
+                                    time: Some(range),
+                                    ..SourceLocator::default()
+                                },
+                                confidence: Some(0.9),
+                            },
+                        }],
+                        transcriber_provider: "test".into(),
+                        transcriber_model: "model@sha256:abcd".into(),
+                        language: Some("en".into()),
+                        language_confidence: Some(0.9),
+                        diarizer_provider: None,
+                        diarization_model: None,
+                        diarization_completed_segments: 0,
+                        speaker_clusters: Vec::new(),
+                    })?;
+                }
+                if self.fail_once.swap(false, Ordering::SeqCst) {
+                    return Err(ConversionError::Io { detail: "injected media crash".into() });
+                }
+                let mut document = Document::default();
+                document.metadata.title = Some("resumed media".into());
                 Ok(ConverterOutput::new(document, Vec::new(), Vec::new()))
             })
         }
@@ -1555,6 +1742,7 @@ mod tests {
         let options_fingerprint =
             fingerprint_json(&(request.hint.clone(), request.options.clone())).unwrap();
         match phase {
+            TaskPhase::Media => panic!("fixture helper does not create media checkpoints"),
             TaskPhase::Converted => store
                 .commit(
                     token,
@@ -2036,6 +2224,43 @@ mod tests {
             block_on(engine.convert_recoverable(changed_options, &store, &token)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Recovery);
         assert!(error.to_string().contains("configuration changed"));
+    }
+
+    #[test]
+    fn media_chunk_checkpoint_resumes_converter_and_is_removed_after_converted_commit() {
+        let directory = private_tempdir();
+        let store = RecoveryStore::open(directory.path()).unwrap();
+        let token = store.create_token().unwrap();
+        let fail_once = Arc::new(AtomicBool::new(true));
+        let recovered = Arc::new(AtomicBool::new(false));
+        let build = || {
+            let mut builder = EngineBuilder::new().renderer(Arc::new(ControlledRenderer {
+                fail: Arc::new(AtomicBool::new(false)),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }));
+            builder
+                .registry_mut()
+                .register_source_resolver(Arc::new(BytesResolver))
+                .register_format_detector(Arc::new(TextDetector))
+                .register_converter(Arc::new(MediaCheckpointingConverter {
+                    fail_once: Arc::clone(&fail_once),
+                    recovered: Arc::clone(&recovered),
+                }));
+            builder.build().unwrap()
+        };
+        let media_request =
+            || ConversionRequest::new(InputRef::bytes(b"media".as_slice(), Some("meeting.txt")));
+        let first =
+            block_on(build().convert_recoverable(media_request(), &store, &token)).unwrap_err();
+        assert_eq!(first.code(), ErrorCode::Io);
+        assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Media);
+
+        let result =
+            block_on(build().convert_recoverable(media_request(), &store, &token)).unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("resumed media"));
+        assert!(recovered.load(Ordering::SeqCst));
+        assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Succeeded);
+        assert!(!store.test_path(&token, TaskPhase::Media).exists());
     }
 
     #[test]

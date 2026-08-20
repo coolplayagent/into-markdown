@@ -146,6 +146,8 @@ pub struct ModelManifest {
     pub default_bundle: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_asr_bundle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_diarization_bundle: Option<String>,
     pub bundles: Vec<ModelBundle>,
 }
 
@@ -351,7 +353,11 @@ impl ModelManifest {
             }
             if !matches!(
                 bundle.kind.as_str(),
-                "ocr-pipeline" | "detector-component" | "recognizer-component" | "asr-model"
+                "ocr-pipeline"
+                    | "detector-component"
+                    | "recognizer-component"
+                    | "asr-model"
+                    | "diarization-model"
             ) || !matches!(bundle.availability.as_str(), "planned" | "available")
             {
                 return Err(invalid_manifest(format!("invalid availability for {}", bundle.id)));
@@ -372,8 +378,9 @@ impl ModelManifest {
                 return Err(invalid_manifest(format!("{} has incomplete metadata", bundle.id)));
             }
             validate_bundle_roles(bundle)?;
-            let is_asr = bundle.kind == "asr-model";
-            if is_asr != bundle.character_set.is_none()
+            let has_no_character_set =
+                matches!(bundle.kind.as_str(), "asr-model" | "diarization-model");
+            if has_no_character_set != bundle.character_set.is_none()
                 || bundle.character_set.as_ref().is_some_and(|character_set| {
                     !matches!(character_set.status.as_str(), "planned" | "available")
                 })
@@ -412,12 +419,13 @@ impl ModelManifest {
                     }
                 }
             }
-            if !matches!(bundle.kind.as_str(), "detector-component" | "asr-model")
-                && !bundle.source_artifacts.iter().any(|item| {
-                    item.id == bundle.character_set.as_ref().unwrap().source_artifact_id
-                        && item.role == "recognizer-and-dictionary"
-                })
-            {
+            if !matches!(
+                bundle.kind.as_str(),
+                "detector-component" | "asr-model" | "diarization-model"
+            ) && !bundle.source_artifacts.iter().any(|item| {
+                item.id == bundle.character_set.as_ref().unwrap().source_artifact_id
+                    && item.role == "recognizer-and-dictionary"
+            }) {
                 return Err(invalid_manifest(format!(
                     "{} character set source is absent",
                     bundle.id
@@ -449,7 +457,7 @@ impl ModelManifest {
                 }
             }
             let installable = bundle.availability == "available"
-                && (is_asr
+                && (has_no_character_set
                     || bundle
                         .character_set
                         .as_ref()
@@ -477,8 +485,23 @@ impl ModelManifest {
             {
                 return Err(invalid_manifest("default ASR bundle is invalid"));
             }
+            let Some(default_diarization) = self.default_diarization_bundle.as_deref() else {
+                return Err(invalid_manifest("default diarization bundle is absent"));
+            };
+            if self
+                .bundles
+                .iter()
+                .find(|bundle| bundle.id == default_diarization)
+                .is_none_or(|bundle| bundle.kind != "diarization-model")
+            {
+                return Err(invalid_manifest("default diarization bundle is invalid"));
+            }
         } else if self.default_asr_bundle.is_some()
-            || self.bundles.iter().any(|bundle| bundle.kind == "asr-model")
+            || self.default_diarization_bundle.is_some()
+            || self
+                .bundles
+                .iter()
+                .any(|bundle| matches!(bundle.kind.as_str(), "asr-model" | "diarization-model"))
         {
             return Err(invalid_manifest("ASR bundles require model schema 3"));
         }
@@ -673,6 +696,7 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
         "detector-component" => BTreeSet::from(["detector"]),
         "recognizer-component" => BTreeSet::from(["recognizer-and-dictionary"]),
         "asr-model" => BTreeSet::from(["model"]),
+        "diarization-model" => BTreeSet::from(["vad", "speaker-embedding"]),
         _ => return Err(invalid_manifest(format!("{} has invalid kind", bundle.id))),
     };
     let source_roles: BTreeSet<_> =
@@ -701,6 +725,7 @@ fn validate_bundle_roles(bundle: &ModelBundle) -> Result<(), ConversionError> {
             "detector-component" => BTreeSet::from(["detector"]),
             "recognizer-component" => BTreeSet::from(["recognizer", "character-table"]),
             "asr-model" => BTreeSet::from(["model"]),
+            "diarization-model" => BTreeSet::from(["vad", "speaker-embedding"]),
             _ => unreachable!(),
         };
         let runtime_roles: BTreeSet<_> =
@@ -1005,11 +1030,17 @@ pub struct ModelManager {
     bundled_root: Option<PathBuf>,
 }
 
-pub(crate) struct VerifiedRuntimeArtifact {
+/// Hash-verified runtime model bytes and retained request accounting.
+pub struct VerifiedRuntimeArtifact {
+    /// Canonical installed model path.
     pub path: PathBuf,
+    /// Expected SHA-256.
     pub sha256: String,
+    /// Immutable model bytes.
     pub bytes: Arc<[u8]>,
+    /// Opened-file identity captured during verification.
     pub file_identity: String,
+    /// Request memory reservation retained with the bytes.
     pub memory_reservation: Arc<ResourceReservation>,
 }
 
@@ -1213,7 +1244,8 @@ impl ModelManager {
         })
     }
 
-    pub(crate) fn verified_runtime_artifact(
+    /// Reverify and retain one runtime artifact for an isolated inference session.
+    pub fn verified_runtime_artifact(
         &self,
         id: &str,
         role: &str,
@@ -1854,7 +1886,7 @@ enum InstallFault {
 
 fn is_installable(bundle: &ModelBundle) -> bool {
     bundle.availability == "available"
-        && (bundle.kind == "asr-model"
+        && (matches!(bundle.kind.as_str(), "asr-model" | "diarization-model")
             || bundle.character_set.as_ref().is_some_and(|value| value.status == "available"))
         && (!bundle.runtime_artifacts.is_empty() || bundle.kind == "ocr-pipeline")
 }
@@ -2510,7 +2542,7 @@ mod tests {
     fn embedded_manifest_declares_only_the_bound_available_pipeline() {
         let manifest = ModelManifest::embedded().unwrap();
         assert_eq!(manifest.default_bundle, detector_model::PIPELINE_ID);
-        assert_eq!(manifest.bundles.len(), 4);
+        assert_eq!(manifest.bundles.len(), 5);
         let pipeline = &manifest.bundles[0];
         assert_eq!(pipeline.kind, "ocr-pipeline");
         assert_eq!(pipeline.availability, "available");
@@ -2523,6 +2555,11 @@ mod tests {
         ));
         assert_eq!(manifest.bundles[3].kind, "asr-model");
         assert_eq!(manifest.default_asr_bundle.as_deref(), Some("whisper-small-multilingual"));
+        assert_eq!(manifest.bundles[4].kind, "diarization-model");
+        assert_eq!(
+            manifest.default_diarization_bundle.as_deref(),
+            Some("silero-vad-3dspeaker-eres2net")
+        );
     }
 
     #[test]

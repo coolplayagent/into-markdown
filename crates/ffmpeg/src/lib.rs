@@ -4,13 +4,15 @@
 //! enables a network protocol. Products provide an absolute audited executable
 //! and independently authenticated authority bytes.
 
-use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
+use into_markdown_core::{
+    ConversionError, ExecutionContext, ExecutionStage, ResourceReservation, TemporaryFile,
+};
 use object::{Architecture, BinaryFormat, Object, ObjectKind};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::alloc::{Layout, alloc};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(test)]
@@ -129,8 +131,9 @@ struct Authority {
 pub struct MediaLimits {
     /// Maximum encoded input bytes.
     pub max_input_bytes: u64,
-    /// Maximum decoded duration in integer milliseconds.
-    pub max_duration_ms: u64,
+    /// Optional decoded duration ceiling in integer milliseconds. Absence
+    /// leaves duration bounded by output and request resource budgets.
+    pub max_duration_ms: Option<u64>,
     /// Maximum conservative encoded bits per second.
     pub max_bitrate: u64,
     /// Requested and maximum output sample rate.
@@ -146,7 +149,7 @@ impl Default for MediaLimits {
     fn default() -> Self {
         Self {
             max_input_bytes: 512 * 1024 * 1024,
-            max_duration_ms: 7_200_000,
+            max_duration_ms: None,
             max_bitrate: 50_000_000,
             sample_rate: 16_000,
             channels: 1,
@@ -206,6 +209,101 @@ impl PcmAudio {
     pub fn sample_bytes(&self) -> usize {
         self.samples.len()
     }
+}
+
+/// Accounted private S16LE PCM file produced by the audited `FFmpeg` runtime.
+///
+/// The file is removed and its temporary-storage charge is released when this
+/// value is dropped. Callers may open bounded read handles but cannot persist
+/// the native decoder output accidentally.
+pub struct NormalizedAudio {
+    temporary: TemporaryFile,
+    /// Samples per second.
+    pub sample_rate: u32,
+    /// Interleaved channel count.
+    pub channels: u16,
+    /// Exact decoded frame count.
+    pub frames: u64,
+    /// SHA-256 of the complete S16LE PCM bytes.
+    pub sha256: String,
+}
+
+/// One bounded PCM window whose heap ownership remains request-accounted.
+pub struct PcmWindow {
+    bytes: Vec<u8>,
+    _memory: ResourceReservation,
+}
+
+impl PcmWindow {
+    /// Borrow the exact S16LE bytes for this window.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl NormalizedAudio {
+    /// Open a fresh read-only handle to the private normalized PCM file.
+    ///
+    /// # Errors
+    /// Returns a local I/O error if the scoped file is no longer available.
+    pub fn open(&self) -> Result<File, ConversionError> {
+        File::open(self.temporary.path()).map_err(Into::into)
+    }
+
+    /// Read one exact mono PCM frame range without retaining the whole source.
+    ///
+    /// # Errors
+    /// Returns a stable resource or I/O error for invalid ranges or short reads.
+    pub fn read_mono_s16le(
+        &self,
+        start_frame: u64,
+        end_frame: u64,
+        context: &ExecutionContext,
+    ) -> Result<PcmWindow, ConversionError> {
+        if self.channels != 1 || start_frame >= end_frame || end_frame > self.frames {
+            return Err(resource("mediaPcmRange"));
+        }
+        let start = start_frame.checked_mul(2).ok_or_else(|| resource("mediaPcmRange"))?;
+        let length = end_frame
+            .checked_sub(start_frame)
+            .and_then(|frames| frames.checked_mul(2))
+            .ok_or_else(|| resource("mediaPcmRange"))?;
+        let capacity = usize::try_from(length).map_err(|_| resource("mediaPcmRange"))?;
+        let memory = context.reserve_memory(length)?;
+        let mut output = allocate_exact_vec(capacity).map_err(map_reader_error)?;
+        output.resize(capacity, 0);
+        let mut file = self.open()?;
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut output)?;
+        Ok(PcmWindow { bytes: output, _memory: memory })
+    }
+}
+
+enum NormalizationTarget {
+    Memory(ResourceReservation),
+    Temporary(TemporaryFile),
+}
+
+enum NormalizedOutput {
+    Memory(Vec<u8>, ResourceReservation, u64),
+    Temporary(TemporaryFile, u64, String),
+}
+
+impl NormalizedOutput {
+    fn len(&self) -> Result<u64, ConversionError> {
+        match self {
+            Self::Memory(bytes, _, _) => {
+                u64::try_from(bytes.len()).map_err(|_| resource("mediaPcmBytes"))
+            }
+            Self::Temporary(_, length, _) => Ok(*length),
+        }
+    }
+}
+
+struct NormalizationResult {
+    output: NormalizedOutput,
+    frames: u64,
 }
 
 /// A hash- and build-configuration-verified `FFmpeg` executable.
@@ -322,7 +420,109 @@ impl FfmpegRuntime {
         &self.version
     }
 
-    /// Decode the first audio stream into bounded S16LE PCM.
+    /// Decode the first audio stream into bounded in-memory S16LE PCM.
+    ///
+    /// This compatibility path remains suitable for short media. Long-form
+    /// callers should use [`Self::normalize_to_file`] so decoded duration is
+    /// bounded by temporary storage rather than heap capacity.
+    ///
+    /// # Errors
+    /// Returns stable malformed, resource, cancellation, timeout, or component errors.
+    pub fn normalize(
+        &self,
+        input: &[u8],
+        limits: MediaLimits,
+        context: &ExecutionContext,
+    ) -> Result<PcmAudio, ConversionError> {
+        let memory = context.reserve_memory(0)?;
+        let result = self.normalize_with_target(
+            input,
+            limits,
+            context,
+            NormalizationTarget::Memory(memory),
+            None,
+        )?;
+        let NormalizedOutput::Memory(output, mut output_memory, reserved_output) = result.output
+        else {
+            return Err(component("workerOutput"));
+        };
+        let capacity = u64::try_from(output.capacity()).map_err(|_| resource("mediaMemory"))?;
+        if reserved_output > capacity {
+            output_memory.shrink(reserved_output - capacity)?;
+        }
+        Ok(PcmAudio {
+            samples: output,
+            sample_rate: limits.sample_rate,
+            channels: limits.channels,
+            frames: result.frames,
+            time_base_num: 1,
+            time_base_den: limits.sample_rate,
+            _memory: output_memory,
+        })
+    }
+
+    /// Decode the first audio stream into an accounted private S16LE PCM file.
+    ///
+    /// # Errors
+    /// Returns stable malformed, resource, cancellation, timeout, or component errors.
+    pub fn normalize_to_file(
+        &self,
+        input: &[u8],
+        limits: MediaLimits,
+        context: &ExecutionContext,
+    ) -> Result<NormalizedAudio, ConversionError> {
+        self.normalize_to_file_inner(input, limits, context, None)
+    }
+
+    /// Decode into private PCM while publishing processed frames before the
+    /// total decoded duration is known.
+    ///
+    /// # Errors
+    /// Returns stable malformed, resource, cancellation, timeout, or component errors.
+    pub fn normalize_to_file_with_progress(
+        &self,
+        input: &[u8],
+        limits: MediaLimits,
+        context: &ExecutionContext,
+        progress_message: &str,
+    ) -> Result<NormalizedAudio, ConversionError> {
+        if progress_message.is_empty()
+            || progress_message.len() > 128
+            || progress_message.chars().any(char::is_control)
+        {
+            return Err(component("progressMessage"));
+        }
+        self.normalize_to_file_inner(input, limits, context, Some(progress_message.to_owned()))
+    }
+
+    fn normalize_to_file_inner(
+        &self,
+        input: &[u8],
+        limits: MediaLimits,
+        context: &ExecutionContext,
+        progress_message: Option<String>,
+    ) -> Result<NormalizedAudio, ConversionError> {
+        let temporary = context.temporary_file("into-md-media-pcm")?;
+        let result = self.normalize_with_target(
+            input,
+            limits,
+            context,
+            NormalizationTarget::Temporary(temporary),
+            progress_message,
+        )?;
+        let NormalizedOutput::Temporary(temporary, _, sha256) = result.output else {
+            return Err(component("workerOutput"));
+        };
+        Ok(NormalizedAudio {
+            temporary,
+            sample_rate: limits.sample_rate,
+            channels: limits.channels,
+            frames: result.frames,
+            sha256,
+        })
+    }
+
+    /// Decode the first audio stream into the selected bounded target.
     ///
     /// A protocol output ceiling is calculated before launch. Actual PCM grows
     /// fallibly under request accounting, retained for the returned value's lifetime.
@@ -331,33 +531,49 @@ impl FfmpegRuntime {
     /// # Errors
     /// Returns stable malformed, resource, cancellation, timeout, or component errors.
     #[allow(clippy::too_many_lines)]
-    pub fn normalize(
+    fn normalize_with_target(
         &self,
         input: &[u8],
         limits: MediaLimits,
         context: &ExecutionContext,
-    ) -> Result<PcmAudio, ConversionError> {
+        target: NormalizationTarget,
+        progress_message: Option<String>,
+    ) -> Result<NormalizationResult, ConversionError> {
         validate_limits(input, limits)?;
         context.checkpoint()?;
-        let frames = limits
-            .max_duration_ms
-            .checked_mul(u64::from(limits.sample_rate))
-            .and_then(|v| v.checked_add(999))
-            .map(|v| v / 1000)
-            .ok_or_else(|| resource("mediaPcmBytes"))?;
+        let frame_width = u64::from(limits.channels) * 2;
+        let file_target = matches!(&target, NormalizationTarget::Temporary(_));
+        let (frames, max_output) = if let Some(duration_ms) = limits.max_duration_ms {
+            let frames = duration_ms
+                .checked_mul(u64::from(limits.sample_rate))
+                .and_then(|value| value.checked_add(999))
+                .map(|value| value / 1000)
+                .ok_or_else(|| resource("mediaPcmBytes"))?;
+            let output_frames = frames.checked_add(1).ok_or_else(|| resource("mediaPcmBytes"))?;
+            let max_output =
+                output_frames.checked_mul(frame_width).ok_or_else(|| resource("mediaPcmBytes"))?;
+            if !file_target && max_output > PCM_LIMIT {
+                return Err(resource("mediaPcmBytes"));
+            }
+            (frames, max_output)
+        } else {
+            let available =
+                if file_target { context.available_temporary_bytes() } else { PCM_LIMIT };
+            let output_frames = available / frame_width;
+            if output_frames <= 1 {
+                return Err(resource(if file_target {
+                    "max_temporary_bytes"
+                } else {
+                    "mediaPcmBytes"
+                }));
+            }
+            (output_frames.saturating_sub(1), output_frames * frame_width)
+        };
         let output_frames = frames.checked_add(1).ok_or_else(|| resource("mediaPcmBytes"))?;
-        let max_output = output_frames
-            .checked_mul(u64::from(limits.channels))
-            .and_then(|v| v.checked_mul(2))
-            .ok_or_else(|| resource("mediaPcmBytes"))?;
-        if max_output > PCM_LIMIT {
-            return Err(resource("mediaPcmBytes"));
-        }
         let input_bytes = u64::try_from(input.len()).map_err(|_| resource("mediaInputBytes"))?;
         let working_bytes =
             input_bytes.checked_add(WORKER_OVERHEAD).ok_or_else(|| resource("mediaMemory"))?;
         let _working_memory = context.reserve_memory(working_bytes)?;
-        let output_memory = context.reserve_memory(0)?;
         let private = tempfile::Builder::new()
             .prefix("into-md-media-")
             .tempdir()
@@ -441,13 +657,33 @@ impl FfmpegRuntime {
             return Err(component("workerThread"));
         };
         let (out_tx, out_rx) = mpsc::sync_channel(1);
+        let output_context = context.clone();
         let output_spawn = if fail_worker_stage(3) {
             Err(std::io::Error::other("injected stdout spawn failure"))
         } else {
             thread::Builder::new().name("ffmpeg-stdout".into()).stack_size(WORKER_STACK).spawn(
                 move || {
                     let _guard = PipeWorker::new();
-                    let _ = out_tx.send(read_bounded_accounted(stdout, max_output, output_memory));
+                    let output = match target {
+                        NormalizationTarget::Memory(memory) => read_bounded_accounted(
+                            stdout, max_output, memory,
+                        )
+                        .map(|(bytes, memory, reserved)| {
+                            NormalizedOutput::Memory(bytes, memory, reserved)
+                        }),
+                        NormalizationTarget::Temporary(temporary) => read_bounded_temporary(
+                            stdout,
+                            max_output,
+                            temporary,
+                            frame_width,
+                            &output_context,
+                            progress_message.as_deref(),
+                        )
+                        .map(|(temporary, length, sha256)| {
+                            NormalizedOutput::Temporary(temporary, length, sha256)
+                        }),
+                    };
+                    let _ = out_tx.send(output);
                 },
             )
         };
@@ -571,9 +807,7 @@ impl FfmpegRuntime {
                 detail: detail.into(),
             });
         }
-        let frame_width = u64::from(limits.channels) * 2;
-        let (output, mut output_memory, reserved_output) = output;
-        let output_len = u64::try_from(output.len()).map_err(|_| resource("mediaPcmBytes"))?;
+        let output_len = output.len()?;
         if output_len == 0 || output_len > max_output || output_len % frame_width != 0 {
             return Err(ConversionError::Malformed {
                 part: Some("audio".into()),
@@ -592,19 +826,7 @@ impl FfmpegRuntime {
         if observed_bitrate > u128::from(limits.max_bitrate) {
             return Err(resource("mediaBitrate"));
         }
-        let capacity = u64::try_from(output.capacity()).map_err(|_| resource("mediaMemory"))?;
-        if reserved_output > capacity {
-            output_memory.shrink(reserved_output - capacity)?;
-        }
-        Ok(PcmAudio {
-            samples: output,
-            sample_rate: limits.sample_rate,
-            channels: limits.channels,
-            frames: actual_frames,
-            time_base_num: 1,
-            time_base_den: limits.sample_rate,
-            _memory: output_memory,
-        })
+        Ok(NormalizationResult { output, frames: actual_frames })
     }
 }
 
@@ -959,7 +1181,7 @@ fn validate_limits(input: &[u8], limits: MediaLimits) -> Result<(), ConversionEr
     if size > limits.max_input_bytes {
         return Err(resource("mediaInputBytes"));
     }
-    if limits.max_duration_ms == 0 || limits.max_duration_ms > 86_400_000 {
+    if limits.max_duration_ms == Some(0) {
         return Err(resource("mediaDuration"));
     }
     if !(8_000..=192_000).contains(&limits.sample_rate) {
@@ -971,9 +1193,11 @@ fn validate_limits(input: &[u8], limits: MediaLimits) -> Result<(), ConversionEr
     if !(PROCESS_MEMORY_MIN..=PROCESS_MEMORY_MAX).contains(&limits.max_process_memory_bytes) {
         return Err(resource("mediaProcessMemory"));
     }
-    let bitrate = size.saturating_mul(8).saturating_mul(1000) / limits.max_duration_ms;
-    if bitrate > limits.max_bitrate {
-        return Err(resource("mediaBitrate"));
+    if let Some(duration_ms) = limits.max_duration_ms {
+        let bitrate = size.saturating_mul(8).saturating_mul(1000) / duration_ms;
+        if bitrate > limits.max_bitrate {
+            return Err(resource("mediaBitrate"));
+        }
     }
     Ok(())
 }
@@ -1049,6 +1273,38 @@ fn read_bounded_accounted(
     }
 }
 
+fn read_bounded_temporary(
+    mut reader: impl Read,
+    limit: u64,
+    mut temporary: TemporaryFile,
+    frame_width: u64,
+    context: &ExecutionContext,
+    progress_message: Option<&str>,
+) -> Result<(TemporaryFile, u64, String), ReaderError> {
+    let mut buffer = [0_u8; PIPE_CHUNK];
+    let mut length = 0_u64;
+    let mut digest = Sha256::new();
+    loop {
+        let count = reader.read(&mut buffer).map_err(|_| ReaderError::Io)?;
+        if count == 0 {
+            temporary.sync_all().map_err(ReaderError::Context)?;
+            return Ok((temporary, length, format!("{:x}", digest.finalize())));
+        }
+        let count_u64 = u64::try_from(count).map_err(|_| ReaderError::Allocation)?;
+        length = length.checked_add(count_u64).ok_or(ReaderError::Allocation)?;
+        if length > limit {
+            return Err(ReaderError::ProtocolLimit);
+        }
+        temporary.write_all_checked(&buffer[..count]).map_err(ReaderError::Context)?;
+        digest.update(&buffer[..count]);
+        if let Some(message) = progress_message {
+            context
+                .report(ExecutionStage::Ai, Some(length / frame_width.max(1)), None, Some(message))
+                .map_err(ReaderError::Context)?;
+        }
+    }
+}
+
 fn allocate_exact_vec(capacity: usize) -> Result<Vec<u8>, ReaderError> {
     if capacity == 0 {
         return Ok(Vec::new());
@@ -1101,7 +1357,9 @@ fn spawn_limited(mut command: Command, limit: u64) -> Result<LimitedProcess, Con
     let address = libc::rlimit { rlim_cur: address_limit, rlim_max: address_limit };
     let data_limit = address_limit.min(PROCESS_DATA_MAX);
     let data = libc::rlimit { rlim_cur: data_limit, rlim_max: data_limit };
-    let cpu = libc::rlimit { rlim_cur: 60, rlim_max: 60 };
+    // Long-form media is governed by the request deadline and the cooperative
+    // parent watchdog below. A fixed child CPU rlimit would turn that resource
+    // policy into an undocumented meeting-duration ceiling.
     let file = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
     let descriptors = libc::rlimit { rlim_cur: 16, rlim_max: 16 };
     let core = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
@@ -1111,7 +1369,6 @@ fn spawn_limited(mut command: Command, limit: u64) -> Result<LimitedProcess, Con
         command.pre_exec(move || {
             if libc::setrlimit(libc::RLIMIT_AS, &raw const address) == 0
                 && libc::setrlimit(libc::RLIMIT_DATA, &raw const data) == 0
-                && libc::setrlimit(libc::RLIMIT_CPU, &raw const cpu) == 0
                 && libc::setrlimit(libc::RLIMIT_FSIZE, &raw const file) == 0
                 && libc::setrlimit(libc::RLIMIT_NOFILE, &raw const descriptors) == 0
                 && libc::setrlimit(libc::RLIMIT_CORE, &raw const core) == 0
@@ -1379,7 +1636,7 @@ mod tests {
         let overwritten_output = overwrite_runtime
             .normalize(
                 &wav,
-                MediaLimits { max_duration_ms: 101, ..MediaLimits::default() },
+                MediaLimits { max_duration_ms: Some(101), ..MediaLimits::default() },
                 &context,
             )
             .unwrap();
@@ -1387,7 +1644,7 @@ mod tests {
         let output = runtime
             .normalize(
                 &wav,
-                MediaLimits { max_duration_ms: 101, ..MediaLimits::default() },
+                MediaLimits { max_duration_ms: Some(101), ..MediaLimits::default() },
                 &context,
             )
             .unwrap();
@@ -1403,7 +1660,7 @@ mod tests {
         let retained = runtime
             .normalize(
                 &wav,
-                MediaLimits { max_duration_ms: 101, ..MediaLimits::default() },
+                MediaLimits { max_duration_ms: Some(101), ..MediaLimits::default() },
                 &retained_context,
             )
             .unwrap();
@@ -1431,7 +1688,7 @@ mod tests {
         let overlong = runtime
             .normalize(
                 &wav,
-                MediaLimits { max_duration_ms: 50, ..MediaLimits::default() },
+                MediaLimits { max_duration_ms: Some(50), ..MediaLimits::default() },
                 &context,
             )
             .unwrap_err();
@@ -1448,7 +1705,7 @@ mod tests {
             let injected = runtime
                 .normalize(
                     &wav,
-                    MediaLimits { max_duration_ms: 101, ..MediaLimits::default() },
+                    MediaLimits { max_duration_ms: Some(101), ..MediaLimits::default() },
                     &context,
                 )
                 .unwrap_err();
@@ -1510,7 +1767,7 @@ mod tests {
             .normalize(
                 &wav,
                 MediaLimits {
-                    max_duration_ms: 86_400_000,
+                    max_duration_ms: Some(86_400_000),
                     sample_rate: 192_000,
                     channels: 8,
                     ..MediaLimits::default()
@@ -1549,7 +1806,7 @@ mod tests {
                 let decoded = runtime
                     .normalize(
                         &bytes,
-                        MediaLimits { max_duration_ms: 30_000, ..MediaLimits::default() },
+                        MediaLimits { max_duration_ms: Some(30_000), ..MediaLimits::default() },
                         &context,
                     )
                     .unwrap();

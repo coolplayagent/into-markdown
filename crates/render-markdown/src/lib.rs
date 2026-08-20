@@ -840,7 +840,7 @@ pub fn render(
         });
     }
     let plan = plan_assets(document, assets, options)?;
-    let context = RenderContext { plan: &plan, assets, options };
+    let context = RenderContext { plan: &plan, assets, options, document };
     let mut output = context.render_blocks(&document.blocks)?;
     trim_blank_lines(&mut output);
     if !output.is_empty() {
@@ -853,6 +853,7 @@ struct RenderContext<'a> {
     plan: &'a AssetPlan,
     assets: &'a [Asset],
     options: &'a ConversionOptions,
+    document: &'a Document,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -940,14 +941,15 @@ impl RenderContext<'_> {
                     &body,
                 ))
             }
-            Block::TimedSegment { range, speaker, content } => {
+            Block::TimedSegment { range, speaker, content, .. } => {
                 let mut line =
                     format!("`{} – {}`", timestamp(range.start_ms), timestamp(range.end_ms));
                 if let Some(speaker) = speaker {
+                    let speaker = self.speaker_label(speaker);
                     write!(
                         line,
                         " **{}:**",
-                        escape_text(&single_line(speaker), InlineContext::Normal)
+                        escape_text(&single_line(&speaker), InlineContext::Normal)
                     )
                     .map_err(|_| render_error("failed to render speaker label"))?;
                 }
@@ -961,6 +963,28 @@ impl RenderContext<'_> {
             Block::Rule => Ok("---".into()),
             _ => Err(render_error("document contains an unsupported future block variant")),
         }
+    }
+
+    fn speaker_label(&self, speaker: &str) -> String {
+        let prefix = "media.speaker.";
+        let suffix = ".label";
+        self.document
+            .metadata
+            .properties
+            .iter()
+            .find_map(|(key, value)| {
+                key.strip_prefix(prefix)
+                    .and_then(|key| key.strip_suffix(suffix))
+                    .filter(|id| *id == speaker)
+                    .map(|_| value.clone())
+            })
+            .unwrap_or_else(|| {
+                speaker
+                    .strip_prefix("speaker-")
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|value| (1..=64).contains(value))
+                    .map_or_else(|| speaker.to_owned(), |value| format!("Speaker {value}"))
+            })
     }
 
     fn render_list(
@@ -2147,6 +2171,8 @@ mod tests {
                 Block::TimedSegment {
                     range: TimeRange { start_ms: 3_661_002, end_ms: 3_662_003 },
                     speaker: Some("A*B".into()),
+                    speaker_confidence: None,
+                    tokens: Vec::new(),
                     content: vec![Inline::Text { value: "hello".into(), marks: vec![] }],
                 },
             ),
@@ -2156,6 +2182,23 @@ mod tests {
             output(&doc),
             "````math\nx```y\nz\n````\n\n[^fn-6e205d0d0a]\n\n[^fn-6e205d0d0a]: foot\n\n<a id=\"pdf-page-2\"></a>\n\n## Page 2\n\npage\n\n## Slide 3: A \\# title\n\n## Sheet: Data \\| 2026\n\nsheet\n\n`01:01:01.002 – 01:01:02.003` **A\\*B:** hello\n\n---\n"
         );
+    }
+
+    #[test]
+    fn anonymous_speaker_ids_have_readable_defaults_and_metadata_only_labels() {
+        let mut doc = document(vec![node(
+            "time",
+            Block::TimedSegment {
+                range: TimeRange { start_ms: 1_000, end_ms: 2_000 },
+                speaker: Some("speaker-1".into()),
+                speaker_confidence: Some(0.8),
+                tokens: Vec::new(),
+                content: vec![Inline::Text { value: "hello".into(), marks: vec![] }],
+            },
+        )]);
+        assert_eq!(output(&doc), "`00:00:01.000 – 00:00:02.000` **Speaker 1:** hello\n");
+        doc.metadata.properties.insert("media.speaker.speaker-1.label".into(), "张 *三*".into());
+        assert_eq!(output(&doc), "`00:00:01.000 – 00:00:02.000` **张 \\*三\\*:** hello\n");
     }
 
     #[test]
@@ -2512,8 +2555,10 @@ mod tests {
             assert_eq!(width, expected_width);
             assert!(!has_header);
             let options = ConversionOptions::default();
-            let plan = plan_assets(&Document::default(), &[], &options).unwrap();
-            let context = RenderContext { plan: &plan, assets: &[], options: &options };
+            let document = Document::default();
+            let plan = plan_assets(&document, &[], &options).unwrap();
+            let context =
+                RenderContext { plan: &plan, assets: &[], options: &options, document: &document };
             let (markdown, actual) = context
                 .render_table_measured(
                     rows,

@@ -209,6 +209,29 @@ pub struct TimeRange {
     pub end_ms: u64,
 }
 
+/// One transcription token with its exact media-time evidence.
+///
+/// Tokens are retained in Document IR so speaker diarization can split a
+/// readable segment without inventing or rewriting transcript text. Markdown
+/// renderers continue to use the segment's `content` field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimedToken {
+    /// Half-open media time range covered by this token.
+    pub range: TimeRange,
+    /// Exact token text returned by the transcriber.
+    pub text: String,
+    /// Optional provider confidence for this token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    /// Anonymous speaker assigned to this token's diarization turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    /// Confidence of the token-level anonymous speaker assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_confidence: Option<f32>,
+}
+
 /// Location of extracted content in the source.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -633,6 +656,14 @@ pub enum Block {
         range: TimeRange,
         /// Optional resolved speaker label.
         speaker: Option<String>,
+        /// Confidence of the anonymous speaker assignment. This is independent
+        /// from the transcript confidence stored in node provenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speaker_confidence: Option<f32>,
+        /// Token-level time evidence used for overlap de-duplication and
+        /// conservative speaker-turn splitting. Legacy IR omits this field.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tokens: Vec<TimedToken>,
         /// Segment transcript.
         content: Vec<Inline>,
     },
@@ -823,6 +854,16 @@ impl Document {
     }
 }
 
+pub(crate) fn validate_checkpoint_blocks(blocks: &[BlockNode]) -> Result<(), IrError> {
+    let limits = ValidationLimits::default();
+    let mut state = ValidationState::new(&limits);
+    validate_nodes(blocks, "$.blocks", 1, &mut state)?;
+    if let Some(label) = state.footnote_references.difference(&state.footnotes).next() {
+        return invalid_node("$.blocks", format!("undefined footnote reference {label}"));
+    }
+    Ok(())
+}
+
 struct ValidationState<'a> {
     limits: &'a ValidationLimits,
     node_count: usize,
@@ -896,12 +937,32 @@ fn preflight_document_value(
                             push_inline_tasks(&mut stack, inlines, &data_path);
                         }
                     }
-                    "heading" | "timedSegment" => push_inline_property(
+                    "heading" => push_inline_property(
                         &mut stack,
                         data,
                         "content",
                         &format!("{data_path}.content"),
                     ),
+                    "timedSegment" => {
+                        push_inline_property(
+                            &mut stack,
+                            data,
+                            "content",
+                            &format!("{data_path}.content"),
+                        );
+                        let tokens = data
+                            .and_then(|value| value.get("tokens"))
+                            .and_then(serde_json::Value::as_array)
+                            .map_or(0, Vec::len);
+                        inline_nodes = inline_nodes.saturating_add(tokens);
+                        if inline_nodes > limits.max_inlines {
+                            return resource_limit(
+                                format!("{data_path}.tokens"),
+                                "documentInlines",
+                                limits.max_inlines,
+                            );
+                        }
+                    }
                     "list" => push_list_item_tasks(
                         &mut stack,
                         data,
@@ -1445,12 +1506,96 @@ fn validate_block(
             nonempty(name, &format!("{path}.data.name"), "worksheet name")?;
             validate_nodes(blocks, &format!("{path}.data.blocks"), depth + 1, state)
         }
-        Block::TimedSegment { range, content, .. } => {
+        Block::TimedSegment { range, speaker, speaker_confidence, tokens, content } => {
             if range.start_ms >= range.end_ms {
                 return invalid_node(
                     format!("{path}.data.range"),
                     "time range start must precede end",
                 );
+            }
+            if speaker.as_deref().is_some_and(|value| {
+                value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+            }) {
+                return invalid_node(
+                    format!("{path}.data.speaker"),
+                    "speaker label must be a bounded nonempty single line",
+                );
+            }
+            if speaker_confidence
+                .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+                || speaker.is_none() && speaker_confidence.is_some()
+            {
+                return invalid_node(
+                    format!("{path}.data.speakerConfidence"),
+                    "speaker confidence must be finite and between zero and one",
+                );
+            }
+            state.inline_count = state.inline_count.saturating_add(tokens.len());
+            if state.inline_count > state.limits.max_inlines {
+                return resource_limit(
+                    format!("{path}.data.tokens"),
+                    "documentInlines",
+                    state.limits.max_inlines,
+                );
+            }
+            let mut previous_end = range.start_ms;
+            let mut token_text_bytes = 0_usize;
+            for (index, token) in tokens.iter().enumerate() {
+                let token_path = format!("{path}.data.tokens[{index}]");
+                if token.range.start_ms < range.start_ms
+                    || token.range.end_ms > range.end_ms
+                    || token.range.start_ms >= token.range.end_ms
+                    || token.range.start_ms < previous_end
+                    || token.text.is_empty()
+                    || token.text.len() > 16 * 1024
+                    || token.text.contains('\0')
+                    || token
+                        .confidence
+                        .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+                    || token.speaker.as_deref().is_some_and(|value| {
+                        value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+                    })
+                    || token
+                        .speaker_confidence
+                        .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+                    || token.speaker.is_none() && token.speaker_confidence.is_some()
+                {
+                    return invalid_node(token_path, "timed token evidence is invalid");
+                }
+                token_text_bytes =
+                    token_text_bytes.checked_add(token.text.len()).ok_or_else(|| {
+                        IrError::new(
+                            IrErrorCode::ResourceLimit,
+                            token_path.clone(),
+                            "timed token text length overflowed",
+                        )
+                    })?;
+                previous_end = token.range.end_ms;
+            }
+            if !tokens.is_empty() {
+                let [Inline::Text { value, marks }] = content.as_slice() else {
+                    return invalid_node(
+                        format!("{path}.data.content"),
+                        "timed token evidence requires one plain text inline",
+                    );
+                };
+                if !marks.is_empty()
+                    || value.len() != token_text_bytes
+                    || !tokens.iter().flat_map(|token| token.text.bytes()).eq(value.bytes())
+                {
+                    return invalid_node(
+                        format!("{path}.data.tokens"),
+                        "timed token text must exactly reproduce segment content",
+                    );
+                }
+                if speaker.as_ref().is_some_and(|speaker| {
+                    tokens.iter().any(|token| token.speaker.as_ref() != Some(speaker))
+                }) {
+                    return invalid_node(
+                        format!("{path}.data.speaker"),
+                        "segment speaker must match all token speaker evidence",
+                    );
+                }
             }
             validate_inlines(content, &format!("{path}.data.content"), false, state)
         }
@@ -2099,6 +2244,14 @@ mod tests {
                     Block::TimedSegment {
                         range: TimeRange { start_ms: 10, end_ms: 20 },
                         speaker: Some("Speaker".into()),
+                        speaker_confidence: None,
+                        tokens: vec![TimedToken {
+                            range: TimeRange { start_ms: 10, end_ms: 20 },
+                            text: "transcript".into(),
+                            confidence: Some(0.9),
+                            speaker: Some("Speaker".into()),
+                            speaker_confidence: Some(0.8),
+                        }],
                         content: vec![Inline::Text { value: "transcript".into(), marks: vec![] }],
                     },
                 ),
@@ -2135,6 +2288,23 @@ mod tests {
         }
         assert!(json.contains("\"ocrEvidence\":"));
         assert_eq!(Document::from_json(&json).unwrap(), document);
+    }
+
+    #[test]
+    fn timed_token_text_must_exactly_reproduce_segment_content() {
+        let mut document = all_nodes_document();
+        let timed = document
+            .blocks
+            .iter_mut()
+            .find(|node| matches!(node.block, Block::TimedSegment { .. }))
+            .expect("timed segment fixture");
+        let Block::TimedSegment { tokens, .. } = &mut timed.block else {
+            unreachable!();
+        };
+        tokens[0].text.push('!');
+        let error = document.validate().unwrap_err();
+        assert_eq!(error.code, IrErrorCode::InvalidNode);
+        assert!(error.path.ends_with(".data.tokens"));
     }
 
     #[test]
@@ -2367,6 +2537,8 @@ mod tests {
             Block::TimedSegment {
                 range: TimeRange { start_ms: 2, end_ms: 2 },
                 speaker: None,
+                speaker_confidence: None,
+                tokens: vec![],
                 content: vec![],
             },
         ];

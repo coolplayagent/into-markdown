@@ -14,5 +14,6 @@ exports_files([
     "npm/react-MIT.txt",
     "policy.json",
     "rust-lock.tsv",
+    "silero-vad-MIT.txt",
     "wasmtime-Apache-2.0-LLVM-exception.txt",
 ])

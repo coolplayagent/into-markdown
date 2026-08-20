@@ -4,7 +4,7 @@ use crate::args::{
     AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
     ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
     ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
-    RaggedRowsArg, TableHeaderArg, UiArgs,
+    RaggedRowsArg, SetupCommand, TableHeaderArg, TranscriptCommand, UiArgs,
 };
 use crate::config::{self, LoadedConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -110,6 +110,8 @@ fn run_command(
         Command::Models(arguments) => {
             run_models(arguments.command, arguments.json, &loaded, catalog, context)
         }
+        Command::Setup(arguments) => run_setup(arguments.command, &loaded, catalog, context),
+        Command::Transcript(arguments) => run_transcript(arguments.command, &loaded, context),
         Command::Providers(arguments) => {
             run_providers(arguments.command, arguments.json, &loaded, catalog, context)
         }
@@ -133,6 +135,148 @@ fn run_command(
         )?;
     }
     Ok(())
+}
+
+fn run_setup(
+    command: SetupCommand,
+    loaded: &LoadedConfig,
+    catalog: Catalog,
+    context: &mut RunContext<'_>,
+) -> Result<(), CliError> {
+    match command {
+        SetupCommand::Media { insecure, allow_private_network } => {
+            run_models(
+                Some(ModelsCommand::Install {
+                    id: "whisper-small-multilingual".into(),
+                    insecure,
+                    allow_private_network,
+                }),
+                false,
+                loaded,
+                catalog,
+                context,
+            )?;
+            run_models(
+                Some(ModelsCommand::Install {
+                    id: "silero-vad-3dspeaker-eres2net".into(),
+                    insecure,
+                    allow_private_network,
+                }),
+                false,
+                loaded,
+                catalog,
+                context,
+            )?;
+            crate::services::verify_asr_runtime()?;
+            crate::services::verify_diarization_runtime()?;
+            Ok(())
+        }
+    }
+}
+
+fn run_transcript(
+    command: TranscriptCommand,
+    loaded: &LoadedConfig,
+    context: &mut RunContext<'_>,
+) -> Result<(), CliError> {
+    match command {
+        TranscriptCommand::Relabel { document_ir, speakers, output } => {
+            let metadata = fs::metadata(&document_ir)?;
+            if !metadata.is_file() || metadata.len() > 256 * 1024 * 1024 {
+                return Err(CliError::usage(
+                    "document IR must be a regular file no larger than 256 MiB",
+                ));
+            }
+            let json = fs::read_to_string(&document_ir)?;
+            let mut document = into_markdown::Document::from_json(&json)
+                .map_err(|error| CliError::usage(format!("invalid document IR: {error}")))?;
+            let mut present = std::collections::BTreeSet::new();
+            collect_speaker_ids(&document.blocks, &mut present);
+            let mut assigned = std::collections::BTreeSet::new();
+            for assignment in speakers {
+                let (speaker, name) = assignment
+                    .split_once('=')
+                    .ok_or_else(|| CliError::usage("--speaker must use SPEAKER_ID=DISPLAY_NAME"))?;
+                if !valid_speaker_id(speaker) || !present.contains(speaker) {
+                    return Err(CliError::usage(format!(
+                        "speaker ID '{speaker}' is not present in this transcript"
+                    )));
+                }
+                if !assigned.insert(speaker.to_owned()) {
+                    return Err(CliError::usage(format!(
+                        "speaker ID '{speaker}' was assigned more than once"
+                    )));
+                }
+                if name.is_empty()
+                    || name.trim() != name
+                    || name.chars().count() > 80
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(CliError::usage(format!(
+                        "display name for '{speaker}' is empty or invalid"
+                    )));
+                }
+                document
+                    .metadata
+                    .properties
+                    .insert(format!("media.speaker.{speaker}.label"), name.to_owned());
+            }
+            let markdown = into_markdown::render_markdown(
+                &document,
+                &[],
+                &into_markdown::ConversionOptions::default(),
+            )?;
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions {
+                    timeout: loaded.timeout_ms.map(std::time::Duration::from_millis),
+                    ..into_markdown::ExecutionOptions::default()
+                },
+                loaded.options.limits.clone(),
+            );
+            output::write_file(&output, markdown.as_bytes(), ConflictPolicy::Error, &execution)?;
+            writeln!(context.stdout, "{}", output.display())?;
+            Ok(())
+        }
+    }
+}
+
+fn valid_speaker_id(value: &str) -> bool {
+    value.strip_prefix("speaker-").is_some_and(|number| {
+        !number.is_empty()
+            && !number.starts_with('0')
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+            && number.parse::<u8>().is_ok_and(|value| (1..=64).contains(&value))
+    })
+}
+
+fn collect_speaker_ids(
+    blocks: &[into_markdown::BlockNode],
+    output: &mut std::collections::BTreeSet<String>,
+) {
+    for node in blocks {
+        match &node.block {
+            into_markdown::Block::TimedSegment { speaker: Some(speaker), .. } => {
+                output.insert(speaker.clone());
+            }
+            into_markdown::Block::List { items, .. } => {
+                for item in items {
+                    collect_speaker_ids(&item.blocks, output);
+                }
+            }
+            into_markdown::Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        collect_speaker_ids(&cell.blocks, output);
+                    }
+                }
+            }
+            into_markdown::Block::Footnote { blocks, .. }
+            | into_markdown::Block::Page { blocks, .. }
+            | into_markdown::Block::Slide { blocks, .. }
+            | into_markdown::Block::Sheet { blocks, .. } => collect_speaker_ids(blocks, output),
+            _ => {}
+        }
+    }
 }
 
 fn run_ui(arguments: UiArgs, context: &mut RunContext<'_>) -> Result<(), CliError> {
@@ -384,13 +528,16 @@ fn run_models(
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id, insecure }) => {
+        Some(ModelsCommand::Install { id, insecure, allow_private_network }) => {
             let id = id.as_str();
             manager.require_installable(id).map_err(model_error)?;
-            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(insecure)
-                .map_err(|(variable, reason)| {
-                    CliError::config(format!("invalid {variable}: {reason}"))
-                })?;
+            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(
+                insecure,
+                allow_private_network,
+            )
+            .map_err(|(variable, reason)| {
+                CliError::config(format!("invalid {variable}: {reason}"))
+            })?;
             let status = manager.install(id, &fetcher, &execution).map_err(model_error)?;
             writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
             Ok(())
@@ -947,6 +1094,16 @@ fn run_doctor(
         },
     ];
     append_core_runtime_checks(&mut checks, loaded);
+    let diarization_available = crate::services::verify_diarization_runtime().is_ok();
+    checks.push(DoctorCheck {
+        id: "runtime.diarization".into(),
+        status: if diarization_available { "ok" } else { "missing" }.into(),
+        detail: if diarization_available {
+            "Silero VAD, 3D-Speaker, and ONNX Runtime passed local verification".into()
+        } else {
+            "use a complete package with the pinned ONNX Runtime worker, then run `into-md setup media` to install and verify Silero VAD and 3D-Speaker".into()
+        },
+    });
     for (name, provider) in &loaded.effective.providers {
         checks.push(DoctorCheck {
             id: format!("providerEnvironment:{name}"),
@@ -1026,6 +1183,8 @@ fn verify_core_runtime(component: &str, loaded: &LoadedConfig) -> bool {
         "pdfium" => into_markdown::default_pdfium_runtime_path()
             .is_some_and(|path| into_markdown::verify_pdfium_runtime(&path).is_ok()),
         "onnxruntime" => crate::services::verify_ocr_runtime(loaded).is_ok(),
+        "whisper-small" => crate::services::verify_asr_runtime().is_ok(),
+        "speaker-diarization" => crate::services::verify_diarization_runtime().is_ok(),
         "legacy-office" => {
             let context = into_markdown::ExecutionContext::new(
                 into_markdown::ExecutionOptions::default(),
@@ -1293,6 +1452,9 @@ fn apply_conversion_overrides(
     apply_limit_overrides(arguments, &mut loaded.options);
     apply_output_overrides(arguments, &mut loaded.options);
     apply_ai_capability_overrides(arguments, loaded)?;
+    if arguments.diarize && loaded.options.ai.audio_transcription == AiMode::Off {
+        return Err(CliError::usage("--diarize conflicts with disabling audio-transcription"));
+    }
     if !arguments.ocr_language.is_empty() {
         loaded.ocr_languages.clone_from(&arguments.ocr_language);
     }
@@ -1313,7 +1475,15 @@ fn apply_asr_overrides(
         options.asr.max_threads = threads;
     }
     if let Some(duration) = arguments.asr_max_duration_ms {
-        options.asr.max_duration_ms = duration;
+        options.asr.max_duration_ms = Some(duration);
+    }
+    if arguments.diarize {
+        options.diarization.enabled = true;
+        options.diarization.expected_speakers = arguments.expected_speakers;
+        if let Some(expected) = arguments.expected_speakers {
+            options.diarization.max_speakers = options.diarization.max_speakers.max(expected);
+        }
+        options.ai.audio_transcription = AiMode::Only;
     }
     into_markdown::WhisperConfig::try_from(&options.asr).map(drop).map_err(CliError::from)
 }
@@ -2912,6 +3082,8 @@ mod tests {
             ("runtime.pdfium", "PDFIUM_LIBRARY"),
             ("runtime.ocr", "models install pp-ocrv6-tiny-zh-en"),
             ("runtime.legacy-office", "legacy Office runtime"),
+            ("runtime.asr", "setup media"),
+            ("runtime.diarization", "setup media"),
         ] {
             let check = checks.iter().find(|check| check["id"] == id).unwrap();
             assert!(matches!(check["status"].as_str(), Some("ok" | "missing")));

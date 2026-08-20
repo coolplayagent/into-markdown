@@ -10,7 +10,7 @@ export const TERMINAL = new Set(["succeeded", "failed", "interrupted", "cancelle
 export const FORMATS: InputFormat[] = [
   "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf",
   "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb",
-  "image", "audio", "video", "zip", "outlook-msg",
+  "image", "zip", "outlook-msg",
 ];
 
 // Keep this allowlist aligned with the core format catalog. The file picker's
@@ -32,9 +32,22 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, InputFormat>> = {
   mp4: "video", mkv: "video", webm: "video", avi: "video", mov: "video",
 };
 
-export const SUPPORTED_FILE_ACCEPT = Object.keys(FORMAT_BY_EXTENSION)
-  .map((extension) => `.${extension}`)
+export const SUPPORTED_FILE_ACCEPT = Object.entries(FORMAT_BY_EXTENSION)
+  .filter(([, format]) => format !== "audio" && format !== "video")
+  .map(([extension]) => `.${extension}`)
   .join(",");
+
+export const MEETING_FILE_ACCEPT = Object.entries(FORMAT_BY_EXTENSION)
+  .filter(([, format]) => format === "audio" || format === "video")
+  .map(([extension]) => `.${extension}`)
+  .join(",");
+
+export function supportsMeetingFile(name: string): boolean {
+  const format = FORMAT_BY_EXTENSION[fileExtension(name)];
+  return format === "audio" || format === "video";
+}
+
+const WORKBENCH_FORMATS = new Set<InputFormat>(FORMATS);
 
 function fileExtension(name: string): string {
   const leaf = name.toLocaleLowerCase("en-US").split(/[\\/]/).pop() ?? "";
@@ -43,7 +56,7 @@ function fileExtension(name: string): string {
 }
 
 export function supportsFileName(name: string, hint: InputFormat | null = null): boolean {
-  return hint !== null || Object.hasOwn(FORMAT_BY_EXTENSION, fileExtension(name));
+  return hint !== null ? WORKBENCH_FORMATS.has(hint) : WORKBENCH_FORMATS.has(FORMAT_BY_EXTENSION[fileExtension(name)]!);
 }
 
 export function formatForName(name: string, hint: InputFormat | null = null): string {

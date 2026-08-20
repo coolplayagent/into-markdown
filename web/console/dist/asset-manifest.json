@@ -2,29 +2,29 @@
   "schemaVersion": 1,
   "assets": [
     {
-      "path": "/assets/app.58de5e0f008efe9f.js",
-      "sha256": "58de5e0f008efe9f6d7ad980cab639852b1da876c6dd3743c7a81fee4c4ca233",
-      "bytes": 518029,
-      "mime": "text/javascript; charset=utf-8",
-      "cache": "immutable"
-    },
-    {
-      "path": "/assets/app.a29bc7b78628b539.css",
-      "sha256": "a29bc7b78628b539e1f227d355612910736c79face8cbb3824656cfb13f8bd21",
-      "bytes": 29938,
+      "path": "/assets/app.07c1e1139680b7ae.css",
+      "sha256": "07c1e1139680b7ae65a01dd5e6ea178cf13ac8996812bfe0e571c3dfd7ee8892",
+      "bytes": 36099,
       "mime": "text/css; charset=utf-8",
       "cache": "immutable"
     },
     {
-      "path": "/assets/bootstrap.02b9b58717de0be1.js",
-      "sha256": "02b9b58717de0be1ca1b055b6a446164fcd4385a8b7d795717b75f6d7b025835",
-      "bytes": 1111,
+      "path": "/assets/app.3be8aba669e96e4c.js",
+      "sha256": "3be8aba669e96e4c105ae948824af4369d30daad5f65d229e145fc0cb97a9cdc",
+      "bytes": 560409,
+      "mime": "text/javascript; charset=utf-8",
+      "cache": "immutable"
+    },
+    {
+      "path": "/assets/bootstrap.5837d7d04e1c266c.js",
+      "sha256": "5837d7d04e1c266c98da9aa7155e1e5fcc4a8cf1eccea0b12dc1311ed91949f6",
+      "bytes": 1458,
       "mime": "text/javascript; charset=utf-8",
       "cache": "immutable"
     },
     {
       "path": "/index.html",
-      "sha256": "d7f822fff61ab4cb2180bb57370b2fbf66c840b48be8d70bbaa5d35dcd8952bc",
+      "sha256": "fe940558414b5cd815d617b05ac481a807f494b707c707e76bb462ee0792f06f",
       "bytes": 496,
       "mime": "text/html; charset=utf-8",
       "cache": "no-store"

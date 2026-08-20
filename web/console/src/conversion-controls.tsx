@@ -1,5 +1,5 @@
 import {
-  AudioLines, Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileText, ScanText, Settings2, SlidersHorizontal,
+  Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileText, ScanText, Settings2, SlidersHorizontal,
   Wifi, WifiOff, X,
 } from "lucide-react";
 import { useState } from "react";
@@ -26,9 +26,8 @@ function SegmentedControl<T extends string>({
   </div>;
 }
 
-export function CapabilityStrip({ value, onChange, audioStatus, onPrepareAudio }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; audioStatus?: ComponentStatus | undefined; onPrepareAudio(): void }) {
+export function CapabilityStrip() {
   const { t } = useI18n();
-  const audioReady = audioStatus?.available === true;
   return <section className="capability-strip" aria-label={t("capabilities")}>
     <div className="capability-item">
       <span className="capability-icon"><FileText size={21} aria-hidden="true" /></span>
@@ -37,18 +36,6 @@ export function CapabilityStrip({ value, onChange, audioStatus, onPrepareAudio }
     <div className="capability-item">
       <span className="capability-icon"><ScanText size={21} aria-hidden="true" /></span>
       <div><strong>{t("imageOcr")}</strong><span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("automaticDetection")}</span></div>
-    </div>
-    <div className="capability-item audio-capability">
-      <span className="capability-icon"><AudioLines size={21} aria-hidden="true" /></span>
-      <div>
-        <strong>{t("audioTranscription")}</strong>
-        {audioStatus?.available
-          ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("audioReady")}</span>
-          : audioStatus
-            ? <button className="capability-setup-link" type="button" onClick={onPrepareAudio}><CircleAlert size={14} aria-hidden="true" />{t("prepareDependencies")}</button>
-            : <span className="neutral"><CircleAlert size={14} aria-hidden="true" />{t("checkingSystem")}</span>}
-      </div>
-      <label className={`switch compact-switch ${audioReady ? "" : "unavailable"}`}><span className="visually-hidden">{t("audioTranscription")}</span><input type="checkbox" checked={audioReady && value.audioTranscription} disabled={!audioReady} onChange={(event) => onChange({ ...value, audioTranscription: event.target.checked })} /><span aria-hidden="true" /></label>
     </div>
   </section>;
 }
@@ -90,7 +77,7 @@ export function AdvancedSettings({ value, onChange, open, onClose }: { value: Wo
   </div>;
 }
 
-const ASR_MODEL_COMMAND = "into-md models install whisper-small-multilingual";
+const ASR_MODEL_COMMAND = "into-md setup media";
 
 export function AudioSetupDialog({ status, open, onClose }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void }) {
   const { t } = useI18n();
