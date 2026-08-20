@@ -265,8 +265,8 @@ into-md formats detect <INPUT> [-f <FORMAT>] [--extension <EXT>]
 ```text
 into-md models [--json]
 into-md models show <ID> [--json]
-into-md models install [ID]
-into-md models verify [ID] [--json]
+into-md models install <ID> [--insecure]
+into-md models verify <ID> [--json]
 into-md models remove <ID>
 into-md models path <ID>
 ```
@@ -279,6 +279,15 @@ into-md models path <ID>
 并通过原子事务安装两个组件；转换命令绝不触发下载。安装后 CLI 的离线 `verify`、`path`
 和 `remove` 管理同一状态，转换调用只在固定 ONNX Runtime/worker 与两个组件均验证成功后
 装配 OCR。
+直连不可达时，`models install` 支持 CONNECT 代理路由：`INTO_MD_HTTPS_PROXY`（回退
+`HTTPS_PROXY`、`https_proxy`）取 `http://[user:pass@]host:port`，`INTO_MD_NO_PROXY`
+（回退 `NO_PROXY`、`no_proxy`）支持 `*`、精确 host 或 `.suffix` 域后缀豁免；空值视为
+未设置，非法值在下载前稳定失败。`doctor` 的 `modelFiles` 项会报告当前路由
+（direct、代理 host:port 或非法变量及原因）。
+系统证书库无法覆盖特殊 TLS 环境时，可为单次安装显式传入 `--insecure`，或设置
+`INTO_MD_INSECURE=1`；环境变量只接受 `0`、`1`、`false`、`true`（大小写不敏感），
+其他值会在下载前报配置错误。该选项会关闭 TLS 证书和握手签名验证，只应临时使用；
+模型内容仍必须通过清单中固定的大小与 SHA-256 校验。
 完整的清单、数据目录、事务和威胁边界见
 [本地模型管理](models.md)。
 

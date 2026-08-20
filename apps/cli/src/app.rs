@@ -384,17 +384,19 @@ fn run_models(
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id }) => {
-            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+        Some(ModelsCommand::Install { id, insecure }) => {
+            let id = id.as_str();
             manager.require_installable(id).map_err(model_error)?;
-            let status = manager
-                .install(id, &crate::model_fetch::PinnedModelFetcher::default(), &execution)
-                .map_err(model_error)?;
+            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(insecure)
+                .map_err(|(variable, reason)| {
+                    CliError::config(format!("invalid {variable}: {reason}"))
+                })?;
+            let status = manager.install(id, &fetcher, &execution).map_err(model_error)?;
             writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
             Ok(())
         }
         Some(ModelsCommand::Verify { id, json }) => {
-            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            let id = id.as_str();
             let status = manager.verify_with_context(id, &execution).map_err(model_error)?;
             if json {
                 write_json(context.stdout, &status)
@@ -919,9 +921,24 @@ fn run_doctor(
         },
         DoctorCheck {
             id: "modelFiles".into(),
-            status: "unavailable".into(),
-            detail: "library model manager is available; CLI download transport is not configured"
-                .into(),
+            status: match &crate::proxy_env::download_route() {
+                crate::proxy_env::DownloadRoute::Direct => "unavailable".into(),
+                crate::proxy_env::DownloadRoute::Proxy { .. } => "ok".into(),
+                crate::proxy_env::DownloadRoute::Invalid { .. } => "error".into(),
+            },
+            detail: match &crate::proxy_env::download_route() {
+                crate::proxy_env::DownloadRoute::Direct => {
+                    "library model manager is available; direct downloads need network reachability"
+                        .into()
+                }
+                crate::proxy_env::DownloadRoute::Proxy { proxy, source, .. } => format!(
+                    "model downloads route HTTPS through the CONNECT proxy from {source}: {}",
+                    proxy.redacted_endpoint()
+                ),
+                crate::proxy_env::DownloadRoute::Invalid { variable, reason } => {
+                    format!("invalid {variable}: {reason}")
+                }
+            },
         },
         DoctorCheck {
             id: "temporaryDirectory".into(),

@@ -1,12 +1,15 @@
 use super::{
     Connection, ConnectionFactory, Domain, Duration, ExecutionContext, IO_POLL_SLICE, Instant,
     Protocol, SockAddr, Socket, SocketAddr, TcpStream, TransportError, TransportErrorKind, Type,
-    map_context_error, tls_connect,
+    map_context_error, tls_handshake,
 };
 use std::io::{self, Read, Write};
 use std::thread;
 
-pub(super) struct DirectConnectionFactory;
+#[derive(Default)]
+pub(super) struct DirectConnectionFactory {
+    pub(super) insecure: bool,
+}
 
 impl ConnectionFactory for DirectConnectionFactory {
     fn connect(
@@ -19,7 +22,7 @@ impl ConnectionFactory for DirectConnectionFactory {
     ) -> Result<Box<dyn Connection>, TransportError> {
         let stream = connect_exact(address, context, deadline)?;
         if scheme == "https" {
-            tls_connect(stream, host, context, deadline)
+            tls_handshake(stream, host, context, deadline, self.insecure)
                 .map(|stream| Box::new(stream) as Box<dyn Connection>)
         } else {
             Ok(Box::new(stream))

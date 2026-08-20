@@ -1,8 +1,10 @@
 //! Audited, policy-constrained HTTP transport shared by remote sources and providers.
 //!
-//! The transport deliberately ignores proxy and certificate environment variables.
-//! It resolves through a bounded worker pool, connects to an exact checked address,
-//! and retains the original host exclusively for HTTP `Host` and TLS SNI.
+//! The transport never reads ambient environment such as proxy or certificate
+//! variables; explicit CONNECT proxy routing is injected by callers as a
+//! `ConnectionFactory`. It resolves through a bounded worker pool, connects to
+//! an exact checked address, and retains the original host exclusively for
+//! HTTP `Host` and TLS SNI.
 
 #![forbid(unsafe_code)]
 
@@ -34,12 +36,23 @@ const MAX_HOST_BYTES: usize = 253;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 const IO_POLL_SLICE: Duration = Duration::from_millis(25);
 
+/// Per-request deadline: the fixed base timeout plus one millisecond per
+/// authorized KiB of wire budget, so bounded large downloads keep a finite,
+/// size-proportional transfer allowance instead of the base timeout alone.
+fn transfer_deadline(now: Instant, limits: FetchLimits) -> Option<Instant> {
+    let kibibytes = limits.max_wire_bytes.checked_div(1024)?;
+    let base_ms = u64::try_from(DEFAULT_REQUEST_TIMEOUT.as_millis()).ok()?;
+    let total_ms = base_ms.checked_add(kibibytes)?;
+    now.checked_add(Duration::from_millis(total_ms))
+}
+
 mod body;
 mod connect;
 mod dns;
 mod error;
 mod http1;
 mod policy;
+mod proxy;
 mod tls;
 
 use body::{ChunkChain, finalize_body, read_response};
@@ -47,7 +60,8 @@ use connect::{
     DirectConnectionFactory, blocking_slice, check_context, check_operation, read_checked,
     write_all_checked,
 };
-use dns::{SystemDnsResolver, resolve_checked};
+pub use dns::SystemDnsResolver;
+use dns::resolve_checked;
 use error::map_context_error;
 pub use error::{TransportError, TransportErrorKind};
 use http1::{parse_head, read_head};
@@ -57,7 +71,8 @@ use policy::{
     invalid_header_value_byte, is_localhost_name, is_token, normalize_allowlist,
     parse_content_disposition, parse_content_type, redacted_url,
 };
-use tls::tls_connect;
+pub use proxy::{NoProxyList, ProxyConfig, ProxyConfigError, RoutedConnectionFactory};
+use tls::tls_handshake;
 
 /// Per-request network authorization. Empty `allowed_hosts` means any public host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +202,10 @@ impl std::fmt::Debug for HttpClient {
 
 impl Default for HttpClient {
     fn default() -> Self {
-        Self { resolver: Arc::new(SystemDnsResolver), connector: Arc::new(DirectConnectionFactory) }
+        Self {
+            resolver: Arc::new(SystemDnsResolver),
+            connector: Arc::new(DirectConnectionFactory::default()),
+        }
     }
 }
 
@@ -195,7 +213,14 @@ impl HttpClient {
     /// Construct a direct client with an injected bounded DNS resolver.
     #[must_use]
     pub fn with_resolver(resolver: Arc<dyn DnsResolver>) -> Self {
-        Self { resolver, connector: Arc::new(DirectConnectionFactory) }
+        Self { resolver, connector: Arc::new(DirectConnectionFactory::default()) }
+    }
+
+    /// Construct a direct client with an injected DNS resolver and explicit
+    /// TLS verification mode.
+    #[must_use]
+    pub fn with_insecure(resolver: Arc<dyn DnsResolver>, insecure: bool) -> Self {
+        Self { resolver, connector: Arc::new(DirectConnectionFactory { insecure }) }
     }
 
     /// Construct an injected client without performing I/O.
@@ -289,8 +314,7 @@ impl HttpClient {
         }
         let mut current = canonical_url(source)?;
         let now = Instant::now();
-        let local_deadline = now
-            .checked_add(DEFAULT_REQUEST_TIMEOUT)
+        let local_deadline = transfer_deadline(now, limits)
             .ok_or_else(|| TransportError::new(TransportErrorKind::Timeout))?;
         let deadline = context
             .remaining_time()
@@ -439,6 +463,7 @@ struct WireBody {
 #[cfg(test)]
 mod tests {
     mod protocol;
+    mod proxy;
     mod resource;
     mod ssrf;
 }

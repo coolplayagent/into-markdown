@@ -16,10 +16,24 @@ const PADDLE_DICTIONARY_URL: &str = "https://raw.githubusercontent.com/PaddlePad
 const WHISPER_SMALL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin";
 const WHISPER_SMALL_XET_HASH: &str =
     "edd29d67e70b000132af65205b99bb774b77abc13d10103e14f80ce2242913e1";
+/// Audited Hugging Face xet bridge domains that may serve one pinned object.
+const WHISPER_SMALL_XET_BRIDGES: &[&str] = &["cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"];
 
 #[derive(Default)]
 pub(crate) struct PinnedModelFetcher {
     client: HttpClient,
+}
+
+impl PinnedModelFetcher {
+    /// Build the fetcher from the environment-derived download route.
+    ///
+    /// # Errors
+    ///
+    /// Returns the offending variable name and reason when a proxy variable
+    /// is set but invalid; no download is attempted in that case.
+    pub(crate) fn from_environment(insecure: bool) -> Result<Self, (&'static str, String)> {
+        crate::proxy_env::model_fetch_client(insecure).map(|client| Self { client })
+    }
 }
 
 impl ModelFetcher for PinnedModelFetcher {
@@ -49,12 +63,13 @@ impl ModelFetcher for PinnedModelFetcher {
                 ));
             }
         };
+        let wire_limit = expected_bytes.saturating_mul(101).saturating_div(100);
         let fetched = self
             .client
             .get(
                 &artifact.url,
                 &network_policy(&artifact.url)?,
-                FetchLimits { max_wire_bytes: expected_bytes, max_decoded_bytes: expected_bytes },
+                FetchLimits { max_wire_bytes: wire_limit, max_decoded_bytes: expected_bytes },
                 context,
             )
             .map_err(map_transport)?;
@@ -93,7 +108,7 @@ fn validate_fetch_identity(
         return Err(unexpected_redirect());
     };
     if final_url.scheme() != "https"
-        || final_url.host_str() != Some("cas-bridge.xethub.hf.co")
+        || !WHISPER_SMALL_XET_BRIDGES.contains(&final_url.host_str().unwrap_or_default())
         || final_url.port().is_some()
         || region != "xet-bridge-us"
         || repository.is_empty()
@@ -120,7 +135,14 @@ fn network_policy(url: &str) -> Result<NetworkPolicy, ModelManagerError> {
             (vec!["paddle-model-ecology.bj.bcebos.com".into()], 0)
         }
         PADDLE_DICTIONARY_URL => (vec!["raw.githubusercontent.com".into()], 0),
-        WHISPER_SMALL_URL => (vec!["huggingface.co".into(), "cas-bridge.xethub.hf.co".into()], 1),
+        WHISPER_SMALL_URL => (
+            vec![
+                "huggingface.co".into(),
+                "cas-bridge.xethub.hf.co".into(),
+                "us.aws.cdn.hf.co".into(),
+            ],
+            1,
+        ),
         _ => {
             return Err(ModelManagerError::Corrupt(
                 "runtime artifact URL is not a pinned download authority".into(),
@@ -258,7 +280,10 @@ mod tests {
     #[test]
     fn pinned_authorities_reject_lookalike_and_mutated_whisper_urls() {
         let policy = network_policy(WHISPER_SMALL_URL).unwrap();
-        assert_eq!(policy.allowed_hosts, ["huggingface.co", "cas-bridge.xethub.hf.co"]);
+        assert_eq!(
+            policy.allowed_hosts,
+            ["huggingface.co", "cas-bridge.xethub.hf.co", "us.aws.cdn.hf.co"]
+        );
         assert_eq!(policy.max_redirects, 1);
         assert!(
             network_policy(
@@ -273,7 +298,7 @@ mod tests {
     fn whisper_redirect_reauthorizes_only_the_xet_bridge() {
         for status in [301, 302, 303, 307, 308] {
             let redirect = format!(
-                "HTTP/1.1 {status} Redirect\r\nLocation: https://cas-bridge.xethub.hf.co/xet-bridge-us/repository/{WHISPER_SMALL_XET_HASH}?signature=secret\r\nContent-Length: 0\r\n\r\n"
+                "HTTP/1.1 {status} Redirect\r\nLocation: https://us.aws.cdn.hf.co/xet-bridge-us/repository/{WHISPER_SMALL_XET_HASH}?signature=secret\r\nContent-Length: 0\r\n\r\n"
             )
             .into_bytes();
             let body = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata".to_vec();
@@ -282,11 +307,31 @@ mod tests {
             let mut bytes = Vec::new();
             acquired.bytes.read_to_end(&mut bytes).unwrap();
             assert_eq!(bytes, b"data");
-            assert_eq!(
-                *connector.hosts.lock().unwrap(),
-                ["huggingface.co", "cas-bridge.xethub.hf.co"]
-            );
+            assert_eq!(*connector.hosts.lock().unwrap(), ["huggingface.co", "us.aws.cdn.hf.co"]);
         }
+
+        let legacy_bridge = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://cas-bridge.xethub.hf.co/xet-bridge-us/repository/{WHISPER_SMALL_XET_HASH}\r\nContent-Length: 0\r\n\r\n"
+        )
+        .into_bytes();
+        let body = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata".to_vec();
+        let (fetcher, _) = scripted_fetcher([legacy_bridge, body]);
+        let mut acquired = fetcher.open(&artifact(WHISPER_SMALL_URL, 4), &context()).unwrap();
+        let mut bytes = Vec::new();
+        acquired.bytes.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"data");
+
+        let mutated_object = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://us.aws.cdn.hf.co/xet-bridge-us/repository/{}0\r\nContent-Length: 0\r\n\r\n",
+            WHISPER_SMALL_XET_HASH
+        )
+        .into_bytes();
+        let body = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata".to_vec();
+        let (fetcher, _) = scripted_fetcher([mutated_object, body]);
+        assert!(matches!(
+            fetcher.open(&artifact(WHISPER_SMALL_URL, 4), &context()),
+            Err(ModelManagerError::Execution(ConversionError::Network { .. }))
+        ));
 
         let evil = b"HTTP/1.1 302 Found\r\nLocation: https://cas-bridge.xethub.hf.co.evil.test/model\r\nContent-Length: 0\r\n\r\n".to_vec();
         let (fetcher, connector) = scripted_fetcher([evil]);

@@ -492,3 +492,14 @@ media converter 测试覆盖 `TimedSegment`、模型/语言 metadata 以及缺�
 Unicode word token WER 必须各不高于 15%；对应常见噪声样本必须各不高于 25%。质量运行还要
 断言每段时间戳单调、有界，语言检测结果正确，所有置信度有限且位于 `[0,1]`。这些阈值不可
 由普通单元测试、接口 stub 或只验证模型 hash 的测试宣称满足。
+
+## 模型下载代理路由
+
+传输库的代理单测（`cargo test -p into-markdown-http-transport`）用注入式假连接逐字节断言：
+CONNECT 请求行与 `Proxy-Authorization` 头精确、凭证不出现在任何字节中；2xx 以外的代理应答、
+head 后提前隧道字节（smuggling）与畸形应答映射稳定错误；`NO_PROXY` 的 `*`/精确/后缀语义、
+明文 origin 永不入隧道；豁免与直连目标不触发任何代理解析。CLI 侧 `proxy_env` 单测固定
+`INTO_MD_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy` 优先级、空值等于未设置与非法值
+fail closed；`model_fetch` 的 scripted transport 维持 whisper 单跳重定向 authority（xet
+bridge 域 + 精确 object hash），重定向到其它 host 或篡改 hash 均稳定拒绝。库与确定性测试
+不读取环境变量：默认客户端行为与所有既有测试在设置代理变量的环境中不变。
