@@ -21,6 +21,7 @@ DATA = [
     "//third_party/licenses:imageproc-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
     "//third_party/licenses:npm-release.spdx.json",
+    "//third_party/licenses:npm/lucide-ISC-MIT.txt",
     "//third_party/licenses:npm/react-MIT.txt",
     "//web/console:checked_assets",
     "//third_party/licenses:policy.json",

@@ -230,7 +230,7 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
     }
     return new Response(JSON.stringify(responseTask), { headers: { "content-type": "application/json" } });
   });
-  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const };
+  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const, audioTranscription: true };
   await client.upload(new File(["pdf"], "报告.pdf"), options);
   const uploadHeaders = calls[0]![1]!.headers as Record<string, string>;
   const filename = uploadHeaders["X-Into-Md-Filename-B64"]!;
@@ -244,9 +244,11 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
     model_bundle: "whisper-small-multilingual", language: null, max_threads: 4,
     max_duration_ms: 600_000, max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024,
   });
+  assert.equal(request.options.ai.audio_transcription, "only");
   assert.deepEqual(request.options.network, { enabled: true, max_redirects: 3, deny_private_networks: false, allowed_hosts: [] });
   assert.equal(request.authorization.network, true);
   assert.equal(request.authorization.privateNetwork, true);
+  assert.equal(request.authorization.provider, true);
   const events: string[] = [];
   await client.watchTask(responseTask.id, (event) => events.push(event.status), new AbortController().signal);
   assert.deepEqual(events, ["running", "succeeded"]);
@@ -322,13 +324,23 @@ test("completed workbench exposes accessible artifact preview and resource brows
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const completed = task("succeeded"); completed.artifacts = [
     { storageKey: "b".repeat(32), kind: "markdown", byteLen: 40, sha256: "c".repeat(64) },
+    { storageKey: "f".repeat(32), kind: "diagnostics", byteLen: 28, sha256: "a".repeat(64) },
     { storageKey: "d".repeat(32), kind: "asset", byteLen: 12, sha256: "e".repeat(64), assetId: "image-1", filename: "diagram.png", mediaType: "image/png" },
   ];
-  const api: ApiClient = { ...availableApi, async listTasks() { return { tasks: [completed] }; }, async preview() { return { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
+  let previewCalls = 0;
+  const api: ApiClient = { ...availableApi, async listTasks() { return { tasks: [completed] }; }, async preview(_id, key) { previewCalls += 1; return key === "f".repeat(32) ? { text: "{\"diagnostics\":[]}", truncated: false, contentType: "application/json" } : { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitFor(() => window.document.body.textContent.includes("Preview result.md"));
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Preview result.md")!.click();
-  await waitFor(() => window.document.body.textContent.includes("file:///secret"));
+  await waitFor(() => previewCalls === 1 && window.document.body.textContent.includes("file:///secret"));
+  assert.equal(window.document.querySelector("details.advanced-settings")?.hasAttribute("open"), false);
+  assert.ok(window.document.querySelector("details.task-menu"));
+  const audioToggle = window.document.querySelector<HTMLInputElement>(".audio-capability input");
+  assert.ok(audioToggle);
+  audioToggle.click();
+  await waitFor(() => audioToggle.checked && window.document.body.textContent.includes("Enabled"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Preview diagnostics.json")!.click();
+  await waitFor(() => previewCalls === 2 && window.document.body.textContent.includes("diagnostics"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(previewCalls, 2, "automatic Markdown preview must not steal focus from another artifact");
   assert.equal(window.document.querySelector(".preview-panel img,.preview-panel script,.preview-panel a"), null);
   assert.ok(window.document.body.textContent.includes("Resources (1)"));
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document);

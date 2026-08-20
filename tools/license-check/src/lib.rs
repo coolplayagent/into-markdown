@@ -947,7 +947,10 @@ fn validate_npm_lock(
         if package.included_in_release != (package.scope == "runtime") {
             errors.push(format!("npm package {key} release flag disagrees with its scope"));
         }
-        if release && package.included_in_release && package.license != "MIT" {
+        if release
+            && package.included_in_release
+            && !matches!(package.license.as_str(), "MIT" | "ISC AND MIT")
+        {
             errors.push(format!("released npm package {key} needs an audited notice conclusion"));
         }
     }
@@ -960,6 +963,20 @@ fn validate_npm_lock(
 
 const REACT_MIT_SHA256: &str = "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93";
 const REACT_COPYRIGHT: &str = "Copyright (c) Meta Platforms, Inc. and affiliates.";
+const LUCIDE_ISC_MIT_SHA256: &str =
+    "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57";
+const LUCIDE_COPYRIGHT: &str =
+    "Copyright (c) 2026 Lucide Icons and Contributors; Copyright (c) 2013-present Cole Bemis";
+
+fn audited_npm_release(package: &NpmPackage) -> Option<(&'static str, &'static str)> {
+    match (package.name.as_str(), package.version.as_str()) {
+        ("react" | "react-dom", "19.2.8") | ("scheduler", "0.27.0") => {
+            Some((REACT_MIT_SHA256, REACT_COPYRIGHT))
+        }
+        ("lucide-react", "1.31.0") => Some((LUCIDE_ISC_MIT_SHA256, LUCIDE_COPYRIGHT)),
+        _ => None,
+    }
+}
 
 fn validate_npm_release_metadata(root: &Path, inventory: &NpmInventory, errors: &mut Vec<String>) {
     let mut released = BTreeMap::new();
@@ -993,10 +1010,14 @@ fn validate_npm_release_metadata(root: &Path, inventory: &NpmInventory, errors: 
                 errors.push(format!("released npm package {key} lacks {field}"));
             }
         }
-        if package.license_sha256.as_deref() != Some(REACT_MIT_SHA256) {
+        let Some((expected_license_hash, expected_copyright)) = audited_npm_release(package) else {
+            errors.push(format!("released npm package {key} has no audited release authority"));
+            continue;
+        };
+        if package.license_sha256.as_deref() != Some(expected_license_hash) {
             errors.push(format!("released npm package {key} has an unreviewed license hash"));
         }
-        if package.copyright.as_deref() != Some(REACT_COPYRIGHT) {
+        if package.copyright.as_deref() != Some(expected_copyright) {
             errors.push(format!("released npm package {key} has unexpected copyright text"));
         }
         let expected_source =
@@ -1017,8 +1038,18 @@ fn validate_npm_release_metadata(root: &Path, inventory: &NpmInventory, errors: 
         }
         if checked_license_files.insert(license_file) {
             match fs::read(root.join(license_file)) {
-                Ok(bytes) => validate_release_license_contents(license_file, Some(&bytes), errors),
-                Err(_) => validate_release_license_contents(license_file, None, errors),
+                Ok(bytes) => validate_release_license_contents(
+                    license_file,
+                    Some(&bytes),
+                    expected_license_hash,
+                    errors,
+                ),
+                Err(_) => validate_release_license_contents(
+                    license_file,
+                    None,
+                    expected_license_hash,
+                    errors,
+                ),
             }
         }
     }
@@ -1104,10 +1135,11 @@ fn release_label_path(label: &str) -> Option<String> {
 fn validate_release_license_contents(
     license_file: &str,
     contents: Option<&[u8]>,
+    expected_sha256: &str,
     errors: &mut Vec<String>,
 ) {
     match contents {
-        Some(bytes) if sha256_hex(bytes) == REACT_MIT_SHA256 => {}
+        Some(bytes) if sha256_hex(bytes) == expected_sha256 => {}
         Some(_) => errors.push(format!("release license file {license_file} has drifted")),
         None => errors.push(format!("release license file {license_file} is missing")),
     }
@@ -1244,13 +1276,19 @@ fn validate_npm_spdx(
 
     let expected_file_name = format!("./web/console/dist{}", app.path);
     let expected_file_id = "SPDXRef-File-console-app";
+    let expected_license_info: Vec<_> = released
+        .values()
+        .flat_map(|package| package.license.split(" AND "))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     if !matches!(sbom.files.as_slice(), [file]
         if file.spdx_id == expected_file_id
             && file.file_name == expected_file_name
             && matches!(file.checksums.as_slice(), [checksum]
                 if checksum.algorithm == "SHA256" && checksum.checksum_value == app.sha256)
             && file.license_concluded == "NOASSERTION"
-            && file.license_info_in_files == ["MIT"]
+            && file.license_info_in_files == expected_license_info
             && file.copyright_text == "NOASSERTION")
     {
         errors.push(
@@ -4805,11 +4843,21 @@ version = "9.9.9"
         let license = fs::read(root.join("third_party/licenses/npm/react-MIT.txt"))
             .expect("checked release license");
         let mut errors = Vec::new();
-        validate_release_license_contents("react-MIT.txt", Some(&license), &mut errors);
+        validate_release_license_contents(
+            "react-MIT.txt",
+            Some(&license),
+            REACT_MIT_SHA256,
+            &mut errors,
+        );
         assert!(errors.is_empty());
 
-        validate_release_license_contents("react-MIT.txt", None, &mut errors);
-        validate_release_license_contents("react-MIT.txt", Some(b"changed"), &mut errors);
+        validate_release_license_contents("react-MIT.txt", None, REACT_MIT_SHA256, &mut errors);
+        validate_release_license_contents(
+            "react-MIT.txt",
+            Some(b"changed"),
+            REACT_MIT_SHA256,
+            &mut errors,
+        );
         assert!(errors.iter().any(|error| error.contains("is missing")));
         assert!(errors.iter().any(|error| error.contains("has drifted")));
     }

@@ -10,6 +10,7 @@ exports_files([
     "inventory.json",
     "npm-inventory.json",
     "npm-release.spdx.json",
+    "npm/lucide-ISC-MIT.txt",
     "npm/react-MIT.txt",
     "policy.json",
     "rust-lock.tsv",

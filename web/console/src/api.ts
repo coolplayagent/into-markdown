@@ -38,11 +38,12 @@ export interface WorkbenchOptions {
   format: InputFormat | null; ocrPolicy: OcrPolicy; ocrConfidence: number; aiMode: AiMode;
   assetMode: AssetMode; includeProvenance: boolean; maxInputMiB: number; maxMemoryMiB: number;
   maxTemporaryMiB: number; maxPages: number; networkMode: NetworkMode; authorizeProvider: boolean;
+  audioTranscription: boolean;
 }
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
   includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false,
+  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: false,
 };
 
 export class ApiError extends Error {
@@ -118,7 +119,7 @@ export function taskRequest(options: WorkbenchOptions): unknown {
     ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
     asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: 600_000,
       max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024 },
-    ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: ai, markdown_postprocess: ai },
+    ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: options.audioTranscription ? "only" : "off", markdown_postprocess: ai },
     network: { enabled: unrestrictedNetwork, max_redirects: 3, deny_private_networks: !unrestrictedNetwork, allowed_hosts: [] },
     limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
       max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
@@ -128,7 +129,7 @@ export function taskRequest(options: WorkbenchOptions): unknown {
       max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: options.includeProvenance,
       asset_mode: options.assetMode, asset_uri_prefix: null },
-  }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider } };
+  }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider || options.audioTranscription } };
 }
 
 export interface ApiClient {
