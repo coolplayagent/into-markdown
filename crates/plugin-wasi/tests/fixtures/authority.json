@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "guestTarget": "wasm32-wasip2",
+  "rustToolchain": {
+    "version": "1.97.1",
+    "commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+    "commitDate": "2026-07-14"
+  },
+  "build": {
+    "command": "cargo +1.97.1 build --manifest-path crates/plugin-wasi/guest-fixture/Cargo.toml --target wasm32-wasip2 --release --locked -j1",
+    "sourceFiles": {
+      "guest-fixture/Cargo.toml": "8ce3347a195fe5203aaf540e04db10b7d9718c8b6475ac155e04b92bd77463ab",
+      "guest-fixture/Cargo.lock": "9154713bac330d9021a3fb93e586b5c984a219482ba5503b64e31e99c4115d12",
+      "guest-fixture/src/main.rs": "b3afcb8cd409bc3f9bc0d7d9192cdfdb7c0487df6f02f2633204425a975e0085"
+    },
+    "component": {
+      "path": "tests/fixtures/guest.component.wasm",
+      "bytes": 142935,
+      "sha256": "9cd2e45d84ea1ef7fb76f8c7eac23dda3a667f8e42285d07477eb098111eddef"
+    }
+  },
+  "testedHostTargets": [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ]
+}

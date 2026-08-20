@@ -1,5 +1,19 @@
 # 测试策略
 
+WASI Preview 2 runtime 的真实 component 门禁为：
+
+```shell
+python crates/plugin-wasi/tests/verify_fixture.py --rebuild
+cargo test --locked -p into-markdown-plugin-wasi --test runtime -j1
+bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resources=memory=4096
+```
+
+fixture 重建必须逐字节匹配 authority；测试实际执行 command component，覆盖默认权限
+拒绝和精确 grant、非法 host import、preopen traversal/symlink escape、TCP loopback、fuel、
+epoch timeout/取消、memory growth/越界、输出、IR/resource/provenance。GitHub workflow 在
+Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 的真实 runner 上执行同一组
+Cargo/Bazel 测试；异平台 compile 或四个 manifest 别名不计作证据。
+
 任务历史/保留的定向门禁包括 `cargo test -p into-markdown-task-store
 terminal_delete_is_atomic_and_protects_active_and_pinned_tasks` 和 `cargo test -p
 into-markdown-cli retention_`。测试覆盖分页/筛选、固定、重试、显式删除、30 天前一毫秒/恰好

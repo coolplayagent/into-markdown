@@ -111,6 +111,14 @@ minimal LGPL-only configuration, and distribution obligations are documented in
 and corresponding-source/relinking rights.
 ```
 
+Wasmtime 39.0.1 and its WASI Preview 2 support crates are source-built Rust
+dependencies for the optional plugin runtime. Their crates.io checksums,
+upstream tag and commit, and exact feature policy are fixed in
+`third_party/wasmtime/source.json`. They are licensed under Apache-2.0 WITH
+LLVM-exception; the complete upstream text is preserved at
+`third_party/licenses/wasmtime-Apache-2.0-LLVM-exception.txt`. The current CLI
+release graph does not include this runtime until plugin registration is wired.
+
 The audit rejects Cargo dependency drift, unmanaged source-less packages,
 managed manifest/inventory/download drift, and tracked release components that
 are planned, unknown, incomplete, or denied. Packaging must copy `LICENSE`,

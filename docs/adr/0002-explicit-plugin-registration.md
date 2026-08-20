@@ -15,3 +15,8 @@ macOS 使用 deny-default Seatbelt profile 与 rlimit；Windows 使用零 capabi
 AppContainer，并在恢复主线程前绑定只允许一个进程的 Job。协议 v1 不授予网络或共享
 文件系统能力；输入与资源均内联通过受限 pipe 传递。父进程环境不会继承，只有宿主策略
 逐项声明的变量可见。任何平台无法安装对应原生边界时都以稳定错误拒绝启动。
+
+隔离插件使用固定 Wasmtime 的真实 WASI Preview 2 command component 和版本 1 JSON
+协议，且必须使用相同的公共 IR、错误、资源和溯源规则。能力、资源边界与四平台门禁见
+[`../wasi-plugins.md`](../wasi-plugins.md)。宿主 crate 在插件安装/注册工作接入前保持可选，
+不能以存在 runtime crate 冒充插件已自动启用。

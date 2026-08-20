@@ -16,6 +16,7 @@ members = [
     "crates/pdf-layout",
     "crates/pdfium",
     "crates/process-plugin",
+    "crates/plugin-wasi",
     "crates/render-markdown",
     "crates/task-store",
     "tests/contracts",
@@ -35,6 +36,9 @@ license = "Apache-2.0"
 [workspace.dependencies]
 axum = { version = "=0.8.4", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22.1"
+bytes = "=1.12.1"
+cap-primitives = "=3.4.5"
+cap-std = "=3.4.5"
 calamine = { version = "=0.36.1", default-features = false, features = ["dates"] }
 clap = { version = "4.5.45", features = ["derive", "string"] }
 clap_complete = "4.5.57"
@@ -61,11 +65,14 @@ quick-xml = "=0.38.3"
 rustls = { version = "=0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 webpki-roots = "=1.0.3"
+wasmtime = { version = "=39.0.1", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "=39.0.1", default-features = false, features = ["p2"] }
+wasmtime-wasi-io = "=39.0.1"
 zeroize = "=1.8.2"
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 rusqlite = { version = "=0.37.0", default-features = false, features = ["backup", "bundled", "limits"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde_json = { version = "1.0.140", features = ["raw_value"] }
 sha2 = "0.10.9"
 socket2 = "0.6.5"
 thiserror = "2.0.12"
