@@ -399,13 +399,13 @@ pub enum ModelsCommand {
     },
     /// Download and atomically install a hash-pinned model bundle.
     Install {
-        id: Option<String>,
+        id: String,
         #[arg(long)]
         insecure: bool,
     },
     /// Verify installed model files without networking.
     Verify {
-        id: Option<String>,
+        id: String,
         #[arg(long)]
         json: bool,
     },

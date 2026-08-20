@@ -385,7 +385,7 @@ fn run_models(
             }
         }
         Some(ModelsCommand::Install { id, insecure }) => {
-            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            let id = id.as_str();
             manager.require_installable(id).map_err(model_error)?;
             let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(insecure)
                 .map_err(|(variable, reason)| {
@@ -396,7 +396,7 @@ fn run_models(
             Ok(())
         }
         Some(ModelsCommand::Verify { id, json }) => {
-            let id = id.as_deref().unwrap_or(&manager.manifest().default_bundle);
+            let id = id.as_str();
             let status = manager.verify_with_context(id, &execution).map_err(model_error)?;
             if json {
                 write_json(context.stdout, &status)
