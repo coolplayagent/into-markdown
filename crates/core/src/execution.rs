@@ -534,6 +534,13 @@ impl ExecutionContext {
         self.reserve(ResourceKind::Temporary, bytes)
     }
 
+    /// Current live temporary-storage reservations for boundary and lifecycle audits.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reserved_temporary_bytes(&self) -> u64 {
+        self.shared.temporary_bytes.load(Ordering::Acquire)
+    }
+
     /// Create an automatically cleaned temporary file charged as bytes are written.
     ///
     /// # Errors

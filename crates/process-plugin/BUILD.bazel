@@ -1,0 +1,51 @@
+load("@crates//:defs.bzl", "all_crate_deps", "aliases")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "process_plugin",
+    srcs = glob(["src/**/*.rs"], exclude = ["src/bin/**/*.rs"]),
+    crate_name = "into_markdown_process_plugin",
+    edition = "2024",
+    deps = ["//crates/core"] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_binary(
+    name = "process-plugin-fixture",
+    srcs = ["src/bin/process_plugin_fixture.rs"],
+    crate_name = "process_plugin_fixture",
+    edition = "2024",
+    deps = [
+        ":process_plugin",
+        "//crates/core",
+    ] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_test(
+    name = "process_plugin_test",
+    crate = ":process_plugin",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    data = [":process-plugin-fixture"],
+    edition = "2024",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+rust_test(
+    name = "process_plugin_integration_test",
+    srcs = ["tests/runtime.rs"],
+    crate_name = "process_plugin_integration_test",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    data = [":process-plugin-fixture"],
+    edition = "2024",
+    deps = [
+        ":process_plugin",
+        "//crates/core",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

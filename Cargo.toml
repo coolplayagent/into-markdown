@@ -15,6 +15,7 @@ members = [
     "crates/onnxruntime",
     "crates/pdf-layout",
     "crates/pdfium",
+    "crates/process-plugin",
     "crates/render-markdown",
     "crates/task-store",
     "tests/contracts",

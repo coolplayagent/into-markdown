@@ -37,8 +37,9 @@ flowchart LR
 解析器掩盖。
 
 插件代码通过 `RegistryBuilder` 显式注册。Rust 没有稳定的动态 ABI，因此项目
-不支持进程内 Rust 动态库插件。未来为隔离执行和第三方分发预留带版本的进程外
-或 WASI 协议。
+不支持进程内 Rust 动态库插件。`into-markdown-process-plugin` 提供已版本化的
+`process-v1` 进程外运行时；安装与启用层必须先给它经 SHA-256 认证的绝对可执行文件
+authority。WASI 使用独立的 `wasi-v1` 边界。
 
 注册表在构建时拒绝空 ID 和同类重复 ID。检测候选与转换尝试的排序键均完整、稳定：
 显式格式优先，其后依次比较归一化 confidence、实现 priority 和稳定 ID。探测错误
