@@ -30,8 +30,8 @@ fn trailing_delimiter_semicolons_remain_accepted_as_empty_parameters() {
 #[test]
 fn transfer_deadline_scales_with_the_exact_wire_budget_and_fails_closed() {
     let now = Instant::now();
-    let tiny = transfer_deadline(now, FetchLimits { max_wire_bytes: 0, max_decoded_bytes: 0 })
-        .unwrap();
+    let tiny =
+        transfer_deadline(now, FetchLimits { max_wire_bytes: 0, max_decoded_bytes: 0 }).unwrap();
     assert!(tiny >= now + DEFAULT_REQUEST_TIMEOUT);
     assert!(tiny <= now + DEFAULT_REQUEST_TIMEOUT + Duration::from_millis(50));
     let large = transfer_deadline(

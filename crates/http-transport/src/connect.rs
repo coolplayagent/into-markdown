@@ -6,14 +6,9 @@ use super::{
 use std::io::{self, Read, Write};
 use std::thread;
 
+#[derive(Default)]
 pub(super) struct DirectConnectionFactory {
     pub(super) insecure: bool,
-}
-
-impl Default for DirectConnectionFactory {
-    fn default() -> Self {
-        Self { insecure: false }
-    }
 }
 
 impl ConnectionFactory for DirectConnectionFactory {

@@ -307,10 +307,7 @@ mod tests {
             let mut bytes = Vec::new();
             acquired.bytes.read_to_end(&mut bytes).unwrap();
             assert_eq!(bytes, b"data");
-            assert_eq!(
-                *connector.hosts.lock().unwrap(),
-                ["huggingface.co", "us.aws.cdn.hf.co"]
-            );
+            assert_eq!(*connector.hosts.lock().unwrap(), ["huggingface.co", "us.aws.cdn.hf.co"]);
         }
 
         let legacy_bridge = format!(

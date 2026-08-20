@@ -165,10 +165,7 @@ fn tunnel_request_is_exact_and_requires_a_success_response() {
         NoProxyList::default(),
         b"HTTP/1.1 200 Connection established\r\n\r\n",
     );
-    let stream = rig
-        .factory
-        .tunnel_stream("huggingface.co", 443, &context(), deadline())
-        .unwrap();
+    let stream = rig.factory.tunnel_stream("huggingface.co", 443, &context(), deadline()).unwrap();
     drop(stream);
     assert_eq!(
         rig.request.lock().unwrap().as_slice(),
@@ -203,13 +200,13 @@ fn tunnel_failures_are_stable_for_refusals_smuggling_and_bad_grammar() {
         (b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n", TransportErrorKind::Connect),
         (b"HTTP/1.1 200 OK\r\n\r\nEARLY-TUNNEL-BYTES", TransportErrorKind::InvalidMessage),
         (b"garbage\r\n\r\n", TransportErrorKind::InvalidMessage),
-        (b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n", TransportErrorKind::InvalidMessage),
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n",
+            TransportErrorKind::InvalidMessage,
+        ),
     ] {
-        let rig = routed_factory(
-            parse_ok("http://proxy.test:8080"),
-            NoProxyList::default(),
-            response,
-        );
+        let rig =
+            routed_factory(parse_ok("http://proxy.test:8080"), NoProxyList::default(), response);
         let Err(error) = rig.factory.tunnel_stream("origin.test", 443, &context(), deadline())
         else {
             panic!("{response:?} must fail");
@@ -242,7 +239,8 @@ fn tunnel_surfaces_cancellation_and_deadline_checks() {
         read_offset: 0,
         request: Arc::new(Mutex::new(Vec::new())),
     };
-    let error = establish_tunnel(&mut connection, None, "origin.test", 443, &context(), Instant::now())
-        .unwrap_err();
+    let error =
+        establish_tunnel(&mut connection, None, "origin.test", 443, &context(), Instant::now())
+            .unwrap_err();
     assert_eq!(error.kind(), TransportErrorKind::Timeout);
 }

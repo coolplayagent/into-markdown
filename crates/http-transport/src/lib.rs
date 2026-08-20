@@ -202,7 +202,10 @@ impl std::fmt::Debug for HttpClient {
 
 impl Default for HttpClient {
     fn default() -> Self {
-        Self { resolver: Arc::new(SystemDnsResolver), connector: Arc::new(DirectConnectionFactory::default()) }
+        Self {
+            resolver: Arc::new(SystemDnsResolver),
+            connector: Arc::new(DirectConnectionFactory::default()),
+        }
     }
 }
 

@@ -79,15 +79,15 @@ fn route_from(
 /// Returns the offending variable name and reason when a proxy variable is
 /// set but invalid; no network access happens in that case.
 pub(crate) fn model_fetch_client(cli_insecure: bool) -> Result<HttpClient, (&'static str, String)> {
-    let env_insecure = std::env::var_os("INTO_MD_INSECURE")
-        .and_then(|value| value.into_string().ok())
-        .is_some_and(|value| !value.is_empty() && value != "0");
+    let env_insecure = parse_insecure(
+        std::env::var_os("INTO_MD_INSECURE").and_then(|value| value.into_string().ok()),
+    )
+    .map_err(|reason| ("INTO_MD_INSECURE", reason))?;
     let insecure = cli_insecure || env_insecure;
     match download_route() {
-        DownloadRoute::Direct => Ok(HttpClient::with_insecure(
-            Arc::new(SystemDnsResolver),
-            insecure,
-        )),
+        DownloadRoute::Direct => {
+            Ok(HttpClient::with_insecure(Arc::new(SystemDnsResolver), insecure))
+        }
         DownloadRoute::Proxy { proxy, no_proxy, .. } => Ok(HttpClient::with_components(
             Arc::new(SystemDnsResolver),
             Arc::new(RoutedConnectionFactory::new(
@@ -99,6 +99,19 @@ pub(crate) fn model_fetch_client(cli_insecure: bool) -> Result<HttpClient, (&'st
         )),
         DownloadRoute::Invalid { variable, reason } => Err((variable, reason)),
     }
+}
+
+fn parse_insecure(value: Option<String>) -> Result<bool, String> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(false);
+    };
+    if value == "0" || value.eq_ignore_ascii_case("false") {
+        return Ok(false);
+    }
+    if value == "1" || value.eq_ignore_ascii_case("true") {
+        return Ok(true);
+    }
+    Err("expected one of 0, 1, false, or true".into())
 }
 
 #[cfg(test)]
@@ -140,5 +153,19 @@ mod tests {
         };
         assert_eq!(variable, "INTO_MD_HTTPS_PROXY");
         assert_eq!(reason, "only http:// proxy endpoints are supported");
+    }
+
+    #[test]
+    fn insecure_environment_value_is_strictly_parsed() {
+        for value in [None, Some(""), Some("0"), Some("false"), Some("FALSE")] {
+            assert!(!parse_insecure(value.map(str::to_owned)).unwrap());
+        }
+        for value in ["1", "true", "TRUE"] {
+            assert!(parse_insecure(Some(value.into())).unwrap());
+        }
+        assert_eq!(
+            parse_insecure(Some("no".into())).unwrap_err(),
+            "expected one of 0, 1, false, or true"
+        );
     }
 }

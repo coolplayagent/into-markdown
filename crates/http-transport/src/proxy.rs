@@ -10,10 +10,9 @@
 
 use super::{
     Connection, ConnectionFactory, DirectConnectionFactory, DnsResolver, ExecutionContext,
-    Instant, Ipv6Addr, MAX_ALLOWED_HOSTS, MAX_HOST_BYTES, MAX_HEADER_BYTES, MAX_URL_BYTES,
-    SocketAddr, TransportError, TransportErrorKind, canonical_host, check_operation,
+    IO_CHUNK_BYTES, Instant, Ipv6Addr, MAX_ALLOWED_HOSTS, MAX_HEADER_BYTES, MAX_HOST_BYTES,
+    MAX_URL_BYTES, SocketAddr, TransportError, TransportErrorKind, canonical_host, check_operation,
     map_context_error, parse_head, read_head, resolve_checked, tls_handshake, write_all_checked,
-    IO_CHUNK_BYTES,
 };
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -161,10 +160,10 @@ fn portable_credential_byte(byte: u8) -> bool {
 }
 
 pub(super) fn base64_standard(input: &[u8], output: &mut String) {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";    for chunk in input.chunks(3) {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for chunk in input.chunks(3) {
         let bytes = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let triple =
-            (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        let triple = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
         let mut index = triple >> 18 & 63;
         output.push(char::from(ALPHABET[usize::try_from(index).unwrap_or(0)]));
         index = triple >> 12 & 63;
@@ -207,7 +206,9 @@ impl NoProxyList {
                 continue;
             }
             let entry = entry.strip_prefix('.').unwrap_or(&entry).to_owned();
-            if !entry.is_empty() && entry.len() <= MAX_HOST_BYTES && entries.len() < MAX_ALLOWED_HOSTS
+            if !entry.is_empty()
+                && entry.len() <= MAX_HOST_BYTES
+                && entries.len() < MAX_ALLOWED_HOSTS
             {
                 entries.push(entry);
             }
@@ -247,7 +248,13 @@ impl RoutedConnectionFactory {
         resolver: Arc<dyn DnsResolver>,
         insecure: bool,
     ) -> Self {
-        Self { proxy, no_proxy, resolver, inner: Arc::new(DirectConnectionFactory { insecure }), insecure }
+        Self {
+            proxy,
+            no_proxy,
+            resolver,
+            inner: Arc::new(DirectConnectionFactory { insecure }),
+            insecure,
+        }
     }
 
     /// Construct with an injected proxy transport for deterministic tests.
@@ -335,7 +342,8 @@ impl ConnectionFactory for RoutedConnectionFactory {
             return self.inner.connect(scheme, host, address, context, deadline);
         }
         let stream = self.tunnel_stream(host, address.port(), context, deadline)?;
-        tls_handshake(stream, host, context, deadline, self.insecure).map(|stream| Box::new(stream) as _)
+        tls_handshake(stream, host, context, deadline, self.insecure)
+            .map(|stream| Box::new(stream) as _)
     }
 }
 
@@ -353,12 +361,9 @@ pub(super) fn establish_tunnel(
     // "Proxy-Authorization: <value>\r\n" line and the final blank line, all
     // with exact byte counts.
     let authorization_bytes = authorization.map_or(0, |value| value.len().saturating_add(23));
-    let required = 29usize
-        .saturating_add(target.len().saturating_mul(2))
-        .saturating_add(authorization_bytes);
-    if required
-        > MAX_URL_BYTES + MAX_HOST_BYTES + MAX_CREDENTIAL_BYTES.div_ceil(3) * 4 + 64
-    {
+    let required =
+        29usize.saturating_add(target.len().saturating_mul(2)).saturating_add(authorization_bytes);
+    if required > MAX_URL_BYTES + MAX_HOST_BYTES + MAX_CREDENTIAL_BYTES.div_ceil(3) * 4 + 64 {
         return Err(TransportError::new(TransportErrorKind::ResourceLimit));
     }
     let mut memory = context
