@@ -31,7 +31,9 @@ const testGroups = {
   ]),
   workbench: new Set([
     "workbench keeps the current batch and conversion controls in one route",
-    "workbench uses a scrollable queue for all recent history",
+    "workbench rejects unsupported files before upload and explains terminal failures",
+    "completed current-batch rows open their result from the whole row",
+    "workbench separates the current batch from scrollable recent history",
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
     "workbench disables audio when its verified runtime is unavailable",
@@ -385,9 +387,23 @@ test("recent history opens a result dialog with irreversible task actions", asyn
   await waitForText(window, "Quarterly report.pdf");
   window.document.querySelector<HTMLButtonElement>(".recent-task-link")!.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
-  window.document.querySelector<HTMLElement>(".task-menu > summary")!.click();
+  const menu = window.document.querySelector<HTMLElement>(".task-menu")!;
+  const trigger = menu.querySelector<HTMLButtonElement>(".menu-trigger")!;
+  trigger.click();
+  await waitFor(() => Boolean(menu.querySelector(".task-menu-popover"))).catch(() => { throw new Error("menu did not open"); });
+  window.document.body.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
+  await waitFor(() => !menu.querySelector(".task-menu-popover")).catch(() => { throw new Error("outside press did not close menu"); });
+  trigger.click();
+  await waitFor(() => Boolean(menu.querySelector(".task-menu-popover")));
+  window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitFor(() => !menu.querySelector(".task-menu-popover") && window.document.activeElement === trigger).catch(() => { throw new Error("Escape did not close and refocus menu"); });
+  trigger.click();
+  await waitFor(() => Boolean(menu.querySelector(".task-menu-popover")));
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Pin")!.click();
-  await waitFor(() => pinned && window.document.body.textContent.includes("Unpin"));
+  await waitFor(() => pinned).catch(() => { throw new Error("pin action was not invoked"); });
+  await waitFor(() => !menu.querySelector(".task-menu-popover")).catch(() => { throw new Error("menu did not close after pin"); });
+  trigger.click();
+  await waitFor(() => Boolean(menu.querySelector(".task-menu-popover")) && menu.textContent.includes("Unpin")).catch(() => { throw new Error("pinned state was not rendered when the menu reopened"); });
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Delete permanently")!.click();
   await waitFor(() => deleted && window.document.querySelector(".result-dialog") === null);
   assert.ok(warning.includes("cannot be undone"));
@@ -449,7 +465,39 @@ test("workbench keeps the current batch and conversion controls in one route", a
   assert.equal(window.document.querySelector(".history-table-shell"), null);
 });
 
-test("workbench uses a scrollable queue for all recent history", async () => {
+test("workbench rejects unsupported files before upload and explains terminal failures", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  let uploads = 0;
+  const failed = { ...task("failed"), displayName: "broken.pdf", format: "pdf" as const, diagnostics: [{ code: "malformed" }] };
+  const api: ApiClient = {
+    ...availableApi,
+    async listTasks() { return { tasks: [failed] }; },
+    async upload() { uploads += 1; return task("running"); },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "broken.pdf");
+  assert.ok(window.document.body.textContent.includes("The file is damaged or its format is invalid"));
+  const input = window.document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  assert.ok(input.accept.includes(".pdf"));
+  assert.ok(input.accept.includes(".pptm"));
+  assert.ok(input.accept.includes(".msg"));
+  assert.equal(input.accept.includes(".plist"), false);
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", {
+    value: { files: [new File(["plist"], "settings.plist"), new File(["markdown"], "notes.md")] },
+  });
+  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
+  await waitForText(window, "Skipped unsupported files: settings.plist");
+  assert.equal(window.document.querySelectorAll(".current-batch li").length, 1);
+  assert.ok(window.document.body.textContent.includes("notes.md"));
+  assert.equal(window.document.body.textContent.includes("settings.plist"), true, "the rejection message should name the skipped input");
+  assert.ok(window.document.querySelector(".upload-card .picker-feedback")?.textContent?.includes("settings.plist"));
+  assert.equal(window.document.querySelector(".control-column .message-bar")?.textContent?.includes("settings.plist"), false);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitFor(() => uploads === 1);
+});
+
+test("workbench separates the current batch from scrollable recent history", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const historyTasks = [
     { ...task("succeeded", "1".repeat(32)), displayName: "recent.pdf", format: "pdf" as const, updatedAtMs: 4 },
@@ -466,13 +514,35 @@ test("workbench uses a scrollable queue for all recent history", async () => {
   await waitForText(window, "Selected (1)");
   assert.equal(window.document.querySelectorAll(".recent-history li").length, 4);
   assert.equal(window.document.body.textContent.includes("hidden.md"), true);
-  assert.ok(window.document.querySelector(".queue-scroll"));
+  assert.ok(window.document.querySelector(".current-batch-scroll"));
+  assert.ok(window.document.querySelector(".recent-history-scroll"));
+  assert.equal(window.document.querySelector(".queue-scroll"), null);
   const current = window.document.querySelector(".current-batch")!;
   const recent = window.document.querySelector(".recent-history")!;
   assert.ok(current.compareDocumentPosition(recent) & window.Node.DOCUMENT_POSITION_FOLLOWING);
   window.document.querySelector<HTMLButtonElement>(".recent-task-link")!.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
   assert.equal(window.location.pathname, "/workbench");
+});
+
+test("completed current-batch rows open their result from the whole row", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const completed = { ...task("succeeded"), displayName: "contract.md", format: "markdown" as const };
+  const api: ApiClient = { ...availableApi, async upload(_file, _options, batchId) { return { ...completed, batchId }; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Add documents");
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
+  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
+  await waitForText(window, "Selected (1)");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
+  window.document.querySelector<HTMLButtonElement>('.result-dialog button[aria-label="Close"]')!.click();
+  await waitFor(() => window.document.querySelector(".result-dialog") === null);
+  const row = window.document.querySelector<HTMLButtonElement>(".current-task-link")!;
+  assert.ok(row.textContent.includes("contract.md"));
+  row.click();
+  await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
 });
 
 test("root workbench automatically opens the first successful result dialog", async () => {

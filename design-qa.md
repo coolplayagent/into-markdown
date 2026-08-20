@@ -7,6 +7,7 @@
 - Result-dialog capture: `/private/tmp/into-md-result-redesign-final.png`
 - Adaptive result-dialog capture: `/private/tmp/into-md-result-adaptive-final.png`
 - Unavailable-audio state capture: `/private/tmp/into-md-audio-disabled-final.png`
+- Nearby validation capture: `/private/tmp/into-md-workbench-near-feedback.png`
 - Result before/after comparison: `/private/tmp/into-md-result-redesign-comparison.png`
 - Same-frame comparison: `/private/tmp/into-md-design-qa-workbench-comparison.png`
 - Truth statement: the implementation keeps option 1's restrained teal palette, compact controls, fine borders, icon language, and two-column workbench while consolidating history, setup, and results into one application surface.
@@ -14,7 +15,7 @@
 ## Information architecture
 
 - The header contains brand, service state, language, and theme only. Standalone status and history destinations are removed.
-- The left panel contains file selection, the active batch, and the complete recent-task list in one bounded scroll region.
+- The left panel contains file selection, the active batch, and recent history as distinct sections. When both lists overflow, each keeps its own bounded scroll region so current work and past work are never mixed into one scrollbar.
 - The right panel keeps capabilities, conversion settings, and the primary action continuously visible.
 - Selecting a completed task opens a full result dialog without changing the route. Reading preview, Markdown source, batch switching, download, resources, diagnostics, retry, and deletion stay inside that dialog.
 - Audio transcription is enabled by default. Runtime readiness is independent from that preference; an unavailable runtime exposes an in-place dependency-preparation dialog rather than another page.
@@ -30,7 +31,10 @@
 ## Interaction and behavior checks
 
 - Persisted tasks restore original filenames and formats; all five available recent items render rather than an arbitrary three-item cap.
-- The recent list has `overflow-y: auto` and an actual scroll range while the page itself remains fixed.
+- The current batch and recent list each have independent `overflow-y: auto` regions while the page itself remains fixed.
+- A completed current-batch row is one full-width action. Clicking its text, status, or check icon opens the same result dialog; this was exercised against a real Markdown conversion.
+- Unsupported file extensions are rejected before task creation, and the named rejection appears directly below the file picker rather than in the conversion controls. Terminal failures use localized, actionable reasons in both current and recent rows.
+- Result overflow menus close on outside pointer interaction, Escape, and completed actions. The file-picker button keeps a stable bounding box during hover and active transitions.
 - Audio transcription starts checked. “准备依赖” opens a same-page dialog with the exact model command and the fixed LGPL FFmpeg requirement.
 - Opening `columns-then-table.pdf` preserves `/` and opens one accessible result dialog. Batch switching and the rendered Markdown table are visible without a route change.
 - Reading preview, Markdown source, detail drawer, and close behavior were exercised in the live packaged binary.
