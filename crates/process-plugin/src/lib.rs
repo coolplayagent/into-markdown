@@ -1,0 +1,1290 @@
+//! Fail-closed host runtime for `process-v1` conversion plugins.
+//!
+//! Plugins are untrusted executables. The host authenticates the executable, starts it with an
+//! empty environment in an operating-system sandbox, and accepts only bounded, versioned,
+//! length-prefixed JSON frames. Source bytes and returned resources cross the pipe rather than a
+//! shared filesystem.
+#![deny(unsafe_op_in_unsafe_fn)]
+
+mod protocol;
+mod sandbox;
+pub mod worker;
+
+use base64::Engine as _;
+use into_markdown_core::{
+    ConversionResult, Diagnostic, DiagnosticsDto, ExecutionContext, ExecutionStage,
+    ResourceReservation, ResultDto,
+};
+use protocol::{HostMessage, PROTOCOL_V1, PluginMessage};
+use sha2::{Digest as _, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant};
+use thiserror::Error;
+
+const HASH_BUFFER_SIZE: usize = 64 * 1024;
+const HASH_BUFFER_BYTES: u64 = 64 * 1024;
+const ABSOLUTE_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
+const ABSOLUTE_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+const ABSOLUTE_RUNTIME_ENTRIES: usize = 10_000;
+
+/// Stable process-plugin failure categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PluginErrorCode {
+    /// The local plugin authority is malformed or no longer matches disk.
+    Authority,
+    /// The operating-system sandbox could not be installed fail-closed.
+    SandboxUnavailable,
+    /// The authenticated executable could not be launched.
+    Launch,
+    /// The peer violated framing, ordering, identity, or version rules.
+    Protocol,
+    /// The peer emitted a frame larger than policy permits.
+    FrameTooLarge,
+    /// The plugin exited or its protocol stream ended before a terminal response.
+    Crashed,
+    /// The request exceeded its host deadline.
+    Timeout,
+    /// The caller cancelled the request.
+    Cancelled,
+    /// The returned IR, resources, diagnostics, or provenance were invalid.
+    InvalidResult,
+    /// The plugin returned a controlled terminal error.
+    Plugin,
+    /// A host resource budget was exceeded.
+    ResourceLimit,
+}
+
+impl PluginErrorCode {
+    /// Stable lower-camel-case representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authority => "pluginAuthority",
+            Self::SandboxUnavailable => "pluginSandboxUnavailable",
+            Self::Launch => "pluginLaunch",
+            Self::Protocol => "pluginProtocol",
+            Self::FrameTooLarge => "pluginFrameTooLarge",
+            Self::Crashed => "pluginCrashed",
+            Self::Timeout => "pluginTimeout",
+            Self::Cancelled => "pluginCancelled",
+            Self::InvalidResult => "pluginInvalidResult",
+            Self::Plugin => "pluginError",
+            Self::ResourceLimit => "pluginResourceLimit",
+        }
+    }
+}
+
+/// Sanitized process-plugin failure. Child stderr is never included verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{code}: {detail}", code = code.as_str())]
+pub struct PluginError {
+    /// Stable machine category.
+    pub code: PluginErrorCode,
+    /// Bounded host-generated detail.
+    pub detail: String,
+}
+
+impl PluginError {
+    fn new(code: PluginErrorCode, detail: impl Into<String>) -> Self {
+        let mut detail = detail.into();
+        detail.truncate(512);
+        Self { code, detail }
+    }
+}
+
+/// Immutable authority for one installed executable.
+#[derive(Debug, Clone)]
+pub struct PluginManifest {
+    /// Stable lowercase plugin identifier.
+    pub plugin_id: String,
+    /// Absolute executable path.
+    pub executable: PathBuf,
+    /// Canonical runtime directory containing the executable and its private libraries.
+    pub runtime_root: PathBuf,
+    /// Lowercase SHA-256 of the executable.
+    pub executable_sha256: String,
+    /// Ordered supported protocol versions.
+    pub protocol_versions: Vec<u32>,
+}
+
+/// Windows `AppContainer` identity provisioned and ACL-authorized by the plugin installer.
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+pub struct WindowsSandboxAuthority {
+    /// `AppContainer` profile name.
+    pub profile_name: String,
+    /// Expected derived SID.
+    pub sid: String,
+    /// Canonical `AppContainer` storage directory used as the private working root.
+    pub storage_root: PathBuf,
+}
+
+/// Host-enforced limits and the complete declared environment capability.
+#[derive(Debug, Clone)]
+pub struct RuntimePolicy {
+    /// Maximum encoded JSON bytes in one frame.
+    pub max_frame_bytes: u32,
+    /// Maximum nested result JSON bytes.
+    pub max_output_bytes: u64,
+    /// Child virtual-address/job memory ceiling.
+    pub max_memory_bytes: u64,
+    /// Maximum size of a child-created file.
+    pub max_file_bytes: u64,
+    /// Maximum child file descriptors.
+    pub max_open_files: u32,
+    /// Maximum handshake duration independent of request timeout.
+    pub handshake_timeout: Duration,
+    /// Hard request duration even when the caller supplied no shorter context deadline.
+    pub request_timeout: Duration,
+    /// Grace after sending cancellation before forced tree termination.
+    pub cancellation_grace: Duration,
+    /// Complete explicit environment. No parent variable is inherited.
+    pub environment: BTreeMap<OsString, OsString>,
+    /// Pre-provisioned no-capability `AppContainer` authority.
+    #[cfg(windows)]
+    pub windows: WindowsSandboxAuthority,
+}
+
+impl Default for RuntimePolicy {
+    fn default() -> Self {
+        Self {
+            max_frame_bytes: 16 * 1024 * 1024,
+            max_output_bytes: 12 * 1024 * 1024,
+            max_memory_bytes: 512 * 1024 * 1024,
+            max_file_bytes: 64 * 1024 * 1024,
+            max_open_files: 64,
+            handshake_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_mins(1),
+            cancellation_grace: Duration::from_millis(100),
+            environment: BTreeMap::new(),
+            #[cfg(windows)]
+            windows: WindowsSandboxAuthority {
+                profile_name: String::new(),
+                sid: String::new(),
+                storage_root: PathBuf::new(),
+            },
+        }
+    }
+}
+
+/// One bounded conversion invocation.
+#[derive(Debug, Clone, Copy)]
+pub struct PluginRequest<'a> {
+    /// Stable request ID unique within the host process.
+    pub request_id: &'a str,
+    /// Stable input-format wire name.
+    pub input_format: &'a str,
+    /// Display-only source name.
+    pub source_name: Option<&'a str>,
+    /// Authenticated input bytes sent inline.
+    pub source: &'a [u8],
+}
+
+/// Validated terminal result plus authenticated runtime identity.
+#[derive(Debug)]
+pub struct PluginExecution {
+    /// Fully decoded and validated result DTO.
+    pub result: ConversionResult,
+    /// Manifest plugin ID matched during handshake.
+    pub plugin_id: String,
+    /// Executable SHA-256 revalidated immediately before launch.
+    pub executable_sha256: String,
+}
+
+/// Reusable authenticated process-plugin runtime.
+#[derive(Debug, Clone)]
+pub struct ProcessPlugin {
+    plugin: ValidatedPlugin,
+    policy: RuntimePolicy,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedPlugin {
+    plugin_id: String,
+    executable: PathBuf,
+    runtime_root: PathBuf,
+    executable_sha256: String,
+    protocol_versions: Vec<u32>,
+}
+
+impl ProcessPlugin {
+    /// Validate static authority. Disk identity is checked again for every launch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginErrorCode::Authority`] when manifest or policy authority is invalid.
+    pub fn new(manifest: PluginManifest, policy: RuntimePolicy) -> Result<Self, PluginError> {
+        validate_policy(&policy)?;
+        let plugin = validate_manifest(manifest, policy.max_file_bytes)?;
+        Ok(Self { plugin, policy })
+    }
+
+    /// Execute one plugin request, forwarding progress and respecting cancellation/deadlines.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`PluginError`] for authority, sandbox, protocol, lifecycle, resource,
+    /// cancellation, timeout, plugin, or result-validation failures.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute(
+        &self,
+        request: PluginRequest<'_>,
+        context: &ExecutionContext,
+    ) -> Result<PluginExecution, PluginError> {
+        validate_request(&request, &self.policy)?;
+        let encoded_bound = u64::from(self.policy.max_frame_bytes)
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(self.policy.max_output_bytes))
+            .and_then(|value| value.checked_add(HASH_BUFFER_BYTES))
+            .ok_or_else(|| {
+                PluginError::new(PluginErrorCode::ResourceLimit, "frame reservation overflow")
+            })?;
+        let _wire_memory =
+            context.reserve_memory(encoded_bound).map_err(|error| map_execution_error(&error))?;
+        verify_executable(&self.plugin, self.policy.max_file_bytes)?;
+        let directory_guard = sandbox::working_directory(&self.policy)?;
+        let staged = stage_plugin(&self.plugin, &self.policy, directory_guard, context)?;
+        verify_executable(&staged.plugin, self.policy.max_file_bytes)?;
+        let mut child = sandbox::spawn(&staged.plugin, &self.policy, &staged.working_directory)?;
+        let mut stdin = child
+            .take_stdin()
+            .ok_or_else(|| PluginError::new(PluginErrorCode::Launch, "plugin stdin missing"))?;
+        let mut stdout = child
+            .take_stdout()
+            .ok_or_else(|| PluginError::new(PluginErrorCode::Launch, "plugin stdout missing"))?;
+        let stderr = child
+            .take_stderr()
+            .ok_or_else(|| PluginError::new(PluginErrorCode::Launch, "plugin stderr missing"))?;
+        let maximum = self.policy.max_frame_bytes;
+        // One queued frame plus the reader's current frame is covered by the two-frame execution
+        // context reservation above. Backpressure remains cancellable during tree teardown.
+        let (frames_tx, frames_rx) = mpsc::sync_channel(1);
+        let reader_stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&reader_stop);
+        let reader_handle = std::thread::Builder::new()
+            .name("process-plugin-protocol".into())
+            .spawn(move || {
+                loop {
+                    let mut frame = protocol::read_frame::<PluginMessage>(&mut stdout, maximum);
+                    let terminal = frame.is_err();
+                    loop {
+                        if thread_stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        match frames_tx.try_send(frame) {
+                            Ok(()) => break,
+                            Err(mpsc::TrySendError::Full(returned)) => {
+                                frame = returned;
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => return,
+                        }
+                    }
+                    if terminal {
+                        break;
+                    }
+                }
+            })
+            .map_err(|_| {
+                PluginError::new(PluginErrorCode::Launch, "protocol reader unavailable")
+            })?;
+        let reader = ProtocolReader { stop: reader_stop, handle: reader_handle };
+        let stderr_reader = std::thread::Builder::new()
+            .name("process-plugin-stderr".into())
+            .spawn(move || drain_stderr(stderr))
+            .map_err(|_| PluginError::new(PluginErrorCode::Launch, "stderr reader unavailable"))?;
+        let nonce = request_nonce(request.request_id);
+        if let Err(error) = protocol::write_frame(
+            &mut stdin,
+            &HostMessage::Hello {
+                supported_versions: self.plugin.protocol_versions.clone(),
+                plugin_id: self.plugin.plugin_id.clone(),
+                nonce: nonce.clone(),
+            },
+            maximum,
+        ) {
+            return finish_error(child, reader, stderr_reader, map_write_error(&error));
+        }
+        let handshake_deadline = Instant::now().checked_add(self.policy.handshake_timeout);
+        let hello = match receive_until(&frames_rx, &mut child, context, handshake_deadline, false)
+        {
+            Ok(hello) => hello,
+            Err(error) => return finish_error(child, reader, stderr_reader, error),
+        };
+        match hello {
+            PluginMessage::Hello { selected_version, plugin_id, nonce: echoed }
+                if selected_version == PROTOCOL_V1
+                    && self.plugin.protocol_versions.contains(&selected_version)
+                    && plugin_id == self.plugin.plugin_id
+                    && echoed == nonce => {}
+            _ => {
+                return finish_error(
+                    child,
+                    reader,
+                    stderr_reader,
+                    PluginError::new(PluginErrorCode::Protocol, "invalid handshake response"),
+                );
+            }
+        }
+        let source_base64 = base64::engine::general_purpose::STANDARD.encode(request.source);
+        let request_deadline = Instant::now().checked_add(self.policy.request_timeout);
+        stdin = match write_request_bounded(
+            stdin,
+            HostMessage::Request {
+                protocol_version: PROTOCOL_V1,
+                request_id: request.request_id.to_owned(),
+                input_format: request.input_format.to_owned(),
+                source_name: request.source_name.map(str::to_owned),
+                source_base64,
+                maximum_output_bytes: self.policy.max_output_bytes,
+            },
+            maximum,
+            &mut child,
+            context,
+            request_deadline,
+        ) {
+            Ok(stdin) => stdin,
+            Err(error) => return finish_error(child, reader, stderr_reader, error),
+        };
+        let mut last_sequence = 0_u64;
+        let mut event_count = 0_u32;
+        let mut streamed_diagnostics = Vec::new();
+        let mut streamed_diagnostic_bytes = 0_u64;
+        macro_rules! finish_on_error {
+            ($expression:expr) => {
+                match $expression {
+                    Ok(value) => value,
+                    Err(error) => return finish_error(child, reader, stderr_reader, error),
+                }
+            };
+        }
+        loop {
+            let frame = match receive_until(&frames_rx, &mut child, context, request_deadline, true)
+            {
+                Ok(frame) => frame,
+                Err(error)
+                    if matches!(
+                        error.code,
+                        PluginErrorCode::Cancelled | PluginErrorCode::Timeout
+                    ) =>
+                {
+                    let _ = protocol::write_frame(
+                        &mut stdin,
+                        &HostMessage::Cancel {
+                            protocol_version: PROTOCOL_V1,
+                            request_id: request.request_id.to_owned(),
+                        },
+                        maximum,
+                    );
+                    let grace = Instant::now().checked_add(self.policy.cancellation_grace);
+                    while grace.is_some_and(|deadline| Instant::now() < deadline) {
+                        if child.try_wait().ok().flatten().is_some() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    terminate_tree(&mut child);
+                    let _ = reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(error);
+                }
+                Err(error) => return finish_error(child, reader, stderr_reader, error),
+            };
+            // Cancellation can race the final millisecond of recv_timeout. Re-check after a frame
+            // becomes readable so a cooperative terminal/error cannot overwrite an already-set
+            // caller cancellation state.
+            if let Err(error) = context.checkpoint().map_err(|error| map_execution_error(&error)) {
+                let _ = protocol::write_frame(
+                    &mut stdin,
+                    &HostMessage::Cancel {
+                        protocol_version: PROTOCOL_V1,
+                        request_id: request.request_id.to_owned(),
+                    },
+                    maximum,
+                );
+                let grace = Instant::now().checked_add(self.policy.cancellation_grace);
+                while grace.is_some_and(|deadline| Instant::now() < deadline) {
+                    if child.try_wait().ok().flatten().is_some() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                terminate_tree(&mut child);
+                let _ = reader.join();
+                let _ = stderr_reader.join();
+                return Err(error);
+            }
+            match frame {
+                PluginMessage::Progress {
+                    protocol_version,
+                    request_id,
+                    sequence,
+                    stage,
+                    completed_units,
+                    total_units,
+                    message,
+                } => {
+                    event_count = event_count.saturating_add(1);
+                    if event_count > 10_000
+                        || message.as_ref().is_some_and(|value| value.len() > 4096)
+                    {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::ResourceLimit,
+                                "plugin event limit exceeded",
+                            ),
+                        );
+                    }
+                    finish_on_error!(validate_event(
+                        protocol_version,
+                        &request_id,
+                        request.request_id,
+                        sequence,
+                        &mut last_sequence,
+                    ));
+                    let stage = finish_on_error!(parse_stage(&stage));
+                    finish_on_error!(
+                        context
+                            .report(stage, completed_units, total_units, message)
+                            .map_err(|error| map_execution_error(&error))
+                    );
+                }
+                PluginMessage::Diagnostic {
+                    protocol_version,
+                    request_id,
+                    sequence,
+                    diagnostic_json,
+                } => {
+                    event_count = event_count.saturating_add(1);
+                    streamed_diagnostic_bytes =
+                        streamed_diagnostic_bytes.saturating_add(diagnostic_json.len() as u64);
+                    if event_count > 10_000
+                        || streamed_diagnostic_bytes > self.policy.max_output_bytes
+                    {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::ResourceLimit,
+                                "plugin event limit exceeded",
+                            ),
+                        );
+                    }
+                    finish_on_error!(validate_event(
+                        protocol_version,
+                        &request_id,
+                        request.request_id,
+                        sequence,
+                        &mut last_sequence,
+                    ));
+                    let envelope = finish_on_error!(
+                        DiagnosticsDto::from_json(&diagnostic_json).map_err(|_| {
+                            PluginError::new(PluginErrorCode::Protocol, "invalid diagnostic event")
+                        })
+                    );
+                    if envelope.diagnostics.len() != 1 {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::Protocol,
+                                "diagnostic event must contain exactly one record",
+                            ),
+                        );
+                    }
+                    let diagnostic = finish_on_error!(
+                        envelope.diagnostics.into_iter().next().ok_or_else(|| PluginError::new(
+                            PluginErrorCode::Protocol,
+                            "diagnostic event is empty",
+                        ))
+                    );
+                    streamed_diagnostics.push(finish_on_error!(
+                        Diagnostic::try_from(diagnostic).map_err(|_| {
+                            PluginError::new(PluginErrorCode::Protocol, "invalid diagnostic event")
+                        })
+                    ));
+                }
+                PluginMessage::Response { protocol_version, request_id, result_json } => {
+                    if protocol_version != PROTOCOL_V1 || request_id != request.request_id {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::Protocol,
+                                "terminal response identity mismatch",
+                            ),
+                        );
+                    }
+                    if result_json.len() as u64 > self.policy.max_output_bytes {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::FrameTooLarge,
+                                "nested result exceeds output limit",
+                            ),
+                        );
+                    }
+                    if (result_json.len() as u64)
+                        .checked_add(streamed_diagnostic_bytes)
+                        .is_none_or(|bytes| bytes > self.policy.max_output_bytes)
+                    {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::FrameTooLarge,
+                                "combined result and diagnostics exceed output limit",
+                            ),
+                        );
+                    }
+                    let dto = finish_on_error!(ResultDto::from_json(&result_json).map_err(|_| {
+                        PluginError::new(
+                            PluginErrorCode::InvalidResult,
+                            "returned result DTO is invalid",
+                        )
+                    }));
+                    let mut result =
+                        finish_on_error!(ConversionResult::try_from(dto).map_err(|_| {
+                            PluginError::new(
+                                PluginErrorCode::InvalidResult,
+                                "returned result conversion failed",
+                            )
+                        }));
+                    result.diagnostics.splice(0..0, streamed_diagnostics);
+                    drop(stdin);
+                    let status = wait_bounded(&mut child, Duration::from_millis(250));
+                    if status != Some(true) {
+                        terminate_tree(&mut child);
+                        let _ = reader.join();
+                        let _ = stderr_reader.join();
+                        return Err(PluginError::new(
+                            PluginErrorCode::Crashed,
+                            "plugin did not exit successfully after response",
+                        ));
+                    }
+                    if reader.join_after_drain(&frames_rx) {
+                        let _ = stderr_reader.join();
+                        return Err(PluginError::new(
+                            PluginErrorCode::Protocol,
+                            "frame followed terminal response",
+                        ));
+                    }
+                    let _ = stderr_reader.join();
+                    return Ok(PluginExecution {
+                        result,
+                        plugin_id: self.plugin.plugin_id.clone(),
+                        executable_sha256: self.plugin.executable_sha256.clone(),
+                    });
+                }
+                PluginMessage::Error { protocol_version, request_id, code, message } => {
+                    if protocol_version != PROTOCOL_V1
+                        || request_id.as_deref() != Some(request.request_id)
+                        || !valid_token(&code, 64)
+                        || message.len() > 4096
+                    {
+                        return finish_error(
+                            child,
+                            reader,
+                            stderr_reader,
+                            PluginError::new(
+                                PluginErrorCode::Protocol,
+                                "invalid plugin error frame",
+                            ),
+                        );
+                    }
+                    return finish_error(
+                        child,
+                        reader,
+                        stderr_reader,
+                        PluginError::new(
+                            PluginErrorCode::Plugin,
+                            format!("plugin returned {code}"),
+                        ),
+                    );
+                }
+                PluginMessage::Hello { .. } => {
+                    return finish_error(
+                        child,
+                        reader,
+                        stderr_reader,
+                        PluginError::new(PluginErrorCode::Protocol, "duplicate handshake"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn write_request_bounded(
+    mut stdin: Box<dyn std::io::Write + Send>,
+    request: HostMessage,
+    maximum: u32,
+    child: &mut sandbox::SandboxChild,
+    context: &ExecutionContext,
+    deadline: Option<Instant>,
+) -> Result<Box<dyn std::io::Write + Send>, PluginError> {
+    let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+    let writer = std::thread::Builder::new()
+        .name("process-plugin-request".into())
+        .spawn(move || {
+            let result = protocol::write_frame(&mut stdin, &request, maximum);
+            let _ = finished_tx.send((stdin, result));
+        })
+        .map_err(|_| PluginError::new(PluginErrorCode::Launch, "request writer unavailable"))?;
+    loop {
+        match finished_rx.recv_timeout(Duration::from_millis(5)) {
+            Ok((stdin, result)) => {
+                let _ = writer.join();
+                return result.map(|()| stdin).map_err(|error| map_write_error(&error));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = writer.join();
+                return Err(PluginError::new(
+                    PluginErrorCode::Protocol,
+                    "request writer ended unexpectedly",
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let context_error = context.checkpoint().err().map(|error| map_execution_error(&error));
+        let policy_timeout = deadline.is_some_and(|value| Instant::now() >= value);
+        let child_ended = child.try_wait().ok().flatten().is_some();
+        if context_error.is_some() || policy_timeout || child_ended {
+            child.terminate();
+            let _ = writer.join();
+            return Err(context_error.unwrap_or_else(|| {
+                if policy_timeout {
+                    PluginError::new(PluginErrorCode::Timeout, "plugin request write timed out")
+                } else {
+                    PluginError::new(
+                        PluginErrorCode::Crashed,
+                        "plugin exited while receiving request",
+                    )
+                }
+            }));
+        }
+    }
+}
+
+fn receive_until(
+    frames: &mpsc::Receiver<std::io::Result<PluginMessage>>,
+    child: &mut sandbox::SandboxChild,
+    context: &ExecutionContext,
+    deadline: Option<Instant>,
+    request_active: bool,
+) -> Result<PluginMessage, PluginError> {
+    loop {
+        if request_active {
+            context.checkpoint().map_err(|error| map_execution_error(&error))?;
+        }
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            return Err(PluginError::new(
+                PluginErrorCode::Timeout,
+                if request_active {
+                    "plugin request timed out"
+                } else {
+                    "plugin handshake timed out"
+                },
+            ));
+        }
+        match frames.recv_timeout(Duration::from_millis(5)) {
+            Ok(Ok(frame)) => return Ok(frame),
+            Ok(Err(error)) => {
+                let detail = error.to_string();
+                let code = if detail.contains("stream ended before frame") {
+                    PluginErrorCode::Crashed
+                } else if detail.contains("exceeds limit") {
+                    PluginErrorCode::FrameTooLarge
+                } else {
+                    PluginErrorCode::Protocol
+                };
+                return Err(PluginError::new(code, "plugin protocol stream is malformed"));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(PluginError::new(
+                    PluginErrorCode::Crashed,
+                    "plugin protocol stream ended",
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if child
+                    .try_wait()
+                    .map_err(|()| PluginError::new(PluginErrorCode::Crashed, "plugin wait failed"))?
+                    .is_some()
+                {
+                    return Err(PluginError::new(
+                        PluginErrorCode::Crashed,
+                        "plugin exited before terminal response",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn finish_error(
+    mut child: sandbox::SandboxChild,
+    reader: ProtocolReader,
+    stderr: std::thread::JoinHandle<()>,
+    error: PluginError,
+) -> Result<PluginExecution, PluginError> {
+    terminate_tree(&mut child);
+    let _ = reader.join();
+    let _ = stderr.join();
+    Err(error)
+}
+
+struct ProtocolReader {
+    stop: Arc<AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl ProtocolReader {
+    fn join(self) -> std::thread::Result<()> {
+        self.stop.store(true, Ordering::Release);
+        self.handle.join()
+    }
+
+    fn join_after_drain(self, frames: &mpsc::Receiver<std::io::Result<PluginMessage>>) -> bool {
+        let mut extra = false;
+        for frame in frames {
+            extra |= frame.is_ok();
+        }
+        let _ = self.handle.join();
+        extra
+    }
+}
+
+fn wait_bounded(child: &mut sandbox::SandboxChild, duration: Duration) -> Option<bool> {
+    let deadline = Instant::now().checked_add(duration)?;
+    loop {
+        if let Ok(Some(success)) = child.try_wait() {
+            return Some(success);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn terminate_tree(child: &mut sandbox::SandboxChild) {
+    child.terminate();
+}
+
+fn drain_stderr(mut stderr: impl std::io::Read) {
+    let mut buffer = [0_u8; 4096];
+    let mut total = 0_usize;
+    loop {
+        match stderr.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => total = total.saturating_add(read).min(16 * 1024),
+        }
+    }
+    let _ = total;
+}
+
+fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
+    if !(1024..=protocol::ABSOLUTE_MAX_FRAME_BYTES).contains(&policy.max_frame_bytes)
+        || policy.max_output_bytes == 0
+        || policy.max_output_bytes > u64::from(policy.max_frame_bytes)
+        || policy.max_memory_bytes < 32 * 1024 * 1024
+        || policy.max_file_bytes == 0
+        || !(16..=4096).contains(&policy.max_open_files)
+        || policy.handshake_timeout.is_zero()
+        || policy.request_timeout.is_zero()
+        || policy.request_timeout > Duration::from_hours(1)
+        || policy.cancellation_grace > Duration::from_secs(5)
+        || policy.environment.len() > 64
+    {
+        return Err(PluginError::new(PluginErrorCode::Authority, "invalid runtime policy"));
+    }
+    for (name, value) in &policy.environment {
+        let name = name.to_str().ok_or_else(|| {
+            PluginError::new(PluginErrorCode::Authority, "environment name is not UTF-8")
+        })?;
+        let value = value.to_str().ok_or_else(|| {
+            PluginError::new(PluginErrorCode::Authority, "environment value is not UTF-8")
+        })?;
+        if !valid_environment_name(name)
+            || reserved_environment_name(name)
+            || value.len() > 4096
+            || value.contains('\0')
+        {
+            return Err(PluginError::new(
+                PluginErrorCode::Authority,
+                "invalid declared environment",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_manifest(
+    manifest: PluginManifest,
+    maximum_file_bytes: u64,
+) -> Result<ValidatedPlugin, PluginError> {
+    if !valid_token(&manifest.plugin_id, 128)
+        || manifest.protocol_versions.is_empty()
+        || manifest.protocol_versions.len() > 8
+        || !manifest.protocol_versions.contains(&PROTOCOL_V1)
+        || manifest.protocol_versions.iter().copied().collect::<BTreeSet<_>>().len()
+            != manifest.protocol_versions.len()
+        || !valid_sha256(&manifest.executable_sha256)
+    {
+        return Err(PluginError::new(PluginErrorCode::Authority, "invalid plugin manifest"));
+    }
+    let executable = canonical_regular_file(&manifest.executable)?;
+    let runtime_root = canonical_directory(&manifest.runtime_root)?;
+    if !executable.starts_with(&runtime_root) {
+        return Err(PluginError::new(
+            PluginErrorCode::Authority,
+            "executable escapes runtime root",
+        ));
+    }
+    let plugin = ValidatedPlugin {
+        plugin_id: manifest.plugin_id,
+        executable,
+        runtime_root,
+        executable_sha256: manifest.executable_sha256,
+        protocol_versions: manifest.protocol_versions,
+    };
+    verify_executable(&plugin, maximum_file_bytes)?;
+    Ok(plugin)
+}
+
+fn verify_executable(plugin: &ValidatedPlugin, maximum_file_bytes: u64) -> Result<(), PluginError> {
+    if canonical_regular_file(&plugin.executable)? != plugin.executable {
+        return Err(PluginError::new(PluginErrorCode::Authority, "executable identity changed"));
+    }
+    let metadata = std::fs::metadata(&plugin.executable).map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "executable metadata unavailable")
+    })?;
+    let maximum = maximum_file_bytes.min(ABSOLUTE_EXECUTABLE_BYTES);
+    if metadata.len() == 0 || metadata.len() > maximum {
+        return Err(PluginError::new(
+            PluginErrorCode::Authority,
+            "executable exceeds authenticated file limit",
+        ));
+    }
+    let mut file = std::fs::File::open(&plugin.executable)
+        .map_err(|_| PluginError::new(PluginErrorCode::Authority, "executable cannot be read"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; HASH_BUFFER_SIZE].into_boxed_slice();
+    let mut total = 0_u64;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| PluginError::new(PluginErrorCode::Authority, "executable read failed"))?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > maximum {
+            return Err(PluginError::new(
+                PluginErrorCode::Authority,
+                "executable exceeds authenticated file limit",
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if total != metadata.len() {
+        return Err(PluginError::new(PluginErrorCode::Authority, "executable size changed"));
+    }
+    let digest = format!("{:x}", hasher.finalize());
+    if digest != plugin.executable_sha256 {
+        return Err(PluginError::new(PluginErrorCode::Authority, "executable digest mismatch"));
+    }
+    Ok(())
+}
+
+fn stage_plugin(
+    plugin: &ValidatedPlugin,
+    policy: &RuntimePolicy,
+    directory_guard: tempfile::TempDir,
+    context: &ExecutionContext,
+) -> Result<StagedPlugin, PluginError> {
+    let private_root = directory_guard.path().canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Launch, "private working directory identity failed")
+    })?;
+    let runtime = private_root.join("runtime");
+    let working = private_root.join("work");
+    std::fs::create_dir(&runtime)
+        .and_then(|()| std::fs::create_dir(&working))
+        .map_err(|_| PluginError::new(PluginErrorCode::Launch, "private runtime unavailable"))?;
+    let executable_relative =
+        plugin.executable.strip_prefix(&plugin.runtime_root).map_err(|_| {
+            PluginError::new(PluginErrorCode::Authority, "executable runtime identity changed")
+        })?;
+    let temporary =
+        copy_runtime_tree(&plugin.runtime_root, &runtime, policy.max_file_bytes, context)?;
+    let executable = runtime.join(executable_relative).canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "staged executable unavailable")
+    })?;
+    make_staged_file_private(&executable, true)?;
+    let runtime_root = runtime
+        .canonicalize()
+        .map_err(|_| PluginError::new(PluginErrorCode::Authority, "staged runtime unavailable"))?;
+    let working = working.canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Launch, "private work directory unavailable")
+    })?;
+    Ok(StagedPlugin {
+        plugin: ValidatedPlugin {
+            plugin_id: plugin.plugin_id.clone(),
+            executable,
+            runtime_root,
+            executable_sha256: plugin.executable_sha256.clone(),
+            protocol_versions: plugin.protocol_versions.clone(),
+        },
+        working_directory: working,
+        _directory: directory_guard,
+        _temporary: temporary,
+    })
+}
+
+struct StagedPlugin {
+    plugin: ValidatedPlugin,
+    working_directory: PathBuf,
+    // Fields drop in declaration order: remove files before releasing their accounting guard.
+    _directory: tempfile::TempDir,
+    _temporary: ResourceReservation,
+}
+
+#[allow(clippy::too_many_lines)]
+fn copy_runtime_tree(
+    source: &Path,
+    destination: &Path,
+    maximum_file: u64,
+    context: &ExecutionContext,
+) -> Result<ResourceReservation, PluginError> {
+    let mut pending = vec![(source.to_path_buf(), destination.to_path_buf())];
+    let mut entries = 0_usize;
+    let mut total = 0_u64;
+    let mut temporary =
+        context.reserve_temporary(0).map_err(|error| map_execution_error(&error))?;
+    let mut buffer = vec![0_u8; HASH_BUFFER_SIZE].into_boxed_slice();
+    while let Some((source_directory, destination_directory)) = pending.pop() {
+        let children = std::fs::read_dir(&source_directory)
+            .map_err(|_| PluginError::new(PluginErrorCode::Authority, "runtime tree unreadable"))?;
+        for child in children {
+            let child = child.map_err(|_| {
+                PluginError::new(PluginErrorCode::Authority, "runtime entry unreadable")
+            })?;
+            entries = entries.saturating_add(1);
+            if entries > ABSOLUTE_RUNTIME_ENTRIES {
+                return Err(PluginError::new(
+                    PluginErrorCode::Authority,
+                    "runtime tree entry limit exceeded",
+                ));
+            }
+            let source_path = child.path();
+            let destination_path = destination_directory.join(child.file_name());
+            let metadata = std::fs::symlink_metadata(&source_path).map_err(|_| {
+                PluginError::new(PluginErrorCode::Authority, "runtime entry metadata unavailable")
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(PluginError::new(
+                    PluginErrorCode::Authority,
+                    "runtime tree contains a symbolic link",
+                ));
+            }
+            if metadata.is_dir() {
+                std::fs::create_dir(&destination_path).map_err(|_| {
+                    PluginError::new(PluginErrorCode::Launch, "staged runtime directory failed")
+                })?;
+                pending.push((source_path, destination_path));
+            } else if metadata.is_file() {
+                let maximum = maximum_file.min(ABSOLUTE_EXECUTABLE_BYTES);
+                if metadata.len() > maximum {
+                    return Err(PluginError::new(
+                        PluginErrorCode::Authority,
+                        "runtime file limit exceeded",
+                    ));
+                }
+                let mut source_file = std::fs::File::open(&source_path).map_err(|_| {
+                    PluginError::new(PluginErrorCode::Authority, "runtime file unreadable")
+                })?;
+                let mut destination_file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&destination_path)
+                    .map_err(|_| {
+                        PluginError::new(PluginErrorCode::Launch, "staged runtime create failed")
+                    })?;
+                let mut copied = 0_u64;
+                loop {
+                    context.checkpoint().map_err(|error| map_execution_error(&error))?;
+                    let read = source_file.read(&mut buffer).map_err(|_| {
+                        PluginError::new(PluginErrorCode::Authority, "runtime file read failed")
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    copied = copied.saturating_add(read as u64);
+                    if copied > metadata.len() || copied > maximum {
+                        return Err(PluginError::new(
+                            PluginErrorCode::Authority,
+                            "runtime file changed while staging",
+                        ));
+                    }
+                    temporary.grow(read as u64).map_err(|error| map_execution_error(&error))?;
+                    std::io::Write::write_all(&mut destination_file, &buffer[..read]).map_err(
+                        |_| {
+                            PluginError::new(PluginErrorCode::Launch, "staged runtime write failed")
+                        },
+                    )?;
+                }
+                drop(destination_file);
+                let copied = std::fs::metadata(&destination_path)
+                    .map_err(|_| {
+                        PluginError::new(PluginErrorCode::Launch, "staged runtime metadata failed")
+                    })?
+                    .len();
+                if copied != metadata.len() || copied > maximum {
+                    return Err(PluginError::new(
+                        PluginErrorCode::Authority,
+                        "runtime file changed while staging",
+                    ));
+                }
+                total = total.saturating_add(copied);
+                if total > ABSOLUTE_RUNTIME_BYTES {
+                    return Err(PluginError::new(
+                        PluginErrorCode::Authority,
+                        "runtime tree byte limit exceeded",
+                    ));
+                }
+                make_staged_file_private(&destination_path, false)?;
+            } else {
+                return Err(PluginError::new(
+                    PluginErrorCode::Authority,
+                    "runtime tree contains a special file",
+                ));
+            }
+        }
+    }
+    Ok(temporary)
+}
+
+#[allow(clippy::unnecessary_wraps)] // Windows needs no chmod; Unix reports permission failures.
+fn make_staged_file_private(path: &Path, executable: bool) -> Result<(), PluginError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = if executable { 0o500 } else { 0o400 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|_| {
+            PluginError::new(PluginErrorCode::Launch, "staged runtime permissions failed")
+        })?;
+    }
+    #[cfg(windows)]
+    {
+        let _ = (path, executable);
+    }
+    Ok(())
+}
+
+fn canonical_regular_file(path: &Path) -> Result<PathBuf, PluginError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "executable metadata unavailable")
+    })?;
+    if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(PluginError::new(
+            PluginErrorCode::Authority,
+            "executable is not a private regular file",
+        ));
+    }
+    path.canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "executable canonicalization failed")
+    })
+}
+
+fn canonical_directory(path: &Path) -> Result<PathBuf, PluginError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "runtime root metadata unavailable")
+    })?;
+    if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(PluginError::new(
+            PluginErrorCode::Authority,
+            "runtime root is not a canonical directory",
+        ));
+    }
+    path.canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Authority, "runtime root canonicalization failed")
+    })
+}
+
+fn validate_request(
+    request: &PluginRequest<'_>,
+    policy: &RuntimePolicy,
+) -> Result<(), PluginError> {
+    let encoded = request
+        .source
+        .len()
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(2))
+        .map(|value| value / 3)
+        .ok_or_else(|| {
+            PluginError::new(PluginErrorCode::ResourceLimit, "source encoding overflow")
+        })?;
+    if !valid_token(request.request_id, 128)
+        || !valid_token(request.input_format, 64)
+        || request.source.is_empty()
+        || encoded.saturating_add(4096) > policy.max_frame_bytes as usize
+        || request.source_name.is_some_and(|name| name.len() > 1024 || name.contains('\0'))
+    {
+        return Err(PluginError::new(
+            PluginErrorCode::ResourceLimit,
+            "request exceeds process protocol limits",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_event(
+    version: u32,
+    id: &str,
+    expected: &str,
+    sequence: u64,
+    last: &mut u64,
+) -> Result<(), PluginError> {
+    if version != PROTOCOL_V1 || id != expected || sequence == 0 || sequence <= *last {
+        return Err(PluginError::new(
+            PluginErrorCode::Protocol,
+            "invalid event identity or ordering",
+        ));
+    }
+    *last = sequence;
+    Ok(())
+}
+
+fn parse_stage(stage: &str) -> Result<ExecutionStage, PluginError> {
+    match stage {
+        "resolving" => Ok(ExecutionStage::Resolving),
+        "detecting" => Ok(ExecutionStage::Detecting),
+        "probing" => Ok(ExecutionStage::Probing),
+        "converting" => Ok(ExecutionStage::Converting),
+        "ai" => Ok(ExecutionStage::Ai),
+        "ocr" => Ok(ExecutionStage::Ocr),
+        "rendering" => Ok(ExecutionStage::Rendering),
+        "completed" => Ok(ExecutionStage::Completed),
+        _ => Err(PluginError::new(PluginErrorCode::Protocol, "unknown progress stage")),
+    }
+}
+
+fn map_execution_error(error: &into_markdown_core::ConversionError) -> PluginError {
+    match error {
+        into_markdown_core::ConversionError::Cancelled => {
+            PluginError::new(PluginErrorCode::Cancelled, "plugin request cancelled")
+        }
+        into_markdown_core::ConversionError::Timeout => {
+            PluginError::new(PluginErrorCode::Timeout, "plugin request timed out")
+        }
+        _ => PluginError::new(
+            PluginErrorCode::ResourceLimit,
+            "execution context rejected plugin event",
+        ),
+    }
+}
+
+fn map_write_error(error: &std::io::Error) -> PluginError {
+    let code = if error.to_string().contains("exceeds limit") {
+        PluginErrorCode::FrameTooLarge
+    } else {
+        PluginErrorCode::Protocol
+    };
+    PluginError::new(code, "host could not write protocol frame")
+}
+
+fn valid_token(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn valid_environment_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && !value.starts_with('=')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn reserved_environment_name(value: &str) -> bool {
+    matches!(
+        value,
+        "INTO_MARKDOWN_PLUGIN_PROTOCOL"
+            | "SYSTEMROOT"
+            | "WINDIR"
+            | "SYSTEMDRIVE"
+            | "USERPROFILE"
+            | "LOCALAPPDATA"
+            | "APPDATA"
+            | "TEMP"
+            | "TMP"
+    )
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn request_nonce(request_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"into-markdown/process-v1/nonce\0");
+    hasher.update(request_id.as_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    hasher.update(time.to_le_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_rejects_host_owned_environment_names() {
+        for name in [
+            "INTO_MARKDOWN_PLUGIN_PROTOCOL",
+            "SYSTEMROOT",
+            "WINDIR",
+            "SYSTEMDRIVE",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "TEMP",
+            "TMP",
+        ] {
+            let mut policy = RuntimePolicy::default();
+            policy.environment.insert(name.into(), "attacker-controlled".into());
+            assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
+        }
+        let mut policy = RuntimePolicy::default();
+        policy.environment.insert("PLUGIN_LOCALE".into(), "en-US".into());
+        validate_policy(&policy).unwrap();
+    }
+}
