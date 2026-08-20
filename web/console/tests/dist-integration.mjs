@@ -12,7 +12,7 @@ const bootstrap = manifest.assets.find((asset) => /^\/assets\/bootstrap\.[a-f0-9
 assert.ok(app && bootstrap);
 
 function installWindow(fragment = "") {
-  const window = new Window({ url: `http://127.0.0.1:1/status${fragment}` });
+  const window = new Window({ url: `http://127.0.0.1:1/workbench${fragment}` });
   Object.defineProperty(window.navigator, "languages", { value: ["en"], configurable: true });
   window.document.body.innerHTML = '<div id="app"></div>';
   for (const [name, value] of Object.entries({
@@ -38,14 +38,14 @@ function waitFor(predicate, timeout = 1_000) {
 
 test("checked-in production app mounts without a React global", async () => {
   const window = installWindow();
-  globalThis.fetch = async () => new Response(JSON.stringify({
+  globalThis.fetch = async (input) => new Response(JSON.stringify(String(input).includes("/api/tasks?") ? { schemaVersion: 1, tasks: [] } : {
     schemaVersion: 1,
     localApi: { available: true, code: "available", detail: "ok" },
     documentConsole: { available: true, code: "available", detail: "ok" },
   }), { headers: { "content-type": "application/json" } });
   const module = await import(pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);
   module.startConsole("A".repeat(43));
-  await waitFor(() => window.document.body.textContent.includes("Local API available"));
+  await waitFor(() => window.document.body.textContent.includes("System ready"));
   assert.equal("React" in globalThis, false);
 });
 
@@ -82,7 +82,7 @@ test("checked-in bootstrap completes hash clear, dynamic import, mount, and auth
   let request;
   globalThis.fetch = async (input, init) => {
     request = [input, init];
-    return new Response(JSON.stringify({
+    return new Response(JSON.stringify(String(input).includes("/api/tasks?") ? { schemaVersion: 1, tasks: [] } : {
       schemaVersion: 1,
       localApi: { available: true, code: "available", detail: "ok" },
       documentConsole: { available: true, code: "available", detail: "ok" },
@@ -91,7 +91,7 @@ test("checked-in bootstrap completes hash clear, dynamic import, mount, and auth
   let bootstrapText = await readFile(resolve(distDirectory, bootstrap.path.slice(1)), "utf8");
   bootstrapText = bootstrapText.replace(app.path, pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);
   await import(`data:text/javascript;base64,${Buffer.from(bootstrapText).toString("base64")}`);
-  await waitFor(() => window.document.body.textContent.includes("Local API available"));
+  await waitFor(() => window.document.body.textContent.includes("System ready"));
   assert.equal(window.location.hash, "");
   assert.equal(window.document.documentElement.outerHTML.includes(token), false);
   assert.equal(request[1].headers["X-Into-Md-Session"], token);

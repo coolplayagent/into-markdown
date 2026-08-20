@@ -3,7 +3,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
-export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus }
+export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus }
 export type TaskStatus = "pending" | "running" | "converted" | "succeeded" | "failed" | "interrupted" | "cancelled";
 export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
@@ -18,11 +18,12 @@ export interface TaskRecord {
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
   pinned: boolean;
+  displayName?: string | null; format?: InputFormat | null; batchId?: string | null;
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
 }
 export interface TaskCursor { updatedAtMs: number; id: string }
 export interface TaskPage { tasks: TaskRecord[]; nextCursor?: TaskCursor }
-export interface TaskFilters { limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean }
+export interface TaskFilters { limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean; batchId?: string }
 export interface CleanupSummary { schemaVersion: 1; deletedTasks: number; reclaimedBytes: number }
 export interface TaskEvent {
   schemaVersion: 1; sequence: number; taskId: string; kind: "snapshot" | "progress";
@@ -30,6 +31,7 @@ export interface TaskEvent {
   execution?: { stage: string; basisPoints: number; message?: string | null };
 }
 export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
+const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
 export type OcrPolicy = "off" | "auto" | "always";
 export type AiMode = "off" | "fallback" | "prefer" | "only";
 export type AssetMode = "extract" | "embed" | "omit";
@@ -43,7 +45,7 @@ export interface WorkbenchOptions {
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
   includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: false,
+  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: true,
 };
 
 export class ApiError extends Error {
@@ -54,7 +56,8 @@ function isComponent(value: unknown): value is ComponentStatus {
   return isObject(value) && typeof value.available === "boolean" && typeof value.code === "string" && typeof value.detail === "string";
 }
 function parseStatus(value: unknown): StatusResponse {
-  if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)) throw new ApiError("invalidResponse");
+  if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)
+    || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)) throw new ApiError("invalidResponse");
   return value as unknown as StatusResponse;
 }
 const taskStatuses = new Set<TaskStatus>(["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"]);
@@ -73,6 +76,11 @@ export function parseTask(value: unknown): TaskRecord {
     || Number(value.progressMillionths) < 0 || Number(value.progressMillionths) > 1_000_000
     || !Array.isArray(value.diagnostics) || value.diagnostics.length > 1024 || value.diagnostics.some((item) => !isObject(item) || typeof item.code !== "string" || item.code.length > 128)
     || !Array.isArray(value.artifacts) || value.artifacts.length > 128 || value.artifacts.some((artifact) => !isArtifact(artifact))
+    || value.displayName !== undefined && value.displayName !== null
+      && (typeof value.displayName !== "string" || value.displayName.length === 0 || value.displayName.length > 255 || /[\u0000-\u001f\u007f/\\]/.test(value.displayName))
+    || value.format !== undefined && value.format !== null && !inputFormats.has(value.format as InputFormat)
+    || value.batchId !== undefined && value.batchId !== null
+      && (typeof value.batchId !== "string" || !/^[0-9a-f]{32}$/.test(value.batchId))
     || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }
@@ -111,10 +119,10 @@ function base64UrlUtf8(value: string): string {
 }
 function base64UrlJson(value: unknown): string { return base64UrlUtf8(JSON.stringify(value)); }
 function mib(value: number): number { return Math.round(value * 1024 * 1024); }
-export function taskRequest(options: WorkbenchOptions): unknown {
+export function taskRequest(options: WorkbenchOptions, batchId?: string): unknown {
   const ai = options.aiMode;
   const unrestrictedNetwork = options.networkMode === "unrestricted";
-  return { schemaVersion: 1, format: options.format, options: {
+  return { schemaVersion: 1, format: options.format, ...(batchId ? { batchId } : {}), options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
     asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: 600_000,
@@ -135,7 +143,7 @@ export function taskRequest(options: WorkbenchOptions): unknown {
 export interface ApiClient {
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
-  upload(file: File, options: WorkbenchOptions, signal?: AbortSignal): Promise<TaskRecord>;
+  upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
   cancel(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   retry(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   setPinned(id: string, pinned: boolean, signal?: AbortSignal): Promise<TaskRecord>;
@@ -169,11 +177,12 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
       const query = new URLSearchParams(); query.set("limit", String(filters.limit ?? 25));
       if (filters.after) { query.set("afterUpdatedAtMs", String(filters.after.updatedAtMs)); query.set("afterId", filters.after.id); }
       if (filters.status) query.set("status", filters.status); if (filters.pinned !== undefined) query.set("pinned", String(filters.pinned));
+      if (filters.batchId) query.set("batchId", filters.batchId);
       return parseTaskList(await jsonRequest(`/api/tasks?${query}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }));
     },
     async getTask(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
-    async upload(file, options, signal) {
-      const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options));
+    async upload(file, options, batchId, signal) {
+      const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options, batchId));
       return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
     },
     async cancel(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },

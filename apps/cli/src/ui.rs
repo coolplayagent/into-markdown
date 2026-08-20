@@ -4,7 +4,7 @@ use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
 use crate::web_tasks::{
     ArtifactSnapshot, RetentionPolicy, TaskEventDto, TaskEventKind, WebTaskBackend, WebTaskError,
-    decode_web_task_request,
+    WebTaskRecord, decode_web_task_request,
 };
 use axum::Json;
 use axum::Router;
@@ -25,7 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -99,9 +99,10 @@ struct StatusDto {
     schema_version: u32,
     local_api: ComponentDto,
     document_console: ComponentDto,
+    audio_transcription: ComponentDto,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ComponentDto {
     available: bool,
@@ -113,7 +114,7 @@ struct ComponentDto {
 #[serde(rename_all = "camelCase")]
 struct TaskListDto {
     schema_version: u32,
-    tasks: Vec<into_markdown::TaskRecord>,
+    tasks: Vec<WebTaskRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<TaskCursorDto>,
 }
@@ -131,6 +132,7 @@ struct TaskListQuery {
     after_id: Option<String>,
     status: Option<into_markdown::TaskStatus>,
     pinned: Option<bool>,
+    batch_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -449,6 +451,12 @@ async fn status(headers: HeaderMap) -> Response {
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
+    let audio_transcription =
+        tokio::task::spawn_blocking(audio_runtime_status).await.unwrap_or(ComponentDto {
+            available: false,
+            code: "componentUnavailable",
+            detail: "audio runtime verification did not complete",
+        });
     Json(StatusDto {
         schema_version: 1,
         local_api: ComponentDto {
@@ -461,8 +469,30 @@ async fn status(headers: HeaderMap) -> Response {
             code: "available",
             detail: "local upload and conversion workbench is active",
         },
+        audio_transcription,
     })
     .into_response()
+}
+
+fn audio_runtime_status() -> ComponentDto {
+    static STATUS: OnceLock<ComponentDto> = OnceLock::new();
+    STATUS
+        .get_or_init(|| {
+            if crate::services::verify_asr_runtime().is_ok() {
+                ComponentDto {
+                    available: true,
+                    code: "available",
+                    detail: "Whisper model and pinned LGPL FFmpeg runtime passed local verification",
+                }
+            } else {
+                ComponentDto {
+                    available: false,
+                    code: "componentUnavailable",
+                    detail: "install whisper-small-multilingual and the pinned LGPL FFmpeg runtime",
+                }
+            }
+        })
+        .clone()
 }
 
 async fn upload_task(State(state): State<AppState>, request: Request) -> Response {
@@ -501,6 +531,7 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
         }
     };
     let backend = state.tasks.clone();
+    let response_backend = state.tasks.clone();
     let mut upload = match tokio::task::spawn_blocking(move || {
         backend.begin_upload_configured(&name, declared, task_request)
     })
@@ -552,19 +583,21 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
         },
     };
     match finished {
-        Ok(Ok(record)) => (StatusCode::ACCEPTED, Json(record)).into_response(),
+        Ok(Ok(record)) => match response_backend.web_record(record) {
+            Ok(record) => (StatusCode::ACCEPTED, Json(record)).into_response(),
+            Err(error) => web_task_rejection(error),
+        },
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
 }
 
 async fn list_tasks(State(state): State<AppState>, request: Request) -> Response {
-    let query = match parse_task_list_query(request.uri().query()) {
-        Ok(query) => query,
-        Err(()) => return rejection(StatusCode::BAD_REQUEST, "invalidHistoryQuery"),
+    let Ok(query) = parse_task_list_query(request.uri().query()) else {
+        return rejection(StatusCode::BAD_REQUEST, "invalidHistoryQuery");
     };
     let headers = request.headers();
-    if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(&headers) {
+    if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
     let after = match (query.after_updated_at_ms, query.after_id) {
@@ -576,15 +609,35 @@ async fn list_tasks(State(state): State<AppState>, request: Request) -> Response
         _ => return rejection(StatusCode::BAD_REQUEST, "invalidCursor"),
     };
     match tokio::task::spawn_blocking(move || {
-        state.tasks.list(query.limit.unwrap_or(25), after.as_ref(), query.status, query.pinned)
+        let backend = state.tasks;
+        let page = match query.batch_id.as_deref() {
+            Some(batch_id) => backend.list_batch(
+                query.limit.unwrap_or(25),
+                after.as_ref(),
+                query.status,
+                query.pinned,
+                batch_id,
+            )?,
+            None => backend.list(
+                query.limit.unwrap_or(25),
+                after.as_ref(),
+                query.status,
+                query.pinned,
+            )?,
+        };
+        let tasks = page
+            .tasks
+            .into_iter()
+            .map(|record| backend.web_record(record))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, WebTaskError>((tasks, page.next))
     })
     .await
     {
-        Ok(Ok(page)) => Json(TaskListDto {
+        Ok(Ok((tasks, next))) => Json(TaskListDto {
             schema_version: 1,
-            tasks: page.tasks,
-            next_cursor: page
-                .next
+            tasks,
+            next_cursor: next
                 .map(|cursor| TaskCursorDto { updated_at_ms: cursor.updated_at_ms, id: cursor.id }),
         })
         .into_response(),
@@ -600,6 +653,7 @@ fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
         after_id: None,
         status: None,
         pinned: None,
+        batch_id: None,
     };
     let Some(value) = value else { return Ok(query) };
     for field in value.split('&') {
@@ -610,7 +664,7 @@ fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
         match name {
             "limit" if query.limit.is_none() => query.limit = Some(value.parse().map_err(|_| ())?),
             "afterUpdatedAtMs" if query.after_updated_at_ms.is_none() => {
-                query.after_updated_at_ms = Some(value.parse().map_err(|_| ())?)
+                query.after_updated_at_ms = Some(value.parse().map_err(|_| ())?);
             }
             "afterId" if query.after_id.is_none() => query.after_id = Some(value.to_owned()),
             "pinned" if query.pinned.is_none() => {
@@ -618,7 +672,15 @@ fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
                     "true" => true,
                     "false" => false,
                     _ => return Err(()),
-                })
+                });
+            }
+            "batchId"
+                if query.batch_id.is_none()
+                    && value.len() == 32
+                    && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && !value.bytes().any(|byte| byte.is_ascii_uppercase()) =>
+            {
+                query.batch_id = Some(value.to_owned());
             }
             "status" if query.status.is_none() => {
                 query.status = Some(match value {
@@ -630,7 +692,7 @@ fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
                     "interrupted" => into_markdown::TaskStatus::Interrupted,
                     "cancelled" => into_markdown::TaskStatus::Cancelled,
                     _ => return Err(()),
-                })
+                });
             }
             _ => return Err(()),
         }
@@ -642,7 +704,12 @@ async fn task_status(State(state): State<AppState>, AxumPath(id): AxumPath<Strin
     let Ok(id) = into_markdown::TaskId::parse(id) else {
         return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
     };
-    match tokio::task::spawn_blocking(move || state.tasks.get(&id)).await {
+    match tokio::task::spawn_blocking(move || {
+        let record = state.tasks.get(&id)?;
+        state.tasks.web_record(record)
+    })
+    .await
+    {
         Ok(Ok(record)) => Json(record).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
@@ -653,7 +720,12 @@ async fn cancel_task(State(state): State<AppState>, AxumPath(id): AxumPath<Strin
     let Ok(id) = into_markdown::TaskId::parse(id) else {
         return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
     };
-    match tokio::task::spawn_blocking(move || state.tasks.cancel(&id)).await {
+    match tokio::task::spawn_blocking(move || {
+        let record = state.tasks.cancel(&id)?;
+        state.tasks.web_record(record)
+    })
+    .await
+    {
         Ok(Ok(record)) => Json(record).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
@@ -664,7 +736,12 @@ async fn retry_task(State(state): State<AppState>, AxumPath(id): AxumPath<String
     let Ok(id) = into_markdown::TaskId::parse(id) else {
         return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
     };
-    match tokio::task::spawn_blocking(move || state.tasks.retry(&id)).await {
+    match tokio::task::spawn_blocking(move || {
+        let record = state.tasks.retry(&id)?;
+        state.tasks.web_record(record)
+    })
+    .await
+    {
         Ok(Ok(record)) => (StatusCode::ACCEPTED, Json(record)).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
@@ -692,7 +769,12 @@ async fn pin_task(
         Ok(request) => request,
         Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidPinRequest"),
     };
-    match tokio::task::spawn_blocking(move || state.tasks.set_pinned(&id, request.pinned)).await {
+    match tokio::task::spawn_blocking(move || {
+        let record = state.tasks.set_pinned(&id, request.pinned)?;
+        state.tasks.web_record(record)
+    })
+    .await
+    {
         Ok(Ok(record)) => Json(record).into_response(),
         Ok(Err(error)) => web_task_rejection(error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
@@ -1355,7 +1437,7 @@ mod tests {
     fn history_query_requires_bounded_canonical_filters_and_cursor_pairs() {
         let id = "a".repeat(32);
         let query = parse_task_list_query(Some(&format!(
-            "limit=25&afterUpdatedAtMs=42&afterId={id}&status=succeeded&pinned=true"
+            "limit=25&afterUpdatedAtMs=42&afterId={id}&status=succeeded&pinned=true&batchId={id}"
         )))
         .unwrap();
         assert_eq!(query.limit, Some(25));
@@ -1363,9 +1445,16 @@ mod tests {
         assert_eq!(query.after_id.as_deref(), Some(id.as_str()));
         assert_eq!(query.status, Some(into_markdown::TaskStatus::Succeeded));
         assert_eq!(query.pinned, Some(true));
-        for invalid in
-            ["unknown=x", "limit=1&limit=2", "status=unknown", "pinned=1", "afterId=%2e%2e"]
-        {
+        assert_eq!(query.batch_id.as_deref(), Some(id.as_str()));
+        for invalid in [
+            "unknown=x",
+            "limit=1&limit=2",
+            "status=unknown",
+            "pinned=1",
+            "afterId=%2e%2e",
+            "batchId=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "batchId=short",
+        ] {
             assert!(parse_task_list_query(Some(invalid)).is_err(), "accepted {invalid}");
         }
     }

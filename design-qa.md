@@ -1,60 +1,63 @@
-# Product Design QA: conversion workbench
+# Product Design QA: unified workbench
 
 ## Source and implementation
 
 - Reference visual: `/Users/yx/.codex/generated_images/019ff4e6-d0a0-7ef2-aef9-09b2b00fd528/exec-943c23ab-c980-4b9f-9cef-a2f5a4f74705.png`
-- Implementation capture: `/private/tmp/into-md-product-design-implementation/option-1-qa-final-clean.png`
-- Combined comparison: `/private/tmp/into-md-product-design-implementation/option-1-qa-comparison-small.png`
-- Truth statement: the implementation follows the selected reference direction while retaining the real product's security controls, task persistence, diagnostics, and status workflow.
+- Workbench capture: `/private/tmp/into-md-design-qa-workbench-single-page-1280.png`
+- Result-dialog capture: `/private/tmp/into-md-result-redesign-final.png`
+- Adaptive result-dialog capture: `/private/tmp/into-md-result-adaptive-final.png`
+- Unavailable-audio state capture: `/private/tmp/into-md-audio-disabled-final.png`
+- Nearby validation capture: `/private/tmp/into-md-workbench-near-feedback.png`
+- Result before/after comparison: `/private/tmp/into-md-result-redesign-comparison.png`
+- Same-frame comparison: `/private/tmp/into-md-design-qa-workbench-comparison.png`
+- Truth statement: the implementation keeps option 1's restrained teal palette, compact controls, fine borders, icon language, and two-column workbench while consolidating history, setup, and results into one application surface.
 
-## Verified state
+## Information architecture
 
-- Browser viewport: 1077 x 998 CSS pixels at device pixel ratio 1.3.
-- Screenshot raster: 819 x 1066 pixels; both screenshots were normalized to the same width for the combined comparison.
-- Queue state: one PDF, one OCR image, and one audio file selected.
-- Result state: one completed Markdown conversion with its safe Markdown preview opened automatically.
+- The header contains brand, service state, language, and theme only. Standalone status and history destinations are removed.
+- The left panel contains file selection, the active batch, and recent history as distinct sections. When both lists overflow, each keeps its own bounded scroll region so current work and past work are never mixed into one scrollbar.
+- The right panel keeps capabilities, conversion settings, and the primary action continuously visible.
+- Selecting a completed task opens a full result dialog without changing the route. Reading preview, Markdown source, batch switching, download, resources, diagnostics, retry, and deletion stay inside that dialog.
+- Audio transcription is enabled by default. Runtime readiness is independent from that preference; an unavailable runtime exposes an in-place dependency-preparation dialog rather than another page.
+- Cleanup remains an explicit user action. Conversion, preview, restart, and navigation never clear history automatically.
 
 ## Visual comparison
 
-- The permanent left sidebar was removed in favor of a compact application header.
-- The upload queue remains the dominant object on the page, paired with concise smart defaults.
-- Capability availability is visible without exposing implementation jargon or setup forms.
-- Primary actions use a restrained deep-teal hierarchy; secondary actions remain available through an overflow menu.
-- Results are preview-first, with advanced artifacts and destructive actions visually de-emphasized.
-- At the tested width the page retains the intended two-column composition without crowding.
+- The implemented workbench uses the same visual hierarchy as option 1: strong title, quiet canvas, white functional panels, deep-teal selected states, compact status treatment, and a persistent primary action.
+- The reference's inline result and history blocks are replaced by a scrollable recent-task region and an integrated reading dialog. The redesigned dialog removes the nested paper card, heavy frame, and single crowded toolbar while preserving the one-page workflow.
+- The final visual pass removed the cramped audio status layout and corrected the settings-card overflow visible at compact desktop widths.
+- Live in-app-browser QA at 1280 x 720 is stricter than the target desktop widths and has zero document-level vertical scrolling. Responsive rules and automated tests continue to cover the 1440 x 900 and 1493 x 1048 desktop layouts.
 
 ## Interaction and behavior checks
 
-- File chooser and multi-file queue: passed.
-- Redundant instructional copy is omitted when the upload queue is empty; the drop target and file actions carry the interaction.
-- Audio transcription has a visible workbench switch and maps to the real local ASR request option.
-- Remove queued file: passed by unit coverage.
-- Batch conversion and progress/result transition: passed with a real local Markdown fixture.
-- Automatic preview of the featured completed task: passed.
-- Advanced settings disclosure: passed and defaults closed.
-- Task overflow actions: passed; pin, retry, ZIP, IR, diagnostics, and delete remain available.
-- Service status view and return navigation: passed.
-- Browser console errors during the verified journey: none.
-- Existing task persistence, SSE updates, network-access policy, cleanup, and security behavior remain covered by the existing integration suite.
+- Persisted tasks restore original filenames and formats; all five available recent items render rather than an arbitrary three-item cap.
+- The current batch and recent list each have independent `overflow-y: auto` regions while the page itself remains fixed.
+- A completed current-batch row is one full-width action. Clicking its text, status, or check icon opens the same result dialog; this was exercised against a real Markdown conversion.
+- Unsupported file extensions are rejected before task creation, and the named rejection appears directly below the file picker rather than in the conversion controls. Terminal failures use localized, actionable reasons in both current and recent rows.
+- Result overflow menus close on outside pointer interaction, Escape, and completed actions. The file-picker button keeps a stable bounding box during hover and active transitions.
+- Audio transcription starts checked. “准备依赖” opens a same-page dialog with the exact model command and the fixed LGPL FFmpeg requirement.
+- Opening `columns-then-table.pdf` preserves `/` and opens one accessible result dialog. Batch switching and the rendered Markdown table are visible without a route change.
+- Reading preview, Markdown source, detail drawer, and close behavior were exercised in the live packaged binary.
+- The real rent-contract artifact no longer exposes raw `<em>` tags, Markdown escapes, or OCR boundary labels in reading mode. Ordered items use aligned, styled markers; source mode remains byte-faithful to the downloaded Markdown.
+- At 1280 x 720 the document page itself has no vertical scroll (`720 / 720`); the result document is the dialog's single vertical reading region (`3275 / 532`).
+- The result dialog is portalled directly to `document.body`, so route motion never becomes its containing block. At the live Mac browser's 1280 x 720 CSS viewport it measures `top 18 / bottom 702`, preserving equal visible margins and eliminating the clipped lower edge.
+- The backdrop uses a 68% product-background wash with `14px` blur, reduced saturation, and slight brightness control; background headings and controls no longer read as competing bold content.
+- When the verified audio runtime is missing, the transcription switch is off and disabled. The dependency action remains visible, and uploads cannot request ASR until the runtime reports ready.
+- The service status is not a navigation target; `/history` and `/status` no longer have standalone UI surfaces.
+- Frontend typecheck, unit suites, distribution integration, asset determinism/update checks, Rust UI tests, formatting, and diff checks passed.
 
-## Accessibility
+## Accessibility and motion
 
-- Automated accessibility checks: passed.
-- Keyboard focus remains visibly indicated; the file-picker focus ring in the capture is expected accessible behavior.
-- Icons are supplied by Lucide rather than custom-drawn assets, and icon-only controls retain accessible labels.
-- Motion respects reduced-motion preferences.
-
-## Comparison history
-
-- The first implementation used a 68rem responsive breakpoint and stacked the primary workspace at the real 1077px browser width.
-- The breakpoint was tightened to 62rem, restoring the intended two-column hierarchy at the verified viewport while preserving the compact layout at narrower widths.
-- A stale integration fixture treated an unavailable document console as a successful mount; the fixture was corrected to describe the intended available-console state.
+- Icon-only controls retain accessible names; dialogs expose modal roles and labelled headings; status is not communicated by color alone.
+- Native-looking selects and checkboxes are replaced by product-styled controls with visible focus states.
+- Buttons, segmented controls, menus, drawers, dialogs, switches, progress, and route content use restrained transitions.
+- `prefers-reduced-motion` collapses all animation and transition durations.
 
 ## Open findings
 
 - P0: none.
 - P1: none.
-- P2: none. The observed mid-width density issue was corrected and reverified.
+- P2: none.
 
 ## Final result
 
