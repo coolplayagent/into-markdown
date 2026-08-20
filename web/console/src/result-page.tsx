@@ -71,25 +71,27 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
 
   return <div className="result-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <section className="result-dialog" role="dialog" aria-modal="true" aria-labelledby="result-title">
-    <header className="result-toolbar">
-      <div className="result-identity">
-        <span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span>
-        <div><p className="section-kicker">{t("conversionResult")}</p><h1 id="result-title">{title}</h1></div>
-        {task && <span className={`result-status ${task.status}`}>{task.status === "succeeded" ? <CheckCircle2 size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{t(task.status)}</span>}
+    <header className="result-header">
+      <div className="result-toolbar-main">
+        <div className="result-identity">
+          <span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span>
+          <div><div className="result-title-meta"><span>{t("conversionResult")}</span>{task && <span className={`result-status ${task.status}`}>{task.status === "succeeded" ? <CheckCircle2 size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{t(task.status)}</span>}</div><h1 id="result-title">{title}</h1></div>
+        </div>
+        <button className="icon-button neutral result-close" type="button" aria-label={t("close")} onClick={onClose}><X size={20} aria-hidden="true" /></button>
       </div>
-      <div className="result-actions">
+      <div className="result-toolbar-secondary">
         <div className="view-toggle" role="group" aria-label={t("previewMode")}><button type="button" aria-pressed={mode === "rendered"} onClick={() => setMode("rendered")}><Eye size={16} aria-hidden="true" />{t("renderedPreview")}</button><button type="button" aria-pressed={mode === "source"} onClick={() => setMode("source")}><Code2 size={16} aria-hidden="true" />{t("markdownSource")}</button></div>
-        {task && markdown && <button type="button" onClick={() => void downloadArtifact(api, task, markdown.storageKey)}><Download size={16} aria-hidden="true" />{t("downloadMarkdown")}</button>}
-        <button className="secondary" type="button" aria-expanded={drawer} onClick={() => setDrawer((value) => !value)}><Info size={16} aria-hidden="true" />{t("detailsAndResources")}</button>
-        {task && <details className="task-menu"><summary aria-label={t("moreActions")}><MoreHorizontal size={19} aria-hidden="true" /></summary><div className="task-menu-popover"><button className="menu-action" type="button" onClick={() => void pin()}>{task.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}{t(task.pinned ? "unpin" : "pin")}</button><button className="menu-action" type="button" onClick={() => void retry()}><RotateCcw size={16} aria-hidden="true" />{t("retry")}</button><button className="menu-action danger" type="button" onClick={() => void remove()}><Trash2 size={16} aria-hidden="true" />{t("deleteTask")}</button></div></details>}
-        <button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={19} aria-hidden="true" /></button>
+        <div className="result-actions">
+          {task && markdown && <button className="secondary" type="button" onClick={() => void downloadArtifact(api, task, markdown.storageKey)}><Download size={16} aria-hidden="true" />{t("downloadMarkdown")}</button>}
+          <button className="secondary" type="button" aria-expanded={drawer} onClick={() => setDrawer((value) => !value)}><Info size={16} aria-hidden="true" />{t("detailsAndResources")}</button>
+          {task && <details className="task-menu"><summary aria-label={t("moreActions")}><MoreHorizontal size={19} aria-hidden="true" /></summary><div className="task-menu-popover"><button className="menu-action" type="button" onClick={() => void pin()}>{task.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}{t(task.pinned ? "unpin" : "pin")}</button><button className="menu-action" type="button" onClick={() => void retry()}><RotateCcw size={16} aria-hidden="true" />{t("retry")}</button><button className="menu-action danger" type="button" onClick={() => void remove()}><Trash2 size={16} aria-hidden="true" />{t("deleteTask")}</button></div></details>}
+        </div>
       </div>
+      {batch.length > 1 && <nav className="batch-switcher" aria-label={t("batchResults")}>
+        {batch.slice(0, 6).map((item) => <button key={item.id} type="button" aria-current={item.id === taskId ? "page" : undefined} onClick={() => onSelectTask(item.id)}>{taskName(item, item.id.slice(0, 8))}</button>)}
+        {batch.length > 6 && <label className="select-shell batch-select"><span className="visually-hidden">{t("moreBatchResults")}</span><select value={taskId} onChange={(event) => onSelectTask(event.target.value)}>{batch.map((item) => <option key={item.id} value={item.id}>{taskName(item, item.id.slice(0, 8))}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></label>}
+      </nav>}
     </header>
-
-    {batch.length > 1 && <nav className="batch-switcher" aria-label={t("batchResults")}>
-      {batch.slice(0, 6).map((item) => <button key={item.id} type="button" aria-current={item.id === taskId ? "page" : undefined} onClick={() => onSelectTask(item.id)}>{taskName(item, item.id.slice(0, 8))}</button>)}
-      {batch.length > 6 && <label className="select-shell batch-select"><span className="visually-hidden">{t("moreBatchResults")}</span><select value={taskId} onChange={(event) => onSelectTask(event.target.value)}>{batch.map((item) => <option key={item.id} value={item.id}>{taskName(item, item.id.slice(0, 8))}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></label>}
-    </nav>}
 
     <div className={`result-body ${drawer ? "drawer-open" : ""}`}>
       <div className="result-document-scroll" tabIndex={-1} role="document">

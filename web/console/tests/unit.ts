@@ -313,12 +313,22 @@ test("history delete preserves bounded server errors and normalizes network fail
 
 test("Markdown preview never creates executable or resource-loading DOM", async () => {
   const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
-  const malicious = "# Safe\n<script>globalThis.pwned=1</script>\n![x](file:///etc/passwd)\n<img src=http://evil.invalid/x onerror=alert(1)>\n[jump](javascript:alert(1))";
+  const malicious = "# Safe\n<em>\\[</em><em>Image OCR</em><em>\\]</em> <em>safe emphasis</em> <em>\\[</em><em>End OCR</em><em>\\]</em>\n1. first item\n<script>globalThis.pwned=1</script>\n![x](file:///etc/passwd)\n<img src=http://evil.invalid/x onerror=alert(1)>\n[jump](javascript:alert(1))";
   root.render(createElement(SafeMarkdownPreview, { source: malicious }));
   await waitFor(() => window.document.body.textContent.includes("file:///etc/passwd"));
   assert.equal(window.document.querySelector("script,img,iframe,object,embed,link,a"), null);
   assert.equal((globalThis as { pwned?: number }).pwned, undefined);
   assert.ok(window.document.body.textContent.includes("<script>"));
+  assert.equal(window.document.body.textContent.includes("<em>"), false);
+  assert.equal(window.document.body.textContent.includes("Image OCR"), false);
+  assert.equal(window.document.body.textContent.includes("End OCR"), false);
+  assert.ok(window.document.body.textContent.includes("safe emphasis"));
+  assert.equal(window.document.querySelectorAll(".markdown-preview em").length, 1);
+  assert.equal(window.document.querySelector(".preview-list-item.ordered .preview-list-marker")?.textContent, "1.");
+  root.render(createElement(SafeMarkdownPreview, { source: "\\*[Image OCR\\] Visible content \\[End OCR\\]\\*" }));
+  await waitFor(() => window.document.body.textContent.includes("Visible content"));
+  assert.equal(window.document.body.textContent.includes("Image OCR"), false);
+  assert.equal(window.document.body.textContent.includes("End OCR"), false);
   root.render(createElement(SafeMarkdownPreview, { source: Array.from({ length: 2_100 }, () => "line").join("\n") }));
   await waitFor(() => window.document.body.textContent.includes("preview block limit reached"));
   root.render(createElement(JsonTree, { value: { provenance: { source: "local" }, blocks: Array.from({ length: 250 }, (_, index) => ({ index })) } }));

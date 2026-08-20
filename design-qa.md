@@ -4,7 +4,8 @@
 
 - Reference visual: `/Users/yx/.codex/generated_images/019ff4e6-d0a0-7ef2-aef9-09b2b00fd528/exec-943c23ab-c980-4b9f-9cef-a2f5a4f74705.png`
 - Workbench capture: `/private/tmp/into-md-design-qa-workbench-single-page-1280.png`
-- Result-dialog capture: `/private/tmp/into-md-design-qa-result-dialog-1280.png`
+- Result-dialog capture: `/private/tmp/into-md-result-redesign-final.png`
+- Result before/after comparison: `/private/tmp/into-md-result-redesign-comparison.png`
 - Same-frame comparison: `/private/tmp/into-md-design-qa-workbench-comparison.png`
 - Truth statement: the implementation keeps option 1's restrained teal palette, compact controls, fine borders, icon language, and two-column workbench while consolidating history, setup, and results into one application surface.
 
@@ -20,7 +21,7 @@
 ## Visual comparison
 
 - The implemented workbench uses the same visual hierarchy as option 1: strong title, quiet canvas, white functional panels, deep-teal selected states, compact status treatment, and a persistent primary action.
-- The reference's inline result and history blocks are replaced by a scrollable recent-task region and a full reading dialog. This preserves the selected visual direction while matching the approved one-page workflow.
+- The reference's inline result and history blocks are replaced by a scrollable recent-task region and an integrated reading dialog. The redesigned dialog removes the nested paper card, heavy frame, and single crowded toolbar while preserving the one-page workflow.
 - The final visual pass removed the cramped audio status layout and corrected the settings-card overflow visible at compact desktop widths.
 - Live in-app-browser QA at 1280 x 720 is stricter than the target desktop widths and has zero document-level vertical scrolling. Responsive rules and automated tests continue to cover the 1440 x 900 and 1493 x 1048 desktop layouts.
 
@@ -31,6 +32,8 @@
 - Audio transcription starts checked. “准备依赖” opens a same-page dialog with the exact model command and the fixed LGPL FFmpeg requirement.
 - Opening `columns-then-table.pdf` preserves `/` and opens one accessible result dialog. Batch switching and the rendered Markdown table are visible without a route change.
 - Reading preview, Markdown source, detail drawer, and close behavior were exercised in the live packaged binary.
+- The real rent-contract artifact no longer exposes raw `<em>` tags, Markdown escapes, or OCR boundary labels in reading mode. Ordered items use aligned, styled markers; source mode remains byte-faithful to the downloaded Markdown.
+- At 1280 x 720 the document page itself has no vertical scroll (`720 / 720`); the result document is the dialog's single vertical reading region (`3275 / 532`).
 - The service status is not a navigation target; `/history` and `/status` no longer have standalone UI surfaces.
 - Frontend typecheck, unit suites, distribution integration, asset determinism/update checks, Rust UI tests, formatting, and diff checks passed.
 

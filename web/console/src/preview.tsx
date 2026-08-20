@@ -37,7 +37,10 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
       const level = heading[1]!.length;
       output.push(<div className={`preview-heading h${level}`} role="heading" aria-level={level} key={index}>{renderInline(heading[2]!)}</div>);
     } else if (/^\s*[-*+]\s+/.test(line)) {
-      output.push(<div className="preview-list-item" key={index}>• {renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</div>);
+      output.push(<div className="preview-list-item" key={index}><span className="preview-list-marker" aria-hidden="true">•</span><span>{renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</span></div>);
+    } else if (/^\s*\d{1,4}[.)]\s+/.test(line)) {
+      const ordered = /^\s*(\d{1,4})[.)]\s+(.*)$/.exec(line)!;
+      output.push(<div className="preview-list-item ordered" key={index}><span className="preview-list-marker" aria-hidden="true">{ordered[1]}.</span><span>{renderInline(ordered[2]!)}</span></div>);
     } else if (line.trim()) {
       output.push(<p key={index}>{renderInline(line)}</p>);
     }
@@ -52,20 +55,34 @@ function isSourceAnchor(line: string): boolean {
 }
 
 function renderInline(source: string): ReactNode {
+  source = stripOcrBoundaryMarkers(source);
   const nodes: ReactNode[] = [];
-  const pattern = /(<strong>[^<>\n]{1,512}<\/strong>|\*\*[^*\n]{1,512}\*\*|`[^`\n]{1,512}`)/g;
+  const pattern = /(<strong>[^<>\n]{1,512}<\/strong>|<em>[^<>\n]{0,512}<\/em>|\*\*[^*\n]{1,512}\*\*|`[^`\n]{1,512}`)/g;
   let cursor = 0;
   for (const match of source.matchAll(pattern)) {
     const offset = match.index ?? 0;
-    if (offset > cursor) nodes.push(source.slice(cursor, offset));
+    if (offset > cursor) nodes.push(unescapeInline(source.slice(cursor, offset)));
     const value = match[0];
-    if (value.startsWith("<strong>")) nodes.push(<strong key={`${offset}-strong`}>{value.slice(8, -9)}</strong>);
-    else if (value.startsWith("**")) nodes.push(<strong key={`${offset}-bold`}>{value.slice(2, -2)}</strong>);
-    else nodes.push(<code key={`${offset}-code`}>{value.slice(1, -1)}</code>);
+    if (value.startsWith("<strong>")) nodes.push(<strong key={`${offset}-strong`}>{unescapeInline(value.slice(8, -9))}</strong>);
+    else if (value.startsWith("<em>")) nodes.push(<em key={`${offset}-em`}>{unescapeInline(value.slice(4, -5))}</em>);
+    else if (value.startsWith("**")) nodes.push(<strong key={`${offset}-bold`}>{unescapeInline(value.slice(2, -2))}</strong>);
+    else nodes.push(<code key={`${offset}-code`}>{unescapeInline(value.slice(1, -1))}</code>);
     cursor = offset + value.length;
   }
-  if (cursor < source.length) nodes.push(source.slice(cursor));
+  if (cursor < source.length) nodes.push(unescapeInline(source.slice(cursor)));
   return nodes.length === 1 ? nodes[0] : nodes;
+}
+
+function stripOcrBoundaryMarkers(source: string): string {
+  return source
+    .replace(/<em>\\?\[<\/em><em>(?:Image OCR|End OCR)<\/em><em>\\?\]<\/em>/g, "")
+    .replace(/\\?\*?\\?\[Image OCR\\?\]\s*/g, "")
+    .replace(/\s*\\?\[End OCR\\?\]\\?\*?/g, "")
+    .trim();
+}
+
+function unescapeInline(source: string): string {
+  return source.replace(/\\([\\`*{}[\]()#+.!_|>~-])/g, "$1");
 }
 
 function tableCells(line: string): string[] {
