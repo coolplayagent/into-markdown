@@ -3,7 +3,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
-export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus }
+export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus }
 export type TaskStatus = "pending" | "running" | "converted" | "succeeded" | "failed" | "interrupted" | "cancelled";
 export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
@@ -45,7 +45,7 @@ export interface WorkbenchOptions {
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
   includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: false,
+  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false, audioTranscription: true,
 };
 
 export class ApiError extends Error {
@@ -56,7 +56,8 @@ function isComponent(value: unknown): value is ComponentStatus {
   return isObject(value) && typeof value.available === "boolean" && typeof value.code === "string" && typeof value.detail === "string";
 }
 function parseStatus(value: unknown): StatusResponse {
-  if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)) throw new ApiError("invalidResponse");
+  if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)
+    || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)) throw new ApiError("invalidResponse");
   return value as unknown as StatusResponse;
 }
 const taskStatuses = new Set<TaskStatus>(["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"]);

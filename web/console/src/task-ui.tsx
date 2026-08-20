@@ -19,6 +19,8 @@ export function formatForName(name: string, hint: InputFormat | null = null): st
   if (["txt", "log"].includes(extension)) return "text";
   if (["md", "mdown"].includes(extension)) return "markdown";
   if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"].includes(extension)) return "image";
+  if (["wav", "mp3", "m4a", "flac", "ogg"].includes(extension)) return "audio";
+  if (["mp4", "mkv", "webm", "avi", "mov"].includes(extension)) return "video";
   return "auto";
 }
 

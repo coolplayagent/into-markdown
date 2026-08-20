@@ -1,57 +1,45 @@
-# Product Design QA: workbench, results, and history
+# Product Design QA: unified workbench
 
 ## Source and implementation
 
 - Reference visual: `/Users/yx/.codex/generated_images/019ff4e6-d0a0-7ef2-aef9-09b2b00fd528/exec-943c23ab-c980-4b9f-9cef-a2f5a4f74705.png`
-- Final workbench capture: `/private/tmp/into-md-design-qa-workbench-final-1440.png`
-- Final result capture: `/private/tmp/into-md-design-qa-result-final-1440.png`
-- Final history capture: `/private/tmp/into-md-design-qa-history-final-1440.png`
-- Combined source-and-implementation comparison: `/private/tmp/into-md-design-qa-workbench-comparison-final.png`
-- Truth statement: the implementation uses the selected option 1 palette, density, borders, icons, spacing, and hierarchy while applying the approved information architecture: a one-screen workbench plus dedicated result and history routes.
+- Workbench capture: `/private/tmp/into-md-design-qa-workbench-single-page-1280.png`
+- Result-dialog capture: `/private/tmp/into-md-design-qa-result-dialog-1280.png`
+- Same-frame comparison: `/private/tmp/into-md-design-qa-workbench-comparison.png`
+- Truth statement: the implementation keeps option 1's restrained teal palette, compact controls, fine borders, icon language, and two-column workbench while consolidating history, setup, and results into one application surface.
 
-## Capture metadata
+## Information architecture
 
-- Reference raster: 1487 x 1058 pixels.
-- Final browser viewport and raster: 1440 x 900 CSS pixels at device pixel ratio 1.
-- Additional verified desktop viewport: 1493 x 1048 CSS pixels at device pixel ratio 1.
-- Combined comparison: source and implementation normalized to 529 pixels high and placed side by side in one image.
-- Workbench state: empty upload queue with all primary controls visible; the submitted three-file batch was verified separately through the persisted result and history routes.
-- Result state: the first successful item in a three-file PDF, image, and DOCX batch, with the batch switcher and rendered Markdown table visible.
-- History state: the same persisted batch restored with original filenames, formats, batch relationship, status, timestamp, and artifact count.
+- The header contains brand, service state, language, and theme only. Standalone status and history destinations are removed.
+- The left panel contains file selection, the active batch, and the complete recent-task list in one bounded scroll region.
+- The right panel keeps capabilities, conversion settings, and the primary action continuously visible.
+- Selecting a completed task opens a full result dialog without changing the route. Reading preview, Markdown source, batch switching, download, resources, diagnostics, retry, and deletion stay inside that dialog.
+- Audio transcription is enabled by default. Runtime readiness is independent from that preference; an unavailable runtime exposes an in-place dependency-preparation dialog rather than another page.
+- Cleanup remains an explicit user action. Conversion, preview, restart, and navigation never clear history automatically.
 
 ## Visual comparison
 
-- The deep-teal primary color, soft gray canvas, white panels, fine borders, compact icon controls, and restrained status treatment follow option 1.
-- The workbench keeps source selection and the internally scrollable queue on the left, conversion capabilities and settings on the right, and the primary action fixed in view.
-- The reference's lower result and history blocks are intentionally absent from the workbench because the approved structure moves both into dedicated secondary routes.
-- The last comparison found that the settings controls were vertically centered inside their panel; the controls were moved to the top and the final screenshot was captured after that correction.
-- At both required desktop sizes, the workbench title, settings, and conversion action remain visible without page scrolling.
+- The implemented workbench uses the same visual hierarchy as option 1: strong title, quiet canvas, white functional panels, deep-teal selected states, compact status treatment, and a persistent primary action.
+- The reference's inline result and history blocks are replaced by a scrollable recent-task region and a full reading dialog. This preserves the selected visual direction while matching the approved one-page workflow.
+- The final visual pass removed the cramped audio status layout and corrected the settings-card overflow visible at compact desktop widths.
+- Live in-app-browser QA at 1280 x 720 is stricter than the target desktop widths and has zero document-level vertical scrolling. Responsive rules and automated tests continue to cover the 1440 x 900 and 1493 x 1048 desktop layouts.
 
 ## Interaction and behavior checks
 
-- Real three-file batch: PDF, image, and DOCX submission, progress, completion, batch identity, original filename persistence, and automatic result navigation passed.
-- Result route: batch switching, rendered preview, Markdown source, complete download response, default-closed detail drawer, and return navigation passed.
-- History route: compact rows, status filter, explicit refresh and cleanup, filename restoration, and row-to-result navigation passed.
-- Reading preview and downloaded Markdown use the same stored artifact. Source anchor markup is hidden only in the rendered reading view; table structure and strong text remain rendered safely.
-- Preview truncation is represented separately from the complete download artifact.
-- Browser document height equaled viewport height on workbench, result, and history at 1440 x 900; the inspected result and history states had no nested vertical scrollers.
-- Browser console warnings and errors during the final result, history, and workbench journey: none.
-- Frontend typecheck, bundled unit suites, distribution integration, checked asset update, determinism, formatting, and diff checks passed.
+- Persisted tasks restore original filenames and formats; all five available recent items render rather than an arbitrary three-item cap.
+- The recent list has `overflow-y: auto` and an actual scroll range while the page itself remains fixed.
+- Audio transcription starts checked. “准备依赖” opens a same-page dialog with the exact model command and the fixed LGPL FFmpeg requirement.
+- Opening `columns-then-table.pdf` preserves `/` and opens one accessible result dialog. Batch switching and the rendered Markdown table are visible without a route change.
+- Reading preview, Markdown source, detail drawer, and close behavior were exercised in the live packaged binary.
+- The service status is not a navigation target; `/history` and `/status` no longer have standalone UI surfaces.
+- Frontend typecheck, unit suites, distribution integration, asset determinism/update checks, Rust UI tests, formatting, and diff checks passed.
 
-## Accessibility
+## Accessibility and motion
 
-- Existing automated accessibility coverage passed.
-- Navigation, route controls, segmented settings, drawers, file rows, and icon-only actions retain accessible names and visible keyboard focus.
-- Status is communicated by text and icon as well as color.
-- Reduced-motion behavior remains supported.
-
-## Comparison history
-
-- The legacy page placed results, artifacts, diagnostics, and history below the workbench and introduced page, card, and preview scrolling.
-- The structural pass separated workbench, result, and history routes and preserved the live workbench while secondary routes are open.
-- Real navigation exposed a root-route auto-navigation gap; `/` now has the same visible-workbench behavior as `/workbench`.
-- Real preview exposed source anchors and raw strong tags; the safe renderer now suppresses anchors in reading view and renders supported inline emphasis without changing source or download bytes.
-- The final visual pass aligned the settings content to the top of its panel and re-ran the same-frame reference comparison.
+- Icon-only controls retain accessible names; dialogs expose modal roles and labelled headings; status is not communicated by color alone.
+- Native-looking selects and checkboxes are replaced by product-styled controls with visible focus states.
+- Buttons, segmented controls, menus, drawers, dialogs, switches, progress, and route content use restrained transitions.
+- `prefers-reduced-motion` collapses all animation and transition durations.
 
 ## Open findings
 

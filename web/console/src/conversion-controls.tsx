@@ -1,8 +1,9 @@
 import {
-  AudioLines, CheckCircle2, ChevronDown, CircleAlert, FileText, ScanText, Settings2, SlidersHorizontal,
+  AudioLines, Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileText, ScanText, Settings2, SlidersHorizontal,
   Wifi, WifiOff, X,
 } from "lucide-react";
-import type { AiMode, InputFormat, NetworkMode, WorkbenchOptions } from "./api";
+import { useState } from "react";
+import type { AiMode, ComponentStatus, InputFormat, NetworkMode, WorkbenchOptions } from "./api";
 import { useI18n } from "./i18n";
 import { FORMATS } from "./task-ui";
 
@@ -25,7 +26,7 @@ function SegmentedControl<T extends string>({
   </div>;
 }
 
-export function CapabilityStrip({ value, onChange }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void }) {
+export function CapabilityStrip({ value, onChange, audioStatus, onPrepareAudio }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; audioStatus?: ComponentStatus | undefined; onPrepareAudio(): void }) {
   const { t } = useI18n();
   return <section className="capability-strip" aria-label={t("capabilities")}>
     <div className="capability-item">
@@ -38,7 +39,14 @@ export function CapabilityStrip({ value, onChange }: { value: WorkbenchOptions; 
     </div>
     <div className="capability-item audio-capability">
       <span className="capability-icon"><AudioLines size={21} aria-hidden="true" /></span>
-      <div><strong>{t("audioTranscription")}</strong><span className={value.audioTranscription ? "ready" : "neutral"}>{value.audioTranscription ? <CheckCircle2 size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{t(value.audioTranscription ? "enabled" : "disabled")}</span></div>
+      <div>
+        <strong>{t("audioTranscription")}</strong>
+        {audioStatus?.available
+          ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("audioReady")}</span>
+          : audioStatus
+            ? <button className="capability-setup-link" type="button" onClick={onPrepareAudio}><CircleAlert size={14} aria-hidden="true" />{t("prepareDependencies")}</button>
+            : <span className="neutral"><CircleAlert size={14} aria-hidden="true" />{t("checkingSystem")}</span>}
+      </div>
       <label className="switch compact-switch"><span className="visually-hidden">{t("audioTranscription")}</span><input type="checkbox" checked={value.audioTranscription} onChange={(event) => onChange({ ...value, audioTranscription: event.target.checked })} /><span aria-hidden="true" /></label>
     </div>
   </section>;
@@ -66,9 +74,9 @@ export function AdvancedSettings({ value, onChange, open, onClose }: { value: Wo
     <aside className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="advanced-title">
       <div className="sheet-heading"><div><p className="section-kicker">{t("conversionSettings")}</p><h2 id="advanced-title">{t("advancedSettings")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <div className="option-grid">
-        <label><span>{t("formatHint")}</span><select value={value.format ?? ""} onChange={(event) => patch("format", (event.target.value || null) as InputFormat | null)}><option value="">{t("automatic")}</option>{FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}</select></label>
+        <label><span>{t("formatHint")}</span><span className="select-shell"><select value={value.format ?? ""} onChange={(event) => patch("format", (event.target.value || null) as InputFormat | null)}><option value="">{t("automatic")}</option>{FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></span></label>
         <label><span>{t("ocrConfidence")}</span><input type="number" min="0" max="1" step="0.05" value={value.ocrConfidence} onChange={(event) => patch("ocrConfidence", Number(event.target.value))} /></label>
-        <label><span>{t("aiMode")}</span><select value={value.aiMode} onChange={(event) => patch("aiMode", event.target.value as AiMode)}><option value="off">{t("off")}</option><option value="fallback">Fallback</option><option value="prefer">Prefer</option><option value="only">Only</option></select></label>
+        <label><span>{t("aiMode")}</span><span className="select-shell"><select value={value.aiMode} onChange={(event) => patch("aiMode", event.target.value as AiMode)}><option value="off">{t("off")}</option><option value="fallback">Fallback</option><option value="prefer">Prefer</option><option value="only">Only</option></select><ChevronDown size={15} aria-hidden="true" /></span></label>
         <label><span>{t("maxInput")}</span><input type="number" min="1" max="512" value={value.maxInputMiB} onChange={(event) => patch("maxInputMiB", Number(event.target.value))} /></label>
         <label><span>{t("maxMemory")}</span><input type="number" min="1" max="256" value={value.maxMemoryMiB} onChange={(event) => patch("maxMemoryMiB", Number(event.target.value))} /></label>
         <label><span>{t("maxPages")}</span><input type="number" min="1" max="10000" value={value.maxPages} onChange={(event) => patch("maxPages", Number(event.target.value))} /></label>
@@ -78,5 +86,30 @@ export function AdvancedSettings({ value, onChange, open, onClose }: { value: Wo
         {value.aiMode !== "off" && <label className="check grant"><input type="checkbox" checked={value.authorizeProvider} onChange={(event) => patch("authorizeProvider", event.target.checked)} />{t("authorizeProvider")}</label>}
       </div>
     </aside>
+  </div>;
+}
+
+const ASR_MODEL_COMMAND = "into-md models install whisper-small-multilingual";
+
+export function AudioSetupDialog({ status, open, onClose }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  if (!open) return null;
+  const copy = async () => {
+    await navigator.clipboard?.writeText(ASR_MODEL_COMMAND);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+  return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <section className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-setup-title">
+      <div className="sheet-heading"><div><p className="section-kicker">{t("audioTranscription")}</p><h2 id="audio-setup-title">{t("prepareAudioTitle")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
+      <p className="setup-intro">{t("audioEnvironmentSetup")}</p>
+      <ol className="setup-steps">
+        <li><span className="step-number">1</span><div><strong>{t("installWhisperModel")}</strong><div className="command-row"><code>{ASR_MODEL_COMMAND}</code><button className="icon-button neutral" type="button" aria-label={t("copyCommand")} onClick={() => void copy()}>{copied ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}</button></div></div></li>
+        <li><span className="step-number">2</span><div><strong>{t("prepareFfmpegRuntime")}</strong><p>{t("ffmpegRuntimeNote")}</p></div></li>
+      </ol>
+      {status?.detail && <p className="runtime-detail"><CircleAlert size={16} aria-hidden="true" />{status.detail}</p>}
+      <div className="dialog-actions"><button type="button" onClick={onClose}>{t("done")}</button></div>
+    </section>
   </div>;
 }

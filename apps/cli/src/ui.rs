@@ -25,7 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -99,9 +99,10 @@ struct StatusDto {
     schema_version: u32,
     local_api: ComponentDto,
     document_console: ComponentDto,
+    audio_transcription: ComponentDto,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ComponentDto {
     available: bool,
@@ -450,6 +451,12 @@ async fn status(headers: HeaderMap) -> Response {
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
+    let audio_transcription =
+        tokio::task::spawn_blocking(audio_runtime_status).await.unwrap_or(ComponentDto {
+            available: false,
+            code: "componentUnavailable",
+            detail: "audio runtime verification did not complete",
+        });
     Json(StatusDto {
         schema_version: 1,
         local_api: ComponentDto {
@@ -462,8 +469,30 @@ async fn status(headers: HeaderMap) -> Response {
             code: "available",
             detail: "local upload and conversion workbench is active",
         },
+        audio_transcription,
     })
     .into_response()
+}
+
+fn audio_runtime_status() -> ComponentDto {
+    static STATUS: OnceLock<ComponentDto> = OnceLock::new();
+    STATUS
+        .get_or_init(|| {
+            if crate::services::verify_asr_runtime().is_ok() {
+                ComponentDto {
+                    available: true,
+                    code: "available",
+                    detail: "Whisper model and pinned LGPL FFmpeg runtime passed local verification",
+                }
+            } else {
+                ComponentDto {
+                    available: false,
+                    code: "componentUnavailable",
+                    detail: "install whisper-small-multilingual and the pinned LGPL FFmpeg runtime",
+                }
+            }
+        })
+        .clone()
 }
 
 async fn upload_task(State(state): State<AppState>, request: Request) -> Response {

@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft, Braces, CheckCircle2, CircleAlert, Code2, Download, Eye, FileJson, Info,
+  Braces, CheckCircle2, ChevronDown, CircleAlert, Code2, Download, Eye, FileJson, Info,
   LoaderCircle, MoreHorizontal, Package, Pin, PinOff, RotateCcw, Trash2, X,
 } from "lucide-react";
 import type { ApiClient, ArtifactPreview, TaskRecord } from "./api";
 import { SafeMarkdownPreview } from "./preview";
-import { RouteLink, useRouter } from "./router";
 import { useI18n } from "./i18n";
 import {
   TERMINAL, artifactLabel, bytesLabel, downloadArtifact, iconForFormat, taskFormat, taskName,
 } from "./task-ui";
 
-export function ResultPage({ api, taskId }: { api: ApiClient; taskId: string }) {
+export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved }: {
+  api: ApiClient;
+  taskId: string;
+  onSelectTask(taskId: string): void;
+  onClose(): void;
+  onTaskRemoved(taskId: string): void;
+}) {
   const { t } = useI18n();
-  const { navigate } = useRouter();
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [batch, setBatch] = useState<TaskRecord[]>([]);
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
@@ -62,13 +66,13 @@ export function ResultPage({ api, taskId }: { api: ApiClient; taskId: string }) 
   const assets = useMemo(() => task?.artifacts.filter((artifact) => artifact.kind === "asset") ?? [], [task]);
 
   const pin = async () => { if (task) setTask(await api.setPinned(task.id, !task.pinned)); };
-  const retry = async () => { if (task) { const next = await api.retry(task.id); navigate(`/results/${next.id}`); } };
-  const remove = async () => { if (!task || !window.confirm(t("deleteWarning"))) return; await api.deleteTask(task.id); navigate("/history"); };
+  const retry = async () => { if (task) { const next = await api.retry(task.id); onSelectTask(next.id); } };
+  const remove = async () => { if (!task || !window.confirm(t("deleteWarning"))) return; await api.deleteTask(task.id); onTaskRemoved(task.id); onClose(); };
 
-  return <section className="result-route" aria-labelledby="result-title">
+  return <div className="result-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <section className="result-dialog" role="dialog" aria-modal="true" aria-labelledby="result-title">
     <header className="result-toolbar">
       <div className="result-identity">
-        <RouteLink className="icon-button neutral" href="/workbench"><ArrowLeft size={19} aria-hidden="true" /><span className="visually-hidden">{t("backWorkbench")}</span></RouteLink>
         <span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span>
         <div><p className="section-kicker">{t("conversionResult")}</p><h1 id="result-title">{title}</h1></div>
         {task && <span className={`result-status ${task.status}`}>{task.status === "succeeded" ? <CheckCircle2 size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{t(task.status)}</span>}
@@ -78,12 +82,13 @@ export function ResultPage({ api, taskId }: { api: ApiClient; taskId: string }) 
         {task && markdown && <button type="button" onClick={() => void downloadArtifact(api, task, markdown.storageKey)}><Download size={16} aria-hidden="true" />{t("downloadMarkdown")}</button>}
         <button className="secondary" type="button" aria-expanded={drawer} onClick={() => setDrawer((value) => !value)}><Info size={16} aria-hidden="true" />{t("detailsAndResources")}</button>
         {task && <details className="task-menu"><summary aria-label={t("moreActions")}><MoreHorizontal size={19} aria-hidden="true" /></summary><div className="task-menu-popover"><button className="menu-action" type="button" onClick={() => void pin()}>{task.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}{t(task.pinned ? "unpin" : "pin")}</button><button className="menu-action" type="button" onClick={() => void retry()}><RotateCcw size={16} aria-hidden="true" />{t("retry")}</button><button className="menu-action danger" type="button" onClick={() => void remove()}><Trash2 size={16} aria-hidden="true" />{t("deleteTask")}</button></div></details>}
+        <button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={19} aria-hidden="true" /></button>
       </div>
     </header>
 
     {batch.length > 1 && <nav className="batch-switcher" aria-label={t("batchResults")}>
-      {batch.slice(0, 6).map((item) => <button key={item.id} type="button" aria-current={item.id === taskId ? "page" : undefined} onClick={() => navigate(`/results/${item.id}`)}>{taskName(item, item.id.slice(0, 8))}</button>)}
-      {batch.length > 6 && <label><span className="visually-hidden">{t("moreBatchResults")}</span><select value={taskId} onChange={(event) => navigate(`/results/${event.target.value}`)}>{batch.map((item) => <option key={item.id} value={item.id}>{taskName(item, item.id.slice(0, 8))}</option>)}</select></label>}
+      {batch.slice(0, 6).map((item) => <button key={item.id} type="button" aria-current={item.id === taskId ? "page" : undefined} onClick={() => onSelectTask(item.id)}>{taskName(item, item.id.slice(0, 8))}</button>)}
+      {batch.length > 6 && <label className="select-shell batch-select"><span className="visually-hidden">{t("moreBatchResults")}</span><select value={taskId} onChange={(event) => onSelectTask(event.target.value)}>{batch.map((item) => <option key={item.id} value={item.id}>{taskName(item, item.id.slice(0, 8))}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></label>}
     </nav>}
 
     <div className={`result-body ${drawer ? "drawer-open" : ""}`}>
@@ -94,5 +99,6 @@ export function ResultPage({ api, taskId }: { api: ApiClient; taskId: string }) 
       </div>
       {drawer && task && <aside className="result-drawer" aria-label={t("detailsAndResources")}><div className="drawer-heading"><h2>{t("detailsAndResources")}</h2><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={() => setDrawer(false)}><X size={18} aria-hidden="true" /></button></div><section><h3>{t("taskDetails")}</h3><dl><div><dt>ID</dt><dd><code>{task.id}</code></dd></div><div><dt>{t("created")}</dt><dd>{new Date(task.createdAtMs).toLocaleString()}</dd></div><div><dt>{t("updated")}</dt><dd>{new Date(task.updatedAtMs).toLocaleString()}</dd></div><div><dt>OCR</dt><dd>{task.configuration.ocrEnabled ? t("on") : t("off")}</dd></div></dl></section><section><h3>{t("resources")} ({assets.length})</h3>{assets.length === 0 ? <p className="muted">{t("noResources")}</p> : <ul className="drawer-list">{assets.map((artifact) => <li key={artifact.storageKey}><div><strong>{artifactLabel(artifact)}</strong><small>{artifact.mediaType ?? "application/octet-stream"} · {bytesLabel(artifact.byteLen)}</small></div><button className="icon-button" type="button" aria-label={`${t("download")} ${artifactLabel(artifact)}`} onClick={() => void downloadArtifact(api, task, artifact.storageKey)}><Download size={16} aria-hidden="true" /></button></li>)}</ul>}</section><section><h3>{t("diagnostics")}</h3>{task.diagnostics.length === 0 ? <p className="muted">{t("noDiagnostics")}</p> : <ul className="diagnostic-list">{task.diagnostics.map((item, index) => <li key={`${item.code}-${index}`}>{item.code}</li>)}</ul>}</section><section><h3>{t("otherArtifacts")}</h3><div className="artifact-actions">{task.artifacts.filter((artifact) => artifact.kind !== "markdown" && artifact.kind !== "asset").map((artifact) => <button className="secondary" type="button" key={artifact.storageKey} onClick={() => void downloadArtifact(api, task, artifact.storageKey)}>{artifact.kind === "bundle" ? <Package size={16} aria-hidden="true" /> : artifact.kind === "documentIr" ? <Braces size={16} aria-hidden="true" /> : <FileJson size={16} aria-hidden="true" />}{artifactLabel(artifact)}</button>)}</div></section></aside>}
     </div>
-  </section>;
+  </section>
+  </div>;
 }

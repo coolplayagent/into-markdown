@@ -3,9 +3,10 @@
 use crate::config::LoadedConfig;
 use crate::error::CliError;
 use into_markdown::{
-    AiMode, ConversionError, ExecutionContext, ExecutionOptions, InstalledAsrConfig,
-    InstalledOcrConfig, OcrPolicy, OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
-    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
+    AiMode, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions,
+    InstalledAsrConfig, InstalledOcrConfig, OcrPolicy, OpenAiCompatibleClient,
+    OpenAiImageDescriptionProvider, ProviderConfig as TransportProviderConfig,
+    ProviderNetworkPolicy, Services,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,6 +37,35 @@ pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig) -> Result<(), Conversion
     )?;
     let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
     assemble_ocr(loaded, &context, &executable).map(drop)
+}
+
+/// Verify the exact offline ASR distribution used by the Web workbench.
+pub(crate) fn verify_asr_runtime() -> Result<(), ConversionError> {
+    let executable = canonical_executable().map_err(|detail| {
+        ConversionError::ComponentUnavailable { component: "whisper-small".into(), detail }
+    })?;
+    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
+        component: "whisper-small".into(),
+        detail: "current executable has no distribution directory".into(),
+    })?;
+    let context = ExecutionContext::new(
+        ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    let ffmpeg_root = directory.join("ffmpeg");
+    into_markdown::installed_asr_service(
+        &InstalledAsrConfig {
+            writable_model_root: writable_model_root()?,
+            bundled_model_root: bundled_model_root(directory),
+            ffmpeg_trusted_root: ffmpeg_root.clone(),
+            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
+            ffmpeg_authority: ffmpeg_root.join("authority.json"),
+            model_bundle: "whisper-small-multilingual".into(),
+        },
+        &ConversionOptions::default(),
+        &context,
+    )
+    .map(drop)
 }
 
 fn assemble_at(
