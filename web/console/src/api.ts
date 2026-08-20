@@ -9,8 +9,8 @@ export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
   storageKey: string;
   kind: "markdown" | "documentIr" | "diagnostics" | "asset" | "bundle";
-  byteLen: number; sha256: string; assetId?: string; mediaType?: string;
-  filename?: string;
+  byteLen: number; sha256: string; assetId?: string | null; mediaType?: string | null;
+  filename?: string | null;
 }
 export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
 export interface ArtifactDownload { blob: Blob; filename: string }
@@ -33,17 +33,16 @@ export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xls
 export type OcrPolicy = "off" | "auto" | "always";
 export type AiMode = "off" | "fallback" | "prefer" | "only";
 export type AssetMode = "extract" | "embed" | "omit";
+export type NetworkMode = "restricted" | "unrestricted";
 export interface WorkbenchOptions {
   format: InputFormat | null; ocrPolicy: OcrPolicy; ocrConfidence: number; aiMode: AiMode;
   assetMode: AssetMode; includeProvenance: boolean; maxInputMiB: number; maxMemoryMiB: number;
-  maxTemporaryMiB: number; maxPages: number; networkEnabled: boolean; privateNetworkEnabled: boolean;
-  allowedHosts: string[]; authorizeNetwork: boolean; authorizePrivateNetwork: boolean; authorizeProvider: boolean;
+  maxTemporaryMiB: number; maxPages: number; networkMode: NetworkMode; authorizeProvider: boolean;
 }
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
   includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkEnabled: false, privateNetworkEnabled: false, allowedHosts: [],
-  authorizeNetwork: false, authorizePrivateNetwork: false, authorizeProvider: false,
+  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false,
 };
 
 export class ApiError extends Error {
@@ -62,9 +61,9 @@ function isArtifact(value: unknown): value is ArtifactReference {
   return isObject(value) && typeof value.storageKey === "string" && /^[0-9a-f]{32}$/.test(value.storageKey)
     && ["markdown", "documentIr", "diagnostics", "asset", "bundle"].includes(String(value.kind))
     && Number.isSafeInteger(value.byteLen) && Number(value.byteLen) >= 0 && typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256)
-    && (value.assetId === undefined || typeof value.assetId === "string" && value.assetId.length <= 255)
-    && (value.filename === undefined || typeof value.filename === "string" && value.filename.length <= 255 && !/[\u0000-\u001f\u007f/\\]/.test(value.filename))
-    && (value.mediaType === undefined || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
+    && (value.assetId === undefined || value.assetId === null || typeof value.assetId === "string" && value.assetId.length <= 255)
+    && (value.filename === undefined || value.filename === null || typeof value.filename === "string" && value.filename.length <= 255 && !/[\u0000-\u001f\u007f/\\]/.test(value.filename))
+    && (value.mediaType === undefined || value.mediaType === null || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
 }
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
@@ -101,7 +100,9 @@ async function readBoundedJson(response: Response, limit = MAX_RESPONSE_BYTES): 
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new ApiError("invalidResponse"); }
 }
-function requestCode(value: unknown): string { return isObject(value) && typeof value.code === "string" ? value.code : "requestFailed"; }
+function requestCode(value: unknown): string {
+  return isObject(value) && typeof value.code === "string" && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.code) ? value.code : "requestFailed";
+}
 function base64UrlUtf8(value: string): string {
   const bytes = new TextEncoder().encode(value); let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -111,11 +112,14 @@ function base64UrlJson(value: unknown): string { return base64UrlUtf8(JSON.strin
 function mib(value: number): number { return Math.round(value * 1024 * 1024); }
 export function taskRequest(options: WorkbenchOptions): unknown {
   const ai = options.aiMode;
+  const unrestrictedNetwork = options.networkMode === "unrestricted";
   return { schemaVersion: 1, format: options.format, options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
+    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: 600_000,
+      max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024 },
     ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: ai, markdown_postprocess: ai },
-    network: { enabled: options.networkEnabled, max_redirects: 3, deny_private_networks: !options.privateNetworkEnabled, allowed_hosts: options.allowedHosts },
+    network: { enabled: unrestrictedNetwork, max_redirects: 3, deny_private_networks: !unrestrictedNetwork, allowed_hosts: [] },
     limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
       max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
       max_pages: options.maxPages, max_asset_bytes: 67108864, max_total_asset_bytes: 134217728,
@@ -124,7 +128,7 @@ export function taskRequest(options: WorkbenchOptions): unknown {
       max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: options.includeProvenance,
       asset_mode: options.assetMode, asset_uri_prefix: null },
-  }, authorization: { network: options.authorizeNetwork, privateNetwork: options.authorizePrivateNetwork, provider: options.authorizeProvider } };
+  }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider } };
 }
 
 export interface ApiClient {

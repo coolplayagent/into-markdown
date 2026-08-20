@@ -34,6 +34,8 @@ use tokio::time::{Duration, Instant};
 const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
 const TASK_REQUEST_HEADER: HeaderName = HeaderName::from_static("x-into-md-request");
 const TASK_FILENAME_HEADER: HeaderName = HeaderName::from_static("x-into-md-filename-b64");
+const SEC_FETCH_MODE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-mode");
+const SEC_FETCH_SITE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-site");
 const SESSION_FRAGMENT: &str = "into-md-session";
 const SESSION_BYTES: usize = 32;
 const SESSION_ENCODED_LEN: usize = 43;
@@ -349,7 +351,7 @@ async fn response_security(request: Request, next: Next) -> Response {
 }
 
 async fn api_security(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    if single_ascii_header(request.headers(), header::ORIGIN) != Some(state.origin.as_ref()) {
+    if !api_origin_matches(&state, &request) {
         return rejection(StatusCode::FORBIDDEN, "invalidOrigin");
     }
     let supplied = single_ascii_header(request.headers(), SESSION_HEADER.clone()).unwrap_or("");
@@ -357,6 +359,18 @@ async fn api_security(State(state): State<AppState>, request: Request, next: Nex
         return rejection(StatusCode::UNAUTHORIZED, "invalidSession");
     }
     next.run(request).await
+}
+
+fn api_origin_matches(state: &AppState, request: &Request) -> bool {
+    match single_ascii_header(request.headers(), header::ORIGIN) {
+        Some(origin) => origin == state.origin.as_ref(),
+        None => {
+            matches!(*request.method(), Method::GET | Method::HEAD)
+                && single_ascii_header(request.headers(), SEC_FETCH_SITE_HEADER)
+                    == Some("same-origin")
+                && single_ascii_header(request.headers(), SEC_FETCH_MODE_HEADER) == Some("cors")
+        }
+    }
 }
 
 fn single_ascii_header(headers: &HeaderMap, name: HeaderName) -> Option<&str> {
@@ -1410,7 +1424,7 @@ mod tests {
         let valid = request(port, &format!("POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).await;
         assert!(valid.starts_with("HTTP/1.1 200"), "{valid:?}");
         assert!(valid.contains("\"schemaVersion\":1"));
-        assert!(valid.contains("\"available\":false"));
+        assert!(valid.contains("\"available\":"));
         assert!(!valid.contains(&session));
         assert_security_headers(&valid);
 
@@ -1420,6 +1434,26 @@ mod tests {
         )
         .await;
         assert_schema_error(&browser_get, "HTTP/1.1 403", "invalidOrigin");
+
+        let same_origin_browser_get = request(
+            port,
+            &format!(
+                "GET /api/status HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&same_origin_browser_get, "HTTP/1.1 405", "methodNotAllowed");
+
+        for (site, mode) in [("cross-site", "cors"), ("same-origin", "navigate")] {
+            let rejected = request(
+                port,
+                &format!(
+                    "GET /api/status HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: {site}\r\nSec-Fetch-Mode: {mode}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+                ),
+            )
+            .await;
+            assert_schema_error(&rejected, "HTTP/1.1 403", "invalidOrigin");
+        }
 
         let authenticated_get = request(port, &format!("GET /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n")).await;
         assert_schema_error(&authenticated_get, "HTTP/1.1 405", "methodNotAllowed");

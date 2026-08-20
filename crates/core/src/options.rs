@@ -307,6 +307,7 @@ pub struct ConversionOptions {
     /// Local OCR policy.
     pub ocr: OcrOptions,
     /// Local speech-recognition policy.
+    #[serde(default)]
     pub asr: AsrOptions,
     /// Optional AI capability policies.
     pub ai: AiOptions,
@@ -329,5 +330,15 @@ mod tests {
         assert_eq!(defaults.ocr.policy, OcrPolicy::Auto);
         assert_eq!(defaults.ai.vision_ocr, AiMode::Off);
         assert_eq!(defaults.ai.markdown_postprocess, AiMode::Off);
+    }
+
+    #[test]
+    fn additive_asr_options_default_when_older_payloads_omit_them() {
+        let mut value = serde_json::to_value(ConversionOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("asr");
+
+        let decoded: ConversionOptions = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.asr, AsrOptions::default());
     }
 }

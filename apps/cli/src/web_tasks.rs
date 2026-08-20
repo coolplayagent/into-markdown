@@ -3,11 +3,11 @@
 use crate::output;
 use crate::transaction::SafeDir;
 use into_markdown::{
-    AiMode, ArtifactKind, ArtifactReference, BusyControl, CancellationToken, ConfigurationSnapshot,
-    ConversionOptions, ConversionRequest, DiagnosticCode, Engine, ExecutionOptions, FormatHint,
-    InputFormat, InputRef, InputReference, NewTask, OcrPolicy, ProgressEvent, ProgressListener,
-    RecoveryStore, RecoveryToken, TaskCursor, TaskDiagnostic, TaskId, TaskRecord, TaskStatus,
-    TaskStore, TaskStoreError, TaskTransition,
+    AiMode, ArtifactKind, ArtifactReference, AsrOptions, BusyControl, CancellationToken,
+    ConfigurationSnapshot, ConversionOptions, ConversionRequest, DiagnosticCode, Engine,
+    ExecutionOptions, FormatHint, InputFormat, InputRef, InputReference, NewTask, OcrPolicy,
+    ProgressEvent, ProgressListener, RecoveryStore, RecoveryToken, TaskCursor, TaskDiagnostic,
+    TaskId, TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -128,6 +128,7 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
     {
         return Err(WebTaskError::Invalid("OCR confidence must be within 0 and 1".into()));
     }
+    validate_web_asr_options(&options.asr)?;
     let limits = &options.limits;
     if limits.max_input_bytes == 0 || limits.max_input_bytes > MAX_FILE_BYTES {
         return Err(WebTaskError::Invalid("max_input_bytes must be within 1 and 512 MiB".into()));
@@ -218,6 +219,14 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
         ));
     }
     Ok(())
+}
+
+fn validate_web_asr_options(options: &AsrOptions) -> Result<(), WebTaskError> {
+    if options == &AsrOptions::default() {
+        Ok(())
+    } else {
+        Err(WebTaskError::Invalid("unsupported Web ASR policy".into()))
+    }
 }
 
 impl From<std::io::Error> for WebTaskError {
@@ -3878,6 +3887,21 @@ mod tests {
         assert!(matches!(
             decode_web_task_request(&vec![b' '; 16 * 1024 + 1]),
             Err(WebTaskError::Limit(_))
+        ));
+    }
+
+    #[test]
+    fn web_task_request_defaults_omitted_asr_and_rejects_unreviewed_asr_profiles() {
+        let mut value = serde_json::to_value(WebTaskRequest::default()).unwrap();
+        value["options"].as_object_mut().unwrap().remove("asr");
+        let decoded = decode_web_task_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.options.asr, AsrOptions::default());
+
+        let mut request = WebTaskRequest::default();
+        request.options.asr.max_threads += 1;
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
         ));
     }
 
