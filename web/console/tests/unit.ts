@@ -21,16 +21,17 @@ const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 const testGroups = {
   preview: new Set([
     "Markdown preview never creates executable or resource-loading DOM",
-    "completed workbench exposes accessible artifact preview and resource browser",
+    "result route provides reading and source views with a closed details drawer",
   ]),
   history_actions: new Set([
-    "history controls expose accessible pinning and irreversible deletion confirmation",
+    "history route exposes compact row actions and irreversible deletion confirmation",
   ]),
   history_cleanup: new Set([
     "immediate cleanup requires irreversible confirmation and reports reclaimed capacity",
   ]),
   workbench: new Set([
-    "workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry",
+    "workbench keeps the current batch and conversion controls in one route",
+    "root workbench automatically opens the first successful result",
     "workbench presents network access as one bounded switch",
     "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
@@ -231,13 +232,15 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
     return new Response(JSON.stringify(responseTask), { headers: { "content-type": "application/json" } });
   });
   const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const, audioTranscription: true };
-  await client.upload(new File(["pdf"], "报告.pdf"), options);
+  const batchId = "d".repeat(32);
+  await client.upload(new File(["pdf"], "报告.pdf"), options, batchId);
   const uploadHeaders = calls[0]![1]!.headers as Record<string, string>;
   const filename = uploadHeaders["X-Into-Md-Filename-B64"]!;
   assert.equal(new TextDecoder().decode(Uint8Array.from(atob(filename.replaceAll("-", "+").replaceAll("_", "/")), (char) => char.charCodeAt(0))), "报告.pdf");
   const encoded = uploadHeaders["X-Into-Md-Request"]!;
   const request = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(encoded.replaceAll("-", "+").replaceAll("_", "/")), (char) => char.charCodeAt(0)))) as Record<string, any>;
   assert.equal(request.schemaVersion, 1);
+  assert.equal(request.batchId, batchId);
   assert.equal(request.format, "pdf");
   assert.equal(request.options.ocr.policy, "always");
   assert.deepEqual(request.options.asr, {
@@ -281,9 +284,9 @@ test("history API paginates, filters, pins, retries and permanently deletes expl
     if (String(input).startsWith("/api/tasks?")) return new Response(JSON.stringify({ schemaVersion: 1, tasks: [current], nextCursor: { updatedAtMs: 2, id: current.id } }), { headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify(current), { headers: { "content-type": "application/json" } });
   });
-  const page = await client.listTasks({ limit: 1, status: "succeeded", pinned: true, after: { updatedAtMs: 3, id: "b".repeat(32) } });
+  const page = await client.listTasks({ limit: 1, status: "succeeded", pinned: true, batchId: "c".repeat(32), after: { updatedAtMs: 3, id: "b".repeat(32) } });
   assert.equal(page.nextCursor?.id, current.id);
-  assert.equal(calls[0]![0], `/api/tasks?limit=1&afterUpdatedAtMs=3&afterId=${"b".repeat(32)}&status=succeeded&pinned=true`);
+  assert.equal(calls[0]![0], `/api/tasks?limit=1&afterUpdatedAtMs=3&afterId=${"b".repeat(32)}&status=succeeded&pinned=true&batchId=${"c".repeat(32)}`);
   await client.setPinned(current.id, true); await client.retry(current.id); await client.deleteTask(current.id);
   assert.equal(calls[1]![0], `/api/tasks/${current.id}/pin`);
   assert.equal(calls[1]![1]?.body, JSON.stringify({ pinned: true }));
@@ -320,36 +323,39 @@ test("Markdown preview never creates executable or resource-loading DOM", async 
   assert.ok(window.document.body.textContent.includes("more entries"));
 });
 
-test("completed workbench exposes accessible artifact preview and resource browser", async () => {
-  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
-  const completed = task("succeeded"); completed.artifacts = [
+test("result route provides reading and source views with a closed details drawer", async () => {
+  const window = installWindow(); const completed = task("succeeded");
+  window.history.replaceState(null, "", `/results/${completed.id}`);
+  Object.assign(completed, { displayName: "Quarterly report.pdf", format: "pdf", batchId: "b".repeat(32) });
+  completed.artifacts = [
     { storageKey: "b".repeat(32), kind: "markdown", byteLen: 40, sha256: "c".repeat(64) },
     { storageKey: "f".repeat(32), kind: "diagnostics", byteLen: 28, sha256: "a".repeat(64) },
     { storageKey: "d".repeat(32), kind: "asset", byteLen: 12, sha256: "e".repeat(64), assetId: "image-1", filename: "diagram.png", mediaType: "image/png" },
   ];
+  const sibling = { ...completed, id: "c".repeat(32), displayName: "Appendix.pdf" };
   let previewCalls = 0;
-  const api: ApiClient = { ...availableApi, async listTasks() { return { tasks: [completed] }; }, async preview(_id, key) { previewCalls += 1; return key === "f".repeat(32) ? { text: "{\"diagnostics\":[]}", truncated: false, contentType: "application/json" } : { text: "<img src=file:///secret>\n<script>alert(1)</script>", truncated: false, contentType: "text/markdown" }; } };
+  const markdown = "<a id=\"pdf-page-1\"></a>\n# Quarterly report\n\n| <strong>Item</strong> | **Amount** |\n| --- | ---: |\n| Revenue | 120 |\n\n<img src=file:///secret>";
+  const api: ApiClient = { ...availableApi, async getTask() { return completed; }, async listTasks(filters) { assert.equal(filters?.batchId, completed.batchId); return { tasks: [completed, sibling] }; }, async preview() { previewCalls += 1; return { text: markdown, truncated: true, contentType: "text/markdown" }; } };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitFor(() => previewCalls === 1 && window.document.body.textContent.includes("file:///secret"));
-  assert.equal(window.document.querySelector("details.advanced-settings")?.hasAttribute("open"), false);
-  assert.ok(window.document.querySelector("details.task-menu"));
-  const audioToggle = window.document.querySelector<HTMLInputElement>(".audio-capability input");
-  assert.ok(audioToggle);
-  audioToggle.click();
-  await waitFor(() => audioToggle.checked && window.document.body.textContent.includes("Enabled"));
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Preview diagnostics.json")!.click();
-  await waitFor(() => previewCalls === 2 && window.document.body.textContent.includes("diagnostics"));
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(previewCalls, 2, "automatic Markdown preview must not steal focus from another artifact");
-  assert.equal(window.document.querySelector(".preview-panel img,.preview-panel script,.preview-panel a"), null);
-  assert.ok(window.document.body.textContent.includes("Resources (1)"));
+  await waitFor(() => previewCalls === 1 && window.document.body.textContent.includes("Quarterly report"));
+  assert.equal(window.document.querySelector(".result-drawer"), null, "details must not compete with the document by default");
+  assert.ok(window.document.querySelector(".preview-table-scroll table"));
+  assert.equal(window.document.querySelectorAll(".preview-table-scroll th strong").length, 2);
+  assert.equal(window.document.body.textContent.includes('pdf-page-1'), false);
+  assert.equal(window.document.querySelector(".markdown-preview img,.markdown-preview script,.markdown-preview a"), null);
+  assert.ok(window.document.body.textContent.includes("Large preview truncated"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Markdown source")!.click();
+  await waitFor(() => Boolean(window.document.querySelector(".markdown-source")));
+  assert.ok(window.document.querySelector(".markdown-source")?.textContent.includes("| Revenue |"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Details and resources")!.click();
+  await waitFor(() => window.document.body.textContent.includes("Resources (1)"));
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document);
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
 });
 
-test("history controls expose accessible pinning and irreversible deletion confirmation", async () => {
-  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
-  const completed = task("succeeded"); let pinned = false; let deleted = false; let warning = ""; let listCalls = 0;
+test("history route exposes compact row actions and irreversible deletion confirmation", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/history");
+  const completed = { ...task("succeeded"), displayName: "Quarterly report.pdf", format: "pdf" as const }; let pinned = false; let deleted = false; let warning = ""; let listCalls = 0;
   window.confirm = (message?: string) => { warning = message ?? ""; return true; };
   const api: ApiClient = {
     ...availableApi,
@@ -358,18 +364,20 @@ test("history controls expose accessible pinning and irreversible deletion confi
     async deleteTask() { deleted = true; },
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "Task details");
+  await waitForText(window, "Quarterly report.pdf");
+  assert.equal(window.document.querySelector(".result-route"), null);
+  assert.equal(window.document.querySelectorAll(".history-row").length, 1);
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Pin")!.click();
   await waitFor(() => pinned && window.document.body.textContent.includes("Unpin"));
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Delete permanently")!.click();
-  await waitFor(() => deleted && window.document.querySelector(".task-card") === null);
+  await waitFor(() => deleted && window.document.querySelector(".history-row") === null);
   assert.ok(warning.includes("cannot be undone"));
   assert.equal(listCalls, 1);
-  assert.equal(window.document.querySelector(".task-card"), null);
+  assert.equal(window.document.querySelector(".history-row"), null);
 });
 test("immediate cleanup requires irreversible confirmation and reports reclaimed capacity", async () => {
   const window2 = installWindow();
-  window2.history.replaceState(null, "", "/workbench");
+  window2.history.replaceState(null, "", "/history");
   let cleanups = 0;
   let warning = "";
   window2.confirm = (message) => {
@@ -394,19 +402,18 @@ test("immediate cleanup requires irreversible confirmation and reports reclaimed
   assert.deepEqual((await axe.run(window2.document)).violations.map((violation) => violation.id), []);
 });
 
-test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry", async () => {
+test("workbench keeps the current batch and conversion controls in one route", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   let cancelled = 0; let uploaded = 0;
-  const failed = task("failed", "b".repeat(32)); const running = task("running", "c".repeat(32));
   const api: ApiClient = {
     ...availableApi,
-    async listTasks() { return { tasks: [running, failed] }; },
-    async upload() { uploaded += 1; return task("running", "d".repeat(32)); },
+    async upload(_file, _options, batchId) { uploaded += 1; return { ...task("running", String(uploaded).repeat(32)), batchId }; },
     async cancel(id) { cancelled += 1; return task("cancelled", id); },
-    async retry() { throw new ApiError("originalUnavailable"); },
+    async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitFor(() => window.document.body.textContent.includes("Restored task"), 2_000).catch(() => { throw new Error(window.document.body.textContent); });
+  await waitForText(window, "Add documents");
+  assert.equal(window.document.querySelector(".history-route,.result-route"), null);
   const inputs = [...window.document.querySelectorAll<HTMLInputElement>('input[type="file"]')];
   assert.equal(inputs.length, 2); assert.equal(inputs[0]!.multiple, true); assert.equal(inputs[1]!.hasAttribute("webkitdirectory"), true);
   const zone = window.document.getElementById("upload-zone")!; let pickerClicks = 0; inputs[0]!.click = () => { pickerClicks += 1; };
@@ -416,23 +423,33 @@ test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel 
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["one"], "one.md"), new File(["two"], "two.md")] } });
   zone.dispatchEvent(drop); await waitForText(window, "Selected (2)");
-  const convert = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Start conversion 2"))!;
+  const convert = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Start conversion (2)"))!;
   convert.click(); await waitFor(() => uploaded === 2);
-  const cancel = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!;
+  const cancel = window.document.querySelector<HTMLButtonElement>('button[aria-label="Cancel one.md"]')!;
   cancel.click(); await waitFor(() => cancelled === 1);
-  const retry = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
-  retry.click(); await waitForText(window, "select the original file again");
-  const oversized = new File(["x"], "huge.pdf"); Object.defineProperty(oversized, "size", { value: 513 * 1024 * 1024 });
-  const hugeDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(hugeDrop, "dataTransfer", { value: { files: [oversized] } });
-  zone.dispatchEvent(hugeDrop); await waitForText(window, "exceeds the selected per-file limit");
-  const many = Array.from({ length: 101 }, (_, index) => new File(["x"], `${index}.txt`));
-  const manyDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(manyDrop, "dataTransfer", { value: { files: many } });
-  zone.dispatchEvent(manyDrop); await waitForText(window, "at most 100 files");
+  assert.equal(window.document.querySelectorAll(".current-batch li").length, 2);
+  assert.equal(window.document.querySelector(".history-table-shell"), null);
+});
+
+test("root workbench automatically opens the first successful result", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/");
+  const completed = { ...task("succeeded"), displayName: "contract.md", format: "markdown" as const };
+  const api: ApiClient = { ...availableApi, async upload(_file, _options, batchId) { return { ...completed, batchId }; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Add documents");
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
+  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
+  await waitForText(window, "Selected (1)");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitFor(() => window.location.pathname === `/results/${completed.id}`);
 });
 
 test("workbench presents network access as one bounded switch", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
+  await waitForText(window, "Advanced settings");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
   await waitForText(window, "When off, conversions process local content only.");
   assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
   assert.ok(!window.document.body.textContent.includes("private-network targets"));
@@ -451,12 +468,12 @@ test("workbench reports the bounded upload rejection code", async () => {
     async upload() { throw new ApiError("invalidTaskOptions"); },
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "No tasks yet");
+  await waitForText(window, "Add documents");
   const zone = window.document.getElementById("upload-zone")!;
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
   zone.dispatchEvent(drop); await waitForText(window, "Selected (1)");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion 1")!.click();
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
   await waitForText(window, "Upload failed: contract.md (invalidTaskOptions)");
 });
 

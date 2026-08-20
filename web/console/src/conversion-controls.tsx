@@ -1,0 +1,82 @@
+import {
+  AudioLines, CheckCircle2, ChevronDown, CircleAlert, FileText, ScanText, Settings2, SlidersHorizontal,
+  Wifi, WifiOff, X,
+} from "lucide-react";
+import type { AiMode, InputFormat, NetworkMode, WorkbenchOptions } from "./api";
+import { useI18n } from "./i18n";
+import { FORMATS } from "./task-ui";
+
+function SegmentedControl<T extends string>({
+  label, value, items, onChange,
+}: {
+  label: string;
+  value: T;
+  items: Array<{ value: T; label: string; recommended?: boolean }>;
+  onChange(value: T): void;
+}) {
+  const { t } = useI18n();
+  return <div className="segmented-field">
+    <span>{label}</span>
+    <div className="segmented-control" role="group" aria-label={label}>
+      {items.map((item) => <button key={item.value} type="button" aria-pressed={value === item.value} onClick={() => onChange(item.value)}>
+        {item.label}{item.recommended && <small>{t("recommended")}</small>}
+      </button>)}
+    </div>
+  </div>;
+}
+
+export function CapabilityStrip({ value, onChange }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void }) {
+  const { t } = useI18n();
+  return <section className="capability-strip" aria-label={t("capabilities")}>
+    <div className="capability-item">
+      <span className="capability-icon"><FileText size={21} aria-hidden="true" /></span>
+      <div><strong>{t("documentParsing")}</strong><span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("localReady")}</span></div>
+    </div>
+    <div className="capability-item">
+      <span className="capability-icon"><ScanText size={21} aria-hidden="true" /></span>
+      <div><strong>{t("imageOcr")}</strong><span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("automaticDetection")}</span></div>
+    </div>
+    <div className="capability-item audio-capability">
+      <span className="capability-icon"><AudioLines size={21} aria-hidden="true" /></span>
+      <div><strong>{t("audioTranscription")}</strong><span className={value.audioTranscription ? "ready" : "neutral"}>{value.audioTranscription ? <CheckCircle2 size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />}{t(value.audioTranscription ? "enabled" : "disabled")}</span></div>
+      <label className="switch compact-switch"><span className="visually-hidden">{t("audioTranscription")}</span><input type="checkbox" checked={value.audioTranscription} onChange={(event) => onChange({ ...value, audioTranscription: event.target.checked })} /><span aria-hidden="true" /></label>
+    </div>
+  </section>;
+}
+
+export function OptionPanel({ value, onChange, disabled, onOpenAdvanced }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; disabled: boolean; onOpenAdvanced(): void }) {
+  const { t } = useI18n();
+  const patch = <K extends keyof WorkbenchOptions>(key: K, next: WorkbenchOptions[K]) => onChange({ ...value, [key]: next });
+  return <section className="control-card" aria-labelledby="conversion-settings-heading">
+    <div className="control-card-heading"><div><p className="section-kicker">{t("conversionSettings")}</p><h2 id="conversion-settings-heading">{t("conversionSettings")}</h2></div><Settings2 size={20} aria-hidden="true" /></div>
+    <fieldset className="quick-option-grid" disabled={disabled}>
+      <div className="segmented-field"><span>{t("outputFormat")}</span><div className="segmented-control single" aria-label={t("outputFormat")}><button type="button" aria-pressed="true"><FileText size={16} aria-hidden="true" /> Markdown</button></div></div>
+      <SegmentedControl label={t("recognitionMode")} value={value.ocrPolicy} onChange={(next) => patch("ocrPolicy", next)} items={[{ value: "auto", label: t("automatic"), recommended: true }, { value: "always", label: t("forceRecognition") }, { value: "off", label: t("off") }]} />
+      <SegmentedControl label={t("assetMode")} value={value.assetMode} onChange={(next) => patch("assetMode", next)} items={[{ value: "extract", label: t("separateAssets"), recommended: true }, { value: "embed", label: t("embedAssets") }, { value: "omit", label: t("omitAssets") }]} />
+    </fieldset>
+    <button className="advanced-trigger" type="button" onClick={onOpenAdvanced}><SlidersHorizontal size={17} aria-hidden="true" /><span>{t("advancedSettings")}</span><ChevronDown size={17} aria-hidden="true" /></button>
+  </section>;
+}
+
+export function AdvancedSettings({ value, onChange, open, onClose }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; open: boolean; onClose(): void }) {
+  const { t } = useI18n();
+  const patch = <K extends keyof WorkbenchOptions>(key: K, next: WorkbenchOptions[K]) => onChange({ ...value, [key]: next });
+  if (!open) return null;
+  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+    <aside className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="advanced-title">
+      <div className="sheet-heading"><div><p className="section-kicker">{t("conversionSettings")}</p><h2 id="advanced-title">{t("advancedSettings")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
+      <div className="option-grid">
+        <label><span>{t("formatHint")}</span><select value={value.format ?? ""} onChange={(event) => patch("format", (event.target.value || null) as InputFormat | null)}><option value="">{t("automatic")}</option>{FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}</select></label>
+        <label><span>{t("ocrConfidence")}</span><input type="number" min="0" max="1" step="0.05" value={value.ocrConfidence} onChange={(event) => patch("ocrConfidence", Number(event.target.value))} /></label>
+        <label><span>{t("aiMode")}</span><select value={value.aiMode} onChange={(event) => patch("aiMode", event.target.value as AiMode)}><option value="off">{t("off")}</option><option value="fallback">Fallback</option><option value="prefer">Prefer</option><option value="only">Only</option></select></label>
+        <label><span>{t("maxInput")}</span><input type="number" min="1" max="512" value={value.maxInputMiB} onChange={(event) => patch("maxInputMiB", Number(event.target.value))} /></label>
+        <label><span>{t("maxMemory")}</span><input type="number" min="1" max="256" value={value.maxMemoryMiB} onChange={(event) => patch("maxMemoryMiB", Number(event.target.value))} /></label>
+        <label><span>{t("maxPages")}</span><input type="number" min="1" max="10000" value={value.maxPages} onChange={(event) => patch("maxPages", Number(event.target.value))} /></label>
+      </div>
+      <div className="authorization-box">
+        <div className="network-choice"><div className="network-icon">{value.networkMode === "unrestricted" ? <Wifi size={18} aria-hidden="true" /> : <WifiOff size={18} aria-hidden="true" />}</div><div><strong>{t("networkAccess")}</strong><p>{t(value.networkMode === "unrestricted" ? "networkEnabledNote" : "networkDisabledNote")}</p></div><label className="switch"><span className="visually-hidden">{t("networkAccess")}</span><input type="checkbox" checked={value.networkMode === "unrestricted"} onChange={(event) => patch("networkMode", (event.target.checked ? "unrestricted" : "restricted") as NetworkMode)} /><span aria-hidden="true" /></label></div>
+        {value.aiMode !== "off" && <label className="check grant"><input type="checkbox" checked={value.authorizeProvider} onChange={(event) => patch("authorizeProvider", event.target.checked)} />{t("authorizeProvider")}</label>}
+      </div>
+    </aside>
+  </div>;
+}

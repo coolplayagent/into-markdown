@@ -10,26 +10,72 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
   const lines = allLines.slice(0, MAX_MARKDOWN_BLOCKS);
   const output: ReactNode[] = [];
   let code: string[] | null = null;
-  for (const [index, line] of lines.entries()) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (line.startsWith("```")) {
       if (code) { output.push(<pre key={`code-${index}`}><code>{code.join("\n")}</code></pre>); code = null; }
       else code = [];
       continue;
     }
     if (code) { code.push(line); continue; }
+    if (isSourceAnchor(line)) continue;
+    const delimiter = lines[index + 1];
+    if (line.includes("|") && delimiter && isTableDelimiter(delimiter)) {
+      const headers = tableCells(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index]!.includes("|") && lines[index]!.trim()) {
+        rows.push(tableCells(lines[index]!));
+        index += 1;
+      }
+      index -= 1;
+      output.push(<div className="preview-table-scroll" key={`table-${index}`}><table><thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex} scope="col">{renderInline(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{renderInline(row[cellIndex] ?? "")}</td>)}</tr>)}</tbody></table></div>);
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
       const level = heading[1]!.length;
-      output.push(<div className={`preview-heading h${level}`} role="heading" aria-level={level} key={index}>{heading[2]}</div>);
+      output.push(<div className={`preview-heading h${level}`} role="heading" aria-level={level} key={index}>{renderInline(heading[2]!)}</div>);
     } else if (/^\s*[-*+]\s+/.test(line)) {
-      output.push(<div className="preview-list-item" key={index}>• {line.replace(/^\s*[-*+]\s+/, "")}</div>);
+      output.push(<div className="preview-list-item" key={index}>• {renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</div>);
     } else if (line.trim()) {
-      output.push(<p key={index}>{line}</p>);
+      output.push(<p key={index}>{renderInline(line)}</p>);
     }
   }
   if (code) output.push(<pre key="code-final"><code>{code.join("\n")}</code></pre>);
   if (lines.length < allLines.length) output.push(<p className="tree-limit" role="status" key="limit">… preview block limit reached</p>);
   return <div className="markdown-preview">{output}</div>;
+}
+
+function isSourceAnchor(line: string): boolean {
+  return /^<a id="[A-Za-z0-9._:-]{1,128}"><\/a>$/.test(line.trim());
+}
+
+function renderInline(source: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const pattern = /(<strong>[^<>\n]{1,512}<\/strong>|\*\*[^*\n]{1,512}\*\*|`[^`\n]{1,512}`)/g;
+  let cursor = 0;
+  for (const match of source.matchAll(pattern)) {
+    const offset = match.index ?? 0;
+    if (offset > cursor) nodes.push(source.slice(cursor, offset));
+    const value = match[0];
+    if (value.startsWith("<strong>")) nodes.push(<strong key={`${offset}-strong`}>{value.slice(8, -9)}</strong>);
+    else if (value.startsWith("**")) nodes.push(<strong key={`${offset}-bold`}>{value.slice(2, -2)}</strong>);
+    else nodes.push(<code key={`${offset}-code`}>{value.slice(1, -1)}</code>);
+    cursor = offset + value.length;
+  }
+  if (cursor < source.length) nodes.push(source.slice(cursor));
+  return nodes.length === 1 ? nodes[0] : nodes;
+}
+
+function tableCells(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll("\\|", "|"));
+}
+
+function isTableDelimiter(line: string): boolean {
+  const cells = tableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
 export function JsonTree({ value }: { value: unknown }) {

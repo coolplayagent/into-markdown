@@ -92,6 +92,8 @@ pub(crate) struct WebTaskAuthorization {
 pub(crate) struct WebTaskRequest {
     pub(crate) schema_version: u32,
     pub(crate) format: Option<InputFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) batch_id: Option<String>,
     pub(crate) options: ConversionOptions,
     pub(crate) authorization: WebTaskAuthorization,
 }
@@ -101,6 +103,7 @@ impl Default for WebTaskRequest {
         Self {
             schema_version: 1,
             format: None,
+            batch_id: None,
             options: web_options(),
             authorization: WebTaskAuthorization::default(),
         }
@@ -119,9 +122,7 @@ pub(crate) fn decode_web_task_request(bytes: &[u8]) -> Result<WebTaskRequest, We
 }
 
 fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskError> {
-    if request.schema_version != 1 {
-        return Err(WebTaskError::Invalid("task request schemaVersion must be 1".into()));
-    }
+    validate_web_task_identity(request)?;
     let options = &request.options;
     if !options.ocr.minimum_confidence.is_finite()
         || !(0.0..=1.0).contains(&options.ocr.minimum_confidence)
@@ -221,6 +222,24 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
     Ok(())
 }
 
+fn validate_web_task_identity(request: &WebTaskRequest) -> Result<(), WebTaskError> {
+    if request.schema_version != 1 {
+        return Err(WebTaskError::Invalid("task request schemaVersion must be 1".into()));
+    }
+    if request.batch_id.as_deref().is_some_and(|value| !valid_batch_id(value)) {
+        return Err(WebTaskError::Invalid(
+            "batchId must be 32 lowercase hexadecimal characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_batch_id(value: &str) -> bool {
+    value.len() == 32
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && !value.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
 fn validate_web_asr_options(options: &AsrOptions) -> Result<(), WebTaskError> {
     if options == &AsrOptions::default() {
         Ok(())
@@ -253,7 +272,23 @@ struct PersistedRequest {
     schema_version: u32,
     name: String,
     hint: FormatHint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    batch_id: Option<String>,
     options: ConversionOptions,
+}
+
+/// Browser-facing task metadata recovered from the authenticated request file.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebTaskRecord {
+    #[serde(flatten)]
+    pub(crate) record: TaskRecord,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) format: Option<InputFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) batch_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1139,6 +1174,28 @@ impl WebTaskBackend {
         Ok(record)
     }
 
+    /// Enrich a durable task record with bounded, non-secret browser metadata.
+    pub(crate) fn web_record(&self, record: TaskRecord) -> Result<WebTaskRecord, WebTaskError> {
+        let _history = lock(&self.owner.shared.history_mutation);
+        let request = self.persisted_request(&record.id)?;
+        Ok(WebTaskRecord {
+            record,
+            display_name: request.as_ref().map(|request| request.name.clone()),
+            format: request.as_ref().and_then(|request| request.hint.format),
+            batch_id: request.and_then(|request| request.batch_id),
+        })
+    }
+
+    fn persisted_request(&self, id: &TaskId) -> Result<Option<PersistedRequest>, WebTaskError> {
+        let task = self
+            .owner
+            .shared
+            .objects
+            .open_child_private_optional(std::ffi::OsStr::new(id.as_str()))
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        task.as_ref().map(load_persisted_request).transpose().map(Option::flatten)
+    }
+
     /// Return a stable, newest-first filtered page.
     pub(crate) fn list(
         &self,
@@ -1146,6 +1203,32 @@ impl WebTaskBackend {
         after: Option<&TaskCursor>,
         status: Option<TaskStatus>,
         pinned: Option<bool>,
+    ) -> Result<TaskHistoryPage, WebTaskError> {
+        self.list_filtered(limit, after, status, pinned, None)
+    }
+
+    /// Return one stable page restricted to a persisted browser batch.
+    pub(crate) fn list_batch(
+        &self,
+        limit: u32,
+        after: Option<&TaskCursor>,
+        status: Option<TaskStatus>,
+        pinned: Option<bool>,
+        batch_id: &str,
+    ) -> Result<TaskHistoryPage, WebTaskError> {
+        if !valid_batch_id(batch_id) {
+            return Err(WebTaskError::Invalid("batch ID is invalid".into()));
+        }
+        self.list_filtered(limit, after, status, pinned, Some(batch_id))
+    }
+
+    fn list_filtered(
+        &self,
+        limit: u32,
+        after: Option<&TaskCursor>,
+        status: Option<TaskStatus>,
+        pinned: Option<bool>,
+        batch_id: Option<&str>,
     ) -> Result<TaskHistoryPage, WebTaskError> {
         if limit == 0 || limit > 100 {
             return Err(WebTaskError::Invalid("history limit must be within 1 and 100".into()));
@@ -1172,8 +1255,18 @@ impl WebTaskBackend {
                 page.last().ok_or_else(|| WebTaskError::Io("history page vanished".into()))?;
             cursor = Some(TaskCursor { updated_at_ms: last.updated_at_ms, id: last.id.clone() });
             for record in page {
+                let batch_matches = match batch_id {
+                    None => true,
+                    Some(expected) => {
+                        self.persisted_request(&record.id)?
+                            .and_then(|request| request.batch_id)
+                            .as_deref()
+                            == Some(expected)
+                    }
+                };
                 if status.is_none_or(|value| record.status == value)
                     && pinned.is_none_or(|value| record.pinned == value)
+                    && batch_matches
                 {
                     matched.push(record);
                     if matched.len() > usize::try_from(limit).unwrap_or(100) {
@@ -1339,6 +1432,7 @@ impl WebTaskBackend {
         let configured = WebTaskRequest {
             schema_version: 1,
             format: request.hint.format,
+            batch_id: None,
             options: request.options,
             authorization: WebTaskAuthorization::default(),
         };
@@ -1846,8 +1940,13 @@ impl Upload {
                 .map_err(|error| WebTaskError::Io(error.to_string()))?;
         let ocr_enabled = options.ocr.policy != OcrPolicy::Off;
         let preserve_layout = options.ai.layout_repair != AiMode::Off;
-        let persisted =
-            PersistedRequest { schema_version: 1, name: self.name.clone(), hint, options };
+        let persisted = PersistedRequest {
+            schema_version: 1,
+            name: self.name.clone(),
+            hint,
+            batch_id: self.request.batch_id.clone(),
+            options,
+        };
         let request_json = bounded_json(&persisted, 64 * 1024, "persisted request")?;
         let _metadata_lease = DiskLease::acquire_interruptible(
             &self.backend.owner.shared,
@@ -3308,7 +3407,10 @@ fn load_persisted_request(task: &SafeDir) -> Result<Option<PersistedRequest>, We
     validate_json_shape(&request_bytes, 32, 4096, 4096)?;
     let request: PersistedRequest = serde_json::from_slice(&request_bytes)
         .map_err(|error| WebTaskError::Unsafe(format!("invalid persisted request: {error}")))?;
-    if request.schema_version != 1 || validate_display_name(&request.name).is_err() {
+    if request.schema_version != 1
+        || validate_display_name(&request.name).is_err()
+        || request.batch_id.as_deref().is_some_and(|value| !valid_batch_id(value))
+    {
         return Err(WebTaskError::Unsafe("persisted request is incompatible".into()));
     }
     Ok(Some(request))
@@ -3837,8 +3939,11 @@ mod tests {
 
     #[test]
     fn web_task_request_uses_shared_options_and_requires_one_time_grants() {
-        let mut request = WebTaskRequest::default();
-        request.format = Some(InputFormat::Pdf);
+        let mut request = WebTaskRequest {
+            format: Some(InputFormat::Pdf),
+            batch_id: Some("ab".repeat(16)),
+            ..WebTaskRequest::default()
+        };
         request.options.ocr.policy = OcrPolicy::Always;
         request.options.network.enabled = true;
         request.options.network.allowed_hosts = vec!["api.example.com".into()];
@@ -3848,6 +3953,7 @@ mod tests {
         request.authorization.network = true;
         let decoded = decode_web_task_request(&serde_json::to_vec(&request).unwrap()).unwrap();
         assert_eq!(decoded.format, Some(InputFormat::Pdf));
+        assert_eq!(decoded.batch_id.as_deref(), Some("abababababababababababababababab"));
         assert_eq!(decoded.options.ocr.policy, OcrPolicy::Always);
         assert_eq!(decoded.options.network.allowed_hosts, ["api.example.com"]);
 
@@ -3858,6 +3964,12 @@ mod tests {
         ));
         request.authorization.private_network = true;
         assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+
+        request.batch_id = Some("AB".repeat(16));
+        assert!(matches!(
+            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
+            Err(WebTaskError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -5005,13 +5117,27 @@ mod tests {
     fn upload_queue_publishes_complete_artifact_set() {
         let temporary = tempfile::tempdir().unwrap();
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
-        let mut upload = backend.begin_upload("a.txt", Some(5)).unwrap();
+        let request = WebTaskRequest {
+            format: Some(InputFormat::Text),
+            batch_id: Some("12".repeat(16)),
+            ..WebTaskRequest::default()
+        };
+        let mut upload =
+            backend.begin_upload_configured("Quarterly report.txt", Some(5), request).unwrap();
         upload.write_chunk(b"hello").unwrap();
         let record = upload.finish().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let current = backend.get(&record.id).unwrap();
             if current.status == TaskStatus::Succeeded {
+                let browser = backend.web_record(current.clone()).unwrap();
+                assert_eq!(browser.display_name.as_deref(), Some("Quarterly report.txt"));
+                assert_eq!(browser.format, Some(InputFormat::Text));
+                assert_eq!(browser.batch_id.as_deref(), Some("12121212121212121212121212121212"));
+                let batch = backend
+                    .list_batch(10, None, None, None, "12121212121212121212121212121212")
+                    .unwrap();
+                assert_eq!(batch.tasks.iter().filter(|item| item.id == record.id).count(), 1);
                 assert!(current.artifacts.iter().any(|value| value.kind == ArtifactKind::Markdown));
                 assert!(
                     current.artifacts.iter().any(|value| value.kind == ArtifactKind::DocumentIr)
