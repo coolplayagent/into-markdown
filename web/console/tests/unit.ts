@@ -31,6 +31,8 @@ const testGroups = {
   ]),
   workbench: new Set([
     "workbench exposes batch, folder, limits, keyboard, restored tasks, cancel and retry",
+    "workbench presents network access as one bounded switch",
+    "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
     "ErrorBoundary contains provider render errors and focuses its fallback heading",
   ]),
@@ -209,6 +211,9 @@ test("API client rejects malicious and oversized responses without reflecting se
   }
   const maliciousTask = task("succeeded"); maliciousTask.artifacts = [{ storageKey: "b".repeat(32), kind: "asset", byteLen: 1, sha256: "c".repeat(64), filename: "../escape.png" }];
   assert.throws(() => parseTask(maliciousTask), ApiError);
+  const nullableArtifactTask = task("succeeded");
+  nullableArtifactTask.artifacts = [{ storageKey: "b".repeat(32), kind: "markdown", byteLen: 1, sha256: "c".repeat(64), assetId: null, filename: null, mediaType: null }];
+  assert.equal(parseTask(nullableArtifactTask).artifacts[0]?.filename, null);
 });
 
 test("workbench API sends shared conversion options and resumes SSE from Last-Event-ID", async () => {
@@ -225,7 +230,7 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
     }
     return new Response(JSON.stringify(responseTask), { headers: { "content-type": "application/json" } });
   });
-  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkEnabled: true, allowedHosts: ["api.example.com"], authorizeNetwork: true };
+  const options = { ...defaultWorkbenchOptions, format: "pdf" as const, ocrPolicy: "always" as const, networkMode: "unrestricted" as const };
   await client.upload(new File(["pdf"], "报告.pdf"), options);
   const uploadHeaders = calls[0]![1]!.headers as Record<string, string>;
   const filename = uploadHeaders["X-Into-Md-Filename-B64"]!;
@@ -235,8 +240,13 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.equal(request.schemaVersion, 1);
   assert.equal(request.format, "pdf");
   assert.equal(request.options.ocr.policy, "always");
-  assert.deepEqual(request.options.network.allowed_hosts, ["api.example.com"]);
+  assert.deepEqual(request.options.asr, {
+    model_bundle: "whisper-small-multilingual", language: null, max_threads: 4,
+    max_duration_ms: 600_000, max_segments: 10_000, max_native_memory_bytes: 900 * 1024 * 1024,
+  });
+  assert.deepEqual(request.options.network, { enabled: true, max_redirects: 3, deny_private_networks: false, allowed_hosts: [] });
   assert.equal(request.authorization.network, true);
+  assert.equal(request.authorization.privateNetwork, true);
   const events: string[] = [];
   await client.watchTask(responseTask.id, (event) => events.push(event.status), new AbortController().signal);
   assert.deepEqual(events, ["running", "succeeded"]);
@@ -406,6 +416,36 @@ test("workbench exposes batch, folder, limits, keyboard, restored tasks, cancel 
   const many = Array.from({ length: 101 }, (_, index) => new File(["x"], `${index}.txt`));
   const manyDrop = new window.Event("drop", { bubbles: true, cancelable: true }); Object.defineProperty(manyDrop, "dataTransfer", { value: { files: many } });
   zone.dispatchEvent(manyDrop); await waitForText(window, "at most 100 files");
+});
+
+test("workbench presents network access as one bounded switch", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
+  await waitForText(window, "When off, conversions process local content only.");
+  assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
+  assert.ok(!window.document.body.textContent.includes("private-network targets"));
+  const label = [...window.document.querySelectorAll("label")].find((item) => item.textContent?.includes("Allow network access"))!;
+  const toggle = label.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  assert.equal(toggle.checked, false);
+  toggle.click();
+  await waitForText(window, "When on, conversions may access internet and local-network services.");
+  assert.equal(toggle.checked, true);
+});
+
+test("workbench reports the bounded upload rejection code", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const api: ApiClient = {
+    ...availableApi,
+    async upload() { throw new ApiError("invalidTaskOptions"); },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "No tasks yet");
+  const zone = window.document.getElementById("upload-zone")!;
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
+  zone.dispatchEvent(drop); await waitForText(window, "Selected (1)");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion 1")!.click();
+  await waitForText(window, "Upload failed: contract.md (invalidTaskOptions)");
 });
 
 test("shell primitives expose keyboard focus and language-safe DOM behavior", () => {

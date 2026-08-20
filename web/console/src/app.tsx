@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiMode, ApiClient, ArtifactPreview, ArtifactReference, AssetMode, InputFormat, OcrPolicy, TaskCursor, TaskRecord, TaskStatus, WorkbenchOptions } from "./api";
-import { defaultWorkbenchOptions } from "./api";
+import type { AiMode, ApiClient, ArtifactPreview, ArtifactReference, AssetMode, InputFormat, NetworkMode, OcrPolicy, TaskCursor, TaskRecord, TaskStatus, WorkbenchOptions } from "./api";
+import { ApiError, defaultWorkbenchOptions } from "./api";
 import { I18nProvider, useI18n } from "./i18n";
 import { RouteLink, Router, useRouter } from "./router";
 import { ThemeProvider, useTheme } from "./theme";
@@ -44,12 +44,10 @@ function OptionPanel({ value, onChange, disabled }: { value: WorkbenchOptions; o
       <label><span>{t("maxPages")}</span><input type="number" min="1" max="10000" value={value.maxPages} onChange={(e) => patch("maxPages", Number(e.target.value))} /></label>
     </div>
     <div className="authorization-box">
-      <label className="check"><input type="checkbox" checked={value.networkEnabled} onChange={(e) => onChange(e.target.checked ? { ...value, networkEnabled: true } : { ...value, networkEnabled: false, privateNetworkEnabled: false, authorizeNetwork: false, authorizePrivateNetwork: false })} />{t("enableNetwork")}</label>
-      {value.networkEnabled && <><label><span>{t("allowedHosts")}</span><input value={value.allowedHosts.join(", ")} placeholder="api.example.com" onChange={(e) => patch("allowedHosts", e.target.value.split(",").map((item) => item.trim()).filter(Boolean))} /></label><label className="check grant"><input type="checkbox" checked={value.authorizeNetwork} onChange={(e) => patch("authorizeNetwork", e.target.checked)} />{t("authorizeNetwork")}</label></>}
-      <label className="check"><input type="checkbox" checked={value.privateNetworkEnabled} disabled={!value.networkEnabled} onChange={(e) => patch("privateNetworkEnabled", e.target.checked)} />{t("enablePrivate")}</label>
-      {value.privateNetworkEnabled && <label className="check grant"><input type="checkbox" checked={value.authorizePrivateNetwork} onChange={(e) => patch("authorizePrivateNetwork", e.target.checked)} />{t("authorizePrivate")}</label>}
+      <label className="check"><input type="checkbox" checked={value.networkMode === "unrestricted"} onChange={(e) => patch("networkMode", (e.target.checked ? "unrestricted" : "restricted") as NetworkMode)} />{t("networkAccess")}</label>
+      <p>{t(value.networkMode === "unrestricted" ? "networkEnabledNote" : "networkDisabledNote")}</p>
       {value.aiMode !== "off" && <label className="check grant"><input type="checkbox" checked={value.authorizeProvider} onChange={(e) => patch("authorizeProvider", e.target.checked)} />{t("authorizeProvider")}</label>}
-      <p>{t("authorizationNote")}</p>
+      {value.aiMode !== "off" && <p>{t("authorizationNote")}</p>}
     </div>
   </fieldset>;
 }
@@ -111,13 +109,15 @@ function Workbench({ api }: { api: ApiClient }) {
     else { setFiles(combined); setMessage(""); }
   };
   const submit = async () => {
-    if (!files.length) return; if (options.networkEnabled && !options.authorizeNetwork) { setMessage(t("authorizationRequired")); return; }
-    if (options.privateNetworkEnabled && !options.authorizePrivateNetwork) { setMessage(t("authorizationRequired")); return; }
+    if (!files.length) return;
     if (options.aiMode !== "off" && !options.authorizeProvider) { setMessage(t("authorizationRequired")); return; }
     setUploading(true); const pending = [...files]; setFiles([]);
     for (const file of pending) {
       try { const task = await api.upload(file, options); filesByTask.current.set(task.id, file); setNames((current) => ({ ...current, [task.id]: file.name })); setFormats((current) => ({ ...current, [task.id]: formatForFile(file, options.format) })); update(task); watch(task); }
-      catch { setMessage(`${t("uploadFailed")}: ${file.name}`); }
+      catch (error) {
+        const code = error instanceof ApiError ? error.code : "unreachable";
+        setMessage(`${t("uploadFailed")}: ${file.name} (${code})`);
+      }
     }
     setUploading(false);
   };
