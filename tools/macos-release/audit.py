@@ -37,17 +37,32 @@ def audit_macho(path: pathlib.Path, maximum_macos: str, description: str | None 
     matches = re.findall(r"\bminos\s+(\d+(?:\.\d+){1,2})", build)
     if not matches or any(version_tuple(value) > version_tuple(maximum_macos) for value in matches):
         raise ReleaseError(f"Mach-O requires a newer macOS than the release contract: {path.name}")
-    commands = run(["/usr/bin/otool", "-l", str(path)])
-    dependencies = run(["/usr/bin/otool", "-L", str(path)])
+    commands = strip_tool_header(run(["/usr/bin/otool", "-l", str(path)]))
+    dependencies = strip_tool_header(run(["/usr/bin/otool", "-L", str(path)]))
     combined = commands + dependencies
-    if any(value in combined for value in FORBIDDEN_LOADER):
-        raise ReleaseError(f"Mach-O contains a forbidden loader path: {path.name}")
+    if forbidden := next((value for value in FORBIDDEN_LOADER if value in combined), None):
+        raise ReleaseError(
+            f"Mach-O contains forbidden loader path {forbidden!r}: {path}"
+        )
     audit_embedded_paths(path)
-    for line in dependencies.splitlines()[1:]:
-        identity = line.strip().split(" (compatibility", 1)[0]
+    for identity in dependency_identities(dependencies):
         if identity.startswith("/") and not identity.startswith(("/usr/lib/", "/System/Library/")):
             raise ReleaseError(f"Mach-O has a non-system absolute dependency: {path.name}")
     run(["/usr/bin/codesign", "--verify", "--strict", str(path)])
+
+
+def strip_tool_header(output: str) -> str:
+    """Remove otool's input filename without hiding any load-command content."""
+    return "\n".join(output.splitlines()[1:])
+
+
+def dependency_identities(output: str) -> list[str]:
+    """Return every dependency from already header-stripped otool output."""
+    return [
+        line.strip().split(" (compatibility", 1)[0]
+        for line in output.splitlines()
+        if line.strip()
+    ]
 
 
 def audit_embedded_paths(path: pathlib.Path) -> None:

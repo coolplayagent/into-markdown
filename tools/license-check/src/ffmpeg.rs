@@ -160,6 +160,8 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
         "--disable-shared",
         "--toolchain=msvc",
         "--disable-x86asm",
+        "--extra-cflags=-mmacosx-version-min=14.0",
+        "--extra-ldflags=-mmacosx-version-min=14.0",
     ]
     .into_iter()
     .collect();
@@ -170,10 +172,17 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
         .all(|flag| allowed.contains(flag.as_str()));
     let target_flags_are_exact = policy.targets.iter().all(|(target, value)| {
         let actual: BTreeSet<_> = value.additional_flags.iter().map(String::as_str).collect();
-        let expected: BTreeSet<_> = if target == "x86_64-pc-windows-msvc" {
-            ["--toolchain=msvc", "--disable-x86asm"].into_iter().collect()
-        } else {
-            BTreeSet::new()
+        let expected: BTreeSet<_> = match target.as_str() {
+            "aarch64-apple-darwin" => [
+                "--extra-cflags=-mmacosx-version-min=14.0",
+                "--extra-ldflags=-mmacosx-version-min=14.0",
+            ]
+            .into_iter()
+            .collect(),
+            "x86_64-pc-windows-msvc" => {
+                ["--toolchain=msvc", "--disable-x86asm"].into_iter().collect()
+            }
+            _ => BTreeSet::new(),
         };
         actual.len() == value.additional_flags.len() && actual == expected
     });
@@ -370,7 +379,7 @@ fn validate_bound_authority(
     evidence: &FfmpegEvidence,
     errors: &mut Vec<String>,
 ) {
-    let expected = format!("share/into-markdown/authority/ffmpeg-{}.json", projection.target);
+    let expected = "bin/ffmpeg/authority.json";
     let digest = format!("{:x}", Sha256::digest(evidence.authority_contents.as_bytes()));
     let authority = projection.files.iter().find(|file| file.path == evidence.authority_path);
     if evidence.authority_path != expected

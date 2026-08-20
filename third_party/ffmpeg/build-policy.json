@@ -35,7 +35,10 @@
     "aarch64-apple-darwin": {
       "binary_format": "mach-o",
       "binary_architecture": "aarch64",
-      "additional_flags": [],
+      "additional_flags": [
+        "--extra-cflags=-mmacosx-version-min=14.0",
+        "--extra-ldflags=-mmacosx-version-min=14.0"
+      ],
       "dynamic_dependencies": [
         "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
         "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",

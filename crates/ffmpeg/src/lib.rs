@@ -50,7 +50,7 @@ const RESOURCE_ERROR_MARKERS: [&[u8]; 4] = [
     b"Not enough memory",
 ];
 const POLL: Duration = Duration::from_millis(10);
-const EXPECTED_CONFIG: [&str; 31] = [
+const EXPECTED_CONFIG: [&str; 29] = [
     "--prefix=/opt/into-markdown/ffmpeg",
     "--disable-everything",
     "--disable-gpl",
@@ -80,9 +80,10 @@ const EXPECTED_CONFIG: [&str; 31] = [
     "--enable-muxer=pcm_s16le",
     "--enable-static",
     "--disable-shared",
-    "--toolchain=msvc",
-    "--disable-x86asm",
 ];
+const EXPECTED_CONFIG_MACOS: [&str; 2] =
+    ["--extra-cflags=-mmacosx-version-min=14.0", "--extra-ldflags=-mmacosx-version-min=14.0"];
+const EXPECTED_CONFIG_WINDOWS: [&str; 2] = ["--toolchain=msvc", "--disable-x86asm"];
 
 /// Stable failures while establishing the native trust boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -574,6 +575,14 @@ impl FfmpegRuntime {
         let working_bytes =
             input_bytes.checked_add(WORKER_OVERHEAD).ok_or_else(|| resource("mediaMemory"))?;
         let _working_memory = context.reserve_memory(working_bytes)?;
+        // Some common containers (notably non-fragmented M4A/MP4) keep their
+        // index at the end and therefore require a seekable source. Preserve
+        // the same request-scoped byte budget and cleanup guarantees as PCM
+        // output instead of silently accepting only streamable variants.
+        let mut encoded_input = context.temporary_file("into-md-media-input")?;
+        encoded_input.write_all_checked(input)?;
+        encoded_input.flush()?;
+        let encoded_path = encoded_input.path().as_os_str().to_owned();
         let private = tempfile::Builder::new()
             .prefix("into-md-media-")
             .tempdir()
@@ -591,7 +600,7 @@ impl FfmpegRuntime {
                 "-max_alloc",
                 "268435456",
                 "-protocol_whitelist",
-                "pipe",
+                "file,pipe",
                 "-threads",
                 "1",
                 "-filter_threads",
@@ -599,7 +608,9 @@ impl FfmpegRuntime {
                 "-filter_complex_threads",
                 "1",
                 "-i",
-                "pipe:0",
+            ])
+            .arg(&encoded_path)
+            .args([
                 "-map",
                 "0:a:0",
                 "-vn",
@@ -619,7 +630,7 @@ impl FfmpegRuntime {
             ])
             .env_clear()
             .current_dir(private.path())
-            .stdin(Stdio::piped())
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut process = spawn_limited(command, limits.max_process_memory_bytes)?;
@@ -629,33 +640,17 @@ impl FfmpegRuntime {
         if fail_worker_stage(1) {
             return Err(component("workerPipeSetup"));
         }
-        let Some(mut stdin) = child.stdin.take() else {
-            return Err(component("workerPipeSetup"));
-        };
         let Some(stdout) = child.stdout.take() else {
             return Err(component("workerPipeSetup"));
         };
         let Some(stderr) = child.stderr.take() else {
             return Err(component("workerPipeSetup"));
         };
-        let mut source = Vec::new();
-        source.try_reserve_exact(input.len()).map_err(|_| resource("mediaMemory"))?;
-        source.extend_from_slice(input);
-        let writer = if fail_worker_stage(2) {
-            Err(std::io::Error::other("injected writer spawn failure"))
-        } else {
-            thread::Builder::new().name("ffmpeg-stdin".into()).stack_size(WORKER_STACK).spawn(
-                move || {
-                    let _guard = PipeWorker::new();
-                    stdin.write_all(&source)
-                },
-            )
-        };
-        let Ok(writer) = writer else {
+        if fail_worker_stage(2) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(component("workerThread"));
-        };
+            return Err(component("workerInput"));
+        }
         let (out_tx, out_rx) = mpsc::sync_channel(1);
         let output_context = context.clone();
         let output_spawn = if fail_worker_stage(3) {
@@ -690,7 +685,6 @@ impl FfmpegRuntime {
         let Ok(output_reader) = output_spawn else {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = writer.join();
             return Err(component("workerThread"));
         };
         let (err_tx, err_rx) = mpsc::sync_channel(1);
@@ -707,7 +701,6 @@ impl FfmpegRuntime {
         let Ok(error_reader) = error_spawn else {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = writer.join();
             let _ = out_rx.recv();
             let _ = output_reader.join();
             return Err(component("workerThread"));
@@ -717,7 +710,6 @@ impl FfmpegRuntime {
                 Ok(true) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = writer.join();
                     let _ = out_rx.recv();
                     let _ = err_rx.recv();
                     let _ = output_reader.join();
@@ -727,7 +719,6 @@ impl FfmpegRuntime {
                 Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = writer.join();
                     let _ = out_rx.recv();
                     let _ = err_rx.recv();
                     let _ = output_reader.join();
@@ -741,7 +732,6 @@ impl FfmpegRuntime {
                 if let Err(error) = context.checkpoint() {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = writer.join();
                     let _ = out_rx.recv();
                     let _ = err_rx.recv();
                     let _ = output_reader.join();
@@ -757,7 +747,6 @@ impl FfmpegRuntime {
                     if let Err(error) = context.checkpoint() {
                         let _ = child.kill();
                         let _ = child.wait();
-                        let _ = writer.join();
                         let _ = out_rx.recv();
                         let _ = err_rx.recv();
                         let _ = output_reader.join();
@@ -769,7 +758,6 @@ impl FfmpegRuntime {
                 Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = writer.join();
                     let _ = out_rx.recv();
                     let _ = err_rx.recv();
                     let _ = output_reader.join();
@@ -778,19 +766,14 @@ impl FfmpegRuntime {
                 }
             }
         };
-        let writer_result = writer.join();
         let output_join = output_reader.join();
         let error_join = error_reader.join();
-        if writer_result.is_err() || output_join.is_err() || error_join.is_err() {
+        if output_join.is_err() || error_join.is_err() {
             return Err(component("workerThread"));
         }
-        let writer_result = writer_result.map_err(|_| component("workerThread"))?;
         let output =
             out_rx.recv().map_err(|_| component("workerOutput"))?.map_err(map_reader_error)?;
         let stderr = err_rx.recv().map_err(|_| component("workerOutput"))?.unwrap_or_default();
-        if writer_result.is_err() && status.success() {
-            return Err(component("workerInput"));
-        }
         if !status.success() {
             match child_failure(status, &stderr) {
                 ChildFailure::Resource => return Err(resource("mediaProcessMemoryOrCpu")),
@@ -831,8 +814,14 @@ impl FfmpegRuntime {
 }
 
 fn expected_config() -> impl Iterator<Item = &'static str> {
-    let count = if cfg!(windows) { EXPECTED_CONFIG.len() } else { EXPECTED_CONFIG.len() - 2 };
-    EXPECTED_CONFIG[..count].iter().copied()
+    let platform: &'static [&'static str] = if cfg!(target_os = "macos") {
+        &EXPECTED_CONFIG_MACOS
+    } else if cfg!(windows) {
+        &EXPECTED_CONFIG_WINDOWS
+    } else {
+        &[]
+    };
+    EXPECTED_CONFIG.iter().copied().chain(platform.iter().copied())
 }
 
 fn expected_binary() -> (&'static str, &'static str) {

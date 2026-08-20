@@ -87,6 +87,16 @@ fn covers_component(
     component: &Component,
     errors: &mut Vec<String>,
 ) -> bool {
+    if component.id == "cargo:whisper-rs@0.16.0" {
+        let expected = fs::read_to_string(repository.join("third_party/whisper-rs-0.16.0/LICENSE"))
+            .unwrap_or_default();
+        return projection.license_materials.iter().any(|item| {
+            item.kind == LicenseMaterialKind::LicenseText
+                && item.component_ids == [component.id.as_str()]
+                && item.spdx_expressions == ["Unlicense"]
+                && item.contents.as_deref() == Some(expected.as_str())
+        });
+    }
     if component.id.starts_with("cargo:") {
         let checksum = component
             .integrity
@@ -118,11 +128,14 @@ fn covers_component(
         "imageproc-contour-adaptation" => "third_party/licenses/imageproc-MIT.txt",
         "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
         "calamine" => "third_party/licenses/calamine-MIT.txt",
+        "npm:lucide-react@1.31.0" => "third_party/licenses/npm/lucide-ISC-MIT.txt",
         id if id.starts_with("npm:") => "third_party/licenses/npm/react-MIT.txt",
         "ppocrv6-tiny-recognizer-onnx-model"
         | "ppocrv6-tiny-recognizer-character-table"
         | "ppocrv6-tiny-detector-onnx-model" => "LICENSE",
         "whisper-small" => "third_party/licenses/whisper-model-MIT.txt",
+        "silero-vad-half-onnx-model" => "third_party/licenses/silero-vad-MIT.txt",
+        "3dspeaker-eres2net-base-onnx-model" => "LICENSE",
         _ => return false,
     };
     let expected = fs::read_to_string(repository.join(authority_path)).unwrap_or_default();

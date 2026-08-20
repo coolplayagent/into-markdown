@@ -25,6 +25,9 @@ pub struct SmokeRequest {
     /// Installed smoke fixture root.
     #[arg(long)]
     pub fixtures: PathBuf,
+    /// Licensed speech fixture used to prove installed ASR produces text.
+    #[arg(long)]
+    pub audio_fixture: PathBuf,
     /// Empty parent directory for all mutable runner state.
     #[arg(long)]
     pub temp_root: PathBuf,
@@ -58,6 +61,7 @@ pub(crate) struct ValidatedRequest {
     pub rust_library: PathBuf,
     pub manifest: PathBuf,
     pub fixtures: PathBuf,
+    pub audio_fixture: PathBuf,
     pub temp_root: PathBuf,
     pub report: PathBuf,
     pub archive_sha256: String,
@@ -82,6 +86,7 @@ impl SmokeRequest {
         let rust_library = canonical_directory(&self.rust_library, "Rust library")?;
         let manifest = canonical_file(&self.manifest, "archive manifest")?;
         let fixtures = canonical_directory(&self.fixtures, "fixture root")?;
+        let audio_fixture = canonical_file(&self.audio_fixture, "audio fixture")?;
         for (path, label) in [
             (&into_md, "into-md"),
             (&rust_library, "Rust library"),
@@ -100,6 +105,9 @@ impl SmokeRequest {
         let temp_root = canonical_directory(&self.temp_root, "temporary root")?;
         if contained(&install_root, &temp_root, "temporary root").is_ok() {
             return Err("temporary root must be outside the immutable installation".into());
+        }
+        if audio_fixture.starts_with(&install_root) || audio_fixture.starts_with(&temp_root) {
+            return Err("audio fixture must be an external read-only acceptance input".into());
         }
         if fs::read_dir(&temp_root)
             .map_err(|error| format!("cannot inspect temporary root: {error}"))?
@@ -127,6 +135,7 @@ impl SmokeRequest {
             rust_library,
             manifest,
             fixtures,
+            audio_fixture,
             temp_root,
             report,
             archive_sha256: self.archive_sha256,

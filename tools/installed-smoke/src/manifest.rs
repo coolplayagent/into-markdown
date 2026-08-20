@@ -223,6 +223,7 @@ mod tests {
             rust_library: rust.canonicalize().unwrap(),
             manifest: manifest.canonicalize().unwrap(),
             fixtures: install.join("share/into-markdown/smoke/fixtures").canonicalize().unwrap(),
+            audio_fixture: install.join("bin/into-md").canonicalize().unwrap(),
             temp_root: temporary.path().to_owned(),
             report: temporary.path().join("report.json"),
             archive_sha256: "a".repeat(64),

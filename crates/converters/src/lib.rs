@@ -908,19 +908,66 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
 }
 
 fn valid_mpeg_audio_frame_header(bytes: &[u8]) -> bool {
-    let Some(header) = bytes.get(..4) else {
+    let Some(first) = mpeg_audio_header(bytes, 0) else {
         return false;
     };
+    let Some(second) = mpeg_audio_header(bytes, first.frame_bytes) else {
+        return false;
+    };
+    first.version == second.version
+        && first.layer == second.layer
+        && first.sample_rate_hz == second.sample_rate_hz
+}
+
+#[derive(Clone, Copy)]
+struct MpegAudioHeader {
+    version: u8,
+    layer: u8,
+    sample_rate_hz: usize,
+    frame_bytes: usize,
+}
+
+fn mpeg_audio_header(bytes: &[u8], offset: usize) -> Option<MpegAudioHeader> {
+    let header = bytes.get(offset..offset.checked_add(4)?)?;
+    if header[0] != 0xff || header[1] & 0xe0 != 0xe0 {
+        return None;
+    }
     let version = (header[1] >> 3) & 0b11;
     let layer = (header[1] >> 1) & 0b11;
-    let bitrate_index = header[2] >> 4;
-    let sample_rate_index = (header[2] >> 2) & 0b11;
-    header[0] == 0xff
-        && header[1] & 0xe0 == 0xe0
-        && version != 0b01
-        && layer != 0
-        && !matches!(bitrate_index, 0 | 0x0f)
-        && sample_rate_index != 0b11
+    let bitrate_index = usize::from(header[2] >> 4);
+    let sample_rate_index = usize::from((header[2] >> 2) & 0b11);
+    if version == 0b01
+        || layer == 0
+        || matches!(bitrate_index, 0 | 0x0f)
+        || sample_rate_index == 0b11
+    {
+        return None;
+    }
+    let bitrate_kbps = match (version, layer) {
+        (0b11, 0b11) => [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+        (0b11, 0b10) => [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+        (0b11, 0b01) => [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+        (_, 0b11) => [32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+        (_, 0b10 | 0b01) => [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+        _ => return None,
+    }[bitrate_index - 1];
+    let sample_rate_hz = match version {
+        0b11 => [44_100, 48_000, 32_000],
+        0b10 => [22_050, 24_000, 16_000],
+        0b00 => [11_025, 12_000, 8_000],
+        _ => return None,
+    }[sample_rate_index];
+    let padding = usize::from((header[2] >> 1) & 1);
+    let bitrate = bitrate_kbps * 1_000;
+    let frame_bytes = if layer == 0b11 {
+        (12 * bitrate / sample_rate_hz + padding) * 4
+    } else if layer == 0b01 && version != 0b11 {
+        72 * bitrate / sample_rate_hz + padding
+    } else {
+        144 * bitrate / sample_rate_hz + padding
+    };
+    offset.checked_add(frame_bytes)?;
+    Some(MpegAudioHeader { version, layer, sample_rate_hz, frame_bytes })
 }
 
 fn valid_bmp_header(bytes: &[u8]) -> bool {
@@ -3334,12 +3381,18 @@ mod tests {
 
     #[test]
     fn mpeg_audio_frame_header_detects_mp3_without_id3() {
-        let candidate = magic_candidate(&[0xff, 0xfb, 0x90, 0x64]).unwrap();
+        let mut mp3 = vec![0_u8; 421];
+        mp3[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+        mp3[417..421].copy_from_slice(&[0xff, 0xfb, 0xa0, 0x64]);
+        let candidate = magic_candidate(&mp3).unwrap();
         assert_eq!(candidate.format, InputFormat::Audio);
         assert_eq!(candidate.evidence, "MPEG audio frame header");
         assert!(magic_candidate(&[0xff, 0xff, 0xff, 0xff]).is_none());
         assert!(magic_candidate(&[0x12, 0xff, 0xfb, 0x90, 0x64]).is_none());
         assert!(magic_candidate(&[0xff, 0xfb, 0xf0, 0x64]).is_none());
+        assert!(magic_candidate(&[0xff, 0xfe, b'A', 0]).is_none());
+        mp3[417..421].copy_from_slice(&[0xff, 0xf3, 0xa0, 0x64]);
+        assert!(magic_candidate(&mp3).is_none());
     }
 
     #[test]

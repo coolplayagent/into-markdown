@@ -33,7 +33,6 @@ const CHECKPOINT_INTERVAL_MS: u64 = 30_000;
 
 /// Product resolver for the two hash-verified diarization ONNX models.
 pub struct DiarizationModelResolver {
-    manager: Arc<ModelManager>,
     cache: Mutex<BTreeMap<String, CachedArtifact>>,
 }
 
@@ -48,10 +47,44 @@ struct CachedArtifact {
 }
 
 impl DiarizationModelResolver {
-    /// Create a resolver backed by the installed model manager.
-    #[must_use]
-    pub fn new(manager: Arc<ModelManager>) -> Self {
-        Self { manager, cache: Mutex::new(BTreeMap::new()) }
+    /// Create a resolver backed by the installed model manager and preload the
+    /// bounded two-model cache under the service-assembly budget. Request
+    /// preflight credits must never escape through a process-local cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable model or resource error when either reviewed artifact
+    /// cannot be verified and retained.
+    pub fn new(
+        manager: Arc<ModelManager>,
+        context: &ExecutionContext,
+    ) -> Result<Self, ConversionError> {
+        let mut cache = BTreeMap::new();
+        for (model_id, role) in [(VAD_MODEL_ID, "vad"), (EMBEDDING_MODEL_ID, "speaker-embedding")] {
+            let artifact = manager
+                .verified_runtime_artifact(BUNDLE_ID, role, context)
+                .map_err(map_model_error)?;
+            let bytes = u64::try_from(artifact.bytes.len()).map_err(|_| {
+                ConversionError::ResourceLimit {
+                    limit: "max_memory_bytes",
+                    detail: "diarization model length overflowed".into(),
+                }
+            })?;
+            cache.insert(
+                model_id.to_owned(),
+                CachedArtifact {
+                    identity: ModelIdentity {
+                        canonical_path: artifact.path,
+                        sha256: artifact.sha256,
+                        bytes,
+                        file_identity: artifact.file_identity,
+                    },
+                    bytes: artifact.bytes,
+                    _memory_reservation: artifact.memory_reservation,
+                },
+            );
+        }
+        Ok(Self { cache: Mutex::new(cache) })
     }
 }
 
@@ -72,35 +105,16 @@ impl ModelResolver for DiarizationModelResolver {
                 });
             }
         };
-        let cached = {
-            let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cached) = cache.get(model_id) {
-                cached.clone()
-            } else {
-                let artifact = self
-                    .manager
-                    .verified_runtime_artifact(BUNDLE_ID, role, context)
-                    .map_err(map_model_error)?;
-                let bytes = u64::try_from(artifact.bytes.len()).map_err(|_| {
-                    ConversionError::ResourceLimit {
-                        limit: "max_memory_bytes",
-                        detail: "diarization model length overflowed".into(),
-                    }
-                })?;
-                let cached = CachedArtifact {
-                    identity: ModelIdentity {
-                        canonical_path: artifact.path,
-                        sha256: artifact.sha256,
-                        bytes,
-                        file_identity: artifact.file_identity,
-                    },
-                    bytes: artifact.bytes,
-                    _memory_reservation: artifact.memory_reservation,
-                };
-                cache.insert(model_id.to_owned(), cached.clone());
-                cached
-            }
-        };
+        let cached = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(model_id)
+            .cloned()
+            .ok_or_else(|| ConversionError::ComponentUnavailable {
+                component: role.into(),
+                detail: "diarization model cache was not assembled".into(),
+            })?;
         let request_memory = context.reserve_memory(cached.identity.bytes)?;
         Ok(ResolvedModel {
             identity: cached.identity,

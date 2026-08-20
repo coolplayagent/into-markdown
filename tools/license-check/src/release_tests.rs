@@ -172,8 +172,17 @@ fn install_base_materials(
 ) {
     let sbom: serde_json::Value = serde_json::from_str(&inputs.sbom_input.contents).unwrap();
     let mut npm = Vec::new();
+    let mut lucide = Vec::new();
     for id in &inputs.component_ids {
-        if id.starts_with("cargo:") {
+        if id == "cargo:whisper-rs@0.16.0" {
+            push_text_material(
+                projection,
+                "share/into-markdown/licenses/whisper-rs-Unlicense.txt",
+                "third_party/whisper-rs-0.16.0/LICENSE",
+                vec![id.clone()],
+                &["Unlicense"],
+            );
+        } else if id.starts_with("cargo:") {
             let component = sbom["components"]
                 .as_array()
                 .unwrap()
@@ -199,9 +208,20 @@ fn install_base_materials(
                 LicenseMaterialKind::UpstreamSourceArchive,
                 id,
             );
+        } else if id == "npm:lucide-react@1.31.0" {
+            lucide.push(id.clone());
         } else if id.starts_with("npm:") {
             npm.push(id.clone());
         }
+    }
+    if !lucide.is_empty() {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/npm/lucide-ISC-MIT.txt",
+            "third_party/licenses/npm/lucide-ISC-MIT.txt",
+            lucide,
+            &["ISC", "MIT"],
+        );
     }
     if !npm.is_empty() {
         push_text_material(
@@ -286,6 +306,24 @@ fn install_base_materials(
             "third_party/licenses/whisper-model-MIT.txt",
             vec!["whisper-small".to_owned()],
             &["MIT"],
+        );
+    }
+    if inputs.component_ids.iter().any(|id| id == "silero-vad-half-onnx-model") {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/silero-vad-MIT.txt",
+            "third_party/licenses/silero-vad-MIT.txt",
+            vec!["silero-vad-half-onnx-model".to_owned()],
+            &["MIT"],
+        );
+    }
+    if inputs.component_ids.iter().any(|id| id == "3dspeaker-eres2net-base-onnx-model") {
+        push_text_material(
+            projection,
+            "share/into-markdown/licenses/3dspeaker-Apache-2.0.txt",
+            "LICENSE",
+            vec!["3dspeaker-eres2net-base-onnx-model".to_owned()],
+            &["Apache-2.0"],
         );
     }
 }
@@ -425,6 +463,39 @@ fn full_offline_whisper_projection_is_hash_and_license_bound() {
     let mut errors = Vec::new();
     crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
     assert!(errors.iter().any(|error| error.contains("whisper-small model")));
+}
+
+#[test]
+fn full_offline_diarization_projection_is_hash_and_license_bound() {
+    let selected = vec![
+        "silero-vad-half-onnx-model".to_owned(),
+        "3dspeaker-eres2net-base-onnx-model".to_owned(),
+    ];
+    let mut files = vec![
+        ArchiveFile {
+            path: "bin/models/silero-vad-3dspeaker-eres2net/silero_vad_half.onnx".into(),
+            bytes: 1_280_395,
+            sha256: "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("silero-vad-half-onnx-model".into()),
+            embedded_components: vec![],
+        },
+        ArchiveFile {
+            path: "bin/models/silero-vad-3dspeaker-eres2net/3dspeaker_eres2net_base.onnx".into(),
+            bytes: 39_593_761,
+            sha256: "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b".into(),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("3dspeaker-eres2net-base-onnx-model".into()),
+            embedded_components: vec![],
+        },
+    ];
+    let mut errors = Vec::new();
+    crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
+    assert!(errors.is_empty(), "diarization projection baseline: {errors:?}");
+
+    files[1].sha256 = "0".repeat(64);
+    crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
+    assert!(errors.iter().any(|error| error.contains("3dspeaker-eres2net-base")));
 }
 
 #[test]
@@ -572,10 +643,7 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
 #[allow(clippy::too_many_lines)]
 fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
-    let approval_errors =
-        generate_release_inputs(&root(), &request("aarch64-apple-darwin", &["ffmpeg"]))
-            .unwrap_err();
-    assert!(approval_errors.iter().any(|error| error.contains("no repository-approved")));
+    generate_release_inputs(&root(), &request("aarch64-apple-darwin", &["ffmpeg"])).unwrap();
     projection.components.push("ffmpeg".into());
     projection.files.push(ArchiveFile {
         path: "bin/ffmpeg".into(),
@@ -635,7 +703,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let authority_bytes = authority_contents.len() as u64;
     let authority_sha256 = hash(authority_contents.as_bytes());
     projection.ffmpeg_evidence = Some(FfmpegEvidence {
-        authority_path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
+        authority_path: "bin/ffmpeg/authority.json".into(),
         authority_bytes,
         authority_sha256: authority_sha256.clone(),
         authority_contents,
@@ -662,7 +730,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
         relink_sha256: "9".repeat(64),
     });
     projection.files.push(ArchiveFile {
-        path: "share/into-markdown/authority/ffmpeg-aarch64-apple-darwin.json".into(),
+        path: "bin/ffmpeg/authority.json".into(),
         bytes: authority_bytes,
         sha256: authority_sha256,
         kind: ArchiveFileKind::Component,

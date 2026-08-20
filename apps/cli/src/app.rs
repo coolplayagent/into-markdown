@@ -1606,7 +1606,7 @@ fn apply_ai_provider_overrides(
     }
     if ai_is_enabled(&loaded.options) {
         let Some(provider_name) = loaded.ai_provider.as_deref() else {
-            if ai_capability_other_than_image_description_is_enabled(&loaded.options) {
+            if provider_backed_ai_capability_is_enabled(&loaded.options) {
                 return Err(CliError::usage(
                     "an enabled AI capability requires --ai-provider or a configured default \
                      provider",
@@ -1624,13 +1624,12 @@ fn apply_ai_provider_overrides(
     Ok(())
 }
 
-fn ai_capability_other_than_image_description_is_enabled(options: &ConversionOptions) -> bool {
+fn provider_backed_ai_capability_is_enabled(options: &ConversionOptions) -> bool {
     [
         options.ai.vision_ocr,
         options.ai.layout_repair,
         options.ai.table_repair,
         options.ai.formula_repair,
-        options.ai.audio_transcription,
         options.ai.markdown_postprocess,
     ]
     .iter()
@@ -3634,6 +3633,96 @@ api_key_env = "REMOTE_KEY"
         )
         .unwrap_err();
         assert_eq!(error.code(), "hostDenied");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_audio_transcription_does_not_require_ai_provider() {
+        let root = std::env::temp_dir().join(format!("into-md-local-asr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("meeting.wav");
+        fs::write(&input, b"RIFF").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![
+                OsString::from("--no-config"),
+                input.into_os_string(),
+                OsString::from("--ai"),
+                OsString::from("audio-transcription=only"),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap();
+        assert!(String::from_utf8(stdout).unwrap().contains("meeting.wav"));
+        assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_diarization_does_not_require_ai_provider() {
+        let root =
+            std::env::temp_dir().join(format!("into-md-local-diarize-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("meeting.wav");
+        fs::write(&input, b"RIFF").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![
+                OsString::from("--no-config"),
+                input.into_os_string(),
+                OsString::from("--diarize"),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap();
+        assert!(String::from_utf8(stdout).unwrap().contains("meeting.wav"));
+        assert!(stderr.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote_ai_capability_still_requires_provider() {
+        let root = std::env::temp_dir().join(format!("into-md-remote-ai-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("document.txt");
+        fs::write(&input, b"hello").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run(
+            vec![
+                OsString::from("--no-config"),
+                input.into_os_string(),
+                OsString::from("--ai"),
+                OsString::from("layout-repair=only"),
+                OsString::from("--dry-run"),
+            ],
+            RunContext {
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("requires --ai-provider"));
         fs::remove_dir_all(root).unwrap();
     }
 
