@@ -3,7 +3,7 @@ const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
-export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
+export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; imageOcr: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
 export interface ModelAdmin { bundle: { id: string; availability: string }; status: { state: string } }
 export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
@@ -85,6 +85,7 @@ function isComponent(value: unknown): value is ComponentStatus {
 }
 function parseStatus(value: unknown): StatusResponse {
   if (!isObject(value) || value.schemaVersion !== 1 || !isComponent(value.localApi) || !isComponent(value.documentConsole)
+    || !isComponent(value.imageOcr)
     || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)
     || value.speakerDiarization !== undefined && !isComponent(value.speakerDiarization)) throw new ApiError("invalidResponse");
   return value as unknown as StatusResponse;
@@ -322,6 +323,7 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
 
 export interface ApiClient {
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
+  installCapability(id: "ocr" | "media", signal?: AbortSignal): Promise<void>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
   uploadMeeting(file: File, options: MeetingOptions, signal?: AbortSignal): Promise<TaskRecord>;
@@ -359,6 +361,10 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
   }
   const client: ApiClient = {
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
+    async installCapability(id, signal) {
+      const value = await jsonRequest(`/api/capabilities/${id}/install`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 4096);
+      if (!isObject(value) || value.schemaVersion !== 1 || value.capability !== id || value.status !== "installed") throw new ApiError("invalidResponse");
+    },
     async admin(signal) { return parseAdminSnapshot(await jsonRequest("/api/admin", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },
     async adminGrant(action, signal) {
       const headers = auth(); headers["Content-Type"] = "application/json";

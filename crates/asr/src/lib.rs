@@ -431,9 +431,19 @@ fn process_allows_metal() -> bool {
     // device while denying the private buffers whisper.cpp allocates during
     // model loading. Some native backends abort instead of returning an error
     // in that state, so choose the guaranteed CPU path before entering them.
-    ["APP_SANDBOX_CONTAINER_ID", "SANDBOX_CONTAINER_ID", "CODEX_SANDBOX"]
-        .iter()
-        .all(|name| std::env::var_os(name).is_none())
+    environment_allows_metal(|name| std::env::var_os(name).is_some())
+}
+
+#[cfg(any(all(target_os = "macos", feature = "metal"), test))]
+fn environment_allows_metal(mut is_present: impl FnMut(&str) -> bool) -> bool {
+    [
+        "APP_SANDBOX_CONTAINER_ID",
+        "SANDBOX_CONTAINER_ID",
+        "CODEX_SANDBOX",
+        "INTO_MARKDOWN_PLUGIN_PROTOCOL",
+    ]
+    .iter()
+    .all(|name| !is_present(name))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -935,6 +945,19 @@ mod tests {
             normalize_language("not-a-language").unwrap_err().code(),
             ErrorCode::ComponentUnavailable
         );
+    }
+
+    #[test]
+    fn restricted_process_markers_disable_metal_before_native_loading() {
+        assert!(environment_allows_metal(|_| false));
+        for marker in [
+            "APP_SANDBOX_CONTAINER_ID",
+            "SANDBOX_CONTAINER_ID",
+            "CODEX_SANDBOX",
+            "INTO_MARKDOWN_PLUGIN_PROTOCOL",
+        ] {
+            assert!(!environment_allows_metal(|name| name == marker));
+        }
     }
 
     #[test]

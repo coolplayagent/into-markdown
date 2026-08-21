@@ -2,8 +2,9 @@
 //!
 //! Plugins are untrusted executables. The host authenticates the executable, starts it with an
 //! empty environment in an operating-system sandbox, and accepts only bounded, versioned,
-//! length-prefixed JSON frames. Source bytes and returned resources cross the pipe rather than a
-//! shared filesystem.
+//! length-prefixed JSON frames. Small sources cross the pipe; larger sources use one
+//! request-private, read-only staged file inside the sandbox. Returned resources always cross the
+//! pipe.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod protocol;
@@ -240,6 +241,10 @@ pub struct RuntimePolicy {
     pub cancellation_grace: Duration,
     /// Complete explicit environment. No parent variable is inherited.
     pub environment: BTreeMap<OsString, OsString>,
+    /// Canonical model directories exposed read-only to the worker.
+    pub read_only_roots: Vec<PathBuf>,
+    /// Permit provider-owned helpers below the authenticated runtime root.
+    pub allow_child_processes: bool,
     /// Pre-provisioned no-capability `AppContainer` authority.
     #[cfg(windows)]
     pub windows: WindowsSandboxAuthority,
@@ -257,6 +262,8 @@ impl Default for RuntimePolicy {
             request_timeout: Duration::from_mins(1),
             cancellation_grace: Duration::from_millis(100),
             environment: BTreeMap::new(),
+            read_only_roots: Vec::new(),
+            allow_child_processes: false,
             #[cfg(windows)]
             windows: WindowsSandboxAuthority {
                 profile_name: String::new(),
@@ -276,6 +283,8 @@ pub struct PluginRequest<'a> {
     pub input_format: &'a str,
     /// Display-only source name.
     pub source_name: Option<&'a str>,
+    /// Optional bounded capability-specific JSON parameters.
+    pub parameters_json: Option<&'a str>,
     /// Authenticated input bytes sent inline.
     pub source: &'a [u8],
 }
@@ -285,6 +294,22 @@ pub struct PluginRequest<'a> {
 pub struct PluginExecution {
     /// Fully decoded and validated result DTO.
     pub result: ConversionResult,
+    /// Manifest plugin ID matched during handshake.
+    pub plugin_id: String,
+    /// Executable SHA-256 revalidated immediately before launch.
+    pub executable_sha256: String,
+}
+
+/// Authenticated raw terminal response for a typed capability adapter.
+///
+/// The caller must deserialize and validate `result_json` against its exact
+/// capability DTO before exposing the result to converters.
+#[derive(Debug)]
+pub struct RawPluginExecution {
+    /// Bounded nested JSON returned by the plugin.
+    pub result_json: String,
+    /// Independently decoded and validated streamed diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
     /// Manifest plugin ID matched during handshake.
     pub plugin_id: String,
     /// Executable SHA-256 revalidated immediately before launch.
@@ -331,6 +356,38 @@ impl ProcessPlugin {
         request: PluginRequest<'_>,
         context: &ExecutionContext,
     ) -> Result<PluginExecution, PluginError> {
+        let raw = self.execute_raw(request, context)?;
+        let dto = ResultDto::from_json(&raw.result_json).map_err(|_| {
+            PluginError::new(PluginErrorCode::InvalidResult, "returned result DTO is invalid")
+        })?;
+        let mut result = ConversionResult::try_from(dto).map_err(|_| {
+            PluginError::new(PluginErrorCode::InvalidResult, "returned result conversion failed")
+        })?;
+        result.diagnostics.splice(0..0, raw.diagnostics);
+        Ok(PluginExecution {
+            result,
+            plugin_id: raw.plugin_id,
+            executable_sha256: raw.executable_sha256,
+        })
+    }
+
+    /// Execute one plugin request and return its authenticated raw JSON response.
+    ///
+    /// This shares the same sandbox, framing, event validation, cancellation,
+    /// deadline, and process lifecycle as [`Self::execute`]. It exists so OCR
+    /// and media adapters can use their own strict DTOs without pretending to
+    /// return a complete document conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable [`PluginError`] for authority, sandbox, protocol,
+    /// lifecycle, resource, cancellation, timeout, or plugin failures.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute_raw(
+        &self,
+        request: PluginRequest<'_>,
+        context: &ExecutionContext,
+    ) -> Result<RawPluginExecution, PluginError> {
         validate_request(&request, &self.policy)?;
         let encoded_bound = u64::from(self.policy.max_frame_bytes)
             .checked_mul(2)
@@ -406,8 +463,14 @@ impl ProcessPlugin {
             return finish_error(child, reader, stderr_reader, map_write_error(&error));
         }
         let handshake_deadline = Instant::now().checked_add(self.policy.handshake_timeout);
-        let hello = match receive_until(&frames_rx, &mut child, context, handshake_deadline, false)
-        {
+        let hello = match receive_until(
+            &frames_rx,
+            &mut child,
+            context,
+            handshake_deadline,
+            false,
+            self.policy.max_memory_bytes,
+        ) {
             Ok(hello) => hello,
             Err(error) => return finish_error(child, reader, stderr_reader, error),
         };
@@ -426,7 +489,52 @@ impl ProcessPlugin {
                 );
             }
         }
-        let source_base64 = base64::engine::general_purpose::STANDARD.encode(request.source);
+        let inline_source = base64::engine::general_purpose::STANDARD.encode(request.source);
+        let inline_request_bytes = inline_source
+            .len()
+            .saturating_add(request.parameters_json.map_or(0, str::len).saturating_add(4096));
+        let (source_base64, source_path, _source_temporary) = if inline_request_bytes
+            <= self.policy.max_frame_bytes as usize
+        {
+            (Some(inline_source), None, None)
+        } else {
+            let source_bytes = u64::try_from(request.source.len()).map_err(|_| {
+                PluginError::new(PluginErrorCode::ResourceLimit, "source byte count overflow")
+            })?;
+            if source_bytes > self.policy.max_file_bytes {
+                return finish_error(
+                    child,
+                    reader,
+                    stderr_reader,
+                    PluginError::new(PluginErrorCode::ResourceLimit, "source exceeds file limit"),
+                );
+            }
+            let reservation = context
+                .reserve_temporary(source_bytes)
+                .map_err(|error| map_execution_error(&error));
+            let reservation = match reservation {
+                Ok(value) => value,
+                Err(error) => return finish_error(child, reader, stderr_reader, error),
+            };
+            let staged_source = staged.working_directory.join("source.bin");
+            let write_result = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged_source)
+                .and_then(|mut file| {
+                    std::io::Write::write_all(&mut file, request.source)?;
+                    file.sync_all()
+                });
+            if write_result.is_err() || make_staged_file_private(&staged_source, false).is_err() {
+                return finish_error(
+                    child,
+                    reader,
+                    stderr_reader,
+                    PluginError::new(PluginErrorCode::Launch, "request source staging failed"),
+                );
+            }
+            (None, Some("source.bin".to_owned()), Some(reservation))
+        };
         let request_deadline = Instant::now().checked_add(self.policy.request_timeout);
         stdin = match write_request_bounded(
             stdin,
@@ -435,13 +543,16 @@ impl ProcessPlugin {
                 request_id: request.request_id.to_owned(),
                 input_format: request.input_format.to_owned(),
                 source_name: request.source_name.map(str::to_owned),
+                parameters_json: request.parameters_json.map(str::to_owned),
                 source_base64,
+                source_path,
                 maximum_output_bytes: self.policy.max_output_bytes,
             },
             maximum,
             &mut child,
             context,
             request_deadline,
+            self.policy.max_memory_bytes,
         ) {
             Ok(stdin) => stdin,
             Err(error) => return finish_error(child, reader, stderr_reader, error),
@@ -459,8 +570,14 @@ impl ProcessPlugin {
             };
         }
         loop {
-            let frame = match receive_until(&frames_rx, &mut child, context, request_deadline, true)
-            {
+            let frame = match receive_until(
+                &frames_rx,
+                &mut child,
+                context,
+                request_deadline,
+                true,
+                self.policy.max_memory_bytes,
+            ) {
                 Ok(frame) => frame,
                 Err(error)
                     if matches!(
@@ -646,23 +763,9 @@ impl ProcessPlugin {
                             ),
                         );
                     }
-                    let dto = finish_on_error!(ResultDto::from_json(&result_json).map_err(|_| {
-                        PluginError::new(
-                            PluginErrorCode::InvalidResult,
-                            "returned result DTO is invalid",
-                        )
-                    }));
-                    let mut result =
-                        finish_on_error!(ConversionResult::try_from(dto).map_err(|_| {
-                            PluginError::new(
-                                PluginErrorCode::InvalidResult,
-                                "returned result conversion failed",
-                            )
-                        }));
-                    result.diagnostics.splice(0..0, streamed_diagnostics);
                     drop(stdin);
                     let status = wait_bounded(&mut child, Duration::from_millis(250));
-                    if status != Some(true) {
+                    if status.is_none_or(|exit| !exit.success()) {
                         terminate_tree(&mut child);
                         let _ = reader.join();
                         let _ = stderr_reader.join();
@@ -679,8 +782,9 @@ impl ProcessPlugin {
                         ));
                     }
                     let _ = stderr_reader.join();
-                    return Ok(PluginExecution {
-                        result,
+                    return Ok(RawPluginExecution {
+                        result_json,
+                        diagnostics: streamed_diagnostics,
                         plugin_id: self.plugin.plugin_id.clone(),
                         executable_sha256: self.plugin.executable_sha256.clone(),
                     });
@@ -731,6 +835,7 @@ fn write_request_bounded(
     child: &mut sandbox::SandboxChild,
     context: &ExecutionContext,
     deadline: Option<Instant>,
+    max_memory_bytes: u64,
 ) -> Result<Box<dyn std::io::Write + Send>, PluginError> {
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let writer = std::thread::Builder::new()
@@ -757,13 +862,16 @@ fn write_request_bounded(
         }
         let context_error = context.checkpoint().err().map(|error| map_execution_error(&error));
         let policy_timeout = deadline.is_some_and(|value| Instant::now() >= value);
+        let memory_exceeded = child.memory_exceeded(max_memory_bytes).unwrap_or(true);
         let child_ended = child.try_wait().ok().flatten().is_some();
-        if context_error.is_some() || policy_timeout || child_ended {
+        if context_error.is_some() || policy_timeout || memory_exceeded || child_ended {
             child.terminate();
             let _ = writer.join();
             return Err(context_error.unwrap_or_else(|| {
                 if policy_timeout {
                     PluginError::new(PluginErrorCode::Timeout, "plugin request write timed out")
+                } else if memory_exceeded {
+                    PluginError::new(PluginErrorCode::ResourceLimit, "plugin memory limit exceeded")
                 } else {
                     PluginError::new(
                         PluginErrorCode::Crashed,
@@ -781,6 +889,7 @@ fn receive_until(
     context: &ExecutionContext,
     deadline: Option<Instant>,
     request_active: bool,
+    max_memory_bytes: u64,
 ) -> Result<PluginMessage, PluginError> {
     loop {
         if request_active {
@@ -800,6 +909,31 @@ fn receive_until(
             Ok(Ok(frame)) => return Ok(frame),
             Ok(Err(error)) => {
                 let detail = error.to_string();
+                if child.memory_exceeded(max_memory_bytes).unwrap_or(true) {
+                    return Err(PluginError::new(
+                        PluginErrorCode::ResourceLimit,
+                        "plugin memory limit exceeded",
+                    ));
+                }
+                if let Some(exit) = child.try_wait().map_err(|()| {
+                    PluginError::new(PluginErrorCode::Crashed, "plugin wait failed")
+                })? {
+                    return Err(PluginError::new(
+                        PluginErrorCode::Crashed,
+                        match exit {
+                            sandbox::ChildExit::Success => {
+                                "plugin exited successfully before terminal response".to_owned()
+                            }
+                            sandbox::ChildExit::Failure => {
+                                "plugin exited with failure before terminal response".to_owned()
+                            }
+                            #[cfg(unix)]
+                            sandbox::ChildExit::Signaled(signal) => format!(
+                                "plugin was terminated by signal {signal} before terminal response"
+                            ),
+                        },
+                    ));
+                }
                 let code = if detail.contains("stream ended before frame") {
                     PluginErrorCode::Crashed
                 } else if detail.contains("exceeds limit") {
@@ -807,7 +941,16 @@ fn receive_until(
                 } else {
                     PluginErrorCode::Protocol
                 };
-                return Err(PluginError::new(code, "plugin protocol stream is malformed"));
+                let stable_detail = if detail.contains("stream ended before frame") {
+                    "plugin protocol stream ended"
+                } else if detail.contains("truncated frame") {
+                    "plugin protocol frame was truncated"
+                } else if detail.contains("exceeds limit") {
+                    "plugin protocol frame exceeds its limit"
+                } else {
+                    "plugin emitted invalid protocol data"
+                };
+                return Err(PluginError::new(code, stable_detail));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(PluginError::new(
@@ -816,6 +959,12 @@ fn receive_until(
                 ));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if child.memory_exceeded(max_memory_bytes).unwrap_or(true) {
+                    return Err(PluginError::new(
+                        PluginErrorCode::ResourceLimit,
+                        "plugin memory limit exceeded",
+                    ));
+                }
                 if child
                     .try_wait()
                     .map_err(|()| PluginError::new(PluginErrorCode::Crashed, "plugin wait failed"))?
@@ -831,12 +980,12 @@ fn receive_until(
     }
 }
 
-fn finish_error(
+fn finish_error<T>(
     mut child: sandbox::SandboxChild,
     reader: ProtocolReader,
     stderr: std::thread::JoinHandle<()>,
     error: PluginError,
-) -> Result<PluginExecution, PluginError> {
+) -> Result<T, PluginError> {
     terminate_tree(&mut child);
     let _ = reader.join();
     let _ = stderr.join();
@@ -864,11 +1013,14 @@ impl ProtocolReader {
     }
 }
 
-fn wait_bounded(child: &mut sandbox::SandboxChild, duration: Duration) -> Option<bool> {
+fn wait_bounded(
+    child: &mut sandbox::SandboxChild,
+    duration: Duration,
+) -> Option<sandbox::ChildExit> {
     let deadline = Instant::now().checked_add(duration)?;
     loop {
-        if let Ok(Some(success)) = child.try_wait() {
-            return Some(success);
+        if let Ok(Some(exit)) = child.try_wait() {
+            return Some(exit);
         }
         if Instant::now() >= deadline {
             return None;
@@ -887,7 +1039,9 @@ fn drain_stderr(mut stderr: impl std::io::Read) {
     loop {
         match stderr.read(&mut buffer) {
             Ok(0) | Err(_) => break,
-            Ok(read) => total = total.saturating_add(read).min(16 * 1024),
+            Ok(read) => {
+                total = total.saturating_add(read).min(16 * 1024);
+            }
         }
     }
     let _ = total;
@@ -902,9 +1056,10 @@ fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
         || !(16..=4096).contains(&policy.max_open_files)
         || policy.handshake_timeout.is_zero()
         || policy.request_timeout.is_zero()
-        || policy.request_timeout > Duration::from_hours(1)
+        || policy.request_timeout > Duration::from_hours(2)
         || policy.cancellation_grace > Duration::from_secs(5)
         || policy.environment.len() > 64
+        || policy.read_only_roots.len() > 16
     {
         return Err(PluginError::new(PluginErrorCode::Authority, "invalid runtime policy"));
     }
@@ -923,6 +1078,15 @@ fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
             return Err(PluginError::new(
                 PluginErrorCode::Authority,
                 "invalid declared environment",
+            ));
+        }
+    }
+    for root in &policy.read_only_roots {
+        let canonical = canonical_directory(root)?;
+        if &canonical != root {
+            return Err(PluginError::new(
+                PluginErrorCode::Authority,
+                "read-only root is not canonical",
             ));
         }
     }
@@ -1162,7 +1326,14 @@ fn copy_runtime_tree(
                         "runtime tree byte limit exceeded",
                     ));
                 }
-                make_staged_file_private(&destination_path, false)?;
+                #[cfg(unix)]
+                let executable = {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    metadata.permissions().mode() & 0o111 != 0
+                };
+                #[cfg(not(unix))]
+                let executable = false;
+                make_staged_file_private(&destination_path, executable)?;
             } else {
                 return Err(PluginError::new(
                     PluginErrorCode::Authority,
@@ -1225,20 +1396,17 @@ fn validate_request(
     request: &PluginRequest<'_>,
     policy: &RuntimePolicy,
 ) -> Result<(), PluginError> {
-    let encoded = request
-        .source
-        .len()
-        .checked_mul(4)
-        .and_then(|value| value.checked_add(2))
-        .map(|value| value / 3)
-        .ok_or_else(|| {
-            PluginError::new(PluginErrorCode::ResourceLimit, "source encoding overflow")
-        })?;
+    let source_bytes = u64::try_from(request.source.len()).map_err(|_| {
+        PluginError::new(PluginErrorCode::ResourceLimit, "source byte count overflow")
+    })?;
     if !valid_token(request.request_id, 128)
         || !valid_token(request.input_format, 64)
         || request.source.is_empty()
-        || encoded.saturating_add(4096) > policy.max_frame_bytes as usize
+        || source_bytes > policy.max_file_bytes
         || request.source_name.is_some_and(|name| name.len() > 1024 || name.contains('\0'))
+        || request
+            .parameters_json
+            .is_some_and(|value| value.len() > 64 * 1024 || value.contains('\0'))
     {
         return Err(PluginError::new(
             PluginErrorCode::ResourceLimit,
@@ -1306,9 +1474,9 @@ fn map_write_error(error: &std::io::Error) -> PluginError {
 fn valid_token(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn valid_environment_name(value: &str) -> bool {
@@ -1377,5 +1545,44 @@ mod tests {
         let mut policy = RuntimePolicy::default();
         policy.environment.insert("PLUGIN_LOCALE".into(), "en-US".into());
         validate_policy(&policy).unwrap();
+    }
+
+    #[test]
+    fn policy_accepts_the_declared_media_timeout_and_rejects_larger_values() {
+        let mut policy =
+            RuntimePolicy { request_timeout: Duration::from_hours(2), ..RuntimePolicy::default() };
+        validate_policy(&policy).unwrap();
+        policy.request_timeout += Duration::from_millis(1);
+        assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_staging_preserves_private_helper_execute_authority() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let source = tempfile::tempdir().unwrap();
+        let helper = source.path().join("helper");
+        let data = source.path().join("data");
+        std::fs::write(&helper, b"helper").unwrap();
+        std::fs::write(&data, b"data").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let destination = parent.path().join("runtime");
+        std::fs::create_dir(&destination).unwrap();
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+        copy_runtime_tree(source.path(), &destination, 1024, &context).unwrap();
+        assert_eq!(
+            std::fs::metadata(destination.join("helper")).unwrap().permissions().mode() & 0o777,
+            0o500
+        );
+        assert_eq!(
+            std::fs::metadata(destination.join("data")).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
     }
 }

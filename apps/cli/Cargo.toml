@@ -30,6 +30,7 @@ into-markdown-http-transport = { path = "../../crates/http-transport" }
 into-markdown-plugin-manager = { path = "../../crates/plugin-manager" }
 into-markdown-plugin-wasi = { path = "../../crates/plugin-wasi" }
 into-markdown-process-plugin = { path = "../../crates/process-plugin" }
+into-markdown-provider-plugin = { path = "../../crates/provider-plugin" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

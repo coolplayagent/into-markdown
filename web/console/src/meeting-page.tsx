@@ -360,6 +360,11 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
     void refresh().catch(() => setMessage(t("loadTasksError")));
   };
 
+  const installMedia = async () => {
+    await api.installCapability("media");
+    await refresh();
+  };
+
   const transcriptHistory = useMemo(() => recent.filter((item) => item.id !== task?.id), [recent, task]);
   const updateVisibleTask = useCallback((record: TaskRecord) => {
     setTask((current) => current?.id === record.id ? record : current);
@@ -411,7 +416,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
         <div className="meeting-history"><div className="recent-history-title"><strong>{t("recentMeetings")}</strong><span>{transcriptHistory.length}</span></div>{transcriptHistory.length === 0 ? <p>{t("noMeetingHistory")}</p> : <ul>{transcriptHistory.slice(0, 8).map((item) => <li key={item.id}><button type="button" onClick={() => setActiveTaskId(item.id)}><span><strong>{taskName(item, t("meetingTranscript"))}</strong><small>{new Date(item.updatedAtMs).toLocaleString(locale)}</small></span><span className={`history-status ${item.status}`}>{t(item.status)}</span></button></li>)}</ul>}</div>
       </section>
     </div>
-    <AudioSetupDialog status={audioStatus?.available === false ? audioStatus : diarizationStatus} open={setup} onClose={closeSetup} />
+    <AudioSetupDialog status={audioStatus?.available === false ? audioStatus : diarizationStatus} open={setup} onClose={closeSetup} onInstall={installMedia} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecent((items) => items.filter((item) => item.id !== id))} onTaskUpdated={updateVisibleTask} />}
   </section>;
 }

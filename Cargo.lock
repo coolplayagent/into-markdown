@@ -1549,6 +1549,7 @@ dependencies = [
  "into-markdown-plugin-manager",
  "into-markdown-plugin-wasi",
  "into-markdown-process-plugin",
+ "into-markdown-provider-plugin",
  "libc",
  "pulldown-cmark",
  "ring",
@@ -1704,6 +1705,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "into-markdown-official-provider"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "into-markdown",
+ "into-markdown-process-plugin",
+ "into-markdown-provider-plugin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "into-markdown-onnxruntime"
 version = "0.0.0"
 dependencies = [
@@ -1801,6 +1814,20 @@ dependencies = [
  "tempfile",
  "thiserror",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "into-markdown-provider-plugin"
+version = "0.0.0"
+dependencies = [
+ "into-markdown-core",
+ "into-markdown-plugin-manager",
+ "into-markdown-process-plugin",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "url",
 ]
 
 [[package]]

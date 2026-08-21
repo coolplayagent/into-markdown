@@ -41,6 +41,25 @@ pub fn installed_diarization_service(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<Arc<dyn Diarizer>, ConversionError> {
+    installed_diarization_service_inner(config, options, context, false)
+}
+
+/// Assemble diarization when the caller already enforces a read-only,
+/// replacement-protected native-runtime sandbox.
+pub fn installed_diarization_service_in_read_only_sandbox(
+    config: &InstalledDiarizationConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn Diarizer>, ConversionError> {
+    installed_diarization_service_inner(config, options, context, true)
+}
+
+fn installed_diarization_service_inner(
+    config: &InstalledDiarizationConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    read_only_sandbox: bool,
+) -> Result<Arc<dyn Diarizer>, ConversionError> {
     context.checkpoint()?;
     if !options.diarization.enabled {
         return Err(ConversionError::ComponentUnavailable {
@@ -117,11 +136,19 @@ pub fn installed_diarization_service(
             detail: format!("FFmpeg artifact authority is unavailable: {error}"),
         }
     })?;
-    let ffmpeg = into_markdown_ffmpeg::FfmpegRuntime::load(
-        &config.ffmpeg_trusted_root,
-        &config.ffmpeg_executable,
-        &authority,
-    )
+    let ffmpeg = if read_only_sandbox {
+        into_markdown_ffmpeg::FfmpegRuntime::load_read_only_sandbox(
+            &config.ffmpeg_trusted_root,
+            &config.ffmpeg_executable,
+            &authority,
+        )
+    } else {
+        into_markdown_ffmpeg::FfmpegRuntime::load(
+            &config.ffmpeg_trusted_root,
+            &config.ffmpeg_executable,
+            &authority,
+        )
+    }
     .map_err(|error| ConversionError::ComponentUnavailable {
         component: "ffmpeg-lgpl".into(),
         detail: format!("installed FFmpeg runtime is unavailable: {error}"),

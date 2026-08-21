@@ -19,7 +19,9 @@ pub(crate) enum HostMessage {
         request_id: String,
         input_format: String,
         source_name: Option<String>,
-        source_base64: String,
+        parameters_json: Option<String>,
+        source_base64: Option<String>,
+        source_path: Option<String>,
         maximum_output_bytes: u64,
     },
     Cancel {

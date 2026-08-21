@@ -74,6 +74,12 @@ pub(crate) fn run(
 ) -> Result<(), String> {
     record(cases, "version", version(request, root, executor));
     record(cases, "formats-authority", catalog::compare_cli(request, root, authority, executor));
+    if runtime_is_projected(projection, "onnxruntime")? {
+        record(cases, "setup-ocr", setup(request, root, "ocr", executor));
+    }
+    if runtime_is_projected(projection, "whisper-small")? {
+        record(cases, "setup-media", setup(request, root, "media", executor));
+    }
     let doctor = doctor(request, root, executor)?;
     capabilities.extend(runtime_capabilities(authority, &doctor)?);
 
@@ -188,14 +194,8 @@ fn media_conversion(
             (vec!["--ai", "audio-transcription=only"], false),
             (vec!["--diarize", "--expected-speakers", "1"], true),
         ] {
-            let mut arguments = vec![
-                path_string.as_str(),
-                "--no-config",
-                "--emit",
-                "result-json",
-                "--log-format",
-                "json",
-            ];
+            let mut arguments =
+                vec![path_string.as_str(), "--emit", "result-json", "--log-format", "json"];
             arguments.extend(extra);
             let output = cli(request, root, &arguments, &[], executor)?;
             let dto: serde_json::Value = serde_json::from_slice(&output.stdout)
@@ -231,14 +231,7 @@ fn media_conversion(
     let output = cli(
         request,
         root,
-        &[
-            path_string.as_str(),
-            "--no-config",
-            "--ai",
-            "audio-transcription=only",
-            "--log-format",
-            "json",
-        ],
+        &[path_string.as_str(), "--ai", "audio-transcription=only", "--log-format", "json"],
         &[],
         executor,
     )?;
@@ -341,13 +334,27 @@ fn doctor(
     root: &Path,
     executor: &dyn Executor,
 ) -> Result<BTreeMap<String, DoctorEntry>, String> {
-    let output = cli(request, root, &["doctor", "--json", "--no-config"], &[], executor)?;
+    let output = cli(request, root, &["doctor", "--json"], &[], executor)?;
     if output.exit_code != Some(0) {
         return Err("doctor command failed".into());
     }
     let entries: Vec<DoctorEntry> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("doctor output is invalid: {error}"))?;
     Ok(entries.into_iter().map(|entry| (entry.id.clone(), entry)).collect())
+}
+
+fn setup(
+    request: &ValidatedRequest,
+    root: &Path,
+    capability: &str,
+    executor: &dyn Executor,
+) -> Result<(), String> {
+    let output = cli(request, root, &["setup", capability], &[], executor)?;
+    if output.exit_code == Some(0) && output.stderr.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{capability} capability setup failed"))
+    }
 }
 
 fn runtime_capabilities(
@@ -502,12 +509,11 @@ fn optional_conversion(
         return Err("format and runtime authority disagree".into());
     }
     let path = fixture_path(request, fixture)?;
-    let mut args = vec![
-        path.display().to_string(),
-        "--no-config".into(),
-        "--log-format".into(),
-        "json".into(),
-    ];
+    let mut args = vec![path.display().to_string()];
+    if format != "image" {
+        args.push("--no-config".into());
+    }
+    args.extend(["--log-format".into(), "json".into()]);
     if format == "image" {
         args.extend(["--assets-dir".into(), root.join("image-assets").display().to_string()]);
     }

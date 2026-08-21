@@ -14,6 +14,12 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
 )
 
+alias(
+    name = "process-plugin",
+    actual = ":process_plugin",
+    visibility = ["//visibility:public"],
+)
+
 rust_binary(
     name = "process-plugin-fixture",
     srcs = ["src/bin/process_plugin_fixture.rs"],
@@ -48,4 +54,8 @@ rust_test(
         "//crates/core",
     ] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    # This target validates the plugin's own OS sandbox. Bazel's macOS
+    # sandbox cannot be nested with sandbox_init(3), so run the test process
+    # locally and let the runtime under test install the restrictive profile.
+    tags = ["no-sandbox"],
 )

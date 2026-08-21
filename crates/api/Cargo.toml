@@ -8,17 +8,27 @@ license.workspace = true
 
 [features]
 default = []
-metal = ["into-markdown-asr/metal"]
+official-provider-runtime = [
+    "dep:into-markdown-asr",
+    "dep:into-markdown-ffmpeg",
+    "dep:into-markdown-onnxruntime",
+]
+metal = ["official-provider-runtime", "into-markdown-asr/metal"]
+
+[[test]]
+name = "ppocrv6_image_quality"
+path = "tests/ppocrv6_image_quality.rs"
+required-features = ["official-provider-runtime"]
 
 [dependencies]
 into-markdown-ai = { path = "../ai" }
-into-markdown-asr = { path = "../asr" }
+into-markdown-asr = { path = "../asr", optional = true }
 into-markdown-converters = { path = "../converters" }
 into-markdown-core = { path = "../core" }
 into-markdown-engine = { path = "../engine" }
-into-markdown-ffmpeg = { path = "../ffmpeg" }
+into-markdown-ffmpeg = { path = "../ffmpeg", optional = true }
 into-markdown-ocr = { path = "../ocr" }
-into-markdown-onnxruntime = { path = "../onnxruntime" }
+into-markdown-onnxruntime = { path = "../onnxruntime", optional = true }
 into-markdown-render-markdown = { path = "../render-markdown" }
 into-markdown-task-store = { path = "../task-store" }
 

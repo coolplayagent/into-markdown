@@ -125,8 +125,10 @@ AppContainer，不在转换路径创建或删除持久 profile。运行时制品
 `pp-ocrv6-tiny-zh-en` pipeline 绑定可安装的 detector 与 recognizer 组件；两者分别固定官方
 ONNX/TAR/config，recognizer 另外固定字符表，全部经过 SHA-256、归档结构、license 与安装事务
 校验。只有 `models install` 会使用固定 host、固定大小与固定 hash 的模型 transport；普通转换
-不会自动下载。发布布局中的固定 ONNX Runtime 与 worker、已安装或随包模型均验证通过后，
-CLI/API 才装配真实 OCR 服务。其他尚未可用的格式转换和插件执行后端仍明确拒绝。
+不会自动下载。官方 OCR/音频实现作为签名 capability-provider 包随标准发布物交付；标准包通过
+`setup ocr` / `setup media` 显式安装模型，完整离线包直接使用随包模型。宿主只在签名、
+文件清单、隔离 runtime、模型与 readiness 全部验证通过后路由真实 OCR、转写或说话人分离，
+运行中失败不会静默切换 provider。其他尚未可用的格式转换后端仍明确拒绝。
 Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 同样 fail closed；目录解析和离线元数据查询不受影响。
 
@@ -141,6 +143,7 @@ Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、
 [本地模型管理](docs/models.md)、
+[OCR 与音频能力插件](docs/capability-plugins.md)、
 [安全模型](docs/security.md)和[测试策略](docs/testing.md)。
 命令与配置契约详见[命令行设计](docs/cli.md)和[配置文件](docs/configuration.md)，
 许可证、第三方来源和发布审计详见[许可证治理](docs/licensing.md)。

@@ -106,6 +106,7 @@ fn signed_package(
             path: path.clone(),
             bytes: bytes.len() as u64,
             sha256: sha256(bytes),
+            executable: protocol == "process-v1" && path == entry,
         })
         .collect();
     let mut manifest = PackageManifest {

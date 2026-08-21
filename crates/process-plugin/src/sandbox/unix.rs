@@ -14,15 +14,26 @@ pub(super) fn prepare(
     let open_files = policy.max_open_files;
     command.process_group(0);
     #[cfg(target_os = "linux")]
-    let landlock = linux::Landlock::prepare(&plugin.runtime_root, directory).map_err(|_| {
-        PluginError::new(crate::PluginErrorCode::SandboxUnavailable, "Landlock setup failed")
-    })?;
+    let landlock =
+        linux::Landlock::prepare(&plugin.runtime_root, directory, &policy.read_only_roots)
+            .map_err(|_| {
+                PluginError::new(
+                    crate::PluginErrorCode::SandboxUnavailable,
+                    "Landlock setup failed",
+                )
+            })?;
     #[cfg(target_os = "linux")]
-    let mut seccomp = linux::Seccomp::prepare().map_err(|_| {
+    let mut seccomp = linux::Seccomp::prepare(policy.allow_child_processes).map_err(|_| {
         PluginError::new(crate::PluginErrorCode::SandboxUnavailable, "seccomp setup failed")
     })?;
     #[cfg(target_os = "macos")]
-    let seatbelt = macos::Seatbelt::prepare(&plugin.runtime_root, directory).map_err(|_| {
+    let seatbelt = macos::Seatbelt::prepare(
+        &plugin.runtime_root,
+        directory,
+        &policy.read_only_roots,
+        policy.allow_child_processes,
+    )
+    .map_err(|_| {
         PluginError::new(crate::PluginErrorCode::SandboxUnavailable, "Seatbelt setup failed")
     })?;
     // SAFETY: on Linux, every allocation, path lookup, FD open, and BPF construction happened
@@ -45,19 +56,30 @@ pub(super) fn prepare(
     Ok(())
 }
 
-fn install_limits(memory: u64, file: u64, open_files: u32) -> std::io::Result<()> {
-    set_limit(libc::RLIMIT_AS, memory)?;
+fn install_limits(_memory: u64, file: u64, open_files: u32) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    set_limit(libc::RLIMIT_AS, _memory)?;
+    #[cfg(target_os = "macos")]
+    set_limit(libc::RLIMIT_AS, 2 * 1024 * 1024 * 1024 * 1024)?;
     set_limit(libc::RLIMIT_FSIZE, file)?;
     set_limit(libc::RLIMIT_NOFILE, u64::from(open_files))?;
     set_limit(libc::RLIMIT_CORE, 0)
 }
 
+#[cfg(target_os = "linux")]
 fn install_no_new_privileges() -> std::io::Result<()> {
     // Prevent privilege gain across the imminent plugin exec and every later exec.
     // SAFETY: prctl takes scalar arguments only for PR_SET_NO_NEW_PRIVS.
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_no_new_privileges() -> std::io::Result<()> {
+    // macOS has no PR_SET_NO_NEW_PRIVS equivalent. Seatbelt is installed
+    // immediately below and the child receives an empty ambient environment.
     Ok(())
 }
 
@@ -130,7 +152,11 @@ mod linux {
     }
 
     impl Landlock {
-        pub(super) fn prepare(runtime: &Path, temporary: &Path) -> std::io::Result<Self> {
+        pub(super) fn prepare(
+            runtime: &Path,
+            temporary: &Path,
+            read_only_roots: &[std::path::PathBuf],
+        ) -> std::io::Result<Self> {
             let attr = RulesetAttr { handled_access_fs: READ | WRITE };
             // SAFETY: the kernel receives a correctly sized initialized ruleset structure.
             let fd = unsafe {
@@ -158,6 +184,9 @@ mod linux {
                 unsafe { OwnedFd::from_raw_fd(i32::try_from(fd).map_err(std::io::Error::other)?) };
             add_path(&ruleset, runtime, READ)?;
             add_path(&ruleset, temporary, READ | WRITE)?;
+            for root in read_only_roots {
+                add_path(&ruleset, root, READ)?;
+            }
             for path in ["/lib", "/lib64", "/usr/lib", "/usr/lib64", "/etc/ld.so.cache"] {
                 let path = Path::new(path);
                 if path.exists() {
@@ -215,7 +244,7 @@ mod linux {
     }
 
     impl Seccomp {
-        pub(super) fn prepare() -> std::io::Result<Self> {
+        pub(super) fn prepare(allow_child_processes: bool) -> std::io::Result<Self> {
             const LD_W_ABS: u16 = 0x20;
             const JMP_JEQ_K: u16 = 0x15;
             const JMP_JSET_K: u16 = 0x45;
@@ -252,23 +281,30 @@ mod linux {
                 libc::SYS_io_uring_enter,
                 libc::SYS_io_uring_register,
             ];
-            let legacy: &[libc::c_long] =
-                if cfg!(target_arch = "x86_64") { &[libc::SYS_fork, libc::SYS_vfork] } else { &[] };
+            let legacy: &[libc::c_long] = if allow_child_processes {
+                &[]
+            } else if cfg!(target_arch = "x86_64") {
+                &[libc::SYS_fork, libc::SYS_vfork]
+            } else {
+                &[]
+            };
             let mut filters = Vec::with_capacity(64 + denied.len() * 2);
             filters.push(stmt(LD_W_ABS, 4));
             filters.push(jump(JMP_JEQ_K, arch, 1, 0));
             filters.push(stmt(RET_K, KILL));
             filters.push(stmt(LD_W_ABS, 0));
-            filters.push(jump(
-                JMP_JEQ_K,
-                u32::try_from(libc::SYS_clone).map_err(std::io::Error::other)?,
-                0,
-                4,
-            ));
-            filters.push(stmt(LD_W_ABS, 16));
-            filters.push(jump(JMP_JSET_K, libc::CLONE_THREAD as u32, 1, 0));
-            filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
-            filters.push(stmt(RET_K, ALLOW));
+            if !allow_child_processes {
+                filters.push(jump(
+                    JMP_JEQ_K,
+                    u32::try_from(libc::SYS_clone).map_err(std::io::Error::other)?,
+                    0,
+                    4,
+                ));
+                filters.push(stmt(LD_W_ABS, 16));
+                filters.push(jump(JMP_JSET_K, libc::CLONE_THREAD as u32, 1, 0));
+                filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
+                filters.push(stmt(RET_K, ALLOW));
+            }
             filters.push(jump(
                 JMP_JEQ_K,
                 u32::try_from(libc::SYS_clone3).map_err(std::io::Error::other)?,
@@ -339,12 +375,36 @@ mod macos {
     }
 
     impl Seatbelt {
-        pub(super) fn prepare(runtime: &Path, temporary: &Path) -> std::io::Result<Self> {
+        pub(super) fn prepare(
+            runtime: &Path,
+            temporary: &Path,
+            read_only_roots: &[std::path::PathBuf],
+            allow_child_processes: bool,
+        ) -> std::io::Result<Self> {
+            let mut ancestors = std::collections::BTreeSet::new();
+            for root in std::iter::once(runtime)
+                .chain(std::iter::once(temporary))
+                .chain(read_only_roots.iter().map(std::path::PathBuf::as_path))
+            {
+                let mut ancestor = root.parent();
+                while let Some(path) = ancestor {
+                    if path != Path::new("/") {
+                        ancestors.insert(escape(path)?);
+                    }
+                    ancestor = path.parent();
+                }
+            }
             let runtime = escape(runtime)?;
             let temporary = escape(temporary)?;
-            let mut profile = String::from(
-                "(version 1)\n(deny default)\n(deny network*)\n(deny process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow signal (target self))\n",
-            );
+            let mut profile = if allow_child_processes {
+                String::from(
+                    "(version 1)\n(deny default)\n(import \"dyld-support.sb\")\n(deny network*)\n(allow process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow signal (target self))\n",
+                )
+            } else {
+                String::from(
+                    "(version 1)\n(deny default)\n(import \"dyld-support.sb\")\n(deny network*)\n(deny process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow signal (target self))\n",
+                )
+            };
             writeln!(profile, "(allow process-exec (subpath \"{runtime}\"))")
                 .map_err(std::io::Error::other)?;
             writeln!(
@@ -357,6 +417,18 @@ mod macos {
             for root in ["/usr/lib", "/System/Library"] {
                 writeln!(profile, "(allow file-read* (subpath \"{root}\"))")
                     .map_err(std::io::Error::other)?;
+            }
+            for root in read_only_roots {
+                let root = escape(root)?;
+                writeln!(profile, "(allow file-read* (subpath \"{root}\"))")
+                    .map_err(std::io::Error::other)?;
+            }
+            for ancestor in ancestors {
+                writeln!(
+                    profile,
+                    "(allow file-read-metadata file-test-existence (literal \"{ancestor}\"))"
+                )
+                .map_err(std::io::Error::other)?;
             }
             let profile =
                 std::ffi::CString::new(profile).map_err(|_| std::io::ErrorKind::InvalidInput)?;

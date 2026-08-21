@@ -15,7 +15,8 @@ rust_binary(
         "//crates/http-transport:http_transport",
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process_plugin",
+        "//crates/process-plugin:process-plugin",
+        "//crates/provider-plugin:provider-plugin",
     ] + all_crate_deps(normal = True),
     compile_data = ["//web/console:checked_assets"],
 )
@@ -32,7 +33,8 @@ rust_test(
         "//crates/http-transport:http_transport",
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process_plugin",
+        "//crates/process-plugin:process-plugin",
+        "//crates/provider-plugin:provider-plugin",
     ] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
     compile_data = ["//web/console:checked_assets"],
@@ -49,7 +51,7 @@ rust_test(
     ],
     deps = [
         "//crates/api:into_markdown",
-        "//crates/process-plugin:process_plugin",
+        "//crates/process-plugin:process-plugin",
         "@crates//:serde_json",
         "@crates//:tempfile",
         "@crates//:zip",
@@ -71,7 +73,7 @@ rust_test(
     deps = [
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process_plugin",
+        "//crates/process-plugin:process-plugin",
         "@crates//:base64",
         "@crates//:ring",
         "@crates//:serde_json",

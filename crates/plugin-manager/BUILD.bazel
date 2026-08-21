@@ -11,7 +11,7 @@ rust_library(
     edition = "2024",
     deps = [
         "//crates/process-plugin",
-        "//crates/plugin-wasi",
+        "//crates/plugin-wasi:plugin_wasi",
         "//crates/core",
         "@crates//:base64",
         "@crates//:ring",
@@ -19,6 +19,7 @@ rust_library(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:sha2",
+        "@crates//:tempfile",
         "@crates//:thiserror",
         "@crates//:zip",
         "@crates//:winx",
@@ -30,7 +31,6 @@ rust_test(
     name = "plugin_manager_test",
     crate = ":plugin_manager",
     compile_data = ["//crates/plugin-wasi:tests/fixtures/guest.component.wasm"],
-    deps = ["@crates//:tempfile"],
 )
 
 rust_binary(
@@ -58,6 +58,7 @@ rust_binary(
         "//crates/core",
         "//crates/process-plugin",
     ],
+    visibility = ["//visibility:public"],
 )
 
 rust_test(
@@ -78,4 +79,7 @@ rust_test(
         "@crates//:tempfile",
         "@crates//:zip",
     ],
+    # This target validates the installed process plugin's own OS sandbox.
+    # Bazel's macOS sandbox cannot be nested with sandbox_init(3).
+    tags = ["no-sandbox"],
 )

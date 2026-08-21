@@ -1261,7 +1261,7 @@ pub struct OcrRequest<'a> {
 /// Native or remote OCR implementation.
 pub trait OcrEngine: Send + Sync {
     /// Stable provider ID.
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
     /// Recognize text and geometry.
     fn recognize<'a>(
         &'a self,
@@ -1340,7 +1340,8 @@ pub struct TranscriptionRequest<'a> {
 }
 
 /// Time-aligned transcription result represented as IR nodes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TranscriptionResult {
     /// Ordered timed segment nodes.
     pub segments: Vec<BlockNode>,
@@ -1357,7 +1358,7 @@ pub struct TranscriptionResult {
 /// Local or remote speech-to-text provider.
 pub trait Transcriber: Send + Sync {
     /// Stable provider ID.
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
     /// Transcribe media.
     fn transcribe<'a>(
         &'a self,
@@ -1382,7 +1383,8 @@ pub struct DiarizationRequest<'a> {
 }
 
 /// Result of local anonymous speaker diarization.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiarizationResult {
     /// Time-aligned nodes with stable anonymous speaker IDs and confidence.
     pub segments: Vec<BlockNode>,
@@ -1395,7 +1397,7 @@ pub struct DiarizationResult {
 /// Offline anonymous speaker diarization provider.
 pub trait Diarizer: Send + Sync {
     /// Stable provider ID.
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
     /// Label and, when needed, split an existing timed transcript.
     fn diarize<'a>(
         &'a self,

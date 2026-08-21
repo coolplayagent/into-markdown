@@ -61,13 +61,6 @@ impl Catalog {
             Language::ZhCn => "警告",
         }
     }
-
-    pub const fn unavailable(self) -> &'static str {
-        match self.language {
-            Language::En => "the backend for this operation is not implemented",
-            Language::ZhCn => "此操作的后端尚未实现",
-        }
-    }
 }
 
 /// Return localized help when Chinese was explicitly selected.

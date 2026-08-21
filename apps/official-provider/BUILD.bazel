@@ -1,0 +1,43 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"])
+
+rust_library(
+    name = "official_provider",
+    srcs = ["src/lib.rs"],
+    crate_name = "into_markdown_official_provider",
+    edition = "2024",
+    deps = [
+        "//crates/api:into_markdown",
+        "//crates/process-plugin",
+        "//crates/provider-plugin",
+    ] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    # Release providers enable native Whisper/ONNX build scripts through the
+    # audited Cargo release flow; keep them out of broad Bazel wildcards until
+    # those native toolchains are declared to Bazel.
+    tags = ["manual"],
+)
+
+rust_binary(
+    name = "into-md-ocr-provider",
+    srcs = ["src/bin/ocr.rs"],
+    crate_name = "into_md_ocr_provider",
+    edition = "2024",
+    deps = [":official_provider"] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    tags = ["manual"],
+)
+
+rust_binary(
+    name = "into-md-media-provider",
+    srcs = ["src/bin/media.rs"],
+    crate_name = "into_md_media_provider",
+    edition = "2024",
+    deps = [":official_provider"] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    tags = ["manual"],
+)

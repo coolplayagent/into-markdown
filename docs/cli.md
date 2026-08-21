@@ -295,6 +295,15 @@ into-md models path <ID>
 完整的清单、数据目录、事务和威胁边界见
 [本地模型管理](models.md)。
 
+常用准备入口同时处理能力插件和模型：
+
+```text
+into-md setup ocr [--insecure] [--allow-private-network]
+into-md setup media [--insecure] [--allow-private-network]
+```
+
+转换和状态查询不会隐式调用这两个命令。
+
 ### AI Provider
 
 ```text
@@ -326,15 +335,23 @@ Authorization 转发到其它 origin。
 ```text
 into-md plugins [--json]
 into-md plugins show <ID> [--json]
-into-md plugins install <PATH|URL> [--sha256 <HASH>] [--scope <global|project>]
-into-md plugins verify [ID] [--json]
+into-md plugins install <PATH-OR-HTTPS-URL> [--sha256 <HASH>] \
+  [--signing-key-id <ID> --signing-key-sha256 <SHA256>] \
+  [--scope <global|project>]
+into-md plugins verify [ID] [--json] [--scope <global|project>]
 into-md plugins enable <ID> [--scope <global|project>]
 into-md plugins disable <ID> [--scope <global|project>]
+into-md plugins run <ID> <INPUT> --input-format <FORMAT> \
+  [--scope <global|project>]
 into-md plugins remove <ID> [--scope <global|project>]
 ```
 
-URL 安装仅接受 HTTPS 且必须提供 SHA-256；本地包记录计算后的哈希。允许的协议为
-`process-v1` 和 `wasi-v1`，不加载 Rust 动态 ABI。
+本地包可用已经信任的发行者安装，也可同时传入签名 key ID 与 Ed25519 公钥指纹建立全局
+信任；HTTPS 安装还必须固定完整包 SHA-256。包内 `plugin.json`、目标、文件集合、可执行
+权限、大小与摘要在安装和加载时都会重新验证。OCR/音频能力描述位于包内
+`provider.json`，执行仍统一走 `process-v1`；普通插件还可使用 `wasi-v1`。所有形式都不
+加载 Rust 动态 ABI。详见
+[OCR 与音频能力插件](capability-plugins.md)。
 
 ### 配置、诊断与补全
 

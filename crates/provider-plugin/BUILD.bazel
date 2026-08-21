@@ -1,0 +1,28 @@
+load("@crates//:defs.bzl", "all_crate_deps", "aliases")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"])
+
+rust_library(
+    name = "provider-plugin",
+    srcs = glob(["src/*.rs"]),
+    crate_name = "into_markdown_provider_plugin",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/plugin-manager:plugin_manager",
+        "//crates/process-plugin",
+    ] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_test(
+    name = "provider_plugin_test",
+    crate = ":provider-plugin",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    edition = "2024",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)

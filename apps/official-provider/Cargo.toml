@@ -1,0 +1,30 @@
+[package]
+name = "into-markdown-official-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+default = []
+metal = ["into-markdown/metal"]
+
+[[bin]]
+name = "into-md-ocr-provider"
+path = "src/bin/ocr.rs"
+
+[[bin]]
+name = "into-md-media-provider"
+path = "src/bin/media.rs"
+
+[dependencies]
+futures.workspace = true
+into-markdown = { path = "../../crates/api", features = ["official-provider-runtime"] }
+into-markdown-process-plugin = { path = "../../crates/process-plugin" }
+into-markdown-provider-plugin = { path = "../../crates/provider-plugin" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

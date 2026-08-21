@@ -9,8 +9,25 @@ use std::io::Write as _;
 use std::time::Duration;
 
 fn main() -> std::io::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--child-probe")) {
+        print!("child-ok");
+        return Ok(());
+    }
     if std::env::var("PROCESS_PLUGIN_FIXTURE_MODE").as_deref() == Ok("stall-request") {
         return stall_after_hello();
+    }
+    if std::env::var("PROCESS_PLUGIN_FIXTURE_MODE").as_deref() == Ok("isolate-stdout") {
+        return worker::serve_with_isolated_stdout(
+            "fixture.process-v1",
+            16 * 1024 * 1024,
+            |_request, _events, _cancellation| {
+                print!("native-library-noise");
+                std::io::stdout()
+                    .flush()
+                    .map_err(|_| WorkerError::new("stdout", "stdout noise failed"))?;
+                Ok(result("stdout-isolated"))
+            },
+        );
     }
     worker::serve("fixture.process-v1", 16 * 1024 * 1024, |request, events, cancellation| {
         let command = String::from_utf8_lossy(&request.source);
@@ -68,6 +85,32 @@ fn main() -> std::io::Result<()> {
                     "secret-leaked"
                 },
             )),
+            "child" => {
+                let executable = std::env::current_exe()
+                    .map_err(|_| WorkerError::new("childPrepare", "child helper is unavailable"))?;
+                let helper = executable.with_file_name(if cfg!(windows) {
+                    "verified-helper.exe"
+                } else {
+                    "verified-helper"
+                });
+                let mut child = std::process::Command::new(helper)
+                    .arg("--child-probe")
+                    .env_clear()
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|_| WorkerError::new("childLaunch", "child helper launch failed"))?;
+                drop(child.stdin.take());
+                let output = child
+                    .wait_with_output()
+                    .map_err(|_| WorkerError::new("childWait", "child helper wait failed"))?;
+                Ok(result(if output.status.success() && output.stdout == b"child-ok" {
+                    "child-ok"
+                } else {
+                    "child-failed"
+                }))
+            }
             "ok" => {
                 events
                     .progress("converting", Some(1), Some(2), Some("fixture".into()))
@@ -82,6 +125,7 @@ fn main() -> std::io::Result<()> {
                     .map_err(|_| WorkerError::new("event", "diagnostic failed"))?;
                 Ok(result("ok"))
             }
+            value if value.starts_with("large-ok") => Ok(result("large-ok")),
             _ => Err(WorkerError::new("unknownFixture", "unknown fixture command")),
         }
     })

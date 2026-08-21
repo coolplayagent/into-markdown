@@ -14,13 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static CONFIG_GENERATION: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn config_generation() -> u64 {
-    CONFIG_GENERATION.load(Ordering::Acquire)
-}
 
 #[cfg(test)]
 thread_local! {
@@ -98,6 +91,7 @@ pub struct RawConfig {
     pub default_provider: Option<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
     pub plugins: BTreeMap<String, PluginConfig>,
+    pub capability_routes: CapabilityRoutesConfig,
     pub profiles: BTreeMap<String, ProfileConfig>,
 }
 
@@ -163,6 +157,23 @@ pub struct AsrConfig {
     pub max_duration_ms: Option<u64>,
     pub max_segments: Option<u32>,
     pub max_native_memory_bytes: Option<u64>,
+}
+
+/// Primary and ordered readiness fallbacks for isolated local capabilities.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CapabilityRoutesConfig {
+    pub ocr: CapabilityRouteConfig,
+    pub transcription: CapabilityRouteConfig,
+    pub diarization: CapabilityRouteConfig,
+}
+
+/// One capability route using `plugin-id/capability-id` references.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CapabilityRouteConfig {
+    pub primary: Option<String>,
+    pub fallbacks: Vec<String>,
 }
 
 /// Partial AI routing configuration.
@@ -233,6 +244,7 @@ pub struct ProfileConfig {
     pub default_provider: Option<String>,
     pub providers: BTreeMap<String, ProviderConfig>,
     pub plugins: BTreeMap<String, PluginConfig>,
+    pub capability_routes: CapabilityRoutesConfig,
 }
 
 /// Fully loaded configuration plus source-path information.
@@ -655,6 +667,31 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
             validate_sha256(&plugin.signing_key_sha256)?;
         }
     }
+    validate_capability_routes(&config.capability_routes)?;
+    Ok(())
+}
+
+fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), CliError> {
+    for (name, route) in [
+        ("ocr", &routes.ocr),
+        ("transcription", &routes.transcription),
+        ("diarization", &routes.diarization),
+    ] {
+        for reference in route.primary.iter().chain(&route.fallbacks) {
+            let Some((plugin, capability)) = reference.split_once('/') else {
+                return Err(CliError::config(format!(
+                    "capability route '{name}' must use plugin-id/capability-id"
+                )));
+            };
+            validate_id("plugin", plugin)?;
+            validate_id("capability", capability)?;
+            if capability.contains('/') {
+                return Err(CliError::config(format!(
+                    "capability route '{name}' contains an invalid capability ID"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -842,6 +879,7 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), CliError>
     let partial = RawConfig {
         cli: profile.cli.clone(),
         conversion: profile.conversion.clone(),
+        capability_routes: profile.capability_routes.clone(),
         ..RawConfig::default()
     };
     validate_layer(&partial)?;
@@ -1161,6 +1199,42 @@ pub(crate) struct ScopeSnapshot {
     authority: crate::transaction::ConfigExpectedAuthority,
 }
 
+/// Capture the physical identity and bytes of every configuration file used by one load.
+/// Administration compares this authority after plugin verification so changes in unrelated
+/// project scopes cannot invalidate the snapshot while replacements of an actual input still do.
+pub(crate) fn loaded_paths_snapshot(
+    paths: &[PathBuf],
+) -> Result<Vec<(PathBuf, crate::transaction::ConfigExpectedAuthority)>, CliError> {
+    paths
+        .iter()
+        .map(|path| {
+            let mut file = File::open(path)?;
+            let initial_identity = config_file_identity(&file)?;
+            let initial_metadata = file.metadata()?;
+            if !initial_metadata.is_file() {
+                return Err(CliError::config("configuration identity rejected"));
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            let final_identity = config_file_identity(&file)?;
+            let final_metadata = file.metadata()?;
+            if initial_identity != final_identity
+                || initial_metadata.len() != final_metadata.len()
+                || final_metadata.len() != bytes.len() as u64
+            {
+                return Err(CliError::config("configuration changed while reading"));
+            }
+            Ok((
+                path.clone(),
+                crate::transaction::ConfigExpectedAuthority {
+                    identity: Some(final_identity),
+                    sha256: Some(format!("{:x}", Sha256::digest(&bytes))),
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Read the complete semantic document plus physical file identity for one
 /// scope. Atomic A→B→A replacement changes identity even when bytes return to
 /// their original value, so administration cannot accept a mixed generation.
@@ -1310,7 +1384,6 @@ fn mutate_path_locked(
         }
     }
     atomic_write_locked(lock, &path, text.as_bytes(), true, Some(&expected))?;
-    CONFIG_GENERATION.fetch_add(1, Ordering::AcqRel);
     Ok(path.to_owned())
 }
 

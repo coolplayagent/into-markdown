@@ -126,6 +126,38 @@ pub struct BoundOcrResult {
     input_identity: Option<OcrInputIdentity>,
 }
 
+/// Serializable representation used at an isolated OCR provider boundary.
+///
+/// The host must convert this DTO through [`BoundOcrResult::try_from_dto`]
+/// before exposing it as trusted OCR evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoundOcrResultDto {
+    /// Legacy-compatible OCR result.
+    pub result: OcrResult,
+    /// Detector confidence in exact region order.
+    pub detection_confidences: Vec<f32>,
+    /// Exact detector and recognizer identities.
+    pub evidence_chain: Vec<OcrEvidenceStep>,
+    /// Optional normalized input identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_identity: Option<OcrInputIdentityDto>,
+}
+
+/// Serializable normalized-image identity for isolated OCR providers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OcrInputIdentityDto {
+    /// Lowercase SHA-256 of the exact normalized image bytes.
+    pub sha256: String,
+    /// Normalized image width.
+    pub width: u32,
+    /// Normalized image height.
+    pub height: u32,
+    /// Zero-based frame ordinal.
+    pub frame: u32,
+}
+
 /// Cryptographic identity of the exact normalized image accepted by an OCR provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OcrInputIdentity {
@@ -281,6 +313,104 @@ impl BoundOcrResult {
     pub fn into_parts(self) -> (OcrResult, Vec<f32>, Vec<OcrEvidenceStep>) {
         (self.result, self.detection_confidences, self.evidence_chain)
     }
+
+    /// Convert validated evidence into its isolated-provider wire DTO.
+    #[must_use]
+    pub fn to_dto(&self) -> BoundOcrResultDto {
+        BoundOcrResultDto {
+            result: self.result.clone(),
+            detection_confidences: self.detection_confidences.clone(),
+            evidence_chain: self.evidence_chain.clone(),
+            input_identity: self.input_identity.map(|identity| OcrInputIdentityDto {
+                sha256: hex_sha256(identity.sha256),
+                width: identity.width,
+                height: identity.height,
+                frame: identity.frame,
+            }),
+        }
+    }
+
+    /// Validate and bind an isolated-provider DTO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an OCR error for malformed hashes, non-finite geometry,
+    /// confidence outside zero-to-one, empty identities, or inconsistent
+    /// detector and recognizer evidence.
+    pub fn try_from_dto(dto: BoundOcrResultDto) -> Result<Self, ConversionError> {
+        validate_wire_result(&dto.result)?;
+        let identity = dto.input_identity.map(parse_input_identity).transpose()?;
+        match identity {
+            Some(identity) => Self::try_new_for_input(
+                dto.result,
+                dto.detection_confidences,
+                dto.evidence_chain,
+                identity,
+            ),
+            None => Self::try_new(dto.result, dto.detection_confidences, dto.evidence_chain),
+        }
+    }
+}
+
+fn validate_wire_result(result: &OcrResult) -> Result<(), ConversionError> {
+    let provider = if result.provider.trim().is_empty() {
+        "ocr-binding".to_owned()
+    } else {
+        result.provider.clone()
+    };
+    if result.provider.trim() != result.provider || result.provider.is_empty() {
+        return Err(ConversionError::Ocr {
+            provider,
+            detail: "OCR provider identity is empty or not canonical".into(),
+        });
+    }
+    for region in &result.regions {
+        if region.text.len() > 16 * 1024 * 1024
+            || !region.confidence.is_finite()
+            || !(0.0..=1.0).contains(&region.confidence)
+            || region
+                .polygon
+                .iter()
+                .any(|(x, y)| !x.is_finite() || !y.is_finite() || *x < 0.0 || *y < 0.0)
+        {
+            return Err(ConversionError::Ocr {
+                provider,
+                detail: "OCR region text, geometry, or confidence is invalid".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn parse_input_identity(dto: OcrInputIdentityDto) -> Result<OcrInputIdentity, ConversionError> {
+    if dto.sha256.len() != 64
+        || !dto.sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ConversionError::Ocr {
+            provider: "ocr-binding".into(),
+            detail: "OCR input identity SHA-256 is invalid".into(),
+        });
+    }
+    let mut digest = [0_u8; 32];
+    for (index, output) in digest.iter_mut().enumerate() {
+        let offset = index * 2;
+        *output = u8::from_str_radix(&dto.sha256[offset..offset + 2], 16).map_err(|_| {
+            ConversionError::Ocr {
+                provider: "ocr-binding".into(),
+                detail: "OCR input identity SHA-256 is invalid".into(),
+            }
+        })?;
+    }
+    OcrInputIdentity::try_new(digest, dto.width, dto.height, dto.frame)
+}
+
+fn hex_sha256(digest: [u8; 32]) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
 }
 
 /// Compatibility result for OCR engines adopting bound structured evidence.

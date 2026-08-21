@@ -38,6 +38,8 @@ pub(crate) fn spawn(
     for (name, value) in &policy.environment {
         command.env(name, value);
     }
+    #[cfg(unix)]
+    command.env("TMPDIR", directory);
     command.env("INTO_MARKDOWN_PLUGIN_PROTOCOL", "process-v1");
     #[cfg(unix)]
     unix::prepare(&mut command, plugin, policy, directory)?;
@@ -59,6 +61,20 @@ pub(crate) enum SandboxChild {
     Unix(std::process::Child),
     #[cfg(windows)]
     Windows(windows::Child),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChildExit {
+    Success,
+    Failure,
+    #[cfg(unix)]
+    Signaled(i32),
+}
+
+impl ChildExit {
+    pub(crate) fn success(self) -> bool {
+        matches!(self, Self::Success)
+    }
 }
 
 impl SandboxChild {
@@ -89,14 +105,60 @@ impl SandboxChild {
         }
     }
 
-    pub(crate) fn try_wait(&mut self) -> Result<Option<bool>, ()> {
+    pub(crate) fn try_wait(&mut self) -> Result<Option<ChildExit>, ()> {
         match self {
             #[cfg(unix)]
             Self::Unix(child) => {
-                child.try_wait().map(|value| value.map(|status| status.success())).map_err(|_| ())
+                use std::os::unix::process::ExitStatusExt as _;
+
+                child
+                    .try_wait()
+                    .map(|value| {
+                        value.map(|status| {
+                            if status.success() {
+                                ChildExit::Success
+                            } else if let Some(signal) = status.signal() {
+                                ChildExit::Signaled(signal)
+                            } else {
+                                ChildExit::Failure
+                            }
+                        })
+                    })
+                    .map_err(|_| ())
             }
             #[cfg(windows)]
-            Self::Windows(child) => child.try_wait(),
+            Self::Windows(child) => child.try_wait().map(|value| {
+                value.map(|success| if success { ChildExit::Success } else { ChildExit::Failure })
+            }),
+        }
+    }
+
+    pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
+        #[cfg(target_os = "macos")]
+        {
+            let Self::Unix(child) = self;
+            let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+            // SAFETY: the owned child PID is live while borrowed and the V2
+            // output buffer has the exact layout requested by the flavor.
+            let result = unsafe {
+                libc::proc_pid_rusage(
+                    i32::try_from(child.id()).map_err(|_| ())?,
+                    libc::RUSAGE_INFO_V2,
+                    (&raw mut usage).cast(),
+                )
+            };
+            if result == 0 {
+                return Ok(usage.ri_phys_footprint.max(usage.ri_resident_size) > limit);
+            }
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return Ok(false);
+            }
+            return Err(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = limit;
+            Ok(false)
         }
     }
 

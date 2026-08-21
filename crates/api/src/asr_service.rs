@@ -29,6 +29,25 @@ pub fn installed_asr_service(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<Arc<dyn Transcriber>, ConversionError> {
+    installed_asr_service_inner(config, options, context, false)
+}
+
+/// Assemble local ASR when the caller already enforces a read-only,
+/// replacement-protected native-runtime sandbox.
+pub fn installed_asr_service_in_read_only_sandbox(
+    config: &InstalledAsrConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn Transcriber>, ConversionError> {
+    installed_asr_service_inner(config, options, context, true)
+}
+
+fn installed_asr_service_inner(
+    config: &InstalledAsrConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    read_only_sandbox: bool,
+) -> Result<Arc<dyn Transcriber>, ConversionError> {
     context.checkpoint()?;
     let manager = Arc::new(into_markdown_ocr::ModelManager::embedded(
         config.writable_model_root.clone(),
@@ -56,11 +75,19 @@ pub fn installed_asr_service(
             detail: format!("FFmpeg artifact authority is unavailable: {error}"),
         }
     })?;
-    let runtime = into_markdown_ffmpeg::FfmpegRuntime::load(
-        &config.ffmpeg_trusted_root,
-        &config.ffmpeg_executable,
-        &authority,
-    )
+    let runtime = if read_only_sandbox {
+        into_markdown_ffmpeg::FfmpegRuntime::load_read_only_sandbox(
+            &config.ffmpeg_trusted_root,
+            &config.ffmpeg_executable,
+            &authority,
+        )
+    } else {
+        into_markdown_ffmpeg::FfmpegRuntime::load(
+            &config.ffmpeg_trusted_root,
+            &config.ffmpeg_executable,
+            &authority,
+        )
+    }
     .map_err(|error| ConversionError::ComponentUnavailable {
         component: "ffmpeg-lgpl".into(),
         detail: format!("installed FFmpeg runtime is unavailable: {error}"),

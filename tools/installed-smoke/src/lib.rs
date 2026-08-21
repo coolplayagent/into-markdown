@@ -243,7 +243,9 @@ mod tests {
         let dto = br#"{"schemaVersion":1,"markdown":"Alpha \u4e2d\u6587 line  \nSecond line\n","document":{"blocks":[{}]}}"#.to_vec();
         let corrupt = br#"{"code":"malformed","exitCode":3}"#.to_vec();
         let pdf = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file"}"#.to_vec();
-        let image = br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md models install pp-ocrv6-tiny-zh-en"}"#.to_vec();
+        let image =
+            br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup ocr"}"#
+                .to_vec();
         let metadata = serde_json::to_vec(&serde_json::json!({
             "packages": [{"id":"root","name":"into-markdown","source":null,"manifest_path":rust.join("Cargo.toml")}],
             "resolve":{"root":"root","nodes":[{"id":"root","dependencies":[]}]}

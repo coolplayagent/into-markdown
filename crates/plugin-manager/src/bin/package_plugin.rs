@@ -50,7 +50,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let template_bytes = bounded_read(&template_path, 1024 * 1024)?;
     let template: Template = serde_json::from_slice(&template_bytes)?;
     let key_bytes = bounded_read(&key_path, 64 * 1024)?;
-    let key = Ed25519KeyPair::from_pkcs8(&key_bytes).map_err(|_| "invalid Ed25519 PKCS#8 key")?;
+    // OpenSSL emits PKCS#8 v1 for Ed25519 while ring's generator emits v2.
+    // Both are standard DER encodings; v1 has no stored public key, so ring
+    // derives it from the private seed before the package fingerprint is made.
+    let key = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&key_bytes)
+        .map_err(|_| "invalid Ed25519 PKCS#8 key")?;
     let public = key.public_key().as_ref();
     let fingerprint = digest(public);
 
@@ -69,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             path: relative,
             bytes: bytes.len() as u64,
             sha256: digest(&bytes),
+            executable: is_executable(&path)?,
         });
         contents.push(bytes);
     }
@@ -170,4 +175,15 @@ fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
 
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    Ok(false)
 }

@@ -1066,7 +1066,26 @@ impl WebTaskBackend {
     /// Open durable stores, recover nonterminal tasks, and start bounded workers.
     #[allow(clippy::too_many_lines)]
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, WebTaskError> {
-        let root = private_directory(root.into())?;
+        Self::open_internal(root.into(), None)
+    }
+
+    pub(crate) fn open_with_media_config(
+        root: impl Into<PathBuf>,
+        loaded: crate::config::LoadedConfig,
+        cwd: PathBuf,
+    ) -> Result<Self, WebTaskError> {
+        Self::open_internal(root.into(), Some((loaded, cwd)))
+    }
+
+    pub(crate) fn update_media_config(&self, loaded: crate::config::LoadedConfig) {
+        self.owner.shared.media_services.update_config(loaded);
+    }
+
+    fn open_internal(
+        root: PathBuf,
+        loaded: Option<(crate::config::LoadedConfig, PathBuf)>,
+    ) -> Result<Self, WebTaskError> {
+        let root = private_directory(root)?;
         let root_handle = SafeDir::open_absolute(&root)
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         root_handle
@@ -1126,7 +1145,10 @@ impl WebTaskBackend {
             history_mutation: Mutex::new(()),
             recovery,
             engine,
-            media_services: crate::services::WebMediaServiceCache::default(),
+            media_services: loaded
+                .map_or_else(crate::services::WebMediaServiceCache::default, |(loaded, cwd)| {
+                    crate::services::WebMediaServiceCache::with_config(loaded, cwd)
+                }),
             events: EventHub::new(random_hex()?),
             queue: Mutex::new(QueueState::default()),
             queue_changed: Condvar::new(),

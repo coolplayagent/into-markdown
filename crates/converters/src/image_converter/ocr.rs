@@ -9,8 +9,7 @@ use into_markdown_core::{
 };
 
 const MERGE_PROVIDER: &str = "builtin.converter.image.ocr-merge";
-const INSTALL_HINT: &str =
-    "install local OCR models with `into-md models install pp-ocrv6-tiny-zh-en`";
+const INSTALL_HINT: &str = "install the local OCR capability with `into-md setup ocr`";
 
 #[derive(Debug)]
 pub(crate) struct OcrContribution {

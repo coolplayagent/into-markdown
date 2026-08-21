@@ -338,6 +338,15 @@ pub struct SetupArgs {
 /// Optional component preparation operations.
 #[derive(Debug, Subcommand)]
 pub enum SetupCommand {
+    /// Install and verify the official local OCR provider and model bundle.
+    Ocr {
+        /// Allow development transport without TLS certificate validation.
+        #[arg(long)]
+        insecure: bool,
+        /// Permit pinned HTTPS hosts that resolve through a private local network route.
+        #[arg(long)]
+        allow_private_network: bool,
+    },
     /// Install and verify local media transcription components.
     Media {
         /// Allow development transport without TLS certificate validation.

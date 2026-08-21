@@ -57,7 +57,7 @@ bazel test //crates/plugin-manager:plugin_manager_test //crates/plugin-manager:p
   "supportedTargets": ["x86_64-pc-windows-msvc"],
   "entrypoints": {"x86_64-pc-windows-msvc": "bin/converter.exe"},
   "runtimeManifest": null,
-  "files": [{"path": "bin/converter.exe", "bytes": 1234, "sha256": "<64 lowercase hex>"}],
+  "files": [{"path": "bin/converter.exe", "bytes": 1234, "sha256": "<64 lowercase hex>", "executable": true}],
   "signature": {
     "signedPayloadVersion": 1,
     "algorithm": "ed25519",
@@ -98,7 +98,11 @@ cargo run --locked -p into-markdown-plugin-manager --bin package_plugin -- \
 
 The template contains the top-level fields through `runtimeManifest`; the tool inventories and
 hashes `SOURCE_DIR`, derives the public key and fingerprint, signs the canonical payload, and writes
-the complete `plugin.json`. It refuses links, special files, `plugin.json` in the source tree,
+the complete `plugin.json`. The signed `executable` bit is derived from each source file's Unix
+execute permission; installation strips execute permission from every file not carrying that
+authority and verifies the resulting tree. This covers declared entrypoints and authenticated
+helper processes without trusting ZIP mode metadata. The signer refuses links, special files,
+`plugin.json` in the source tree,
 non-portable paths, oversized files, and an existing output.
 
 ## ZIP and path rules

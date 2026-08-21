@@ -2,8 +2,11 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "official-provider-runtime")]
 mod asr_service;
+#[cfg(feature = "official-provider-runtime")]
 mod diarization_service;
+#[cfg(feature = "official-provider-runtime")]
 mod ocr_service;
 
 #[cfg(test)]
@@ -12,13 +15,21 @@ mod image_ai_tests;
 #[cfg(test)]
 mod embedded_visual_ocr_tests;
 
-pub use asr_service::{InstalledAsrConfig, installed_asr_service};
-pub use diarization_service::{InstalledDiarizationConfig, installed_diarization_service};
+#[cfg(feature = "official-provider-runtime")]
+pub use asr_service::{
+    InstalledAsrConfig, installed_asr_service, installed_asr_service_in_read_only_sandbox,
+};
+#[cfg(feature = "official-provider-runtime")]
+pub use diarization_service::{
+    InstalledDiarizationConfig, installed_diarization_service,
+    installed_diarization_service_in_read_only_sandbox,
+};
 pub use into_markdown_ai::{
     AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
     OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
     ProviderError, ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
 };
+#[cfg(feature = "official-provider-runtime")]
 pub use into_markdown_asr::{WhisperConfig, WhisperSmallTranscriber};
 pub use into_markdown_converters::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
@@ -40,6 +51,7 @@ pub use into_markdown_ocr::{
 pub use into_markdown_ocr::{
     MergeConfig as OcrMergeConfig, MergeLimits as OcrMergeLimits, OcrPageInput,
 };
+#[cfg(feature = "official-provider-runtime")]
 pub use into_markdown_onnxruntime::verify_worker_executable as verify_ocr_worker_executable;
 pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
@@ -50,6 +62,7 @@ pub use into_markdown_task_store::{
     InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
     TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
+#[cfg(feature = "official-provider-runtime")]
 pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installed_ocr_service};
 
 /// Create the standard builder with safe local source resolvers, hint

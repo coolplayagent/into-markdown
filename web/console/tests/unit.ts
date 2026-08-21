@@ -150,10 +150,12 @@ const availableApi: ApiClient = {
       schemaVersion: 1 as const,
       localApi: { available: true, code: "available", detail: "ok" },
       documentConsole: { available: true, code: "available", detail: "ok" },
+      imageOcr: { available: false, code: "componentUnavailable", detail: "setup" },
       audioTranscription: { available: false, code: "componentUnavailable", detail: "setup" },
       speakerDiarization: { available: false, code: "componentUnavailable", detail: "setup" },
     };
   },
+  async installCapability() {},
   async listTasks() { return { tasks: [] }; },
   async getTask(id) { return task("running", id); },
   async upload() { return task(); },
@@ -288,6 +290,9 @@ test("API client sends only the strict POST contract and validates bounded DTOs"
       schemaVersion: 1,
       localApi: { available: true, code: "available", detail: "ok" },
       documentConsole: { available: false, code: "componentUnavailable", detail: "not installed" },
+      imageOcr: { available: false, code: "componentUnavailable", detail: "not installed" },
+      audioTranscription: { available: false, code: "componentUnavailable", detail: "not installed" },
+      speakerDiarization: { available: false, code: "componentUnavailable", detail: "not installed" },
     }), { headers: { "content-type": "application/json" } });
   });
   assert.equal((await client.status()).localApi.available, true);
