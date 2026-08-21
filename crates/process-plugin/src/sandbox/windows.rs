@@ -1,20 +1,36 @@
 use crate::{PluginError, PluginErrorCode, RuntimePolicy, ValidatedPlugin};
+use sha2::Digest as _;
 use std::fs::File;
 use std::mem::size_of;
-use std::os::windows::ffi::OsStrExt as _;
+use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
-use std::path::Path;
+use std::path::{Component, Path};
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LocalFree,
     SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    SET_ACCESS, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+    TRUSTEE_W,
+};
 use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeleteAppContainerProfile,
     DeriveAppContainerSidFromAppContainerName, GetAppContainerFolderPath,
 };
 use windows_sys::Win32::Security::{
-    FreeSid, GetTokenInformation, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
-    TOKEN_APPCONTAINER_INFORMATION, TokenAppContainerSid, TokenIsAppContainer,
+    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, FreeSid, GetAce,
+    GetSecurityDescriptorControl, GetTokenInformation, InitializeSecurityDescriptor,
+    IsWellKnownSid, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
+    SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
+    SetSecurityDescriptorOwner, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+    TokenAppContainerSid, TokenIsAppContainer, TokenUser, WinBuiltinAdministratorsSid,
+    WinLocalSystemSid,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateDirectoryW, FILE_ALL_ACCESS, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, VOLUME_NAME_DOS,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -26,14 +42,504 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 const INFINITE: u32 = u32::MAX;
+const HRESULT_ALREADY_EXISTS: i32 = 0x8007_00B7_u32.cast_signed();
+const HRESULT_FILE_NOT_FOUND: i32 = 0x8007_0002_u32.cast_signed();
+const ACCESS_ALLOWED_ACE_TYPE_VALUE: u32 = 0;
+const APP_READ_EXECUTE: u32 = 0x0012_00A9;
+
+struct StoragePath(*mut u16);
+
+impl Drop for StoragePath {
+    fn drop(&mut self) {
+        // SAFETY: GetAppContainerFolderPath returns CoTaskMemAlloc-owned storage.
+        unsafe { windows_sys::Win32::System::Com::CoTaskMemFree(self.0.cast()) };
+    }
+}
+const INHERITED_ACE_FLAG: u8 = 0x10;
+
+pub(crate) fn provision(
+    scope_plugin_identity: &str,
+) -> Result<crate::WindowsSandboxAuthority, PluginError> {
+    let suffix = format!("{:x}", sha2::Sha256::digest(scope_plugin_identity.as_bytes()));
+    let profile_name = format!("into-markdown.plugin.{}", &suffix[..24]);
+    let name = wide_text(&profile_name)?;
+    let display = wide_text("into-markdown plugin sandbox")?;
+    let description = wide_text("Zero-capability process-v1 plugin identity")?;
+    let mut created = std::ptr::null_mut();
+    // SAFETY: all UTF-16 strings are terminated and remain live, there are no capability entries,
+    // and `created` is a writable out pointer owned by this call.
+    let result = unsafe {
+        CreateAppContainerProfile(
+            name.as_ptr(),
+            display.as_ptr(),
+            description.as_ptr(),
+            std::ptr::null(),
+            0,
+            &raw mut created,
+        )
+    };
+    let sid = if result >= 0 {
+        let created = AppContainerSid(created);
+        sid_text(created.as_ptr())?
+    } else if result == HRESULT_ALREADY_EXISTS {
+        let derived = AppContainerSid::derive(&profile_name)?;
+        sid_text(derived.as_ptr())?
+    } else {
+        return Err(unavailable("AppContainer profile provisioning failed"));
+    };
+    let derived = AppContainerSid::derive_verified(&profile_name, &sid)?;
+    let storage_root = storage_path(derived.as_ptr())?;
+    Ok(crate::WindowsSandboxAuthority { profile_name, sid, storage_root })
+}
+
+pub(crate) fn remove_profile(scope_plugin_identity: &str) -> Result<(), PluginError> {
+    let suffix = format!("{:x}", sha2::Sha256::digest(scope_plugin_identity.as_bytes()));
+    let profile_name = format!("into-markdown.plugin.{}", &suffix[..24]);
+    let name = wide_text(&profile_name)?;
+    // SAFETY: `name` is a live, terminated UTF-16 profile name.
+    let result = unsafe { DeleteAppContainerProfile(name.as_ptr()) };
+    if result < 0 && result != HRESULT_FILE_NOT_FOUND {
+        return Err(unavailable("AppContainer profile cleanup failed"));
+    }
+    Ok(())
+}
+
+pub(crate) fn authorize_path(
+    authority: &crate::WindowsSandboxAuthority,
+    path: &Path,
+) -> Result<(), PluginError> {
+    let app = AppContainerSid::derive_verified(&authority.profile_name, &authority.sid)?;
+    grant_runtime_path(path, app.as_ptr(), true)?;
+    verify_runtime_tree(path, app.as_ptr(), true)
+}
+
+fn verify_runtime_tree(path: &Path, app_sid: PSID, root: bool) -> Result<(), PluginError> {
+    use std::os::windows::fs::MetadataExt as _;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| unavailable("runtime snapshot metadata unavailable"))?;
+    if metadata.file_attributes() & 0x400 != 0 {
+        return Err(unavailable("runtime snapshot reparse point rejected"));
+    }
+    let current = CurrentUser::open()?;
+    verify_acl(path, &[current.sid(), app_sid], root)?;
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)
+            .map_err(|_| unavailable("runtime snapshot inventory unavailable"))?
+        {
+            let entry = entry.map_err(|_| unavailable("runtime snapshot entry unavailable"))?;
+            verify_runtime_tree(&entry.path(), app_sid, false)?;
+        }
+    }
+    Ok(())
+}
+
+fn grant_runtime_path(path: &Path, app_sid: PSID, directory: bool) -> Result<(), PluginError> {
+    let mut old_acl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let mut wide = wide_path(path)?;
+    // SAFETY: output pointers and the terminated path are valid.
+    if unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut old_acl,
+            std::ptr::null_mut(),
+            &raw mut descriptor,
+        )
+    } != 0
+        || old_acl.is_null()
+        || descriptor.is_null()
+    {
+        return Err(unavailable("runtime snapshot DACL unavailable"));
+    }
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: APP_READ_EXECUTE,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: if directory { SUB_CONTAINERS_AND_OBJECTS_INHERIT } else { 0 },
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: app_sid.cast(),
+        },
+    };
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: old ACL, app SID, access entry, and output pointer remain live.
+    let built = unsafe { SetEntriesInAclW(1, &raw const access, old_acl, &raw mut acl) };
+    let installed = if built == 0 && !acl.is_null() {
+        // SAFETY: the path and new ACL remain live.
+        unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            )
+        }
+    } else {
+        1
+    };
+    if !acl.is_null() {
+        // SAFETY: SetEntriesInAclW returned LocalAlloc-owned ACL storage.
+        unsafe { LocalFree(acl.cast()) };
+    }
+    // SAFETY: GetNamedSecurityInfoW returned LocalAlloc-owned descriptor storage.
+    unsafe { LocalFree(descriptor) };
+    if installed != 0 {
+        return Err(unavailable("runtime snapshot DACL installation failed"));
+    }
+    Ok(())
+}
+
+pub(crate) fn create_private_directory(path: &Path) -> Result<(), PluginError> {
+    let wide = wide_path(path)?;
+    let current_user = CurrentUser::open()?;
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_ALL_ACCESS,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: current_user.sid().cast(),
+        },
+    };
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: access and token-backed SID remain live and acl is writable.
+    if unsafe { SetEntriesInAclW(1, &raw const access, std::ptr::null(), &raw mut acl) } != 0
+        || acl.is_null()
+    {
+        return Err(unavailable("private directory DACL construction failed"));
+    }
+    let mut descriptor = windows_sys::Win32::Security::SECURITY_DESCRIPTOR::default();
+    // SAFETY: descriptor is writable and acl is a valid absolute ACL.
+    let initialized = unsafe {
+        InitializeSecurityDescriptor((&raw mut descriptor).cast(), 1) != 0
+            && SetSecurityDescriptorOwner((&raw mut descriptor).cast(), current_user.sid(), 0) != 0
+            && SetSecurityDescriptorDacl((&raw mut descriptor).cast(), 1, acl, 0) != 0
+            && SetSecurityDescriptorControl(
+                (&raw mut descriptor).cast(),
+                SE_DACL_PROTECTED,
+                SE_DACL_PROTECTED,
+            ) != 0
+    };
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+        lpSecurityDescriptor: (&raw mut descriptor).cast(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: wide path, security descriptor, DACL, and attributes all remain live.
+    let created =
+        initialized && unsafe { CreateDirectoryW(wide.as_ptr(), &raw const attributes) } != 0;
+    // SAFETY: SetEntriesInAclW returned LocalAlloc-owned storage.
+    unsafe { LocalFree(acl.cast()) };
+    if !created {
+        return Err(unavailable("private directory creation failed"));
+    }
+    if let Err(error) = verify_private_path(path) {
+        let _ = std::fs::remove_dir(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub(crate) fn rename_sibling_no_replace(
+    directory: &File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    // cap-primitives 3.4.5 opens Windows directory handles without
+    // FILE_SHARE_DELETE. The live `directory` handle therefore leases this
+    // parent namespace against rename/replacement while the absolute names
+    // below are derived and passed to MoveFileExW.
+    for name in [source, destination] {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(unavailable("plugin transaction name rejected"));
+        }
+    }
+    let handle = directory.as_raw_handle().cast();
+    let mut buffer = vec![0_u16; 32_768];
+    // SAFETY: the pinned directory handle is live and the output buffer is writable.
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            handle,
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    };
+    if written == 0 || usize::try_from(written).unwrap_or(usize::MAX) >= buffer.len() {
+        return Err(unavailable("plugin transaction directory identity unavailable"));
+    }
+    buffer.truncate(written as usize);
+    let parent = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer));
+    let source = wide_path(&parent.join(source))?;
+    let destination = wide_path(&parent.join(destination))?;
+    // SAFETY: both NUL-terminated paths remain live. REPLACE_EXISTING is
+    // deliberately absent, so a raced destination is never overwritten.
+    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(unavailable("plugin transaction rename failed"));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_private_path(path: &Path) -> Result<(), PluginError> {
+    let current_user = CurrentUser::open()?;
+    verify_acl(path, &[current_user.sid()], true)
+}
+
+pub(crate) fn verify_private_child(path: &Path) -> Result<(), PluginError> {
+    let current_user = CurrentUser::open()?;
+    verify_acl(path, &[current_user.sid()], false)
+}
+
+pub(crate) fn verify_trusted_parent(path: &Path) -> Result<(), PluginError> {
+    const UNTRUSTED_MUTATION: u32 = 0x0000_0002
+        | 0x0000_0004
+        | 0x0000_0010
+        | 0x0000_0040
+        | 0x0000_0100
+        | 0x0001_0000
+        | 0x0004_0000
+        | 0x0008_0000
+        | 0x1000_0000
+        | 0x4000_0000;
+    let current_user = CurrentUser::open()?;
+    let user = current_user.sid();
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let mut path = wide_path(path)?;
+    // SAFETY: all output pointers are writable and the path is terminated.
+    let result = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &raw mut owner,
+            std::ptr::null_mut(),
+            &raw mut dacl,
+            std::ptr::null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if result != 0 || descriptor.is_null() || dacl.is_null() {
+        if !descriptor.is_null() {
+            // SAFETY: GetNamedSecurityInfoW returned LocalAlloc-owned storage.
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(unavailable("trusted parent DACL unavailable"));
+    }
+    // SAFETY: owner and token SID remain live.
+    let mut valid = !owner.is_null() && unsafe { EqualSid(owner, user) } != 0;
+    // SAFETY: dacl points inside the live descriptor.
+    let count = unsafe { (*dacl).AceCount };
+    for index in 0..u32::from(count) {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: index is bounded by AceCount and raw is writable.
+        if unsafe { GetAce(dacl, index, &raw mut raw) } == 0 || raw.is_null() {
+            valid = false;
+            break;
+        }
+        // Only the plain allow ACE is parsed as an authority grant. Plain and
+        // object deny/audit ACEs do not grant authority; callback, object-allow,
+        // and every unknown ACE layout fail closed rather than being skipped.
+        let header = unsafe { &*raw.cast::<windows_sys::Win32::Security::ACE_HEADER>() };
+        match u32::from(header.AceType) {
+            ACCESS_ALLOWED_ACE_TYPE_VALUE => {}
+            1 | 2 | 6 | 7 => continue,
+            _ => {
+                valid = false;
+                break;
+            }
+        }
+        // SAFETY: an allowed ACE contains ACCESS_ALLOWED_ACE and a trailing SID.
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = (&raw const ace.SidStart).cast_mut().cast();
+        let authorized = unsafe {
+            EqualSid(sid, user) != 0
+                || IsWellKnownSid(sid, WinLocalSystemSid) != 0
+                || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
+        };
+        if !authorized && ace.Mask & UNTRUSTED_MUTATION != 0 {
+            valid = false;
+            break;
+        }
+    }
+    // SAFETY: descriptor is the LocalAlloc block returned above.
+    unsafe { LocalFree(descriptor) };
+    if !valid {
+        return Err(unavailable("trusted parent grants unauthorized mutation"));
+    }
+    Ok(())
+}
+
+fn verify_acl(path: &Path, allowed: &[PSID], require_protected: bool) -> Result<(), PluginError> {
+    let user = allowed[0];
+    let is_directory = std::fs::metadata(path)
+        .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
+        .is_dir();
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let mut path = wide_path(path)?;
+    // SAFETY: all output pointers are writable and the terminated path remains live.
+    let result = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &raw mut owner,
+            std::ptr::null_mut(),
+            &raw mut dacl,
+            std::ptr::null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if result != 0 || descriptor.is_null() || dacl.is_null() {
+        if !descriptor.is_null() {
+            // SAFETY: GetNamedSecurityInfoW allocated this descriptor with LocalAlloc.
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(unavailable("plugin DACL unavailable"));
+    }
+    // SAFETY: owner and current token SID are valid while descriptor/token remain owned.
+    let mut valid = !owner.is_null() && unsafe { EqualSid(owner, user) } != 0;
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+    // SAFETY: descriptor is live and both outputs are writable.
+    if unsafe { GetSecurityDescriptorControl(descriptor, &raw mut control, &raw mut revision) } == 0
+        || require_protected && control & SE_DACL_PROTECTED == 0
+    {
+        valid = false;
+    }
+    // SAFETY: dacl points inside the live descriptor.
+    let count = unsafe { (*dacl).AceCount };
+    if usize::from(count) != allowed.len() {
+        valid = false;
+    }
+    let mut seen = vec![false; allowed.len()];
+    for index in 0..u32::from(count) {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: index is bounded by AceCount and raw is writable.
+        if unsafe { GetAce(dacl, index, &raw mut raw) } == 0 || raw.is_null() {
+            valid = false;
+            break;
+        }
+        // SAFETY: GetAce returned an ACE inside the live ACL.
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE_VALUE {
+            valid = false;
+            break;
+        }
+        let sid = (&raw const ace.SidStart).cast_mut().cast();
+        let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
+        let expected_mask = match identity {
+            Some(0) => FILE_ALL_ACCESS,
+            Some(1) if allowed.len() == 2 => APP_READ_EXECUTE,
+            _ => {
+                valid = false;
+                break;
+            }
+        };
+        if let Some(identity) = identity {
+            if seen[identity] {
+                valid = false;
+                break;
+            }
+            seen[identity] = true;
+        }
+        let expected_inheritance = if is_directory { 3 } else { 0 };
+        if ace.Mask != expected_mask
+            || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
+        {
+            valid = false;
+            break;
+        }
+    }
+    valid &= seen.into_iter().all(|value| value);
+    // SAFETY: descriptor is the LocalAlloc block returned above.
+    unsafe { LocalFree(descriptor) };
+    if !valid {
+        return Err(unavailable("plugin DACL contains unauthorized identity"));
+    }
+    Ok(())
+}
+
+struct CurrentUser {
+    _token: OwnedHandle,
+    storage: Vec<usize>,
+}
+
+impl CurrentUser {
+    fn open() -> Result<Self, PluginError> {
+        let mut token = std::ptr::null_mut();
+        // SAFETY: current-process pseudo-handle is valid and token is writable.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0 {
+            return Err(unavailable("current user token unavailable"));
+        }
+        // SAFETY: OpenProcessToken returned a newly owned handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
+        let mut needed = 0_u32;
+        // SAFETY: null-buffer sizing call with a valid token.
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &raw mut needed,
+            )
+        };
+        if needed == 0 {
+            return Err(unavailable("current user identity unavailable"));
+        }
+        let word = size_of::<usize>();
+        let words = usize::try_from(needed)
+            .ok()
+            .and_then(|bytes| bytes.checked_add(word - 1))
+            .map(|bytes| bytes / word)
+            .ok_or_else(|| unavailable("current user identity size overflow"))?;
+        let mut storage = vec![0_usize; words];
+        // SAFETY: aligned storage has at least `needed` writable bytes and token is valid.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                storage.as_mut_ptr().cast(),
+                needed,
+                &raw mut needed,
+            )
+        } == 0
+        {
+            return Err(unavailable("current user identity unavailable"));
+        }
+        Ok(Self { _token: token, storage })
+    }
+
+    fn sid(&self) -> PSID {
+        // SAFETY: storage is aligned, initialized by GetTokenInformation(TokenUser), and live.
+        unsafe { (*self.storage.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+    }
+}
 
 pub(crate) struct Child {
     process: OwnedHandle,
@@ -98,7 +604,7 @@ pub(super) fn spawn(
 ) -> Result<super::SandboxChild, PluginError> {
     let _ = &plugin.runtime_root;
     validate_storage(policy)?;
-    let sid = AppContainerSid::derive(&policy.windows.profile_name, &policy.windows.sid)?;
+    let sid = AppContainerSid::derive_verified(&policy.windows.profile_name, &policy.windows.sid)?;
     let stdin = Pipe::new(false)?;
     let stdout = Pipe::new(true)?;
     let stderr = Pipe::new(true)?;
@@ -213,7 +719,7 @@ fn validate_storage(policy: &RuntimePolicy) -> Result<(), PluginError> {
     if policy.windows.profile_name.is_empty() || !policy.windows.sid.starts_with("S-1-15-2-") {
         return Err(unavailable("AppContainer authority missing"));
     }
-    let sid = AppContainerSid::derive(&policy.windows.profile_name, &policy.windows.sid)?;
+    let sid = AppContainerSid::derive_verified(&policy.windows.profile_name, &policy.windows.sid)?;
     let actual = storage_path(sid.as_ptr())?;
     let expected = policy
         .windows
@@ -412,7 +918,7 @@ impl Drop for AttributeList {
 
 struct AppContainerSid(PSID);
 impl AppContainerSid {
-    fn derive(name: &str, expected: &str) -> Result<Self, PluginError> {
+    fn derive(name: &str) -> Result<Self, PluginError> {
         let name = wide_text(name)?;
         let mut sid = std::ptr::null_mut();
         // SAFETY: `name` is NUL-terminated and `sid` is a writable result pointer.
@@ -421,7 +927,11 @@ impl AppContainerSid {
         {
             return Err(unavailable("AppContainer SID derivation failed"));
         }
-        let sid = Self(sid);
+        Ok(Self(sid))
+    }
+
+    fn derive_verified(name: &str, expected: &str) -> Result<Self, PluginError> {
+        let sid = Self::derive(name)?;
         if sid_text(sid.0)?.eq_ignore_ascii_case(expected) {
             Ok(sid)
         } else {
@@ -520,15 +1030,11 @@ fn storage_path(sid: PSID) -> Result<std::path::PathBuf, PluginError> {
     if unsafe { GetAppContainerFolderPath(text.as_ptr(), &raw mut raw) } < 0 || raw.is_null() {
         return Err(unavailable("AppContainer storage unavailable"));
     }
-    let result = wide_string(raw)
+    let raw = StoragePath(raw);
+    wide_string(raw.0)
         .map(std::path::PathBuf::from)?
         .canonicalize()
-        .map_err(|_| unavailable("AppContainer storage canonicalization failed"));
-    // SAFETY: the API allocated this string with LocalAlloc and ownership is released once.
-    unsafe {
-        LocalFree(raw.cast());
-    }
-    result
+        .map_err(|_| unavailable("AppContainer storage canonicalization failed"))
 }
 
 fn sid_text(sid: PSID) -> Result<String, PluginError> {

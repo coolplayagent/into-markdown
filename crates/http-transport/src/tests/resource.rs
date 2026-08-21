@@ -237,3 +237,81 @@ fn stalled_headers_obey_deadline_and_cancellation() {
     );
     cancellation_thread.join().unwrap();
 }
+
+fn stream_raw(raw: &[u8], limits: FetchLimits) -> Result<Vec<u8>, TransportError> {
+    let mut stream =
+        MemoryConnection { read: std::io::Cursor::new(raw.to_vec()), written: Vec::new() };
+    let mut output = Vec::new();
+    read_response_to_writer(
+        &mut stream,
+        &mut output,
+        limits,
+        &context(1_000_000),
+        Instant::now() + Duration::from_secs(1),
+    )?;
+    Ok(output)
+}
+
+#[test]
+fn streaming_framing_has_independent_wire_and_decoded_bounds() {
+    let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata\r\n0\r\n\r\n";
+    assert_eq!(
+        stream_raw(chunked, FetchLimits { max_wire_bytes: 14, max_decoded_bytes: 4 }).unwrap(),
+        b"data"
+    );
+    assert_eq!(
+        stream_raw(chunked, FetchLimits { max_wire_bytes: 13, max_decoded_bytes: 4 })
+            .unwrap_err()
+            .kind(),
+        TransportErrorKind::ResourceLimit
+    );
+    assert_eq!(
+        stream_raw(chunked, FetchLimits { max_wire_bytes: 14, max_decoded_bytes: 3 })
+            .unwrap_err()
+            .kind(),
+        TransportErrorKind::ResourceLimit
+    );
+    assert_eq!(
+        stream_raw(
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ndata",
+            FetchLimits { max_wire_bytes: 4, max_decoded_bytes: 4 },
+        )
+        .unwrap(),
+        b"data"
+    );
+}
+
+#[test]
+fn streaming_rejects_truncation_and_encoding_before_output() {
+    for invalid in [
+        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\ndata".as_slice(),
+    ] {
+        assert_eq!(
+            stream_raw(invalid, FetchLimits { max_wire_bytes: 64, max_decoded_bytes: 64 })
+                .unwrap_err()
+                .kind(),
+            TransportErrorKind::InvalidMessage
+        );
+    }
+    let mut stream = MemoryConnection {
+        read: std::io::Cursor::new(
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n\r\ndata".to_vec(),
+        ),
+        written: Vec::new(),
+    };
+    let mut output = Vec::new();
+    assert_eq!(
+        read_response_to_writer(
+            &mut stream,
+            &mut output,
+            FetchLimits { max_wire_bytes: 4, max_decoded_bytes: 4 },
+            &context(1_000_000),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err()
+        .kind(),
+        TransportErrorKind::InvalidMessage
+    );
+    assert!(output.is_empty());
+}

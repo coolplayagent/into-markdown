@@ -2,15 +2,44 @@
 
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind, Language, Scope};
 use crate::error::CliError;
+#[cfg(not(test))]
 use directories::ProjectDirs;
 use into_markdown::{
     AiMode, AssetMode, ChineseScript, ConversionOptions, OcrPolicy, RaggedRowsMode,
     TableHeaderMode, TextDecodingMode,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+thread_local! {
+    static TEST_GLOBAL_CONFIG_PATH: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(crate) struct TestGlobalConfigGuard(Option<PathBuf>);
+
+#[cfg(test)]
+impl TestGlobalConfigGuard {
+    pub(crate) fn set(path: Option<PathBuf>) -> Self {
+        Self(TEST_GLOBAL_CONFIG_PATH.with(|slot| slot.replace(path)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestGlobalConfigGuard {
+    fn drop(&mut self) {
+        TEST_GLOBAL_CONFIG_PATH.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
 
 const CONFIG_FILENAME: &str = ".into-markdown.toml";
 const MAX_PROVIDER_BASE_URL_BYTES: usize = 4 * 1024;
@@ -21,7 +50,7 @@ const MAX_ENVIRONMENT_NAME_BYTES: usize = 256;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigPaths {
-    pub global: PathBuf,
+    pub global: Option<PathBuf>,
     pub project: Option<PathBuf>,
     pub explicit: Vec<PathBuf>,
     pub loaded: Vec<PathBuf>,
@@ -41,13 +70,15 @@ pub struct ProviderConfig {
 }
 
 /// One configured process or WASI plugin.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginConfig {
     pub source: String,
     pub sha256: Option<String>,
     pub protocol: String,
     pub enabled: bool,
+    pub signing_key_id: String,
+    pub signing_key_sha256: String,
 }
 
 /// Versioned top-level configuration document.
@@ -251,7 +282,7 @@ pub fn load(
 ) -> Result<LoadedConfig, CliError> {
     load_with_global(
         cwd,
-        global_config_path()?,
+        if no_automatic { None } else { Some(global_config_path()?) },
         explicit,
         no_automatic,
         selected_profile,
@@ -261,7 +292,7 @@ pub fn load(
 
 fn load_with_global(
     cwd: &Path,
-    global: PathBuf,
+    global: Option<PathBuf>,
     explicit: &[PathBuf],
     no_automatic: bool,
     selected_profile: Option<&str>,
@@ -270,7 +301,7 @@ fn load_with_global(
     let project = find_project_config(cwd);
     let mut candidates = Vec::new();
     if !no_automatic {
-        candidates.push((global.clone(), false));
+        candidates.push((global.clone().expect("automatic global path"), false));
         if let Some(path) = &project {
             candidates.push((path.clone(), false));
         }
@@ -611,6 +642,14 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
         if let Some(hash) = &plugin.sha256 {
             validate_sha256(hash)?;
         }
+        if plugin.signing_key_id.is_empty() != plugin.signing_key_sha256.is_empty() {
+            return Err(CliError::config(format!(
+                "plugin '{id}' signing key id and fingerprint must be configured together"
+            )));
+        }
+        if !plugin.signing_key_sha256.is_empty() {
+            validate_sha256(&plugin.signing_key_sha256)?;
+        }
     }
     Ok(())
 }
@@ -806,19 +845,115 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), CliError>
         if let Some(hash) = &plugin.sha256 {
             validate_sha256(hash)?;
         }
+        if !plugin.signing_key_sha256.is_empty() {
+            validate_sha256(&plugin.signing_key_sha256)?;
+        }
     }
     Ok(())
 }
 
 pub fn global_config_path() -> Result<PathBuf, CliError> {
-    let dirs = ProjectDirs::from("", "", "into-markdown").ok_or_else(|| {
-        CliError::config("operating-system configuration directory is unavailable")
-    })?;
-    Ok(dirs.config_dir().join("config.toml"))
+    #[cfg(test)]
+    {
+        return TEST_GLOBAL_CONFIG_PATH
+            .with(|slot| slot.borrow().clone())
+            .ok_or_else(|| CliError::internal("test global config path was not injected"));
+    }
+    #[cfg(not(test))]
+    {
+        if let Some(configured) = std::env::var_os("INTO_MARKDOWN_USER_DATA_HOME") {
+            let requested = PathBuf::from(configured);
+            if !requested.is_absolute() || !requested.is_dir() {
+                return Err(CliError::config(
+                    "INTO_MARKDOWN_USER_DATA_HOME must name an existing absolute directory",
+                ));
+            }
+            let metadata = fs::symlink_metadata(&requested)?;
+            if metadata.file_type().is_symlink() {
+                return Err(CliError::config("user-data anchor link rejected"));
+            }
+            let identity = user_data_directory_identity(&requested)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.uid() != rustix::process::geteuid().as_raw()
+                    || metadata.mode() & 0o077 != 0
+                {
+                    return Err(CliError::config("user-data anchor is not owner-private"));
+                }
+            }
+            #[cfg(windows)]
+            into_markdown_process_plugin::verify_windows_plugin_store_path(&requested)
+                .map_err(|error| CliError::config(error.to_string()))?;
+            let canonical = fs::canonicalize(&requested)?;
+            if canonical != requested
+                || user_data_directory_identity(&requested)? != identity
+                || user_data_directory_identity(&canonical)? != identity
+            {
+                return Err(CliError::config("user-data anchor must be canonical"));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                let final_metadata = fs::symlink_metadata(&canonical)?;
+                if final_metadata.uid() != rustix::process::geteuid().as_raw()
+                    || final_metadata.mode() & 0o077 != 0
+                {
+                    return Err(CliError::config("user-data anchor is not owner-private"));
+                }
+            }
+            #[cfg(windows)]
+            into_markdown_process_plugin::verify_windows_plugin_store_path(&canonical)
+                .map_err(|error| CliError::config(error.to_string()))?;
+            return Ok(canonical.join("into-markdown").join("config.toml"));
+        }
+        let dirs = ProjectDirs::from("", "", "into-markdown").ok_or_else(|| {
+            CliError::config("operating-system configuration directory is unavailable")
+        })?;
+        Ok(dirs.config_dir().join("config.toml"))
+    }
 }
 
-pub fn project_config_path(cwd: &Path) -> PathBuf {
-    cwd.join(CONFIG_FILENAME)
+#[cfg(not(test))]
+fn user_data_directory_identity(path: &Path) -> Result<(u64, u64), CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(CliError::config("user-data anchor identity rejected"));
+        }
+        return Ok((metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        let information = winapi_util::file::information(&directory)?;
+        if information.file_attributes() & 0x400 != 0 {
+            return Err(CliError::config("user-data anchor reparse point rejected"));
+        }
+        return Ok((information.volume_serial_number(), information.file_index()));
+    }
+    #[allow(unreachable_code)]
+    Err(CliError::config("user-data anchor identity unavailable"))
+}
+
+pub fn project_config_path(cwd: &Path) -> Result<PathBuf, CliError> {
+    Ok(project_scope_root(cwd)?.join(CONFIG_FILENAME))
+}
+
+/// Root directory that owns the nearest project configuration scope.
+pub fn project_scope_root(cwd: &Path) -> Result<PathBuf, CliError> {
+    let canonical = fs::canonicalize(cwd)?;
+    Ok(find_project_config(&canonical)
+        .and_then(|path| path.parent().map(Path::to_owned))
+        .unwrap_or(canonical))
 }
 
 fn find_project_config(cwd: &Path) -> Option<PathBuf> {
@@ -828,19 +963,20 @@ fn find_project_config(cwd: &Path) -> Option<PathBuf> {
 pub fn scope_path(scope: Scope, cwd: &Path) -> Result<PathBuf, CliError> {
     match scope {
         Scope::Global => global_config_path(),
-        Scope::Project => Ok(project_config_path(cwd)),
+        Scope::Project => project_config_path(cwd),
     }
 }
 
 pub fn init(scope: Scope, cwd: &Path, force: bool) -> Result<PathBuf, CliError> {
     let path = scope_path(scope, cwd)?;
+    let lock = lock_scope(scope, cwd)?;
     if path.exists() && !force {
         return Err(CliError::config(format!(
             "configuration already exists: {} (use --force to replace it)",
             path.display()
         )));
     }
-    atomic_write(&path, CONFIG_TEMPLATE.as_bytes(), force)?;
+    atomic_write_locked(&lock, &path, CONFIG_TEMPLATE.as_bytes(), force, None)?;
     Ok(path)
 }
 
@@ -916,23 +1052,92 @@ pub fn set_default_provider(scope: Scope, cwd: &Path, name: &str) -> Result<Path
     })
 }
 
-pub fn set_plugin_enabled(
-    scope: Scope,
-    cwd: &Path,
+pub(crate) fn compare_and_set_plugin_exact_locked(
+    lock: &ConfigMutationGuard,
+    path: &Path,
     id: &str,
-    enabled: bool,
+    expected: Option<&PluginConfig>,
+    replacement: Option<&PluginConfig>,
 ) -> Result<PathBuf, CliError> {
     validate_id("plugin", id)?;
-    mutate_scope(scope, cwd, |root| {
-        if get_value(root, &format!("plugins.{id}")).is_err() {
-            return Err(CliError::config(format!("plugin '{id}' is not configured in this scope")));
+    mutate_path_locked(lock, path, |root| {
+        let current = root
+            .get("plugins")
+            .and_then(toml::Value::as_table)
+            .and_then(|plugins| plugins.get(id))
+            .map(|value| value.clone().try_into::<PluginConfig>())
+            .transpose()
+            .map_err(|error| CliError::config(format!("plugin config is invalid: {error}")))?;
+        if current.as_ref() != expected {
+            return Err(CliError::config(format!("plugin '{id}' changed during the transaction")));
         }
-        set_nested(root, &format!("plugins.{id}.enabled"), toml::Value::Boolean(enabled))
+        if let Some(replacement) = replacement {
+            let value = toml::Value::try_from(replacement)
+                .map_err(|error| CliError::internal(format!("serialize plugin: {error}")))?;
+            let table = root
+                .as_table_mut()
+                .ok_or_else(|| CliError::config("configuration root must be a table"))?;
+            let plugins = table
+                .entry("plugins")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or_else(|| CliError::config("plugins must be a table"))?;
+            plugins.insert(id.to_owned(), value);
+            Ok(())
+        } else {
+            if let Some(plugins) = root.get_mut("plugins").and_then(toml::Value::as_table_mut) {
+                plugins.remove(id);
+            }
+            Ok(())
+        }
     })
 }
 
-pub fn remove_plugin(scope: Scope, cwd: &Path, id: &str) -> Result<PathBuf, CliError> {
-    mutate_scope(scope, cwd, |root| remove_nested(root, &format!("plugins.{id}")))
+/// Read plugins from exactly one scope without applying project/profile shadowing.
+pub fn plugins_in_scope(
+    scope: Scope,
+    cwd: &Path,
+) -> Result<BTreeMap<String, PluginConfig>, CliError> {
+    let path = scope_path(scope, cwd)?;
+    plugins_at_path(&path)
+}
+
+pub(crate) fn plugins_in_exact_locked(
+    lock: &ConfigMutationGuard,
+    path: &Path,
+) -> Result<BTreeMap<String, PluginConfig>, CliError> {
+    if lock.config != path {
+        return Err(CliError::config("configuration lock scope mismatch"));
+    }
+    match lock.directory.symlink_metadata(
+        path.file_name().ok_or_else(|| CliError::config("configuration has no name"))?,
+    ) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error.into()),
+    }
+    let value = read_layer_value_locked(lock)?;
+    let parsed: RawConfig = value
+        .clone()
+        .try_into()
+        .map_err(|error| CliError::config(format!("scope configuration is invalid: {error}")))?;
+    validate_explicit_provider_values(&value)?;
+    validate_document(&parsed, false, false)?;
+    Ok(parsed.plugins)
+}
+
+fn plugins_at_path(path: &Path) -> Result<BTreeMap<String, PluginConfig>, CliError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let value = read_layer_value(path)?;
+    let parsed: RawConfig = value
+        .clone()
+        .try_into()
+        .map_err(|error| CliError::config(format!("scope configuration is invalid: {error}")))?;
+    validate_explicit_provider_values(&value)?;
+    validate_document(&parsed, false, false)?;
+    Ok(parsed.plugins)
 }
 
 fn mutate_scope(
@@ -940,8 +1145,37 @@ fn mutate_scope(
     cwd: &Path,
     operation: impl FnOnce(&mut toml::Value) -> Result<(), CliError>,
 ) -> Result<PathBuf, CliError> {
+    let lock = lock_scope(scope, cwd)?;
+    mutate_scope_locked(&lock, scope, cwd, operation)
+}
+
+fn mutate_scope_locked(
+    lock: &ConfigMutationGuard,
+    scope: Scope,
+    cwd: &Path,
+    operation: impl FnOnce(&mut toml::Value) -> Result<(), CliError>,
+) -> Result<PathBuf, CliError> {
     let path = scope_path(scope, cwd)?;
-    let mut value = if path.exists() { read_layer_value(&path)? } else { empty_table() };
+    mutate_path_locked(lock, &path, operation)
+}
+
+fn mutate_path_locked(
+    lock: &ConfigMutationGuard,
+    path: &Path,
+    operation: impl FnOnce(&mut toml::Value) -> Result<(), CliError>,
+) -> Result<PathBuf, CliError> {
+    if lock.config != path {
+        return Err(CliError::config("configuration lock scope mismatch"));
+    }
+    let target = path.file_name().ok_or_else(|| CliError::config("configuration has no name"))?;
+    let (mut value, expected) = match lock.directory.symlink_metadata(target) {
+        Ok(_) => read_layer_value_locked_with_authority(lock)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            empty_table(),
+            crate::transaction::ConfigExpectedAuthority { identity: None, sha256: None },
+        ),
+        Err(error) => return Err(error.into()),
+    };
     operation(&mut value)?;
     if value.get("schema_version").is_none() {
         value
@@ -957,8 +1191,209 @@ fn mutate_scope(
     validate_document(&parsed, false, false)?;
     let text = toml::to_string_pretty(&value)
         .map_err(|error| CliError::internal(format!("serialize configuration: {error}")))?;
-    atomic_write(&path, text.as_bytes(), true)?;
-    Ok(path)
+    #[cfg(test)]
+    {
+        let marker = Path::new(".test-config-mutate-after-locked-read");
+        if let Ok(racer) = lock.directory.read(marker) {
+            lock.directory.remove_file(marker)?;
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.write(true).truncate(true);
+            let mut target_file = lock.directory.open_with(target, &options)?.into_std();
+            use std::io::Write as _;
+            target_file.write_all(&racer)?;
+            target_file.sync_all()?;
+        }
+    }
+    atomic_write_locked(lock, &path, text.as_bytes(), true, Some(&expected))?;
+    Ok(path.to_owned())
+}
+
+/// Exclusive mutation token for one exact configuration scope.
+pub struct ConfigMutationGuard {
+    file: File,
+    config: PathBuf,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    directory: cap_std::fs::Dir,
+}
+
+impl ConfigMutationGuard {
+    fn acquire(config: &Path) -> Result<Self, CliError> {
+        let parent = config
+            .parent()
+            .ok_or_else(|| CliError::config("configuration has no parent directory"))?;
+        fs::create_dir_all(parent)?;
+        let directory = cap_std::fs::Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
+        let name = Path::new(".into-md-config.lock");
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.create(true).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use cap_std::fs::OpenOptionsExt as _;
+            options.custom_flags(0x0020_0000);
+        }
+        let file = directory.open_with(name, &options)?.into_std();
+        let metadata = file.metadata()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != rustix::process::geteuid().as_raw()
+            {
+                return Err(CliError::config("configuration lock identity rejected"));
+            }
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            let information = winapi_util::file::information(&file)?;
+            if !metadata.is_file()
+                || metadata.file_attributes() & 0x400 != 0
+                || information.number_of_links() != 1
+            {
+                return Err(CliError::config("configuration lock identity rejected"));
+            }
+        }
+        file.try_lock()
+            .map_err(|_| CliError::config("another configuration mutation is active"))?;
+        let target =
+            config.file_name().ok_or_else(|| CliError::config("configuration has no file name"))?;
+        crate::transaction::recover_config_in_dir(&directory, target)?;
+        Ok(Self { file, config: config.to_owned(), directory })
+    }
+
+    pub(crate) fn directory_identity(&self) -> Result<(u64, u64), CliError> {
+        let directory = self.directory.try_clone()?.into_std_file();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let metadata = directory.metadata()?;
+            return Ok((metadata.dev(), metadata.ino()));
+        }
+        #[cfg(windows)]
+        {
+            let information = winapi_util::file::information(&directory)?;
+            return Ok((information.volume_serial_number(), information.file_index()));
+        }
+        #[allow(unreachable_code)]
+        Err(CliError::config("configuration directory identity unavailable"))
+    }
+}
+
+fn read_layer_value_locked(lock: &ConfigMutationGuard) -> Result<toml::Value, CliError> {
+    read_layer_value_locked_with_authority(lock).map(|(value, _)| value)
+}
+
+fn read_layer_value_locked_with_authority(
+    lock: &ConfigMutationGuard,
+) -> Result<(toml::Value, crate::transaction::ConfigExpectedAuthority), CliError> {
+    let name = lock
+        .config
+        .file_name()
+        .ok_or_else(|| CliError::config("configuration has no file name"))?;
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    let mut file = lock.directory.open_with(name, &options)?.into_std();
+    let metadata = file.metadata()?;
+    let initial_identity = config_file_identity(&file)?;
+    if !metadata.is_file() {
+        return Err(CliError::config("configuration identity rejected"));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    let final_metadata = file.metadata()?;
+    let identity = config_file_identity(&file)?;
+    if metadata.len() != final_metadata.len()
+        || metadata.len() != text.len() as u64
+        || identity != initial_identity
+    {
+        return Err(CliError::config("configuration changed while reading"));
+    }
+    let value: toml::Value = toml::from_str(&text)
+        .map_err(|error| CliError::config(format!("parse configuration: {error}")))?;
+    validate_explicit_provider_values(&value)?;
+    let parsed: RawConfig = value
+        .clone()
+        .try_into()
+        .map_err(|error| CliError::config(format!("validate configuration: {error}")))?;
+    validate_document(&parsed, true, false)?;
+    Ok((
+        value,
+        crate::transaction::ConfigExpectedAuthority {
+            identity: Some(identity),
+            sha256: Some(format!("{:x}", Sha256::digest(text.as_bytes()))),
+        },
+    ))
+}
+
+fn config_file_identity(file: &File) -> Result<(u64, u64), CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = file.metadata()?;
+        return Ok((metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        let information = winapi_util::file::information(file)?;
+        return Ok((information.volume_serial_number(), information.file_index()));
+    }
+    #[allow(unreachable_code)]
+    Err(CliError::config("configuration identity unavailable"))
+}
+
+impl Drop for ConfigMutationGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// Acquire the transaction-wide mutation lock for one exact scope.
+pub fn lock_scope(scope: Scope, cwd: &Path) -> Result<ConfigMutationGuard, CliError> {
+    ConfigMutationGuard::acquire(&scope_path(scope, cwd)?)
+}
+
+pub(crate) fn lock_exact(path: &Path) -> Result<ConfigMutationGuard, CliError> {
+    ConfigMutationGuard::acquire(path)
+}
+
+/// Whether recovery must run before reading this scope's configuration.
+pub fn scope_has_pending_transaction(scope: Scope, cwd: &Path) -> Result<bool, CliError> {
+    let path = scope_path(scope, cwd)?;
+    let Some(parent) = path.parent() else { return Ok(false) };
+    if !parent.is_dir() {
+        return Ok(false);
+    }
+    #[cfg(windows)]
+    {
+        return Ok(fs::read_dir(parent)?.filter_map(Result::ok).any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(".into-md-config-") && name.ends_with(".journal")
+        }));
+    }
+    #[cfg(unix)]
+    {
+        return Ok(parent.join(".into-md-output-transactions-01").is_dir());
+    }
+    #[allow(unreachable_code)]
+    Ok(false)
 }
 
 fn set_nested(root: &mut toml::Value, key: &str, value: toml::Value) -> Result<(), CliError> {
@@ -1030,8 +1465,25 @@ fn parse_toml_value(input: &str) -> toml::Value {
         .unwrap_or_else(|| toml::Value::String(input.to_owned()))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), CliError> {
-    crate::transaction::atomic_replace_config(path, bytes, replace)
+fn atomic_write_locked(
+    lock: &ConfigMutationGuard,
+    path: &Path,
+    bytes: &[u8],
+    replace: bool,
+    expected: Option<&crate::transaction::ConfigExpectedAuthority>,
+) -> Result<(), CliError> {
+    if lock.config != path {
+        return Err(CliError::config("configuration lock scope mismatch"));
+    }
+    let name =
+        path.file_name().ok_or_else(|| CliError::config("configuration has no file name"))?;
+    crate::transaction::atomic_replace_config_in_dir(
+        &lock.directory,
+        name,
+        bytes,
+        replace,
+        expected,
+    )
 }
 
 fn merge_value(target: &mut toml::Value, overlay: toml::Value) {
@@ -1261,10 +1713,16 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn temporary_directory(name: &str) -> PathBuf {
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("test")
+            .chars()
+            .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+            .collect::<String>();
         let path = std::env::temp_dir().join(format!(
             "into-md-config-{name}-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            thread_name
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
@@ -1417,7 +1875,7 @@ api_key_env = "EXPLICIT_KEY"
         )
         .unwrap();
         let loaded =
-            load_with_global(&cwd, global, &[explicit_one, explicit_two], false, None, None)
+            load_with_global(&cwd, Some(global), &[explicit_one, explicit_two], false, None, None)
                 .unwrap();
         let provider = &loaded.effective.providers["vision"];
         assert_eq!(provider.provider_type, "openai-compatible");
@@ -1426,6 +1884,20 @@ api_key_env = "EXPLICIT_KEY"
         assert_eq!(provider.api_key_env, "EXPLICIT_KEY");
         assert!(loaded.sources["providers.vision.model"].ends_with(".into-markdown.toml"));
         assert!(loaded.sources["providers.vision.api_key_env"].ends_with("explicit-two.toml"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_automatic_config_has_no_global_authority_but_loads_explicit_files() {
+        let root = temporary_directory("no-automatic-explicit");
+        let explicit = root.join("explicit.toml");
+        fs::write(&explicit, "schema_version = 1\n").unwrap();
+
+        let loaded = load_with_global(&root, None, &[explicit.clone()], true, None, None).unwrap();
+
+        assert_eq!(loaded.paths.global, None);
+        assert_eq!(loaded.paths.explicit, vec![explicit.clone()]);
+        assert_eq!(loaded.paths.loaded, vec![explicit]);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1614,4 +2086,57 @@ api_key_env = "VISION_API_KEY"
             toml::from_str("schema_version = 1\n[conversion]\ntimeout_ms = 0\n").unwrap();
         assert!(validate_raw(&config).is_err());
     }
+}
+#[test]
+fn dotted_plugin_ids_remain_single_toml_keys() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plugin = PluginConfig {
+        source: "fixture.zip".to_owned(),
+        sha256: Some("0".repeat(64)),
+        protocol: "process-v1".to_owned(),
+        enabled: true,
+        signing_key_id: "publisher.test".to_owned(),
+        signing_key_sha256: "1".repeat(64),
+    };
+    let path = scope_path(Scope::Project, temporary.path()).unwrap();
+    let lock = lock_exact(&path).unwrap();
+    compare_and_set_plugin_exact_locked(&lock, &path, "publisher.converter", None, Some(&plugin))
+        .unwrap();
+    assert_eq!(
+        plugins_in_exact_locked(&lock, &path).unwrap().get("publisher.converter"),
+        Some(&plugin)
+    );
+}
+
+#[test]
+fn pinned_config_cas_rejects_content_mutation_before_publish() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join(CONFIG_FILENAME);
+    let original = PluginConfig {
+        source: "old.zip".to_owned(),
+        sha256: Some("0".repeat(64)),
+        protocol: "process-v1".to_owned(),
+        enabled: true,
+        signing_key_id: "publisher.test".to_owned(),
+        signing_key_sha256: "1".repeat(64),
+    };
+    let lock = lock_exact(&path).unwrap();
+    compare_and_set_plugin_exact_locked(&lock, &path, "publisher.converter", None, Some(&original))
+        .unwrap();
+    let mut replacement = original.clone();
+    replacement.enabled = false;
+    let racer = b"schema_version = 1\n[plugins.racer]\nsource = \"racer.zip\"\nprotocol = \"process-v1\"\nenabled = true\n";
+    fs::write(temporary.path().join(".test-config-mutate-after-locked-read"), racer).unwrap();
+
+    assert!(
+        compare_and_set_plugin_exact_locked(
+            &lock,
+            &path,
+            "publisher.converter",
+            Some(&original),
+            Some(&replacement),
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(path).unwrap(), racer, "racer content was overwritten");
 }

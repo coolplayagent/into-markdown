@@ -128,6 +128,97 @@ pub struct WindowsSandboxAuthority {
     pub storage_root: PathBuf,
 }
 
+/// Provision the deterministic, zero-capability `AppContainer` used by an installed plugin.
+///
+/// # Errors
+///
+/// Returns an error when the profile, SID, storage, or ACL authority cannot be proven.
+#[cfg(windows)]
+pub fn provision_windows_sandbox(
+    scope_plugin_identity: &str,
+) -> Result<WindowsSandboxAuthority, PluginError> {
+    sandbox::windows::provision(scope_plugin_identity)
+}
+
+/// Remove a plugin's deterministic `AppContainer` profile after uninstall commits.
+///
+/// # Errors
+///
+/// Returns an error when the profile cannot be safely removed or verified absent.
+#[cfg(windows)]
+pub fn remove_windows_sandbox(scope_plugin_identity: &str) -> Result<(), PluginError> {
+    sandbox::windows::remove_profile(scope_plugin_identity)
+}
+
+/// Grant one provisioned `AppContainer` read/execute access to an immutable runtime snapshot.
+///
+/// # Errors
+///
+/// Returns an error when any snapshot ACL cannot be installed and verified exactly.
+#[cfg(windows)]
+pub fn authorize_windows_sandbox_path(
+    authority: &WindowsSandboxAuthority,
+    path: &Path,
+) -> Result<(), PluginError> {
+    sandbox::windows::authorize_path(authority, path)
+}
+
+/// Atomically create one directory with a current-user-only protected DACL.
+///
+/// # Errors
+///
+/// Returns an error when creation or the exact owner/DACL verification fails.
+#[cfg(windows)]
+pub fn create_windows_plugin_store_directory(path: &Path) -> Result<(), PluginError> {
+    sandbox::windows::create_private_directory(path)
+}
+
+/// Verify a plugin-store path remains owned and writable only by the current user.
+///
+/// # Errors
+///
+/// Returns an error when the path identity, owner, or DACL is not exact.
+#[cfg(windows)]
+pub fn verify_windows_plugin_store_path(path: &Path) -> Result<(), PluginError> {
+    sandbox::windows::verify_private_path(path)
+}
+
+/// Verify a child inherited only the private plugin-store DACL.
+///
+/// # Errors
+///
+/// Returns an error when the child is a link or has unexpected ACL authority.
+#[cfg(windows)]
+pub fn verify_windows_plugin_store_child(path: &Path) -> Result<(), PluginError> {
+    sandbox::windows::verify_private_child(path)
+}
+
+/// Verify an existing Windows user-data parent is owned by the current user
+/// and grants mutation authority only to that user, SYSTEM, or Administrators.
+///
+/// # Errors
+///
+/// Returns an error when the parent identity, owner, or DACL is not trusted.
+#[cfg(windows)]
+pub fn verify_windows_plugin_trusted_parent(path: &Path) -> Result<(), PluginError> {
+    sandbox::windows::verify_trusted_parent(path)
+}
+
+/// Atomically rename one sibling below a pinned directory without replacing an
+/// existing destination, requesting write-through publication from Windows.
+///
+/// # Errors
+///
+/// Returns an error when either name is invalid or the no-replace rename fails.
+#[cfg(windows)]
+pub fn rename_windows_plugin_file_no_replace(
+    directory: &std::fs::File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    sandbox::windows::rename_sibling_no_replace(directory, source, destination)
+}
+
 /// Host-enforced limits and the complete declared environment capability.
 #[derive(Debug, Clone)]
 pub struct RuntimePolicy {

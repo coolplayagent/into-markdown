@@ -55,7 +55,7 @@ mod policy;
 mod proxy;
 mod tls;
 
-use body::{ChunkChain, finalize_body, read_response};
+use body::{ChunkChain, finalize_body, read_response, read_response_to_writer};
 use connect::{
     DirectConnectionFactory, blocking_slice, check_context, check_operation, read_checked,
     write_all_checked,
@@ -67,9 +67,9 @@ pub use error::{TransportError, TransportErrorKind};
 use http1::{parse_head, read_head};
 pub use policy::is_public_ip;
 use policy::{
-    canonical_host, canonical_redirect, canonical_url, encode_get_request, find_bytes,
-    invalid_header_value_byte, is_localhost_name, is_token, normalize_allowlist,
-    parse_content_disposition, parse_content_type, redacted_url,
+    canonical_host, canonical_redirect, canonical_url, encode_get_request,
+    encode_identity_get_request, find_bytes, invalid_header_value_byte, is_localhost_name,
+    is_token, normalize_allowlist, parse_content_disposition, parse_content_type, redacted_url,
 };
 pub use proxy::{NoProxyList, ProxyConfig, ProxyConfigError, RoutedConnectionFactory};
 use tls::tls_handshake;
@@ -130,6 +130,29 @@ pub struct FetchedResource {
     pub filename: Option<String>,
     /// Ordered, redacted redirect provenance.
     pub redirects: Vec<RedirectHop>,
+}
+
+/// Metadata and temporary-storage lease for a response streamed to a caller-owned writer.
+pub struct StreamedResource {
+    /// Exact identity response bytes written.
+    pub bytes_written: u64,
+    /// Canonical final URL, redacted before leaving the transport boundary.
+    pub final_url: String,
+    /// Strict lower-case media type without parameters.
+    pub media_type: Option<String>,
+    /// Portable NFC filename from a validated Content-Disposition field.
+    pub filename: Option<String>,
+    /// Ordered, redacted redirect provenance.
+    pub redirects: Vec<RedirectHop>,
+    temporary: ResourceReservation,
+}
+
+impl StreamedResource {
+    /// Consume the metadata while retaining the exact temporary-storage lease.
+    #[must_use]
+    pub fn into_temporary_reservation(self) -> ResourceReservation {
+        self.temporary
+    }
 }
 
 /// Owned response parts returned by [`FetchedResource::into_parts`].
@@ -368,6 +391,82 @@ impl HttpClient {
         }
     }
 
+    /// Stream one identity-encoded HTTP(S) response into a caller-owned writer.
+    /// Temporary capacity is reserved before DNS or connect and remains charged
+    /// until the returned metadata is dropped or consumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable transport error when policy, resource, protocol, I/O,
+    /// cancellation, deadline, or response-integrity validation fails.
+    pub fn get_to_writer(
+        &self,
+        source: &str,
+        policy: &NetworkPolicy,
+        limits: FetchLimits,
+        context: &ExecutionContext,
+        output: &mut dyn Write,
+    ) -> Result<StreamedResource, TransportError> {
+        check_context(context)?;
+        if !policy.allow_network {
+            return Err(TransportError::new(TransportErrorKind::NetworkDenied));
+        }
+        let temporary =
+            context.reserve_temporary(limits.max_decoded_bytes).map_err(map_context_error)?;
+        let mut current = canonical_url(source)?;
+        let now = Instant::now();
+        let local_deadline = transfer_deadline(now, limits)
+            .ok_or_else(|| TransportError::new(TransportErrorKind::Timeout))?;
+        let deadline = context
+            .remaining_time()
+            .and_then(|remaining| now.checked_add(remaining))
+            .map_or(local_deadline, |request_deadline| request_deadline.min(local_deadline));
+        let mut visited = BTreeSet::new();
+        let mut redirects = Vec::new();
+        loop {
+            check_operation(context, deadline)?;
+            let public_current = redacted_url(&current);
+            if !visited.insert(current.as_str().to_owned()) {
+                return Err(TransportError::new(TransportErrorKind::Http));
+            }
+            let response =
+                self.request_once_to_writer(&current, policy, limits, context, deadline, output)?;
+            if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+                if response.bytes_written != 0
+                    || redirects.len() >= usize::from(policy.max_redirects)
+                {
+                    return Err(TransportError::new(TransportErrorKind::Http));
+                }
+                let location = response
+                    .location
+                    .as_deref()
+                    .ok_or_else(|| TransportError::new(TransportErrorKind::Http))?;
+                let next = canonical_redirect(&current, location)?;
+                if visited.contains(next.as_str()) {
+                    return Err(TransportError::new(TransportErrorKind::Http));
+                }
+                redirects.push(RedirectHop {
+                    from: public_current,
+                    to: redacted_url(&next),
+                    status: response.status,
+                });
+                current = next;
+                continue;
+            }
+            if response.status != 200 {
+                return Err(TransportError::new(TransportErrorKind::Http));
+            }
+            return Ok(StreamedResource {
+                bytes_written: response.bytes_written,
+                final_url: redacted_url(&current),
+                media_type: response.media_type,
+                filename: response.filename,
+                redirects,
+                temporary,
+            });
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn request_once(
         &self,
@@ -423,6 +522,64 @@ impl HttpClient {
         }
         Err(last)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn request_once_to_writer(
+        &self,
+        url: &Url,
+        policy: &NetworkPolicy,
+        limits: FetchLimits,
+        context: &ExecutionContext,
+        deadline: Instant,
+        output: &mut dyn Write,
+    ) -> Result<RawStreamResponse, TransportError> {
+        let route_capacity = MAX_DNS_ADDRESSES
+            .checked_mul(std::mem::size_of::<SocketAddr>())
+            .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        let mut route_memory = context
+            .reserve_memory(
+                u64::try_from(route_capacity)
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+        let (host, addresses) = self.authorized_addresses(url, policy, context, deadline)?;
+        let address_capacity = addresses
+            .capacity()
+            .checked_mul(std::mem::size_of::<SocketAddr>())
+            .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        route_memory
+            .shrink(
+                u64::try_from(route_capacity - address_capacity)
+                    .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+            )
+            .map_err(map_context_error)?;
+        let mut last = TransportError::new(TransportErrorKind::Connect);
+        for (index, address) in addresses.iter().copied().enumerate() {
+            check_operation(context, deadline)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let left = u32::try_from(addresses.len() - index).unwrap_or(u32::MAX).max(1);
+            let attempt_deadline =
+                Instant::now().checked_add(remaining / left).unwrap_or(deadline).min(deadline);
+            match self.connect_address(url, &host, address, context, attempt_deadline) {
+                Ok(mut stream) => {
+                    let (request, _request_memory) =
+                        encode_identity_get_request(url, &host, context)?;
+                    write_all_checked(&mut stream, request.as_bytes(), context, deadline)?;
+                    return read_response_to_writer(&mut stream, output, limits, context, deadline);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        TransportErrorKind::Connect | TransportErrorKind::Tls
+                    ) && index + 1 < addresses.len() =>
+                {
+                    last = error;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last)
+    }
 }
 
 struct RawResponse {
@@ -432,6 +589,15 @@ struct RawResponse {
     filename: Option<String>,
     content_encoding: ContentEncoding,
     body: WireBody,
+}
+
+#[derive(Debug)]
+struct RawStreamResponse {
+    status: u16,
+    location: Option<String>,
+    media_type: Option<String>,
+    filename: Option<String>,
+    bytes_written: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

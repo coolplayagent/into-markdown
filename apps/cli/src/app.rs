@@ -6,7 +6,7 @@ use crate::args::{
     ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
     RaggedRowsArg, SetupCommand, TableHeaderArg, TranscriptCommand, UiArgs,
 };
-use crate::config::{self, LoadedConfig, ProviderConfig};
+use crate::config::{self, LoadedConfig, PluginConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
 use crate::i18n::{self, Catalog};
 use crate::output::{self, BatchItemReport, BatchItemStatus, BatchReport};
@@ -18,13 +18,55 @@ use into_markdown::{
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, RaggedRowsMode,
     TableHeaderMode, TextDecodingMode,
 };
-use serde::Serialize;
+use into_markdown_http_transport::{NetworkPolicy, TransportError, TransportErrorKind};
+use into_markdown_plugin_manager::{ManagerError, ManagerErrorCode, PluginManager};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
+
+const MAX_PLUGIN_PACKAGE_BYTES: u64 = 256 * 1024 * 1024;
+const PLUGIN_CLI_TRANSACTION: &str = ".cli-plugin-transaction.json";
+const PLUGIN_CLI_TRANSACTION_NEXT: &str = ".cli-plugin-transaction.next";
+const PLUGIN_CLI_TRANSACTION_PREVIOUS: &str = ".cli-plugin-transaction.previous";
+const PLUGIN_CLI_LOCK: &str = ".cli-plugin.lock";
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CliPluginOperation {
+    Install,
+    Remove,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum CliPluginPhase {
+    Started,
+    StoreChanged,
+    ConfigChanged,
+    TrustChanged,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CliPluginTransaction {
+    schema_version: u32,
+    operation: CliPluginOperation,
+    phase: CliPluginPhase,
+    global: bool,
+    store_relative: String,
+    project_root: Option<PathBuf>,
+    id: String,
+    backup_name: Option<String>,
+    old_config: Option<PluginConfig>,
+    new_config: Option<PluginConfig>,
+    signing_key_id: Option<String>,
+    signing_key_sha256: Option<String>,
+}
 
 /// Process services supplied by the binary or tests.
 pub struct RunContext<'a> {
@@ -32,10 +74,43 @@ pub struct RunContext<'a> {
     pub stderr: &'a mut dyn Write,
     pub stdin_is_terminal: bool,
     pub cwd: PathBuf,
+    #[cfg(test)]
+    pub user_data_anchor: Option<PathBuf>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_USER_DATA_ANCHOR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct TestUserDataGuard(Option<PathBuf>);
+
+#[cfg(test)]
+impl TestUserDataGuard {
+    fn set(value: Option<PathBuf>) -> Self {
+        let previous = TEST_USER_DATA_ANCHOR.with(|slot| slot.replace(value));
+        Self(previous)
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestUserDataGuard {
+    fn drop(&mut self) {
+        TEST_USER_DATA_ANCHOR.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
 }
 
 /// Parse and execute one CLI invocation.
 pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), CliError> {
+    #[cfg(test)]
+    let _test_user_data = TestUserDataGuard::set(context.user_data_anchor.clone());
+    #[cfg(test)]
+    let _test_global_config = config::TestGlobalConfigGuard::set(
+        context.user_data_anchor.as_ref().map(|anchor| anchor.join("config/config.toml")),
+    );
     let requested_language = i18n::requested_language(&arguments);
     if let Some(help) = i18n::localized_help(&arguments, requested_language) {
         context.stdout.write_all(help.as_bytes())?;
@@ -62,6 +137,14 @@ pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), 
         cli.conversion.inputs.push(OsString::from("-"));
     }
 
+    // Plugin operations may have crashed after moving the configuration file
+    // aside. Recover both the config-file transaction and the joint
+    // store/config/trust transaction before the first configuration read, so
+    // even read-only list/show/verify/run observes one coherent generation.
+    if matches!(cli.command, Some(Command::Plugins(_) | Command::Doctor(_))) {
+        recover_plugins_before_config_load(&context.cwd, cli.global.no_config)?;
+    }
+
     let loaded = config::load(
         &context.cwd,
         &cli.global.config,
@@ -81,6 +164,52 @@ pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), 
         Some(command) => run_command(command, &cli.global, loaded, catalog, json_log, &mut context),
     };
     result.map_err(|error| error.with_rendering(language, json_log))
+}
+
+fn recover_plugins_before_config_load(cwd: &Path, no_config: bool) -> Result<(), CliError> {
+    if no_config {
+        return Ok(());
+    }
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let mut global_manager = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    // Acquiring either scope lock first performs its config-journal recovery.
+    // The pending joint journal identifies which exact scope must then be
+    // reconciled; `cwd` remains relevant for project identity validation.
+    if config::scope_has_pending_transaction(crate::args::Scope::Global, cwd)? {
+        drop(config::lock_scope(crate::args::Scope::Global, cwd)?);
+    }
+    if config::scope_has_pending_transaction(crate::args::Scope::Project, cwd)? {
+        drop(config::lock_scope(crate::args::Scope::Project, cwd)?);
+    }
+    recover_pending_cli_plugin_transaction(
+        &global_anchor,
+        &global_relative,
+        &mut global_manager,
+        &execution,
+    )?;
+    let (project_anchor, project_relative) = project_plugin_store_scope(cwd)?;
+    let project_manager = PluginManager::open_existing_scoped(
+        &project_anchor,
+        &project_relative,
+        global_manager.trusted_signers(),
+    )
+    .map_err(plugin_manager_error)?;
+    if let Some(project_manager) = project_manager {
+        recover_pending_cli_plugin_transaction_at(
+            project_manager.root(),
+            &global_anchor,
+            &global_relative,
+            &mut global_manager,
+            &execution,
+        )?;
+    }
+    Ok(())
 }
 
 fn run_command(
@@ -115,9 +244,14 @@ fn run_command(
         Command::Providers(arguments) => {
             run_providers(arguments.command, arguments.json, &loaded, catalog, context)
         }
-        Command::Plugins(arguments) => {
-            run_plugins(arguments.command, arguments.json, &loaded, catalog, context)
-        }
+        Command::Plugins(arguments) => run_plugins(
+            arguments.command,
+            arguments.json,
+            global.no_config,
+            &loaded,
+            catalog,
+            context,
+        ),
         Command::Config(arguments) => run_config(arguments.command, &loaded, context),
         Command::Doctor(arguments) => run_doctor(&arguments, &loaded, context),
         Command::Completions(arguments) => generate_completions(arguments.shell, context.stdout),
@@ -824,10 +958,14 @@ fn provider_view<'a>(
 fn run_plugins(
     command: Option<PluginsCommand>,
     json: bool,
+    no_config: bool,
     loaded: &LoadedConfig,
-    catalog: Catalog,
+    _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    if no_config && !matches!(&command, None | Some(PluginsCommand::Show { .. })) {
+        return Err(CliError::usage("--no-config supports only plugin list and show operations"));
+    }
     match command {
         None => {
             if json {
@@ -884,7 +1022,13 @@ fn run_plugins(
                 Ok(())
             }
         }
-        Some(PluginsCommand::Install { source, sha256, scope: _ }) => {
+        Some(PluginsCommand::Install {
+            source,
+            sha256,
+            signing_key_id,
+            signing_key_sha256,
+            scope,
+        }) => {
             if source.starts_with("https://") {
                 let hash = sha256.as_deref().ok_or_else(|| {
                     CliError::usage("HTTPS plugin installation requires --sha256")
@@ -903,29 +1047,1718 @@ fn run_plugins(
                     format!("plugin package does not exist: {source}"),
                 ));
             }
-            Err(CliError::component(format!("plugins install: {}", catalog.unavailable())))
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let mut global_manager =
+                PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                    .map_err(plugin_manager_error)?;
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
+            recover_pending_cli_plugin_transaction(
+                &global_anchor,
+                &global_relative,
+                &mut global_manager,
+                &execution,
+            )?;
+            match (signing_key_id.as_deref(), signing_key_sha256.as_deref()) {
+                (Some(id), Some(fingerprint)) => {
+                    config::validate_sha256(fingerprint)?;
+                    if scope == crate::args::Scope::Project
+                        && global_manager.trusted_signers().fingerprints.get(id).map(String::as_str)
+                            != Some(fingerprint)
+                    {
+                        return Err(CliError::new(
+                            ExitClass::Policy,
+                            "untrustedPluginPublisher",
+                            "project scope can only reference a publisher trusted globally",
+                        ));
+                    }
+                }
+                (None, None) => {}
+                _ => return Err(CliError::usage("both signing key options are required")),
+            }
+            let global_candidate = match (signing_key_id.as_deref(), signing_key_sha256.as_deref())
+            {
+                (Some(id), Some(fingerprint)) if scope == crate::args::Scope::Global => {
+                    global_manager
+                        .with_candidate_signer(id, fingerprint)
+                        .map_err(plugin_manager_error)?
+                }
+                _ => global_manager.clone(),
+            };
+            let project_scope = if scope == crate::args::Scope::Project {
+                Some(ProjectScopeAuthority::resolve(&context.cwd)?)
+            } else {
+                None
+            };
+            let (store_relative, project_root, manager) = if scope == crate::args::Scope::Global {
+                (global_relative.clone(), None, global_candidate.clone())
+            } else {
+                let authority = project_scope.as_ref().expect("project authority");
+                authority.verify()?;
+                let manager = PluginManager::open_scoped(
+                    &authority.anchor,
+                    &authority.store_relative,
+                    global_candidate.trusted_signers(),
+                )
+                .map_err(plugin_manager_error)?;
+                (authority.store_relative.clone(), Some(authority.root.clone()), manager)
+            };
+            let config_path = project_scope
+                .as_ref()
+                .map(ProjectScopeAuthority::config_path)
+                .unwrap_or(config::scope_path(scope, &context.cwd)?);
+            let transaction_root = manager.root().to_owned();
+            let downloaded = if source.starts_with("https://") {
+                Some(download_plugin_package(&source, &execution)?)
+            } else {
+                None
+            };
+            let package_path = downloaded
+                .as_ref()
+                .map(|download| download.file.path())
+                .unwrap_or_else(|| Path::new(&source));
+            let inspected = manager
+                .inspect_file(package_path, sha256.as_deref(), &execution)
+                .map_err(plugin_manager_error)?;
+            if signing_key_id.as_deref().is_some_and(|id| id != inspected.signing_key_id) {
+                return Err(CliError::new(
+                    ExitClass::Policy,
+                    "pluginSignerMismatch",
+                    "package signer differs from --signing-key-id",
+                ));
+            }
+            if let Some(authority) = &project_scope {
+                authority.verify()?;
+            }
+            let config_lock = config::lock_exact(&config_path)?;
+            if let Some(authority) = &project_scope {
+                authority.verify_config_guard(&config_lock)?;
+            }
+            let configured_before = config::plugins_in_exact_locked(&config_lock, &config_path)?;
+            let old_config = configured_before.get(&inspected.id).cloned();
+            let installed_before = match manager.verify(&inspected.id, &execution) {
+                Ok(installed) => Some(installed),
+                Err(error) if error.code == ManagerErrorCode::NotInstalled => None,
+                Err(error) => return Err(plugin_manager_error(error)),
+            };
+            match (old_config.as_ref(), installed_before.as_ref()) {
+                (Some(configured), Some(installed)) => {
+                    verify_plugin_pin(&manager, configured, installed)?;
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(CliError::new(
+                        ExitClass::Policy,
+                        "pluginTransactionConflict",
+                        "plugin store and scope configuration are inconsistent",
+                    ));
+                }
+            }
+            let backup_name = format!(
+                ".cli-backup-{}-{}-{}.zip",
+                inspected.id,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            let backup_path = transaction_root.join(&backup_name);
+            let _ = fs::remove_file(&backup_path);
+            let mut transaction = CliPluginTransaction {
+                schema_version: 1,
+                operation: CliPluginOperation::Install,
+                phase: CliPluginPhase::Started,
+                global: scope == crate::args::Scope::Global,
+                store_relative: store_relative.to_string_lossy().into_owned(),
+                project_root,
+                id: inspected.id.clone(),
+                backup_name: installed_before.as_ref().map(|_| backup_name),
+                old_config: old_config.clone(),
+                new_config: None,
+                signing_key_id: signing_key_id.clone(),
+                signing_key_sha256: signing_key_sha256.clone(),
+            };
+            write_cli_plugin_transaction(&transaction_root, &transaction)?;
+            cli_plugin_test_crash("install-started");
+            let snapshot = match manager.snapshot_package(&inspected.id, &backup_path, &execution) {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) if error.code == ManagerErrorCode::NotInstalled => None,
+                Err(error) => {
+                    clear_cli_plugin_transaction(&transaction_root)?;
+                    return Err(plugin_manager_error(error));
+                }
+            };
+            let installed = match manager.install_file(
+                package_path,
+                Some(&inspected.package_sha256),
+                &execution,
+            ) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    rollback_plugin_store(
+                        &manager,
+                        &inspected.id,
+                        snapshot.as_ref().map(|value| value.path()),
+                        snapshot.as_ref().map(|value| value.installed().package_sha256.as_str()),
+                        &execution,
+                    )?;
+                    drop(snapshot);
+                    clear_cli_plugin_transaction(&transaction_root)?;
+                    return Err(plugin_manager_error(error));
+                }
+            };
+            let key_id = signing_key_id.clone().unwrap_or(installed.signing_key_id.clone());
+            let key_sha256 = signing_key_sha256
+                .clone()
+                .or_else(|| manager.trusted_signers().fingerprints.get(&key_id).cloned())
+                .ok_or_else(|| CliError::usage("publisher trust requires signing key options"))?;
+            let new_config = PluginConfig {
+                source,
+                sha256: Some(installed.package_sha256.clone()),
+                protocol: installed.protocol.clone(),
+                enabled: true,
+                signing_key_id: key_id,
+                signing_key_sha256: key_sha256,
+            };
+            // StoreChanged is also the durable intent for the exact config CAS.
+            // Recovery can therefore undo a CAS even if the process dies before
+            // the subsequent ConfigChanged journal rewrite.
+            transaction.new_config = Some(new_config.clone());
+            transaction.phase = CliPluginPhase::StoreChanged;
+            if let Err(error) = write_cli_plugin_transaction(&transaction_root, &transaction) {
+                rollback_plugin_store(
+                    &manager,
+                    &installed.id,
+                    snapshot.as_ref().map(|value| value.path()),
+                    snapshot.as_ref().map(|value| value.installed().package_sha256.as_str()),
+                    &execution,
+                )?;
+                drop(snapshot);
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            cli_plugin_test_crash("install-store-changed");
+            if let Some(snapshot) = snapshot {
+                let _ = snapshot.persist();
+            }
+            if let Some(authority) = &project_scope {
+                authority.verify_config_guard(&config_lock)?;
+            }
+            let path = match config::compare_and_set_plugin_exact_locked(
+                &config_lock,
+                &config_path,
+                &installed.id,
+                old_config.as_ref(),
+                Some(&new_config),
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    rollback_plugin_store(
+                        &manager,
+                        &installed.id,
+                        old_config.as_ref().map(|_| backup_path.as_path()),
+                        old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                        &execution,
+                    )?;
+                    clear_cli_plugin_transaction(&transaction_root)?;
+                    return Err(error);
+                }
+            };
+            cli_plugin_test_crash("install-config-cas");
+            if let Some(authority) = &project_scope
+                && let Err(error) = authority.verify_config_guard(&config_lock)
+            {
+                rollback_plugin_store(
+                    &manager,
+                    &installed.id,
+                    old_config.as_ref().map(|_| backup_path.as_path()),
+                    old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                    &execution,
+                )?;
+                restore_plugin_config(
+                    &config_lock,
+                    &config_path,
+                    &installed.id,
+                    Some(&new_config),
+                    old_config.as_ref(),
+                )?;
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            transaction.phase = CliPluginPhase::ConfigChanged;
+            if let Err(error) = write_cli_plugin_transaction(&transaction_root, &transaction) {
+                rollback_plugin_store(
+                    &manager,
+                    &installed.id,
+                    old_config.as_ref().map(|_| backup_path.as_path()),
+                    old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                    &execution,
+                )?;
+                restore_plugin_config(
+                    &config_lock,
+                    &config_path,
+                    &installed.id,
+                    Some(&new_config),
+                    old_config.as_ref(),
+                )?;
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            cli_plugin_test_crash("install-config-changed");
+            let mut trust_pending = false;
+            if scope == crate::args::Scope::Global
+                && let (Some(id), Some(fingerprint)) =
+                    (signing_key_id.as_deref(), signing_key_sha256.as_deref())
+                && {
+                    arm_plugin_manager_trust_fault(global_manager.root())?;
+                    true
+                }
+                && let Err(error) = global_manager.trust_signer(id, fingerprint)
+            {
+                if error.code == ManagerErrorCode::Indeterminate {
+                    // ConfigChanged is a durable forward-commit intent.  Keep
+                    // the joint journal so startup can finish trust publication;
+                    // rolling back here could leave a pending signer expansion
+                    // that becomes visible on the next process.
+                    trust_pending = true;
+                } else {
+                    rollback_plugin_store(
+                        &manager,
+                        &installed.id,
+                        old_config.as_ref().map(|_| backup_path.as_path()),
+                        old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                        &execution,
+                    )?;
+                    restore_plugin_config(
+                        &config_lock,
+                        &config_path,
+                        &installed.id,
+                        Some(&new_config),
+                        old_config.as_ref(),
+                    )?;
+                    clear_cli_plugin_transaction(&transaction_root)?;
+                    return Err(plugin_manager_error(error));
+                }
+            }
+            if trust_pending {
+                writeln!(context.stdout, "{}\t{}", installed.id, path.display())?;
+                return Ok(());
+            }
+            cli_plugin_test_crash("install-trust-published");
+            transaction.phase = CliPluginPhase::TrustChanged;
+            if write_cli_plugin_transaction(&transaction_root, &transaction).is_ok() {
+                let backup_clean = !backup_path.exists() || fs::remove_file(&backup_path).is_ok();
+                if backup_clean {
+                    let _ = clear_cli_plugin_transaction(&transaction_root);
+                }
+            }
+            writeln!(context.stdout, "{}\t{}", installed.id, path.display())?;
+            Ok(())
         }
-        Some(PluginsCommand::Verify { id, json: _ }) => Err(CliError::component(format!(
-            "plugins verify {}: {}",
-            id.as_deref().unwrap_or("all"),
-            catalog.unavailable()
-        ))),
+        Some(PluginsCommand::Verify { id, json, scope }) => {
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                .map_err(plugin_manager_error)?;
+            let authority = scoped_plugin_authority(scope, &context.cwd, &global)?;
+            let config_lock = lock_scoped_plugin_config(&authority)?;
+            let configured = config::plugins_in_exact_locked(&config_lock, &authority.config_path)?;
+            let manager = &authority.manager;
+            let verified = if let Some(id) = id {
+                let installed = manager.verify(&id, &execution).map_err(plugin_manager_error)?;
+                let authority = configured.get(&id).ok_or_else(|| {
+                    CliError::config(format!(
+                        "plugin '{id}' is installed but not configured in this scope"
+                    ))
+                })?;
+                verify_plugin_pin(&manager, authority, &installed)?;
+                vec![installed]
+            } else {
+                let installed = manager.verify_all(&execution).map_err(plugin_manager_error)?;
+                for plugin in &installed {
+                    let authority = configured.get(&plugin.id).ok_or_else(|| {
+                        CliError::config(format!(
+                            "plugin '{}' is installed but not configured in this scope",
+                            plugin.id
+                        ))
+                    })?;
+                    verify_plugin_pin(&manager, authority, plugin)?;
+                }
+                for id in configured.keys() {
+                    if !installed.iter().any(|plugin| &plugin.id == id) {
+                        return Err(CliError::config(format!(
+                            "plugin '{id}' is configured but not installed in this scope"
+                        )));
+                    }
+                }
+                installed
+            };
+            if let Some(project) = &authority.project {
+                project.verify_config_guard(&config_lock)?;
+            }
+            if json {
+                write_json(context.stdout, &verified)
+            } else {
+                for plugin in verified {
+                    writeln!(
+                        context.stdout,
+                        "{}\t{}\t{}",
+                        plugin.id, plugin.version, plugin.protocol
+                    )?;
+                }
+                Ok(())
+            }
+        }
         Some(PluginsCommand::Enable { id, scope }) => {
-            let path = config::set_plugin_enabled(scope, &context.cwd, &id, true)?;
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let mut global_manager =
+                PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                    .map_err(plugin_manager_error)?;
+            let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
+            recover_pending_cli_plugin_transaction(
+                &global_anchor,
+                &global_relative,
+                &mut global_manager,
+                &execution,
+            )?;
+            let authority = scoped_plugin_authority(scope, &context.cwd, &global_manager)?;
+            let manager = &authority.manager;
+            let installed = manager.verify(&id, &execution).map_err(plugin_manager_error)?;
+            let config_lock = lock_scoped_plugin_config(&authority)?;
+            let configured_by_scope =
+                config::plugins_in_exact_locked(&config_lock, &authority.config_path)?;
+            let configured = configured_by_scope
+                .get(&id)
+                .ok_or_else(|| CliError::config(format!("plugin '{id}' is not configured")))?;
+            verify_plugin_pin(&manager, configured, &installed)?;
+            let mut enabled = configured.clone();
+            enabled.enabled = true;
+            let path = config::compare_and_set_plugin_exact_locked(
+                &config_lock,
+                &authority.config_path,
+                &id,
+                Some(configured),
+                Some(&enabled),
+            )?;
+            if let Some(project) = &authority.project
+                && let Err(error) = project.verify_config_guard(&config_lock)
+            {
+                config::compare_and_set_plugin_exact_locked(
+                    &config_lock,
+                    &authority.config_path,
+                    &id,
+                    Some(&enabled),
+                    Some(configured),
+                )?;
+                return Err(error);
+            }
             writeln!(context.stdout, "{}", path.display())?;
             Ok(())
         }
         Some(PluginsCommand::Disable { id, scope }) => {
-            let path = config::set_plugin_enabled(scope, &context.cwd, &id, false)?;
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let mut global_manager =
+                PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                    .map_err(plugin_manager_error)?;
+            let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
+            recover_pending_cli_plugin_transaction(
+                &global_anchor,
+                &global_relative,
+                &mut global_manager,
+                &execution,
+            )?;
+            let authority = scoped_plugin_authority(scope, &context.cwd, &global_manager)?;
+            let config_lock = lock_scoped_plugin_config(&authority)?;
+            let configured = config::plugins_in_exact_locked(&config_lock, &authority.config_path)?;
+            let current = configured
+                .get(&id)
+                .ok_or_else(|| CliError::config(format!("plugin '{id}' is not configured")))?;
+            let mut disabled = current.clone();
+            disabled.enabled = false;
+            let path = config::compare_and_set_plugin_exact_locked(
+                &config_lock,
+                &authority.config_path,
+                &id,
+                Some(current),
+                Some(&disabled),
+            )?;
+            if let Some(project) = &authority.project
+                && let Err(error) = project.verify_config_guard(&config_lock)
+            {
+                config::compare_and_set_plugin_exact_locked(
+                    &config_lock,
+                    &authority.config_path,
+                    &id,
+                    Some(&disabled),
+                    Some(current),
+                )?;
+                return Err(error);
+            }
             writeln!(context.stdout, "{}", path.display())?;
             Ok(())
         }
         Some(PluginsCommand::Remove { id, scope }) => {
-            let path = config::remove_plugin(scope, &context.cwd, &id)?;
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let mut global_manager =
+                PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                    .map_err(plugin_manager_error)?;
+            let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
+            recover_pending_cli_plugin_transaction(
+                &global_anchor,
+                &global_relative,
+                &mut global_manager,
+                &execution,
+            )?;
+            let project_scope = if scope == crate::args::Scope::Project {
+                Some(ProjectScopeAuthority::resolve(&context.cwd)?)
+            } else {
+                None
+            };
+            let (store_relative, project_root, manager) = if scope == crate::args::Scope::Global {
+                (global_relative, None, global_manager.clone())
+            } else {
+                let authority = project_scope.as_ref().expect("project authority");
+                authority.verify()?;
+                let manager = PluginManager::open_scoped(
+                    &authority.anchor,
+                    &authority.store_relative,
+                    global_manager.trusted_signers(),
+                )
+                .map_err(plugin_manager_error)?;
+                (authority.store_relative.clone(), Some(authority.root.clone()), manager)
+            };
+            let config_path = project_scope
+                .as_ref()
+                .map(ProjectScopeAuthority::config_path)
+                .unwrap_or(config::scope_path(scope, &context.cwd)?);
+            let transaction_root = manager.root().to_owned();
+            if let Some(authority) = &project_scope {
+                authority.verify()?;
+            }
+            let config_lock = config::lock_exact(&config_path)?;
+            if let Some(authority) = &project_scope {
+                authority.verify_config_guard(&config_lock)?;
+            }
+            let configured = config::plugins_in_exact_locked(&config_lock, &config_path)?;
+            let old_config = configured.get(&id).cloned();
+            let installed_before = manager.verify(&id, &execution).map_err(plugin_manager_error)?;
+            let configured_before = old_config.as_ref().ok_or_else(|| {
+                CliError::new(
+                    ExitClass::Policy,
+                    "pluginTransactionConflict",
+                    "plugin is installed but absent from scope configuration",
+                )
+            })?;
+            verify_plugin_pin(&manager, configured_before, &installed_before)?;
+            let backup_name = format!(
+                ".cli-backup-{}-{}-{}.zip",
+                id,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            let backup_path = transaction_root.join(&backup_name);
+            let _ = fs::remove_file(&backup_path);
+            let mut transaction = CliPluginTransaction {
+                schema_version: 1,
+                operation: CliPluginOperation::Remove,
+                phase: CliPluginPhase::Started,
+                global: scope == crate::args::Scope::Global,
+                store_relative: store_relative.to_string_lossy().into_owned(),
+                project_root,
+                id: id.clone(),
+                backup_name: Some(backup_name),
+                old_config: old_config.clone(),
+                new_config: None,
+                signing_key_id: None,
+                signing_key_sha256: None,
+            };
+            write_cli_plugin_transaction(&transaction_root, &transaction)?;
+            cli_plugin_test_crash("remove-started");
+            let snapshot =
+                manager.snapshot_package(&id, &backup_path, &execution).map_err(|error| {
+                    let _ = clear_cli_plugin_transaction(&transaction_root);
+                    plugin_manager_error(error)
+                })?;
+            if let Err(error) = manager.remove(&id) {
+                drop(snapshot);
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(plugin_manager_error(error));
+            }
+            transaction.phase = CliPluginPhase::StoreChanged;
+            if let Err(error) = write_cli_plugin_transaction(&transaction_root, &transaction) {
+                rollback_plugin_store(
+                    &manager,
+                    &id,
+                    Some(snapshot.path()),
+                    Some(&snapshot.installed().package_sha256),
+                    &execution,
+                )?;
+                drop(snapshot);
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            cli_plugin_test_crash("remove-store-changed");
+            let _ = snapshot.persist();
+            if let Some(authority) = &project_scope {
+                authority.verify_config_guard(&config_lock)?;
+            }
+            let path = match config::compare_and_set_plugin_exact_locked(
+                &config_lock,
+                &config_path,
+                &id,
+                old_config.as_ref(),
+                None,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    rollback_plugin_store(
+                        &manager,
+                        &id,
+                        Some(&backup_path),
+                        old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                        &execution,
+                    )?;
+                    clear_cli_plugin_transaction(&transaction_root)?;
+                    return Err(error);
+                }
+            };
+            cli_plugin_test_crash("remove-config-cas");
+            if let Some(authority) = &project_scope
+                && let Err(error) = authority.verify_config_guard(&config_lock)
+            {
+                rollback_plugin_store(
+                    &manager,
+                    &id,
+                    Some(&backup_path),
+                    old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                    &execution,
+                )?;
+                restore_plugin_config(&config_lock, &config_path, &id, None, old_config.as_ref())?;
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            transaction.phase = CliPluginPhase::ConfigChanged;
+            if let Err(error) = write_cli_plugin_transaction(&transaction_root, &transaction) {
+                rollback_plugin_store(
+                    &manager,
+                    &id,
+                    Some(&backup_path),
+                    old_config.as_ref().and_then(|value| value.sha256.as_deref()),
+                    &execution,
+                )?;
+                restore_plugin_config(&config_lock, &config_path, &id, None, old_config.as_ref())?;
+                clear_cli_plugin_transaction(&transaction_root)?;
+                return Err(error);
+            }
+            cli_plugin_test_crash("remove-config-changed");
+            let backup_clean = !backup_path.exists() || fs::remove_file(&backup_path).is_ok();
+            if backup_clean {
+                let _ = clear_cli_plugin_transaction(&transaction_root);
+            }
             writeln!(context.stdout, "{}", path.display())?;
             Ok(())
         }
+        Some(PluginsCommand::Run { id, input, input_format, scope }) => {
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let (global_anchor, global_relative) = global_plugin_store_scope()?;
+            let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+                .map_err(plugin_manager_error)?;
+            let authority = scoped_plugin_authority(scope, &context.cwd, &global)?;
+            let config_lock = lock_scoped_plugin_config(&authority)?;
+            let configured_by_scope =
+                config::plugins_in_exact_locked(&config_lock, &authority.config_path)?;
+            let manager = &authority.manager;
+            let configured =
+                configured_by_scope.get(&id).filter(|plugin| plugin.enabled).ok_or_else(|| {
+                    CliError::config(format!("plugin '{id}' is not enabled in this scope"))
+                })?;
+            let installed = manager.verify(&id, &execution).map_err(plugin_manager_error)?;
+            verify_plugin_pin(&manager, configured, &installed)?;
+            if let Some(project) = &authority.project {
+                project.verify_config_guard(&config_lock)?;
+            }
+            let maximum = execution.resource_limits().max_input_bytes;
+            let (source, _input_memory) = read_plugin_input(&input, maximum, &execution)?;
+            match configured.protocol.as_str() {
+                "process-v1" => {
+                    let prepared = manager
+                        .process_manifest(
+                            &id,
+                            into_markdown_process_plugin::RuntimePolicy::default(),
+                            &execution,
+                        )
+                        .map_err(plugin_manager_error)?;
+                    let result = prepared
+                        .execute(
+                            into_markdown_process_plugin::PluginRequest {
+                                request_id: "cli-plugin-run",
+                                input_format: &input_format,
+                                source_name: input.file_name().and_then(OsStr::to_str),
+                                source: &source,
+                            },
+                            &execution,
+                        )
+                        .map_err(process_plugin_error)?;
+                    let encoded = output::encode_result(&result.result, EmitKind::ResultJson)?;
+                    context.stdout.write_all(&encoded).map_err(CliError::from)
+                }
+                "wasi-v1" => {
+                    let prepared = manager
+                        .prepare_wasi(
+                            &id,
+                            &into_markdown_plugin_wasi::WasiCapabilities::default(),
+                            &execution,
+                        )
+                        .map_err(plugin_manager_error)?;
+                    let request = into_markdown_plugin_wasi::PluginRequest {
+                        protocol_version: into_markdown_plugin_wasi::PROTOCOL_VERSION,
+                        source_name: input
+                            .file_name()
+                            .and_then(OsStr::to_str)
+                            .unwrap_or("input")
+                            .to_owned(),
+                        input: source,
+                    };
+                    // Wasmtime's synchronous component adapter can exceed the
+                    // Windows main-thread stack even for a bounded guest. Keep
+                    // the reviewed runtime limits and give only the host call
+                    // stack a fixed, cross-platform bound.
+                    let result = std::thread::scope(|scope| {
+                        std::thread::Builder::new()
+                            .name("into-md-wasi-plugin".into())
+                            .stack_size(8 * 1024 * 1024)
+                            .spawn_scoped(scope, || prepared.execute(&request, &execution))
+                            .map_err(|error| {
+                                CliError::internal(format!("start WASI plugin thread: {error}"))
+                            })?
+                            .join()
+                            .map_err(|_| CliError::internal("WASI plugin thread panicked"))?
+                            .map_err(wasi_plugin_error)
+                    })?;
+                    let document = serde_json::from_str::<serde_json::Value>(
+                        &result.document.to_json().map_err(|error| {
+                            CliError::internal(format!("serialize plugin document: {error}"))
+                        })?,
+                    )
+                    .map_err(|error| {
+                        CliError::internal(format!("serialize plugin document: {error}"))
+                    })?;
+                    write_json(
+                        context.stdout,
+                        &serde_json::json!({ "document": document, "resources": result.resources }),
+                    )
+                }
+                _ => Err(CliError::new(
+                    ExitClass::Policy,
+                    "unsupportedProtocol",
+                    "plugin protocol is unsupported",
+                )),
+            }
+        }
     }
+}
+
+fn rollback_plugin_store(
+    manager: &PluginManager,
+    id: &str,
+    backup: Option<&Path>,
+    expected_sha256: Option<&str>,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<(), CliError> {
+    if let Some(backup) = backup.filter(|path| path.is_file()) {
+        manager.install_file(backup, expected_sha256, execution).map_err(plugin_manager_error)?;
+    } else if let Err(error) = manager.remove(id)
+        && error.code != ManagerErrorCode::NotInstalled
+    {
+        return Err(plugin_manager_error(error));
+    }
+    Ok(())
+}
+
+fn restore_plugin_config(
+    lock: &config::ConfigMutationGuard,
+    config_path: &Path,
+    id: &str,
+    changed: Option<&PluginConfig>,
+    previous: Option<&PluginConfig>,
+) -> Result<(), CliError> {
+    let current = config::plugins_in_exact_locked(lock, config_path)?;
+    if current.get(id) == previous {
+        return Ok(());
+    }
+    config::compare_and_set_plugin_exact_locked(lock, config_path, id, changed, previous)?;
+    Ok(())
+}
+
+struct CliPluginLock(File);
+
+impl Drop for CliPluginLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+fn acquire_cli_plugin_lock(root: &Path) -> Result<CliPluginLock, CliError> {
+    let path = root.join(PLUGIN_CLI_LOCK);
+    let file = OpenOptions::new().create(true).read(true).write(true).open(&path)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    #[cfg(windows)]
+    let linked = {
+        use std::os::windows::fs::MetadataExt as _;
+        metadata.file_attributes() & 0x400 != 0
+    };
+    #[cfg(not(windows))]
+    let linked = metadata.file_type().is_symlink();
+    if !metadata.is_file() || linked {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction lock identity rejected",
+        ));
+    }
+    file.try_lock().map_err(|_| {
+        CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionConflict",
+            "another plugin transaction is active",
+        )
+    })?;
+    Ok(CliPluginLock(file))
+}
+
+fn recover_cli_transaction_files(root: &Path) -> Result<(), CliError> {
+    let journal = root.join(PLUGIN_CLI_TRANSACTION);
+    let next = root.join(PLUGIN_CLI_TRANSACTION_NEXT);
+    let previous = root.join(PLUGIN_CLI_TRANSACTION_PREVIOUS);
+    if journal.exists() {
+        let _ = fs::remove_file(&next);
+        let _ = fs::remove_file(&previous);
+    } else if next.exists() {
+        fs::rename(&next, &journal)?;
+        let _ = fs::remove_file(&previous);
+    } else if previous.exists() {
+        fs::rename(&previous, &journal)?;
+    }
+    sync_cli_plugin_directory(root)?;
+    Ok(())
+}
+
+fn sync_cli_plugin_directory(root: &Path) -> Result<(), CliError> {
+    #[cfg(unix)]
+    File::open(root)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = root;
+    Ok(())
+}
+
+fn write_cli_plugin_transaction(
+    root: &Path,
+    transaction: &CliPluginTransaction,
+) -> Result<(), CliError> {
+    recover_cli_transaction_files(root)?;
+    let journal = root.join(PLUGIN_CLI_TRANSACTION);
+    let next = root.join(PLUGIN_CLI_TRANSACTION_NEXT);
+    let previous = root.join(PLUGIN_CLI_TRANSACTION_PREVIOUS);
+    let bytes = serde_json::to_vec(transaction)
+        .map_err(|error| CliError::internal(format!("serialize plugin transaction: {error}")))?;
+    let mut output = OpenOptions::new().create_new(true).write(true).open(&next)?;
+    output.write_all(&bytes)?;
+    output.sync_all()?;
+    if journal.exists() {
+        fs::rename(&journal, &previous)?;
+        sync_cli_plugin_directory(root)?;
+    }
+    if let Err(error) = fs::rename(&next, &journal) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, &journal);
+        }
+        return Err(error.into());
+    }
+    sync_cli_plugin_directory(root)?;
+    let _ = fs::remove_file(previous);
+    sync_cli_plugin_directory(root)?;
+    Ok(())
+}
+
+fn clear_cli_plugin_transaction(root: &Path) -> Result<(), CliError> {
+    for name in
+        [PLUGIN_CLI_TRANSACTION, PLUGIN_CLI_TRANSACTION_NEXT, PLUGIN_CLI_TRANSACTION_PREVIOUS]
+    {
+        let path = root.join(name);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+    }
+    sync_cli_plugin_directory(root)?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn cli_plugin_test_crash(point: &str) {
+    if std::env::var_os("INTO_MD_PLUGIN_CLI_CRASH_POINT").as_deref()
+        == Some(std::ffi::OsStr::new(point))
+    {
+        std::process::exit(86);
+    }
+}
+
+#[cfg(not(test))]
+fn cli_plugin_test_crash(_point: &str) {}
+
+#[cfg(all(test, feature = "plugin-manager-fault-injection"))]
+fn arm_plugin_manager_trust_fault(root: &Path) -> Result<(), CliError> {
+    if std::env::var_os("INTO_MD_PLUGIN_TRUST_INDETERMINATE").is_some() {
+        fs::write(root.join(".test-fail-atomic-rename"), b"2")?;
+    }
+    Ok(())
+}
+
+#[cfg(not(all(test, feature = "plugin-manager-fault-injection")))]
+fn arm_plugin_manager_trust_fault(_root: &Path) -> Result<(), CliError> {
+    Ok(())
+}
+
+fn read_cli_plugin_transaction(root: &Path) -> Result<Option<CliPluginTransaction>, CliError> {
+    recover_cli_transaction_files(root)?;
+    let path = root.join(PLUGIN_CLI_TRANSACTION);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction journal rejected",
+        ));
+    }
+    let bytes = fs::read(path)?;
+    let transaction: CliPluginTransaction = serde_json::from_slice(&bytes).map_err(|_| {
+        CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction journal is invalid",
+        )
+    })?;
+    if transaction.schema_version != 1
+        || transaction.id.is_empty()
+        || transaction
+            .backup_name
+            .as_deref()
+            .is_some_and(|name| !name.starts_with(".cli-backup-") || name.contains(['/', '\\']))
+        || Path::new(&transaction.store_relative)
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction authority rejected",
+        ));
+    }
+    Ok(Some(transaction))
+}
+
+fn recover_pending_cli_plugin_transaction(
+    global_anchor: &Path,
+    global_relative: &Path,
+    global_manager: &mut PluginManager,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<(), CliError> {
+    let root = global_manager.root().to_owned();
+    recover_pending_cli_plugin_transaction_at(
+        &root,
+        global_anchor,
+        global_relative,
+        global_manager,
+        execution,
+    )
+}
+
+fn recover_pending_cli_plugin_transaction_at(
+    journal_root: &Path,
+    global_anchor: &Path,
+    global_relative: &Path,
+    global_manager: &mut PluginManager,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<(), CliError> {
+    let root = journal_root.to_owned();
+    let Some(transaction) = read_cli_plugin_transaction(&root)? else {
+        return Ok(());
+    };
+    let scope =
+        if transaction.global { crate::args::Scope::Global } else { crate::args::Scope::Project };
+    let cwd = transaction.project_root.as_deref().unwrap_or(global_anchor);
+    let project_scope =
+        if transaction.global { None } else { Some(ProjectScopeAuthority::resolve(cwd)?) };
+    let expected_relative = if transaction.global {
+        global_relative.to_owned()
+    } else {
+        let authority = project_scope.as_ref().expect("project authority");
+        authority.verify()?;
+        if authority.anchor != global_anchor {
+            return Err(CliError::new(
+                ExitClass::Policy,
+                "pluginTransactionAuthority",
+                "project transaction anchor changed",
+            ));
+        }
+        authority.store_relative.clone()
+    };
+    if Path::new(&transaction.store_relative) != expected_relative {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction scope changed",
+        ));
+    }
+    let config_path = project_scope
+        .as_ref()
+        .map(ProjectScopeAuthority::config_path)
+        .unwrap_or(config::scope_path(scope, cwd)?);
+    let config_lock = config::lock_exact(&config_path)?;
+    if let Some(authority) = &project_scope {
+        authority.verify_config_guard(&config_lock)?;
+    }
+    let manager = if transaction.global {
+        global_manager.clone()
+    } else {
+        PluginManager::open_scoped(
+            global_anchor,
+            &expected_relative,
+            global_manager.trusted_signers(),
+        )
+        .map_err(plugin_manager_error)?
+    };
+    let manager = if matches!(transaction.operation, CliPluginOperation::Install)
+        && let (Some(id), Some(fingerprint)) =
+            (transaction.signing_key_id.as_deref(), transaction.signing_key_sha256.as_deref())
+    {
+        manager.with_candidate_signer(id, fingerprint).map_err(plugin_manager_error)?
+    } else {
+        manager
+    };
+    if manager.root() != root {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginTransactionAuthority",
+            "plugin transaction journal is outside its bound scope store",
+        ));
+    }
+    let backup = transaction.backup_name.as_deref().map(|name| root.join(name));
+    let committed = match transaction.operation {
+        CliPluginOperation::Install => {
+            matches!(
+                transaction.phase,
+                CliPluginPhase::ConfigChanged | CliPluginPhase::TrustChanged
+            )
+        }
+        CliPluginOperation::Remove => transaction.phase == CliPluginPhase::ConfigChanged,
+    };
+    if let Some(authority) = &project_scope {
+        authority.verify()?;
+    }
+    if committed {
+        if matches!(transaction.operation, CliPluginOperation::Install) {
+            let installed =
+                manager.verify(&transaction.id, execution).map_err(plugin_manager_error)?;
+            let configured = config::plugins_in_exact_locked(&config_lock, &config_path)?;
+            let expected = transaction.new_config.as_ref().ok_or_else(|| {
+                CliError::new(
+                    ExitClass::Policy,
+                    "pluginTransactionAuthority",
+                    "committed install lacks configuration authority",
+                )
+            })?;
+            if configured.get(&transaction.id) != Some(expected) {
+                return Err(CliError::new(
+                    ExitClass::Policy,
+                    "pluginTransactionRecovery",
+                    "committed plugin configuration changed",
+                ));
+            }
+            verify_plugin_pin(&manager, expected, &installed)?;
+        }
+        if matches!(transaction.operation, CliPluginOperation::Install)
+            && transaction.global
+            && let (Some(id), Some(fingerprint)) =
+                (transaction.signing_key_id.as_deref(), transaction.signing_key_sha256.as_deref())
+        {
+            global_manager.trust_signer(id, fingerprint).map_err(plugin_manager_error)?;
+        }
+    } else {
+        if let Some(backup) = backup.as_deref().filter(|path| path.is_file()) {
+            let expected =
+                transaction.old_config.as_ref().and_then(|plugin| plugin.sha256.as_deref());
+            if let Err(error) = manager.install_file(backup, expected, execution) {
+                // A crash while creating a pre-change snapshot may leave an
+                // unauthoritative file on older stores.  It is safe to discard
+                // only when the live store still proves the exact old package;
+                // otherwise the backup is required for rollback and corruption
+                // remains a fail-closed recovery error.
+                let old_is_live = expected.is_some_and(|sha256| {
+                    manager
+                        .verify(&transaction.id, execution)
+                        .is_ok_and(|installed| installed.package_sha256 == sha256)
+                });
+                if !old_is_live {
+                    return Err(plugin_manager_error(error));
+                }
+                fs::remove_file(backup)?;
+                sync_cli_plugin_directory(&root)?;
+            }
+        } else if transaction.old_config.is_none() {
+            if let Err(error) = manager.remove(&transaction.id)
+                && error.code != ManagerErrorCode::NotInstalled
+            {
+                return Err(plugin_manager_error(error));
+            }
+        } else {
+            let installed =
+                manager.verify(&transaction.id, execution).map_err(plugin_manager_error)?;
+            if transaction.old_config.as_ref().and_then(|plugin| plugin.sha256.as_deref())
+                != Some(installed.package_sha256.as_str())
+            {
+                return Err(CliError::new(
+                    ExitClass::Policy,
+                    "pluginTransactionRecovery",
+                    "previous plugin package is unavailable for rollback",
+                ));
+            }
+        }
+        let changed = match transaction.operation {
+            CliPluginOperation::Install => transaction.new_config.as_ref(),
+            CliPluginOperation::Remove => None,
+        };
+        restore_plugin_config(
+            &config_lock,
+            &config_path,
+            &transaction.id,
+            changed,
+            transaction.old_config.as_ref(),
+        )?;
+    }
+    if let Some(backup) = backup
+        && backup.exists()
+    {
+        fs::remove_file(backup)?;
+    }
+    clear_cli_plugin_transaction(&root)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct PluginInputIdentity {
+    volume: u64,
+    file: u64,
+    bytes: u64,
+    modified: i128,
+}
+
+fn plugin_input_identity(file: &File) -> Result<PluginInputIdentity, CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = file.metadata().map_err(CliError::from)?;
+        Ok(PluginInputIdentity {
+            volume: metadata.dev(),
+            file: metadata.ino(),
+            bytes: metadata.len(),
+            modified: i128::from(metadata.mtime()) * 1_000_000_000
+                + i128::from(metadata.mtime_nsec()),
+        })
+    }
+    #[cfg(windows)]
+    {
+        let information = winapi_util::file::information(file).map_err(CliError::from)?;
+        Ok(PluginInputIdentity {
+            volume: information.volume_serial_number(),
+            file: information.file_index(),
+            bytes: information.file_size(),
+            modified: i128::from(information.last_write_time().unwrap_or_default()),
+        })
+    }
+}
+
+fn read_plugin_input(
+    path: &Path,
+    maximum: u64,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<(Vec<u8>, into_markdown::ResourceReservation), CliError> {
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::fd::OwnedFd;
+        let descriptor: OwnedFd = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(CliError::from)?;
+        File::from(descriptor)
+    };
+    #[cfg(windows)]
+    let mut file = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(CliError::from)?
+    };
+    let metadata = file.metadata().map_err(CliError::from)?;
+    let identity = plugin_input_identity(&file)?;
+    if !metadata.is_file() || metadata.len() > maximum {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "resourceLimit",
+            "plugin input size rejected",
+        ));
+    }
+    #[cfg(windows)]
+    if winapi_util::file::information(&file).map_err(CliError::from)?.file_attributes() & 0x400 != 0
+    {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pathTraversal",
+            "plugin input link rejected",
+        ));
+    }
+    let mut reservation =
+        execution.reserve_memory(metadata.len()).map_err(plugin_execution_error)?;
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| CliError::new(ExitClass::Policy, "resourceLimit", "input size overflow"))?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|_| {
+        CliError::new(ExitClass::Policy, "resourceLimit", "input allocation rejected")
+    })?;
+    if bytes.capacity() > capacity {
+        reservation.grow((bytes.capacity() - capacity) as u64).map_err(plugin_execution_error)?;
+    }
+    let probe = maximum
+        .checked_add(1)
+        .ok_or_else(|| CliError::new(ExitClass::Policy, "resourceLimit", "input bound overflow"))?;
+    let mut bounded = std::io::Read::take(&mut file, probe);
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        execution.checkpoint().map_err(plugin_execution_error)?;
+        let remaining_with_probe = capacity.saturating_sub(bytes.len()).saturating_add(1);
+        let requested = buffer.len().min(remaining_with_probe);
+        let read = bounded.read(&mut buffer[..requested]).map_err(CliError::from)?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().checked_add(read).is_none_or(|length| length > capacity) {
+            return Err(CliError::new(
+                ExitClass::Policy,
+                "resourceLimit",
+                "plugin input grew beyond limit",
+            ));
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    if bytes.len() as u64 != metadata.len() || plugin_input_identity(&file)? != identity {
+        return Err(CliError::new(ExitClass::Io, "io", "plugin input changed while reading"));
+    }
+    Ok((bytes, reservation))
+}
+
+fn verify_plugin_pin(
+    manager: &PluginManager,
+    configured: &PluginConfig,
+    installed: &into_markdown_plugin_manager::InstalledPlugin,
+) -> Result<(), CliError> {
+    let trusted_fingerprint =
+        manager.trusted_signers().fingerprints.get(&installed.signing_key_id).cloned();
+    if configured.protocol != installed.protocol
+        || configured.sha256.as_deref() != Some(installed.package_sha256.as_str())
+        || configured.signing_key_id != installed.signing_key_id
+        || trusted_fingerprint.as_deref() != Some(configured.signing_key_sha256.as_str())
+    {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "pluginAuthority",
+            "scope configuration does not pin the installed package and trusted publisher",
+        ));
+    }
+    Ok(())
+}
+
+fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
+    #[cfg(test)]
+    {
+        let anchor = TEST_USER_DATA_ANCHOR
+            .with(|slot| slot.borrow().clone())
+            .ok_or_else(|| CliError::internal("test user-data anchor was not injected"))?;
+        create_private_user_data_directory(&anchor)?;
+        let anchor = canonical_private_user_data_directory(&anchor)?;
+        let product = anchor.join("into-markdown");
+        prepare_user_data_anchor(&product)?;
+        return Ok((fs::canonicalize(product)?, PathBuf::from("plugins")));
+    }
+    #[cfg(not(test))]
+    {
+        if let Some(configured) = std::env::var_os("INTO_MARKDOWN_USER_DATA_HOME") {
+            let anchor = PathBuf::from(configured);
+            if !anchor.is_absolute() || !anchor.is_dir() {
+                return Err(CliError::config(
+                    "INTO_MARKDOWN_USER_DATA_HOME must name an existing absolute directory",
+                ));
+            }
+            let anchor = canonical_private_user_data_directory(&anchor)?;
+            let product = anchor.join("into-markdown");
+            prepare_user_data_anchor(&product)?;
+            return Ok((fs::canonicalize(product)?, PathBuf::from("plugins")));
+        }
+        let config = config::global_config_path()?;
+        let directory =
+            config.parent().ok_or_else(|| CliError::config("global scope unavailable"))?;
+        ensure_private_user_data_path(directory)?;
+        if fs::symlink_metadata(directory)?.file_type().is_symlink() {
+            return Err(CliError::config("global config parent link rejected"));
+        }
+        let parent_identity = project_directory_identity(directory)?;
+        let directory = fs::canonicalize(directory)?;
+        if project_directory_identity(&directory)? != parent_identity {
+            return Err(CliError::config("global config parent identity changed"));
+        }
+        let product = directory.join("plugin-data");
+        prepare_user_data_anchor(&product)?;
+        Ok((fs::canonicalize(product)?, PathBuf::from("plugins")))
+    }
+}
+
+fn prepare_user_data_anchor(path: &Path) -> Result<(), CliError> {
+    if !path.exists() {
+        create_private_user_data_directory(path)?;
+    } else if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(CliError::config("plugin user-data anchor link rejected"));
+    }
+    let original_identity = project_directory_identity(path)?;
+    let canonical = fs::canonicalize(path)?;
+    if !fs::metadata(&canonical)?.is_dir() {
+        return Err(CliError::config("plugin user-data anchor identity rejected"));
+    }
+    verify_private_user_data_directory(path)?;
+    verify_private_user_data_directory(&canonical)?;
+    if project_directory_identity(&canonical)? != original_identity {
+        return Err(CliError::config("plugin user-data anchor identity changed"));
+    }
+    Ok(())
+}
+
+fn canonical_private_user_data_directory(path: &Path) -> Result<PathBuf, CliError> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(CliError::config("plugin user-data parent link rejected"));
+    }
+    verify_private_user_data_directory(path)?;
+    let identity = project_directory_identity(path)?;
+    let canonical = fs::canonicalize(path)?;
+    verify_private_user_data_directory(&canonical)?;
+    if project_directory_identity(&canonical)? != identity {
+        return Err(CliError::config("plugin user-data parent identity changed"));
+    }
+    Ok(canonical)
+}
+
+fn create_private_user_data_directory(path: &Path) -> Result<(), CliError> {
+    if path.exists() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        fs::DirBuilder::new().mode(0o700).create(path)?;
+    }
+    #[cfg(windows)]
+    into_markdown_process_plugin::create_windows_plugin_store_directory(path)
+        .map_err(|error| CliError::config(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn ensure_private_user_data_path(path: &Path) -> Result<(), CliError> {
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        missing.push(cursor.to_owned());
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| CliError::config("user-data path has no trusted ancestor"))?;
+    }
+    if fs::symlink_metadata(cursor)?.file_type().is_symlink() {
+        return Err(CliError::config("user-data ancestor link rejected"));
+    }
+    verify_trusted_user_data_parent(cursor)?;
+    let identity = project_directory_identity(cursor)?;
+    let mut parent = fs::canonicalize(cursor)?;
+    verify_trusted_user_data_parent(&parent)?;
+    if project_directory_identity(&parent)? != identity {
+        return Err(CliError::config("user-data ancestor identity changed"));
+    }
+    for component in missing.into_iter().rev() {
+        let name = component
+            .file_name()
+            .ok_or_else(|| CliError::config("user-data component rejected"))?;
+        let child = parent.join(name);
+        create_private_user_data_directory(&child)?;
+        let canonical = canonical_private_user_data_directory(&child)?;
+        if canonical.parent() != Some(parent.as_path()) {
+            return Err(CliError::config("user-data component escaped trusted parent"));
+        }
+        parent = canonical;
+    }
+    Ok(())
+}
+
+fn verify_private_user_data_directory(path: &Path) -> Result<(), CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = fs::metadata(path)?;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err(CliError::config("plugin user-data anchor permissions rejected"));
+        }
+    }
+    #[cfg(windows)]
+    into_markdown_process_plugin::verify_windows_plugin_store_path(path)
+        .map_err(|error| CliError::config(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_trusted_user_data_parent(path: &Path) -> Result<(), CliError> {
+    into_markdown_process_plugin::verify_windows_plugin_trusted_parent(path)
+        .map_err(|error| CliError::config(error.to_string()))
+}
+
+#[cfg(unix)]
+#[cfg_attr(test, allow(dead_code))]
+fn verify_trusted_user_data_parent(path: &Path) -> Result<(), CliError> {
+    verify_private_user_data_directory(path)
+}
+
+#[derive(Clone)]
+struct ProjectScopeAuthority {
+    root: PathBuf,
+    volume: u64,
+    file: u64,
+    anchor: PathBuf,
+    store_relative: PathBuf,
+}
+
+impl ProjectScopeAuthority {
+    fn resolve(cwd: &Path) -> Result<Self, CliError> {
+        let project = config::project_scope_root(cwd)?;
+        let (volume, file) = project_directory_identity(&project)?;
+        let mut authority = b"into-markdown/project-plugin-scope/v1\0".to_vec();
+        authority.extend_from_slice(&volume.to_le_bytes());
+        authority.extend_from_slice(&file.to_le_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            authority.extend_from_slice(project.as_os_str().as_bytes());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt as _;
+            for unit in project.as_os_str().encode_wide() {
+                authority.extend_from_slice(&unit.to_le_bytes());
+            }
+        }
+        let key = format!("{:x}", Sha256::digest(authority));
+        let (anchor, global_relative) = global_plugin_store_scope()?;
+        let product = global_relative.parent().unwrap_or_else(|| Path::new(""));
+        Ok(Self {
+            root: project,
+            volume,
+            file,
+            anchor,
+            store_relative: product.join("project-plugins").join(key),
+        })
+    }
+
+    fn verify(&self) -> Result<(), CliError> {
+        let canonical = fs::canonicalize(&self.root).map_err(CliError::from)?;
+        if canonical != self.root
+            || project_directory_identity(&canonical)? != (self.volume, self.file)
+        {
+            return Err(CliError::new(
+                ExitClass::Policy,
+                "pluginProjectScopeChanged",
+                "project scope identity changed during plugin transaction",
+            ));
+        }
+        Ok(())
+    }
+
+    fn config_path(&self) -> PathBuf {
+        self.root.join(".into-markdown.toml")
+    }
+
+    fn verify_config_guard(&self, guard: &config::ConfigMutationGuard) -> Result<(), CliError> {
+        if guard.directory_identity()? != (self.volume, self.file) {
+            return Err(CliError::new(
+                ExitClass::Policy,
+                "pluginProjectScopeChanged",
+                "configuration lock is not bound to the resolved project scope",
+            ));
+        }
+        self.verify()
+    }
+}
+
+fn project_directory_identity(project: &Path) -> Result<(u64, u64), CliError> {
+    let metadata = fs::metadata(project).map_err(CliError::from)?;
+    if !metadata.is_dir() {
+        return Err(CliError::config("project scope is not a directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        return Ok((metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&project)
+            .map_err(CliError::from)?;
+        let information = winapi_util::file::information(&directory).map_err(CliError::from)?;
+        if information.file_attributes() & 0x400 != 0 {
+            return Err(CliError::config("project scope reparse point rejected"));
+        }
+        return Ok((information.volume_serial_number(), information.file_index()));
+    }
+    #[allow(unreachable_code)]
+    Err(CliError::config("project scope identity unavailable"))
+}
+
+fn project_plugin_store_scope(cwd: &Path) -> Result<(PathBuf, PathBuf), CliError> {
+    let authority = ProjectScopeAuthority::resolve(cwd)?;
+    Ok((authority.anchor, authority.store_relative))
+}
+
+fn open_scoped_plugin_manager(
+    scope: crate::args::Scope,
+    cwd: &Path,
+) -> Result<PluginManager, CliError> {
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    if scope == crate::args::Scope::Global {
+        Ok(global)
+    } else {
+        let (anchor, relative) = project_plugin_store_scope(cwd)?;
+        PluginManager::open_scoped(&anchor, &relative, global.trusted_signers())
+            .map_err(plugin_manager_error)
+    }
+}
+
+struct ScopedPluginAuthority {
+    manager: PluginManager,
+    project: Option<ProjectScopeAuthority>,
+    config_path: PathBuf,
+}
+
+fn scoped_plugin_authority(
+    scope: crate::args::Scope,
+    cwd: &Path,
+    global: &PluginManager,
+) -> Result<ScopedPluginAuthority, CliError> {
+    if scope == crate::args::Scope::Global {
+        return Ok(ScopedPluginAuthority {
+            manager: global.clone(),
+            project: None,
+            config_path: config::scope_path(scope, cwd)?,
+        });
+    }
+    let project = ProjectScopeAuthority::resolve(cwd)?;
+    project.verify()?;
+    let manager = PluginManager::open_scoped(
+        &project.anchor,
+        &project.store_relative,
+        global.trusted_signers(),
+    )
+    .map_err(plugin_manager_error)?;
+    Ok(ScopedPluginAuthority {
+        manager,
+        config_path: project.config_path(),
+        project: Some(project),
+    })
+}
+
+fn lock_scoped_plugin_config(
+    authority: &ScopedPluginAuthority,
+) -> Result<config::ConfigMutationGuard, CliError> {
+    let lock = config::lock_exact(&authority.config_path)?;
+    if let Some(project) = &authority.project {
+        project.verify_config_guard(&lock)?;
+    }
+    Ok(lock)
+}
+
+fn plugin_manager_error(error: ManagerError) -> CliError {
+    let (class, code) = match error.code {
+        ManagerErrorCode::Cancelled => (ExitClass::Cancelled, "cancelled"),
+        ManagerErrorCode::Timeout => (ExitClass::Policy, "timeout"),
+        ManagerErrorCode::ResourceLimit => (ExitClass::Policy, "resourceLimit"),
+        ManagerErrorCode::Indeterminate => (ExitClass::Io, "transactionIndeterminate"),
+        ManagerErrorCode::NotInstalled => (ExitClass::Io, "notFound"),
+        ManagerErrorCode::Io => (ExitClass::Io, "io"),
+        ManagerErrorCode::Conflict => (ExitClass::Policy, "conflict"),
+        ManagerErrorCode::HashMismatch => (ExitClass::Policy, "hashMismatch"),
+        ManagerErrorCode::Signature => (ExitClass::Policy, "signature"),
+        ManagerErrorCode::UnsupportedProtocol | ManagerErrorCode::UnsupportedTarget => {
+            (ExitClass::Component, "componentUnavailable")
+        }
+        ManagerErrorCode::InvalidPackage | ManagerErrorCode::PathTraversal => {
+            (ExitClass::Policy, "invalidPackage")
+        }
+        _ => (ExitClass::Policy, "pluginManager"),
+    };
+    CliError::new(class, code, error.to_string())
+}
+
+struct DownloadedPlugin {
+    file: tempfile::NamedTempFile,
+    _temporary: into_markdown::ResourceReservation,
+}
+
+fn download_plugin_package(
+    source: &str,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<DownloadedPlugin, CliError> {
+    let url = url::Url::parse(source).map_err(|_| CliError::usage("plugin URL is invalid"))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(CliError::new(
+            ExitClass::Policy,
+            "invalidPluginUrl",
+            "plugin URL must be canonical HTTPS without credentials or fragment",
+        ));
+    }
+    let host = url.host_str().unwrap_or_default().to_owned();
+    let policy = NetworkPolicy {
+        allow_network: true,
+        allow_private_network: false,
+        allowed_hosts: vec![host.clone()],
+        max_redirects: 0,
+    };
+    let mut file = tempfile::Builder::new()
+        .prefix("into-md-plugin-")
+        .suffix(".zip")
+        .tempfile()
+        .map_err(CliError::from)?;
+    let client = crate::proxy_env::model_fetch_client(false)
+        .map_err(|(name, detail)| CliError::config(format!("{name}: {detail}")))?;
+    let response = client
+        .get_to_writer(
+            source,
+            &policy,
+            into_markdown_http_transport::FetchLimits {
+                max_wire_bytes: MAX_PLUGIN_PACKAGE_BYTES,
+                max_decoded_bytes: MAX_PLUGIN_PACKAGE_BYTES,
+            },
+            execution,
+            file.as_file_mut(),
+        )
+        .map_err(plugin_transport_error)?;
+    if response.bytes_written == 0 {
+        return Err(CliError::new(ExitClass::Policy, "invalidPackage", "empty plugin response"));
+    }
+    file.as_file_mut().sync_all().map_err(CliError::from)?;
+    Ok(DownloadedPlugin { file, _temporary: response.into_temporary_reservation() })
+}
+
+fn plugin_transport_error(error: TransportError) -> CliError {
+    let (class, code) = match error.kind() {
+        TransportErrorKind::Cancelled => (ExitClass::Cancelled, "cancelled"),
+        TransportErrorKind::Timeout => (ExitClass::Network, "timeout"),
+        TransportErrorKind::ResourceLimit => (ExitClass::Policy, "resourceLimit"),
+        TransportErrorKind::NetworkDenied
+        | TransportErrorKind::HostDenied
+        | TransportErrorKind::PrivateNetworkDenied => (ExitClass::Policy, "networkDenied"),
+        TransportErrorKind::Dns => (ExitClass::Network, "dns"),
+        TransportErrorKind::Connect => (ExitClass::Network, "connect"),
+        TransportErrorKind::Tls => (ExitClass::Network, "tls"),
+        TransportErrorKind::Http | TransportErrorKind::InvalidMessage => {
+            (ExitClass::Network, "invalidHttp")
+        }
+        TransportErrorKind::Unavailable => (ExitClass::Network, "networkUnavailable"),
+        _ => (ExitClass::Network, "pluginDownload"),
+    };
+    CliError::new(class, code, error.to_string())
+}
+
+fn plugin_execution_error(error: into_markdown::ConversionError) -> CliError {
+    match error {
+        into_markdown::ConversionError::Cancelled => {
+            CliError::new(ExitClass::Cancelled, "cancelled", "plugin operation cancelled")
+        }
+        into_markdown::ConversionError::Timeout => {
+            CliError::new(ExitClass::Policy, "timeout", "plugin operation timed out")
+        }
+        into_markdown::ConversionError::ResourceLimit { .. } => CliError::new(
+            ExitClass::Policy,
+            "resourceLimit",
+            "plugin operation exceeded its resource limit",
+        ),
+        _ => CliError::new(ExitClass::Io, "io", error.to_string()),
+    }
+}
+
+fn process_plugin_error(error: into_markdown_process_plugin::PluginError) -> CliError {
+    use into_markdown_process_plugin::PluginErrorCode as Code;
+    let class = match error.code {
+        Code::Cancelled => ExitClass::Cancelled,
+        Code::SandboxUnavailable | Code::Launch => ExitClass::Component,
+        _ => ExitClass::Policy,
+    };
+    CliError::new(class, error.code.as_str(), error.detail)
+}
+
+fn wasi_plugin_error(error: into_markdown_plugin_wasi::WasiPluginError) -> CliError {
+    use into_markdown_plugin_wasi::WasiPluginErrorCode as Code;
+    let class = match error.code {
+        Code::Cancelled => ExitClass::Cancelled,
+        Code::Io => ExitClass::Io,
+        Code::Runtime | Code::UnsupportedPlatform => ExitClass::Component,
+        _ => ExitClass::Policy,
+    };
+    CliError::new(class, error.code.as_str(), error.detail)
 }
 
 #[derive(Serialize)]
@@ -948,7 +2781,11 @@ fn run_config(
             if json {
                 write_json(context.stdout, &loaded.paths)
             } else {
-                writeln!(context.stdout, "global: {}", loaded.paths.global.display())?;
+                if let Some(global) = &loaded.paths.global {
+                    writeln!(context.stdout, "global: {}", global.display())?;
+                } else {
+                    writeln!(context.stdout, "global: (disabled)")?;
+                }
                 writeln!(
                     context.stdout,
                     "project: {}",
@@ -1117,18 +2954,7 @@ fn run_doctor(
         });
     }
     for (id, plugin) in &loaded.effective.plugins {
-        let (status, detail) = if !plugin.enabled {
-            ("disabled", "plugin is disabled".into())
-        } else if plugin.source.starts_with("https://") {
-            ("unavailable", "installed plugin package lookup is not implemented".into())
-        } else if Path::new(&plugin.source).is_file() {
-            (
-                "unavailable",
-                format!("package present; {} execution is not implemented", plugin.protocol),
-            )
-        } else {
-            ("missing", format!("package not found: {}", plugin.source))
-        };
+        let (status, detail) = doctor_plugin_check(id, plugin, &context.cwd);
         checks.push(DoctorCheck { id: format!("plugin:{id}"), status: status.into(), detail });
     }
     checks.push(DoctorCheck {
@@ -1149,6 +2975,48 @@ fn run_doctor(
             writeln!(context.stdout, "{}\t{}\t{}", check.id, check.status, check.detail)?;
         }
         Ok(())
+    }
+}
+
+fn doctor_plugin_check(id: &str, effective: &PluginConfig, cwd: &Path) -> (&'static str, String) {
+    if !effective.enabled {
+        return ("disabled", "plugin is disabled".into());
+    }
+    let project = config::plugins_in_scope(crate::args::Scope::Project, cwd);
+    let global = config::plugins_in_scope(crate::args::Scope::Global, cwd);
+    let (scope, exact) = match (project, global) {
+        (Ok(project), Ok(_global)) if project.get(id) == Some(effective) => {
+            (crate::args::Scope::Project, project.get(id).cloned())
+        }
+        (Ok(_), Ok(global)) if global.get(id) == Some(effective) => {
+            (crate::args::Scope::Global, global.get(id).cloned())
+        }
+        (Err(error), _) | (_, Err(error)) => return ("error", error.to_string()),
+        _ => {
+            return (
+                "error",
+                "effective plugin is shadowed by a profile or mismatched scope authority".into(),
+            );
+        }
+    };
+    let Some(exact) = exact else {
+        return ("missing", "plugin is not configured in the selected scope".into());
+    };
+    let manager = match open_scoped_plugin_manager(scope, cwd) {
+        Ok(manager) => manager,
+        Err(error) => return ("error", error.to_string()),
+    };
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    match manager
+        .verify(id, &execution)
+        .map_err(plugin_manager_error)
+        .and_then(|installed| verify_plugin_pin(&manager, &exact, &installed))
+    {
+        Ok(()) => ("ok", format!("{} runtime package and authority verified", exact.protocol)),
+        Err(error) => ("error", error.to_string()),
     }
 }
 
@@ -2686,21 +4554,577 @@ mod tests {
     };
     use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
-    use std::io::{Cursor, Read as _};
+    use std::io::Cursor;
+
+    #[test]
+    fn plugin_test_authority_never_falls_back_to_real_user_data() {
+        let error = global_plugin_store_scope().unwrap_err();
+        assert_eq!(error.code(), "internal");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_user_data_parent_rejects_world_writable_authority() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let anchor = temporary.path().join("user-data");
+        fs::create_dir(&anchor).unwrap();
+        fs::set_permissions(&anchor, fs::Permissions::from_mode(0o777)).unwrap();
+        let _test_user_data = TestUserDataGuard::set(Some(anchor.clone()));
+
+        let error = global_plugin_store_scope().unwrap_err();
+        assert_eq!(error.code(), "config");
+        assert!(!anchor.join("into-markdown").exists());
+    }
+
+    fn signed_transaction_fixture() -> (Vec<u8>, String, String) {
+        use base64::Engine as _;
+        use into_markdown_plugin_manager::{PackageFile, PackageManifest, PackageSignature};
+        use ring::signature::{Ed25519KeyPair, KeyPair as _};
+        use zip::write::SimpleFileOptions;
+
+        let key = Ed25519KeyPair::from_seed_unchecked(&[9_u8; 32]).unwrap();
+        let public = key.public_key().as_ref();
+        let fingerprint = format!("{:x}", Sha256::digest(public));
+        #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+        let target = "x86_64-pc-windows-msvc".to_owned();
+        #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+        let target = "x86_64-unknown-linux-gnu".to_owned();
+        #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+        let target = "aarch64-unknown-linux-gnu".to_owned();
+        #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+        let target = "aarch64-apple-darwin".to_owned();
+        let contents = b"fixture";
+        let mut manifest = PackageManifest {
+            schema_version: 1,
+            id: "transaction-fixture".to_owned(),
+            version: "1.0.0".to_owned(),
+            protocol: "process-v1".to_owned(),
+            supported_targets: std::collections::BTreeSet::from([target.clone()]),
+            entrypoints: BTreeMap::from([(target, "fixture.exe".to_owned())]),
+            runtime_manifest: None,
+            files: vec![PackageFile {
+                path: "fixture.exe".to_owned(),
+                bytes: contents.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(contents)),
+            }],
+            signature: PackageSignature {
+                signed_payload_version: 1,
+                algorithm: "ed25519".to_owned(),
+                key_id: "publisher.transaction".to_owned(),
+                public_key_base64: base64::engine::general_purpose::STANDARD.encode(public),
+                public_key_sha256: fingerprint.clone(),
+                signed_payload_sha256: String::new(),
+                signature_base64: String::new(),
+            },
+        };
+        let payload = into_markdown_plugin_manager::canonical_signed_payload(&manifest).unwrap();
+        manifest.signature.signed_payload_sha256 = format!("{:x}", Sha256::digest(&payload));
+        manifest.signature.signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(key.sign(&payload).as_ref());
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("plugin.json", options).unwrap();
+        writer.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+        writer.start_file("fixture.exe", options).unwrap();
+        writer.write_all(contents).unwrap();
+        (writer.finish().unwrap().into_inner(), "publisher.transaction".to_owned(), fingerprint)
+    }
+
+    #[test]
+    fn joint_transaction_config_cas_crash_child() {
+        let Some(root) = std::env::var_os("INTO_MD_JOINT_TXN_ROOT") else { return };
+        let mode = std::env::var("INTO_MD_JOINT_TXN_MODE").unwrap();
+        let root = PathBuf::from(root);
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let user_data = root.join("appdata");
+        create_private_user_data_directory(&user_data).unwrap();
+        let _test_user_data = TestUserDataGuard::set(Some(user_data));
+        let (anchor, relative) = global_plugin_store_scope().unwrap();
+        let (package, key_id, fingerprint) = signed_transaction_fixture();
+        let mut global = if mode == "seed" {
+            PluginManager::open_scoped(&anchor, &relative, Default::default()).unwrap()
+        } else {
+            PluginManager::open_persisted_scoped(&anchor, &relative).unwrap()
+        };
+        if mode == "seed" {
+            global.trust_signer(&key_id, &fingerprint).unwrap();
+            let (_, project_relative) = project_plugin_store_scope(&project).unwrap();
+            let manager =
+                PluginManager::open_scoped(&anchor, &project_relative, global.trusted_signers())
+                    .unwrap();
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let installed = manager.install_bytes(&package, None, &execution).unwrap();
+            let configured = PluginConfig {
+                source: "fixture.zip".to_owned(),
+                sha256: Some(installed.package_sha256),
+                protocol: installed.protocol,
+                enabled: true,
+                signing_key_id: key_id.clone(),
+                signing_key_sha256: fingerprint.clone(),
+            };
+            let config_path = config::scope_path(crate::args::Scope::Project, &project).unwrap();
+            let config_lock = config::lock_exact(&config_path).unwrap();
+            config::compare_and_set_plugin_exact_locked(
+                &config_lock,
+                &config_path,
+                &installed.id,
+                None,
+                Some(&configured),
+            )
+            .unwrap();
+            let transaction = CliPluginTransaction {
+                schema_version: 1,
+                operation: CliPluginOperation::Install,
+                phase: CliPluginPhase::StoreChanged,
+                global: false,
+                store_relative: project_relative.to_string_lossy().into_owned(),
+                project_root: Some(project.canonicalize().unwrap()),
+                id: installed.id,
+                backup_name: None,
+                old_config: None,
+                new_config: Some(configured),
+                signing_key_id: Some(key_id),
+                signing_key_sha256: Some(fingerprint),
+            };
+            write_cli_plugin_transaction(manager.root(), &transaction).unwrap();
+            std::process::exit(86);
+        }
+        let execution = into_markdown::ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+        let (_, project_relative) = project_plugin_store_scope(&project).unwrap();
+        let manager = PluginManager::open_existing_scoped(
+            &anchor,
+            &project_relative,
+            global.trusted_signers(),
+        )
+        .unwrap()
+        .unwrap();
+        recover_pending_cli_plugin_transaction_at(
+            manager.root(),
+            &anchor,
+            &relative,
+            &mut global,
+            &execution,
+        )
+        .unwrap();
+        assert_eq!(
+            manager.verify("transaction-fixture", &execution).unwrap_err().code,
+            ManagerErrorCode::NotInstalled
+        );
+        assert!(
+            config::plugins_in_scope(crate::args::Scope::Project, &project).unwrap().is_empty()
+        );
+    }
+
+    #[test]
+    fn joint_transaction_recovers_cas_before_phase_write_in_new_process() {
+        use std::process::Command as ProcessCommand;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let invoke = |mode: &str| {
+            ProcessCommand::new(&executable)
+                .args([
+                    "--exact",
+                    "app::tests::joint_transaction_config_cas_crash_child",
+                    "--nocapture",
+                ])
+                .env("INTO_MD_JOINT_TXN_ROOT", temporary.path())
+                .env("INTO_MD_JOINT_TXN_MODE", mode)
+                .env("APPDATA", temporary.path().join("appdata"))
+                .env("LOCALAPPDATA", temporary.path().join("appdata"))
+                .env("XDG_CONFIG_HOME", temporary.path().join("appdata"))
+                .env("HOME", temporary.path().join("home"))
+                .status()
+                .unwrap()
+        };
+        assert_eq!(invoke("seed").code(), Some(86));
+        assert!(invoke("recover").success());
+    }
+
+    #[test]
+    fn plugin_joint_phase_crash_child() {
+        let Some(root) = std::env::var_os("INTO_MD_PLUGIN_PHASE_ROOT") else { return };
+        let mode = std::env::var("INTO_MD_PLUGIN_PHASE_MODE").unwrap();
+        let root = PathBuf::from(root);
+        let project = root.join("project");
+        let user_data = root.join("user-data");
+        fs::create_dir_all(&project).unwrap();
+        create_private_user_data_directory(&user_data).unwrap();
+        let _test_config =
+            config::TestGlobalConfigGuard::set(Some(user_data.join("config/config.toml")));
+        let config_path = config::global_config_path().unwrap();
+        ensure_private_user_data_path(config_path.parent().unwrap()).unwrap();
+        let _test_user_data = TestUserDataGuard::set(Some(user_data));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        if mode == "crash" || mode == "remove-crash" || mode == "indeterminate-seed" {
+            let (package, key_id, fingerprint) = signed_transaction_fixture();
+            let package_path = root.join("plugin.zip");
+            fs::write(&package_path, &package).unwrap();
+            let sha256 = format!("{:x}", Sha256::digest(&package));
+            run(
+                vec![
+                    OsString::from("plugins"),
+                    OsString::from("install"),
+                    package_path.into_os_string(),
+                    OsString::from("--sha256"),
+                    OsString::from(sha256),
+                    OsString::from("--signing-key-id"),
+                    OsString::from(key_id),
+                    OsString::from("--signing-key-sha256"),
+                    OsString::from(fingerprint),
+                    OsString::from("--scope"),
+                    OsString::from("global"),
+                ],
+                RunContext {
+                    user_data_anchor: Some(root.join("user-data")),
+                    stdout: &mut stdout,
+                    stderr: &mut stderr,
+                    stdin_is_terminal: true,
+                    cwd: project,
+                },
+            )
+            .unwrap();
+            if mode == "indeterminate-seed" {
+                let (anchor, relative) = global_plugin_store_scope().unwrap();
+                let store = anchor.join(relative);
+                assert!(store.join(PLUGIN_CLI_TRANSACTION).exists());
+                assert!(store.join(".trusted-signers.next").exists());
+                std::process::exit(87);
+            }
+            if mode == "remove-crash" {
+                stdout.clear();
+                stderr.clear();
+                run(
+                    vec![
+                        OsString::from("plugins"),
+                        OsString::from("remove"),
+                        OsString::from("transaction-fixture"),
+                        OsString::from("--scope"),
+                        OsString::from("global"),
+                    ],
+                    RunContext {
+                        user_data_anchor: Some(root.join("user-data")),
+                        stdout: &mut stdout,
+                        stderr: &mut stderr,
+                        stdin_is_terminal: true,
+                        cwd: root.join("project"),
+                    },
+                )
+                .unwrap();
+            }
+            panic!("crash hook did not terminate the child");
+        }
+        run(
+            vec![OsString::from("plugins"), OsString::from("--json")],
+            RunContext {
+                user_data_anchor: Some(root.join("user-data")),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: project,
+            },
+        )
+        .unwrap();
+        let point = std::env::var("INTO_MD_PLUGIN_PHASE_POINT").unwrap();
+        let expected_installed = if point.starts_with("remove-") {
+            !point.contains("config-changed")
+        } else {
+            point.contains("config-changed") || point.contains("trust-published")
+        };
+        let output = String::from_utf8(stdout).unwrap();
+        assert_eq!(output.contains("transaction-fixture"), expected_installed, "{output}");
+
+        let (package, key_id, fingerprint) = signed_transaction_fixture();
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let (anchor, relative) = global_plugin_store_scope().unwrap();
+        let manager = PluginManager::open_persisted_scoped(&anchor, &relative).unwrap();
+        let execution = into_markdown::ExecutionContext::new(
+            into_markdown::ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+        let verified = manager.verify("transaction-fixture", &execution);
+        assert_eq!(verified.is_ok(), expected_installed, "{point}");
+        match verified {
+            Ok(installed) => {
+                assert_eq!(installed.package_sha256, package_sha256);
+                assert_eq!(installed.signing_key_id, key_id);
+            }
+            Err(error) => assert_eq!(error.code, ManagerErrorCode::NotInstalled),
+        }
+        let config_path = config::global_config_path().unwrap();
+        let config_lock = config::lock_exact(&config_path).unwrap();
+        let configured = config::plugins_in_exact_locked(&config_lock, &config_path).unwrap();
+        assert_eq!(configured.contains_key("transaction-fixture"), expected_installed, "{point}");
+        if let Some(configured) = configured.get("transaction-fixture") {
+            assert!(configured.enabled);
+            assert_eq!(configured.sha256.as_deref(), Some(package_sha256.as_str()));
+            assert_eq!(configured.signing_key_id, key_id);
+            assert_eq!(configured.signing_key_sha256, fingerprint);
+        }
+        let trust_expected = point.starts_with("remove-") || expected_installed;
+        assert_eq!(
+            manager.trusted_signers().fingerprints.get(&key_id),
+            trust_expected.then_some(&fingerprint),
+            "{point}"
+        );
+        assert!(!manager.root().join(PLUGIN_CLI_TRANSACTION).exists(), "{point}");
+        assert!(fs::read_dir(manager.root()).unwrap().all(|entry| {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            name != ".transaction.json"
+                && !name.starts_with(".cli-backup-")
+                && !name.starts_with(".backup-")
+                && !name.starts_with(".snapshot-next-")
+                && !name.starts_with(".incoming-")
+                && !name.starts_with(".staging-")
+                && !name.starts_with(".removed-")
+        }));
+        assert!(fs::read_dir(config_path.parent().unwrap()).unwrap().all(|entry| {
+            !entry.unwrap().file_name().to_string_lossy().starts_with(".into-md-config-")
+        }));
+    }
+
+    #[test]
+    fn plugin_joint_install_recovers_every_durable_phase_in_new_processes() {
+        use std::process::Command as ProcessCommand;
+
+        for phase in [
+            "install-started",
+            "install-store-changed",
+            "install-config-cas",
+            "install-config-changed",
+            "install-trust-published",
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let executable = std::env::current_exe().unwrap();
+            let invoke = |mode: &str| {
+                ProcessCommand::new(&executable)
+                    .args(["--exact", "app::tests::plugin_joint_phase_crash_child", "--nocapture"])
+                    .env("INTO_MD_PLUGIN_PHASE_ROOT", temporary.path())
+                    .env("INTO_MD_PLUGIN_PHASE_MODE", mode)
+                    .env("INTO_MD_PLUGIN_PHASE_POINT", phase)
+                    .env("INTO_MD_PLUGIN_CLI_CRASH_POINT", phase)
+                    .env("APPDATA", temporary.path().join("appdata"))
+                    .env("LOCALAPPDATA", temporary.path().join("appdata"))
+                    .env("XDG_CONFIG_HOME", temporary.path().join("config"))
+                    .env("HOME", temporary.path().join("home"))
+                    .status()
+                    .unwrap()
+            };
+            assert_eq!(invoke("crash").code(), Some(86), "{phase}");
+            assert!(invoke("recover").success(), "{phase}");
+        }
+    }
+
+    #[test]
+    fn plugin_joint_remove_recovers_every_durable_phase_in_new_processes() {
+        use std::process::Command as ProcessCommand;
+
+        for phase in
+            ["remove-started", "remove-store-changed", "remove-config-cas", "remove-config-changed"]
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let executable = std::env::current_exe().unwrap();
+            let invoke = |mode: &str| {
+                ProcessCommand::new(&executable)
+                    .args(["--exact", "app::tests::plugin_joint_phase_crash_child", "--nocapture"])
+                    .env("INTO_MD_PLUGIN_PHASE_ROOT", temporary.path())
+                    .env("INTO_MD_PLUGIN_PHASE_MODE", mode)
+                    .env("INTO_MD_PLUGIN_PHASE_POINT", phase)
+                    .env("INTO_MD_PLUGIN_CLI_CRASH_POINT", phase)
+                    .env("APPDATA", temporary.path().join("appdata"))
+                    .env("LOCALAPPDATA", temporary.path().join("appdata"))
+                    .env("XDG_CONFIG_HOME", temporary.path().join("config"))
+                    .env("HOME", temporary.path().join("home"))
+                    .status()
+                    .unwrap()
+            };
+            assert_eq!(invoke("remove-crash").code(), Some(86), "{phase}");
+            assert!(invoke("recover").success(), "{phase}");
+        }
+    }
+
+    #[cfg(feature = "plugin-manager-fault-injection")]
+    #[test]
+    fn plugin_joint_trust_indeterminate_recovers_forward_in_new_process() {
+        use std::process::Command as ProcessCommand;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let invoke = |mode: &str, inject: bool| {
+            let mut command = ProcessCommand::new(&executable);
+            command
+                .args(["--exact", "app::tests::plugin_joint_phase_crash_child", "--nocapture"])
+                .env("INTO_MD_PLUGIN_PHASE_ROOT", temporary.path())
+                .env("INTO_MD_PLUGIN_PHASE_MODE", mode)
+                .env("INTO_MD_PLUGIN_PHASE_POINT", "install-config-changed")
+                .env("APPDATA", temporary.path().join("appdata"))
+                .env("LOCALAPPDATA", temporary.path().join("appdata"))
+                .env("XDG_CONFIG_HOME", temporary.path().join("config"))
+                .env("HOME", temporary.path().join("home"));
+            if inject {
+                command.env("INTO_MD_PLUGIN_TRUST_INDETERMINATE", "1");
+            }
+            command.status().unwrap()
+        };
+        assert_eq!(invoke("indeterminate-seed", true).code(), Some(87));
+        assert!(invoke("recover", false).success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plugin_read_recovery_child() {
+        let Some(cwd) = std::env::var_os("INTO_MD_PLUGIN_READ_RECOVERY_ROOT") else { return };
+        let cwd = PathBuf::from(cwd);
+        let user_data = cwd.parent().unwrap().join("user-data");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![OsString::from("plugins"), OsString::from("--json")],
+            RunContext {
+                user_data_anchor: Some(user_data),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd,
+            },
+        )
+        .unwrap();
+        assert!(String::from_utf8(stdout).unwrap().contains("demo"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recreated_project_does_not_consume_old_scope_journal_child() {
+        let Some(root) = std::env::var_os("INTO_MD_PROJECT_RECREATE_ROOT") else { return };
+        let root = PathBuf::from(root);
+        let project = root.join("project");
+        fs::create_dir(&project).unwrap();
+        let user_data = root.join("isolated-user-data");
+        let _test_user_data = TestUserDataGuard::set(Some(user_data.clone()));
+        let (anchor, old_relative) = project_plugin_store_scope(&project).unwrap();
+        let global = PluginManager::open_persisted_scoped(
+            &global_plugin_store_scope().unwrap().0,
+            &global_plugin_store_scope().unwrap().1,
+        )
+        .unwrap();
+        let old =
+            PluginManager::open_scoped(&anchor, &old_relative, global.trusted_signers()).unwrap();
+        fs::write(old.root().join(PLUGIN_CLI_TRANSACTION), b"old identity sentinel").unwrap();
+        fs::rename(&project, root.join("moved")).unwrap();
+        fs::create_dir(&project).unwrap();
+        let (_, new_relative) = project_plugin_store_scope(&project).unwrap();
+        assert_ne!(old_relative, new_relative);
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run(
+            vec![OsString::from("plugins"), OsString::from("--json")],
+            RunContext {
+                user_data_anchor: Some(user_data),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: project.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(stdout).unwrap().trim(), "[]");
+        assert_eq!(fs::read_dir(&project).unwrap().count(), 0);
+        assert_eq!(
+            fs::read(old.root().join(PLUGIN_CLI_TRANSACTION)).unwrap(),
+            b"old identity sentinel"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recreated_project_scope_isolated_parent() {
+        use std::process::Command as ProcessCommand;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let appdata = temporary.path().join("appdata");
+        fs::create_dir(&appdata).unwrap();
+        let status = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::recreated_project_does_not_consume_old_scope_journal_child",
+                "--nocapture",
+            ])
+            .env("INTO_MD_PROJECT_RECREATE_ROOT", temporary.path())
+            .env("APPDATA", &appdata)
+            .env("LOCALAPPDATA", &appdata)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn first_plugin_read_recovers_project_config_before_load() {
+        use std::process::Command as ProcessCommand;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("project");
+        let appdata = temporary.path().join("appdata");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&appdata).unwrap();
+        let target = project.join(".into-markdown.toml");
+        fs::write(&target, "schema_version = 1\n").unwrap();
+        let replacement = format!(
+            "schema_version = 1\n[plugins.demo]\nsource = \"file:///demo.zip\"\nsha256 = \"{}\"\nprotocol = \"process-v1\"\nenabled = false\nsigning_key_id = \"test\"\nsigning_key_sha256 = \"{}\"\n",
+            "0".repeat(64),
+            "1".repeat(64)
+        );
+        let executable = std::env::current_exe().unwrap();
+        let crash = ProcessCommand::new(&executable)
+            .args([
+                "--exact",
+                "transaction::windows_config_tests::config_replace_crash_child",
+                "--nocapture",
+            ])
+            .env("INTO_MD_CONFIG_CRASH_ROOT", &project)
+            .env("INTO_MD_CONFIG_CRASH_TARGET", ".into-markdown.toml")
+            .env("INTO_MD_CONFIG_CRASH_CONTENT", &replacement)
+            .env("INTO_MD_CONFIG_CRASH_POINT", "backup")
+            .status()
+            .unwrap();
+        assert_eq!(crash.code(), Some(86));
+        assert!(!target.exists());
+
+        let read = ProcessCommand::new(executable)
+            .args(["--exact", "app::tests::plugin_read_recovery_child", "--nocapture"])
+            .env("INTO_MD_PLUGIN_READ_RECOVERY_ROOT", &project)
+            .env("APPDATA", &appdata)
+            .env("LOCALAPPDATA", &appdata)
+            .status()
+            .unwrap();
+        assert!(read.success());
+        assert_eq!(fs::read_to_string(target).unwrap(), replacement);
+    }
 
     fn invoke(arguments: &[&str], stdin_is_terminal: bool) -> Result<(String, String), CliError> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let root = std::env::temp_dir().join(format!(
-            "into-md-app-test-{}-{}",
-            std::process::id(),
-            arguments.join("-").replace('/', "_")
-        ));
+        let argument_digest = format!("{:x}", Sha256::digest(arguments.join("\0").as_bytes()));
+        let root = std::env::temp_dir()
+            .join(format!("into-md-app-test-{}-{argument_digest}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let result = run(
             arguments.iter().map(OsString::from).collect(),
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal,
@@ -2752,6 +5176,7 @@ mod tests {
                 report.clone().into_os_string(),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -2772,6 +5197,13 @@ mod tests {
         let (stdout, _) = invoke(&[], true).unwrap();
         assert!(stdout.contains("Usage:"));
         assert!(stdout.contains("providers"));
+    }
+
+    #[test]
+    fn no_config_rejects_plugin_operations_that_require_scope_authority() {
+        let error = invoke(&["--no-config", "plugins", "verify", "demo"], true).unwrap_err();
+        assert_eq!(error.code(), "usage");
+        assert!(error.to_string().contains("only plugin list and show"));
     }
 
     #[test]
@@ -3206,6 +5638,7 @@ mod tests {
         let error = run(
             vec![input.into_os_string()],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3236,6 +5669,7 @@ mod tests {
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3285,6 +5719,7 @@ mod tests {
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3370,6 +5805,7 @@ mod tests {
                 OsString::from("text"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3401,6 +5837,7 @@ mod tests {
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut dry_stdout,
                 stderr: &mut dry_stderr,
                 stdin_is_terminal: true,
@@ -3504,6 +5941,7 @@ mod tests {
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3545,6 +5983,7 @@ api_key_env = "LOCAL_KEY"
                 OsString::from("--allow-network"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3588,6 +6027,7 @@ api_key_env = "REMOTE_KEY"
                 OsString::from("--allow-network"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3632,6 +6072,7 @@ api_key_env = "REMOTE_KEY"
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: false,
@@ -3661,6 +6102,7 @@ api_key_env = "REMOTE_KEY"
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3691,6 +6133,7 @@ api_key_env = "REMOTE_KEY"
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3721,6 +6164,7 @@ api_key_env = "REMOTE_KEY"
                 OsString::from("--dry-run"),
             ],
             RunContext {
+                user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,
                 stderr: &mut stderr,
                 stdin_is_terminal: true,
@@ -3776,6 +6220,45 @@ api_key_env = "REMOTE_KEY"
     fn sha256_is_available_for_future_local_plugin_records() {
         let digest = Sha256::digest(b"plugin");
         assert_eq!(format!("{digest:x}").len(), 64);
+    }
+
+    #[test]
+    fn project_plugin_scope_is_identity_bound_and_isolates_projects() {
+        let temporary = tempfile::tempdir().unwrap();
+        let _test_user_data = TestUserDataGuard::set(Some(temporary.path().join("user-data")));
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let (anchor_one, scope_one) = project_plugin_store_scope(&first).unwrap();
+        let (anchor_two, scope_two) = project_plugin_store_scope(&second).unwrap();
+        assert_eq!(anchor_one, anchor_two);
+        assert_ne!(scope_one, scope_two);
+        assert_eq!(project_plugin_store_scope(&first).unwrap().1, scope_one);
+        fs::write(first.join(".into-markdown.toml"), "schema_version = 1\n").unwrap();
+        let resolved = ProjectScopeAuthority::resolve(&first).unwrap();
+        let nested = first.join("nested").join("deeper");
+        fs::create_dir_all(&nested).unwrap();
+        assert_eq!(project_plugin_store_scope(&nested).unwrap().1, scope_one);
+
+        let moved = temporary.path().join("moved");
+        fs::rename(&first, &moved).unwrap();
+        fs::create_dir(&first).unwrap();
+        assert!(resolved.verify().is_err(), "old project identity accepted replacement");
+        let replacement_scope = project_plugin_store_scope(&first).unwrap().1;
+        let moved_scope = project_plugin_store_scope(&moved).unwrap().1;
+        assert_ne!(replacement_scope, scope_one);
+        assert_ne!(moved_scope, scope_one);
+
+        let alias = temporary.path().join("alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        #[cfg(windows)]
+        let _ = std::os::windows::fs::symlink_dir(&first, &alias);
+        if alias.exists() {
+            let (_, alias_scope) = project_plugin_store_scope(&alias).unwrap();
+            assert_eq!(replacement_scope, alias_scope);
+        }
     }
 
     #[test]

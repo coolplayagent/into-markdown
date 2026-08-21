@@ -370,3 +370,53 @@ fn redirect_cycle_limit_and_redacted_metadata_are_deterministic() {
         TransportErrorKind::Http
     );
 }
+
+#[test]
+fn streamed_identity_response_is_bounded_and_reserves_before_dns() {
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: 4\r\n\r\ndata"
+            .as_slice();
+    let (client, _) = scripted_client([response]);
+    let execution = context();
+    let mut output = Vec::new();
+    let streamed = client
+        .get_to_writer(
+            "https://public.test/plugin.zip",
+            &public_policy(&["public.test"], 0),
+            FetchLimits { max_wire_bytes: 4, max_decoded_bytes: 4 },
+            &execution,
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(streamed.bytes_written, 4);
+    assert_eq!(output, b"data");
+    assert_eq!(execution.reserved_temporary_bytes(), 4);
+    drop(streamed);
+    assert_eq!(execution.reserved_temporary_bytes(), 0);
+
+    let dns = Arc::new(CountingDns {
+        calls: AtomicUsize::new(0),
+        addresses: vec!["8.8.8.8:443".parse().unwrap()],
+    });
+    let client = HttpClient::with_resolver(dns.clone());
+    let limited = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits { max_temporary_bytes: 3, ..Default::default() },
+    );
+    assert_eq!(
+        client
+            .get_to_writer(
+                "https://public.test/plugin.zip",
+                &public_policy(&["public.test"], 0),
+                FetchLimits { max_wire_bytes: 4, max_decoded_bytes: 4 },
+                &limited,
+                &mut Vec::new(),
+            )
+            .err()
+            .expect("temporary budget")
+            .kind(),
+        TransportErrorKind::ResourceLimit
+    );
+    assert_eq!(dns.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(limited.reserved_temporary_bytes(), 0);
+}

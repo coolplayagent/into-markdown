@@ -3,6 +3,10 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 package(default_visibility = ["//crates:__subpackages__"])
 
 exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+exports_files(
+    ["tests/fixtures/guest.component.wasm"],
+    visibility = ["//visibility:public"],
+)
 
 rust_library(
     name = "plugin_wasi",

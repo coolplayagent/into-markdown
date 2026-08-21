@@ -33,7 +33,14 @@ fn main() {
     let explicit_json_log = i18n::requested_json_log(&arguments);
     let result = app::run(
         arguments,
-        app::RunContext { stdout: &mut stdout, stderr: &mut stderr, stdin_is_terminal, cwd },
+        app::RunContext {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_is_terminal,
+            cwd,
+            #[cfg(test)]
+            user_data_anchor: None,
+        },
     );
     if let Err(error) = result {
         if error.is_broken_pipe() {

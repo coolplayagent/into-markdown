@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 
 pub(crate) fn working_directory(policy: &RuntimePolicy) -> Result<tempfile::TempDir, PluginError> {
     #[cfg(unix)]

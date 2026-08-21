@@ -84,10 +84,7 @@ pub(crate) fn packages(
     if authority.schema_version != 1 || authority.root != "into-markdown-cli" {
         errors.push("Cargo normal-runtime authority has unsupported schema or root".to_owned());
     }
-    let lock_hash = format!("{:x}", Sha256::digest(lock_text.as_bytes()));
-    if authority.cargo_lock_sha256 != lock_hash {
-        errors.push("Cargo normal-runtime authority is stale for Cargo.lock".to_owned());
-    }
+    validate_lock_hash(lock_text.as_bytes(), &authority.cargo_lock_sha256, errors);
     let Some(metadata) = cargo_metadata(repository, errors) else {
         return RuntimeClosure { registry: BTreeSet::new(), local: BTreeMap::new() };
     };
@@ -283,7 +280,7 @@ fn validate_manifest_hashes(
             continue;
         }
         match std::fs::read(repository.join(relative)) {
-            Ok(contents) => match canonical_manifest_sha256(&contents) {
+            Ok(contents) => match canonical_text_sha256(&contents) {
                 Ok(actual) => {
                     if expected.len() != 64
                         || !expected
@@ -305,7 +302,7 @@ fn validate_manifest_hashes(
     }
 }
 
-fn canonical_manifest_sha256(contents: &[u8]) -> Result<String, &'static str> {
+fn canonical_text_sha256(contents: &[u8]) -> Result<String, &'static str> {
     std::str::from_utf8(contents).map_err(|_| "invalid UTF-8")?;
     let mut normalized = Vec::with_capacity(contents.len());
     let mut index = 0;
@@ -322,6 +319,16 @@ fn canonical_manifest_sha256(contents: &[u8]) -> Result<String, &'static str> {
         }
     }
     Ok(format!("{:x}", Sha256::digest(normalized)))
+}
+
+fn validate_lock_hash(contents: &[u8], expected: &str, errors: &mut Vec<String>) {
+    match canonical_text_sha256(contents) {
+        Ok(actual) if actual != expected => {
+            errors.push("Cargo normal-runtime authority is stale for Cargo.lock".to_owned());
+        }
+        Err(error) => errors.push(format!("Cargo.lock is not canonical UTF-8 text: {error}")),
+        Ok(_) => {}
+    }
 }
 
 fn parse_partition(
@@ -352,7 +359,7 @@ fn parse_partition(
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_manifest_sha256, validate_manifest_hashes};
+    use super::{canonical_text_sha256, validate_lock_hash, validate_manifest_hashes};
     use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
@@ -364,7 +371,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("Cargo.toml");
         let lf = b"[package]\nname = \"fixture\"\n";
-        let expected = canonical_manifest_sha256(lf).unwrap();
+        let expected = canonical_text_sha256(lf).unwrap();
         let paths = BTreeSet::from(["Cargo.toml".to_owned()]);
         let manifests = BTreeMap::from([("Cargo.toml".to_owned(), expected)]);
 
@@ -385,5 +392,27 @@ mod tests {
             assert!(!errors.is_empty());
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lock_hash_accepts_lf_and_crlf_but_rejects_invalid_text_and_content() {
+        let lf = b"version = 4\n[[package]]\nname = \"fixture\"\n";
+        let crlf = b"version = 4\r\n[[package]]\r\nname = \"fixture\"\r\n";
+        let expected = canonical_text_sha256(lf).unwrap();
+
+        for contents in [lf.as_slice(), crlf.as_slice()] {
+            let mut errors = Vec::new();
+            validate_lock_hash(contents, &expected, &mut errors);
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+        for contents in [
+            b"version = 4\n[[package]]\nname = \"mutated\"\n".as_slice(),
+            b"version = 4\r[[package]]\n".as_slice(),
+            b"version = 4\n\xff".as_slice(),
+        ] {
+            let mut errors = Vec::new();
+            validate_lock_hash(contents, &expected, &mut errors);
+            assert!(!errors.is_empty());
+        }
     }
 }
