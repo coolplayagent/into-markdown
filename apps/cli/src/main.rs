@@ -1,5 +1,6 @@
 //! `into-md` command-line application.
 
+mod admin;
 mod app;
 mod args;
 mod config;

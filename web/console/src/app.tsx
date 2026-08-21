@@ -6,6 +6,7 @@ import { RouteLink, Router, useRouter } from "./router";
 import { ThemeProvider, useTheme } from "./theme";
 import { WorkbenchPage } from "./workbench-page";
 import { MeetingPage } from "./meeting-page";
+import { AdminPage, type AdminSection } from "./admin-page";
 
 function Preferences() {
   const { locale, setLocale, t } = useI18n();
@@ -35,12 +36,16 @@ function Content({ api }: { api: ApiClient }) {
   const meetingResult = /^\/meetings\/results\/([0-9a-f]{32})$/.exec(path);
   const workbenchResult = /^\/results\/([0-9a-f]{32})$/.exec(path);
   const meeting = path === "/meetings" || Boolean(meetingResult);
+  const adminMatch = /^\/admin\/(formats|models|providers|plugins|configuration|doctor)$/.exec(path);
+  const adminSection = adminMatch?.[1] as AdminSection | undefined;
   useEffect(() => {
-    document.title = `${t(meeting ? "meetingNotes" : "workbench")} · into-markdown`;
-  }, [meeting, t]);
+    document.title = `${t(adminSection ?? (meeting ? "meetingNotes" : "workbench"))} · into-markdown`;
+  }, [adminSection, meeting, t]);
   useEffect(() => { main.current?.focus(); }, [path]);
   return <main id="main" ref={main} tabIndex={-1}>
-    <div className="route-surface">{meeting
+    <div className="route-surface">{adminSection
+      ? <AdminPage api={api} section={adminSection} />
+      : meeting
       ? <MeetingPage api={api} initialTaskId={meetingResult?.[1]} />
       : <WorkbenchPage api={api} initialTaskId={workbenchResult?.[1]} />}</div>
   </main>;
@@ -49,7 +54,7 @@ function Content({ api }: { api: ApiClient }) {
 function Shell({ api }: { api: ApiClient }) {
   const { t } = useI18n();
   const { path } = useRouter();
-  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
+  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") && !path.startsWith("/admin/") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink><RouteLink href="/admin/plugins" className={path.startsWith("/admin/") ? "active" : ""}>{t("administration")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
 }
 
 export function App({ api }: { api: ApiClient }) {

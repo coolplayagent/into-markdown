@@ -4,7 +4,7 @@ use crate::args::{
     AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
     ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
     ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
-    RaggedRowsArg, SetupCommand, TableHeaderArg, TranscriptCommand, UiArgs,
+    RaggedRowsArg, Scope, SetupCommand, TableHeaderArg, TranscriptCommand, UiArgs,
 };
 use crate::config::{self, LoadedConfig, PluginConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -76,6 +76,55 @@ pub struct RunContext<'a> {
     pub cwd: PathBuf,
     #[cfg(test)]
     pub user_data_anchor: Option<PathBuf>,
+}
+
+pub(crate) fn run_admin_cli_arguments(
+    cwd: &Path,
+    arguments: Vec<OsString>,
+    test_user_data_anchor: Option<&Path>,
+) -> Result<String, CliError> {
+    let _ = test_user_data_anchor;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    run(
+        arguments,
+        RunContext {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_is_terminal: true,
+            cwd: cwd.to_owned(),
+            #[cfg(test)]
+            user_data_anchor: test_user_data_anchor.map(Path::to_owned),
+        },
+    )?;
+    String::from_utf8(stdout).map_err(|_| CliError::internal("command returned non-UTF-8 output"))
+}
+
+pub(crate) const fn admin_plugin_target() -> &'static str {
+    #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+    return "x86_64-pc-windows-msvc";
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    return "x86_64-unknown-linux-gnu";
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    return "aarch64-unknown-linux-gnu";
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    return "aarch64-apple-darwin";
+    #[allow(unreachable_code)]
+    "unsupported"
+}
+
+pub(crate) fn with_admin_authority<T>(
+    test_user_data_anchor: Option<&Path>,
+    operation: impl FnOnce() -> T,
+) -> T {
+    #[cfg(test)]
+    let _test_user_data = TestUserDataGuard::set(test_user_data_anchor.map(Path::to_owned));
+    #[cfg(test)]
+    let _test_global_config = config::TestGlobalConfigGuard::set(
+        test_user_data_anchor.map(|anchor| anchor.join("config/config.toml")),
+    );
+    let _ = test_user_data_anchor;
+    operation()
 }
 
 #[cfg(test)]
@@ -166,7 +215,10 @@ pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), 
     result.map_err(|error| error.with_rendering(language, json_log))
 }
 
-fn recover_plugins_before_config_load(cwd: &Path, no_config: bool) -> Result<(), CliError> {
+pub(crate) fn recover_plugins_before_config_load(
+    cwd: &Path,
+    no_config: bool,
+) -> Result<(), CliError> {
     if no_config {
         return Ok(());
     }
@@ -221,7 +273,7 @@ fn run_command(
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     match command {
-        Command::Ui(arguments) => run_ui(arguments, context),
+        Command::Ui(arguments) => run_ui(arguments, global, context),
         Command::Formats(arguments) => match arguments.command {
             None => list_formats(
                 arguments.family.as_deref(),
@@ -413,10 +465,24 @@ fn collect_speaker_ids(
     }
 }
 
-fn run_ui(arguments: UiArgs, context: &mut RunContext<'_>) -> Result<(), CliError> {
+fn run_ui(
+    arguments: UiArgs,
+    global: &crate::args::GlobalArgs,
+    context: &mut RunContext<'_>,
+) -> Result<(), CliError> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|error| CliError::component(format!("initialize local Web runtime: {error}")))?;
-    runtime.block_on(crate::ui::run_cli(arguments, context.stdout, context.stderr))
+    runtime.block_on(crate::ui::run_cli(
+        arguments,
+        crate::admin::AdminConfigContext {
+            explicit: global.config.clone(),
+            no_automatic: global.no_config,
+            profile: global.profile.clone(),
+            language: global.language,
+        },
+        context.stdout,
+        context.stderr,
+    ))
 }
 
 #[derive(Serialize)]
@@ -698,7 +764,7 @@ fn run_models(
     }
 }
 
-fn ensure_model_parent() -> Result<(), CliError> {
+pub(crate) fn ensure_model_parent() -> Result<(), CliError> {
     let data_dir = directories::ProjectDirs::from("", "", "into-markdown")
         .map(|directories| directories.data_dir().to_path_buf())
         .ok_or_else(|| {
@@ -715,7 +781,7 @@ fn ensure_model_parent_at(data_dir: &Path) -> Result<(), CliError> {
     fs::create_dir_all(data_dir).map_err(CliError::from)
 }
 
-fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
+pub(crate) fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
     let writable_root = directories::ProjectDirs::from("", "", "into-markdown")
         .map(|directories| directories.data_dir().join("models"))
         .ok_or_else(|| {
@@ -733,7 +799,7 @@ fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
     into_markdown::ModelManager::embedded(writable_root, bundled_root).map_err(CliError::from)
 }
 
-fn model_error(error: into_markdown::ModelManagerError) -> CliError {
+pub(crate) fn model_error(error: into_markdown::ModelManagerError) -> CliError {
     use into_markdown::ModelManagerError;
     match error {
         ModelManagerError::UnknownBundle => CliError::usage(error.to_string()),
@@ -825,7 +891,12 @@ fn run_providers(
             Ok(())
         }
         Some(ProvidersCommand::SetDefault { name, scope }) => {
-            if !loaded.effective.providers.contains_key(&name) {
+            let provider_exists = if scope == Scope::Global {
+                crate::config::has_complete_provider_in_scope(scope, &context.cwd, &name)?
+            } else {
+                loaded.effective.providers.contains_key(&name)
+            };
+            if !provider_exists {
                 return Err(CliError::usage(format!("unknown provider '{name}'")));
             }
             let path = config::set_default_provider(scope, &context.cwd, &name)?;
@@ -833,44 +904,7 @@ fn run_providers(
             Ok(())
         }
         Some(ProvidersCommand::Test(arguments)) => {
-            let provider =
-                loaded.effective.providers.get(&arguments.name).ok_or_else(|| {
-                    CliError::usage(format!("unknown provider '{}'", arguments.name))
-                })?;
-            let mut options = loaded.options.clone();
-            apply_network_authorization(
-                &mut options,
-                arguments.allow_network,
-                arguments.allow_private_network,
-                &arguments.allow_host,
-            )?;
-            validate_network_url(&provider.base_url, &options, "provider")?;
-            let timeout = std::time::Duration::from_millis(
-                provider.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
-            );
-            let provider_config = TransportProviderConfig::parse(
-                &provider.base_url,
-                &provider.model,
-                &provider.api_key_env,
-                timeout,
-                provider.capabilities.clone(),
-            )?;
-            let client = OpenAiCompatibleClient::new(
-                provider_config,
-                ProviderNetworkPolicy {
-                    allow_network: options.network.enabled,
-                    allow_private_network: !options.network.deny_private_networks,
-                    allowed_hosts: options.network.allowed_hosts.clone(),
-                },
-            );
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions {
-                    timeout: Some(timeout),
-                    ..into_markdown::ExecutionOptions::default()
-                },
-                options.limits,
-            );
-            let result = client.test(&execution)?;
+            let result = test_provider(loaded, &arguments)?;
             if json {
                 write_json(context.stdout, &result)
             } else {
@@ -882,6 +916,51 @@ fn run_providers(
             }
         }
     }
+}
+
+pub(crate) fn test_provider(
+    loaded: &LoadedConfig,
+    arguments: &crate::args::ProviderTestArgs,
+) -> Result<into_markdown::ProviderTestResult, CliError> {
+    let provider = loaded
+        .effective
+        .providers
+        .get(&arguments.name)
+        .ok_or_else(|| CliError::usage(format!("unknown provider '{}'", arguments.name)))?;
+    let mut options = loaded.options.clone();
+    apply_network_authorization(
+        &mut options,
+        arguments.allow_network,
+        arguments.allow_private_network,
+        &arguments.allow_host,
+    )?;
+    validate_network_url(&provider.base_url, &options, "provider")?;
+    let timeout = std::time::Duration::from_millis(
+        provider.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
+    );
+    let provider_config = TransportProviderConfig::parse(
+        &provider.base_url,
+        &provider.model,
+        &provider.api_key_env,
+        timeout,
+        provider.capabilities.clone(),
+    )?;
+    let client = OpenAiCompatibleClient::new(
+        provider_config,
+        ProviderNetworkPolicy {
+            allow_network: options.network.enabled,
+            allow_private_network: !options.network.deny_private_networks,
+            allowed_hosts: options.network.allowed_hosts.clone(),
+        },
+    );
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions {
+            timeout: Some(timeout),
+            ..into_markdown::ExecutionOptions::default()
+        },
+        options.limits,
+    );
+    client.test(&execution).map_err(CliError::from)
 }
 
 fn list_providers(
@@ -2308,6 +2387,74 @@ fn verify_plugin_pin(
     Ok(())
 }
 
+/// Verify one captured effective plugin against the store selected by the
+/// physical source-layer authority. This deliberately validates the merged
+/// pins, not merely the raw configuration in the package's store scope.
+pub(crate) fn verify_admin_effective_plugin(
+    cwd: &Path,
+    scope: Scope,
+    id: &str,
+    configured: &PluginConfig,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    let authority = scoped_plugin_authority(scope, cwd, &global)?;
+    let installed = authority.manager.verify(id, &execution).map_err(plugin_manager_error)?;
+    verify_plugin_pin(&authority.manager, configured, &installed)?;
+    if let Some(project) = &authority.project {
+        project.verify()?;
+    }
+    Ok(installed)
+}
+
+pub(crate) fn admin_effective_plugin_scope(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+) -> Result<Scope, CliError> {
+    let source = loaded.sources.get(&format!("plugins.{id}.source")).ok_or_else(|| {
+        CliError::new(
+            ExitClass::Policy,
+            "pluginAuthority",
+            "effective plugin source has no configuration authority",
+        )
+    })?;
+    let project = config::source_is_exact_scope(source, Scope::Project, cwd)?;
+    let global = config::source_is_exact_scope(source, Scope::Global, cwd)?;
+    match (global, project) {
+        (true, false) => Ok(Scope::Global),
+        (false, true) => Ok(Scope::Project),
+        _ => Err(CliError::new(
+            ExitClass::Policy,
+            "pluginAuthority",
+            "effective plugin source does not identify exactly one managed configuration scope",
+        )),
+    }
+}
+
+pub(crate) fn verify_admin_effective_plugin_from_loaded(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    let configured = loaded
+        .effective
+        .plugins
+        .get(id)
+        .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
+    verify_admin_effective_plugin(
+        cwd,
+        admin_effective_plugin_scope(loaded, cwd, id)?,
+        id,
+        configured,
+    )
+}
+
 fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
     #[cfg(test)]
     {
@@ -2565,22 +2712,6 @@ fn project_directory_identity(project: &Path) -> Result<(u64, u64), CliError> {
 fn project_plugin_store_scope(cwd: &Path) -> Result<(PathBuf, PathBuf), CliError> {
     let authority = ProjectScopeAuthority::resolve(cwd)?;
     Ok((authority.anchor, authority.store_relative))
-}
-
-fn open_scoped_plugin_manager(
-    scope: crate::args::Scope,
-    cwd: &Path,
-) -> Result<PluginManager, CliError> {
-    let (global_anchor, global_relative) = global_plugin_store_scope()?;
-    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
-        .map_err(plugin_manager_error)?;
-    if scope == crate::args::Scope::Global {
-        Ok(global)
-    } else {
-        let (anchor, relative) = project_plugin_store_scope(cwd)?;
-        PluginManager::open_scoped(&anchor, &relative, global.trusted_signers())
-            .map_err(plugin_manager_error)
-    }
 }
 
 struct ScopedPluginAuthority {
@@ -2873,10 +3004,10 @@ fn run_config(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DoctorCheck {
-    id: String,
-    status: String,
-    detail: String,
+pub(crate) struct DoctorCheck {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) detail: String,
 }
 
 fn run_doctor(
@@ -2884,6 +3015,24 @@ fn run_doctor(
     loaded: &LoadedConfig,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    let checks = collect_doctor_checks(arguments, loaded, &context.cwd, true);
+    if arguments.json {
+        write_json(context.stdout, &checks)
+    } else {
+        writeln!(context.stdout, "CHECK\tSTATUS\tDETAIL")?;
+        for check in checks {
+            writeln!(context.stdout, "{}\t{}\t{}", check.id, check.status, check.detail)?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn collect_doctor_checks(
+    arguments: &crate::args::DoctorArgs,
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    verify_plugins: bool,
+) -> Vec<DoctorCheck> {
     let mut checks = vec![
         DoctorCheck {
             id: "configuration".into(),
@@ -2953,8 +3102,15 @@ fn run_doctor(
             detail: provider.api_key_env.clone(),
         });
     }
-    for (id, plugin) in &loaded.effective.plugins {
-        let (status, detail) = doctor_plugin_check(id, plugin, &context.cwd);
+    for id in loaded.effective.plugins.keys() {
+        let (status, detail) = if verify_plugins {
+            doctor_plugin_check(id, loaded, cwd)
+        } else {
+            (
+                "adminConfigContextReadOnly",
+                "plugin store verification is disabled for this configuration context".into(),
+            )
+        };
         checks.push(DoctorCheck { id: format!("plugin:{id}"), status: status.into(), detail });
     }
     checks.push(DoctorCheck {
@@ -2967,55 +3123,18 @@ fn run_doctor(
         }
         .into(),
     });
-    if arguments.json {
-        write_json(context.stdout, &checks)
-    } else {
-        writeln!(context.stdout, "CHECK\tSTATUS\tDETAIL")?;
-        for check in checks {
-            writeln!(context.stdout, "{}\t{}\t{}", check.id, check.status, check.detail)?;
-        }
-        Ok(())
-    }
+    checks
 }
 
-fn doctor_plugin_check(id: &str, effective: &PluginConfig, cwd: &Path) -> (&'static str, String) {
+fn doctor_plugin_check(id: &str, loaded: &LoadedConfig, cwd: &Path) -> (&'static str, String) {
+    let effective = &loaded.effective.plugins[id];
     if !effective.enabled {
         return ("disabled", "plugin is disabled".into());
     }
-    let project = config::plugins_in_scope(crate::args::Scope::Project, cwd);
-    let global = config::plugins_in_scope(crate::args::Scope::Global, cwd);
-    let (scope, exact) = match (project, global) {
-        (Ok(project), Ok(_global)) if project.get(id) == Some(effective) => {
-            (crate::args::Scope::Project, project.get(id).cloned())
+    match verify_admin_effective_plugin_from_loaded(loaded, cwd, id) {
+        Ok(installed) => {
+            ("ok", format!("{} runtime package and authority verified", installed.protocol))
         }
-        (Ok(_), Ok(global)) if global.get(id) == Some(effective) => {
-            (crate::args::Scope::Global, global.get(id).cloned())
-        }
-        (Err(error), _) | (_, Err(error)) => return ("error", error.to_string()),
-        _ => {
-            return (
-                "error",
-                "effective plugin is shadowed by a profile or mismatched scope authority".into(),
-            );
-        }
-    };
-    let Some(exact) = exact else {
-        return ("missing", "plugin is not configured in the selected scope".into());
-    };
-    let manager = match open_scoped_plugin_manager(scope, cwd) {
-        Ok(manager) => manager,
-        Err(error) => return ("error", error.to_string()),
-    };
-    let execution = into_markdown::ExecutionContext::new(
-        into_markdown::ExecutionOptions::default(),
-        into_markdown::ResourceLimits::default(),
-    );
-    match manager
-        .verify(id, &execution)
-        .map_err(plugin_manager_error)
-        .and_then(|installed| verify_plugin_pin(&manager, &exact, &installed))
-    {
-        Ok(()) => ("ok", format!("{} runtime package and authority verified", exact.protocol)),
         Err(error) => ("error", error.to_string()),
     }
 }

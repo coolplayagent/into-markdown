@@ -1,7 +1,7 @@
 # 本地 Web 服务
 
 `into-md ui` 提供安全的本机 HTTP 入口和嵌入式 React + TypeScript 控制台壳。控制台
-包含响应式批量转换工作台、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
+包含响应式批量转换工作台、格式/模型/Provider/插件/配置/doctor 管理页、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
 客户端。状态响应把 `localApi.available` 与 `documentConsole.available` 都标为 `true`。
 
 ## 命令与监听
@@ -76,12 +76,54 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 布局。外层响应中间件为所有 method、fallback、2xx 和 4xx 统一添加安全 Header 与
 `no-store`，不依赖具体 handler 正常返回。
 
+`GET /api/admin` 返回 schema 1 的有界管理快照。格式来自 core catalog；模型状态来自
+与 CLI 相同的 `ModelManager`；Provider 只返回脱敏 URL、环境变量名及“是否存在”，永不读取
+或返回环境变量值；配置使用 `LoadedConfig::display_value` 的脱敏结果。插件按 global/project
+精确作用域列出，并通过与 `plugins verify` 相同的 PluginManager authority 复核安装树、发布者
+签名、协议/target 和配置中的 package hash/signing-key pin；doctor 展示同一验证结果，快照不会
+联网。`POST /api/admin` 接受最多 16 KiB、拒绝未知字段的 action DTO。插件 verify、enable、
+disable 和 remove 直接复用 CLI 的 scope identity、崩溃恢复、CAS 与 store/config 联合事务，
+不会走单独的 Web 配置写入路径。模型/Provider 联网操作必须在该请求携带
+`authorizeNetwork`；删除等危险操作必须携带 `authorizeDangerous`。页面先向
+`POST /api/admin/grant` 申请 30 秒有效的服务端 grant；grant 绑定当前 session、action、scope、
+target、source、SHA-256、signer 和全部网络/危险标志，并在 action 校验时原子单次消费。成功、
+后端失败或客户端中止都不会恢复 grant；重放和参数替换均拒绝。单作业 administration gate
+在并发 snapshot/grant/action 时返回稳定的 `adminBusy`，busy 请求不会消费 grant。页面也在发起
+请求前清零复选框并用同步 in-flight guard 防双击，但客户端状态不构成安全边界。安全配置编辑器只公开非秘密键，服务端也拒绝 secret、token、password 或
+明文 API key 形态的写入；API key 只能由命名环境变量提供。
+
+默认自动配置上下文列出 global/project 原始 override 和一条完整 effective 记录。原始记录仅能
+修改/删除自身作用域；effective Provider 仅能测试，effective 插件仅能按物理配置文件 identity
+选出的 package scope 做合并 pin 验证。目录名中的 `#`、路径别名和 Windows 大小写不会被字符串
+切分误判。若 UI 由 `--config`、`--profile`、`INTO_MD_PROFILE`、`--no-config` 或其组合启动，
+服务只返回 `scope=effective` 的只读视图，不恢复或打开自动 global/project 插件 store，也不下发
+action/package scope；Provider/插件测试、验证和全部配置 mutation 返回
+`adminConfigContextReadOnly`。格式检测和模型只读/安装动作仍复用该次启动的 timeout/resource
+上下文。
+
+管理能力与 CLI 的映射如下；`plugins run` 是文档执行能力，不属于管理面：
+
+| Web action | CLI authority | 一次性授权 |
+|---|---|---|
+| `format.detect`（format/extension/MIME/charset/host/private） | `formats detect` | 网络；private 另需 dangerous |
+| `model.show/path/verify/install/remove` | `models` 同名子命令 | install 网络；private/insecure 与 remove 需 dangerous |
+| `provider.add/test/set-default/remove` | `providers` 同名子命令 | add、set-default、remove 需 dangerous；test 需网络，private 另需 dangerous |
+| `plugin.install/verify/enable/disable/remove` | #44 manager + `plugins` 同名子命令 | local install/enable/remove 需 dangerous；HTTPS install 另需网络 |
+| `config.paths/show/init/validate/get/set/unset` | `config` 同名子命令；show 明确选择 merged 或 resolved 且始终脱敏 | init force、set、unset 需 dangerous；managed namespaces 只能走专用 action |
+| `profile.show/create/remove` | `profile` 同名子命令 | create/replace 与 remove 需 dangerous；show 始终递归脱敏 |
+| `doctor.run` | 共享 `collect_doctor_checks` 服务 | 网络探测需网络，private 另需 dangerous |
+
+所有 snapshot 与成功 operation result 在服务端序列化后限制为 1 MiB；客户端使用相同限制并对
+DTO 枚举、长度、集合数量、hash、scope 与只读交叉字段 fail-closed。Profile 和插件 URL 会移除
+userinfo、query 与 fragment；Provider 只显示环境变量名和存在状态。
+
 ## 控制台与静态资产
 
 `/workbench`（以及 `/`）提供多文件拖放、文件与目录选择、批量选项、队列进度、取消、
 失败重试和产物下载；`/status` 显示本地 API 状态，其他页面显示 404。每批最多 100 个文件、
 总计 1 GiB，单文件上限由批次 Engine 选项控制且不得超过 512 MiB。刷新后通过
-`GET /api/tasks` 恢复最近 100 个 durable 任务；原文件不写入浏览器存储，因此刷新后的失败
+`/admin/formats`、`/admin/models`、`/admin/providers`、`/admin/plugins`、
+`/admin/configuration` 与 `/admin/doctor` 覆盖本地管理能力。`GET /api/tasks` 恢复最近 100 个 durable 任务；原文件不写入浏览器存储，因此刷新后的失败
 重试要求重新选择。客户端路由 fallback 仅处理带 `Accept: text/html` 的 GET/HEAD，并明确
 排除 `/api` 与 `/assets`。HTML 使用 `no-store`；文件名带内容 SHA-256 前缀的 JavaScript
 与 CSS 使用一年 `immutable` 缓存并带完整 SHA-256 ETag。所有响应都有精确 MIME、

@@ -4,6 +4,16 @@ export const MAX_PREVIEW_BYTES = 256 * 1024;
 
 export interface ComponentStatus { available: boolean; code: string; detail: string }
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
+export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
+export interface ModelAdmin { bundle: { id: string; availability: string }; status: { state: string } }
+export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
+export interface PluginAdmin { id: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; packageScope?: "global" | "project"; source?: string; sha256?: string; protocol?: string; enabled?: boolean; effective: boolean; shadowedBy?: "effective"; verification?: string; version?: string; signingKeyId?: string; signingKeySha256?: string; target?: string }
+export interface DoctorAdmin { id: string; status: string; detail: string }
+export type AdminOperationResult = { kind: "detection"; sourceName?: string | null; sourceSize: number; candidates: Array<{ format: string; confidence: number; explicit: boolean; detectorId: string; reason: string; diagnostics: string[] }> } | { kind: "profile"; name: string; value: Record<string, unknown> } | { kind: "model"; operation: "show" | "path"; value: unknown } | { kind: "config"; operation: "paths" | "get" | "showMerged" | "showResolved"; value: unknown } | { kind: "doctor"; checks: DoctorAdmin[] } | { kind: "providerTest"; configuredModelAvailable: boolean; modelCount: number; capabilities: string[] };
+export interface ProfileAdmin { name: string; scope: "global" | "project" | "effective"; effective: boolean; active: boolean; shadowedBy?: "project" }
+export interface AdminSnapshot { schemaVersion: 1; formats: FormatAdmin[]; models: { defaultBundle: string; entries: ModelAdmin[] }; providers: ProviderAdmin[]; plugins: PluginAdmin[]; configuration: Record<string, unknown>; profiles: ProfileAdmin[]; doctor: DoctorAdmin[]; operationResult?: AdminOperationResult; configurationReadOnly: boolean }
+export interface AdminAction { schemaVersion: 1; action: string; scope?: "global" | "project" | undefined; target?: string; value?: string; source?: string; sha256?: string; signingKeyId?: string; signingKeySha256?: string; providerType?: string; model?: string; apiKeyEnv?: string; capabilities?: string[]; timeoutMs?: number; charset?: string; formatHint?: string; extension?: string; mimeType?: string; allowHosts?: string[]; allowPrivateNetwork?: boolean; insecure?: boolean; force?: boolean; resolved?: boolean; from?: string; authorizationGrant?: string; authorizeDangerous?: boolean; authorizeNetwork?: boolean }
+export interface AdminActionOutcome { operationResult?: AdminOperationResult }
 export type TaskStatus = "pending" | "running" | "converted" | "succeeded" | "failed" | "interrupted" | "cancelled";
 export interface TaskDiagnostic { code: string }
 export interface ArtifactReference {
@@ -78,6 +88,115 @@ function parseStatus(value: unknown): StatusResponse {
     || value.audioTranscription !== undefined && !isComponent(value.audioTranscription)
     || value.speakerDiarization !== undefined && !isComponent(value.speakerDiarization)) throw new ApiError("invalidResponse");
   return value as unknown as StatusResponse;
+}
+function shortString(value: unknown, limit = 4096): value is string { return typeof value === "string" && value.length <= limit; }
+function stringList(value: unknown, limit = 256): value is string[] { return Array.isArray(value) && value.length <= limit && value.every((item) => shortString(item, 512)); }
+function safeText(value: unknown, limit: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value);
+}
+function isFormatAdmin(value: unknown): value is FormatAdmin {
+  return isObject(value) && safeText(value.format, 64) && safeText(value.family, 64)
+    && ["available", "planned"].includes(String(value.status))
+    && ["core", "optional_runtime", "plugin"].includes(String(value.source))
+    && Array.isArray(value.extensions) && value.extensions.length <= 32
+    && value.extensions.every((item) => typeof item === "string" && /^[a-z0-9][a-z0-9+-]{0,31}$/.test(item))
+    && (value.runtimeComponent === undefined || safeText(value.runtimeComponent, 128))
+    && (value.installHint === undefined || safeText(value.installHint, 512));
+}
+function isModelAdmin(value: unknown): value is ModelAdmin {
+  if (!isObject(value) || !isObject(value.bundle) || !isObject(value.status)) return false;
+  return safeText(value.bundle.id, 128) && ["available", "planned"].includes(String(value.bundle.availability))
+    && safeText(value.status.state, 64);
+}
+function isProviderAdmin(value: unknown, configurationReadOnly: boolean): value is ProviderAdmin {
+  if (!isObject(value) || !safeText(value.name, 128)
+    || !["global", "project", "effective"].includes(String(value.scope))
+    || value.actionScope !== undefined && !["global", "project"].includes(String(value.actionScope))
+    || value.providerType !== undefined && value.providerType !== "openai-compatible"
+    || value.baseUrl !== undefined && !safeText(value.baseUrl, 4096)
+    || value.model !== undefined && !safeText(value.model, 256)
+    || value.apiKeyEnv !== undefined && (typeof value.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.apiKeyEnv))
+    || value.environmentSet !== undefined && typeof value.environmentSet !== "boolean"
+    || typeof value.default !== "boolean" || value.timeoutMs !== undefined && (!Number.isSafeInteger(value.timeoutMs) || Number(value.timeoutMs) <= 0 || Number(value.timeoutMs) > 86_400_000)
+    || !Array.isArray(value.capabilities) || value.capabilities.length > 64
+    || !value.capabilities.every((item) => typeof item === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(item))) return false;
+  if (typeof value.effective !== "boolean") return false;
+  if (value.effective) return value.scope === "effective" && value.shadowedBy === undefined
+    && (configurationReadOnly ? value.actionScope === undefined : value.actionScope !== undefined)
+    && value.providerType === "openai-compatible" && safeText(value.baseUrl, 4096) && safeText(value.model, 256)
+    && typeof value.apiKeyEnv === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.apiKeyEnv)
+    && typeof value.environmentSet === "boolean";
+  return value.scope !== "effective" && value.shadowedBy === "effective" && value.actionScope === value.scope;
+}
+function isDetectionResult(value: unknown): boolean {
+  return isObject(value) && value.kind === "detection" && (value.sourceName === null || value.sourceName === undefined || safeText(value.sourceName, 512))
+    && Number.isSafeInteger(value.sourceSize) && Number(value.sourceSize) >= 0
+    && Array.isArray(value.candidates) && value.candidates.length <= 64
+    && value.candidates.every((item) => isObject(item) && safeText(item.format, 64)
+      && typeof item.confidence === "number" && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1
+      && typeof item.explicit === "boolean" && safeText(item.detectorId, 128) && safeText(item.reason, 512)
+      && stringList(item.diagnostics, 64));
+}
+function boundedJson(value: unknown, depth = 0): boolean {
+  if (depth > 16) return false;
+  if (value === null || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) return true;
+  if (typeof value === "string") return value.length <= 4096 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+  if (Array.isArray(value)) return value.length <= 256 && value.every((item) => boundedJson(item, depth + 1));
+  if (!isObject(value) || Object.keys(value).length > 256) return false;
+  return Object.entries(value).every(([key, item]) => safeText(key, 128) && boundedJson(item, depth + 1));
+}
+function isOperationResult(value: unknown): value is AdminOperationResult {
+  return isDetectionResult(value) || isObject(value) && value.kind === "profile"
+    && safeText(value.name, 128) && isObject(value.value) && boundedJson(value.value)
+    || isObject(value) && value.kind === "model" && ["show", "path"].includes(String(value.operation)) && boundedJson(value.value)
+    || isObject(value) && value.kind === "config" && ["paths", "get", "showMerged", "showResolved"].includes(String(value.operation)) && boundedJson(value.value)
+    || isObject(value) && value.kind === "doctor" && Array.isArray(value.checks) && value.checks.length <= 512
+      && value.checks.every((item) => isObject(item) && shortString(item.id, 256) && shortString(item.status, 64) && shortString(item.detail))
+    || isObject(value) && value.kind === "providerTest" && typeof value.configuredModelAvailable === "boolean"
+      && Number.isSafeInteger(value.modelCount) && Number(value.modelCount) >= 0 && Number(value.modelCount) <= 10_000
+      && Array.isArray(value.capabilities) && value.capabilities.length <= 64
+      && value.capabilities.every((item) => typeof item === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(item));
+}
+function isPluginAdmin(value: unknown, configurationReadOnly: boolean): value is PluginAdmin {
+  if (!isObject(value) || !shortString(value.id, 128) || !/^[A-Za-z0-9._-]+$/.test(value.id)
+    || !["global", "project", "effective"].includes(String(value.scope))
+    || value.actionScope !== undefined && !["global", "project"].includes(String(value.actionScope))
+    || value.packageScope !== undefined && !["global", "project"].includes(String(value.packageScope))
+    || value.source !== undefined && (!shortString(value.source) || /[\u0000-\u001f\u007f]/.test(value.source))
+    || value.sha256 !== undefined && (typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256))
+    || value.protocol !== undefined && (!shortString(value.protocol, 64) || !/^[A-Za-z0-9._-]+$/.test(value.protocol))
+    || value.enabled !== undefined && typeof value.enabled !== "boolean" || typeof value.effective !== "boolean"
+    || value.verification !== undefined && (!shortString(value.verification, 64) || !/^[A-Za-z][A-Za-z0-9]*$/.test(value.verification))
+    || value.version !== undefined && (typeof value.version !== "string" || value.version.length > 128 || /[^\x20-\x7e]/.test(value.version))
+    || value.signingKeyId !== undefined && (!shortString(value.signingKeyId, 128) || !/^[A-Za-z0-9._-]+$/.test(value.signingKeyId))
+    || value.signingKeySha256 !== undefined && (typeof value.signingKeySha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.signingKeySha256))
+    || value.target !== undefined && (!shortString(value.target, 128) || !/^[A-Za-z0-9._-]+$/.test(value.target))) return false;
+  const shadow = value.shadowedBy;
+  return value.effective ? value.scope === "effective" && shadow === undefined
+    && (configurationReadOnly ? value.actionScope === undefined && value.packageScope === undefined : value.actionScope !== undefined && value.packageScope !== undefined)
+    && value.source !== undefined
+    && value.protocol !== undefined && value.enabled !== undefined && value.verification !== undefined
+    && value.signingKeyId !== undefined && value.signingKeySha256 !== undefined && value.target !== undefined
+    : value.scope !== "effective" && shadow === "effective" && value.actionScope === value.scope && value.packageScope !== undefined;
+}
+export function parseAdminSnapshot(value: unknown): AdminSnapshot {
+  if (!isObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.formats) || value.formats.length > 128
+    || value.formats.some((item) => !isFormatAdmin(item))
+    || !isObject(value.models) || !safeText(value.models.defaultBundle, 128) || !Array.isArray(value.models.entries) || value.models.entries.length > 64 || value.models.entries.some((item) => !isModelAdmin(item))
+    || !Array.isArray(value.providers) || value.providers.length > 128 || value.providers.some((item) => !isProviderAdmin(item, value.configurationReadOnly === true))
+    || !Array.isArray(value.plugins) || value.plugins.length > 256 || value.plugins.some((item) => !isPluginAdmin(item, value.configurationReadOnly === true))
+    || !isObject(value.configuration) || typeof value.configurationReadOnly !== "boolean" || !Array.isArray(value.profiles) || value.profiles.length > 128
+    || value.profiles.some((item) => !isObject(item) || !safeText(item.name, 128)
+      || !["global", "project", "effective"].includes(String(item.scope)) || typeof item.effective !== "boolean" || typeof item.active !== "boolean"
+      || (item.effective ? item.shadowedBy !== undefined : item.shadowedBy !== "project"))
+    || !Array.isArray(value.doctor) || value.doctor.length > 512 || value.doctor.some((item) => !isObject(item) || !shortString(item.id, 256) || !shortString(item.status, 64) || !shortString(item.detail))
+    || value.operationResult !== undefined && !isOperationResult(value.operationResult)) throw new ApiError("invalidResponse");
+  if (value.configurationReadOnly === true && (
+    value.providers.some((item) => !isObject(item) || item.scope !== "effective" || item.effective !== true || item.actionScope !== undefined)
+    || value.plugins.some((item) => !isObject(item) || item.scope !== "effective" || item.effective !== true || item.actionScope !== undefined || item.packageScope !== undefined)
+    || value.profiles.some((item) => !isObject(item) || item.scope !== "effective" || item.effective !== true)
+  )) throw new ApiError("invalidResponse");
+  return value as unknown as AdminSnapshot;
 }
 const taskStatuses = new Set<TaskStatus>(["pending", "running", "converted", "succeeded", "failed", "interrupted", "cancelled"]);
 function isArtifact(value: unknown): value is ArtifactReference {
@@ -216,6 +335,9 @@ export interface ApiClient {
   watchTask(id: string, onEvent: (event: TaskEvent) => void, signal: AbortSignal): Promise<void>;
   preview(id: string, key: string, signal?: AbortSignal): Promise<ArtifactPreview>;
   download(id: string, key: string, signal?: AbortSignal): Promise<ArtifactDownload>;
+  admin(signal?: AbortSignal): Promise<AdminSnapshot>;
+  adminGrant(action: AdminAction, signal?: AbortSignal): Promise<string>;
+  adminAction(action: AdminAction, signal?: AbortSignal): Promise<AdminActionOutcome>;
 }
 async function readBoundedBytes(response: Response, limit: number): Promise<Uint8Array> {
   const declared = Number(response.headers.get("content-length"));
@@ -237,6 +359,20 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
   }
   const client: ApiClient = {
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
+    async admin(signal) { return parseAdminSnapshot(await jsonRequest("/api/admin", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },
+    async adminGrant(action, signal) {
+      const headers = auth(); headers["Content-Type"] = "application/json";
+      const value = await jsonRequest("/api/admin/grant", { method: "POST", headers, body: JSON.stringify(action), ...(signal ? { signal } : {}) }, 4096);
+      if (!isObject(value) || value.schemaVersion !== 1 || !shortString(value.grant, 128) || !/^[A-Za-z0-9_-]{43}$/.test(value.grant)) throw new ApiError("invalidResponse");
+      return value.grant;
+    },
+    async adminAction(action, signal) {
+      const headers = auth(); headers["Content-Type"] = "application/json";
+      const value = await jsonRequest("/api/admin", { method: "POST", headers, body: JSON.stringify(action), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES);
+      if (!isObject(value) || value.schemaVersion !== 1 || value.code !== "ok"
+        || value.operationResult !== undefined && !isOperationResult(value.operationResult)) throw new ApiError("invalidResponse");
+      return value.operationResult === undefined ? {} : { operationResult: value.operationResult };
+    },
     async listTasks(filters = {}, signal) {
       const query = new URLSearchParams(); query.set("limit", String(filters.limit ?? 25));
       if (filters.after) { query.set("afterUpdatedAtMs", String(filters.after.updatedAtMs)); query.set("afterId", filters.after.id); }

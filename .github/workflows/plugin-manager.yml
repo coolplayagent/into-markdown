@@ -8,6 +8,8 @@ on:
       - "crates/process-plugin/**"
       - "crates/plugin-wasi/**"
       - "apps/cli/**"
+      - "web/console/**"
+      - "docs/ui.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "third_party/licenses/**"
@@ -20,6 +22,8 @@ on:
       - "crates/process-plugin/**"
       - "crates/plugin-wasi/**"
       - "apps/cli/**"
+      - "web/console/**"
+      - "docs/ui.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "third_party/licenses/**"
@@ -37,6 +41,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
       - name: Validate Cargo runtime authority mutations
         run: |
           cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j1
@@ -44,6 +52,13 @@ jobs:
           cargo test --locked -p license-check normal_runtime_authority_rejects_kind_reclassification -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_manifest_set_drift -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_manifest_hash_drift -j1
+      - name: Verify deterministic console assets and npm SPDX authority
+        run: |
+          bazel build //web/console:assets //web/console:determinism_test \
+            --jobs=1 --local_resources=memory=4096
+          bazel test //web/console:admin_unit_test //web/console:dist_integration_test \
+            --jobs=1 --local_resources=memory=4096 --test_output=errors
+          cargo test --locked -p license-check npm_spdx_deletion_drift_duplicate_and_dangling_relationship_are_rejected -j1
   runtime:
     strategy:
       fail-fast: false
@@ -73,6 +88,13 @@ jobs:
           cargo test --locked -p into-markdown-cli --bin into-md --features plugin-manager-fault-injection --target ${{ matrix.target }} -j1 plugin_joint_trust_indeterminate -- --test-threads=1
           cargo test --locked -p into-markdown-cli --bin into-md --target ${{ matrix.target }} -j1 transaction::windows_config_tests -- --test-threads=1
           cargo test --locked -p into-markdown-cli --test exit_contract --target ${{ matrix.target }} -j1 plugin_list_uses_only_isolated_production_user_data -- --exact --test-threads=1
+      - name: Run bounded administration service and route tests
+        run: |
+          cargo test --locked -p into-markdown-cli --bin into-md --target ${{ matrix.target }} -j1 admin::tests -- --test-threads=1
+          cargo test --locked -p into-markdown-cli --bin into-md --target ${{ matrix.target }} -j1 ui::tests::administration_gate_bounds_snapshot_grant_and_action_and_releases -- --exact --test-threads=1
+      - name: Run real administration HTTP session boundary
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: cargo test --locked -p into-markdown-cli --bin into-md --target ${{ matrix.target }} -j1 ui::tests::administration_snapshot_reuses_session_boundary_and_actions_require_grants -- --exact --test-threads=1
       - name: Run process plugin fixture
         run: cargo test --locked -p into-markdown-process-plugin --test runtime --target ${{ matrix.target }} -j1
       - name: Run isolated real CLI plugin lifecycle
@@ -95,6 +117,8 @@ jobs:
           bazel test //crates/plugin-manager:plugin_manager_test //crates/plugin-manager:plugin_manager_process_e2e_test \
             --jobs=1 --local_resources=memory=4096 --test_output=errors
           bazel test //apps/cli:plugin_lifecycle_test \
+            --jobs=1 --local_resources=memory=4096 --test_output=errors
+          bazel test //web/console:admin_unit_test //web/console:dist_integration_test \
             --jobs=1 --local_resources=memory=4096 --test_output=errors
       - name: Rebuild and run WASI fixture
         shell: bash

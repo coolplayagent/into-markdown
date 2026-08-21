@@ -62,6 +62,16 @@ UNIT_TEST_DATA = [
     ":unit_test_bundle",
 ]
 
+js_run_binary(
+    name = "admin_unit_test_bundle",
+    outs = ["admin_unit_test_bundle.mjs"],
+    args = [
+        "web/console/admin_unit_test_bundle.mjs",
+        "web/console/tests/admin-unit.ts",
+    ],
+    tool = ":test_builder",
+)
+
 js_test(
     name = "unit_test_core",
     data = UNIT_TEST_DATA,
@@ -108,12 +118,25 @@ test_suite(
     name = "unit_test",
     tests = [
         ":unit_test_accessibility",
+        ":admin_unit_test",
         ":unit_test_core",
         ":unit_test_history_actions",
         ":unit_test_history_cleanup",
         ":unit_test_preview",
         ":unit_test_workbench",
     ],
+)
+
+js_test(
+    name = "admin_unit_test",
+    data = [
+        ":admin_unit_test_bundle",
+        ":node_modules/happy-dom",
+        ":node_modules/axe-core",
+        ":node_modules/react",
+        ":node_modules/react-dom",
+    ],
+    entry_point = "admin_unit_test_bundle.mjs",
 )
 
 js_test(

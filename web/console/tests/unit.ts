@@ -170,6 +170,8 @@ const availableApi: ApiClient = {
   },
   async preview() { return { text: "", truncated: false, contentType: "text/plain" }; },
   async download() { return { blob: new Blob(), filename: "result.md" }; },
+  async admin() { return { schemaVersion: 1, formats: [], models: { defaultBundle: "default", entries: [] }, providers: [], plugins: [], configuration: {}, profiles: [], doctor: [], configurationReadOnly: false }; },
+  async adminAction() { return {}; },
 };
 
 test("session handoff clears every fragment and survives only in the current tab", () => {
@@ -819,6 +821,7 @@ test("shell primitives expose keyboard focus and language-safe DOM behavior", ()
   main.focus();
   assert.equal(window.document.activeElement, main);
   assert.equal(main.getAttribute("tabindex"), "-1");
+  window.close();
 });
 
 function luminance(hex: string): number {
