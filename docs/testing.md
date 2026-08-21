@@ -14,6 +14,11 @@ epoch timeout/取消、memory growth/越界、输出、IR/resource/provenance。
 Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 的真实 runner 上执行同一组
 Cargo/Bazel 测试；异平台 compile 或四个 manifest 别名不计作证据。
 
+插件管理器在四个平台运行 `cargo test --locked -p into-markdown-plugin-manager -j1`，并与
+HTTP transport、process-v1、WASI runtime 的真实执行门禁组合验证签名安装、精确 scope pin、
+默认零网络权限、崩溃恢复、恶意 ZIP 与启停/移除。Bazel 对应目标为
+`//crates/plugin-manager:plugin_manager_test`。
+
 任务历史/保留的定向门禁包括 `cargo test -p into-markdown-task-store
 terminal_delete_is_atomic_and_protects_active_and_pinned_tasks` 和 `cargo test -p
 into-markdown-cli retention_`。测试覆盖分页/筛选、固定、重试、显式删除、30 天前一毫秒/恰好

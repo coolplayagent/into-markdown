@@ -378,6 +378,7 @@ impl WindowsProfile {
             CreateAppContainerProfile, GetAppContainerFolderPath,
         };
         use windows_sys::Win32::Security::PSID;
+        use windows_sys::Win32::System::Com::CoTaskMemFree;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let name = format!(
             "into-markdown-fixture-{}-{}",
@@ -420,7 +421,7 @@ impl WindowsProfile {
         let storage_path = PathBuf::from(unsafe { wide_ptr(storage) }).canonicalize().unwrap();
         // SAFETY: both allocations are owned by the documented matching allocators.
         unsafe {
-            LocalFree(storage.cast());
+            CoTaskMemFree(storage.cast());
             windows_sys::Win32::Security::FreeSid(sid);
         }
         let grant = format!("*{sid_text}:(OI)(CI)RX");

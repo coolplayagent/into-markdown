@@ -1,0 +1,81 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "plugin_manager",
+    srcs = ["src/lib.rs"],
+    crate_name = "into_markdown_plugin_manager",
+    edition = "2024",
+    deps = [
+        "//crates/process-plugin",
+        "//crates/plugin-wasi",
+        "//crates/core",
+        "@crates//:base64",
+        "@crates//:ring",
+        "@crates//:rustix",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+        "@crates//:zip",
+        "@crates//:winx",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "plugin_manager_test",
+    crate = ":plugin_manager",
+    compile_data = ["//crates/plugin-wasi:tests/fixtures/guest.component.wasm"],
+    deps = ["@crates//:tempfile"],
+)
+
+rust_binary(
+    name = "package_plugin",
+    srcs = ["src/bin/package_plugin.rs"],
+    crate_name = "package_plugin",
+    edition = "2024",
+    deps = [
+        ":plugin_manager",
+        "@crates//:base64",
+        "@crates//:ring",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:zip",
+    ],
+)
+
+rust_binary(
+    name = "plugin_manager_process_fixture",
+    srcs = ["src/bin/plugin_manager_process_fixture.rs"],
+    crate_name = "plugin_manager_process_fixture",
+    edition = "2024",
+    deps = [
+        "//crates/core",
+        "//crates/process-plugin",
+    ],
+)
+
+rust_test(
+    name = "plugin_manager_process_e2e_test",
+    srcs = ["tests/process_e2e.rs"],
+    crate_name = "plugin_manager_process_e2e_test",
+    edition = "2024",
+    data = [":plugin_manager_process_fixture"],
+    deps = [
+        ":plugin_manager",
+        "//crates/core",
+        "//crates/process-plugin",
+        "@crates//:base64",
+        "@crates//:ring",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tempfile",
+        "@crates//:zip",
+    ],
+)

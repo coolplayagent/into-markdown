@@ -19,6 +19,15 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
+use cap_std::fs::MetadataExt as _;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConfigExpectedAuthority {
+    pub identity: Option<(u64, u64)>,
+    pub sha256: Option<String>,
+}
+
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
 
 const JOURNAL_SIGNATURE: &str = "into-markdown-output-transaction";
@@ -42,6 +51,7 @@ static ACTIVE_TRANSACTIONS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new()
 /// Atomically replace one configuration file through an authenticated parent
 /// directory handle.
 #[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn atomic_replace_config(
     path: &Path,
     bytes: &[u8],
@@ -54,6 +64,199 @@ pub(crate) fn atomic_replace_config(
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
     )
+}
+
+#[cfg(test)]
+mod windows_config_tests {
+    use super::*;
+    use std::process::Command;
+
+    const NONCE: &str = "0123456789abcdef0123456789abcdef";
+
+    fn names() -> (String, String, String) {
+        (
+            format!(".into-md-config-{NONCE}.next"),
+            format!(".into-md-config-{NONCE}.previous"),
+            format!(".into-md-config-{NONCE}.journal"),
+        )
+    }
+
+    fn open(root: &Path) -> cap_std::fs::Dir {
+        cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap()
+    }
+
+    fn seed_journal(
+        directory: &cap_std::fs::Dir,
+        original: Option<(u64, u64)>,
+        new: &[u8],
+    ) -> (String, String, String) {
+        let (temporary, backup, journal_name) = names();
+        let journal = WindowsConfigJournal {
+            schema_version: 1,
+            target: "config.toml".to_owned(),
+            temporary: temporary.clone(),
+            backup: backup.clone(),
+            original,
+            original_sha256: cap_config_digest(directory, OsStr::new("config.toml")).unwrap(),
+            new_sha256: format!("{:x}", Sha256::digest(new)),
+            phase: WindowsConfigPhase::Prepared,
+        };
+        write_windows_config_journal(directory, OsStr::new(&journal_name), &journal).unwrap();
+        (temporary, backup, journal_name)
+    }
+
+    #[test]
+    fn config_replace_crash_child() {
+        let Some(root) = std::env::var_os("INTO_MD_CONFIG_CRASH_ROOT") else { return };
+        let directory = open(Path::new(&root));
+        let target = std::env::var_os("INTO_MD_CONFIG_CRASH_TARGET")
+            .unwrap_or_else(|| OsString::from("config.toml"));
+        let bytes =
+            std::env::var("INTO_MD_CONFIG_CRASH_CONTENT").unwrap_or_else(|_| "new".to_owned());
+        atomic_replace_config_in_dir(&directory, &target, bytes.as_bytes(), true, None).unwrap();
+    }
+
+    #[test]
+    fn config_replace_recovers_every_rename_phase_in_a_new_process() {
+        for phase in ["journal", "backup", "target"] {
+            let temporary = tempfile::tempdir().unwrap();
+            fs::write(temporary.path().join("config.toml"), b"old").unwrap();
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transaction::windows_config_tests::config_replace_crash_child",
+                    "--nocapture",
+                ])
+                .env("INTO_MD_CONFIG_CRASH_ROOT", temporary.path())
+                .env("INTO_MD_CONFIG_CRASH_POINT", phase)
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(86), "phase {phase}");
+            let directory = open(temporary.path());
+            recover_windows_config_transaction(&directory, OsStr::new("config.toml")).unwrap();
+            assert_eq!(fs::read(temporary.path().join("config.toml")).unwrap(), b"new");
+            assert!(fs::read_dir(temporary.path()).unwrap().all(|entry| {
+                !entry.unwrap().file_name().to_string_lossy().starts_with(".into-md-config-")
+            }));
+        }
+    }
+
+    #[test]
+    fn config_recovery_rejects_ambiguous_and_forged_journals() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = open(temporary.path());
+        seed_journal(&directory, None, b"new");
+        let forged = format!(".into-md-config-{}.journal", "1".repeat(32));
+        directory.write(&forged, b"{}").unwrap();
+        let error =
+            recover_windows_config_transaction(&directory, OsStr::new("config.toml")).unwrap_err();
+        assert_eq!(error.code(), "transactionRecoveryFailed");
+
+        directory.remove_file(&forged).unwrap();
+        let (_, _, journal) = names();
+        directory.rename(&journal, &directory, format!("{journal}.extra.journal")).unwrap();
+        let error =
+            recover_windows_config_transaction(&directory, OsStr::new("config.toml")).unwrap_err();
+        assert_eq!(error.code(), "transactionRecoveryFailed");
+    }
+
+    #[test]
+    fn config_recovery_rejects_hardlinked_authority_without_touching_sentinel() {
+        for position in ["target", "temporary", "backup"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path();
+            let sentinel = root.join("sentinel");
+            fs::write(&sentinel, b"sentinel").unwrap();
+            let directory = open(root);
+            let (next, backup, _) = seed_journal(&directory, None, b"new");
+            let attack = match position {
+                "target" => "config.toml",
+                "temporary" => next.as_str(),
+                _ => backup.as_str(),
+            };
+            fs::hard_link(&sentinel, root.join(attack)).unwrap();
+            let error = recover_windows_config_transaction(&directory, OsStr::new("config.toml"))
+                .unwrap_err();
+            assert_eq!(error.code(), "transactionRecoveryFailed", "{position}");
+            assert_eq!(fs::read(&sentinel).unwrap(), b"sentinel");
+        }
+    }
+
+    #[test]
+    fn config_bound_authority_rejects_mutation_at_publish_barrier() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("config.toml");
+        fs::write(&target, b"old").unwrap();
+        let directory = open(temporary.path());
+        let expected = ConfigExpectedAuthority {
+            identity: cap_config_identity(&directory, OsStr::new("config.toml")).unwrap(),
+            sha256: cap_config_digest(&directory, OsStr::new("config.toml")).unwrap(),
+        };
+        directory.write(".test-config-mutate-before-publish", b"racer").unwrap();
+
+        let error = atomic_replace_config_in_dir(
+            &directory,
+            OsStr::new("config.toml"),
+            b"new",
+            true,
+            Some(&expected),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "transactionRecoveryFailed");
+        assert_eq!(fs::read(&target).unwrap(), b"racer");
+    }
+
+    #[test]
+    fn config_cleanup_rename_barrier_preserves_replacement_sentinel() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("config.toml");
+        fs::write(&target, b"old").unwrap();
+        let directory = open(temporary.path());
+        let identity = cap_config_identity(&directory, OsStr::new("config.toml")).unwrap().unwrap();
+        let digest = cap_config_digest(&directory, OsStr::new("config.toml")).unwrap().unwrap();
+        directory.write(".test-config-replace-before-cleanup", b"sentinel").unwrap();
+
+        let error =
+            remove_config_with_authority(&directory, OsStr::new("config.toml"), identity, &digest)
+                .unwrap_err();
+        assert_eq!(error.code(), "transactionRecoveryFailed");
+        assert_eq!(fs::read(&target).unwrap(), b"sentinel");
+        assert_eq!(fs::read(temporary.path().join(".test-config-clean-held")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn config_no_replace_rename_preserves_raced_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = open(temporary.path());
+        directory.write("source.next", b"candidate").unwrap();
+        assert!(directory.symlink_metadata("config.toml").is_err());
+        directory.write("config.toml", b"racer sentinel").unwrap();
+
+        let error = config_rename_no_replace(
+            &directory,
+            OsStr::new("source.next"),
+            OsStr::new("config.toml"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "transactionRecoveryFailed");
+        assert_eq!(directory.read("config.toml").unwrap(), b"racer sentinel");
+        assert_eq!(directory.read("source.next").unwrap(), b"candidate");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_config_directory_blocks_parent_namespace_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("config");
+        fs::create_dir(&parent).unwrap();
+        let directory = open(&parent);
+        directory.write("sentinel", b"inside pinned parent").unwrap();
+
+        let moved = temporary.path().join("moved");
+        assert!(fs::rename(&parent, &moved).is_err());
+        assert_eq!(directory.read("sentinel").unwrap(), b"inside pinned parent");
+        assert!(!moved.exists());
+    }
 }
 
 #[cfg(unix)]
@@ -209,7 +412,765 @@ fn unlink_name_if_identity(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn atomic_replace_config_in_dir(
+    parent: &cap_std::fs::Dir,
+    name: &OsStr,
+    bytes: &[u8],
+    replace: bool,
+    bound_expected: Option<&ConfigExpectedAuthority>,
+) -> Result<(), CliError> {
+    use cap_std::fs::OpenOptionsExt as _;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    validate_single_name(name)?;
+    recover_windows_config_transaction(parent, name)?;
+    let expected_digest = cap_config_digest(parent, name)?;
+    let expected = match parent.symlink_metadata(name) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(recovery_error("config file identity rejected"));
+            }
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            let file = parent.open_with(name, &options)?.into_std();
+            let information = winapi_util::file::information(&file)?;
+            if information.file_attributes() & 0x400 != 0 || information.number_of_links() != 1 {
+                return Err(recovery_error("config file identity rejected"));
+            }
+            if !replace {
+                return Err(CliError::config("configuration path already exists"));
+            }
+            Some((information.volume_serial_number(), information.file_index()))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(bound) = bound_expected
+        && (bound.identity != expected || bound.sha256 != expected_digest)
+    {
+        return Err(recovery_error("config changed after locked read"));
+    }
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|_| CliError::new(ExitClass::Internal, "internal", "config nonce unavailable"))?;
+    let nonce = nonce.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let temporary = OsString::from(format!(".into-md-config-{nonce}.next"));
+    let backup = OsString::from(format!(".into-md-config-{nonce}.previous"));
+    let journal = OsString::from(format!(".into-md-config-{nonce}.journal"));
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.create_new(true).write(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut output = parent.open_with(&temporary, &options)?.into_std();
+    let result = (|| {
+        output.write_all(bytes)?;
+        output.sync_all()?;
+        let authority = WindowsConfigJournal {
+            schema_version: 1,
+            target: name
+                .to_str()
+                .ok_or_else(|| recovery_error("config name is not portable"))?
+                .to_owned(),
+            temporary: temporary
+                .to_str()
+                .ok_or_else(|| recovery_error("temporary name is not portable"))?
+                .to_owned(),
+            backup: backup
+                .to_str()
+                .ok_or_else(|| recovery_error("backup name is not portable"))?
+                .to_owned(),
+            original: expected,
+            original_sha256: expected_digest.clone(),
+            new_sha256: format!("{:x}", Sha256::digest(bytes)),
+            phase: WindowsConfigPhase::Prepared,
+        };
+        write_windows_config_journal(parent, &journal, &authority)?;
+        windows_config_test_crash("journal");
+        config_test_mutate_before_publish(parent, name)?;
+        if let Some(expected) = expected {
+            let mut current_options = cap_std::fs::OpenOptions::new();
+            current_options.read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            let current = parent.open_with(name, &current_options)?.into_std();
+            let information = winapi_util::file::information(&current)?;
+            if (information.volume_serial_number(), information.file_index()) != expected
+                || information.file_attributes() & 0x400 != 0
+                || information.number_of_links() != 1
+                || cap_config_digest(parent, name)? != expected_digest
+            {
+                return Err(recovery_error("config changed before replacement"));
+            }
+            parent.rename(name, parent, &backup)?;
+            sync_cap_directory(parent)?;
+            windows_config_test_crash("backup");
+            if let Err(error) = parent.rename(&temporary, parent, name) {
+                let _ = parent.rename(&backup, parent, name);
+                return Err(error.into());
+            }
+            sync_cap_directory(parent)?;
+            windows_config_test_crash("target");
+            let _ = parent.remove_file(&backup);
+        } else {
+            if parent.symlink_metadata(name).is_ok() {
+                return Err(recovery_error("config appeared before replacement"));
+            }
+            parent.rename(&temporary, parent, name)?;
+            sync_cap_directory(parent)?;
+            windows_config_test_crash("target");
+        }
+        parent.remove_file(&journal)?;
+        sync_cap_directory(parent)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = recover_windows_config_transaction(parent, name);
+        if cap_config_digest(parent, name)? == Some(format!("{:x}", Sha256::digest(bytes))) {
+            return Ok(());
+        }
+    }
+    result
+}
+
+#[cfg(not(windows))]
+pub(crate) fn atomic_replace_config_in_dir(
+    parent: &cap_std::fs::Dir,
+    name: &OsStr,
+    bytes: &[u8],
+    replace: bool,
+    bound_expected: Option<&ConfigExpectedAuthority>,
+) -> Result<(), CliError> {
+    use cap_std::fs::OpenOptionsExt as _;
+    validate_single_name(name)?;
+    recover_windows_config_transaction(parent, name)?;
+    let expected = match parent.symlink_metadata(name) {
+        Ok(metadata) => {
+            if !replace {
+                return Err(recovery_error("configuration already exists"));
+            }
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+                return Err(recovery_error("config file identity rejected"));
+            }
+            Some((metadata.dev(), metadata.ino(), cap_config_digest(parent, name)?))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(bound) = bound_expected {
+        let identity = expected.as_ref().map(|(device, inode, _)| (*device, *inode));
+        let sha256 = expected.as_ref().and_then(|(_, _, digest)| digest.clone());
+        if bound.identity != identity || bound.sha256 != sha256 {
+            return Err(recovery_error("config changed after locked read"));
+        }
+    }
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|_| CliError::new(ExitClass::Internal, "internal", "config nonce unavailable"))?;
+    let nonce = nonce.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let temporary = OsString::from(format!(".into-md-config-{nonce}.next"));
+    let backup = OsString::from(format!(".into-md-config-{nonce}.previous"));
+    let journal = OsString::from(format!(".into-md-config-{nonce}.journal"));
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.create_new(true).write(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    let mut output = parent.open_with(&temporary, &options)?.into_std();
+    let result = (|| {
+        output.write_all(bytes)?;
+        output.sync_all()?;
+        drop(output);
+        let authority = WindowsConfigJournal {
+            schema_version: 1,
+            target: name
+                .to_str()
+                .ok_or_else(|| recovery_error("config name is not portable"))?
+                .to_owned(),
+            temporary: temporary.to_string_lossy().into_owned(),
+            backup: backup.to_string_lossy().into_owned(),
+            original: expected.as_ref().map(|(device, inode, _)| (*device, *inode)),
+            original_sha256: expected.as_ref().and_then(|(_, _, digest)| digest.clone()),
+            new_sha256: format!("{:x}", Sha256::digest(bytes)),
+            phase: WindowsConfigPhase::Prepared,
+        };
+        write_windows_config_journal(parent, &journal, &authority)?;
+        windows_config_test_crash("journal");
+        config_test_mutate_before_publish(parent, name)?;
+        match expected.as_ref() {
+            Some((device, inode, digest)) => {
+                let metadata = parent.symlink_metadata(name)?;
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.nlink() != 1
+                    || (metadata.dev(), metadata.ino()) != (*device, *inode)
+                    || cap_config_digest(parent, name)? != *digest
+                {
+                    return Err(recovery_error("config changed before replacement"));
+                }
+                rustix::fs::renameat_with(
+                    parent,
+                    name,
+                    parent,
+                    &backup,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )?;
+                sync_cap_directory(parent)?;
+                windows_config_test_crash("backup");
+                let moved = parent.symlink_metadata(&backup)?;
+                if (moved.dev(), moved.ino()) != (*device, *inode)
+                    || cap_config_digest(parent, &backup)? != *digest
+                {
+                    let _ = rustix::fs::renameat_with(
+                        parent,
+                        &backup,
+                        parent,
+                        name,
+                        rustix::fs::RenameFlags::NOREPLACE,
+                    );
+                    return Err(recovery_error("config changed at replacement barrier"));
+                }
+            }
+            None if parent.symlink_metadata(name).is_ok() => {
+                return Err(recovery_error("config appeared before replacement"));
+            }
+            None => {}
+        }
+        if let Err(error) = rustix::fs::renameat_with(
+            parent,
+            &temporary,
+            parent,
+            name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            if expected.is_some() {
+                let _ = rustix::fs::renameat_with(
+                    parent,
+                    &backup,
+                    parent,
+                    name,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                );
+            }
+            return Err(error.into());
+        }
+        sync_cap_directory(parent)?;
+        windows_config_test_crash("target");
+        // The new target plus successful parent sync is the commit point.
+        // Cleanup is restartable and cannot turn a committed mutation into an
+        // ambiguous error return.
+        let _ = recover_windows_config_transaction(parent, name);
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = recover_windows_config_transaction(parent, name);
+        if cap_config_digest(parent, name)? == Some(format!("{:x}", Sha256::digest(bytes))) {
+            return Ok(());
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+fn config_test_mutate_before_publish(
+    parent: &cap_std::fs::Dir,
+    name: &OsStr,
+) -> Result<(), CliError> {
+    let marker = Path::new(".test-config-mutate-before-publish");
+    let replacement = match parent.read(marker) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    parent.remove_file(marker)?;
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.write(true).truncate(true);
+    let mut target = parent.open_with(name, &options)?.into_std();
+    target.write_all(&replacement)?;
+    target.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn config_test_mutate_before_publish(
+    _parent: &cap_std::fs::Dir,
+    _name: &OsStr,
+) -> Result<(), CliError> {
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WindowsConfigJournal {
+    schema_version: u32,
+    target: String,
+    temporary: String,
+    backup: String,
+    original: Option<(u64, u64)>,
+    original_sha256: Option<String>,
+    new_sha256: String,
+    phase: WindowsConfigPhase,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WindowsConfigPhase {
+    Prepared,
+}
+
+fn write_windows_config_journal(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+    journal: &WindowsConfigJournal,
+) -> Result<(), CliError> {
+    let bytes = serde_json::to_vec(journal)
+        .map_err(|error| recovery_error(&format!("serialize config journal: {error}")))?;
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = directory.open_with(name, &options)?.into_std();
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    sync_cap_directory(directory)
+}
+
+fn recover_windows_config_transaction(
+    directory: &cap_std::fs::Dir,
+    target: &OsStr,
+) -> Result<(), CliError> {
+    let target_text =
+        target.to_str().ok_or_else(|| recovery_error("config name is not portable"))?;
+    let journals = directory
+        .entries()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(".into-md-config-") && name.ends_with(".journal"))
+        .collect::<Vec<_>>();
+    if journals.len() > 1 {
+        return Err(recovery_error("ambiguous config transaction journals"));
+    }
+    let Some(journal_name) = journals.first() else {
+        return Ok(());
+    };
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = directory.open_with(journal_name, &options)?.into_std();
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 || config_open_file_link_count(&file)? != 1
+    {
+        return Err(recovery_error("config transaction journal identity rejected"));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err(recovery_error("config transaction journal changed"));
+    }
+    let journal: WindowsConfigJournal = serde_json::from_slice(&bytes)
+        .map_err(|_| recovery_error("config transaction journal is invalid"))?;
+    if journal.schema_version != 1
+        || journal.target != target_text
+        || !valid_windows_config_transaction_name(journal_name, "journal")
+        || !valid_windows_config_transaction_name(&journal.temporary, "next")
+        || !valid_windows_config_transaction_name(&journal.backup, "previous")
+        || journal.new_sha256.len() != 64
+        || !journal
+            .new_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || journal.original.is_some() != journal.original_sha256.is_some()
+        || journal.original_sha256.as_ref().is_some_and(|hash| {
+            hash.len() != 64
+                || !hash.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        || config_transaction_nonce(&journal.temporary) != config_transaction_nonce(&journal.backup)
+        || config_transaction_nonce(journal_name) != config_transaction_nonce(&journal.temporary)
+    {
+        return Err(recovery_error("config transaction authority rejected"));
+    }
+    let target_digest = cap_config_digest(directory, target)?;
+    let temporary_digest = cap_config_digest(directory, OsStr::new(&journal.temporary))?;
+    let backup_identity = cap_config_identity(directory, OsStr::new(&journal.backup))?;
+    let backup_digest = cap_config_digest(directory, OsStr::new(&journal.backup))?;
+    let target_identity = cap_config_identity(directory, target)?;
+    match (
+        journal.original,
+        journal.original_sha256.as_deref(),
+        target_identity,
+        backup_identity,
+        target_digest,
+        backup_digest,
+        temporary_digest,
+    ) {
+        // Initial creation, before and after publishing the prepared file.
+        (None, None, None, None, None, None, Some(temporary_hash))
+            if temporary_hash == journal.new_sha256 =>
+        {
+            config_rename_no_replace(directory, OsStr::new(&journal.temporary), target)?;
+            sync_cap_directory(directory)?;
+        }
+        (None, None, Some(_), None, Some(target_hash), None, None)
+            if target_hash == journal.new_sha256 =>
+        {
+            // A recovered target is not considered committed until its parent
+            // namespace has been made durable.
+            sync_cap_directory(directory)?;
+        }
+
+        // Replacement, before moving the old file aside.
+        (
+            Some(original),
+            Some(original_hash),
+            Some(target_id),
+            None,
+            Some(target_hash),
+            None,
+            Some(temporary_hash),
+        ) if target_id == original
+            && target_hash == original_hash
+            && temporary_hash == journal.new_sha256 =>
+        {
+            config_rename_no_replace(directory, target, OsStr::new(&journal.backup))?;
+            sync_cap_directory(directory)?;
+            config_rename_no_replace(directory, OsStr::new(&journal.temporary), target)?;
+            sync_cap_directory(directory)?;
+            remove_config_with_authority(
+                directory,
+                OsStr::new(&journal.backup),
+                original,
+                original_hash,
+            )?;
+            sync_cap_directory(directory)?;
+        }
+        // Replacement, after moving the old file aside but before publishing new.
+        (
+            Some(original),
+            Some(original_hash),
+            None,
+            Some(backup_id),
+            None,
+            Some(backup_hash),
+            Some(temporary_hash),
+        ) if backup_id == original
+            && backup_hash == original_hash
+            && temporary_hash == journal.new_sha256 =>
+        {
+            config_rename_no_replace(directory, OsStr::new(&journal.temporary), target)?;
+            sync_cap_directory(directory)?;
+            remove_config_with_authority(
+                directory,
+                OsStr::new(&journal.backup),
+                original,
+                original_hash,
+            )?;
+            sync_cap_directory(directory)?;
+        }
+        // Replacement committed; only the exact old object may be purged.
+        (
+            Some(original),
+            Some(original_hash),
+            Some(_),
+            Some(backup_id),
+            Some(target_hash),
+            Some(backup_hash),
+            None,
+        ) if backup_id == original
+            && backup_hash == original_hash
+            && target_hash == journal.new_sha256 =>
+        {
+            sync_cap_directory(directory)?;
+            remove_config_with_authority(
+                directory,
+                OsStr::new(&journal.backup),
+                original,
+                original_hash,
+            )?;
+            sync_cap_directory(directory)?;
+        }
+        _ => return Err(recovery_error("config transaction cannot be recovered safely")),
+    }
+    directory.remove_file(journal_name)?;
+    sync_cap_directory(directory)
+}
+
+fn config_rename_no_replace(
+    directory: &cap_std::fs::Dir,
+    source: &OsStr,
+    destination: &OsStr,
+) -> Result<(), CliError> {
+    validate_single_name(source)?;
+    validate_single_name(destination)?;
+    #[cfg(unix)]
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|_| recovery_error("config transaction rename failed"))?;
+    #[cfg(windows)]
+    {
+        let pinned = directory.try_clone()?.into_std_file();
+        into_markdown_process_plugin::rename_windows_plugin_file_no_replace(
+            &pinned,
+            source,
+            destination,
+        )
+        .map_err(|error| recovery_error(&error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn remove_config_with_authority(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+    expected_identity: (u64, u64),
+    expected_sha256: &str,
+) -> Result<(), CliError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = directory.open_with(name, &options)?.into_std();
+    let identity = config_open_file_identity(&file)?;
+    if config_open_file_link_count(&file)? != 1
+        || identity != expected_identity
+        || config_open_file_digest(&mut file)? != expected_sha256
+        || config_open_file_identity(&file)? != identity
+        || cap_config_identity(directory, name)? != Some(identity)
+    {
+        return Err(recovery_error("config cleanup authority changed"));
+    }
+    config_test_replace_before_cleanup(directory, name)?;
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|_| CliError::new(ExitClass::Internal, "internal", "config nonce unavailable"))?;
+    let nonce = nonce.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let quarantine = OsString::from(format!(".into-md-config-clean-{nonce}"));
+    config_rename_no_replace(directory, name, &quarantine)?;
+    if cap_config_identity(directory, &quarantine)? != Some(identity)
+        || cap_config_digest(directory, &quarantine)?.as_deref() != Some(expected_sha256)
+    {
+        let _ = config_rename_no_replace(directory, &quarantine, name);
+        return Err(recovery_error("config cleanup authority changed at rename barrier"));
+    }
+    directory.remove_file(&quarantine)?;
+    Ok(())
+}
+
+fn config_open_file_digest(file: &mut File) -> Result<String, CliError> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+fn config_test_replace_before_cleanup(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+) -> Result<(), CliError> {
+    let marker = Path::new(".test-config-replace-before-cleanup");
+    let replacement = match directory.read(marker) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    directory.remove_file(marker)?;
+    directory.rename(name, directory, ".test-config-clean-held")?;
+    directory.write(name, replacement)?;
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn config_test_replace_before_cleanup(
+    _directory: &cap_std::fs::Dir,
+    _name: &OsStr,
+) -> Result<(), CliError> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn windows_config_test_crash(point: &str) {
+    if std::env::var_os("INTO_MD_CONFIG_CRASH_POINT").as_deref() == Some(OsStr::new(point)) {
+        std::process::exit(86);
+    }
+}
+
+#[cfg(not(test))]
+fn windows_config_test_crash(_point: &str) {}
+
+pub(crate) fn recover_config_in_dir(
+    directory: &cap_std::fs::Dir,
+    target: &OsStr,
+) -> Result<(), CliError> {
+    recover_windows_config_transaction(directory, target)
+}
+
+fn valid_windows_config_transaction_name(value: &str, suffix: &str) -> bool {
+    value.starts_with(".into-md-config-")
+        && value.ends_with(&format!(".{suffix}"))
+        && value.len() == ".into-md-config-".len() + 32 + 1 + suffix.len()
+        && value[".into-md-config-".len()..".into-md-config-".len() + 32]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn config_transaction_nonce(value: &str) -> Option<&str> {
+    let prefix = ".into-md-config-";
+    let remainder = value.strip_prefix(prefix)?;
+    let (nonce, _) = remainder.split_once('.')?;
+    (nonce.len() == 32
+        && nonce.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    .then_some(nonce)
+}
+
+fn cap_config_identity(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+) -> Result<Option<(u64, u64)>, CliError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    match directory.open_with(name, &options) {
+        Ok(file) => {
+            let file = file.into_std();
+            if config_open_file_link_count(&file)? != 1 {
+                return Err(recovery_error("config transaction file identity rejected"));
+            }
+            Ok(Some(config_open_file_identity(&file)?))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn cap_config_digest(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+) -> Result<Option<String>, CliError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match directory.open_with(name, &options) {
+        Ok(file) => file.into_std(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if config_open_file_link_count(&file)? != 1 {
+        return Err(recovery_error("config transaction file identity rejected"));
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+fn sync_cap_directory(directory: &cap_std::fs::Dir) -> Result<(), CliError> {
+    #[cfg(unix)]
+    let result = {
+        use cap_std::fs::OpenOptionsExt as _;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC);
+        directory.open_with(".", &options)?.into_std().sync_all()
+    };
+    #[cfg(windows)]
+    let result = directory.try_clone()?.into_std_file().sync_all();
+    match result {
+        Ok(()) => Ok(()),
+        // Windows commonly denies FlushFileBuffers for directory handles. The
+        // journal and replacement file themselves are flushed; the journaled
+        // state machine therefore provides process-crash recovery. This does
+        // not claim a power-loss directory-flush guarantee on such volumes.
+        #[cfg(windows)]
+        Err(error)
+            if error.kind() == io::ErrorKind::PermissionDenied
+                || matches!(error.raw_os_error(), Some(1 | 6)) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn config_open_file_identity(file: &File) -> Result<(u64, u64), CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = file.metadata()?;
+        return Ok((metadata.dev(), metadata.ino()));
+    }
+    #[cfg(windows)]
+    {
+        let information = winapi_util::file::information(file)?;
+        return Ok((information.volume_serial_number(), information.file_index()));
+    }
+    #[allow(unreachable_code)]
+    Err(recovery_error("config identity unavailable"))
+}
+
+fn config_open_file_link_count(file: &File) -> Result<u64, CliError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        return Ok(file.metadata()?.nlink());
+    }
+    #[cfg(windows)]
+    return Ok(winapi_util::file::information(file)?.number_of_links());
+    #[allow(unreachable_code)]
+    Err(recovery_error("config link count unavailable"))
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub(crate) fn atomic_replace_config(
     _path: &Path,
     _bytes: &[u8],

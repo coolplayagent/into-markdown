@@ -578,6 +578,12 @@ pub enum PluginsCommand {
         source: String,
         #[arg(long)]
         sha256: Option<String>,
+        /// Publisher key id present in the signed package manifest.
+        #[arg(long, requires = "signing_key_sha256")]
+        signing_key_id: Option<String>,
+        /// Trusted SHA-256 fingerprint of the publisher Ed25519 public key.
+        #[arg(long, requires = "signing_key_id")]
+        signing_key_sha256: Option<String>,
         #[arg(long, value_enum, default_value_t)]
         scope: Scope,
     },
@@ -586,6 +592,8 @@ pub enum PluginsCommand {
         id: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long, value_enum, default_value_t)]
+        scope: Scope,
     },
     /// Enable a configured plugin.
     Enable {
@@ -602,6 +610,15 @@ pub enum PluginsCommand {
     /// Remove a configured plugin.
     Remove {
         id: String,
+        #[arg(long, value_enum, default_value_t)]
+        scope: Scope,
+    },
+    /// Execute one enabled plugin through its sandboxed runtime.
+    Run {
+        id: String,
+        input: PathBuf,
+        #[arg(long)]
+        input_format: String,
         #[arg(long, value_enum, default_value_t)]
         scope: Scope,
     },

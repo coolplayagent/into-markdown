@@ -3,7 +3,7 @@ use super::{
     Instant, RawResponse, ResourceReservation, TransportError, TransportErrorKind, WireBody,
     check_operation, map_context_error, parse_head, read_checked, read_head,
 };
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::Arc;
 
 pub(super) struct ChunkNode {
@@ -204,6 +204,165 @@ pub(super) fn read_response(
         content_encoding: head.content_encoding,
         body: WireBody { chunks, memory },
     })
+}
+
+pub(super) fn read_response_to_writer(
+    stream: &mut dyn Connection,
+    output: &mut dyn Write,
+    limits: FetchLimits,
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<super::RawStreamResponse, TransportError> {
+    let mut memory = context.reserve_memory(0).map_err(map_context_error)?;
+    let (head_bytes, head_end) = read_head(stream, context, deadline, &mut memory)?;
+    let head = parse_head(&head_bytes[..head_end])?;
+    if head.status != 200 || matches!(head.status, 301 | 302 | 303 | 307 | 308) {
+        return Ok(super::RawStreamResponse {
+            status: head.status,
+            location: head.location,
+            media_type: None,
+            filename: None,
+            bytes_written: 0,
+        });
+    }
+    if head.content_encoding != ContentEncoding::Identity {
+        return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+    }
+    let wire_limit = usize::try_from(limits.max_wire_bytes)
+        .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    let decoded_limit = usize::try_from(limits.max_decoded_bytes)
+        .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+    let initial = &head_bytes[head_end..];
+    let bytes_written = match head.framing {
+        Framing::Length(length) => {
+            if length > wire_limit || length > decoded_limit || initial.len() > length {
+                return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+            }
+            write_output(output, initial)?;
+            let mut total = initial.len();
+            let mut buffer = [0_u8; IO_CHUNK_BYTES];
+            while total < length {
+                check_operation(context, deadline)?;
+                let requested = (length - total).min(buffer.len());
+                let read = read_checked(stream, &mut buffer[..requested], context, deadline)?;
+                if read == 0 {
+                    return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+                }
+                write_output(output, &buffer[..read])?;
+                total += read;
+            }
+            total
+        }
+        Framing::Close => {
+            if initial.len() > wire_limit || initial.len() > decoded_limit {
+                return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+            }
+            write_output(output, initial)?;
+            let mut total = initial.len();
+            let mut buffer = [0_u8; IO_CHUNK_BYTES];
+            loop {
+                check_operation(context, deadline)?;
+                let read = read_checked(stream, &mut buffer, context, deadline)?;
+                if read == 0 {
+                    break;
+                }
+                total = total
+                    .checked_add(read)
+                    .filter(|bytes| *bytes <= wire_limit && *bytes <= decoded_limit)
+                    .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+                write_output(output, &buffer[..read])?;
+            }
+            total
+        }
+        Framing::Chunked => read_chunked_to_writer(
+            stream,
+            initial,
+            wire_limit,
+            decoded_limit,
+            output,
+            context,
+            deadline,
+        )?,
+    };
+    Ok(super::RawStreamResponse {
+        status: head.status,
+        location: None,
+        media_type: head.media_type,
+        filename: head.filename,
+        bytes_written: u64::try_from(bytes_written)
+            .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?,
+    })
+}
+
+fn write_output(output: &mut dyn Write, bytes: &[u8]) -> Result<(), TransportError> {
+    output.write_all(bytes).map_err(|_| TransportError::new(TransportErrorKind::Unavailable))
+}
+
+fn read_chunked_to_writer(
+    stream: &mut dyn Connection,
+    initial: &[u8],
+    wire_limit: usize,
+    decoded_limit: usize,
+    output: &mut dyn Write,
+    context: &ExecutionContext,
+    deadline: Instant,
+) -> Result<usize, TransportError> {
+    if initial.len() > wire_limit {
+        return Err(TransportError::new(TransportErrorKind::ResourceLimit));
+    }
+    let mut reader = PrefixedReader::new(initial, stream);
+    let mut wire_bytes = initial.len();
+    let mut total = 0_usize;
+    loop {
+        let line = read_crlf_line(&mut reader, 32, wire_limit, &mut wire_bytes, context, deadline)?;
+        if line.is_empty()
+            || line.as_slice().contains(&b';')
+            || !line.as_slice().iter().all(u8::is_ascii_hexdigit)
+        {
+            return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+        }
+        let size = usize::from_str_radix(
+            std::str::from_utf8(line.as_slice())
+                .map_err(|_| TransportError::new(TransportErrorKind::InvalidMessage))?,
+            16,
+        )
+        .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        if size == 0 {
+            if !read_crlf_line(&mut reader, 2, wire_limit, &mut wire_bytes, context, deadline)?
+                .is_empty()
+            {
+                return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+            }
+            return Ok(total);
+        }
+        total = total
+            .checked_add(size)
+            .filter(|bytes| *bytes <= decoded_limit)
+            .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
+        let mut remaining = size;
+        let mut buffer = [0_u8; IO_CHUNK_BYTES];
+        while remaining != 0 {
+            let requested = remaining.min(buffer.len());
+            let read = read_wire_checked(
+                &mut reader,
+                &mut buffer[..requested],
+                wire_limit,
+                &mut wire_bytes,
+                context,
+                deadline,
+            )?;
+            if read == 0 {
+                return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+            }
+            write_output(output, &buffer[..read])?;
+            remaining -= read;
+        }
+        if !read_crlf_line(&mut reader, 2, wire_limit, &mut wire_bytes, context, deadline)?
+            .is_empty()
+        {
+            return Err(TransportError::new(TransportErrorKind::InvalidMessage));
+        }
+    }
 }
 
 pub(super) fn finalize_body(

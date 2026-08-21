@@ -85,6 +85,43 @@ fn real_cli_relabels_a_meeting_ir_without_running_transcription() {
 }
 
 #[test]
+fn plugin_list_uses_only_isolated_production_user_data() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    let user_data = temporary.path().join("user-data");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    #[cfg(windows)]
+    into_markdown_process_plugin::create_windows_plugin_store_directory(&user_data).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(&user_data).unwrap();
+    }
+    let outside_sentinel = temporary.path().join("outside-sentinel");
+    std::fs::write(&outside_sentinel, b"unchanged").unwrap();
+    let output = Command::new(binary())
+        .args(["--no-config", "plugins", "--json"])
+        .current_dir(&project)
+        .env("APPDATA", &user_data)
+        .env("LOCALAPPDATA", &user_data)
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOME", &home)
+        .env("INTO_MARKDOWN_USER_DATA_HOME", &user_data)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "[]");
+    assert_eq!(std::fs::read_dir(project).unwrap().count(), 0);
+    assert!(
+        !user_data.exists() || std::fs::read_dir(user_data).unwrap().next().is_none(),
+        "read-only plugin listing must not create store artifacts"
+    );
+    assert_eq!(std::fs::read(outside_sentinel).unwrap(), b"unchanged");
+}
+
+#[test]
 fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network_policy() {
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("provider.toml");

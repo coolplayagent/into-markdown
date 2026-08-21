@@ -42,6 +42,8 @@ flowchart LR
 authority。WASI 使用独立的 `wasi-v1` 边界；第三方 component 由固定版本的真实 WASI Preview 2
 运行时隔离执行，默认没有文件、clock、random 或网络权限；安装/注册层必须显式提供
 hash、能力和资源限制。协议与威胁边界见 [`wasi-plugins.md`](wasi-plugins.md)。
+签名包、全局 publisher trust、项目/全局作用域、原子安装与 CLI dispatch 见
+[`plugin-management.md`](plugin-management.md)。
 
 注册表在构建时拒绝空 ID 和同类重复 ID。检测候选与转换尝试的排序键均完整、稳定：
 显式格式优先，其后依次比较归一化 confidence、实现 priority 和稳定 ID。探测错误

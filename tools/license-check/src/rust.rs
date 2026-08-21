@@ -626,6 +626,14 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 
     #[test]
+    fn normal_runtime_authority_matches_locked_metadata() {
+        let (root, lock_text, lock, authority_text) = normal_authority_fixture();
+        let authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
+        let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
     fn normal_runtime_authority_rejects_overlap_and_omission() {
         let (root, lock_text, lock, authority_text) = normal_authority_fixture();
         let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();

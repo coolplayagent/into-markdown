@@ -75,6 +75,23 @@ pub(super) fn encode_get_request(
     host: &str,
     context: &ExecutionContext,
 ) -> Result<(String, ResourceReservation), TransportError> {
+    encode_get_request_with_encoding(url, host, context, true)
+}
+
+pub(super) fn encode_identity_get_request(
+    url: &Url,
+    host: &str,
+    context: &ExecutionContext,
+) -> Result<(String, ResourceReservation), TransportError> {
+    encode_get_request_with_encoding(url, host, context, false)
+}
+
+fn encode_get_request_with_encoding(
+    url: &Url,
+    host: &str,
+    context: &ExecutionContext,
+    gzip: bool,
+) -> Result<(String, ResourceReservation), TransportError> {
     let path = url.path();
     let query = url.query();
     if path.is_empty()
@@ -97,6 +114,7 @@ pub(super) fn encode_get_request(
         .and_then(|size| size.checked_add(host.len()))
         .and_then(|size| size.checked_add(usize::from(ipv6) * 2))
         .and_then(|size| size.checked_add(port_digits))
+        .and_then(|size| size.checked_add(if gzip { 0 } else { 4 }))
         .filter(|size| *size <= MAX_URL_BYTES + FIXED_REQUEST_BYTES + MAX_HOST_BYTES + 8)
         .ok_or_else(|| TransportError::new(TransportErrorKind::ResourceLimit))?;
     let mut memory = context
@@ -124,7 +142,9 @@ pub(super) fn encode_get_request(
         write!(request, ":{port}")
             .map_err(|_| TransportError::new(TransportErrorKind::ResourceLimit))?;
     }
-    request.push_str("\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\nUser-Agent: into-md/0\r\n\r\n");
+    request.push_str("\r\nAccept: */*\r\nAccept-Encoding: ");
+    request.push_str(if gzip { "gzip" } else { "identity" });
+    request.push_str("\r\nConnection: close\r\nUser-Agent: into-md/0\r\n\r\n");
     if request.capacity() > required {
         memory
             .grow(
