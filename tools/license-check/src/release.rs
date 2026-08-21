@@ -530,7 +530,13 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
 fn embedded_only(id: &str) -> bool {
     id.starts_with("cargo:")
         || id.starts_with("npm:")
-        || matches!(id, "imageproc-contour-adaptation" | "clipper2-rust" | "calamine")
+        || matches!(
+            id,
+            "opencc-transcript-character-table"
+                | "imageproc-contour-adaptation"
+                | "clipper2-rust"
+                | "calamine"
+        )
 }
 
 fn projection_material_path(path: &str) -> bool {

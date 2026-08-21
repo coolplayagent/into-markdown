@@ -37,6 +37,8 @@ pub struct AsrOptions {
     pub model_bundle: String,
     /// Optional BCP-47 language hint; absence enables model detection.
     pub language: Option<String>,
+    /// Deterministic Han-script normalization applied after recognition.
+    pub chinese_script: ChineseScript,
     /// Maximum native decoder threads.
     pub max_threads: u16,
     /// Optional decoded-media duration ceiling. Absence means that duration is
@@ -54,12 +56,26 @@ impl Default for AsrOptions {
         Self {
             model_bundle: "whisper-small-multilingual".into(),
             language: None,
+            chinese_script: ChineseScript::Preserve,
             max_threads: 4,
             max_duration_ms: None,
             max_segments: 100_000,
             max_native_memory_bytes: 900 * 1024 * 1024,
         }
     }
+}
+
+/// Output policy for Chinese transcript glyphs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChineseScript {
+    /// Preserve the glyphs emitted by the recognizer.
+    #[default]
+    Preserve,
+    /// Normalize mapped Han characters to Simplified Chinese.
+    Simplified,
+    /// Normalize mapped Han characters to Traditional Chinese.
+    Traditional,
 }
 
 /// Local anonymous speaker-diarization settings for media transcription.
@@ -370,5 +386,15 @@ mod tests {
         let decoded: ConversionOptions = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.asr, AsrOptions::default());
+    }
+
+    #[test]
+    fn additive_chinese_script_defaults_for_existing_asr_payloads() {
+        let mut value = serde_json::to_value(AsrOptions::default()).unwrap();
+        value.as_object_mut().unwrap().remove("chinese_script");
+
+        let decoded: AsrOptions = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.chinese_script, ChineseScript::Preserve);
     }
 }

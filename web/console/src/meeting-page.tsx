@@ -4,7 +4,7 @@ import {
   Settings2, Square, Trash2, Upload, Users, X,
 } from "lucide-react";
 import type { ApiClient, ComponentStatus, MeetingOptions, TaskRecord } from "./api";
-import { ApiError, defaultMeetingOptions } from "./api";
+import { ApiError, meetingOptionsForLocale } from "./api";
 import { AudioSetupDialog } from "./conversion-controls";
 import { useI18n, type MessageKey } from "./i18n";
 import { ResultDialog } from "./result-page";
@@ -101,13 +101,14 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const writes = useRef<Promise<void>>(Promise.resolve());
   const watcher = useRef<AbortController | null>(null);
   const diarizationTouched = useRef(false);
+  const languageTouched = useRef(false);
   const recordingFailure = useRef<MessageKey | null>(null);
   const [state, setState] = useState<RecorderState>("idle");
   const [elapsed, setElapsed] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [fromDraft, setFromDraft] = useState(false);
   const [message, setMessage] = useState("");
-  const [options, setOptions] = useState<MeetingOptions>(defaultMeetingOptions);
+  const [options, setOptions] = useState<MeetingOptions>(() => meetingOptionsForLocale(locale));
   const [audioStatus, setAudioStatus] = useState<ComponentStatus>();
   const [diarizationStatus, setDiarizationStatus] = useState<ComponentStatus>();
   const [setup, setSetup] = useState(false);
@@ -120,6 +121,14 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
+
+  useEffect(() => {
+    if (!languageTouched.current) {
+      setOptions((current) => ({
+        ...current, transcriptLanguage: meetingOptionsForLocale(locale).transcriptLanguage,
+      }));
+    }
+  }, [locale]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const [status, page] = await Promise.all([api.status(signal), api.listTasks({ limit: 100 }, signal)]);
@@ -391,6 +400,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       <section className="card transcript-card" aria-labelledby="transcript-options-title">
         <div className="card-heading"><div><p className="section-kicker">{t("transcript")}</p><h2 id="transcript-options-title">{t("transcriptSettings")}</h2></div><Settings2 size={20} /></div>
         <div className="meeting-options">
+          <label className="transcript-language"><span>{t("transcriptLanguage")}</span><select value={options.transcriptLanguage} onChange={(event) => { languageTouched.current = true; setOptions((current) => ({ ...current, transcriptLanguage: event.target.value as MeetingOptions["transcriptLanguage"] })); }}><option value="auto">{t("automaticDetection")}</option><option value="zh-Hans">{t("simplifiedChinese")}</option><option value="zh-Hant">{t("traditionalChinese")}</option><option value="en">{t("english")}</option></select><small>{t("transcriptLanguageHelp")}</small></label>
           <div className="meeting-option-row"><span><Users size={18} /><span><strong>{t("distinguishSpeakers")}</strong><small>{diarizationStatus?.available ? t("anonymousSpeakerLabels") : t("speakerSetupNeeded")}</small></span></span><label className={`switch ${diarizationStatus?.available ? "" : "unavailable"}`}><span className="visually-hidden">{t("distinguishSpeakers")}</span><input type="checkbox" disabled={!diarizationStatus?.available} checked={options.diarize && diarizationStatus?.available === true} onChange={(event) => { diarizationTouched.current = true; setOptions((current) => ({ ...current, diarize: event.target.checked })); }} /><span /></label></div>
           {options.diarize && diarizationStatus?.available === true && <label className="expected-speakers"><span>{t("expectedSpeakers")}</span><select value={options.expectedSpeakers ?? ""} onChange={(event) => setOptions((current) => ({ ...current, expectedSpeakers: event.target.value ? Number(event.target.value) : null }))}><option value="">{t("automatic")}</option>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label>}
           {(audioStatus?.available === false || diarizationStatus?.available === false) && <button className="prepare-media" type="button" onClick={() => setSetup(true)}><CircleAlert size={16} />{t("prepareAudioComponents")}</button>}

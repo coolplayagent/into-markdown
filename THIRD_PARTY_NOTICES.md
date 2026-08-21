@@ -13,6 +13,14 @@ by `AND` applies; in particular, `unicode-ident` is concluded as
 each package's copyright and license text; the registry source for every
 package is fixed by `Cargo.lock`.
 
+The deterministic Simplified/Traditional transcript character mappings use
+OpenCC `TSCharacters.txt` and `STCharacters.txt` at commit
+`4f90418b9ed73a91023897095c762e5fdaadc016`, retained under
+`third_party/opencc`. OpenCC is distributed under Apache-2.0; the complete
+license text is the repository `LICENSE`. The mapping selects only the first
+one-codepoint character candidate so it never merges or splits timestamped ASR
+tokens; phrase-level ambiguity is not rewritten.
+
 `calamine 0.36.1` parses XLSX/XLSM/XLSB only after the repository-owned
 OPC/BIFF12 scanner authenticates the third-party reading surface and its
 combined retained/transient peak under the engine's request credit. The panic

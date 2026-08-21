@@ -7,6 +7,7 @@ exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"
 rust_library(
     name = "ffmpeg",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = ["//third_party/ffmpeg:build-policy.json"],
     crate_name = "into_markdown_ffmpeg",
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal = True),
@@ -16,6 +17,7 @@ rust_library(
 rust_test(
     name = "ffmpeg_test",
     crate = ":ffmpeg",
+    compile_data = ["//third_party/ffmpeg:build-policy.json"],
     aliases = aliases(normal_dev = True, proc_macro_dev = True),
     edition = "2024",
     deps = ["//crates/core"] + all_crate_deps(normal_dev = True),

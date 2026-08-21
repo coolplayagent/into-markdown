@@ -81,7 +81,7 @@ def build(target: pathlib.Path) -> None:
     )
     run(
         [
-            "cargo", "build", "-j2", "--release", "--locked",
+            "cargo", "build", "-j2", "--release", "--locked", "--features", "metal",
             "-p", "into-markdown-cli", "--bin", "into-md",
             "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker",
             "-p", "into-markdown-legacy-office", "--bin", "legacy-office-worker",
@@ -357,6 +357,7 @@ def write_license_materials(
                 material(path, output, "license-text", [component], [spdx], contents=True)
             )
     for component, source, spdx in [
+        ("opencc-transcript-character-table", "LICENSE", "Apache-2.0"),
         ("imageproc-contour-adaptation", "third_party/licenses/imageproc-MIT.txt", "MIT"),
         ("clipper2-rust", "third_party/licenses/BSL-1.0.txt", "BSL-1.0"),
         ("calamine", "third_party/licenses/calamine-MIT.txt", "MIT"),
@@ -436,7 +437,12 @@ def projection_for(output: pathlib.Path, materials: list[dict], ffmpeg_authority
     embedded = [
         item for item in selected
         if item.startswith(("cargo:", "npm:"))
-        or item in {"calamine", "clipper2-rust", "imageproc-contour-adaptation"}
+        or item in {
+            "calamine",
+            "clipper2-rust",
+            "imageproc-contour-adaptation",
+            "opencc-transcript-character-table",
+        }
     ]
     files = []
     for path in regular_files(output):

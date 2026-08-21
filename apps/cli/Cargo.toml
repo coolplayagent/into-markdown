@@ -6,6 +6,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+default = []
+metal = ["into-markdown/metal"]
+
 [[bin]]
 name = "into-md"
 path = "src/main.rs"

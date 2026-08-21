@@ -6,6 +6,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+default = []
+metal = ["whisper-rs/metal"]
+
 [dependencies]
 into-markdown-core = { path = "../core" }
 into-markdown-ffmpeg = { path = "../ffmpeg" }

@@ -9,7 +9,7 @@ use into_markdown::{
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
 pub(crate) fn assemble(
@@ -22,25 +22,83 @@ pub(crate) fn assemble(
 
 /// Assemble the exact local media services required by one durable Web meeting
 /// request. The helper verifies installed components and never downloads them.
-pub(crate) fn assemble_web_media(
-    options: &ConversionOptions,
-    execution: &ExecutionOptions,
-) -> Result<Services, CliError> {
-    let executable = canonical_executable().map_err(CliError::component)?;
-    let context = ExecutionContext::new(execution.clone(), options.limits.clone());
-    let mut services = Services {
-        transcriber: Some(assemble_asr_options(options, &context, &executable)?),
-        ..Services::default()
-    };
-    if options.diarization.enabled {
-        let directory = executable.parent().ok_or_else(|| {
-            CliError::component("current executable has no distribution directory")
-        })?;
-        services.diarizer = Some(
-            assemble_diarization_config(options, directory, &context).map_err(CliError::from)?,
-        );
+#[derive(Clone, PartialEq, Eq)]
+struct WebMediaKey {
+    model_revision: u128,
+    asr: into_markdown::AsrOptions,
+    diarization_bundle: Option<String>,
+}
+
+struct SingleEntryCache<K, V> {
+    entry: Mutex<Option<(K, V)>>,
+}
+
+impl<K: PartialEq, V: Clone> SingleEntryCache<K, V> {
+    fn get_or_try_insert_with<E>(
+        &self,
+        key: K,
+        build: impl FnOnce() -> Result<V, E>,
+    ) -> Result<V, E> {
+        let mut entry = self.entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((cached_key, value)) = entry.as_ref()
+            && *cached_key == key
+        {
+            return Ok(value.clone());
+        }
+        let value = build()?;
+        *entry = Some((key, value.clone()));
+        Ok(value)
     }
-    Ok(services)
+}
+
+impl<K, V> Default for SingleEntryCache<K, V> {
+    fn default() -> Self {
+        Self { entry: Mutex::new(None) }
+    }
+}
+
+/// Process-local, bounded cache for the native services used by Web meetings.
+/// A configuration or installed-model revision change atomically replaces the
+/// previous entry; construction failures are never cached.
+#[derive(Default)]
+pub(crate) struct WebMediaServiceCache {
+    services: SingleEntryCache<WebMediaKey, Services>,
+}
+
+impl WebMediaServiceCache {
+    pub(crate) fn assemble(&self, options: &ConversionOptions) -> Result<Services, CliError> {
+        let key = WebMediaKey {
+            model_revision: media_model_revision(),
+            asr: options.asr.clone(),
+            diarization_bundle: options
+                .diarization
+                .enabled
+                .then(|| options.diarization.model_bundle.clone()),
+        };
+        self.services.get_or_try_insert_with(key, || {
+            let executable = canonical_executable().map_err(CliError::component)?;
+            // Cached native services outlive any one request, so their verified
+            // model leases must not retain a request cancellation/progress sink.
+            let context = ExecutionContext::new(
+                ExecutionOptions::default(),
+                into_markdown::ResourceLimits::default(),
+            );
+            let mut services = Services {
+                transcriber: Some(assemble_asr_options(options, &context, &executable)?),
+                ..Services::default()
+            };
+            if options.diarization.enabled {
+                let directory = executable.parent().ok_or_else(|| {
+                    CliError::component("current executable has no distribution directory")
+                })?;
+                services.diarizer = Some(
+                    assemble_diarization_config(options, directory, &context)
+                        .map_err(CliError::from)?,
+                );
+            }
+            Ok(services)
+        })
+    }
 }
 
 /// Verify the exact local OCR distribution used by conversion without any
@@ -307,6 +365,7 @@ const fn ffmpeg_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn auto_degrades_only_component_absence_and_preserves_execution_failures() {
@@ -325,5 +384,38 @@ mod tests {
                 detail: "low memory".into(),
             },
         ));
+    }
+
+    #[test]
+    fn single_entry_cache_reuses_replaces_and_does_not_cache_errors() {
+        let cache = SingleEntryCache::<u8, String>::default();
+        let builds = AtomicUsize::new(0);
+        let first = cache
+            .get_or_try_insert_with(1, || {
+                builds.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, ()>("one".to_owned())
+            })
+            .unwrap();
+        let reused = cache
+            .get_or_try_insert_with(1, || {
+                builds.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, ()>("unexpected".to_owned())
+            })
+            .unwrap();
+        assert_eq!(
+            (first.as_str(), reused.as_str(), builds.load(Ordering::Relaxed)),
+            ("one", "one", 1)
+        );
+
+        let failure = cache.get_or_try_insert_with(2, || Err::<String, _>("failed"));
+        assert_eq!(failure.unwrap_err(), "failed");
+        let replacement = cache
+            .get_or_try_insert_with(2, || {
+                builds.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, ()>("two".to_owned())
+            })
+            .unwrap();
+        assert_eq!(replacement, "two");
+        assert_eq!(builds.load(Ordering::Relaxed), 2);
     }
 }

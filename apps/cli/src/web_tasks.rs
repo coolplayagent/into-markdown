@@ -381,6 +381,7 @@ struct Shared {
     history_mutation: Mutex<()>,
     recovery: RecoveryStore,
     engine: Engine,
+    media_services: crate::services::WebMediaServiceCache,
     events: EventHub,
     queue: Mutex<QueueState>,
     queue_changed: Condvar,
@@ -1125,6 +1126,7 @@ impl WebTaskBackend {
             history_mutation: Mutex::new(()),
             recovery,
             engine,
+            media_services: crate::services::WebMediaServiceCache::default(),
             events: EventHub::new(random_hex()?),
             queue: Mutex::new(QueueState::default()),
             queue_changed: Condvar::new(),
@@ -2653,7 +2655,9 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             })),
         };
         let meeting_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
-            let services = crate::services::assemble_web_media(&persisted.options, &execution)
+            let services = shared
+                .media_services
+                .assemble(&persisted.options)
                 .map_err(|error| WebTaskError::Io(error.to_string()))?;
             Some(
                 into_markdown::default_engine_with_services(services)

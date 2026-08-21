@@ -4,8 +4,8 @@ use crate::args::{AssetModeArg, ConflictPolicy, EmitKind, Language, Scope};
 use crate::error::CliError;
 use directories::ProjectDirs;
 use into_markdown::{
-    AiMode, AssetMode, ConversionOptions, OcrPolicy, RaggedRowsMode, TableHeaderMode,
-    TextDecodingMode,
+    AiMode, AssetMode, ChineseScript, ConversionOptions, OcrPolicy, RaggedRowsMode,
+    TableHeaderMode, TextDecodingMode,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -120,6 +120,7 @@ pub struct OcrConfig {
 pub struct AsrConfig {
     pub model_bundle: Option<String>,
     pub language: Option<String>,
+    pub chinese_script: Option<ChineseScript>,
     pub max_threads: Option<u16>,
     pub max_duration_ms: Option<u64>,
     pub max_segments: Option<u32>,
@@ -479,6 +480,9 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     }
     if let Some(value) = &config.asr.language {
         options.asr.language = Some(value.clone());
+    }
+    if let Some(value) = config.asr.chinese_script {
+        options.asr.chinese_script = value;
     }
     if let Some(value) = config.asr.max_threads {
         options.asr.max_threads = value;

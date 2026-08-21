@@ -3,21 +3,27 @@
 //! Encoded media is normalized by the audited `FFmpeg` runtime. Model bytes are
 //! resolved only through `ModelManager`; ordinary transcription never downloads.
 
+mod chinese_script;
 mod diarization;
 
 pub use diarization::{DiarizationModelResolver, LocalSpeakerDiarizer, OnlineCosineClustering};
 
 use into_markdown_core::{
-    AsrOptions, Block, BlockNode, BoxFuture, ConversionError, ExecutionContext, ExecutionStage,
-    Inline, MEDIA_CHECKPOINT_SCHEMA_VERSION, MediaCheckpoint, MediaCheckpointStage, NodeId,
-    NormalizedAudioIdentity, Provenance, ProvenanceKind, ResourceReservation, SourceLocator,
-    TimeRange, TimedToken, Transcriber, TranscriptionRequest, TranscriptionResult,
+    AsrOptions, Block, BlockNode, BoxFuture, ChineseScript, ConversionError, ExecutionContext,
+    ExecutionStage, Inline, MEDIA_CHECKPOINT_SCHEMA_VERSION, MediaCheckpoint, MediaCheckpointStage,
+    NodeId, NormalizedAudioIdentity, Provenance, ProvenanceKind, ResourceReservation,
+    SourceLocator, TimeRange, TimedToken, Transcriber, TranscriptionRequest, TranscriptionResult,
     estimate_retained_blocks,
 };
 use into_markdown_ffmpeg::{FfmpegRuntime, MediaLimits, NormalizedAudio};
 use into_markdown_ocr::{ModelManager, ModelManagerError};
+use std::path::Path;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 const PROVIDER_ID: &str = "builtin.asr.whisper-small";
 const SAMPLE_RATE: u32 = 16_000;
@@ -31,13 +37,15 @@ const WINDOW_OVERLAP_MS: u64 = 2_000;
 const SILENCE_SEARCH_MS: u64 = 2_000;
 const SILENCE_PROBE_MS: u64 = 200;
 
-/// CPU-only limits and model selection for one installed service.
+/// Limits, output policy, and model selection for one installed service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhisperConfig {
     /// Embedded model bundle ID.
     pub model_bundle: String,
     /// Optional normalized Whisper language code.
     pub language: Option<String>,
+    /// Deterministic Han-script output policy.
+    pub chinese_script: ChineseScript,
     /// Maximum decoder threads.
     pub max_threads: u16,
     /// Optional maximum decoded duration.
@@ -56,6 +64,7 @@ impl TryFrom<&AsrOptions> for WhisperConfig {
         let config = Self {
             model_bundle: options.model_bundle.clone(),
             language,
+            chinese_script: options.chinese_script,
             max_threads: options.max_threads,
             max_duration_ms: options.max_duration_ms,
             max_segments: options.max_segments,
@@ -83,6 +92,17 @@ impl WhisperConfig {
 struct CachedModel {
     context: WhisperContext,
     identity: String,
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    path: PathBuf,
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    backend: WhisperBackend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhisperBackend {
+    Cpu,
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    Metal,
 }
 
 /// Installed, offline Whisper-small provider with a single-flight model cache.
@@ -130,9 +150,7 @@ impl WhisperSmallTranscriber {
         // progress streams. With logging backends disabled this audited hook
         // is a process-wide no-op sink and is safe to install repeatedly.
         whisper_rs::install_logging_hooks();
-        let mut parameters = WhisperContextParameters::default();
-        parameters.use_gpu(false).flash_attn(false);
-        let native = WhisperContext::new_with_params(&artifact.path, parameters).map_err(|_| {
+        let (native, backend) = load_preferred_context(&artifact.path).map_err(|_| {
             component(&self.config.model_bundle, "verified Whisper model could not be loaded")
         })?;
         if !native.is_multilingual()
@@ -151,7 +169,13 @@ impl WhisperSmallTranscriber {
         *cache = Some(CachedModel {
             context: native,
             identity: format!("{}@sha256:{}", self.config.model_bundle, artifact.sha256),
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            path: artifact.path,
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            backend,
         });
+        #[cfg(not(all(target_os = "macos", feature = "metal")))]
+        let _ = backend;
         Ok(cache)
     }
 
@@ -272,45 +296,43 @@ impl WhisperSmallTranscriber {
                 return Err(component(PROVIDER_ID, "long-form window made no progress"));
             }
             let samples = pcm_f32_range(&pcm, window_start, window_end, context)?;
-            let mut state = model.context.create_state().map_err(|_| {
-                component(PROVIDER_ID, "Whisper decoder state could not be created")
-            })?;
-            if language.is_none() {
-                state.pcm_to_mel(&samples.values, threads).map_err(|_| {
-                    component(PROVIDER_ID, "language detection preprocessing failed")
-                })?;
-                let (id, probabilities) = state
-                    .lang_detect(0, threads)
-                    .map_err(|_| component(PROVIDER_ID, "language detection failed"))?;
-                let detected =
-                    whisper_rs::get_lang_str(id).map(str::to_owned).ok_or_else(|| {
-                        component(PROVIDER_ID, "language detection returned an unknown language")
-                    })?;
-                language_confidence = probabilities
-                    .get(
-                        usize::try_from(id)
-                            .map_err(|_| component(PROVIDER_ID, "invalid language"))?,
-                    )
-                    .copied()
-                    .filter(|value| value.is_finite())
-                    .map(|value| value.clamp(0.0, 1.0));
-                language = Some(detected);
-            }
-            let mut params =
-                FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
-            params.set_n_threads(i32::try_from(threads).map_err(|_| resource("asrConfiguration"))?);
-            params.set_translate(false);
-            params.set_no_timestamps(false);
-            params.set_token_timestamps(true);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_special(false);
-            params.set_print_timestamps(false);
-            params.set_language(language.as_deref());
-            install_window_callbacks(&mut params, context, window_start, window_end, total_frames);
-            if state.full(params, &samples.values).is_err() {
+            let decoded = decode_window(
+                &model.context,
+                &samples.values,
+                threads,
+                language.as_deref(),
+                context,
+                window_start,
+                window_end,
+                total_frames,
+            );
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            let decoded = if decoded.is_err() && model.backend == WhisperBackend::Metal {
+                // Native GPU availability can change after initialization. A
+                // failed Metal window is retried once on a fresh CPU context;
+                // subsequent windows stay on CPU and checkpoints remain valid.
                 context.checkpoint()?;
-                return Err(component(PROVIDER_ID, "Whisper inference failed"));
+                model.context = load_context(&model.path, false).map_err(|_| {
+                    component(PROVIDER_ID, "Whisper CPU fallback could not be loaded")
+                })?;
+                model.backend = WhisperBackend::Cpu;
+                decode_window(
+                    &model.context,
+                    &samples.values,
+                    threads,
+                    language.as_deref(),
+                    context,
+                    window_start,
+                    window_end,
+                    total_frames,
+                )
+            } else {
+                decoded
+            };
+            let (state, detected) = decoded?;
+            if let Some((detected_language, confidence)) = detected {
+                language = Some(detected_language);
+                language_confidence = confidence;
             }
             context.checkpoint()?;
             let ownership_start =
@@ -320,9 +342,11 @@ impl WhisperSmallTranscriber {
             } else {
                 window_end.saturating_sub(overlap_frames / 2)
             };
+            let new_segments_start = output.len();
             collect_window_segments(
                 &state,
                 window_start,
+                window_end,
                 ownership_start,
                 ownership_end,
                 total_frames,
@@ -334,6 +358,9 @@ impl WhisperSmallTranscriber {
                 &mut next_id,
                 context,
             )?;
+            for segment in &mut output[new_segments_start..] {
+                chinese_script::normalize_segment(segment, self.config.chinese_script);
+            }
             let next_window_start = if window_end == total_frames {
                 total_frames
             } else {
@@ -358,14 +385,108 @@ impl WhisperSmallTranscriber {
             window_start = next_window_start;
         }
         context.report(ExecutionStage::Ai, Some(650), Some(1_000), Some("asr.complete"))?;
+        let output_language = match (language.as_deref(), self.config.chinese_script) {
+            (Some("zh"), ChineseScript::Simplified) => Some("zh-Hans".into()),
+            (Some("zh"), ChineseScript::Traditional) => Some("zh-Hant".into()),
+            _ => language,
+        };
         Ok(TranscriptionResult {
             segments: output,
             provider: PROVIDER_ID.into(),
             model: model.identity.clone(),
-            language,
+            language: output_language,
             language_confidence,
         })
     }
+}
+
+fn load_context(
+    path: &Path,
+    accelerated: bool,
+) -> Result<WhisperContext, whisper_rs::WhisperError> {
+    let mut parameters = WhisperContextParameters::default();
+    // Metal is the acceleration boundary. Keep flash attention disabled: the
+    // bundled whisper.cpp backend does not expose a recoverable Rust error for
+    // every Metal flash-attention failure, so enabling it would bypass the CPU
+    // fallback with a native process abort on affected macOS devices.
+    parameters.use_gpu(accelerated).flash_attn(false);
+    WhisperContext::new_with_params(path, parameters)
+}
+
+fn load_preferred_context(
+    path: &Path,
+) -> Result<(WhisperContext, WhisperBackend), whisper_rs::WhisperError> {
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    if process_allows_metal()
+        && let Ok(context) = load_context(path, true)
+    {
+        return Ok((context, WhisperBackend::Metal));
+    }
+    load_context(path, false).map(|context| (context, WhisperBackend::Cpu))
+}
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
+fn process_allows_metal() -> bool {
+    // App Sandbox and restricted local-agent sandboxes can expose a Metal
+    // device while denying the private buffers whisper.cpp allocates during
+    // model loading. Some native backends abort instead of returning an error
+    // in that state, so choose the guaranteed CPU path before entering them.
+    ["APP_SANDBOX_CONTAINER_ID", "SANDBOX_CONTAINER_ID", "CODEX_SANDBOX"]
+        .iter()
+        .all(|name| std::env::var_os(name).is_none())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_window(
+    native: &WhisperContext,
+    samples: &[f32],
+    threads: usize,
+    requested_language: Option<&str>,
+    context: &ExecutionContext,
+    window_start: u64,
+    window_end: u64,
+    total_frames: u64,
+) -> Result<(WhisperState, Option<(String, Option<f32>)>), ConversionError> {
+    let mut state = native
+        .create_state()
+        .map_err(|_| component(PROVIDER_ID, "Whisper decoder state could not be created"))?;
+    let detected = if requested_language.is_none() {
+        state
+            .pcm_to_mel(samples, threads)
+            .map_err(|_| component(PROVIDER_ID, "language detection preprocessing failed"))?;
+        let (id, probabilities) = state
+            .lang_detect(0, threads)
+            .map_err(|_| component(PROVIDER_ID, "language detection failed"))?;
+        let language = whisper_rs::get_lang_str(id).map(str::to_owned).ok_or_else(|| {
+            component(PROVIDER_ID, "language detection returned an unknown language")
+        })?;
+        let confidence = probabilities
+            .get(usize::try_from(id).map_err(|_| component(PROVIDER_ID, "invalid language"))?)
+            .copied()
+            .filter(|value| value.is_finite())
+            .map(|value| value.clamp(0.0, 1.0));
+        Some((language, confidence))
+    } else {
+        None
+    };
+    let language =
+        requested_language.or_else(|| detected.as_ref().map(|(value, _)| value.as_str()));
+    let mut params = FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
+    params.set_n_threads(i32::try_from(threads).map_err(|_| resource("asrConfiguration"))?);
+    params.set_translate(false);
+    params.set_no_timestamps(false);
+    params.set_token_timestamps(true);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_special(false);
+    params.set_print_timestamps(false);
+    params.set_language(language);
+    install_window_callbacks(&mut params, context, window_start, window_end, total_frames);
+    if state.full(params, samples).is_err() {
+        context.checkpoint()?;
+        return Err(component(PROVIDER_ID, "Whisper inference failed"));
+    }
+    Ok((state, detected))
 }
 
 #[cfg(test)]
@@ -500,6 +621,7 @@ fn pcm_f32_range(
 fn collect_window_segments(
     state: &whisper_rs::WhisperState,
     window_start_frame: u64,
+    window_end_frame: u64,
     ownership_start_frame: u64,
     ownership_end_frame: u64,
     total_frames: u64,
@@ -511,6 +633,7 @@ fn collect_window_segments(
     next_id: &mut u32,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
+    let decoded_end_ms = frames_to_milliseconds(window_end_frame.min(total_frames));
     let count = u32::try_from(state.full_n_segments()).map_err(|_| resource("asrSegments"))?;
     if count > maximum || output.len().saturating_add(count as usize) > maximum as usize {
         return Err(resource("asrSegments"));
@@ -549,6 +672,10 @@ fn collect_window_segments(
             saw_timed_token = true;
             let start_ms = offset_ms.saturating_add(token_start.saturating_mul(10));
             let end_ms = offset_ms.saturating_add(token_end.saturating_mul(10));
+            let Some((start_ms, end_ms)) = clip_provider_range(start_ms, end_ms, decoded_end_ms)
+            else {
+                continue;
+            };
             let midpoint_frame = milliseconds_to_frames(start_ms.saturating_add(end_ms) / 2)?;
             if !owns_timestamp(midpoint_frame, ownership_start_frame, ownership_end_frame) {
                 continue;
@@ -593,6 +720,10 @@ fn collect_window_segments(
             // half-open ownership rule instead of duplicating it across windows.
             let start_ms = offset_ms.saturating_add(local_start_ms);
             let end_ms = offset_ms.saturating_add(local_end_ms);
+            let Some((start_ms, end_ms)) = clip_provider_range(start_ms, end_ms, decoded_end_ms)
+            else {
+                continue;
+            };
             let midpoint_frame = milliseconds_to_frames(start_ms.saturating_add(end_ms) / 2)?;
             if !owns_timestamp(midpoint_frame, ownership_start_frame, ownership_end_frame) {
                 continue;
@@ -607,14 +738,6 @@ fn collect_window_segments(
             continue;
         }
         let mut owned_tokens = decode_timed_tokens(owned_token_bytes)?;
-        *transcript_bytes = transcript_bytes
-            .checked_add(text.len())
-            .filter(|total| *total <= MAX_TRANSCRIPT_BYTES)
-            .ok_or_else(|| resource("asrTranscriptBytes"))?;
-        let total_ms = frames_to_milliseconds(total_frames);
-        if end_ms > total_ms.saturating_add(10) {
-            return Err(component(PROVIDER_ID, "segment timestamp exceeds decoded media"));
-        }
         start_ms = start_ms.max(*previous_end);
         if end_ms <= start_ms {
             continue;
@@ -638,6 +761,10 @@ fn collect_window_segments(
             // segment instead of rewriting or inventing text.
             owned_tokens.clear();
         }
+        *transcript_bytes = transcript_bytes
+            .checked_add(text.len())
+            .filter(|total| *total <= MAX_TRANSCRIPT_BYTES)
+            .ok_or_else(|| resource("asrTranscriptBytes"))?;
         *previous_end = end_ms;
         let range = TimeRange { start_ms, end_ms };
         output.push(BlockNode {
@@ -659,6 +786,11 @@ fn collect_window_segments(
         *next_id = next_id.checked_add(1).ok_or_else(|| resource("asrSegments"))?;
     }
     Ok(())
+}
+
+fn clip_provider_range(start_ms: u64, end_ms: u64, decoded_end_ms: u64) -> Option<(u64, u64)> {
+    let end_ms = end_ms.min(decoded_end_ms);
+    (start_ms < end_ms).then_some((start_ms, end_ms))
 }
 
 fn owns_timestamp(
@@ -829,6 +961,13 @@ mod tests {
             boundary,
             milliseconds_to_frames(57_000).unwrap(),
         ));
+    }
+
+    #[test]
+    fn provider_ranges_are_clipped_to_the_decoded_window() {
+        assert_eq!(clip_provider_range(54_900, 55_600, 55_000), Some((54_900, 55_000)));
+        assert_eq!(clip_provider_range(55_000, 55_600, 55_000), None);
+        assert_eq!(clip_provider_range(2_000, 1_000, 55_000), None);
     }
 
     #[test]

@@ -2,6 +2,17 @@
   "schema_version": 1,
   "components": [
     {
+      "id": "opencc-transcript-character-table",
+      "kind": "embedded-data",
+      "status": "reviewed",
+      "included_in_release": true,
+      "release_eligible": true,
+      "version": "OpenCC 4f90418b9ed73a91023897095c762e5fdaadc016",
+      "source": "https://github.com/BYVoid/OpenCC/tree/4f90418b9ed73a91023897095c762e5fdaadc016/data/dictionary",
+      "license": "Apache-2.0",
+      "obligations": "The deterministic one-codepoint Simplified/Traditional transcript mappings use third_party/opencc/TSCharacters.txt (SHA-256 737c21c66f55a419dd6956cb3089476cdefc5a36877452631617696df1e5d925) and STCharacters.txt (SHA-256 a0ca1601c70648cf48b33c3c6210ccbecc5c7eead4b4c3daf76587ba2c03582b) from OpenCC commit 4f90418b9ed73a91023897095c762e5fdaadc016. Preserve OpenCC attribution and the complete Apache-2.0 license in the repository LICENSE. Any mapping update requires a fixed upstream revision, exact hashes, and renewed ambiguity review."
+    },
+    {
       "id": "imageproc-contour-adaptation",
       "kind": "embedded-source",
       "status": "reviewed",

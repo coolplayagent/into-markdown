@@ -1471,6 +1471,13 @@ fn apply_asr_overrides(
     if let Some(language) = &arguments.asr_language {
         options.asr.language = Some(language.clone());
     }
+    if let Some(script) = arguments.chinese_script {
+        options.asr.chinese_script = match script {
+            crate::args::ChineseScriptArg::Preserve => into_markdown::ChineseScript::Preserve,
+            crate::args::ChineseScriptArg::Simplified => into_markdown::ChineseScript::Simplified,
+            crate::args::ChineseScriptArg::Traditional => into_markdown::ChineseScript::Traditional,
+        };
+    }
     if let Some(threads) = arguments.asr_threads {
         options.asr.max_threads = threads;
     }

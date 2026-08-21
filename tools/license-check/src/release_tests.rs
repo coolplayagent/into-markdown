@@ -107,7 +107,10 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
                 || id.starts_with("npm:")
                 || matches!(
                     id.as_str(),
-                    "imageproc-contour-adaptation" | "clipper2-rust" | "calamine"
+                    "opencc-transcript-character-table"
+                        | "imageproc-contour-adaptation"
+                        | "clipper2-rust"
+                        | "calamine"
                 )
         })
         .cloned()
@@ -233,6 +236,12 @@ fn install_base_materials(
         );
     }
     for (id, archive_path, authority_path, license) in [
+        (
+            "opencc-transcript-character-table",
+            "share/into-markdown/licenses/opencc-Apache-2.0.txt",
+            "LICENSE",
+            "Apache-2.0",
+        ),
         (
             "imageproc-contour-adaptation",
             "share/into-markdown/licenses/imageproc-MIT.txt",
@@ -391,7 +400,12 @@ fn four_platform_requests_use_one_license_conclusion() {
         let generated = generate_release_inputs(&repository, &json).unwrap();
         assert_eq!(generated.target, target);
         assert!(!generated.third_party_notices.contents.contains("License: LGPL-2.1-or-later"));
-        for required in ["imageproc-contour-adaptation", "clipper2-rust", "calamine"] {
+        for required in [
+            "opencc-transcript-character-table",
+            "imageproc-contour-adaptation",
+            "clipper2-rust",
+            "calamine",
+        ] {
             assert!(generated.component_ids.iter().any(|id| id == required));
         }
         notices.push(generated.third_party_notices.contents);

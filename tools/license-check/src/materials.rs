@@ -125,6 +125,7 @@ fn covers_component(
         return exact_libreoffice_bundle(repository, projection, component, errors);
     }
     let authority_path = match component.id.as_str() {
+        "opencc-transcript-character-table" => "LICENSE",
         "imageproc-contour-adaptation" => "third_party/licenses/imageproc-MIT.txt",
         "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
         "calamine" => "third_party/licenses/calamine-MIT.txt",

@@ -52,9 +52,9 @@ pub use ocr_binding::{
     BoundOcrResult, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion, OcrResult,
 };
 pub use options::{
-    AiMode, AiOptions, AsrOptions, AssetMode, ConversionOptions, DelimitedTextOptions,
-    DiarizationOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions, RaggedRowsMode,
-    ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
+    AiMode, AiOptions, AsrOptions, AssetMode, ChineseScript, ConversionOptions,
+    DelimitedTextOptions, DiarizationOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions,
+    RaggedRowsMode, ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
 };
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
