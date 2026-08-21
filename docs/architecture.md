@@ -202,6 +202,18 @@ stdout 是流式边界：外部资源先 stage，stdout 成功（包括既有 EP
 已校验的目标。渲染器
 生成的受控 data URI 不走源链接策略，因此保留 data URI 必需的分隔符。
 
+## 跨格式语义布局质量边界
+
+转换器输出 Document IR 后，可由独立 `crates/layout-quality` 投影和审计阅读顺序、层级、
+page/slide/sheet/cell/part 边界、量化 geometry、table origin-cell 拓扑、资源/脚注引用与完整
+来源链。该 crate 只依赖 core，不依赖具体 converter、renderer、模型或远程服务；converter
+保留源格式 authority，renderer 只消费已验证 IR，二者都不能用后置修复绕过质量回归。
+
+质量审计复用请求 `ExecutionContext` 的 cancellation、deadline、memory、depth、table 和
+work envelope。完整 report 构造成功前不会发布结果；成功 report 持有自己的 request-memory
+reservation，失败与 Drop 都释放配额。结构化差异和 IR/GFM hash authority、阈值、fixture
+覆盖、平台门禁详见 [`semantic-layout-quality.md`](semantic-layout-quality.md)。
+
 ## 支持平台
 
 - macOS ARM64

@@ -56,6 +56,8 @@ DATA = [
     "//crates/http-transport:BUILD.bazel",
     "//crates/legacy-office:Cargo.toml",
     "//crates/legacy-office:BUILD.bazel",
+    "//crates/layout-quality:Cargo.toml",
+    "//crates/layout-quality:BUILD.bazel",
     "//crates/ocr:Cargo.toml",
     "//crates/ocr:BUILD.bazel",
     "//crates/onnxruntime:Cargo.toml",

@@ -12,6 +12,7 @@ exports_files([
     "generate.py",
     "manifest.json",
     "pdf-layout-quality-authority.json",
+    "semantic-layout-quality-authority.json",
 ])
 
 filegroup(
@@ -23,6 +24,7 @@ filegroup(
         "generate.py",
         "manifest.json",
         "pdf-layout-quality-authority.json",
+        "semantic-layout-quality-authority.json",
     ] + glob(["small/**", "asr-quality/**"]),
 )
 

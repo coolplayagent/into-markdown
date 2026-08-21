@@ -1,0 +1,49 @@
+load("@crates//:defs.bzl", "all_crate_deps", "aliases")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//crates:__subpackages__"])
+
+exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"])
+
+rust_library(
+    name = "layout_quality",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown_layout_quality",
+    edition = "2024",
+    deps = ["//crates/core"] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "layout_quality_test",
+    crate = ":layout_quality",
+    aliases = aliases(normal_dev = True, proc_macro_dev = True),
+    edition = "2024",
+    deps = ["//crates/core"] + all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+# Cross-format, hash-pinned semantic layout quality gate. Unlike the explicit
+# PDFium target, this target uses repository fixtures without a native runtime
+# and therefore runs on every supported platform.
+rust_test(
+    name = "semantic_layout_quality",
+    srcs = ["tests/semantic_layout_quality.rs"],
+    crate_name = "semantic_layout_quality",
+    compile_data = [
+        "//fixtures:manifest.json",
+        "//fixtures:semantic-layout-quality-authority.json",
+    ],
+    data = ["//fixtures:corpus"],
+    edition = "2024",
+    deps = [
+        ":layout_quality",
+        "//crates/converters",
+        "//crates/core",
+        "//crates/render-markdown:render_markdown",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+    ],
+)

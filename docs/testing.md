@@ -1,5 +1,12 @@
 # 测试策略
 
+跨格式语义布局、阅读顺序、表格拓扑、资源关联和 IR/GFM hash 门禁见
+[`semantic-layout-quality.md`](semantic-layout-quality.md)。平台无关核心及真实 package
+fixture 由 `//crates/layout-quality:layout_quality_test` 和
+`//crates/layout-quality:semantic_layout_quality` 执行；PDF、OCR 和旧 Office 保留各自必须安装
+真实 runtime 的显式 gate，不用 mock 结果替代。四个受支持平台分别运行相同 authority，
+任何规范 IR/GFM byte 差异都会失败。
+
 WASI Preview 2 runtime 的真实 component 门禁为：
 
 ```shell

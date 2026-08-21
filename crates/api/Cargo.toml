@@ -9,16 +9,17 @@ license.workspace = true
 [features]
 default = []
 official-provider-runtime = [
+    "ocr-provider-runtime",
     "dep:into-markdown-asr",
     "dep:into-markdown-ffmpeg",
-    "dep:into-markdown-onnxruntime",
 ]
+ocr-provider-runtime = ["dep:into-markdown-onnxruntime"]
 metal = ["official-provider-runtime", "into-markdown-asr/metal"]
 
 [[test]]
 name = "ppocrv6_image_quality"
 path = "tests/ppocrv6_image_quality.rs"
-required-features = ["official-provider-runtime"]
+required-features = ["ocr-provider-runtime"]
 
 [dependencies]
 into-markdown-ai = { path = "../ai" }
