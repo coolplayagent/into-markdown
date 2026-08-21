@@ -1,0 +1,112 @@
+name: Semantic layout quality
+
+on:
+  pull_request:
+    paths:
+      - "crates/core/**"
+      - "crates/api/**"
+      - "crates/converters/**"
+      - "crates/legacy-office/**"
+      - "crates/layout-quality/**"
+      - "crates/ocr/**"
+      - "crates/onnxruntime/**"
+      - "crates/render-markdown/**"
+      - "fixtures/**"
+      - "models/**"
+      - "third_party/onnxruntime/**"
+      - "third_party/pdfium/**"
+      - "docs/architecture.md"
+      - "docs/semantic-layout-quality.md"
+      - "docs/testing.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - ".github/workflows/semantic-layout-quality.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/core/**"
+      - "crates/api/**"
+      - "crates/converters/**"
+      - "crates/legacy-office/**"
+      - "crates/layout-quality/**"
+      - "crates/ocr/**"
+      - "crates/onnxruntime/**"
+      - "crates/render-markdown/**"
+      - "fixtures/**"
+      - "models/**"
+      - "third_party/onnxruntime/**"
+      - "third_party/pdfium/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/semantic-layout-quality.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  four-platform-golden:
+    name: ${{ matrix.config }} normalized IR and GFM
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            config: macos_arm64
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            config: linux_x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            config: linux_arm64
+            target: aarch64-unknown-linux-gnu
+          - os: windows-2025
+            config: windows_x86_64
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazelbuild/setup-bazel@v3
+        with:
+          bazelisk-cache: true
+          disk-cache: semantic-layout-${{ matrix.config }}
+          repository-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.target }}
+      - name: Run the bounded quality engine and real converter goldens with Cargo
+        run: >-
+          cargo test --locked --target ${{ matrix.target }} -j1
+          -p into-markdown-layout-quality
+      - name: Run the same quality boundary through Bazel
+        run: >-
+          bazel test --config=${{ matrix.config }} --lockfile_mode=error
+          //crates/layout-quality:layout_quality_test
+          //crates/layout-quality:semantic_layout_quality
+          //crates/converters:converters_test
+          //crates/pdf-layout:pdf_layout_test
+          //crates/converters:pdf_layout_quality
+          //crates/api:ppocrv6_image_quality
+          //crates/legacy-office:legacy_office_test
+          --jobs=1 --local_resources=memory=4096 --test_output=errors
+
+  repository-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazelbuild/setup-bazel@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Check formatting and strict lints
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p into-markdown-layout-quality --all-targets --no-deps -- -D warnings
+      - name: Check the locked Cargo license authority integration
+        run: >-
+          cargo test --locked -p license-check
+          normal_runtime_authority_matches_locked_metadata -j1

@@ -12,6 +12,7 @@ members = [
     "crates/ffmpeg",
     "crates/http-transport",
     "crates/legacy-office",
+    "crates/layout-quality",
     "crates/ocr",
     "crates/onnxruntime",
     "crates/pdf-layout",

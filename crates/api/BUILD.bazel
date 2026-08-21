@@ -20,6 +20,29 @@ rust_library(
     ],
 )
 
+# Manual quality assembly matching Cargo's narrow `ocr-provider-runtime`
+# feature. Keeping this as a separate library prevents native OCR dependencies
+# from entering the ordinary Bazel API graph while allowing the real product
+# gate to compile the same installed-service path as release builds.
+rust_library(
+    name = "into_markdown_ocr_provider_runtime",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "into_markdown",
+    edition = "2024",
+    rustc_flags = ["--cfg=feature=\"ocr-provider-runtime\""],
+    tags = ["manual"],
+    deps = [
+        "//crates/ai",
+        "//crates/converters",
+        "//crates/core",
+        "//crates/engine",
+        "//crates/ocr",
+        "//crates/onnxruntime",
+        "//crates/render-markdown:render_markdown",
+        "//crates/task-store:task_store",
+    ],
+)
+
 # Explicit full detector -> recognizer -> public API image-conversion quality gate.
 rust_test(
     name = "ppocrv6_image_quality",
@@ -75,7 +98,7 @@ rust_test(
     }),
     tags = ["manual"],
     deps = [
-        ":into_markdown",
+        ":into_markdown_ocr_provider_runtime",
         "//crates/core",
         "//crates/ocr",
         "@crates//:futures",

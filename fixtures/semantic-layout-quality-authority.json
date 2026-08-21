@@ -1,0 +1,3952 @@
+{
+  "schema_version": 1,
+  "fixture_manifest_sha256": "545b26c4b645fbc90d9bed323414e0883e75807b115f91a0d89b07b638c32b9a",
+  "authorities": [
+    {
+      "schemaVersion": 1,
+      "fixtureId": "docx-normal",
+      "format": "docx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "docx-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus Alpha 中文",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "word/document.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.docx"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "0dfc6d83790bca4c7f742ceb86422d7b901e74f6131f1a68ca978c31f96fe8a2",
+      "gfmSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "docx-malicious",
+      "format": "docx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "docx-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "safe external link",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "word/document.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.docx"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "link",
+                "target": "https://example.invalid/fixture-link"
+              }
+            ]
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "13dcbba550f31bb0d257cdb43791d3634975fed1afc539c280f17569c79d319e",
+      "gfmSha256": "3532a18bfe9466f97c54d9714bed5e80865b8353062926d2d4fa2360baf4a491"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "pptx-normal",
+      "format": "pptx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "presentation-slide-1-z-1-node-4",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus 你好 – Привет",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-2-node-1",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "English français",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-node-2",
+            "kind": "heading:3",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 2,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "Speaker notes",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-1-node-3",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Nota 日本語",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 0,
+              "heightMilli": 0
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-1-node-6",
+            "kind": "slide:2",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "Second layout",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 1000,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-2-node-5",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-2-z-1-node-6",
+            "order": 5,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "مرحبا",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 2000,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
+      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "pptm-malicious",
+      "format": "pptx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "presentation-slide-1-z-1-node-4",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus 你好 – Привет",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-2-node-1",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "English français",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-node-2",
+            "kind": "heading:3",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 2,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "Speaker notes",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-1-node-3",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Nota 日本語",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 0,
+              "heightMilli": 0
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-1-node-6",
+            "kind": "slide:2",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "Second layout",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 1000,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-2-node-5",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-2-z-1-node-6",
+            "order": 5,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "مرحبا",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 2000,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "11a80bc57e55bf5cd0f6f68198afc0e23aa6ad9c3179a14ce8fd927f650244d6",
+      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "ppsx-normal",
+      "format": "pptx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "presentation-slide-1-z-1-node-4",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus 你好 – Привет",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-2-node-1",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "English français",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-node-2",
+            "kind": "heading:3",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 2,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "Speaker notes",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-1-node-3",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Nota 日本語",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 0,
+              "heightMilli": 0
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-1-node-6",
+            "kind": "slide:2",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "Second layout",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 1000,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-2-node-5",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-2-z-1-node-6",
+            "order": 5,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "مرحبا",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 2000,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
+      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "potx-normal",
+      "format": "pptx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "presentation-slide-1-z-1-node-4",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus 你好 – Привет",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-2-node-1",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "English français",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-node-2",
+            "kind": "heading:3",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 2,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "Speaker notes",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-1-z-1-node-3",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-1-z-1-node-4",
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Nota 日本語",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/notesSlides/notesSlide1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 0,
+              "yMilli": 0,
+              "widthMilli": 0,
+              "heightMilli": 0
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-1-node-6",
+            "kind": "slide:2",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "Second layout",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 1000,
+              "yMilli": 0,
+              "widthMilli": 4000,
+              "heightMilli": 1000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "presentation-slide-2-z-2-node-5",
+            "kind": "paragraph",
+            "parentId": "presentation-slide-2-z-1-node-6",
+            "order": 5,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "مرحبا",
+            "boundary": {
+              "page": null,
+              "slide": 2,
+              "sheet": null,
+              "cell": null,
+              "part": "ppt/slides/slide2.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 2000,
+              "yMilli": 2000,
+              "widthMilli": 4000,
+              "heightMilli": 2000
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.presentationml"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
+      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "xlsx-normal",
+      "format": "xlsx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "workbook-sheet-0",
+            "kind": "sheet:Corpus",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-table-0",
+            "kind": "table",
+            "parentId": "workbook-sheet-0",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": {
+              "rows": 3,
+              "columns": 3,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-0"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-1"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 2,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-2"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-1-0"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-1-1"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 2,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-1-2"
+                  ]
+                },
+                {
+                  "row": 2,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                },
+                {
+                  "row": 2,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                },
+                {
+                  "row": 2,
+                  "column": 2,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "Corpus",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "0,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-1",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 3,
+            "siblingOrder": 1,
+            "depth": 2,
+            "text": "true",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "0,1",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-2",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 4,
+            "siblingOrder": 2,
+            "depth": 2,
+            "text": "42.5",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "0,2",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-1-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 5,
+            "siblingOrder": 3,
+            "depth": 2,
+            "text": "2024-01-01 00:00:00",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "1,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-1-1",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 6,
+            "siblingOrder": 4,
+            "depth": 2,
+            "text": "=SUM(1,2) [cached: 3]",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "1,1",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-1-2",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 7,
+            "siblingOrder": 5,
+            "depth": 2,
+            "text": "=cmd",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "1,2",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-image-0-0",
+            "kind": "image",
+            "parentId": "workbook-sheet-0",
+            "order": 8,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "corpus pixel",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "2,0",
+              "part": "xl/drawings/drawing1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "asset",
+                "target": "workbook-image-431ced6916a2a21a156e3870"
+              }
+            ]
+          },
+          {
+            "id": "workbook-image-0-1",
+            "kind": "image",
+            "parentId": "workbook-sheet-0",
+            "order": 9,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Corpus again",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "2,1",
+              "part": "xl/drawings/drawing1.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "asset",
+                "target": "workbook-image-431ced6916a2a21a156e3870"
+              }
+            ]
+          }
+        ],
+        "assets": [
+          {
+            "id": "workbook-image-431ced6916a2a21a156e3870",
+            "mediaType": "image/png",
+            "filename": "corpus.png",
+            "externalUri": null,
+            "bytes": 68,
+            "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+            "referenced": true
+          }
+        ]
+      },
+      "irSha256": "596a25175eacbf32388ffbbc9205d46b658ad8125e22a53af1780ffc537b939f",
+      "gfmSha256": "54f31131d817ff48fb79e562d820992c04924d7a2639c3cd8f96ee70ebeed6d4"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "xlsm-normal",
+      "format": "xlsx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "workbook-sheet-0",
+            "kind": "sheet:Corpus",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-table-0",
+            "kind": "table",
+            "parentId": "workbook-sheet-0",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": {
+              "rows": 2,
+              "columns": 2,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-0"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-1"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-1-0"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "2028-01-02 00:00:00",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "0,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-1",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 3,
+            "siblingOrder": 1,
+            "depth": 2,
+            "text": "macro inert",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "0,1",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-1-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 4,
+            "siblingOrder": 2,
+            "depth": 2,
+            "text": "=1+2 [cached: 3]",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Corpus",
+              "cell": "1,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "760653d1d4a8062d8a2744da3ce9a7ed1a7aaac348b09ca057f50b302e61e1cb",
+      "gfmSha256": "78361dfef27119e9b1600879712ab0cf3b9196b14a908d1980b8780cc23e0751"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "xlsb-normal",
+      "format": "xlsx",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "workbook-sheet-0",
+            "kind": "sheet:Binary",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Binary",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-table-0",
+            "kind": "table",
+            "parentId": "workbook-sheet-0",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": null,
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": {
+              "rows": 2,
+              "columns": 3,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-0"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-1"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 2,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-0-2"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "workbook-cell-0-1-0"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                },
+                {
+                  "row": 1,
+                  "column": 2,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "Binary value",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": "0,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-1",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 3,
+            "siblingOrder": 1,
+            "depth": 2,
+            "text": "true",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": "0,1",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-0-2",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 4,
+            "siblingOrder": 2,
+            "depth": 2,
+            "text": "2024-01-01 00:00:00",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": "0,2",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "workbook-cell-0-1-0",
+            "kind": "paragraph",
+            "parentId": "workbook-table-0",
+            "order": 5,
+            "siblingOrder": 3,
+            "depth": 2,
+            "text": "=1+2 [cached: 3]",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Binary",
+              "cell": "1,0",
+              "part": null,
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.workbook"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "927f78b6e20913202e49035fa354abed9a10625718b6265e21512953bfbd3ea2",
+      "gfmSha256": "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "odt-normal",
+      "format": "odt",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-1",
+            "kind": "heading:2",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus ODT",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-2",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "Alpha 中文",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-4",
+            "kind": "list:bullet:1",
+            "parentId": null,
+            "order": 2,
+            "siblingOrder": 2,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-3",
+            "kind": "paragraph",
+            "parentId": "odf-4",
+            "order": 3,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "item",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-7",
+            "kind": "table",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 3,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": {
+              "rows": 1,
+              "columns": 2,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-5"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-6"
+                  ]
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "odf-5",
+            "kind": "paragraph",
+            "parentId": "odf-7",
+            "order": 5,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "A",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-6",
+            "kind": "paragraph",
+            "parentId": "odf-7",
+            "order": 6,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "B",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "0877dc31c19cc002d8432c362a9e60154f29a697d2c587220f91326342fbaa60",
+      "gfmSha256": "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "odt-implicit-nested-list",
+      "format": "odt",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Prefix",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-5",
+            "kind": "list:ordered:1",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-2",
+            "kind": "paragraph",
+            "parentId": "odf-5",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "outer",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-4",
+            "kind": "list:bullet:1",
+            "parentId": "odf-5",
+            "order": 3,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-3",
+            "kind": "paragraph",
+            "parentId": "odf-4",
+            "order": 4,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "nested",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "f65054bc4103da1b0dbd4971041a5e7aeae527d6908a8e303c80b7484fc34c7a",
+      "gfmSha256": "907ffdcf8638ecc2ccf7c5d8a67004e281a4b4067bbf26ab01e57fa54cc9ea44"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "ods-normal",
+      "format": "ods",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-6",
+            "kind": "sheet:Data",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Data",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-5",
+            "kind": "table",
+            "parentId": "odf-6",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": {
+              "rows": 3,
+              "columns": 2,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-1"
+                  ]
+                },
+                {
+                  "row": 0,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-2"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-3"
+                  ]
+                },
+                {
+                  "row": 1,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                },
+                {
+                  "row": 2,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": [
+                    "odf-4"
+                  ]
+                },
+                {
+                  "row": 2,
+                  "column": 1,
+                  "rowSpan": 1,
+                  "columnSpan": 1,
+                  "header": false,
+                  "blockIds": []
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "odf-1",
+            "kind": "paragraph",
+            "parentId": "odf-5",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "Alpha",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": "0,0",
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-2",
+            "kind": "paragraph",
+            "parentId": "odf-5",
+            "order": 3,
+            "siblingOrder": 1,
+            "depth": 2,
+            "text": "1",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": "0,1",
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-3",
+            "kind": "paragraph",
+            "parentId": "odf-5",
+            "order": 4,
+            "siblingOrder": 2,
+            "depth": 2,
+            "text": "tail",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": "1,0",
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-4",
+            "kind": "paragraph",
+            "parentId": "odf-5",
+            "order": 5,
+            "siblingOrder": 3,
+            "depth": 2,
+            "text": "tail",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Data",
+              "cell": "2,0",
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "1b6d264c626d2df523f100c7672b33f1b0211e73abc36aac7c644b52cd0ebda6",
+      "gfmSha256": "34087e4a175f614e604a67f9755063363d4dda096fccf68f9bd92b7589b93864"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "ods-span-nested",
+      "format": "ods",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-3",
+            "kind": "sheet:Spans",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Spans",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Spans",
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-2",
+            "kind": "table",
+            "parentId": "odf-3",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Spans",
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": {
+              "rows": 1,
+              "columns": 2,
+              "cells": [
+                {
+                  "row": 0,
+                  "column": 0,
+                  "rowSpan": 1,
+                  "columnSpan": 2,
+                  "header": false,
+                  "blockIds": [
+                    "odf-1"
+                  ]
+                }
+              ]
+            },
+            "references": []
+          },
+          {
+            "id": "odf-1",
+            "kind": "paragraph",
+            "parentId": "odf-2",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 2,
+            "text": "merged",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": "Spans",
+              "cell": "0,0",
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "a201cba7c8eef400c5feb5471c143b79fa1d552c8dbfc74c94609b4b03727a28",
+      "gfmSha256": "d8bf223846629dbb60468011666b5656e8aa1bfd0d11bba700ccfd48336839ea"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "odp-normal",
+      "format": "odp",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-4",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus ODP",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-1",
+            "kind": "paragraph",
+            "parentId": "odf-4",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "Alpha 中文",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": 28346,
+              "yMilli": 28346,
+              "widthMilli": 141732,
+              "heightMilli": 56693
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-3",
+            "kind": "paragraph",
+            "parentId": "odf-4",
+            "order": 2,
+            "siblingOrder": 1,
+            "depth": 1,
+            "text": "Speaker notes",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-2",
+            "kind": "paragraph",
+            "parentId": "odf-4",
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 1,
+            "text": "Speaker cue",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "c241f5b54f533ddb6e7763f5ac6936042fbb1b9bdf2ffd7c711bb5a8f8ea4d60",
+      "gfmSha256": "33364d2a5a9a9f1cb93e22c57d6d54d31badb3247327641cfce39ca9ac180adf"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "odp-rotation",
+      "format": "odp",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "odf-2",
+            "kind": "slide:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "odf-1",
+            "kind": "paragraph",
+            "parentId": "odf-2",
+            "order": 1,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "rotated",
+            "boundary": {
+              "page": null,
+              "slide": 1,
+              "sheet": null,
+              "cell": null,
+              "part": "content.xml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": {
+              "xMilli": -28346,
+              "yMilli": 56693,
+              "widthMilli": 28346,
+              "heightMilli": 56693
+            },
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.odf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "a831a760de71ff55abdd3aa91d74e2fb407f0bdca7a6b7b1a5c45c02d1056db0",
+      "gfmSha256": "f8d0336401a5dd25e4428cdcc547114b31d96c34dd46f51857e0b4379b9685c0"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "rtf-normal",
+      "format": "rtf",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "rtf-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Corpus Alpha 中文",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": null,
+              "byteStart": 24,
+              "byteEnd": 62
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.rtf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "77edf09f5e507eedcd18b31eae18e1bfc31972d4b92cf423df23d3bc37cd9415",
+      "gfmSha256": "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "rtf-malicious",
+      "format": "rtf",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "rtf-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "beforeunsafeafter",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": null,
+              "byteStart": 12,
+              "byteEnd": 141
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.rtf"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "202bb408d9619a272a461b36617d96d87976c84fb2ba32f0940012e7702c02bf",
+      "gfmSha256": "9501c19fc08744a6a9ec302c2304f9fe04d7f49061ed847b3d9cbd6b013154ed"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "epub-normal",
+      "format": "epub",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "epub-navigation-heading",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Contents",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/nav.xhtml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "metadata",
+                "provider": "builtin.converter.epub"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "epub-navigation-list",
+            "kind": "list:ordered:1",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/nav.xhtml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.epub"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "epub-navigation-entry-000000",
+            "kind": "paragraph",
+            "parentId": "epub-navigation-list",
+            "order": 2,
+            "siblingOrder": 0,
+            "depth": 1,
+            "text": "Corpus chapter",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/nav.xhtml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.epub"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "link",
+                "target": "EPUB/chapter.xhtml#corpus"
+              }
+            ]
+          },
+          {
+            "id": "epub-spine-000001-heading",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 3,
+            "siblingOrder": 2,
+            "depth": 0,
+            "text": "Corpus chapter",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/chapter.xhtml",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "metadata",
+                "provider": "builtin.converter.epub"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "epub-spine-000001-node-html-000001",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 3,
+            "depth": 0,
+            "text": "Corpus chapter",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/chapter.xhtml",
+              "byteStart": 0,
+              "byteEnd": 176
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.html"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "epub-spine-000001-node-html-000002",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 5,
+            "siblingOrder": 4,
+            "depth": 0,
+            "text": "Alpha EPUB text.",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "EPUB/chapter.xhtml",
+              "byteStart": 0,
+              "byteEnd": 176
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.html"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "3e0b40409a161327f691e6d16d3bffab150ca2b1cad7d0ae86b1e6a5cd620197",
+      "gfmSha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "msg-normal",
+      "format": "outlook-msg",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "msg-root-node-1",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Repository MSG",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0037001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-2",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "From: Alice <alice@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0C1F001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-3",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 2,
+            "siblingOrder": 2,
+            "depth": 0,
+            "text": "To: Bob <bob@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__recip_version1.0_#00000000/__properties_version1.0#39FE001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-4",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 3,
+            "siblingOrder": 3,
+            "depth": 0,
+            "text": "Date: 1970-01-01T00:00:00Z",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#00390040",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-5",
+            "kind": "rule",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 4,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-msg-body-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 5,
+            "siblingOrder": 5,
+            "depth": 0,
+            "text": "Plain fixture body",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#1000001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-6",
+            "kind": "heading:2",
+            "parentId": null,
+            "order": 6,
+            "siblingOrder": 6,
+            "depth": 0,
+            "text": "Transport headers",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-7",
+            "kind": "code:rfc822",
+            "parentId": null,
+            "order": 7,
+            "siblingOrder": 7,
+            "depth": 0,
+            "text": "Message-ID: <repository@example.test> X-Offline: true",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": []
+      },
+      "irSha256": "b02e98dc289157fd0dd170f35ea6c6ced02dcca18cc89dc5c2ffe3d955aad2ce",
+      "gfmSha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "msg-cid",
+      "format": "outlook-msg",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "msg-root-node-1",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Repository MSG",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0037001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-2",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "From: Alice <alice@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0C1F001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-3",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 2,
+            "siblingOrder": 2,
+            "depth": 0,
+            "text": "To: Bob <bob@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__recip_version1.0_#00000000/__properties_version1.0#39FE001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-4",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 3,
+            "siblingOrder": 3,
+            "depth": 0,
+            "text": "Date: 1970-01-01T00:00:00Z",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#00390040",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-5",
+            "kind": "rule",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 4,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-html-000001",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 5,
+            "siblingOrder": 5,
+            "depth": 0,
+            "text": "CID fixture",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#10130102",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.html"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-html-000002",
+            "kind": "image",
+            "parentId": null,
+            "order": 6,
+            "siblingOrder": 6,
+            "depth": 0,
+            "text": "logo",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#10130102",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.html"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "asset",
+                "target": "msg-root-attachment-1-msg-attachment-1-c2153f77e11087fc"
+              }
+            ]
+          },
+          {
+            "id": "msg-root-node-6",
+            "kind": "heading:2",
+            "parentId": null,
+            "order": 7,
+            "siblingOrder": 7,
+            "depth": 0,
+            "text": "Transport headers",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-7",
+            "kind": "code:rfc822",
+            "parentId": null,
+            "order": 8,
+            "siblingOrder": 8,
+            "depth": 0,
+            "text": "Message-ID: <repository@example.test> X-Offline: true",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": [
+          {
+            "id": "msg-root-attachment-1-msg-attachment-1-c2153f77e11087fc",
+            "mediaType": "image/png",
+            "filename": "logo.png",
+            "externalUri": null,
+            "bytes": 70,
+            "sha256": "c2153f77e11087fcb078ae38527fa83bef29791e3700e30cc87fec4405a66d0f",
+            "referenced": true
+          }
+        ]
+      },
+      "irSha256": "41567b59368d211543ce98ea4cb05a7d99b7f74411432aea7b14f7e9f22a47e3",
+      "gfmSha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af"
+    },
+    {
+      "schemaVersion": 1,
+      "fixtureId": "msg-attachment-nested",
+      "format": "outlook-msg",
+      "cohort": "modern",
+      "geometryToleranceMilli": 0,
+      "snapshot": {
+        "nodes": [
+          {
+            "id": "msg-root-node-1",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 0,
+            "siblingOrder": 0,
+            "depth": 0,
+            "text": "Repository MSG",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0037001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-2",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 1,
+            "siblingOrder": 1,
+            "depth": 0,
+            "text": "From: Alice <alice@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#0C1F001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-3",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 2,
+            "siblingOrder": 2,
+            "depth": 0,
+            "text": "To: Bob <bob@example.test>",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__recip_version1.0_#00000000/__properties_version1.0#39FE001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-4",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 3,
+            "siblingOrder": 3,
+            "depth": 0,
+            "text": "Date: 1970-01-01T00:00:00Z",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#00390040",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-5",
+            "kind": "rule",
+            "parentId": null,
+            "order": 4,
+            "siblingOrder": 4,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-msg-body-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 5,
+            "siblingOrder": 5,
+            "depth": 0,
+            "text": "Outer fixture body",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#1000001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-6",
+            "kind": "heading:2",
+            "parentId": null,
+            "order": 6,
+            "siblingOrder": 6,
+            "depth": 0,
+            "text": "Attachments",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000000/__properties_version1.0#37010102",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-7",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 7,
+            "siblingOrder": 7,
+            "depth": 0,
+            "text": "notes.txt",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000000/__properties_version1.0#37010102",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": [
+              {
+                "kind": "attachment",
+                "target": "msg-root-attachment-1-msg-attachment-1-2f4b280810d85bca"
+              }
+            ]
+          },
+          {
+            "id": "msg-root-node-8",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 8,
+            "siblingOrder": 8,
+            "depth": 0,
+            "text": "forwarded.msg",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000001/__properties_version1.0#3701000D",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-9",
+            "kind": "heading:3",
+            "parentId": null,
+            "order": 9,
+            "siblingOrder": 9,
+            "depth": 0,
+            "text": "Attached message: forwarded.msg",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000001/__properties_version1.0#3701000D",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-attachment-2-msg-root-nested-2-node-1",
+            "kind": "heading:1",
+            "parentId": null,
+            "order": 10,
+            "siblingOrder": 10,
+            "depth": 0,
+            "text": "Nested fixture",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000001/__substg1.0_3701000D/__properties_version1.0#0037001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-attachment-2-msg-root-nested-2-node-2",
+            "kind": "rule",
+            "parentId": null,
+            "order": 11,
+            "siblingOrder": 11,
+            "depth": 0,
+            "text": "",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-attachment-2-msg-root-nested-2-msg-body-1",
+            "kind": "paragraph",
+            "parentId": null,
+            "order": 12,
+            "siblingOrder": 12,
+            "depth": 0,
+            "text": "Nested fixture body",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__attach_version1.0_#00000001/__substg1.0_3701000D/__properties_version1.0#1000001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-10",
+            "kind": "heading:2",
+            "parentId": null,
+            "order": 13,
+            "siblingOrder": 13,
+            "depth": 0,
+            "text": "Transport headers",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          },
+          {
+            "id": "msg-root-node-11",
+            "kind": "code:rfc822",
+            "parentId": null,
+            "order": 14,
+            "siblingOrder": 14,
+            "depth": 0,
+            "text": "Message-ID: <repository@example.test> X-Offline: true",
+            "boundary": {
+              "page": null,
+              "slide": null,
+              "sheet": null,
+              "cell": null,
+              "part": "msg/__properties_version1.0#007D001F",
+              "byteStart": null,
+              "byteEnd": null
+            },
+            "bounds": null,
+            "sourceChain": [
+              {
+                "kind": "nativeParser",
+                "provider": "builtin.converter.msg"
+              }
+            ],
+            "table": null,
+            "references": []
+          }
+        ],
+        "assets": [
+          {
+            "id": "msg-root-attachment-1-msg-attachment-1-2f4b280810d85bca",
+            "mediaType": "text/plain",
+            "filename": "notes.txt",
+            "externalUri": null,
+            "bytes": 21,
+            "sha256": "2f4b280810d85bcae87ae4daa5183ca40e6a186e3f29e37b4baa1fe0109deac0",
+            "referenced": true
+          }
+        ]
+      },
+      "irSha256": "2575fada812f52d0b62b8096c2705afc4f1a503777b290341b55317b6052eda9",
+      "gfmSha256": "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a"
+    }
+  ],
+  "coverage": [
+    {
+      "format_family": "wordprocessingml-docx-docm",
+      "normal_fixture": "docx-normal",
+      "complex_fixture": "docx-malicious",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "docx-corrupt",
+      "resource_boundary_fixture": "docx-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "presentationml",
+      "normal_fixture": "pptx-normal",
+      "complex_fixture": "pptm-malicious",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "pptx-corrupt",
+      "resource_boundary_fixture": "pptx-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "spreadsheetml-xlsb",
+      "normal_fixture": "xlsx-normal",
+      "complex_fixture": "xlsb-normal",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "xlsb-corrupt",
+      "resource_boundary_fixture": "xlsb-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "odf-text",
+      "normal_fixture": "odt-normal",
+      "complex_fixture": "odt-implicit-nested-list",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "odt-corrupt",
+      "resource_boundary_fixture": "odt-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "odf-presentation",
+      "normal_fixture": "odp-normal",
+      "complex_fixture": "odp-rotation",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "odp-corrupt",
+      "resource_boundary_fixture": "odp-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "odf-spreadsheet",
+      "normal_fixture": "ods-normal",
+      "complex_fixture": "ods-span-nested",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "ods-corrupt",
+      "resource_boundary_fixture": "ods-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "rtf",
+      "normal_fixture": "rtf-normal",
+      "complex_fixture": "rtf-malicious",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "rtf-corrupt",
+      "resource_boundary_fixture": "rtf-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "epub",
+      "normal_fixture": "epub-normal",
+      "complex_fixture": "gate:epub-container-tests",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "gate:epub-malformed-container-tests",
+      "resource_boundary_fixture": "gate:epub-resource-limits",
+      "gate": "//crates/converters:converters_test"
+    },
+    {
+      "format_family": "pdf",
+      "normal_fixture": "pdf-layout-multicolumn",
+      "complex_fixture": "pdf-layout-structures",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "gate:pdf-envelope-tests",
+      "resource_boundary_fixture": "gate:pdf-layout-resource-limits",
+      "gate": "//crates/converters:pdf_layout_quality"
+    },
+    {
+      "format_family": "image-ocr",
+      "normal_fixture": "ocr-english-clear-1",
+      "complex_fixture": "ocr-mixed-clear-1",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "gate:image-envelope-tests",
+      "resource_boundary_fixture": "gate:image-resource-limits",
+      "gate": "//crates/api:ppocrv6_image_quality"
+    },
+    {
+      "format_family": "outlook-msg",
+      "normal_fixture": "msg-normal",
+      "complex_fixture": "msg-attachment-nested",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "msg-corrupt",
+      "resource_boundary_fixture": "msg-limit",
+      "gate": "//crates/layout-quality:semantic_layout_quality"
+    },
+    {
+      "format_family": "legacy-office",
+      "normal_fixture": "gate:legacy-office-installed-smoke",
+      "complex_fixture": "gate:legacy-office-complex-smoke",
+      "misordered_counterexample": "counterexample:reading-order",
+      "corrupt_fixture": "gate:legacy-office-corrupt-input",
+      "resource_boundary_fixture": "gate:legacy-office-resource-limits",
+      "gate": "//crates/legacy-office:legacy_office_test"
+    }
+  ]
+}

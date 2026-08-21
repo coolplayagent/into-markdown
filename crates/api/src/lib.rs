@@ -6,7 +6,7 @@ use std::sync::Arc;
 mod asr_service;
 #[cfg(feature = "official-provider-runtime")]
 mod diarization_service;
-#[cfg(feature = "official-provider-runtime")]
+#[cfg(feature = "ocr-provider-runtime")]
 mod ocr_service;
 
 #[cfg(test)]
@@ -51,7 +51,7 @@ pub use into_markdown_ocr::{
 pub use into_markdown_ocr::{
     MergeConfig as OcrMergeConfig, MergeLimits as OcrMergeLimits, OcrPageInput,
 };
-#[cfg(feature = "official-provider-runtime")]
+#[cfg(feature = "ocr-provider-runtime")]
 pub use into_markdown_onnxruntime::verify_worker_executable as verify_ocr_worker_executable;
 pub use into_markdown_render_markdown::{
     AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
@@ -62,7 +62,7 @@ pub use into_markdown_task_store::{
     InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
     TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
-#[cfg(feature = "official-provider-runtime")]
+#[cfg(feature = "ocr-provider-runtime")]
 pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installed_ocr_service};
 
 /// Create the standard builder with safe local source resolvers, hint
