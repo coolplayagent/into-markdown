@@ -7,6 +7,7 @@ exports_files(["BUILD.bazel", "Cargo.toml"], visibility = ["//visibility:public"
 rust_library(
     name = "asr",
     srcs = glob(["src/**/*.rs"]),
+    compile_data = ["//third_party/opencc:character_tables"],
     crate_name = "into_markdown_asr",
     edition = "2024",
     visibility = ["//visibility:public"],
@@ -21,11 +22,13 @@ rust_library(
 rust_test(
     name = "asr_test",
     crate = ":asr",
+    compile_data = ["//third_party/opencc:character_tables"],
     edition = "2024",
     deps = [
         "//crates/core",
         "//crates/ffmpeg",
         "//crates/ocr",
+        "@crates//:sha2",
         "@crates//:futures",
         "@crates//:tempfile",
         "//third_party/whisper-rs-0.16.0:whisper_rs",

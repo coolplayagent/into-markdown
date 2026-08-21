@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createApiClient, ApiError, defaultMeetingOptions, defaultWorkbenchOptions, meetingTaskRequest,
-  parseTask,
+  meetingOptionsForLocale, parseTask,
 } from "../src/api";
 import type { ApiClient, TaskRecord } from "../src/api";
 import { App } from "../src/app";
@@ -42,6 +42,7 @@ const testGroups = {
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
     "meeting recording is an independent route and media never enters the document workbench",
+    "Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices",
     "meeting page keeps recording primary and setup feedback beside transcript controls",
     "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
@@ -261,6 +262,22 @@ test("meeting upload format prefers the recorder MIME type over ambiguous extens
   assert.equal(format(new window.File(["video"], "camera.webm")), "video");
 });
 
+test("meeting request binds language hints to deterministic Chinese script output", () => {
+  const window = installWindow();
+  const file = new window.File(["audio"], "meeting.m4a", { type: "audio/mp4" });
+  const simplified = meetingTaskRequest(file, meetingOptionsForLocale("zh-CN")) as any;
+  assert.equal(simplified.options.asr.language, "zh");
+  assert.equal(simplified.options.asr.chinese_script, "simplified");
+  const traditional = meetingTaskRequest(file, {
+    ...defaultMeetingOptions, transcriptLanguage: "zh-Hant",
+  }) as any;
+  assert.equal(traditional.options.asr.language, "zh");
+  assert.equal(traditional.options.asr.chinese_script, "traditional");
+  const automatic = meetingTaskRequest(file, defaultMeetingOptions) as any;
+  assert.equal(automatic.options.asr.language, null);
+  assert.equal(automatic.options.asr.chinese_script, "preserve");
+});
+
 test("API client sends only the strict POST contract and validates bounded DTOs", async () => {
   let captured: [RequestInfo | URL, RequestInit | undefined] | undefined;
   const client = createApiClient(token, async (input, init) => {
@@ -331,7 +348,7 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.equal(request.format, "pdf");
   assert.equal(request.options.ocr.policy, "always");
   assert.deepEqual(request.options.asr, {
-    model_bundle: "whisper-small-multilingual", language: null, max_threads: 4,
+    model_bundle: "whisper-small-multilingual", language: null, chinese_script: "preserve", max_threads: 4,
     max_duration_ms: null, max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024,
   });
   assert.equal(request.options.ai.audio_transcription, "off");
@@ -757,6 +774,23 @@ test("meeting page keeps recording primary and setup feedback beside transcript 
   const diarize = window.document.querySelector<HTMLInputElement>('.meeting-options input[type="checkbox"]')!;
   assert.equal(diarize.disabled, true);
   assert.equal(diarize.checked, false);
+});
+
+test("Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices", async () => {
+  const window = installWindow(["zh-CN"]); window.history.replaceState(null, "", "/meetings");
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
+  await waitForText(window, "转写语言");
+  const transcriptLanguage = window.document.querySelector<HTMLSelectElement>(".transcript-language select")!;
+  assert.equal(transcriptLanguage.value, "zh-Hans");
+  transcriptLanguage.value = "zh-Hant";
+  transcriptLanguage.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => transcriptLanguage.value === "zh-Hant");
+  const locale = [...window.document.querySelectorAll<HTMLSelectElement>("select")]
+    .find((select) => [...select.options].some((option) => option.value === "en"))!;
+  locale.value = "en";
+  locale.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => window.document.documentElement.lang === "en");
+  assert.equal(transcriptLanguage.value, "zh-Hant");
 });
 
 test("workbench reports the bounded upload rejection code", async () => {

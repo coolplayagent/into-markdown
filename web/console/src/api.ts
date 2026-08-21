@@ -53,13 +53,18 @@ export const defaultWorkbenchOptions: WorkbenchOptions = {
 export interface MeetingOptions {
   diarize: boolean;
   expectedSpeakers: number | null;
+  transcriptLanguage: "auto" | "zh-Hans" | "zh-Hant" | "en";
   maxInputMiB: number;
   maxMemoryMiB: number;
   maxTemporaryMiB: number;
 }
 export const defaultMeetingOptions: MeetingOptions = {
-  diarize: true, expectedSpeakers: null, maxInputMiB: 512, maxMemoryMiB: 1536, maxTemporaryMiB: 4096,
+  diarize: true, expectedSpeakers: null, transcriptLanguage: "auto", maxInputMiB: 512,
+  maxMemoryMiB: 1536, maxTemporaryMiB: 4096,
 };
+export function meetingOptionsForLocale(locale: string): MeetingOptions {
+  return { ...defaultMeetingOptions, transcriptLanguage: locale.toLowerCase().startsWith("zh") ? "zh-Hans" : "auto" };
+}
 
 export class ApiError extends Error {
   constructor(readonly code: string) { super("The local API request failed."); this.name = "ApiError"; }
@@ -151,7 +156,7 @@ export function taskRequest(options: WorkbenchOptions, batchId?: string): unknow
   return { schemaVersion: 1, workflow: "conversion", format: options.format, ...(batchId ? { batchId } : {}), options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
-    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: null,
+    asr: { model_bundle: "whisper-small-multilingual", language: null, chinese_script: "preserve", max_threads: 4, max_duration_ms: null,
       max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
     diarization: { enabled: false, expected_speakers: null, model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },
     ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: "off", markdown_postprocess: ai },
@@ -171,10 +176,14 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
   const inferred = file.type.startsWith("video/") ? "video"
     : file.type.startsWith("audio/") ? "audio"
       : /\.(mp4|mkv|webm|avi|mov)$/i.test(file.name) ? "video" : "audio";
+  const chinese = options.transcriptLanguage === "zh-Hans" || options.transcriptLanguage === "zh-Hant";
+  const language = chinese ? "zh" : options.transcriptLanguage === "en" ? "en" : null;
+  const chineseScript = options.transcriptLanguage === "zh-Hans" ? "simplified"
+    : options.transcriptLanguage === "zh-Hant" ? "traditional" : "preserve";
   return { schemaVersion: 1, workflow: "meetingTranscript", format: inferred, options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: "off", model_bundle: null, minimum_confidence: 0.7 },
-    asr: { model_bundle: "whisper-small-multilingual", language: null, max_threads: 4, max_duration_ms: null,
+    asr: { model_bundle: "whisper-small-multilingual", language, chinese_script: chineseScript, max_threads: 4, max_duration_ms: null,
       max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
     diarization: { enabled: options.diarize, expected_speakers: options.expectedSpeakers,
       model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },

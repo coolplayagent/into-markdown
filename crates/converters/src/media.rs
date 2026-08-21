@@ -1,7 +1,8 @@
 use into_markdown_core::{
-    Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, Diagnostic,
-    DiagnosticSeverity, DiarizationRequest, Document, ExecutionContext, FormatCandidate,
-    InputFormat, ProbeOutcome, ResolvedInput, Services, TranscriptionRequest,
+    Block, BoxFuture, ChineseScript, ConversionError, ConversionOptions, Converter,
+    ConverterOutput, Diagnostic, DiagnosticSeverity, DiarizationRequest, Document,
+    ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
+    TranscriptionRequest,
 };
 
 const MEDIA_FORMATS: &[InputFormat] = &[InputFormat::Audio, InputFormat::Video];
@@ -191,6 +192,17 @@ impl Converter for MediaConverter {
             }
             if let Some(language) = result.language {
                 document.metadata.properties.insert("media.language".into(), language);
+            }
+            if options.asr.chinese_script != ChineseScript::Preserve {
+                document.metadata.properties.insert(
+                    "media.chineseScript".into(),
+                    match options.asr.chinese_script {
+                        ChineseScript::Simplified => "simplified",
+                        ChineseScript::Traditional => "traditional",
+                        ChineseScript::Preserve => unreachable!(),
+                    }
+                    .into(),
+                );
             }
             if let Some(confidence) = result.language_confidence {
                 document

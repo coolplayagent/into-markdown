@@ -22,7 +22,8 @@ pub struct InstalledAsrConfig {
     pub model_bundle: String,
 }
 
-/// Assemble an installed CPU-only Whisper-small service without networking.
+/// Assemble an installed Whisper-small service without networking.
+/// macOS release builds prefer Metal and retain an automatic CPU fallback.
 pub fn installed_asr_service(
     config: &InstalledAsrConfig,
     options: &ConversionOptions,

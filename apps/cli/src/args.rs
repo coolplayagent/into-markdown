@@ -180,6 +180,10 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "BCP47")]
     pub asr_language: Option<String>,
 
+    /// Deterministic Chinese transcript script output.
+    #[arg(long, value_enum, value_name = "SCRIPT")]
+    pub chinese_script: Option<ChineseScriptArg>,
+
     /// Maximum local ASR decoder threads.
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..=8))]
     pub asr_threads: Option<u16>,
@@ -716,6 +720,14 @@ pub enum Language {
     ZhCn,
 }
 
+/// Chinese transcript glyph policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ChineseScriptArg {
+    Preserve,
+    Simplified,
+    Traditional,
+}
+
 /// Conditional terminal behavior.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum When {
@@ -920,6 +932,17 @@ mod tests {
                 "65",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn chinese_transcript_script_is_a_closed_cli_enum() {
+        let command =
+            Cli::try_parse_from(["into-md", "meeting.mp3", "--chinese-script", "simplified"])
+                .unwrap();
+        assert_eq!(command.conversion.chinese_script, Some(ChineseScriptArg::Simplified));
+        assert!(
+            Cli::try_parse_from(["into-md", "meeting.mp3", "--chinese-script", "zh-CN"]).is_err()
         );
     }
 

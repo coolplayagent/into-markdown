@@ -154,6 +154,7 @@ into-md <INPUT...>
 
 --asr-model <BUNDLE_ID>
 --asr-language <WHISPER_LANGUAGE>
+--chinese-script <preserve|simplified|traditional>
 --asr-threads <1..8>
 --asr-max-duration-ms <MILLISECONDS>
 
@@ -180,10 +181,13 @@ markdown-postprocess
 已验证的模型和发布物内固定 FFmpeg runtime。其他 AI 能力必须选择已配置 Provider，并在
 本次调用显式传入 `--allow-network`。
 
-音频与视频输入先由经 authority 校验的 FFmpeg 转成 16 kHz 单声道 PCM，再由 CPU-only
-Whisper 生成带毫秒时间范围、语言、语言置信度和 token 平均置信度的统一 IR 节点。
-未指定 `--asr-language` 时执行模型语言检测。线程最多 8，默认时长上限 10 分钟；取消、
-总 deadline、内存、时长和 segment 上限贯穿解码及推理。转换过程不会安装模型。
+音频与视频输入先由经 authority 校验的 FFmpeg 转成 16 kHz 单声道 PCM，再由 Whisper
+生成带毫秒时间范围、语言、语言置信度和 token 平均置信度的统一 IR 节点。macOS
+发布包在非沙箱进程中优先使用 Metal；受限沙箱直接使用 CPU，初始化或推理返回失败时
+也会在同一任务内回退 CPU。未指定
+`--asr-language` 时执行模型语言检测；`--chinese-script` 在本地确定性规范化中文字符，
+不会改写时间范围。线程最多 8；默认不按分钟数拒绝，取消、总 deadline、内存、临时空间、
+显式时长和 segment 上限贯穿解码及推理。转换过程不会安装模型。
 
 ### 网络与资源边界
 
