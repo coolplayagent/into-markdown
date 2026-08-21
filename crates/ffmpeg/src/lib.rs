@@ -312,7 +312,13 @@ struct NormalizationResult {
 pub struct FfmpegRuntime {
     executable: PathBuf,
     version: String,
-    _directory: tempfile::TempDir,
+    _backing: RuntimeBacking,
+}
+
+#[derive(Debug)]
+enum RuntimeBacking {
+    Snapshot { _directory: tempfile::TempDir },
+    ReadOnlySandbox,
 }
 
 impl FfmpegRuntime {
@@ -324,6 +330,31 @@ impl FfmpegRuntime {
         trusted_root: &Path,
         executable: &Path,
         authority_json: &[u8],
+    ) -> Result<Self, LoadError> {
+        Self::load_inner(trusted_root, executable, authority_json, true)
+    }
+
+    /// Verify and execute the original path inside a host-enforced read-only sandbox.
+    ///
+    /// This avoids copying an executable into writable temporary storage. The
+    /// caller must keep the complete trusted root read-only and replacement-
+    /// protected for the lifetime of the returned runtime.
+    ///
+    /// # Errors
+    /// Returns a stable error before native media parsing when validation fails.
+    pub fn load_read_only_sandbox(
+        trusted_root: &Path,
+        executable: &Path,
+        authority_json: &[u8],
+    ) -> Result<Self, LoadError> {
+        Self::load_inner(trusted_root, executable, authority_json, false)
+    }
+
+    fn load_inner(
+        trusted_root: &Path,
+        executable: &Path,
+        authority_json: &[u8],
+        snapshot: bool,
     ) -> Result<Self, LoadError> {
         validate_authority_envelope(authority_json)?;
         let authority: Authority =
@@ -398,6 +429,13 @@ impl FfmpegRuntime {
             return Err(LoadError::HashMismatch);
         }
         validate_binary(&binary, &authority)?;
+        if !snapshot {
+            return Ok(Self {
+                executable: canonical,
+                version: authority.ffmpeg_version,
+                _backing: RuntimeBacking::ReadOnlySandbox,
+            });
+        }
         let directory = tempfile::Builder::new()
             .prefix("into-md-ffmpeg-")
             .tempdir()
@@ -412,7 +450,11 @@ impl FfmpegRuntime {
         snapshot.write_all(&binary).map_err(|_| LoadError::Io)?;
         snapshot.sync_all().map_err(|_| LoadError::Io)?;
         set_executable_read_only(&private)?;
-        Ok(Self { executable: private, version: authority.ffmpeg_version, _directory: directory })
+        Ok(Self {
+            executable: private,
+            version: authority.ffmpeg_version,
+            _backing: RuntimeBacking::Snapshot { _directory: directory },
+        })
     }
 
     /// Pinned upstream version.
@@ -630,10 +672,16 @@ impl FfmpegRuntime {
             ])
             .env_clear()
             .current_dir(private.path())
-            .stdin(Stdio::null())
+            // A pipe avoids opening `/dev/null`, which a least-authority outer
+            // process sandbox intentionally does not expose. Closing the
+            // parent endpoint immediately below still gives FFmpeg EOF.
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut process = spawn_limited(command, limits.max_process_memory_bytes)?;
+        let inherited_read_only_sandbox = matches!(self._backing, RuntimeBacking::ReadOnlySandbox);
+        let mut process =
+            spawn_limited(command, limits.max_process_memory_bytes, inherited_read_only_sandbox)?;
+        drop(process.child.stdin.take());
         #[cfg(test)]
         let _active_worker = ActiveWorker::new();
         let child = &mut process.child;
@@ -1340,8 +1388,25 @@ impl Drop for LimitedProcess {
 }
 
 #[cfg(unix)]
-fn spawn_limited(mut command: Command, limit: u64) -> Result<LimitedProcess, ConversionError> {
+fn spawn_limited(
+    mut command: Command,
+    limit: u64,
+    inherited_read_only_sandbox: bool,
+) -> Result<LimitedProcess, ConversionError> {
     use std::os::unix::process::CommandExt;
+    #[cfg(target_os = "macos")]
+    if inherited_read_only_sandbox {
+        // The authenticated process provider has already installed Seatbelt
+        // and hard file/descriptor/core limits. Reinstalling rlimits from a
+        // nested pre-exec callback is denied by Seatbelt; the watchdog below
+        // still enforces FFmpeg's stricter physical-memory ceiling.
+        return command
+            .spawn()
+            .map(|child| LimitedProcess { child })
+            .map_err(|_| component("workerLaunch"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = inherited_read_only_sandbox;
     let address_limit = unix_address_limit(limit);
     let address = libc::rlimit { rlim_cur: address_limit, rlim_max: address_limit };
     let data_limit = address_limit.min(PROCESS_DATA_MAX);
@@ -1388,7 +1453,11 @@ const fn unix_address_limit(limit: u64) -> u64 {
 }
 
 #[cfg(windows)]
-fn spawn_limited(mut command: Command, limit: u64) -> Result<LimitedProcess, ConversionError> {
+fn spawn_limited(
+    mut command: Command,
+    limit: u64,
+    _inherited_read_only_sandbox: bool,
+) -> Result<LimitedProcess, ConversionError> {
     use std::mem::size_of;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::os::windows::process::CommandExt;

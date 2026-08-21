@@ -110,6 +110,18 @@ sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 protocol = "wasi-v1"
 enabled = true
 
+[capability_routes.ocr]
+primary = "official.ocr.ppocrv6/ocr"
+fallbacks = []
+
+[capability_routes.transcription]
+primary = "official.media.whisper/transcription"
+fallbacks = ["corporate.media/transcription"]
+
+[capability_routes.diarization]
+primary = "official.media.whisper/diarization"
+fallbacks = []
+
 [profiles.quality.conversion.ocr]
 policy = "always"
 minimum_confidence = 0.85
@@ -124,6 +136,10 @@ formula_repair = "prefer"
 固定 runtime/target、fuel、memory、output/resource 上限，以及逐项 preopen、clock、random
 和 literal-IP TCP grant；缺少的能力保持拒绝。完整清单和协议见
 [`wasi-plugins.md`](wasi-plugins.md)。
+
+Capability 引用必须是 `plugin-id/capability-id`。显式模式要求 primary 就绪；自动模式只在
+处理输入前按顺序尝试 readiness fallback，运行中的失败不会切换 provider。签名安装、官方
+包和隔离边界见 [`capability-plugins.md`](capability-plugins.md)。
 
 配置中的 `allowed_hosts`、重定向和私网策略只能收窄权限，不能启用网络。上例调用
 本机 Provider 时仍需：

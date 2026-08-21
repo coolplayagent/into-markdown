@@ -42,6 +42,9 @@ test("checked-in production app mounts without a React global", async () => {
     schemaVersion: 1,
     localApi: { available: true, code: "available", detail: "ok" },
     documentConsole: { available: true, code: "available", detail: "ok" },
+    imageOcr: { available: false, code: "notInstalled", detail: "setup required" },
+    audioTranscription: { available: false, code: "notInstalled", detail: "setup required" },
+    speakerDiarization: { available: false, code: "notInstalled", detail: "setup required" },
   }), { headers: { "content-type": "application/json" } });
   const module = await import(pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);
   module.startConsole("A".repeat(43));
@@ -86,6 +89,9 @@ test("checked-in bootstrap completes hash clear, dynamic import, mount, and auth
       schemaVersion: 1,
       localApi: { available: true, code: "available", detail: "ok" },
       documentConsole: { available: true, code: "available", detail: "ok" },
+      imageOcr: { available: false, code: "notInstalled", detail: "setup required" },
+      audioTranscription: { available: false, code: "notInstalled", detail: "setup required" },
+      speakerDiarization: { available: false, code: "notInstalled", detail: "setup required" },
     }), { headers: { "content-type": "application/json" } });
   };
   let bootstrapText = await readFile(resolve(distDirectory, bootstrap.path.slice(1)), "utf8");

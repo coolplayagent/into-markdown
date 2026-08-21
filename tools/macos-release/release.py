@@ -9,6 +9,8 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 
 from acquire import acquire, extract_tar
 from archive import create as create_archive
@@ -21,12 +23,14 @@ CORE_COMPONENTS = [
     "ffmpeg",
     "onnxruntime-cpu",
     "pdfium",
+]
+OCR_COMPONENTS = [
     "ppocrv6-tiny-detector-onnx-model",
     "ppocrv6-tiny-recognizer-character-table",
     "ppocrv6-tiny-recognizer-onnx-model",
 ]
-OCR_COMPONENTS = CORE_COMPONENTS[3:]
 FULL_COMPONENTS = [
+    *OCR_COMPONENTS,
     "whisper-small",
     "silero-vad-half-onnx-model",
     "3dspeaker-eres2net-base-onnx-model",
@@ -81,13 +85,23 @@ def build(target: pathlib.Path) -> None:
     )
     run(
         [
-            "cargo", "build", "-j2", "--release", "--locked", "--features", "metal",
+            "cargo", "build", "-j2", "--release", "--locked",
             "-p", "into-markdown-cli", "--bin", "into-md",
             "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker",
+            "-p", "into-markdown-plugin-manager", "--bin", "package_plugin",
             "-p", "into-markdown-legacy-office", "--bin", "legacy-office-worker",
             "-p", "installed-smoke", "--bin", "installed-smoke",
             "-p", "installed-smoke", "--bin", "archive-check",
             "-p", "license-check", "--bin", "release-projection",
+        ],
+        cwd=ROOT,
+        env=environment,
+    )
+    run(
+        [
+            "cargo", "build", "-j2", "--release", "--locked", "--features", "metal",
+            "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider",
+            "--bin", "into-md-media-provider",
         ],
         cwd=ROOT,
         env=environment,
@@ -149,16 +163,17 @@ def assemble(
     build_root: pathlib.Path,
     ffmpeg_artifacts: pathlib.Path,
     profile: str,
+    plugin_signing_key: pathlib.Path,
 ) -> pathlib.Path:
     if output.exists():
         raise ReleaseError("release output directory already exists")
     ffmpeg_authority = validate_ffmpeg_artifacts(ffmpeg_artifacts)
-    downloads = {
-        "ffmpeg-source", "pdfium", "onnxruntime", "ocr-detector", "ocr-recognizer",
-        "ocr-dictionary",
-    }
+    downloads = {"ffmpeg-source", "pdfium", "onnxruntime"}
     if profile == "full":
-        downloads.update({"libreoffice", "whisper-small", "silero-vad", "3dspeaker"})
+        downloads.update({
+            "libreoffice", "ocr-detector", "ocr-recognizer", "ocr-dictionary",
+            "whisper-small", "silero-vad", "3dspeaker",
+        })
     acquire(cache, downloads)
     output.mkdir(parents=True)
     binaries = output / "bin"
@@ -185,27 +200,27 @@ def assemble(
         0o644,
     )
     models = binaries / "models"
-    extract_tar(
-        cache / "ocr-detector",
-        models / "pp-ocrv6-tiny-detector-onnx",
-        {"PP-OCRv6_tiny_det_onnx_infer/inference.onnx": "inference.onnx"},
-    )
-    extract_tar(
-        cache / "ocr-recognizer",
-        models / "pp-ocrv6-tiny-recognizer-onnx",
-        {"PP-OCRv6_tiny_rec_onnx_infer/inference.onnx": "inference.onnx"},
-    )
-    copy_file(
-        cache / "ocr-dictionary",
-        models / "pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt",
-        0o644,
-    )
-    for bundle in ["pp-ocrv6-tiny-detector-onnx", "pp-ocrv6-tiny-recognizer-onnx"]:
-        write_json(
-            models / bundle / "install-state.json",
-            {"schemaVersion": 1, "bundleId": bundle, "complete": True},
-        )
     if profile == "full":
+        extract_tar(
+            cache / "ocr-detector",
+            models / "pp-ocrv6-tiny-detector-onnx",
+            {"PP-OCRv6_tiny_det_onnx_infer/inference.onnx": "inference.onnx"},
+        )
+        extract_tar(
+            cache / "ocr-recognizer",
+            models / "pp-ocrv6-tiny-recognizer-onnx",
+            {"PP-OCRv6_tiny_rec_onnx_infer/inference.onnx": "inference.onnx"},
+        )
+        copy_file(
+            cache / "ocr-dictionary",
+            models / "pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt",
+            0o644,
+        )
+        for bundle in ["pp-ocrv6-tiny-detector-onnx", "pp-ocrv6-tiny-recognizer-onnx"]:
+            write_json(
+                models / bundle / "install-state.json",
+                {"schemaVersion": 1, "bundleId": bundle, "complete": True},
+            )
         copy_file(
             cache / "whisper-small",
             models / "whisper-small-multilingual/ggml-small.bin",
@@ -226,6 +241,13 @@ def assemble(
                 models / bundle / "install-state.json",
                 {"schemaVersion": 1, "bundleId": bundle, "complete": True},
             )
+
+    package_official_plugins(
+        output,
+        release_bin,
+        ffmpeg_artifacts,
+        plugin_signing_key,
+    )
 
     legacy = binaries / "legacy-office-runtime"
     legacy.mkdir()
@@ -318,19 +340,19 @@ def write_license_materials(
             contents=True,
         )
     )
-    model_license = destination / "paddleocr-Apache-2.0.txt"
-    copy_file(ROOT / "LICENSE", model_license, 0o644)
-    result.append(
-        material(
-            model_license,
-            output,
-            "license-text",
-            OCR_COMPONENTS,
-            ["Apache-2.0"],
-            contents=True,
-        )
-    )
     if profile == "full":
+        model_license = destination / "paddleocr-Apache-2.0.txt"
+        copy_file(ROOT / "LICENSE", model_license, 0o644)
+        result.append(
+            material(
+                model_license,
+                output,
+                "license-text",
+                OCR_COMPONENTS,
+                ["Apache-2.0"],
+                contents=True,
+            )
+        )
         for component, source, name, spdx in [
             (
                 "whisper-small",
@@ -519,6 +541,226 @@ def copy_file(source: pathlib.Path, destination: pathlib.Path, mode: int) -> Non
     destination.chmod(mode)
 
 
+def package_official_plugins(
+    output: pathlib.Path,
+    release_bin: pathlib.Path,
+    ffmpeg_artifacts: pathlib.Path,
+    signing_key: pathlib.Path,
+) -> None:
+    if not signing_key.is_file() or signing_key.is_symlink():
+        raise ReleaseError("official plugin Ed25519 PKCS#8 signing key is unavailable")
+    packages = output / "share/into-markdown/plugins/packages"
+    packages.mkdir(parents=True)
+    publisher = packages.parent / "official-publisher.json"
+    packager = release_bin / "package_plugin"
+    records: dict[str, dict] = {}
+    signer: tuple[str, str] | None = None
+    with tempfile.TemporaryDirectory(prefix="into-md-provider-runtime-", dir=output.parent) as name:
+        temporary = pathlib.Path(name)
+        ocr = temporary / "ocr"
+        copy_file(release_bin / "into-md-ocr-provider", ocr / "bin/into-md-ocr-provider", 0o755)
+        copy_file(release_bin / "onnxruntime-worker", ocr / "bin/onnxruntime-worker", 0o755)
+        copy_file(
+            output / "bin/onnxruntime/lib/libonnxruntime.dylib",
+            ocr / "onnxruntime/lib/libonnxruntime.dylib",
+            0o644,
+        )
+        ocr_signer = build_provider_package(
+            packager,
+            ocr,
+            official_ocr_manifest(ocr),
+            signing_key,
+            packages / "official.ocr.ppocrv6.imp",
+        )
+        records["official.ocr.ppocrv6"] = {
+            "file": "official.ocr.ppocrv6.imp",
+            "sha256": sha256(packages / "official.ocr.ppocrv6.imp"),
+        }
+        signer = ocr_signer
+
+        media = temporary / "media"
+        copy_file(
+            release_bin / "into-md-media-provider",
+            media / "bin/into-md-media-provider",
+            0o755,
+        )
+        copy_file(release_bin / "onnxruntime-worker", media / "bin/onnxruntime-worker", 0o755)
+        copy_file(
+            output / "bin/onnxruntime/lib/libonnxruntime.dylib",
+            media / "onnxruntime/lib/libonnxruntime.dylib",
+            0o644,
+        )
+        copy_file(ffmpeg_artifacts / "ffmpeg-aarch64-apple-darwin", media / "ffmpeg/ffmpeg", 0o755)
+        copy_file(
+            ffmpeg_artifacts / "ffmpeg-authority-aarch64-apple-darwin.json",
+            media / "ffmpeg/authority.json",
+            0o644,
+        )
+        media_signer = build_provider_package(
+            packager,
+            media,
+            official_media_manifest(media),
+            signing_key,
+            packages / "official.media.whisper.imp",
+        )
+        records["official.media.whisper"] = {
+            "file": "official.media.whisper.imp",
+            "sha256": sha256(packages / "official.media.whisper.imp"),
+        }
+        if signer != media_signer:
+            raise ReleaseError("official plugin publisher records disagree")
+    if signer is None:
+        raise ReleaseError("official plugin signer was not produced")
+    write_json(
+        publisher,
+        {
+            "schemaVersion": 1,
+            "signingKeyId": signer[0],
+            "signingKeySha256": signer[1],
+            "packages": records,
+        },
+    )
+
+
+def build_provider_package(
+    packager: pathlib.Path,
+    runtime: pathlib.Path,
+    manifest: dict,
+    signing_key: pathlib.Path,
+    output: pathlib.Path,
+) -> tuple[str, str]:
+    write_json(runtime / "provider.json", manifest)
+    template_path = runtime.parent / f"{manifest['id']}-package.json"
+    write_json(
+        template_path,
+        {
+            "schemaVersion": 1,
+            "id": manifest["id"],
+            "version": manifest["version"],
+            "protocol": "process-v1",
+            "supportedTargets": ["aarch64-apple-darwin"],
+            "entrypoints": {
+                "aarch64-apple-darwin": manifest["targets"][0]["entrypoint"],
+            },
+            "runtimeManifest": None,
+        },
+    )
+    run(
+        [
+            str(packager), str(runtime), str(template_path), str(signing_key),
+            "official.into-markdown", str(output),
+        ],
+        cwd=ROOT,
+    )
+    with zipfile.ZipFile(output) as package:
+        package_manifest = json.loads(package.read("plugin.json"))
+    signature = package_manifest["signature"]
+    return signature["keyId"], signature["publicKeySha256"]
+
+
+def runtime_inventory(root: pathlib.Path) -> list[dict]:
+    result = []
+    for path in regular_files(root):
+        relative = path.relative_to(root).as_posix()
+        result.append({
+            "path": relative,
+            "bytes": path.stat().st_size,
+            "sha256": sha256(path),
+            "executable": relative.startswith("bin/") or relative == "ffmpeg/ffmpeg",
+        })
+    return result
+
+
+def official_ocr_manifest(runtime: pathlib.Path) -> dict:
+    return {
+        "schemaVersion": 1,
+        "id": "official.ocr.ppocrv6",
+        "version": "0.0.0",
+        "publisher": "official.into-markdown",
+        "hostApi": {"minimum": 1, "maximum": 1},
+        "protocol": "capability-provider",
+        "targets": [{
+            "triple": "aarch64-apple-darwin",
+            "entrypoint": "bin/into-md-ocr-provider",
+            "files": runtime_inventory(runtime),
+        }],
+        "capabilities": [{
+            "id": "ocr",
+            "kind": "ocr",
+            "providerId": "builtin.ocr.ppocrv6-image",
+            "languages": ["zh-Hans", "zh-Hant", "en"],
+            "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"],
+            "modelBundles": ["pp-ocrv6-tiny-zh-en"],
+            "resources": {
+                "maxInputBytes": 536870912,
+                "maxOutputBytes": 25165824,
+                "maxMemoryBytes": 805306368,
+                "maxTemporaryBytes": 1073741824,
+                "timeoutMs": 600000,
+            },
+        }],
+        "models": [{
+            "id": "pp-ocrv6-tiny-zh-en",
+            "upstreamVersion": "PP-OCRv6 tiny / PaddleOCR 3.x",
+            "platforms": ["aarch64-apple-darwin"],
+            "artifacts": [
+                {"role": "detector", "fileName": "detector.onnx", "bytes": 1780590, "sha256": "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8", "license": "Apache-2.0"},
+                {"role": "recognizer", "fileName": "recognizer.onnx", "bytes": 4462639, "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6", "license": "Apache-2.0"},
+                {"role": "character-table", "fileName": "ppocrv6_tiny_dict.txt", "bytes": 27156, "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd", "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt", "license": "Apache-2.0"},
+            ],
+        }],
+        "permissions": {"network": False, "persistentWorker": False, "childProcesses": True},
+        "licenses": ["Apache-2.0", "MIT"],
+    }
+
+
+def official_media_manifest(runtime: pathlib.Path) -> dict:
+    return {
+        "schemaVersion": 1,
+        "id": "official.media.whisper",
+        "version": "0.0.0",
+        "publisher": "official.into-markdown",
+        "hostApi": {"minimum": 1, "maximum": 1},
+        "protocol": "capability-provider",
+        "targets": [{
+            "triple": "aarch64-apple-darwin",
+            "entrypoint": "bin/into-md-media-provider",
+            "files": runtime_inventory(runtime),
+        }],
+        "capabilities": [
+            {
+                "id": "transcription", "kind": "transcription",
+                "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"],
+                "mediaTypes": ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"],
+                "modelBundles": ["whisper-small-multilingual"],
+                "resources": {"maxInputBytes": 536870912, "maxOutputBytes": 25165824, "maxMemoryBytes": 943718400, "maxTemporaryBytes": 4294967296, "timeoutMs": 7200000},
+            },
+            {
+                "id": "diarization", "kind": "diarization",
+                "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"],
+                "mediaTypes": ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"],
+                "modelBundles": ["silero-vad-3dspeaker-eres2net"],
+                "resources": {"maxInputBytes": 536870912, "maxOutputBytes": 25165824, "maxMemoryBytes": 536870912, "maxTemporaryBytes": 4294967296, "timeoutMs": 7200000},
+            },
+        ],
+        "models": [
+            {
+                "id": "whisper-small-multilingual", "upstreamVersion": "OpenAI Whisper small / whisper.cpp c521a4b02f422512d734391fdf08bb08c0862f68", "platforms": ["aarch64-apple-darwin"],
+                "artifacts": [{"role": "model", "fileName": "ggml-small.bin", "bytes": 487601967, "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin", "license": "MIT"}],
+            },
+            {
+                "id": "silero-vad-3dspeaker-eres2net", "upstreamVersion": "Silero VAD 6.2.1 / 3D-Speaker ERes2Net base", "platforms": ["aarch64-apple-darwin"],
+                "artifacts": [
+                    {"role": "vad", "fileName": "silero_vad_half.onnx", "bytes": 1280395, "sha256": "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769", "url": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx", "license": "MIT"},
+                    {"role": "speaker-embedding", "fileName": "3dspeaker_eres2net_base.onnx", "bytes": 39593761, "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b", "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx", "license": "Apache-2.0"},
+                ],
+            },
+        ],
+        "permissions": {"network": False, "persistentWorker": False, "childProcesses": True},
+        "licenses": ["Apache-2.0", "LGPL-2.1-or-later", "MIT"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=pathlib.Path)
@@ -527,6 +769,7 @@ def main() -> None:
     parser.add_argument("--ffmpeg-artifacts", required=True, type=pathlib.Path)
     parser.add_argument("--archive", required=True, type=pathlib.Path)
     parser.add_argument("--profile", required=True, choices=["core", "full"])
+    parser.add_argument("--plugin-signing-key", required=True, type=pathlib.Path)
     parser.add_argument("--skip-build", action="store_true")
     arguments = parser.parse_args()
     check_host()
@@ -538,6 +781,7 @@ def main() -> None:
         arguments.build_root.resolve(),
         arguments.ffmpeg_artifacts.resolve(),
         arguments.profile,
+        arguments.plugin_signing_key.resolve(),
     )
     create_archive(stage, arguments.archive.resolve(), authority()["sourceDateEpoch"])
     archive = arguments.archive.resolve()

@@ -369,13 +369,13 @@ fn snapshot_consistent(
     context: &AdminConfigContext,
 ) -> Result<AdminSnapshot, CliError> {
     for _ in 0..2 {
-        let process_generation = config::config_generation();
         let exact_automatic = context.is_default();
         let global_generation =
             exact_automatic.then(|| config::scope_snapshot(Scope::Global, cwd)).transpose()?;
         let project_generation =
             exact_automatic.then(|| config::scope_snapshot(Scope::Project, cwd)).transpose()?;
         let loaded = context.load(cwd)?;
+        let loaded_paths = config::loaded_paths_snapshot(&loaded.paths.loaded)?;
         let global_document = global_generation.as_ref().map_or_else(
             || toml::Value::Table(toml::map::Map::new()),
             |value| value.document.clone(),
@@ -414,8 +414,9 @@ fn snapshot_consistent(
         } else {
             true
         };
-        if process_generation == config::config_generation()
-            && exact_unchanged
+        if exact_unchanged
+            && loaded.paths.loaded == loaded_after.paths.loaded
+            && loaded_paths == config::loaded_paths_snapshot(&loaded.paths.loaded)?
             && loaded.merged == loaded_after.merged
         {
             return Ok(result);
@@ -1328,6 +1329,7 @@ mod tests {
                 path: "worker.bin".into(),
                 bytes: worker.len() as u64,
                 sha256: format!("{:x}", Sha256::digest(&worker)),
+                executable: true,
             }],
             signature: PackageSignature {
                 signed_payload_version: 1,

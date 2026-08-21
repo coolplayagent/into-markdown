@@ -273,7 +273,7 @@ fn run_command(
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     match command {
-        Command::Ui(arguments) => run_ui(arguments, global, context),
+        Command::Ui(arguments) => run_ui(arguments, global, loaded, context),
         Command::Formats(arguments) => match arguments.command {
             None => list_formats(
                 arguments.family.as_deref(),
@@ -291,7 +291,9 @@ fn run_command(
         Command::Models(arguments) => {
             run_models(arguments.command, arguments.json, &loaded, catalog, context)
         }
-        Command::Setup(arguments) => run_setup(arguments.command, &loaded, catalog, context),
+        Command::Setup(arguments) => {
+            run_setup(arguments.command, global, &loaded, catalog, context)
+        }
         Command::Transcript(arguments) => run_transcript(arguments.command, &loaded, context),
         Command::Providers(arguments) => {
             run_providers(arguments.command, arguments.json, &loaded, catalog, context)
@@ -325,12 +327,41 @@ fn run_command(
 
 fn run_setup(
     command: SetupCommand,
+    global: &crate::args::GlobalArgs,
     loaded: &LoadedConfig,
     catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    prepare_official_capability(command, global, loaded, catalog, context).map(drop)
+}
+
+pub(crate) fn prepare_official_capability(
+    command: SetupCommand,
+    global: &crate::args::GlobalArgs,
+    loaded: &LoadedConfig,
+    catalog: Catalog,
+    context: &mut RunContext<'_>,
+) -> Result<LoadedConfig, CliError> {
     match command {
+        SetupCommand::Ocr { insecure, allow_private_network } => {
+            ensure_official_plugin("official.ocr.ppocrv6", global, loaded, catalog, context)?;
+            run_models(
+                Some(ModelsCommand::Install {
+                    id: "pp-ocrv6-tiny-zh-en".into(),
+                    insecure,
+                    allow_private_network,
+                }),
+                false,
+                loaded,
+                catalog,
+                context,
+            )?;
+            let refreshed = reload_after_setup(global, context)?;
+            crate::services::verify_ocr_runtime(&refreshed, &context.cwd)?;
+            Ok(refreshed)
+        }
         SetupCommand::Media { insecure, allow_private_network } => {
+            ensure_official_plugin("official.media.whisper", global, loaded, catalog, context)?;
             run_models(
                 Some(ModelsCommand::Install {
                     id: "whisper-small-multilingual".into(),
@@ -353,11 +384,25 @@ fn run_setup(
                 catalog,
                 context,
             )?;
-            crate::services::verify_asr_runtime()?;
-            crate::services::verify_diarization_runtime()?;
-            Ok(())
+            let refreshed = reload_after_setup(global, context)?;
+            crate::services::verify_asr_runtime(&refreshed, &context.cwd)?;
+            crate::services::verify_diarization_runtime(&refreshed, &context.cwd)?;
+            Ok(refreshed)
         }
     }
+}
+
+fn reload_after_setup(
+    global: &crate::args::GlobalArgs,
+    context: &RunContext<'_>,
+) -> Result<LoadedConfig, CliError> {
+    config::load(
+        &context.cwd,
+        &global.config,
+        global.no_config,
+        global.profile.as_deref(),
+        global.language,
+    )
 }
 
 fn run_transcript(
@@ -468,6 +513,7 @@ fn collect_speaker_ids(
 fn run_ui(
     arguments: UiArgs,
     global: &crate::args::GlobalArgs,
+    loaded: LoadedConfig,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     let runtime = tokio::runtime::Runtime::new()
@@ -480,6 +526,7 @@ fn run_ui(
             profile: global.profile.clone(),
             language: global.language,
         },
+        loaded,
         context.stdout,
         context.stderr,
     ))
@@ -1032,6 +1079,86 @@ fn provider_view<'a>(
         capabilities: &provider.capabilities,
         default: loaded.effective.default_provider.as_deref() == Some(name),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OfficialPluginCatalog {
+    schema_version: u32,
+    signing_key_id: String,
+    signing_key_sha256: String,
+    packages: BTreeMap<String, OfficialPluginRecord>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OfficialPluginRecord {
+    file: String,
+    sha256: String,
+}
+
+fn ensure_official_plugin(
+    id: &str,
+    global: &crate::args::GlobalArgs,
+    loaded: &LoadedConfig,
+    catalog: Catalog,
+    context: &mut RunContext<'_>,
+) -> Result<(), CliError> {
+    if loaded.effective.plugins.get(id).is_some_and(|plugin| plugin.enabled)
+        && verify_admin_effective_plugin_from_loaded(loaded, &context.cwd, id).is_ok()
+    {
+        return Ok(());
+    }
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|_| CliError::component("installed executable path is unavailable"))?;
+    let distribution = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| CliError::component("installed distribution root is unavailable"))?;
+    let plugin_root = distribution.join("share/into-markdown/plugins");
+    let catalog_path = plugin_root.join("official-publisher.json");
+    let metadata = fs::symlink_metadata(&catalog_path).map_err(|_| {
+        CliError::component(format!(
+            "official plugin catalog is unavailable; install a standard or full distribution containing {id}"
+        ))
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
+        return Err(CliError::component("official plugin catalog is invalid"));
+    }
+    let catalog_bytes = fs::read(&catalog_path).map_err(CliError::from)?;
+    let official: OfficialPluginCatalog = serde_json::from_slice(&catalog_bytes)
+        .map_err(|_| CliError::component("official plugin catalog is invalid"))?;
+    if official.schema_version != 1 {
+        return Err(CliError::component("official plugin catalog schema is unsupported"));
+    }
+    config::validate_sha256(&official.signing_key_sha256)?;
+    let package = official
+        .packages
+        .get(id)
+        .ok_or_else(|| CliError::component(format!("official package {id} is unavailable")))?;
+    config::validate_sha256(&package.sha256)?;
+    if !matches!(
+        Path::new(&package.file).components().collect::<Vec<_>>().as_slice(),
+        [std::path::Component::Normal(_)]
+    ) {
+        return Err(CliError::component("official package filename is invalid"));
+    }
+    let package_path = plugin_root.join("packages").join(&package.file);
+    run_plugins(
+        Some(PluginsCommand::Install {
+            source: package_path.display().to_string(),
+            sha256: Some(package.sha256.clone()),
+            signing_key_id: Some(official.signing_key_id),
+            signing_key_sha256: Some(official.signing_key_sha256),
+            scope: Scope::Global,
+        }),
+        false,
+        global.no_config,
+        loaded,
+        catalog,
+        context,
+    )
 }
 
 fn run_plugins(
@@ -1798,6 +1925,7 @@ fn run_plugins(
                                 request_id: "cli-plugin-run",
                                 input_format: &input_format,
                                 source_name: input.file_name().and_then(OsStr::to_str),
+                                parameters_json: None,
                                 source: &source,
                             },
                             &execution,
@@ -2455,6 +2583,36 @@ pub(crate) fn verify_admin_effective_plugin_from_loaded(
     )
 }
 
+/// Prepare one effective process plugin through the same scope and exact-pin authority used by
+/// the administration surface. The returned value owns an immutable private runtime snapshot.
+pub(crate) fn prepare_admin_effective_process_plugin_from_loaded(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+    policy: into_markdown_process_plugin::RuntimePolicy,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<into_markdown_plugin_manager::PreparedProcessPlugin, CliError> {
+    let configured = loaded
+        .effective
+        .plugins
+        .get(id)
+        .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
+    if !configured.enabled {
+        return Err(CliError::component(format!("plugin '{id}' is disabled")));
+    }
+    let scope = admin_effective_plugin_scope(loaded, cwd, id)?;
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    let authority = scoped_plugin_authority(scope, cwd, &global)?;
+    let installed = authority.manager.verify(id, execution).map_err(plugin_manager_error)?;
+    verify_plugin_pin(&authority.manager, configured, &installed)?;
+    if let Some(project) = &authority.project {
+        project.verify()?;
+    }
+    authority.manager.process_manifest(id, policy, execution).map_err(plugin_manager_error)
+}
+
 fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
     #[cfg(test)]
     {
@@ -3079,8 +3237,8 @@ pub(crate) fn collect_doctor_checks(
             detail: std::env::temp_dir().display().to_string(),
         },
     ];
-    append_core_runtime_checks(&mut checks, loaded);
-    let diarization_available = crate::services::verify_diarization_runtime().is_ok();
+    append_core_runtime_checks(&mut checks, loaded, cwd);
+    let diarization_available = crate::services::verify_diarization_runtime(loaded, cwd).is_ok();
     checks.push(DoctorCheck {
         id: "runtime.diarization".into(),
         status: if diarization_available { "ok" } else { "missing" }.into(),
@@ -3139,7 +3297,7 @@ fn doctor_plugin_check(id: &str, loaded: &LoadedConfig, cwd: &Path) -> (&'static
     }
 }
 
-fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConfig) {
+fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConfig, cwd: &Path) {
     for capability in into_markdown::core_capabilities()
         .iter()
         .filter(|capability| capability.kind == into_markdown::CapabilityKind::Runtime)
@@ -3152,7 +3310,7 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
             });
             continue;
         };
-        let available = verify_core_runtime(runtime.component, loaded);
+        let available = verify_core_runtime(runtime.component, loaded, cwd);
         checks.push(DoctorCheck {
             id: capability.id.into(),
             status: if available { "ok" } else { "missing" }.into(),
@@ -3165,13 +3323,13 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
     }
 }
 
-fn verify_core_runtime(component: &str, loaded: &LoadedConfig) -> bool {
+fn verify_core_runtime(component: &str, loaded: &LoadedConfig, cwd: &Path) -> bool {
     match component {
         "pdfium" => into_markdown::default_pdfium_runtime_path()
             .is_some_and(|path| into_markdown::verify_pdfium_runtime(&path).is_ok()),
-        "onnxruntime" => crate::services::verify_ocr_runtime(loaded).is_ok(),
-        "whisper-small" => crate::services::verify_asr_runtime().is_ok(),
-        "speaker-diarization" => crate::services::verify_diarization_runtime().is_ok(),
+        "onnxruntime" => crate::services::verify_ocr_runtime(loaded, cwd).is_ok(),
+        "whisper-small" => crate::services::verify_asr_runtime(loaded, cwd).is_ok(),
+        "speaker-diarization" => crate::services::verify_diarization_runtime(loaded, cwd).is_ok(),
         "legacy-office" => {
             let context = into_markdown::ExecutionContext::new(
                 into_markdown::ExecutionOptions::default(),
@@ -3323,7 +3481,7 @@ fn run_conversion(
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
         ..into_markdown::ExecutionOptions::default()
     };
-    let services = crate::services::assemble(&loaded, &execution)?;
+    let services = crate::services::assemble(&loaded, &execution, &context.cwd)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
@@ -3479,7 +3637,25 @@ fn apply_asr_overrides(
         }
         options.ai.audio_transcription = AiMode::Only;
     }
-    into_markdown::WhisperConfig::try_from(&options.asr).map(drop).map_err(CliError::from)
+    let asr = &options.asr;
+    let language_valid = asr.language.as_deref().is_none_or(|language| {
+        !language.is_empty()
+            && language.len() <= 35
+            && language.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    });
+    if asr.model_bundle.is_empty()
+        || !(1..=8).contains(&asr.max_threads)
+        || asr.max_duration_ms == Some(0)
+        || !(1..=100_000).contains(&asr.max_segments)
+        || !(256 * 1024 * 1024..=2 * 1024 * 1024 * 1024).contains(&asr.max_native_memory_bytes)
+        || !language_valid
+    {
+        return Err(CliError::from(into_markdown::ConversionError::ResourceLimit {
+            limit: "asrConfiguration",
+            detail: "ASR options exceed the supported local provider envelope".into(),
+        }));
+    }
+    Ok(())
 }
 
 fn apply_ocr_overrides(
@@ -4727,6 +4903,7 @@ mod tests {
                 path: "fixture.exe".to_owned(),
                 bytes: contents.len() as u64,
                 sha256: format!("{:x}", Sha256::digest(contents)),
+                executable: true,
             }],
             signature: PackageSignature {
                 signed_payload_version: 1,
@@ -5637,7 +5814,7 @@ mod tests {
         let checks = checks.as_array().unwrap();
         for (id, hint) in [
             ("runtime.pdfium", "PDFIUM_LIBRARY"),
-            ("runtime.ocr", "models install pp-ocrv6-tiny-zh-en"),
+            ("runtime.ocr", "setup ocr"),
             ("runtime.legacy-office", "legacy Office runtime"),
             ("runtime.asr", "setup media"),
             ("runtime.diarization", "setup media"),

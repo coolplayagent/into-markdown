@@ -25,7 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
@@ -74,6 +74,7 @@ struct AppState {
     admin_config: crate::admin::AdminConfigContext,
     admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
     admin_gate: Arc<Semaphore>,
+    loaded: Arc<RwLock<crate::config::LoadedConfig>>,
 }
 
 #[derive(Clone)]
@@ -83,6 +84,8 @@ struct AdminState {
     admin_config: crate::admin::AdminConfigContext,
     admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
     admin_gate: Arc<Semaphore>,
+    tasks: WebTaskBackend,
+    loaded: Arc<RwLock<crate::config::LoadedConfig>>,
 }
 
 impl FromRef<AppState> for AdminState {
@@ -93,6 +96,8 @@ impl FromRef<AppState> for AdminState {
             admin_config: state.admin_config.clone(),
             admin_grants: state.admin_grants.clone(),
             admin_gate: state.admin_gate.clone(),
+            tasks: state.tasks.clone(),
+            loaded: state.loaded.clone(),
         }
     }
 }
@@ -131,6 +136,7 @@ struct StatusDto {
     schema_version: u32,
     local_api: ComponentDto,
     document_console: ComponentDto,
+    image_ocr: ComponentDto,
     audio_transcription: ComponentDto,
     speaker_diarization: ComponentDto,
 }
@@ -249,6 +255,7 @@ fn browser_command() -> (&'static str, &'static [&'static str]) {
 pub async fn run_cli(
     arguments: UiArgs,
     admin_config: crate::admin::AdminConfigContext,
+    loaded: crate::config::LoadedConfig,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<(), CliError> {
@@ -260,8 +267,12 @@ pub async fn run_cli(
             .join("ui"),
     };
     prepare_data_dir(&data_dir)?;
-    let tasks = WebTaskBackend::open(data_dir.join("tasks"))
-        .map_err(|error| CliError::new(ExitClass::Io, "uiTaskBackendFailed", error.to_string()))?;
+    let cwd = std::env::current_dir()?;
+    let tasks =
+        WebTaskBackend::open_with_media_config(data_dir.join("tasks"), loaded.clone(), cwd.clone())
+            .map_err(|error| {
+                CliError::new(ExitClass::Io, "uiTaskBackendFailed", error.to_string())
+            })?;
 
     let listener = bind_loopback(arguments.port).await?;
     let address = listener.local_addr()?;
@@ -270,7 +281,7 @@ pub async fn run_cli(
     let launch_url = format!("{origin}/#{SESSION_FRAGMENT}={session}");
     announce_and_open(&SystemBrowser, arguments.no_open, &origin, &launch_url, stdout, stderr)?;
 
-    serve(listener, session, tasks, std::env::current_dir()?, None, admin_config, async {
+    serve(listener, session, tasks, cwd, None, admin_config, loaded, async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await
@@ -312,6 +323,7 @@ async fn serve<F>(
     cwd: PathBuf,
     test_user_data_anchor: Option<PathBuf>,
     admin_config: crate::admin::AdminConfigContext,
+    loaded: crate::config::LoadedConfig,
     shutdown: F,
 ) -> Result<(), CliError>
 where
@@ -335,9 +347,14 @@ where
         admin_config,
         admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
         admin_gate: Arc::new(Semaphore::new(1)),
+        loaded: Arc::new(RwLock::new(loaded)),
     };
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
+        .route(
+            "/capabilities/{id}/install",
+            post(install_capability).fallback(api_method_not_allowed),
+        )
         .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
         .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
         .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
@@ -499,17 +516,32 @@ async fn static_fallback(method: Method, uri: Uri, headers: HeaderMap) -> Respon
     }
 }
 
-async fn status(headers: HeaderMap) -> Response {
+async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if headers.contains_key(header::CONTENT_TYPE) {
         return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unexpectedContentType");
     }
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
-    let (audio_transcription, speaker_diarization) = tokio::join!(
-        tokio::task::spawn_blocking(audio_runtime_status),
-        tokio::task::spawn_blocking(diarization_runtime_status),
+    let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let cwd = state.cwd.clone();
+    let ocr_config = loaded.clone();
+    let audio_config = loaded.clone();
+    let diarization_config = loaded;
+    let ocr_cwd = cwd.clone();
+    let audio_cwd = cwd.clone();
+    let (image_ocr, audio_transcription, speaker_diarization) = tokio::join!(
+        tokio::task::spawn_blocking(move || ocr_runtime_status(&ocr_config, &ocr_cwd)),
+        tokio::task::spawn_blocking(move || audio_runtime_status(&audio_config, &audio_cwd)),
+        tokio::task::spawn_blocking(move || {
+            diarization_runtime_status(&diarization_config, &cwd)
+        }),
     );
+    let image_ocr = image_ocr.unwrap_or(ComponentDto {
+        available: false,
+        code: "componentUnavailable",
+        detail: "OCR provider verification did not complete",
+    });
     let audio_transcription = audio_transcription.unwrap_or(ComponentDto {
         available: false,
         code: "componentUnavailable",
@@ -532,10 +564,80 @@ async fn status(headers: HeaderMap) -> Response {
             code: "available",
             detail: "local upload and conversion workbench is active",
         },
+        image_ocr,
         audio_transcription,
         speaker_diarization,
     })
     .into_response()
+}
+
+async fn install_capability(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if headers.contains_key(header::CONTENT_TYPE) {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unexpectedContentType");
+    }
+    if !request_body_is_empty(&headers) {
+        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    let command = match id.as_str() {
+        "ocr" => crate::args::SetupCommand::Ocr { insecure: false, allow_private_network: false },
+        "media" => {
+            crate::args::SetupCommand::Media { insecure: false, allow_private_network: false }
+        }
+        _ => return rejection(StatusCode::NOT_FOUND, "unknownCapability"),
+    };
+    let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
+    };
+    let snapshot = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let cwd = state.cwd.clone();
+    let config = state.admin_config.clone();
+    let tasks = state.tasks.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let global = crate::args::GlobalArgs {
+            config: config.explicit,
+            no_config: config.no_automatic,
+            profile: config.profile,
+            language: config.language,
+            ..crate::args::GlobalArgs::default()
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut context = crate::app::RunContext {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_is_terminal: false,
+            cwd,
+            #[cfg(test)]
+            user_data_anchor: None,
+        };
+        let updated = crate::app::prepare_official_capability(
+            command,
+            &global,
+            &snapshot,
+            crate::i18n::Catalog::new(snapshot.language),
+            &mut context,
+        )?;
+        tasks.update_media_config(updated.clone());
+        Ok::<_, CliError>(updated)
+    })
+    .await;
+    match result {
+        Ok(Ok(updated)) => {
+            *state.loaded.write().unwrap_or_else(std::sync::PoisonError::into_inner) = updated;
+            Json(serde_json::json!({
+                "schemaVersion": 1,
+                "capability": id,
+                "status": "installed"
+            }))
+            .into_response()
+        }
+        Ok(Err(error)) => admin_error(&error),
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    }
 }
 
 async fn admin_snapshot(State(state): State<AdminState>) -> Response {
@@ -615,11 +717,23 @@ async fn admin_action(State(state): State<AdminState>, request: Request) -> Resp
     let anchor = state.test_user_data_anchor.clone();
     let config = state.admin_config.clone();
     match tokio::task::spawn_blocking(move || {
-        crate::admin::apply(&cwd, &config, &action, anchor.as_deref())
+        let result = crate::admin::apply(&cwd, &config, &action, anchor.as_deref())?;
+        let loaded = crate::config::load(
+            &cwd,
+            &config.explicit,
+            config.no_automatic,
+            config.profile.as_deref(),
+            config.language,
+        )?;
+        Ok::<_, CliError>((result, loaded))
     })
     .await
     {
-        Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Ok((result, loaded))) => {
+            state.tasks.update_media_config(loaded.clone());
+            *state.loaded.write().unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
+            Json(result).into_response()
+        }
         Ok(Err(error)) => admin_error(&error),
         Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
@@ -651,10 +765,29 @@ fn admin_error(error: &CliError) -> Response {
     (status, Json(serde_json::json!({"schemaVersion": 1, "code": error.code()}))).into_response()
 }
 
-fn diarization_runtime_status() -> ComponentDto {
+fn ocr_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
     static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
     cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
-        if crate::services::verify_diarization_runtime().is_ok() {
+        if crate::services::verify_ocr_runtime(loaded, cwd).is_ok() {
+            ComponentDto {
+                available: true,
+                code: "available",
+                detail: "signed OCR provider and PP-OCRv6 model passed isolated verification",
+            }
+        } else {
+            ComponentDto {
+                available: false,
+                code: "componentUnavailable",
+                detail: "install the signed OCR provider and PP-OCRv6 model",
+            }
+        }
+    })
+}
+
+fn diarization_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
+    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
+    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
+        if crate::services::verify_diarization_runtime(loaded, cwd).is_ok() {
             ComponentDto {
                 available: true,
                 code: "available",
@@ -670,10 +803,10 @@ fn diarization_runtime_status() -> ComponentDto {
     })
 }
 
-fn audio_runtime_status() -> ComponentDto {
+fn audio_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
     static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
     cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
-        if crate::services::verify_asr_runtime().is_ok() {
+        if crate::services::verify_asr_runtime(loaded, cwd).is_ok() {
             ComponentDto {
                 available: true,
                 code: "available",
@@ -1621,6 +1754,10 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::sync::oneshot;
 
+    fn test_config(cwd: &Path) -> crate::config::LoadedConfig {
+        crate::config::load(cwd, &[], true, None, None).unwrap()
+    }
+
     async fn request(port: u16, request: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
         stream.write_all(request.as_bytes()).await.unwrap();
@@ -1649,6 +1786,7 @@ mod tests {
             directory.path().to_owned(),
             Some(directory.path().join("user-data")),
             crate::admin::AdminConfigContext::default(),
+            test_config(directory.path()),
             async {
                 let _ = receiver.await;
             },
@@ -1680,6 +1818,8 @@ mod tests {
             admin_config: crate::admin::AdminConfigContext::default(),
             admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
             admin_gate: Arc::new(Semaphore::new(1)),
+            tasks: WebTaskBackend::open(directory.path().join("backend")).unwrap(),
+            loaded: Arc::new(RwLock::new(test_config(directory.path()))),
         };
         let body = serde_json::json!({
             "schemaVersion": 1,
@@ -2354,6 +2494,7 @@ mod tests {
             directory.path().to_owned(),
             Some(directory.path().join("user-data")),
             crate::admin::AdminConfigContext::default(),
+            test_config(directory.path()),
             async {
                 let _ = receiver.await;
             },
@@ -2445,6 +2586,7 @@ mod tests {
             directory.path().to_owned(),
             Some(directory.path().join("user-data")),
             crate::admin::AdminConfigContext::default(),
+            test_config(directory.path()),
             async {
                 let _ = receiver.await;
             },

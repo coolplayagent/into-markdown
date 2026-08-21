@@ -26,14 +26,10 @@ pub(crate) const LEGACY_OFFICE: RuntimeRequirement = RuntimeRequirement {
     component: "legacy-office",
     install_hint: "install the authority-verified legacy Office runtime for this platform",
 };
-const OCR: RuntimeRequirement = RuntimeRequirement {
-    component: "onnxruntime",
-    install_hint: "run `into-md models install pp-ocrv6-tiny-zh-en` and configure the pinned ONNX Runtime worker",
-};
-const ASR: RuntimeRequirement = RuntimeRequirement {
-    component: "whisper-small",
-    install_hint: "use a complete package with the pinned LGPL FFmpeg runtime, then run `into-md setup media` to install and verify the media models",
-};
+const OCR: RuntimeRequirement =
+    RuntimeRequirement { component: "onnxruntime", install_hint: "run `into-md setup ocr`" };
+const ASR: RuntimeRequirement =
+    RuntimeRequirement { component: "whisper-small", install_hint: "run `into-md setup media`" };
 
 const AVAILABLE: FormatStatus = FormatStatus::Available;
 const CORE: CapabilitySource = CapabilitySource::Core;

@@ -113,6 +113,9 @@ pub struct PackageFile {
     pub bytes: u64,
     /// SHA-256 of exact file bytes.
     pub sha256: String,
+    /// Whether Unix installations grant owner execute permission to this file.
+    #[serde(default)]
+    pub executable: bool,
 }
 
 /// Ed25519 authority over the canonical manifest without this field.
@@ -284,10 +287,9 @@ impl PackageSnapshot {
 pub struct PreparedProcessPlugin {
     authority: into_markdown_process_plugin::PluginManifest,
     policy: into_markdown_process_plugin::RuntimePolicy,
-    snapshot: PathBuf,
+    _snapshot_directory: tempfile::TempDir,
     _snapshot_reservation: ResourceReservation,
     _metadata_reservation: ResourceReservation,
-    _store_lock: StoreLock,
 }
 
 /// Verified WASI component bytes and their request-scoped capability intersection.
@@ -330,11 +332,24 @@ impl PreparedProcessPlugin {
         )?
         .execute(request, execution)
     }
-}
 
-impl Drop for PreparedProcessPlugin {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.snapshot);
+    /// Execute a structured process-v1 request while retaining the authenticated JSON result.
+    ///
+    /// Capability adapters use this form for typed OCR, transcription, and diarization payloads;
+    /// the same pinned snapshot and sandbox policy apply as for [`Self::execute`].
+    pub fn execute_raw(
+        &self,
+        request: into_markdown_process_plugin::PluginRequest<'_>,
+        execution: &ExecutionContext,
+    ) -> Result<
+        into_markdown_process_plugin::RawPluginExecution,
+        into_markdown_process_plugin::PluginError,
+    > {
+        into_markdown_process_plugin::ProcessPlugin::new(
+            self.authority.clone(),
+            self.policy.clone(),
+        )?
+        .execute_raw(request, execution)
     }
 }
 
@@ -1137,7 +1152,7 @@ impl PluginManager {
         #[allow(unused_mut)] mut policy: into_markdown_process_plugin::RuntimePolicy,
         execution: &ExecutionContext,
     ) -> Result<PreparedProcessPlugin, ManagerError> {
-        let store_lock = self.acquire_lock()?;
+        let _store_lock = self.acquire_lock()?;
         self.recover_unlocked()?;
         let installed = self.verify_unlocked(id, execution)?;
         let metadata_reservation =
@@ -1167,9 +1182,14 @@ impl PluginManager {
         let snapshot_bytes = tree_size(&installed.root, execution)?;
         let snapshot_reservation =
             execution.reserve_temporary(snapshot_bytes).map_err(map_execution_error)?;
-        let snapshot =
-            self.root.join(format!(".dispatch-{}-{}", id, NONCE.fetch_add(1, Ordering::Relaxed)));
-        let mut snapshot_cleanup = TemporaryDirectory::new(snapshot.clone());
+        // The verified copy is independent of the mutable package store. Keeping it in an
+        // owner-private temporary directory lets one conversion retain multiple providers from
+        // the same store without holding the store-wide mutation lock for their whole lifetime.
+        let snapshot_directory = tempfile::Builder::new()
+            .prefix(&format!("into-md-plugin-dispatch-{}-", NONCE.fetch_add(1, Ordering::Relaxed)))
+            .tempdir()
+            .map_err(ManagerError::from)?;
+        let snapshot = snapshot_directory.path().join("runtime");
         copy_tree(&installed.root, &snapshot, execution)?;
         verify_tree(&manifest, &snapshot, Some(execution))?;
         #[cfg(windows)]
@@ -1182,14 +1202,12 @@ impl PluginManager {
             executable_sha256: file.sha256.clone(),
             protocol_versions: vec![1],
         };
-        snapshot_cleanup.keep();
         Ok(PreparedProcessPlugin {
             authority,
             policy,
-            snapshot,
+            _snapshot_directory: snapshot_directory,
             _snapshot_reservation: snapshot_reservation,
             _metadata_reservation: metadata_reservation,
-            _store_lock: store_lock,
         })
     }
 
@@ -1786,7 +1804,7 @@ fn extract_verified<R: std::io::Read + std::io::Seek>(
         }
         output.sync_all()?;
         #[cfg(unix)]
-        if manifest.entrypoints.values().any(|entry| entry == &name) {
+        if authority.executable || manifest.entrypoints.values().any(|entry| entry == &name) {
             use std::os::unix::fs::PermissionsExt as _;
             fs::set_permissions(&target, fs::Permissions::from_mode(0o500))?;
         }
@@ -1927,6 +1945,18 @@ fn verify_tree(
                 ManagerErrorCode::HashMismatch,
                 "installed file differs",
             ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let executable = authority.executable
+                || manifest.entrypoints.values().any(|entry| entry == &authority.path);
+            if metadata.permissions().mode() & 0o111 != if executable { 0o100 } else { 0 } {
+                return Err(ManagerError::new(
+                    ManagerErrorCode::InvalidPackage,
+                    "installed executable authority differs",
+                ));
+            }
         }
     }
     Ok(())
@@ -2277,28 +2307,6 @@ fn copy_and_digest_bounded(
 
 struct TemporaryFile {
     path: Option<PathBuf>,
-}
-
-struct TemporaryDirectory {
-    path: Option<PathBuf>,
-}
-
-impl TemporaryDirectory {
-    fn new(path: PathBuf) -> Self {
-        Self { path: Some(path) }
-    }
-
-    fn keep(&mut self) {
-        self.path.take();
-    }
-}
-
-impl Drop for TemporaryDirectory {
-    fn drop(&mut self) {
-        if let Some(path) = &self.path {
-            let _ = fs::remove_dir_all(path);
-        }
-    }
 }
 
 impl TemporaryFile {
@@ -3015,6 +3023,9 @@ fn sync_tree(path: &Path) -> Result<(), ManagerError> {
         if entry.file_type()?.is_dir() {
             sync_tree(&entry.path())?;
         } else if entry.file_type()?.is_file() {
+            #[cfg(unix)]
+            OpenOptions::new().read(true).open(entry.path())?.sync_all()?;
+            #[cfg(not(unix))]
             OpenOptions::new().write(true).open(entry.path())?.sync_all()?;
         } else {
             return Err(ManagerError::new(
@@ -3210,10 +3221,11 @@ mod tests {
             runtime_manifest: None,
             files: files
                 .iter()
-                .map(|(path, contents, _)| PackageFile {
+                .map(|(path, contents, mode)| PackageFile {
                     path: (*path).to_owned(),
                     bytes: contents.len() as u64,
                     sha256: digest(contents),
+                    executable: mode & 0o111 != 0,
                 })
                 .collect(),
             signature: PackageSignature {
@@ -3370,11 +3382,13 @@ mod tests {
                 path: "plugin.component.wasm".into(),
                 bytes: COMPONENT.len() as u64,
                 sha256: digest(COMPONENT),
+                executable: false,
             },
             PackageFile {
                 path: "runtime.json".into(),
                 bytes: runtime_bytes.len() as u64,
                 sha256: digest(&runtime_bytes),
+                executable: false,
             },
         ];
         let mut manifest = PackageManifest {

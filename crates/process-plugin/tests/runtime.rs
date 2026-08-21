@@ -43,6 +43,10 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
         .unwrap();
     assert_eq!(network.result.markdown, "network-denied");
 
+    let controlled = harness.execute(b"controlled-error", ExecutionOptions::default()).unwrap_err();
+    assert_eq!(controlled.code, PluginErrorCode::Plugin);
+    assert_eq!(controlled.detail, "plugin returned unknownFixture");
+
     for (mode, expected) in [
         (b"malformed".as_slice(), PluginErrorCode::Protocol),
         (b"oversize".as_slice(), PluginErrorCode::FrameTooLarge),
@@ -86,6 +90,13 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let error = stall.execute(&source, ExecutionOptions::default()).unwrap_err();
     assert_eq!(error.code, PluginErrorCode::Timeout);
     assert!(started.elapsed() < Duration::from_secs(5), "blocked request write ignored deadline");
+}
+
+#[test]
+fn isolated_worker_stdout_keeps_native_noise_out_of_protocol_frames() {
+    let harness = Harness::new_with_mode(Some("isolate-stdout"));
+    let result = harness.execute(b"ignored", ExecutionOptions::default()).unwrap();
+    assert_eq!(result.result.markdown, "stdout-isolated");
 }
 
 #[test]
@@ -159,6 +170,14 @@ fn staged_runtime_isolated_and_raii_releases_temporary_budget() {
     assert_temporary_budget_released(&isolated);
 }
 
+#[cfg(unix)]
+#[test]
+fn declared_child_process_can_execute_an_authenticated_runtime_helper() {
+    let harness = Harness::new_with_mode(Some("allow-child"));
+    let result = harness.execute(b"child", ExecutionOptions::default()).unwrap();
+    assert_eq!(result.result.markdown, "child-ok");
+}
+
 struct MutateOriginal {
     executable: PathBuf,
     complete: std::sync::mpsc::SyncSender<()>,
@@ -167,11 +186,21 @@ struct MutateOriginal {
 impl ProgressListener for MutateOriginal {
     fn on_progress(&self, event: ProgressEvent) {
         if event.message.as_deref() == Some("stage-ready") {
+            make_fixture_writable(&self.executable);
             std::fs::write(&self.executable, b"mutated").unwrap();
             let _ = self.complete.try_send(());
         }
     }
 }
+
+#[cfg(unix)]
+fn make_fixture_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(windows)]
+fn make_fixture_writable(_path: &Path) {}
 
 fn assert_temporary_budget_released(context: &ExecutionContext) {
     assert_eq!(
@@ -194,6 +223,7 @@ impl ProgressListener for CancelReady {
 #[test]
 fn executable_digest_mutation_fails_before_launch() {
     let harness = Harness::new();
+    make_fixture_writable(&harness.executable);
     std::fs::write(&harness.executable, b"mutated").unwrap();
     let error = harness.execute(b"ok", ExecutionOptions::default()).unwrap_err();
     assert_eq!(error.code, PluginErrorCode::Authority);
@@ -254,12 +284,19 @@ impl Harness {
             tempfile::Builder::new().prefix("into-md-fixture-runtime-").tempdir().unwrap();
         let executable = runtime.path().join(if cfg!(windows) { "fixture.exe" } else { "fixture" });
         std::fs::copy(&fixture, &executable).unwrap();
+        let helper = runtime.path().join(if cfg!(windows) {
+            "verified-helper.exe"
+        } else {
+            "verified-helper"
+        });
+        std::fs::copy(&fixture, &helper).unwrap();
         let runtime_root = runtime.path().canonicalize().unwrap();
         let executable = executable.canonicalize().unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o500)).unwrap();
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o500)).unwrap();
         }
         #[cfg(windows)]
         let profile = WindowsProfile::new(&runtime_root);
@@ -282,7 +319,10 @@ impl Harness {
         }
         if let Some(mode) = mode {
             policy.environment.insert("PROCESS_PLUGIN_FIXTURE_MODE".into(), mode.into());
-            policy.request_timeout = Duration::from_millis(250);
+            if mode == "stall-request" {
+                policy.request_timeout = Duration::from_millis(250);
+            }
+            policy.allow_child_processes = mode == "allow-child";
         }
         let plugin = ProcessPlugin::new(
             PluginManifest {
@@ -328,11 +368,21 @@ impl Harness {
                 request_id: "fixture-request",
                 input_format: "text",
                 source_name: Some("fixture.txt"),
+                parameters_json: None,
                 source,
             },
             context,
         )
     }
+}
+
+#[test]
+fn payloads_larger_than_a_protocol_frame_use_the_private_staged_source() {
+    let runtime = Harness::try_new_with_mode_and_file_limit(None, Some(32 * 1024 * 1024)).unwrap();
+    let mut source = vec![b'x'; 13 * 1024 * 1024];
+    source[..8].copy_from_slice(b"large-ok");
+    let result = runtime.execute(&source, ExecutionOptions::default()).unwrap();
+    assert_eq!(result.result.markdown, "large-ok");
 }
 
 fn fixture_executable() -> PathBuf {

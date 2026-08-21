@@ -153,14 +153,18 @@ implemented. The `pp-ocrv6-tiny-zh-en` product pipeline binds separately reviewe
 recognizer components, official ONNX archive structure, the character table, and transactional
 install authority. Only `models install` uses the fixed-host, fixed-size, hash-pinned library
 transport; conversion never downloads models automatically. CLI and API conversion assemble OCR
-only after both components and the packaged ONNX Runtime worker verify successfully.
+only after the signed capability package, isolated runtime, both components, and readiness check
+verify successfully. The standard distribution includes signed OCR and media provider packages;
+`setup ocr` and `setup media` install their models explicitly, while the full offline distribution
+includes those models. A provider failure after execution begins never triggers a silent fallback.
 Windows model installation remains fail-closed until durable, reparse-safe
 directory-handle flushing is implemented; path resolution and offline metadata remain available.
-Other unavailable format conversion and plugin execution remain unavailable.
+Other unavailable format conversion remains unavailable.
 
 The detailed design documents are maintained in Chinese. See the
 [architecture](docs/architecture.md), [interface contract](docs/interfaces.md),
 [format matrix](docs/formats.md), [OCR and AI design](docs/ocr-and-ai.md),
+[OCR and audio capability plugins](docs/capability-plugins.md),
 [security model](docs/security.md), and [testing strategy](docs/testing.md).
 The authoritative CLI and configuration specifications are maintained in
 Chinese: [command-line design](docs/cli.md) and

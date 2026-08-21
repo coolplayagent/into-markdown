@@ -1,13 +1,13 @@
 //! Per-invocation optional-service assembly with no implicit discovery or download.
 
-use crate::config::LoadedConfig;
+use crate::config::{CapabilityRouteConfig, LoadedConfig};
 use crate::error::CliError;
 use into_markdown::{
-    AiMode, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions,
-    InstalledAsrConfig, InstalledDiarizationConfig, InstalledOcrConfig, OcrPolicy,
+    AiMode, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions, OcrPolicy,
     OpenAiCompatibleClient, OpenAiImageDescriptionProvider,
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, Services,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
@@ -15,9 +15,9 @@ use std::time::UNIX_EPOCH;
 pub(crate) fn assemble(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
+    cwd: &Path,
 ) -> Result<Services, CliError> {
-    let executable = canonical_executable().map_err(CliError::component)?;
-    assemble_at(loaded, execution, &executable)
+    assemble_at(loaded, execution, cwd)
 }
 
 /// Assemble the exact local media services required by one durable Web meeting
@@ -49,6 +49,10 @@ impl<K: PartialEq, V: Clone> SingleEntryCache<K, V> {
         *entry = Some((key, value.clone()));
         Ok(value)
     }
+
+    fn clear(&self) {
+        *self.entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
 }
 
 impl<K, V> Default for SingleEntryCache<K, V> {
@@ -63,6 +67,8 @@ impl<K, V> Default for SingleEntryCache<K, V> {
 #[derive(Default)]
 pub(crate) struct WebMediaServiceCache {
     services: SingleEntryCache<WebMediaKey, Services>,
+    loaded: Mutex<Option<LoadedConfig>>,
+    cwd: Mutex<Option<PathBuf>>,
 }
 
 impl WebMediaServiceCache {
@@ -76,7 +82,20 @@ impl WebMediaServiceCache {
                 .then(|| options.diarization.model_bundle.clone()),
         };
         self.services.get_or_try_insert_with(key, || {
-            let executable = canonical_executable().map_err(CliError::component)?;
+            let loaded = self
+                .loaded
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .ok_or_else(|| {
+                    CliError::component("Web media capability routing is unavailable")
+                })?;
+            let cwd = self
+                .cwd
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .ok_or_else(|| CliError::component("Web capability scope is unavailable"))?;
             // Cached native services outlive any one request, so their verified
             // model leases must not retain a request cancellation/progress sink.
             let context = ExecutionContext::new(
@@ -84,108 +103,96 @@ impl WebMediaServiceCache {
                 into_markdown::ResourceLimits::default(),
             );
             let mut services = Services {
-                transcriber: Some(assemble_asr_options(options, &context, &executable)?),
+                transcriber: Some(assemble_asr_options(&loaded, options, &context, &cwd)?),
                 ..Services::default()
             };
             if options.diarization.enabled {
-                let directory = executable.parent().ok_or_else(|| {
-                    CliError::component("current executable has no distribution directory")
-                })?;
                 services.diarizer = Some(
-                    assemble_diarization_config(options, directory, &context)
+                    assemble_diarization_config(&loaded, options, &context, &cwd)
                         .map_err(CliError::from)?,
                 );
             }
             Ok(services)
         })
     }
+
+    pub(crate) fn with_config(loaded: LoadedConfig, cwd: PathBuf) -> Self {
+        Self {
+            services: SingleEntryCache::default(),
+            loaded: Mutex::new(Some(loaded)),
+            cwd: Mutex::new(Some(cwd)),
+        }
+    }
+
+    pub(crate) fn update_config(&self, loaded: LoadedConfig) {
+        *self.loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(loaded);
+        self.services.clear();
+    }
 }
 
 /// Verify the exact local OCR distribution used by conversion without any
 /// download or network access.
-pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig) -> Result<(), ConversionError> {
-    let executable = canonical_executable().map_err(|detail| {
-        ConversionError::ComponentUnavailable { component: "onnxruntime".into(), detail }
-    })?;
-    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
-        component: "onnxruntime-worker".into(),
-        detail: "current executable has no distribution directory".into(),
-    })?;
-    into_markdown::verify_ocr_worker_executable(&directory.join(worker_name())).map_err(
-        |error| ConversionError::ComponentUnavailable {
-            component: "onnxruntime-worker".into(),
-            detail: format!("installed ONNX worker is unavailable: {error}"),
-        },
-    )?;
+pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig, cwd: &Path) -> Result<(), ConversionError> {
     let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
-    assemble_ocr(loaded, &context, &executable).map(drop)
+    assemble_ocr(loaded, &context, cwd).map(drop)
 }
 
 /// Verify the exact offline ASR distribution used by the Web workbench.
-pub(crate) fn verify_asr_runtime() -> Result<(), ConversionError> {
-    let executable = canonical_executable().map_err(|detail| {
-        ConversionError::ComponentUnavailable { component: "whisper-small".into(), detail }
-    })?;
-    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
-        component: "whisper-small".into(),
-        detail: "current executable has no distribution directory".into(),
-    })?;
+pub(crate) fn verify_asr_runtime(loaded: &LoadedConfig, cwd: &Path) -> Result<(), ConversionError> {
     let context = ExecutionContext::new(
         ExecutionOptions::default(),
         into_markdown::ResourceLimits::default(),
     );
-    let ffmpeg_root = directory.join("ffmpeg");
-    into_markdown::installed_asr_service(
-        &InstalledAsrConfig {
-            writable_model_root: writable_model_root()?,
-            bundled_model_root: bundled_model_root(directory),
-            ffmpeg_trusted_root: ffmpeg_root.clone(),
-            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
-            ffmpeg_authority: ffmpeg_root.join("authority.json"),
-            model_bundle: "whisper-small-multilingual".into(),
-        },
-        &ConversionOptions::default(),
-        &context,
-    )
-    .map(drop)
+    assemble_asr_options(loaded, &loaded.options, &context, cwd).map(drop).map_err(|error| {
+        ConversionError::ComponentUnavailable {
+            component: "transcription-plugin".into(),
+            detail: error.to_string(),
+        }
+    })
 }
 
 /// Verify the exact offline diarization distribution used by the meeting page.
-pub(crate) fn verify_diarization_runtime() -> Result<(), ConversionError> {
-    let executable = canonical_executable().map_err(|detail| {
-        ConversionError::ComponentUnavailable { component: "speaker-diarization".into(), detail }
-    })?;
-    let directory = executable.parent().ok_or_else(|| ConversionError::ComponentUnavailable {
-        component: "speaker-diarization".into(),
-        detail: "current executable has no distribution directory".into(),
-    })?;
+pub(crate) fn verify_diarization_runtime(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> Result<(), ConversionError> {
     let mut options = ConversionOptions::default();
     options.diarization.enabled = true;
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    assemble_diarization_config(&options, directory, &context).map(drop)
+    assemble_diarization_config(loaded, &options, &context, cwd).map(drop)
 }
 
-/// Revision of the writable media-model root used to invalidate a cached
-/// unavailable status after an explicit `setup media` installation.
+/// Revision of model, plugin, and routing authority used to invalidate a
+/// cached unavailable status after an explicit capability installation.
 pub(crate) fn media_model_revision() -> u128 {
-    let Ok(root) = writable_model_root() else { return 0 };
-    let Ok(metadata) = std::fs::metadata(root) else { return 0 };
-    metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map_or(1, |duration| duration.as_nanos().saturating_add(1))
+    let mut revision = 1_u128;
+    let paths = [
+        writable_model_root().ok(),
+        directories::ProjectDirs::from("", "", "into-markdown")
+            .map(|directories| directories.data_dir().join("plugins")),
+        crate::config::global_config_path().ok(),
+    ];
+    for path in paths.into_iter().flatten() {
+        let Ok(metadata) = std::fs::metadata(path) else { continue };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |value| value.as_nanos());
+        revision = revision.rotate_left(17) ^ modified ^ u128::from(metadata.len());
+    }
+    revision
 }
 
 fn assemble_at(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
-    executable: &Path,
+    cwd: &Path,
 ) -> Result<Services, CliError> {
     let mut services = Services::default();
     let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     if loaded.options.ocr.policy != OcrPolicy::Off {
-        match assemble_ocr(loaded, &context, executable) {
+        match assemble_ocr(loaded, &context, cwd) {
             Ok(engine) => services.ocr = Some(engine),
             Err(error) if can_degrade_ocr(loaded.options.ocr.policy, &error) => {}
             Err(error) => return Err(CliError::from(error)),
@@ -195,74 +202,244 @@ fn assemble_at(
         services.ai = assemble_image_description(loaded)?;
     }
     if loaded.options.ai.audio_transcription != AiMode::Off {
-        services.transcriber = Some(assemble_asr(loaded, &context, executable)?);
+        services.transcriber = Some(assemble_asr(loaded, &context, cwd)?);
     }
     if loaded.options.diarization.enabled {
-        let directory = executable.parent().ok_or_else(|| {
-            CliError::component("current executable has no distribution directory")
-        })?;
         services.diarizer = Some(
-            assemble_diarization_config(&loaded.options, directory, &context)
+            assemble_diarization_config(loaded, &loaded.options, &context, cwd)
                 .map_err(CliError::from)?,
         );
     }
     Ok(services)
 }
 
-fn assemble_diarization_config(
-    options: &ConversionOptions,
-    directory: &Path,
+fn strict_media_mode(options: &ConversionOptions) -> into_markdown_provider_plugin::ResolutionMode {
+    if options.ai.audio_transcription == AiMode::Only {
+        into_markdown_provider_plugin::ResolutionMode::RequiredPrimary
+    } else {
+        into_markdown_provider_plugin::ResolutionMode::ReadinessFallback
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_process_capability(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    kind: into_markdown_provider_plugin::CapabilityKind,
+    configured: &CapabilityRouteConfig,
+    default_primary: &str,
+    model_bundle: Option<String>,
+    mode: into_markdown_provider_plugin::ResolutionMode,
     context: &ExecutionContext,
+) -> Result<into_markdown_provider_plugin::ProcessCapability, ConversionError> {
+    use into_markdown_provider_plugin::{CapabilityRegistry, CapabilityRoute, ProcessCapability};
+
+    let primary = parse_provider_reference(
+        configured.primary.as_deref().unwrap_or(default_primary),
+        model_bundle.as_deref(),
+    )?;
+    let fallbacks = configured
+        .fallbacks
+        .iter()
+        .map(|reference| parse_provider_reference(reference, model_bundle.as_deref()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let route = CapabilityRoute { primary, fallbacks };
+    let mut registry = CapabilityRegistry::new();
+    let mut packages = BTreeMap::new();
+    let mut registration_errors = BTreeMap::new();
+    let references = std::iter::once(&route.primary).chain(&route.fallbacks);
+    for reference in references {
+        if packages.contains_key(&reference.plugin_id) {
+            continue;
+        }
+        let key = format!("{}/{}", reference.plugin_id, reference.capability_id);
+        let Some(config) = loaded.effective.plugins.get(&reference.plugin_id) else {
+            registration_errors.insert(key, "plugin is not configured".to_owned());
+            continue;
+        };
+        if !config.enabled || config.protocol != "process-v1" {
+            registration_errors
+                .insert(key, "plugin is disabled or does not use process-v1".to_owned());
+            continue;
+        }
+        let installed = match crate::app::verify_admin_effective_plugin_from_loaded(
+            loaded,
+            cwd,
+            &reference.plugin_id,
+        ) {
+            Ok(installed) => installed,
+            Err(error) => {
+                registration_errors.insert(key, error.to_string());
+                continue;
+            }
+        };
+        let (manifest, descriptor_sha256) =
+            match into_markdown_provider_plugin::load_installed_manifest(&installed) {
+                Ok(authority) => authority,
+                Err(error) => {
+                    registration_errors.insert(key, error);
+                    continue;
+                }
+            };
+        if let Err(error) =
+            registry.register(manifest.clone(), descriptor_sha256, installed.root.clone(), true)
+        {
+            registration_errors.insert(key, error.to_string());
+            continue;
+        };
+        packages.insert(reference.plugin_id.clone(), (installed, manifest));
+    }
+    let roots = provider_model_roots()?;
+    let mut readiness_errors = BTreeMap::new();
+    let mut ready = BTreeMap::new();
+    let binding = registry.resolve(kind, &route, mode, |binding| {
+        let Some((_installed, manifest)) = packages.get(&binding.plugin_id) else {
+            return false;
+        };
+        let result = ProcessCapability::runtime_policy(manifest, binding, roots.clone())
+            .map_err(CliError::from)
+            .and_then(|(policy, model_roots)| {
+                crate::app::prepare_admin_effective_process_plugin_from_loaded(
+                    loaded,
+                    cwd,
+                    &binding.plugin_id,
+                    policy,
+                    context,
+                )
+                .and_then(|process| {
+                    ProcessCapability::new(process, manifest, binding.clone(), model_roots)
+                        .map_err(CliError::from)
+                })
+            })
+            .and_then(|capability| {
+                capability.verify_ready(&loaded.options, context).map_err(CliError::from)?;
+                ready
+                    .insert(format!("{}/{}", binding.plugin_id, binding.capability_id), capability);
+                Ok(())
+            });
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                readiness_errors.insert(
+                    format!("{}/{}", binding.plugin_id, binding.capability_id),
+                    error.to_string(),
+                );
+                false
+            }
+        }
+    });
+    let binding = binding.map_err(|error| {
+        let mut details = registration_errors.into_values().collect::<Vec<_>>();
+        details.extend(readiness_errors.into_values());
+        ConversionError::ComponentUnavailable {
+            component: capability_name(kind).into(),
+            detail: if details.is_empty() {
+                format!("{error}; {}", capability_setup_hint(kind))
+            } else {
+                format!("{error}; {}", details.join("; "))
+            },
+        }
+    })?;
+    ready.remove(&format!("{}/{}", binding.plugin_id, binding.capability_id)).ok_or_else(|| {
+        ConversionError::ComponentUnavailable {
+            component: capability_name(kind).into(),
+            detail: "resolved plugin capability disappeared".into(),
+        }
+    })
+}
+
+fn parse_provider_reference(
+    value: &str,
+    model_bundle: Option<&str>,
+) -> Result<into_markdown_provider_plugin::ProviderReference, ConversionError> {
+    let Some((plugin_id, capability_id)) = value.split_once('/') else {
+        return Err(ConversionError::ComponentUnavailable {
+            component: "capability-routing".into(),
+            detail: format!("invalid provider reference '{value}'"),
+        });
+    };
+    Ok(into_markdown_provider_plugin::ProviderReference {
+        plugin_id: plugin_id.into(),
+        capability_id: capability_id.into(),
+        model_bundle: model_bundle.map(str::to_owned),
+    })
+}
+
+fn provider_model_roots() -> Result<Vec<PathBuf>, ConversionError> {
+    let mut roots = vec![writable_model_root()?];
+    if let Ok(executable) = canonical_executable()
+        && let Some(directory) = executable.parent()
+        && let Some(bundled) = bundled_model_root(directory)
+    {
+        roots.push(bundled);
+    }
+    Ok(roots)
+}
+
+const fn capability_name(kind: into_markdown_provider_plugin::CapabilityKind) -> &'static str {
+    match kind {
+        into_markdown_provider_plugin::CapabilityKind::Ocr => "ocr-plugin",
+        into_markdown_provider_plugin::CapabilityKind::Transcription => "transcription-plugin",
+        into_markdown_provider_plugin::CapabilityKind::Diarization => "diarization-plugin",
+    }
+}
+
+const fn capability_setup_hint(
+    kind: into_markdown_provider_plugin::CapabilityKind,
+) -> &'static str {
+    match kind {
+        into_markdown_provider_plugin::CapabilityKind::Ocr => "run `into-md setup ocr`",
+        into_markdown_provider_plugin::CapabilityKind::Transcription
+        | into_markdown_provider_plugin::CapabilityKind::Diarization => "run `into-md setup media`",
+    }
+}
+
+fn assemble_diarization_config(
+    loaded: &LoadedConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::Diarizer>, ConversionError> {
-    let runtime_root = directory.join("onnxruntime");
-    let runtime_library = into_markdown::expected_ocr_runtime_library(&runtime_root)?;
-    let ffmpeg_root = directory.join("ffmpeg");
-    into_markdown::installed_diarization_service(
-        &InstalledDiarizationConfig {
-            writable_model_root: writable_model_root()?,
-            bundled_model_root: bundled_model_root(directory),
-            runtime_trusted_root: runtime_root,
-            runtime_library,
-            worker_executable: directory.join(worker_name()),
-            ffmpeg_trusted_root: ffmpeg_root.clone(),
-            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
-            ffmpeg_authority: ffmpeg_root.join("authority.json"),
-            model_bundle: options.diarization.model_bundle.clone(),
-        },
-        options,
+    resolve_process_capability(
+        loaded,
+        cwd,
+        into_markdown_provider_plugin::CapabilityKind::Diarization,
+        &loaded.effective.capability_routes.diarization,
+        "official.media.whisper/diarization",
+        Some(options.diarization.model_bundle.clone()),
+        strict_media_mode(options),
         context,
-    )
+    )?
+    .diarizer(options.clone())
+    .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::Diarizer>)
 }
 
 fn assemble_asr(
     loaded: &LoadedConfig,
     context: &ExecutionContext,
-    executable: &Path,
+    cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
-    assemble_asr_options(&loaded.options, context, executable)
+    assemble_asr_options(loaded, &loaded.options, context, cwd)
 }
 
 fn assemble_asr_options(
+    loaded: &LoadedConfig,
     options: &ConversionOptions,
     context: &ExecutionContext,
-    executable: &Path,
+    cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
-    let directory = executable
-        .parent()
-        .ok_or_else(|| CliError::component("current executable has no distribution directory"))?;
-    let ffmpeg_root = directory.join("ffmpeg");
-    into_markdown::installed_asr_service(
-        &InstalledAsrConfig {
-            writable_model_root: writable_model_root()?,
-            bundled_model_root: bundled_model_root(directory),
-            ffmpeg_trusted_root: ffmpeg_root.clone(),
-            ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
-            ffmpeg_authority: ffmpeg_root.join("authority.json"),
-            model_bundle: options.asr.model_bundle.clone(),
-        },
-        options,
+    resolve_process_capability(
+        loaded,
+        cwd,
+        into_markdown_provider_plugin::CapabilityKind::Transcription,
+        &loaded.effective.capability_routes.transcription,
+        "official.media.whisper/transcription",
+        Some(options.asr.model_bundle.clone()),
+        strict_media_mode(options),
         context,
     )
+    .and_then(|capability| capability.transcriber(options.clone()))
+    .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::Transcriber>)
     .map_err(CliError::from)
 }
 
@@ -274,30 +451,27 @@ fn can_degrade_ocr(policy: OcrPolicy, error: &into_markdown::ConversionError) ->
 fn assemble_ocr(
     loaded: &LoadedConfig,
     context: &ExecutionContext,
-    executable: &Path,
+    cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
-    let directory = executable.parent().ok_or_else(|| {
-        into_markdown::ConversionError::ComponentUnavailable {
-            component: "onnxruntime-worker".into(),
-            detail: "current executable has no distribution directory".into(),
-        }
-    })?;
-    let runtime_root = directory.join("onnxruntime");
-    let runtime_library = into_markdown::expected_ocr_runtime_library(&runtime_root)?;
     let model_bundle =
         loaded.options.ocr.model_bundle.clone().unwrap_or_else(|| "pp-ocrv6-tiny-zh-en".into());
-    into_markdown::installed_ocr_service(
-        &InstalledOcrConfig {
-            writable_model_root: writable_model_root()?,
-            bundled_model_root: bundled_model_root(directory),
-            runtime_trusted_root: runtime_root,
-            runtime_library,
-            worker_executable: directory.join(worker_name()),
-            model_bundle,
-        },
-        &loaded.options,
+    let mode = if loaded.options.ocr.policy == OcrPolicy::Always {
+        into_markdown_provider_plugin::ResolutionMode::RequiredPrimary
+    } else {
+        into_markdown_provider_plugin::ResolutionMode::ReadinessFallback
+    };
+    resolve_process_capability(
+        loaded,
+        cwd,
+        into_markdown_provider_plugin::CapabilityKind::Ocr,
+        &loaded.effective.capability_routes.ocr,
+        "official.ocr.ppocrv6/ocr",
+        Some(model_bundle),
+        mode,
         context,
-    )
+    )?
+    .ocr(loaded.options.clone())
+    .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::OcrEngine>)
 }
 
 fn assemble_image_description(
@@ -352,14 +526,6 @@ fn canonical_executable() -> Result<PathBuf, String> {
     executable
         .canonicalize()
         .map_err(|error| format!("cannot resolve the installed executable: {error}"))
-}
-
-const fn worker_name() -> &'static str {
-    if cfg!(windows) { "onnxruntime-worker.exe" } else { "onnxruntime-worker" }
-}
-
-const fn ffmpeg_name() -> &'static str {
-    if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
 }
 
 #[cfg(test)]

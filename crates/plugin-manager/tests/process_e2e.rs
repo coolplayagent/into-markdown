@@ -20,6 +20,7 @@ struct FileAuthority {
     path: String,
     bytes: u64,
     sha256: String,
+    executable: bool,
 }
 
 #[derive(Serialize)]
@@ -118,6 +119,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
         path: entry.into(),
         bytes: executable_bytes.len() as u64,
         sha256: sha256(&executable_bytes),
+        executable: true,
     }];
     let mut manifest = Manifest {
         schema_version: 1,
@@ -199,6 +201,16 @@ fn signed_install_prepares_and_executes_real_process_guest() {
             &execution,
         )
         .expect("prepare");
+    let second = manager
+        .process_manifest(
+            "fixture.manager-process",
+            into_markdown_process_plugin::RuntimePolicy::default(),
+            &execution,
+        )
+        .expect("prepare a second runtime from the same store");
+    manager
+        .verify("fixture.manager-process", &execution)
+        .expect("store remains available while snapshots are retained");
     let output = prepared
         .execute(
             into_markdown_process_plugin::PluginRequest {
@@ -206,9 +218,23 @@ fn signed_install_prepares_and_executes_real_process_guest() {
                 input_format: "fixture",
                 source_name: Some("fixture.bin"),
                 source: b"ok",
+                parameters_json: None,
             },
             &execution,
         )
         .expect("execute");
     assert_eq!(output.result.markdown, "manager-process-ok");
+    let second_output = second
+        .execute(
+            into_markdown_process_plugin::PluginRequest {
+                request_id: "manager-e2e-second",
+                input_format: "fixture",
+                source_name: Some("fixture.bin"),
+                source: b"ok",
+                parameters_json: None,
+            },
+            &execution,
+        )
+        .expect("execute second retained runtime");
+    assert_eq!(second_output.result.markdown, "manager-process-ok");
 }

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/cli",
+    "apps/official-provider",
     "crates/ai",
     "crates/asr",
     "crates/api",
@@ -18,6 +19,7 @@ members = [
     "crates/process-plugin",
     "crates/plugin-wasi",
     "crates/plugin-manager",
+    "crates/provider-plugin",
     "crates/render-markdown",
     "crates/task-store",
     "tests/contracts",

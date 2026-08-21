@@ -1,0 +1,20 @@
+[package]
+name = "into-markdown-provider-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+into-markdown-core = { path = "../core" }
+into-markdown-plugin-manager = { path = "../plugin-manager" }
+into-markdown-process-plugin = { path = "../process-plugin" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

@@ -33,7 +33,11 @@ jobs:
       - name: Build fixed macOS archive
         env:
           PROFILE: ${{ inputs.profile }}
+          PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
         run: |
+          umask 077
+          printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/official-plugin-signing-key.pk8"
           for sample in a b; do
             PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
               --profile "$PROFILE" \
@@ -41,6 +45,7 @@ jobs:
               --cache "$RUNNER_TEMP/release-cache" \
               --build-root "$RUNNER_TEMP/build-$PROFILE-$sample" \
               --ffmpeg-artifacts "$RUNNER_TEMP/ffmpeg-audit" \
+              --plugin-signing-key "$RUNNER_TEMP/official-plugin-signing-key.pk8" \
               --archive "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-$sample.tar.gz"
           done
           cmp "$RUNNER_TEMP/into-md-macos-arm64-$PROFILE-a.tar.gz" \

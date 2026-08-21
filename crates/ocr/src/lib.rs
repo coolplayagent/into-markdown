@@ -1413,6 +1413,11 @@ impl ModelManager {
         fetcher: &dyn ModelFetcher,
         context: &ExecutionContext,
     ) -> Result<ModelStatus, ModelManagerError> {
+        match self.verify_with_context(id, context) {
+            Ok(status) => return Ok(status),
+            Err(ModelManagerError::NotInstalled) => {}
+            Err(error) => return Err(error),
+        }
         if let Some(components) = detector_model::pipeline_components(id) {
             for component in components {
                 self.install_inner(component, fetcher, context, InstallFault::None, false)?;

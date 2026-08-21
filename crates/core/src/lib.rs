@@ -49,7 +49,8 @@ pub use media_checkpoint::{
 };
 pub use nested::{NestedConversionRequest, NestedConversionService};
 pub use ocr_binding::{
-    BoundOcrResult, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion, OcrResult,
+    BoundOcrResult, BoundOcrResultDto, OcrInputIdentity, OcrInputIdentityDto, OcrOutputPlan,
+    OcrRecognition, OcrRegion, OcrResult,
 };
 pub use options::{
     AiMode, AiOptions, AsrOptions, AssetMode, ChineseScript, ConversionOptions,

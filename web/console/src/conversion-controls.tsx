@@ -1,5 +1,5 @@
 import {
-  Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileText, ScanText, Settings2, SlidersHorizontal,
+  Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileText, LoaderCircle, ScanText, Settings2, SlidersHorizontal,
   Wifi, WifiOff, X,
 } from "lucide-react";
 import { useState } from "react";
@@ -26,8 +26,14 @@ function SegmentedControl<T extends string>({
   </div>;
 }
 
-export function CapabilityStrip() {
+export function CapabilityStrip({ ocr, onInstallOcr }: { ocr?: ComponentStatus | undefined; onInstallOcr(): Promise<void> }) {
   const { t } = useI18n();
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState(false);
+  const install = async () => {
+    setInstalling(true); setError(false);
+    try { await onInstallOcr(); } catch { setError(true); } finally { setInstalling(false); }
+  };
   return <section className="capability-strip" aria-label={t("capabilities")}>
     <div className="capability-item">
       <span className="capability-icon"><FileText size={21} aria-hidden="true" /></span>
@@ -35,7 +41,10 @@ export function CapabilityStrip() {
     </div>
     <div className="capability-item">
       <span className="capability-icon"><ScanText size={21} aria-hidden="true" /></span>
-      <div><strong>{t("imageOcr")}</strong><span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("automaticDetection")}</span></div>
+      <div><strong>{t("imageOcr")}</strong>{ocr?.available
+        ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{t("localReady")}</span>
+        : <><span className="needs-setup"><CircleAlert size={14} aria-hidden="true" />{t("audioNeedsSetup")}</span><button className="capability-install" type="button" disabled={installing} onClick={() => void install()}>{installing ? <LoaderCircle className="spin" size={14} /> : null}{t(installing ? "installingComponents" : "installNow")}</button>{error && <small className="capability-error" role="status">{t("installComponentsFailed")}</small>}</>}
+      </div>
     </div>
   </section>;
 }
@@ -66,7 +75,7 @@ export function AdvancedSettings({ value, onChange, open, onClose }: { value: Wo
         <label><span>{t("ocrConfidence")}</span><input type="number" min="0" max="1" step="0.05" value={value.ocrConfidence} onChange={(event) => patch("ocrConfidence", Number(event.target.value))} /></label>
         <label><span>{t("aiMode")}</span><span className="select-shell"><select value={value.aiMode} onChange={(event) => patch("aiMode", event.target.value as AiMode)}><option value="off">{t("off")}</option><option value="fallback">Fallback</option><option value="prefer">Prefer</option><option value="only">Only</option></select><ChevronDown size={15} aria-hidden="true" /></span></label>
         <label><span>{t("maxInput")}</span><input type="number" min="1" max="512" value={value.maxInputMiB} onChange={(event) => patch("maxInputMiB", Number(event.target.value))} /></label>
-        <label><span>{t("maxMemory")}</span><input type="number" min="1" max="256" value={value.maxMemoryMiB} onChange={(event) => patch("maxMemoryMiB", Number(event.target.value))} /></label>
+        <label><span>{t("maxMemory")}</span><input type="number" min="1" max="2048" value={value.maxMemoryMiB} onChange={(event) => patch("maxMemoryMiB", Number(event.target.value))} /></label>
         <label><span>{t("maxPages")}</span><input type="number" min="1" max="10000" value={value.maxPages} onChange={(event) => patch("maxPages", Number(event.target.value))} /></label>
       </div>
       <div className="authorization-box">
@@ -79,14 +88,20 @@ export function AdvancedSettings({ value, onChange, open, onClose }: { value: Wo
 
 const ASR_MODEL_COMMAND = "into-md setup media";
 
-export function AudioSetupDialog({ status, open, onClose }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void }) {
+export function AudioSetupDialog({ status, open, onClose, onInstall }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void; onInstall(): Promise<void> }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState(false);
   if (!open) return null;
   const copy = async () => {
     await navigator.clipboard?.writeText(ASR_MODEL_COMMAND);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  };
+  const install = async () => {
+    setInstalling(true); setError(false);
+    try { await onInstall(); onClose(); } catch { setError(true); } finally { setInstalling(false); }
   };
   return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <section className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-setup-title">
@@ -97,7 +112,8 @@ export function AudioSetupDialog({ status, open, onClose }: { status?: Component
         <li><span className="step-number">2</span><div><strong>{t("prepareFfmpegRuntime")}</strong><p>{t("ffmpegRuntimeNote")}</p></div></li>
       </ol>
       {status?.detail && <p className="runtime-detail"><CircleAlert size={16} aria-hidden="true" />{status.detail}</p>}
-      <div className="dialog-actions"><button type="button" onClick={onClose}>{t("done")}</button></div>
+      {error && <p className="runtime-detail" role="status"><CircleAlert size={16} aria-hidden="true" />{t("installComponentsFailed")}</p>}
+      <div className="dialog-actions"><button className="secondary" type="button" onClick={onClose} disabled={installing}>{t("close")}</button><button type="button" onClick={() => void install()} disabled={installing}>{installing ? <LoaderCircle className="spin" size={17} /> : null}{t(installing ? "installingComponents" : "installNow")}</button></div>
     </section>
   </div>;
 }
