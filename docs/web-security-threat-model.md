@@ -98,9 +98,12 @@ HTTP 回环通信不是 TLS。安全性依赖操作系统回环隔离、每进�
 cargo test --locked -p into-markdown-cli --bin into-md ui::tests -- --test-threads=1
 cargo test --locked -p into-markdown-cli web_tasks::tests -- --test-threads=1
 bazel test //apps/cli:web_security_test //web/console:web_security_test --test_output=errors
+INTO_MD_CLI=target/debug/into-md pnpm --filter @into-markdown/console exec playwright test tests/web-security.e2e.spec.ts --workers=1
 ```
 
-真实浏览器验收从新进程打印的 private URL 进入，确认 fragment 在首个应用请求前清除；随后
+真实浏览器门禁从新进程打印的 private URL 进入，且不会把该 URL 写入测试报告；它确认 fragment
+在首个应用请求前清除，随后
 上传包含 raw HTML、脚本、`javascript:`、`file:`、data URI 和远程图片的 Markdown，确认预览
-只显示文本、没有外部网络请求和可执行/资源型 DOM；再验证刷新恢复、制品下载、错误 Origin、
-旧会话重放以及服务关闭后连接释放。测试证据不得包含真实会话值或用户文档。
+只显示文本、没有外部网络请求和可执行/资源型 DOM，并验证同一标签页刷新恢复。Cargo loopback
+门禁负责制品下载、错误 Origin、旧会话重放以及服务关闭后连接释放。测试证据不得包含真实
+会话值或用户文档。

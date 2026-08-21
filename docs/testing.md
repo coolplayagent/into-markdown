@@ -31,8 +31,9 @@ Web 安全的权威范围和剩余风险见 [`web-security-threat-model.md`](web
 into-markdown-cli --bin into-md ui::tests -- --test-threads=1`、`cargo test --locked -p
 into-markdown-cli web_tasks::tests -- --test-threads=1`、`bazel test //web/console:unit_test_preview
 //web/console:admin_unit_test //web/console:dist_integration_test` 和 `bazel test
-//apps/cli:web_security_test //web/console:web_security_test`。前端用恶意 HTML、`javascript:`、
-`file:` 与远程图片语法验证预览 DOM
+//apps/cli:web_security_test //web/console:web_security_test`。CI 另在真实 Chromium 中运行
+`web/console/tests/web-security.e2e.spec.ts`，从生产 `into-md ui` 的私有启动 URL 进入、上传敌意
+文本、等待实际转换结果并刷新恢复。前端用恶意 HTML、`javascript:`、`file:` 与远程图片语法验证预览 DOM
 不产生任何可执行或资源加载元素；另验证 256 KiB 截断、IR/provenance 树上限、资源浏览与 axe。
 Unix loopback 集成测试把真实 Markdown artifact 做完整、开放区间和非法区间下载，校验状态、
 长度、Content-Range、MIME、Content-Disposition 与安全响应头。

@@ -11,6 +11,9 @@ on:
       - "docs/web-security-threat-model.md"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/web-security.yml"
   push:
     branches: [main]
@@ -23,6 +26,9 @@ on:
       - "docs/web-security-threat-model.md"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/web-security.yml"
 
 permissions:
@@ -77,3 +83,30 @@ jobs:
         run: >-
           bazel test //apps/cli:web_security_test //web/console:web_security_test
           --jobs=1 --local_resources=memory=4096 --test_output=errors
+
+  browser-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - name: Install locked browser test dependencies
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm --filter @into-markdown/console exec playwright install --with-deps chromium
+      - name: Build the production local Web server
+        run: cargo build --locked -p into-markdown-cli --bin into-md
+      - name: Type-check the browser security test
+        run: corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
+      - name: Run hostile-content browser E2E
+        env:
+          INTO_MD_CLI: ${{ github.workspace }}/target/debug/into-md
+        run: >-
+          corepack pnpm --filter @into-markdown/console exec playwright test
+          tests/web-security.e2e.spec.ts --workers=1 --reporter=line
