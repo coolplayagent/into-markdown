@@ -1,0 +1,64 @@
+load(":platform_contract.bzl", "foreign_rejecting_toolchains", "platform_contract", "toolchain_probe")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+toolchain_type(name = "platform_contract_type")
+
+foreign_rejecting_toolchains()
+
+platform_contract(name = "macos_arm64_impl", triple = "aarch64-apple-darwin")
+platform_contract(name = "linux_x86_64_impl", triple = "x86_64-unknown-linux-gnu")
+platform_contract(name = "linux_arm64_impl", triple = "aarch64-unknown-linux-gnu")
+platform_contract(name = "windows_x86_64_impl", triple = "x86_64-pc-windows-msvc")
+
+toolchain(
+    name = "macos_arm64",
+    exec_compatible_with = ["@platforms//os:osx", "@platforms//cpu:aarch64"],
+    toolchain = ":macos_arm64_impl",
+    toolchain_type = ":platform_contract_type",
+)
+
+toolchain(
+    name = "linux_x86_64",
+    exec_compatible_with = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    toolchain = ":linux_x86_64_impl",
+    toolchain_type = ":platform_contract_type",
+)
+
+toolchain(
+    name = "linux_arm64",
+    exec_compatible_with = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
+    toolchain = ":linux_arm64_impl",
+    toolchain_type = ":platform_contract_type",
+)
+
+toolchain(
+    name = "windows_x86_64",
+    exec_compatible_with = ["@platforms//os:windows", "@platforms//cpu:x86_64"],
+    toolchain = ":windows_x86_64_impl",
+    toolchain_type = ":platform_contract_type",
+)
+
+toolchain_probe(name = "native_toolchain_contract")
+
+# A real native C++ link/run regression for the Rust allocator-symbol bridge.
+# The Rust function allocates and drops a Vec, so an empty allocator CcInfo
+# would leave the link without the version-mangled allocator definitions.
+rust_library(
+    name = "allocator_bridge_rust",
+    srcs = ["allocator_bridge.rs"],
+    crate_name = "allocator_bridge",
+    edition = "2024",
+)
+
+cc_test(
+    name = "allocator_bridge_test",
+    srcs = ["allocator_bridge_test.cc"],
+    linkopts = select({
+        "@platforms//os:windows": ["ntdll.lib"],
+        "//conditions:default": [],
+    }),
+    deps = [":allocator_bridge_rust"],
+)

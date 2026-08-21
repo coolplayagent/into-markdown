@@ -2,10 +2,14 @@ common --enable_bzlmod
 build --announce_rc
 build --incompatible_strict_action_env
 build --show_timestamps
+# Rust 1.97 mangles allocator symbols.  Use rules_rust's rust_static_library
+# bridge so Rust libraries remain linkable from native C++ without a target C++
+# compiler being needed merely to analyze a rejected foreign configuration.
+build --@rules_rust//rust/settings:experimental_use_allocator_libraries_with_mangled_symbols=true
 test --test_output=errors
 
 # This project intentionally supports Apple Silicon only on macOS.
-build:macos_arm64 --platforms=//:macos_arm64_platform
-build:linux_x86_64 --platforms=//:linux_x86_64_platform
-build:linux_arm64 --platforms=//:linux_arm64_platform
-build:windows_x86_64 --platforms=//:windows_x86_64_platform
+build:macos_arm64 --platforms=//:macos_arm64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
+build:linux_x86_64 --platforms=//:linux_x86_64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
+build:linux_arm64 --platforms=//:linux_arm64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
+build:windows_x86_64 --platforms=//:windows_x86_64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
