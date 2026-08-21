@@ -1,6 +1,7 @@
 # 本地 Web 服务
 
-`into-md ui` 提供安全的本机 HTTP 入口和嵌入式 React + TypeScript 控制台壳。控制台
+`into-md ui` 提供安全的本机 HTTP 入口和嵌入式 React + TypeScript 控制台壳。权威攻击者、
+信任边界、控制项、剩余风险和验收证据见[本地 Web 控制台威胁模型](web-security-threat-model.md)。控制台
 包含响应式批量转换工作台、格式/模型/Provider/插件/配置/doctor 管理页、服务状态路由、主题、简体中文/英文、错误边界与受约束 API
 客户端。状态响应把 `localApi.available` 与 `documentConsole.available` 都标为 `true`。
 
@@ -30,11 +31,13 @@ http://127.0.0.1:<port>/#into-md-session=<private-value>
 fragment 不会进入 HTTP request target。外部 content-hash bootstrap 脚本只接受完整且
 唯一的 `#into-md-session=<值>`，值的固定长度和字符集都必须合法。脚本同步通过
 `history.replaceState` 清除整个 fragment，之后才动态导入 React 应用；非法交接在不加载
-应用和不发请求的情况下显示安全错误。会话值只保存在 bootstrap 闭包与 API client 内存中，
-不写入 localStorage、sessionStorage、DOM、日志或错误消息。静态资产不嵌入会话值；响应设置
-`Referrer-Policy: no-referrer`、`Cache-Control: no-store`、
-`X-Content-Type-Options: nosniff`，CSP 仅允许同源脚本和连接并禁止 framing、base URI
-及表单提交；样式也只允许同源外部 CSS，不允许 inline style 或 `eval`。
+应用和不发请求的情况下显示安全错误。会话值保存在 bootstrap/API client 内存中，并只为
+当前标签页刷新恢复写入 `sessionStorage`；它不写入 localStorage、DOM、日志、错误消息或 HTTP
+URL。静态资产不嵌入会话值；响应设置 `Referrer-Policy: no-referrer`、
+`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、
+`Cross-Origin-Opener-Policy: same-origin`、`Cross-Origin-Resource-Policy: same-origin` 和最小
+`Permissions-Policy`；CSP 仅允许同源脚本和连接并禁止 framing、base URI 及表单提交，样式也只
+允许同源外部 CSS，不允许 inline style 或 `eval`。
 
 合法交接后的动态模块加载或同步启动失败使用独立的通用启动错误，不复述交接错误、异常或
 会话值。React 树外的 bootstrap 负责这类失败；React `ErrorBoundary` 负责 Provider、render
