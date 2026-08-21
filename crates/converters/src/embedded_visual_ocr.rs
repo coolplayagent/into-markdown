@@ -3,10 +3,10 @@
 use crate::image_converter::{decode, encode, envelope, format};
 use image::{AnimationDecoder, ImageDecoder};
 use into_markdown_core::{
-    AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, EnrichmentPlan, ExecutionContext, Inline, InputFormat, NodeId,
-    OcrInputIdentity, OcrPolicy, OutputEnricher, Provenance, ResourceReservation, Services,
-    SourceLocator, estimate_validation_working_set,
+    AiMode, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions,
+    ConverterOutput, Diagnostic, DiagnosticSeverity, EnrichmentPlan, ExecutionContext, Inline,
+    InputFormat, NodeId, OcrInputIdentity, OcrPolicy, OutputEnricher, Provenance,
+    ResourceReservation, Services, SourceLocator, estimate_validation_working_set,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -198,7 +198,7 @@ fn plan_enrichment(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<EnrichmentPlan, ConversionError> {
-    if options.ocr.policy == OcrPolicy::Off
+    if !ocr_enabled(options)
         || input_format == InputFormat::Image
         || !eligible_container(input_format)
     {
@@ -222,7 +222,7 @@ fn plan_enrichment(
     if reference_counts.is_empty() {
         return Ok(EnrichmentPlan::Skip);
     }
-    if options.ocr.policy == OcrPolicy::Always {
+    if effective_ocr_policy(options) == OcrPolicy::Always {
         let mut supported_references = 0_u64;
         for asset in &output.assets {
             if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
@@ -364,14 +364,14 @@ fn plan_enrichment(
                         (plan.max_retained_bytes(), plan.max_working_bytes(), plan.max_regions())
                     }
                     Err(ConversionError::ComponentUnavailable { .. })
-                        if options.ocr.policy == OcrPolicy::Auto =>
+                        if effective_ocr_policy(options) == OcrPolicy::Auto =>
                     {
                         (0, 0, 0)
                     }
                     Err(error) => return Err(error),
                 }
             }
-            None if options.ocr.policy == OcrPolicy::Auto => (0, 0, 0),
+            None if effective_ocr_policy(options) == OcrPolicy::Auto => (0, 0, 0),
             None => {
                 return Err(ConversionError::ComponentUnavailable {
                     component: "ocr".into(),
@@ -442,7 +442,10 @@ fn candidate_dimensions_for_policy(
 ) -> Result<Option<(u32, u32)>, ConversionError> {
     match validated_candidate_dimensions(asset, options, context) {
         Ok(dimensions) => Ok(Some(dimensions)),
-        Err(error) if options.ocr.policy == OcrPolicy::Auto && auto_skippable_raster(&error) => {
+        Err(error)
+            if effective_ocr_policy(options) == OcrPolicy::Auto
+                && auto_skippable_raster(&error) =>
+        {
             Ok(None)
         }
         Err(error) => Err(error),
@@ -454,7 +457,7 @@ fn auto_excluded_raster(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<bool, ConversionError> {
-    if options.ocr.policy != OcrPolicy::Auto {
+    if effective_ocr_policy(options) != OcrPolicy::Auto {
         return Ok(false);
     }
     // Classification must not consume OCR reference limits: otherwise an
@@ -735,7 +738,7 @@ async fn enrich(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    if options.ocr.policy == OcrPolicy::Off
+    if !ocr_enabled(options)
         || input_format == InputFormat::Image
         || !eligible_container(input_format)
     {
@@ -851,7 +854,7 @@ async fn enrich(
         let normalized = match normalize(asset, options, context) {
             Ok(value) => value,
             Err(error)
-                if options.ocr.policy == OcrPolicy::Auto
+                if effective_ocr_policy(options) == OcrPolicy::Auto
                     && auto_degradable_normalization(&error) =>
             {
                 cache.insert(
@@ -886,7 +889,7 @@ async fn enrich(
         match normalized_plan {
             Ok(_) => {}
             Err(error)
-                if options.ocr.policy == OcrPolicy::Auto
+                if effective_ocr_policy(options) == OcrPolicy::Auto
                     && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
             {
                 cache.insert(
@@ -957,6 +960,20 @@ async fn enrich(
         output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
     }
     Ok(output)
+}
+
+fn ocr_enabled(options: &ConversionOptions) -> bool {
+    effective_ocr_policy(options) != OcrPolicy::Off
+}
+
+fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
+    match options.ai.vision_ocr {
+        AiMode::Only => OcrPolicy::Always,
+        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
+            OcrPolicy::Auto
+        }
+        _ => options.ocr.policy,
+    }
 }
 
 fn auto_degradable_normalization(error: &ConversionError) -> bool {

@@ -25,9 +25,11 @@ pub use diarization_service::{
     installed_diarization_service_in_read_only_sandbox,
 };
 pub use into_markdown_ai::{
-    AiProviderDescriptor, GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
-    OpenAiCompatibleClient, OpenAiCompatibleConfig, OpenAiImageDescriptionProvider, ProviderConfig,
-    ProviderError, ProviderErrorCode, ProviderNetworkPolicy, ProviderTestResult,
+    AiProviderDescriptor, AudioGenerationMetadata, CompositeAiProvider, GenerationEndpoint,
+    GenerationInput, GenerationRequest, GenerationResult, OpenAiCompatibleClient,
+    OpenAiCompatibleConfig, OpenAiDocumentPatchProvider, OpenAiImageDescriptionProvider,
+    OpenAiRemoteOcr, OpenAiRemoteTranscriber, ProviderConfig, ProviderError, ProviderErrorCode,
+    ProviderNetworkPolicy, ProviderTestResult, StructuredAiPatchEnricher,
 };
 #[cfg(feature = "official-provider-runtime")]
 pub use into_markdown_asr::{WhisperConfig, WhisperSmallTranscriber};
@@ -83,6 +85,7 @@ pub fn default_engine_builder_with_services(services: Services) -> EngineBuilder
     let mut builder = EngineBuilder::new()
         .renderer(Arc::new(into_markdown_render_markdown::GfmRenderer))
         .enricher(Arc::new(into_markdown_converters::EmbeddedVisualOcrEnricher))
+        .enricher(Arc::new(StructuredAiPatchEnricher))
         .services(services);
     if let Err(error) = into_markdown_converters::register_core_components(builder.registry_mut()) {
         builder.registry_mut().record_validation_error(error.to_string());

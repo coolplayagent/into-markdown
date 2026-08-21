@@ -26,8 +26,9 @@ use zeroize::Zeroize;
 const MAX_SECRET_BYTES: usize = 16 * 1024;
 const MAX_BASE_URL_BYTES: usize = 4 * 1024;
 const MAX_ENVIRONMENT_NAME_BYTES: usize = 256;
-const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_AUDIO_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PROMPT_BYTES: usize = 256 * 1024;
 const MAX_OUTPUT_TOKENS: u32 = 16_384;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
@@ -406,6 +407,15 @@ pub enum GenerationInput<'a> {
         /// Text instruction paired with the image.
         prompt: &'a str,
     },
+    /// One Base64-encoded audio input for an OpenAI-compatible chat request.
+    Audio {
+        /// Encoded audio bytes. Public URLs and local paths are intentionally unsupported.
+        bytes: &'a [u8],
+        /// Exact supported audio MIME media type.
+        media_type: &'a str,
+        /// Optional BCP-47 language hint accepted by the configured provider.
+        language: Option<&'a str>,
+    },
 }
 
 /// One explicitly authorized generation request.
@@ -431,6 +441,20 @@ pub struct GenerationResult {
     pub schema_version: u32,
     /// Provider-generated text, not yet interpreted as an IR patch.
     pub text: String,
+    /// Validated audio response metadata, present only for audio requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioGenerationMetadata>,
+}
+
+/// Bounded metadata returned by an audio-transcription request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioGenerationMetadata {
+    /// Provider-reported source duration in milliseconds.
+    pub duration_ms: u64,
+    /// Provider-reported BCP-47-like language code when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 /// Direct client whose default implementation performs no proxy discovery.
@@ -576,6 +600,7 @@ impl OpenAiCompatibleClient {
             let mut result = parse_generation_response(
                 response,
                 request.endpoint,
+                matches!(request.input, GenerationInput::Audio { .. }),
                 context,
                 deadline,
                 &mut memory,
@@ -876,8 +901,40 @@ fn validate_generation_request(
         {
             Ok(())
         }
+        GenerationInput::Audio { bytes, media_type, language }
+            if request.endpoint == GenerationEndpoint::ChatCompletions
+                && !bytes.is_empty()
+                && bytes.len() <= MAX_AUDIO_BYTES
+                && supported_audio_media_type(media_type)
+                && language.is_none_or(valid_language_hint) =>
+        {
+            Ok(())
+        }
         _ => Err(ProviderError::new(ProviderErrorCode::ResourceLimit)),
     }
+}
+
+fn supported_audio_media_type(value: &str) -> bool {
+    matches!(
+        value,
+        "audio/aac"
+            | "audio/flac"
+            | "audio/m4a"
+            | "audio/mp4"
+            | "audio/mpeg"
+            | "audio/ogg"
+            | "audio/opus"
+            | "audio/wav"
+            | "audio/webm"
+            | "video/mp4"
+            | "video/webm"
+    )
+}
+
+fn valid_language_hint(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 35
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn generation_body_bound(
@@ -892,6 +949,15 @@ fn generation_body_bound(
             .and_then(|size| size.checked_div(3))
             .and_then(|groups| groups.checked_mul(4))
             .and_then(|encoded| encoded.checked_add(prompt.len().saturating_mul(6)))
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?,
+        GenerationInput::Audio { bytes, language, .. } => bytes
+            .len()
+            .checked_add(2)
+            .and_then(|size| size.checked_div(3))
+            .and_then(|groups| groups.checked_mul(4))
+            .and_then(|encoded| {
+                encoded.checked_add(language.map_or(0, |value| value.len().saturating_mul(6)))
+            })
             .ok_or_else(|| ProviderError::new(ProviderErrorCode::ResourceLimit))?,
     };
     input_bytes
@@ -910,7 +976,12 @@ fn encode_generation_request(
     struct ChatRequest<'a> {
         model: &'a str,
         messages: [ChatMessage<'a>; 1],
-        max_tokens: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_tokens: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stream: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        asr_options: Option<ChatAsrOptions<'a>>,
     }
     #[derive(Serialize)]
     struct ChatMessage<'a> {
@@ -921,7 +992,8 @@ fn encode_generation_request(
     #[serde(untagged)]
     enum ChatContent<'a> {
         Text(&'a str),
-        Parts([ChatPart<'a>; 2]),
+        ImageParts([ChatPart<'a>; 2]),
+        AudioParts([ChatPart<'a>; 1]),
     }
     #[derive(Serialize)]
     #[serde(tag = "type")]
@@ -930,10 +1002,22 @@ fn encode_generation_request(
         Text { text: &'a str },
         #[serde(rename = "image_url")]
         ImageUrl { image_url: ChatImageUrl<'a> },
+        #[serde(rename = "input_audio")]
+        InputAudio { input_audio: ChatInputAudio<'a> },
     }
     #[derive(Serialize)]
     struct ChatImageUrl<'a> {
         url: &'a str,
+    }
+    #[derive(Serialize)]
+    struct ChatInputAudio<'a> {
+        data: &'a str,
+    }
+    #[derive(Serialize)]
+    struct ChatAsrOptions<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<&'a str>,
+        enable_itn: bool,
     }
     #[derive(Serialize)]
     struct ResponsesRequest<'a> {
@@ -966,8 +1050,9 @@ fn encode_generation_request(
         Image { image_url: &'a str },
     }
 
-    let image_url = match request.input {
-        GenerationInput::Image { bytes, media_type, .. } => Some(format!(
+    let data_url = match request.input {
+        GenerationInput::Image { bytes, media_type, .. }
+        | GenerationInput::Audio { bytes, media_type, .. } => Some(format!(
             "data:{media_type};base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         )),
@@ -975,23 +1060,41 @@ fn encode_generation_request(
     };
     let body = match request.endpoint {
         GenerationEndpoint::ChatCompletions => {
-            let content = match (request.input, image_url.as_deref()) {
-                (GenerationInput::Text(text), None) => ChatContent::Text(text),
-                (GenerationInput::Image { prompt, .. }, Some(url)) => ChatContent::Parts([
-                    ChatPart::Text { text: prompt },
-                    ChatPart::ImageUrl { image_url: ChatImageUrl { url } },
-                ]),
-                _ => return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration)),
-            };
+            let (content, max_tokens, stream, asr_options) =
+                match (request.input, data_url.as_deref()) {
+                    (GenerationInput::Text(text), None) => {
+                        (ChatContent::Text(text), Some(request.max_output_tokens), None, None)
+                    }
+                    (GenerationInput::Image { prompt, .. }, Some(url)) => (
+                        ChatContent::ImageParts([
+                            ChatPart::Text { text: prompt },
+                            ChatPart::ImageUrl { image_url: ChatImageUrl { url } },
+                        ]),
+                        Some(request.max_output_tokens),
+                        None,
+                        None,
+                    ),
+                    (GenerationInput::Audio { language, .. }, Some(data)) => (
+                        ChatContent::AudioParts([ChatPart::InputAudio {
+                            input_audio: ChatInputAudio { data },
+                        }]),
+                        None,
+                        Some(false),
+                        Some(ChatAsrOptions { language, enable_itn: false }),
+                    ),
+                    _ => return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration)),
+                };
             serde_json::to_vec(&ChatRequest {
                 model,
                 messages: [ChatMessage { role: "user", content }],
-                max_tokens: request.max_output_tokens,
+                max_tokens,
+                stream,
+                asr_options,
             })
             .map(|body| ("/chat/completions", body))
         }
         GenerationEndpoint::Responses => {
-            let content = match (request.input, image_url.as_deref()) {
+            let content = match (request.input, data_url.as_deref()) {
                 (GenerationInput::Text(text), None) => {
                     ResponsesContent::Text([ResponsesText { r#type: "input_text", text }])
                 }
@@ -1000,6 +1103,9 @@ fn encode_generation_request(
                         ResponsesPart::Text { text: prompt },
                         ResponsesPart::Image { image_url },
                     ])
+                }
+                (GenerationInput::Audio { .. }, _) => {
+                    return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration));
                 }
                 _ => return Err(ProviderError::new(ProviderErrorCode::InvalidConfiguration)),
             };
@@ -1609,30 +1715,34 @@ fn parse_models_response(
 fn parse_generation_response(
     response: HttpResponse,
     endpoint: GenerationEndpoint,
+    expects_audio: bool,
     context: &ExecutionContext,
     deadline: Instant,
     memory: &mut MemoryBudget,
 ) -> Result<GenerationResult, ProviderError> {
     ensure_success_status(response.status)?;
-    let text = match endpoint {
+    let (text, audio) = match endpoint {
         GenerationEndpoint::ChatCompletions => {
             let parsed: ParsedJson<ChatResponseWire> =
                 parse_json_bounded(&response.body, context, deadline, memory)?;
-            let text = parse_chat_text(parsed.value)?;
+            let (text, audio) = parse_chat_text(parsed.value, expects_audio)?;
             memory.grow(text.capacity())?;
             memory.shrink(parsed.reserved)?;
-            text
+            (text, audio)
         }
         GenerationEndpoint::Responses => {
+            if expects_audio {
+                return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+            }
             let parsed: ParsedJson<ResponsesResponseWire> =
                 parse_json_bounded(&response.body, context, deadline, memory)?;
             let text = parse_responses_text(parsed.value, memory)?;
             memory.shrink(parsed.reserved)?;
-            text
+            (text, None)
         }
     };
     memory.shrink(response.body.capacity())?;
-    Ok(GenerationResult { schema_version: 1, text })
+    Ok(GenerationResult { schema_version: 1, text, audio })
 }
 
 #[derive(Deserialize)]
@@ -1704,7 +1814,10 @@ impl ApiErrorWire {
     }
 }
 
-fn parse_chat_text(value: ChatResponseWire) -> Result<String, ProviderError> {
+fn parse_chat_text(
+    value: ChatResponseWire,
+    expects_audio: bool,
+) -> Result<(String, Option<AudioGenerationMetadata>), ProviderError> {
     if value.object != "chat.completion" || value.id.is_empty() || value.model.is_empty() {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
@@ -1712,13 +1825,8 @@ fn parse_chat_text(value: ChatResponseWire) -> Result<String, ProviderError> {
         let _ = error.is_well_formed();
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let _ = (
-        value.created,
-        value.usage,
-        value.service_tier,
-        value.system_fingerprint,
-        value.moderation,
-    );
+    let usage = value.usage;
+    let _ = (value.created, value.service_tier, value.system_fingerprint, value.moderation);
     let mut choices =
         value.choices.ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
     if choices.len() != 1 {
@@ -1746,13 +1854,41 @@ fn parse_chat_text(value: ChatResponseWire) -> Result<String, ProviderError> {
     {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    let _ = message.annotations;
+    let audio = if expects_audio {
+        let seconds = usage
+            .as_ref()
+            .and_then(|usage| usage.get("seconds"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|seconds| (1..=300).contains(seconds))
+            .ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
+        let language = message
+            .annotations
+            .as_ref()
+            .and_then(|annotations| {
+                annotations.iter().find_map(|annotation| {
+                    (annotation.get("type").and_then(serde_json::Value::as_str)
+                        == Some("audio_info"))
+                    .then(|| annotation.get("language").and_then(serde_json::Value::as_str))
+                    .flatten()
+                })
+            })
+            .map(str::to_owned);
+        if language.as_deref().is_some_and(|value| !valid_language_hint(value)) {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
+        Some(AudioGenerationMetadata { duration_ms: seconds.saturating_mul(1_000), language })
+    } else {
+        if message.annotations.as_ref().is_some_and(|values| !values.is_empty()) {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
+        None
+    };
     let content =
         message.content.ok_or_else(|| ProviderError::new(ProviderErrorCode::InvalidResponse))?;
     if content.is_empty() || content.len() > MAX_JSON_STRING_BYTES {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
-    Ok(content)
+    Ok((content, audio))
 }
 
 #[derive(Deserialize)]
@@ -2326,6 +2462,7 @@ mod tests {
         parse_generation_response(
             HttpResponse { status: 200, retry_after: None, body },
             endpoint,
+            false,
             &context,
             Instant::now() + Duration::from_secs(1),
             &mut memory,
@@ -2476,6 +2613,47 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&responses_body).unwrap(),
             r#"{"model":"model","input":[{"role":"user","content":[{"type":"input_text","text":"describe"},{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]}],"max_output_tokens":42}"#
+        );
+    }
+
+    #[test]
+    fn audio_generation_uses_bounded_base64_chat_contract_and_validates_metadata() {
+        let request = GenerationRequest {
+            endpoint: GenerationEndpoint::ChatCompletions,
+            capability: "audio-transcription",
+            input: GenerationInput::Audio {
+                bytes: b"abc",
+                media_type: "audio/wav",
+                language: Some("zh"),
+            },
+            max_output_tokens: 42,
+            idempotency_key: None,
+        };
+        let (_, body) = encode_generation_request(&request, "qwen3-asr-flash").unwrap();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            r#"{"model":"qwen3-asr-flash","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"data:audio/wav;base64,YWJj"}}]}],"stream":false,"asr_options":{"language":"zh","enable_itn":false}}"#
+        );
+
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let body = r#"{"id":"chatcmpl-asr","object":"chat.completion","created":1720000000,"model":"qwen3-asr-flash","choices":[{"index":0,"message":{"role":"assistant","content":"欢迎使用。","annotations":[{"type":"audio_info","language":"zh","emotion":"neutral"}]},"finish_reason":"stop"}],"usage":{"seconds":3,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#
+            .as_bytes()
+            .to_vec();
+        memory.grow(body.capacity()).unwrap();
+        let result = parse_generation_response(
+            HttpResponse { status: 200, retry_after: None, body },
+            GenerationEndpoint::ChatCompletions,
+            true,
+            &context,
+            Instant::now() + Duration::from_secs(1),
+            &mut memory,
+        )
+        .unwrap();
+        assert_eq!(result.text, "欢迎使用。");
+        assert_eq!(
+            result.audio,
+            Some(AudioGenerationMetadata { duration_ms: 3_000, language: Some("zh".into()) })
         );
     }
 

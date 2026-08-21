@@ -8,6 +8,7 @@ use into_markdown::{
     AiMode, AssetMode, ChineseScript, ConversionOptions, OcrPolicy, RaggedRowsMode,
     TableHeaderMode, TextDecodingMode,
 };
+use into_markdown_provider_plugin::CapabilitySourceRef;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -159,7 +160,7 @@ pub struct AsrConfig {
     pub max_native_memory_bytes: Option<u64>,
 }
 
-/// Primary and ordered readiness fallbacks for isolated local capabilities.
+/// Primary and ordered local-plugin or remote-provider capability sources.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilityRoutesConfig {
@@ -168,10 +169,14 @@ pub struct CapabilityRoutesConfig {
     pub diarization: CapabilityRouteConfig,
 }
 
-/// One capability route using `plugin-id/capability-id` references.
+/// One capability route using `plugin:ID/CAPABILITY` or
+/// `provider:ID/CAPABILITY` references. The unprefixed plugin spelling remains
+/// readable for configuration migration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilityRouteConfig {
+    /// Invocation behavior for the ordered sources.
+    pub mode: Option<AiMode>,
     pub primary: Option<String>,
     pub fallbacks: Vec<String>,
 }
@@ -677,17 +682,62 @@ fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), Cli
         ("transcription", &routes.transcription),
         ("diarization", &routes.diarization),
     ] {
+        if route.mode == Some(AiMode::Off)
+            && (route.primary.as_deref().is_some_and(|source| source != "off")
+                || !route.fallbacks.is_empty())
+        {
+            return Err(CliError::config(format!(
+                "capability route '{name}' off mode cannot contain active sources"
+            )));
+        }
+        if route.mode.is_some_and(|mode| mode != AiMode::Off)
+            && route.primary.as_deref() == Some("off")
+        {
+            return Err(CliError::config(format!(
+                "capability route '{name}' active mode cannot use an off primary"
+            )));
+        }
+        if route.primary.as_deref() == Some("off") && !route.fallbacks.is_empty() {
+            return Err(CliError::config(format!(
+                "capability route '{name}' cannot combine an off primary with fallbacks"
+            )));
+        }
+        if route.fallbacks.iter().any(|reference| reference == "off") {
+            return Err(CliError::config(format!(
+                "capability route '{name}' cannot use off as a fallback"
+            )));
+        }
+        let mut seen = BTreeSet::new();
         for reference in route.primary.iter().chain(&route.fallbacks) {
-            let Some((plugin, capability)) = reference.split_once('/') else {
+            if reference == "off" {
+                continue;
+            }
+            let (kind, qualified) = reference
+                .split_once(':')
+                .map_or(("plugin", reference.as_str()), |(kind, value)| (kind, value));
+            if !matches!(kind, "plugin" | "provider") {
                 return Err(CliError::config(format!(
-                    "capability route '{name}' must use plugin-id/capability-id"
+                    "capability route '{name}' uses unknown source kind '{kind}'"
+                )));
+            }
+            let Some((source, capability)) = qualified.split_once('/') else {
+                return Err(CliError::config(format!(
+                    "capability route '{name}' must use plugin:ID/CAPABILITY or provider:ID/CAPABILITY"
                 )));
             };
-            validate_id("plugin", plugin)?;
+            validate_id(kind, source)?;
             validate_id("capability", capability)?;
             if capability.contains('/') {
                 return Err(CliError::config(format!(
                     "capability route '{name}' contains an invalid capability ID"
+                )));
+            }
+            let canonical = reference.parse::<CapabilitySourceRef>().map_err(|error| {
+                CliError::config(format!("capability route '{name}' is invalid: {error}"))
+            })?;
+            if !seen.insert(canonical) {
+                return Err(CliError::config(format!(
+                    "capability route '{name}' contains a duplicate source"
                 )));
             }
         }
@@ -1896,6 +1946,34 @@ conflict = "rename"
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn heterogeneous_capability_routes_reject_contradictions_and_alias_duplicates() {
+        let mut routes = CapabilityRoutesConfig::default();
+        routes.ocr = CapabilityRouteConfig {
+            mode: Some(AiMode::Prefer),
+            primary: Some("provider:bailian/vision-ocr".into()),
+            fallbacks: vec!["plugin:official.ocr.ppocrv6/ocr".into()],
+        };
+        assert!(validate_capability_routes(&routes).is_ok());
+
+        routes.ocr.mode = Some(AiMode::Off);
+        assert!(validate_capability_routes(&routes).is_err());
+
+        routes.ocr = CapabilityRouteConfig {
+            mode: Some(AiMode::Prefer),
+            primary: Some("official.ocr.ppocrv6/ocr".into()),
+            fallbacks: vec!["plugin:official.ocr.ppocrv6/ocr".into()],
+        };
+        assert!(validate_capability_routes(&routes).is_err());
+
+        routes.ocr = CapabilityRouteConfig {
+            mode: Some(AiMode::Only),
+            primary: Some("off".into()),
+            fallbacks: Vec::new(),
+        };
+        assert!(validate_capability_routes(&routes).is_err());
+    }
 
     fn temporary_directory(name: &str) -> PathBuf {
         let thread_name = std::thread::current()

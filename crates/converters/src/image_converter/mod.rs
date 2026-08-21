@@ -130,7 +130,8 @@ async fn convert_image(
         context.checkpoint()?;
         let page = u32::try_from(index + 1).map_err(|_| resource("max_pages", "page overflow"))?;
         let needs_normalized_asset = summary.frames > 1 || decoded.orientation != 1;
-        let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off;
+        let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off
+            || options.ai.vision_ocr != AiMode::Off;
         let ai_enabled = options.ai.image_description != AiMode::Off;
         let needs_normalized =
             needs_normalized_asset || ai_enabled || (ocr_enabled && !frame.has_alpha);

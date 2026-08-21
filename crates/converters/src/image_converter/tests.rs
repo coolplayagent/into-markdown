@@ -550,6 +550,76 @@ struct BoundOcr;
 
 struct WorkingSetOcr;
 
+struct RemoteOcr;
+
+impl OcrEngine for RemoteOcr {
+    fn id(&self) -> &'static str {
+        "provider.fixture.vision-ocr"
+    }
+
+    fn provenance_kind(&self) -> ProvenanceKind {
+        ProvenanceKind::AiProvider
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async {
+            Ok(OcrResult {
+                regions: vec![OcrRegion {
+                    text: "remote text".into(),
+                    polygon: [(0.0, 0.0); 4],
+                    confidence: 0.0,
+                }],
+                provider: "provider.fixture.vision-ocr".into(),
+            })
+        })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new_with_working(16 * 1024, 4 * 1024, 1, 4096)
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        Box::pin(async move { self.recognize(request, context).await.map(OcrRecognition::Remote) })
+    }
+}
+
+#[test]
+fn remote_vision_ocr_runs_when_local_ocr_is_off_without_fabricating_local_evidence() {
+    let mut options = options();
+    options.ai.vision_ocr = AiMode::Only;
+    let services = Services { ocr: Some(Arc::new(RemoteOcr)), ..Services::default() };
+    let output = block_on(convert_image(
+        &input(encoded(ImageFormat::Png), "remote.png"),
+        &options,
+        &services,
+        &context(&options),
+    ))
+    .unwrap();
+    let Block::Page { blocks, .. } = &output.document.blocks[0].block else {
+        panic!("page expected")
+    };
+    let remote = blocks
+        .iter()
+        .find(|node| node.provenance.provider == "provider.fixture.vision-ocr")
+        .expect("remote OCR paragraph");
+    assert_eq!(remote.provenance.kind, ProvenanceKind::AiProvider);
+    let Block::Paragraph(inlines) = &remote.block else { panic!("remote paragraph expected") };
+    assert!(matches!(inlines.as_slice(), [Inline::Text { value, .. }] if value == "remote text"));
+}
+
 impl OcrEngine for WorkingSetOcr {
     fn id(&self) -> &'static str {
         "test.ocr.working-set"

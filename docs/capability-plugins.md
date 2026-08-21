@@ -63,25 +63,36 @@ provider ID 和模型 ID 必须与路由绑定一致。
 
 ## 路由与失败语义
 
-配置引用格式为 `plugin-id/capability-id`：
+能力来源使用同一规范引用：本地来源为 `plugin:ID/CAPABILITY`，远端来源为
+`provider:ID/CAPABILITY`。旧的无前缀插件引用只用于兼容读取：
 
 ```toml
 [capability_routes.ocr]
-primary = "official.ocr.ppocrv6/ocr"
-fallbacks = []
+mode = "prefer"
+primary = "provider:bailian/vision-ocr"
+fallbacks = ["plugin:official.ocr.ppocrv6/ocr"]
 
 [capability_routes.transcription]
-primary = "official.media.whisper/transcription"
-fallbacks = []
+mode = "fallback"
+primary = "plugin:official.media.whisper/transcription"
+fallbacks = ["provider:bailian/audio-transcription"]
 
 [capability_routes.diarization]
-primary = "official.media.whisper/diarization"
+mode = "only"
+primary = "plugin:official.media.whisper/diarization"
 fallbacks = []
 ```
 
-`ocr=always` 与 `audio_transcription=only` 要求 primary 就绪，失败时不会改走其它 provider。
-自动模式只允许在执行前的 readiness 阶段按配置顺序选择 fallback。开始处理输入后，崩溃、
-超时、资源超限或无效结果都会直接失败，不会把同一敏感输入静默交给另一个插件。
+`only` 要求 primary 就绪并对执行失败关闭；`fallback` 只允许来源不可用时切换；`prefer`
+还允许网络、超时和受控 Provider/OCR 失败按显式顺序恢复。取消、资源超限、内部不变量、
+来源身份不匹配和无效结构化结果始终直接失败，绝不把它们伪装成成功。每个候选来源均由
+用户配置明确列出，不会发现或调用未列出的 Provider。
+
+远端 OCR 只产生页级 AI 文本，不伪造本地检测框、置信度或模型证据；远端转写必须携带
+经过校验的时长、Provider 和模型身份，并生成单调的时间范围。布局、表格、公式和 Markdown
+后处理只能返回版本化 Document Patch：未知操作、未知或嵌套目标、冲突替换、悬空资源引用、
+重复 ID、越界结构和非精确 AI provenance 在应用前被拒绝，Provider 返回的直接节点不会进入
+最终 Document IR。
 
 ## 隔离边界
 

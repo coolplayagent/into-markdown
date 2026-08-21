@@ -3796,7 +3796,7 @@ fn apply_ai_provider_overrides(
 
 fn provider_backed_ai_capability_is_enabled(options: &ConversionOptions) -> bool {
     [
-        options.ai.vision_ocr,
+        options.ai.image_description,
         options.ai.layout_repair,
         options.ai.table_repair,
         options.ai.formula_repair,

@@ -1,11 +1,11 @@
 //! Policy-bound OCR routing and evidence-preserving IR construction.
 
 use into_markdown_core::{
-    Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity,
-    Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
-    OcrInputIdentity, OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrResult,
-    OcrSourceRegion, Provenance, ProvenanceKind, ResourceReservation, Services, SourceLocator,
-    SourcePoint, estimate_retained_output,
+    AiMode, Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic,
+    DiagnosticSeverity, Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage,
+    OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest,
+    OcrResult, OcrSourceRegion, Provenance, ProvenanceKind, ResourceReservation, Services,
+    SourceLocator, SourcePoint, estimate_retained_output,
 };
 
 const MERGE_PROVIDER: &str = "builtin.converter.image.ocr-merge";
@@ -56,19 +56,20 @@ async fn recognize_inner(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<OcrContribution, ConversionError> {
-    if options.ocr.policy == OcrPolicy::Off {
+    let policy = effective_ocr_policy(options);
+    if policy == OcrPolicy::Off {
         return Ok(empty());
     }
     context.checkpoint()?;
     validate_options(options)?;
     let Some(engine) = services.ocr.as_deref() else {
-        return unavailable(options.ocr.policy, page, "no OCR engine is configured");
+        return unavailable(policy, page, "no OCR engine is configured");
     };
     let request =
         OcrRequest { image, media_type: "image/png", languages: &["zh-Hans", "en", "zh-Hant"] };
     let plan = match engine.planned_bound_output(request, options, context) {
         Ok(plan) => plan,
-        Err(error) => return preflight_unavailable(options.ocr.policy, page, engine.id(), error),
+        Err(error) => return preflight_unavailable(policy, page, engine.id(), error),
     };
     validate_plan(plan, options, context)?;
     let planned_bytes = plan
@@ -91,21 +92,49 @@ async fn recognize_inner(
     let provider_context = credited.as_deref().unwrap_or(context);
     let recognition = match context.run(engine.recognize_bound(request, provider_context)).await? {
         Ok(value) => value,
-        Err(error @ ConversionError::ComponentUnavailable { .. })
-            if options.ocr.policy == OcrPolicy::Auto =>
-        {
+        Err(error @ ConversionError::ComponentUnavailable { .. }) if policy == OcrPolicy::Auto => {
             return Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")));
         }
-        Err(error) if options.ocr.policy == OcrPolicy::Auto => return Err(error),
+        Err(error) if policy == OcrPolicy::Auto => return Err(error),
         Err(error) => return Err(map_unavailable(engine.id(), error)),
     };
     drop(credited);
-    let OcrRecognition::Bound(bound) = recognition else {
-        return unavailable(
-            options.ocr.policy,
-            page,
-            "the configured OCR engine returned legacy output without bound detector/model evidence",
-        );
+    let bound = match recognition {
+        OcrRecognition::Bound(bound) => bound,
+        OcrRecognition::Remote(result) => {
+            let (document, diagnostics) =
+                materialize_remote_unbound(result, page, plan, options, context)?;
+            let assets = Vec::<Asset>::new();
+            let retained = estimate_retained_output(&document, &assets, &diagnostics)?;
+            if retained > plan.max_retained_bytes() {
+                return Err(ConversionError::Ocr {
+                    provider: engine.id().into(),
+                    detail: format!("remote OCR retained {retained} bytes beyond its plan"),
+                });
+            }
+            if retained < reservation_bytes {
+                memory.shrink(reservation_bytes - retained)?;
+            }
+            return Ok(OcrContribution {
+                accepted_text: !document.blocks.is_empty(),
+                nodes: document.blocks,
+                diagnostics,
+                memory: Some(memory),
+            });
+        }
+        OcrRecognition::Unbound(_) => {
+            return unavailable(
+                policy,
+                page,
+                "the configured local OCR engine returned legacy output without bound detector/model evidence",
+            );
+        }
+        _ => {
+            return Err(ConversionError::Ocr {
+                provider: engine.id().into(),
+                detail: "OCR provider returned an unsupported recognition contract".into(),
+            });
+        }
     };
     if let Some(expected) = expected_identity
         && bound.input_identity() != Some(expected)
@@ -163,6 +192,82 @@ async fn recognize_inner(
         diagnostics,
         memory: Some(memory),
     })
+}
+
+fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
+    match options.ai.vision_ocr {
+        AiMode::Only => OcrPolicy::Always,
+        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
+            OcrPolicy::Auto
+        }
+        _ => options.ocr.policy,
+    }
+}
+
+fn materialize_remote_unbound(
+    result: OcrResult,
+    page: u32,
+    plan: OcrOutputPlan,
+    options: &ConversionOptions,
+    execution: &ExecutionContext,
+) -> Result<(Document, Vec<Diagnostic>), ConversionError> {
+    let provider = result.provider.clone();
+    if provider.trim().is_empty()
+        || result.regions.len() > usize::try_from(plan.max_regions()).unwrap_or(usize::MAX)
+    {
+        return Err(ConversionError::Ocr {
+            provider,
+            detail: "remote OCR provider identity or region count is invalid".into(),
+        });
+    }
+    let mut total_text = 0_u64;
+    let mut nodes = Vec::new();
+    for (index, region) in result.regions.into_iter().enumerate() {
+        if index % 64 == 0 {
+            execution.checkpoint()?;
+        }
+        let text = region.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        total_text = total_text
+            .checked_add(u64::try_from(text.len()).map_err(|_| ConversionError::ResourceLimit {
+                limit: "max_field_bytes",
+                detail: "remote OCR text size is unrepresentable".into(),
+            })?)
+            .ok_or_else(|| ConversionError::ResourceLimit {
+                limit: "max_field_bytes",
+                detail: "remote OCR text size overflow".into(),
+            })?;
+        if total_text > plan.max_text_bytes() || total_text > options.limits.max_field_bytes {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_field_bytes",
+                detail: "remote OCR text exceeds the configured output bound".into(),
+            });
+        }
+        nodes.push(BlockNode {
+            id: NodeId(format!("remote-ocr-page-{page}-{index}")),
+            block: Block::Paragraph(vec![Inline::Text { value: text.into(), marks: Vec::new() }]),
+            provenance: Provenance {
+                kind: ProvenanceKind::AiProvider,
+                provider: provider.clone(),
+                locator: SourceLocator { page: Some(page), ..SourceLocator::default() },
+                confidence: None,
+            },
+        });
+    }
+    if nodes.is_empty() {
+        return Err(ConversionError::Ocr {
+            provider,
+            detail: "remote OCR returned no usable text".into(),
+        });
+    }
+    let document = Document { blocks: nodes, ..Document::default() };
+    document.validate().map_err(|error| ConversionError::Ocr {
+        provider,
+        detail: format!("remote OCR returned invalid IR at {}: {}", error.path, error.detail),
+    })?;
+    Ok((document, Vec::new()))
 }
 
 struct MaterializeContext<'a> {
