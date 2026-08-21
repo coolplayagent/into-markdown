@@ -138,18 +138,17 @@ test("administration responses share one exact one-MiB wire limit", async () => 
 
 test("administration pages are accessible, responsive, recoverable and require one-time grants", async () => {
   const window = install("/admin/models"); const actions: AdminAction[] = [];
-  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions) }));
-  await waitFor(() => window.document.body.textContent.includes("ocr"));
+  const missingModel: AdminSnapshot = { ...snapshot, models: { ...snapshot.models, entries: [{ bundle: { id: "whisper-small-multilingual", availability: "planned" }, status: { state: "missing" } }] } };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingModel) }));
+  await waitFor(() => window.document.body.textContent.includes("Multilingual transcription"));
   const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
-  assert.equal(installButton.disabled, true);
-  const grants = [...window.document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]; grants.forEach((grant) => grant.click());
   assert.equal(installButton.disabled, false); installButton.click(); installButton.click(); await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, true);
-  assert.equal(actions[0]!.authorizeDangerous, true);
-  assert.equal(actions[0]!.allowPrivateNetwork, true);
-  assert.equal(actions[0]!.insecure, true);
-  await waitFor(() => grants.every((grant) => !grant.checked));
-  assert.deepEqual(grants.map((grant) => grant.checked), [false, false, false, false], "all grants reset before one operation");
+  assert.equal(actions[0]!.authorizeDangerous, false);
+  assert.equal(actions[0]!.allowPrivateNetwork, false);
+  assert.equal(actions[0]!.insecure, false);
+  assert.equal(window.document.body.textContent.includes("manifest"), false);
+  assert.equal(window.document.body.textContent.includes("invocation capabilities"), false);
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document); assert.deepEqual(result.violations.map((item) => item.id), []);
   window.innerWidth = 375; window.dispatchEvent(new window.Event("resize"));
   assert.equal(window.document.querySelector("main") !== null, true);
@@ -160,18 +159,20 @@ test("failed initial load exposes an alert and retry recovery", async () => {
   const failed = api(); failed.admin = async () => { calls += 1; if (calls === 1) throw new ApiError("unreachable"); return snapshot; };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: failed }));
   await waitFor(() => window.document.querySelector('[role="alert"]') !== null);
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Retry")!.click();
-  await waitFor(() => window.document.body.textContent.includes("networkProbe")); assert.equal(calls, 2);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Reload")!.click();
+  await waitFor(() => window.document.body.textContent.includes("Diagnostics")); assert.equal(calls, 2);
 });
 
 test("partial records expose exact-layer mutation while read-only authority stays disabled", async () => {
   const partial: AdminSnapshot = {
     ...snapshot,
     providers: [
+      { name: "vision", scope: "global", actionScope: "global", model: "base", capabilities: [], default: false, effective: false, shadowedBy: "effective" },
       { name: "vision", scope: "project", actionScope: "project", model: "override", capabilities: [], default: false, effective: false, shadowedBy: "effective" },
       snapshot.providers[0]!,
     ],
     plugins: [
+      { id: "local", scope: "global", actionScope: "global", packageScope: "global", protocol: "process-v1", enabled: false, effective: false, shadowedBy: "effective" },
       { id: "local", scope: "project", actionScope: "project", packageScope: "global", protocol: "process-v1", enabled: true, effective: false, shadowedBy: "effective" },
       snapshot.plugins[0]!,
     ],
@@ -180,8 +181,8 @@ test("partial records expose exact-layer mutation while read-only authority stay
   Object.defineProperty(window.navigator, "languages", { value: ["zh-CN"], configurable: true });
   activeRoot = createRoot(window.document.getElementById("app")!);
   activeRoot.render(createElement(App, { api: api([], parseAdminSnapshot(partial)) }));
-  await waitFor(() => window.document.body.textContent.includes("继承自其他作用域"));
-  assert.equal([...window.document.querySelectorAll("button")].filter((button) => button.textContent === "移除").length, 1);
+  await waitFor(() => window.document.body.textContent.includes("https://example.com/v1"));
+  assert.equal(window.document.querySelectorAll(".admin-entity-card button.danger").length, 2);
 
   activeRoot.unmount(); activeRoot = null; window.history.pushState({}, "", "/admin/plugins");
   const readOnly: AdminSnapshot = {
@@ -193,6 +194,7 @@ test("partial records expose exact-layer mutation while read-only authority stay
   };
   activeRoot = createRoot(window.document.getElementById("app")!);
   activeRoot.render(createElement(App, { api: api([], readOnly) }));
-  await waitFor(() => window.document.body.textContent.includes("只读管理视图"));
-  assert.equal([...window.document.querySelectorAll("button")].every((button) => button.disabled), true);
+  await waitFor(() => window.document.body.textContent.includes("当前只能查看"));
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("安装扩展插件"))?.disabled, true);
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "验证")?.disabled, true);
 });
