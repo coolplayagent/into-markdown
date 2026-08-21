@@ -26,10 +26,14 @@ into-markdown-cli retention_`。测试覆盖分页/筛选、固定、重试、�
 SQLite commit 前后注入失败的目录/checkpoint 重启恢复。前端单测覆盖 cursor 编码、筛选、固定/
 重试/删除/立即清理 API、不可恢复提示与键盘/axe 可访问性。
 
-Web 预览与下载的定向门禁为 `cargo test -p into-markdown-cli
-download_ranges_and_names_are_canonical_and_header_safe`、`bazel test
-//web/console:unit_test //web/console:admin_unit_test //web/console:dist_integration_test` 和 `bazel test
-//apps/cli:into_md_test`。前端用恶意 HTML、`javascript:`、`file:` 与远程图片语法验证预览 DOM
+Web 安全的权威范围和剩余风险见 [`web-security-threat-model.md`](web-security-threat-model.md)。
+会话、Host/Origin、重启重放、预览与下载的定向门禁为 `cargo test --locked -p
+into-markdown-cli --bin into-md ui::tests -- --test-threads=1`、`cargo test --locked -p
+into-markdown-cli web_tasks::tests -- --test-threads=1`、`bazel test //web/console:unit_test_preview
+//web/console:admin_unit_test //web/console:dist_integration_test` 和 `bazel test
+//apps/cli:web_security_test //web/console:web_security_test`。CI 另在真实 Chromium 中运行
+`web/console/tests/web-security.e2e.spec.ts`，从生产 `into-md ui` 的私有启动 URL 进入、上传敌意
+文本、等待实际转换结果并刷新恢复。前端用恶意 HTML、`javascript:`、`file:` 与远程图片语法验证预览 DOM
 不产生任何可执行或资源加载元素；另验证 256 KiB 截断、IR/provenance 树上限、资源浏览与 axe。
 Unix loopback 集成测试把真实 Markdown artifact 做完整、开放区间和非法区间下载，校验状态、
 长度、Content-Range、MIME、Content-Disposition 与安全响应头。

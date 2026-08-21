@@ -36,6 +36,11 @@ const TASK_REQUEST_HEADER: HeaderName = HeaderName::from_static("x-into-md-reque
 const TASK_FILENAME_HEADER: HeaderName = HeaderName::from_static("x-into-md-filename-b64");
 const SEC_FETCH_MODE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-mode");
 const SEC_FETCH_SITE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-site");
+const CROSS_ORIGIN_OPENER_POLICY_HEADER: HeaderName =
+    HeaderName::from_static("cross-origin-opener-policy");
+const CROSS_ORIGIN_RESOURCE_POLICY_HEADER: HeaderName =
+    HeaderName::from_static("cross-origin-resource-policy");
+const PERMISSIONS_POLICY_HEADER: HeaderName = HeaderName::from_static("permissions-policy");
 const SESSION_FRAGMENT: &str = "into-md-session";
 const SESSION_BYTES: usize = 32;
 const SESSION_ENCODED_LEN: usize = 43;
@@ -1558,6 +1563,14 @@ fn apply_security_headers(mut response: Response) -> Response {
     }
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(CROSS_ORIGIN_OPENER_POLICY_HEADER, HeaderValue::from_static("same-origin"));
+    headers.insert(CROSS_ORIGIN_RESOURCE_POLICY_HEADER, HeaderValue::from_static("same-origin"));
+    headers.insert(
+        PERMISSIONS_POLICY_HEADER,
+        HeaderValue::from_static(
+            "camera=(), display-capture=(self), geolocation=(), microphone=(self), payment=(), usb=()",
+        ),
+    );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
@@ -1800,6 +1813,12 @@ mod tests {
         assert!(lowercase.contains("referrer-policy: no-referrer\r\n"), "{response}");
         assert!(lowercase.contains("x-content-type-options: nosniff\r\n"), "{response}");
         assert!(lowercase.contains("content-security-policy: default-src 'none';"), "{response}");
+        assert!(lowercase.contains("cross-origin-opener-policy: same-origin\r\n"), "{response}");
+        assert!(lowercase.contains("cross-origin-resource-policy: same-origin\r\n"), "{response}");
+        assert!(
+            lowercase.contains("permissions-policy: camera=(), display-capture=(self)"),
+            "{response}"
+        );
     }
 
     fn assert_schema_error(response: &str, status: &str, code: &str) {
@@ -2056,6 +2075,16 @@ mod tests {
             format!(
                 "Host: {host}\r\nOrigin: {origin}, http://evil.invalid\r\nX-Into-Md-Session: {session}"
             ),
+            format!("Host: {host}\r\nOrigin: null\r\nX-Into-Md-Session: {session}"),
+            format!(
+                "Host: {host}\r\nOrigin: http://user@127.0.0.1:{port}\r\nX-Into-Md-Session: {session}"
+            ),
+            format!(
+                "Host: {host}\r\nOrigin: {origin}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}"
+            ),
+            format!(
+                "Host: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Session: {session}"
+            ),
         ] {
             let response = request(
                 port,
@@ -2070,6 +2099,15 @@ mod tests {
         assert!(preflight.starts_with("HTTP/1.1 403"), "{preflight}");
         assert_security_headers(&preflight);
         assert!(!preflight.to_ascii_lowercase().contains("access-control-allow-origin"));
+        let ambient_auth = request(
+            port,
+            &format!(
+                "POST /api/status?session={session} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nCookie: X-Into-Md-Session={session}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&ambient_auth, "HTTP/1.1 401", "invalidSession");
+        assert!(!ambient_auth.contains(&session));
         let unknown_api = request(
             port,
             &format!("GET /api/future HTTP/1.1\r\nHost: {host}\r\nOrigin: http://evil.invalid\r\nConnection: close\r\n\r\n"),
@@ -2087,6 +2125,31 @@ mod tests {
         assert_schema_error(&unexpected_body, "HTTP/1.1 400", "requestBodyNotAllowed");
         shutdown.send(()).unwrap();
         task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_from_a_stopped_server_cannot_be_replayed_after_restart() {
+        let (_first_directory, _first_port, first_session, first_shutdown, first_task) =
+            start().await;
+        first_shutdown.send(()).unwrap();
+        first_task.await.unwrap().unwrap();
+
+        let (_second_directory, second_port, second_session, second_shutdown, second_task) =
+            start().await;
+        assert_ne!(first_session, second_session);
+        let host = format!("127.0.0.1:{second_port}");
+        let origin = format!("http://{host}");
+        let replay = request(
+            second_port,
+            &format!(
+                "POST /api/status HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {first_session}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert_schema_error(&replay, "HTTP/1.1 401", "invalidSession");
+        assert!(!replay.contains(&first_session));
+        second_shutdown.send(()).unwrap();
+        second_task.await.unwrap().unwrap();
     }
 
     #[cfg(unix)]

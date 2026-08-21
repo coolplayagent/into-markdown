@@ -1,0 +1,112 @@
+name: Local Web security boundary
+
+on:
+  pull_request:
+    paths:
+      - "apps/cli/**"
+      - "web/console/**"
+      - "docs/ui.md"
+      - "docs/security.md"
+      - "docs/testing.md"
+      - "docs/web-security-threat-model.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/web-security.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/cli/**"
+      - "web/console/**"
+      - "docs/ui.md"
+      - "docs/security.md"
+      - "docs/testing.md"
+      - "docs/web-security-threat-model.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/web-security.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-boundary:
+    name: ${{ matrix.target }} loopback and storage security
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.target }}
+      - name: Run local Web request, content, and storage boundary
+        run: >-
+          cargo test --locked -p into-markdown-cli --bin into-md
+          --target ${{ matrix.target }} -j1 ui::tests -- --test-threads=1
+      - name: Run task storage path and artifact boundary
+        run: >-
+          cargo test --locked -p into-markdown-cli
+          --target ${{ matrix.target }} -j1 web_tasks::tests -- --test-threads=1
+
+  bazel-and-console:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazelbuild/setup-bazel@v3
+        with:
+          bazelisk-cache: true
+          disk-cache: local-web-security
+          repository-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Run production CLI and embedded-console security gates
+        run: >-
+          bazel test //apps/cli:web_security_test //web/console:web_security_test
+          --jobs=1 --local_resources=memory=4096 --test_output=errors
+
+  browser-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - name: Install locked browser test dependencies
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm --filter @into-markdown/console exec playwright install --with-deps chromium
+      - name: Build the production local Web server
+        run: cargo build --locked -p into-markdown-cli --bin into-md
+      - name: Type-check the browser security test
+        run: corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
+      - name: Run hostile-content browser E2E
+        env:
+          INTO_MD_CLI: ${{ github.workspace }}/target/debug/into-md
+        run: >-
+          corepack pnpm --filter @into-markdown/console exec playwright test
+          tests/web-security.e2e.spec.ts --workers=1 --reporter=line

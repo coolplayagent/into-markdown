@@ -150,6 +150,15 @@ js_test(
     env = {"INTO_MD_DIST": "web/console/dist"},
 )
 
+test_suite(
+    name = "web_security_test",
+    tests = [
+        ":dist_integration_test",
+        ":unit_test_core",
+        ":unit_test_preview",
+    ],
+)
+
 js_run_binary(
     name = "generated_assets",
     out_dirs = ["generated_assets"],

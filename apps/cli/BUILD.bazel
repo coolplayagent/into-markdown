@@ -40,6 +40,14 @@ rust_test(
     compile_data = ["//web/console:checked_assets"],
 )
 
+# Named security gate for the complete loopback HTTP, storage, and embedded
+# console boundary. Keep this alias pointed at the production CLI test crate so
+# private route helpers cannot be tested through a weaker duplicate harness.
+test_suite(
+    name = "web_security_test",
+    tests = [":cli_test"],
+)
+
 rust_test(
     name = "exit_contract_test",
     srcs = ["tests/exit_contract.rs"],
