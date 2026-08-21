@@ -421,4 +421,7 @@ pub enum OcrRecognition {
     Bound(BoundOcrResult),
     /// Legacy OCR output without evidence sufficient for `Inline::OcrText`.
     Unbound(OcrResult),
+    /// Remote OCR text without fabricated detector geometry or confidence.
+    /// Consumers may materialize this only as page-scoped AI provenance.
+    Remote(OcrResult),
 }

@@ -19,6 +19,63 @@ struct SourceBoundOcr(AtomicUsize);
 
 struct PdfGeometryOcr(AtomicUsize);
 
+struct RemoteEmbeddedOcr(AtomicUsize);
+
+impl OcrEngine for RemoteEmbeddedOcr {
+    fn id(&self) -> &'static str {
+        "provider.fixture.vision-ocr"
+    }
+
+    fn provenance_kind(&self) -> ProvenanceKind {
+        ProvenanceKind::AiProvider
+    }
+
+    fn recognize<'a>(
+        &'a self,
+        _: OcrRequest<'a>,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrResult, ConversionError>> {
+        Box::pin(async {
+            Ok(OcrResult {
+                regions: vec![OcrRegion {
+                    text: "remote embedded text".into(),
+                    polygon: [(0.0, 0.0); 4],
+                    confidence: 0.0,
+                }],
+                provider: "provider.fixture.vision-ocr".into(),
+            })
+        })
+    }
+
+    fn planned_bound_output(
+        &self,
+        _: OcrRequest<'_>,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new_with_working(16 * 1024, 16 * 1024, 1, 128)
+    }
+
+    fn planned_normalized_png_output(
+        &self,
+        _: u32,
+        _: u32,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        OcrOutputPlan::try_new_with_working(16 * 1024, 16 * 1024, 1, 128)
+    }
+
+    fn recognize_bound<'a>(
+        &'a self,
+        request: OcrRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { self.recognize(request, context).await.map(OcrRecognition::Remote) })
+    }
+}
+
 impl OcrEngine for PdfGeometryOcr {
     fn id(&self) -> &'static str {
         "test.api.pdf-geometry-ocr"
@@ -221,6 +278,26 @@ fn dynamically_created_docx_obeys_embedded_visual_ocr_and_asset_modes() {
     let result = block_on(engine.convert(request)).unwrap();
     assert!(!result.markdown.contains("text from embedded picture"));
     assert_eq!(ocr.0.load(Ordering::SeqCst), 6);
+}
+
+#[test]
+fn remote_vision_ocr_enriches_container_images_when_local_ocr_is_off() {
+    let mut file = tempfile::Builder::new().suffix(".docx").tempfile().unwrap();
+    file.write_all(&docx_with_png()).unwrap();
+    file.flush().unwrap();
+    let ocr = Arc::new(RemoteEmbeddedOcr(AtomicUsize::new(0)));
+    let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+    let engine = default_engine_with_services(services).unwrap();
+    let mut request = ConversionRequest::new(InputRef::Path(file.path().to_path_buf()));
+    request.options.ocr.policy = OcrPolicy::Off;
+    request.options.ai.vision_ocr = AiMode::Only;
+    request.options.output.asset_mode = AssetMode::Omit;
+    let result = block_on(engine.convert(request)).unwrap();
+    assert_eq!(result.markdown.matches("remote embedded text").count(), 4);
+    assert!(result.provenance.iter().any(|item| {
+        item.kind == ProvenanceKind::AiProvider && item.provider == "provider.fixture.vision-ocr"
+    }));
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 2);
 }
 
 #[test]

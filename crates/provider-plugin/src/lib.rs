@@ -20,8 +20,8 @@ pub use process::{
     TranscriptionParameters,
 };
 pub use routing::{
-    CapabilityRegistry, CapabilityRoute, ProviderBinding, ProviderReference, ResolutionMode,
-    RouteError,
+    CapabilityId, CapabilityRegistry, CapabilityRoute, CapabilityRouteMode, CapabilitySourceRef,
+    ProviderBinding, ProviderReference, ResolutionMode, RouteError, UnifiedCapabilityRoute,
 };
 
 /// Capability-provider host API implemented by this build.

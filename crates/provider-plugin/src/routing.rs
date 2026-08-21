@@ -1,8 +1,217 @@
 use crate::{CapabilityKind, PluginCapabilityDescriptor, PluginManifest};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
+
+/// Product-level capability routed across Core, local plugins, and remote providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityId {
+    /// Legacy binary Office document normalization.
+    LegacyOffice,
+    /// Image or rendered-page OCR.
+    Ocr,
+    /// Audio/video transcription.
+    Transcription,
+    /// Anonymous speaker diarization.
+    Diarization,
+}
+
+impl CapabilityId {
+    /// Stable configuration and CLI spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyOffice => "legacy-office",
+            Self::Ocr => "ocr",
+            Self::Transcription => "transcription",
+            Self::Diarization => "diarization",
+        }
+    }
+}
+
+impl FromStr for CapabilityId {
+    type Err = RouteError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "legacy-office" => Ok(Self::LegacyOffice),
+            "ocr" => Ok(Self::Ocr),
+            "transcription" => Ok(Self::Transcription),
+            "diarization" => Ok(Self::Diarization),
+            _ => Err(RouteError::InvalidSource(value.into())),
+        }
+    }
+}
+
+/// One exact capability implementation source.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CapabilitySourceRef {
+    /// Capability implemented by a signed local plugin.
+    Plugin {
+        /// Signed package identity.
+        plugin_id: String,
+        /// Package-local capability identity.
+        capability_id: String,
+    },
+    /// Capability implemented by a configured remote provider.
+    Provider {
+        /// Provider configuration identity.
+        provider_id: String,
+        /// Provider capability identity.
+        capability_id: String,
+    },
+    /// Capability is explicitly disabled.
+    Off,
+}
+
+impl std::fmt::Display for CapabilitySourceRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plugin { plugin_id, capability_id } => {
+                write!(formatter, "plugin:{plugin_id}/{capability_id}")
+            }
+            Self::Provider { provider_id, capability_id } => {
+                write!(formatter, "provider:{provider_id}/{capability_id}")
+            }
+            Self::Off => formatter.write_str("off"),
+        }
+    }
+}
+
+impl FromStr for CapabilitySourceRef {
+    type Err = RouteError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "off" {
+            return Ok(Self::Off);
+        }
+        let (kind, qualified) =
+            value.split_once(':').map_or(("plugin", value), |(kind, qualified)| (kind, qualified));
+        let (source, capability) = qualified
+            .split_once('/')
+            .filter(|(source, capability)| {
+                valid_id(source) && valid_id(capability) && !capability.contains('/')
+            })
+            .ok_or_else(|| RouteError::InvalidSource(value.into()))?;
+        match kind {
+            "plugin" => {
+                Ok(Self::Plugin { plugin_id: source.into(), capability_id: capability.into() })
+            }
+            "provider" => {
+                Ok(Self::Provider { provider_id: source.into(), capability_id: capability.into() })
+            }
+            _ => Err(RouteError::InvalidSource(value.into())),
+        }
+    }
+}
+
+fn valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+/// Per-capability routing behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CapabilityRouteMode {
+    /// Do not invoke any source.
+    Off,
+    /// Use the ordered fallback only when the primary cannot serve the request.
+    Fallback,
+    /// Prefer the primary and recover through ordered fallbacks.
+    Prefer,
+    /// Require the primary and fail closed.
+    Only,
+}
+
+/// Ordered heterogeneous sources for one product capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnifiedCapabilityRoute {
+    /// Product capability being routed.
+    pub capability: CapabilityId,
+    /// Invocation behavior.
+    pub mode: CapabilityRouteMode,
+    /// Preferred exact source.
+    pub primary: CapabilitySourceRef,
+    /// Ordered recovery sources.
+    pub fallbacks: Vec<CapabilitySourceRef>,
+}
+
+impl UnifiedCapabilityRoute {
+    /// Validate route invariants before configuration is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Rejects contradictory off sources and duplicate source identities.
+    pub fn validate(&self) -> Result<(), RouteError> {
+        if self.mode == CapabilityRouteMode::Off {
+            if self.primary != CapabilitySourceRef::Off || !self.fallbacks.is_empty() {
+                return Err(RouteError::InvalidSource(
+                    "off mode must contain only the off source".into(),
+                ));
+            }
+            return Ok(());
+        }
+        if self.primary == CapabilitySourceRef::Off
+            || self.fallbacks.contains(&CapabilitySourceRef::Off)
+        {
+            return Err(RouteError::InvalidSource(
+                "active routes cannot contain the off source".into(),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for source in std::iter::once(&self.primary).chain(&self.fallbacks) {
+            if !seen.insert(source) {
+                return Err(RouteError::InvalidSource(format!("duplicate source {source}")));
+            }
+            let source_capability = match source {
+                CapabilitySourceRef::Plugin { capability_id, .. }
+                | CapabilitySourceRef::Provider { capability_id, .. } => capability_id.as_str(),
+                CapabilitySourceRef::Off => continue,
+            };
+            if !self.capability.accepts_source_capability(source_capability) {
+                return Err(RouteError::InvalidSource(format!(
+                    "source {source} cannot implement {}",
+                    self.capability.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Sources eligible during pre-execution readiness resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns route validation failures before exposing an iterator.
+    pub fn eligible_sources(&self) -> Result<Vec<&CapabilitySourceRef>, RouteError> {
+        self.validate()?;
+        Ok(match self.mode {
+            CapabilityRouteMode::Off => Vec::new(),
+            CapabilityRouteMode::Only => vec![&self.primary],
+            CapabilityRouteMode::Fallback | CapabilityRouteMode::Prefer => {
+                std::iter::once(&self.primary).chain(&self.fallbacks).collect()
+            }
+        })
+    }
+}
+
+impl CapabilityId {
+    fn accepts_source_capability(self, source: &str) -> bool {
+        match self {
+            Self::LegacyOffice => source == "legacy-office",
+            Self::Ocr => matches!(source, "ocr" | "vision-ocr"),
+            Self::Transcription => matches!(source, "transcription" | "audio-transcription"),
+            Self::Diarization => source == "diarization",
+        }
+    }
+}
 
 /// One configured provider and optional provider-owned model bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +287,9 @@ pub enum RouteError {
     /// No acceptable provider is ready.
     #[error("provider unavailable: {0}")]
     Unavailable(String),
+    /// Product capability source reference is malformed or contradictory.
+    #[error("invalid capability source: {0}")]
+    InvalidSource(String),
 }
 
 impl CapabilityRegistry {
@@ -303,5 +515,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(binding.provider_id, "fallback.provider");
+    }
+
+    #[test]
+    fn heterogeneous_sources_have_one_strict_canonical_contract() {
+        let plugin: CapabilitySourceRef = "plugin:official.ocr/ocr".parse().unwrap();
+        let provider: CapabilitySourceRef = "provider:bailian/vision-ocr".parse().unwrap();
+        assert_eq!(plugin.to_string(), "plugin:official.ocr/ocr");
+        assert_eq!(provider.to_string(), "provider:bailian/vision-ocr");
+        assert_eq!("official.ocr/ocr".parse::<CapabilitySourceRef>().unwrap(), plugin);
+        for invalid in ["", "core:x/y", "provider:/ocr", "provider:x/ocr/extra"] {
+            assert!(invalid.parse::<CapabilitySourceRef>().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn unified_route_rejects_off_conflicts_and_duplicate_sources() {
+        let source: CapabilitySourceRef = "provider:bailian/vision-ocr".parse().unwrap();
+        let route = UnifiedCapabilityRoute {
+            capability: CapabilityId::Ocr,
+            mode: CapabilityRouteMode::Prefer,
+            primary: source.clone(),
+            fallbacks: vec![source],
+        };
+        assert!(route.validate().is_err());
+
+        let off = UnifiedCapabilityRoute {
+            capability: CapabilityId::Ocr,
+            mode: CapabilityRouteMode::Off,
+            primary: CapabilitySourceRef::Off,
+            fallbacks: Vec::new(),
+        };
+        assert!(off.eligible_sources().unwrap().is_empty());
+
+        let incompatible = UnifiedCapabilityRoute {
+            capability: CapabilityId::Ocr,
+            mode: CapabilityRouteMode::Only,
+            primary: "provider:bailian/audio-transcription".parse().unwrap(),
+            fallbacks: Vec::new(),
+        };
+        assert!(incompatible.validate().is_err());
     }
 }

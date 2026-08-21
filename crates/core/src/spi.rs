@@ -4,7 +4,7 @@ use crate::{
     OcrRecognition, OcrResult, Provenance, ResolvedInput, ResolvedSource, ResourceReservation,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::mem::size_of;
 use std::pin::Pin;
@@ -1262,6 +1262,14 @@ pub struct OcrRequest<'a> {
 pub trait OcrEngine: Send + Sync {
     /// Stable provider ID.
     fn id(&self) -> &str;
+    /// Provenance class emitted by this engine.
+    ///
+    /// Local engines retain the default. Remote model adapters must return
+    /// [`crate::ProvenanceKind::AiProvider`] so callers never mislabel remote
+    /// processing as local OCR.
+    fn provenance_kind(&self) -> crate::ProvenanceKind {
+        crate::ProvenanceKind::LocalOcr
+    }
     /// Recognize text and geometry.
     fn recognize<'a>(
         &'a self,
@@ -1472,6 +1480,7 @@ pub struct AiRequest<'a> {
 
 /// Versioned, validated changes an AI provider may propose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentPatch {
     /// Protocol version. The initial contract is `1`.
     pub version: u32,
@@ -1479,8 +1488,12 @@ pub struct DocumentPatch {
     pub operations: Vec<PatchOperation>,
 }
 
+/// Maximum operations accepted from one untrusted AI response.
+pub const MAX_PATCH_OPERATIONS: usize = 1_024;
+
 /// Allowed structured IR edits. Raw provider-specific mutation is forbidden.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum PatchOperation {
     /// Append new nodes at the document root.
@@ -1511,8 +1524,234 @@ impl DocumentPatch {
                 detail: format!("unsupported document patch version {}", self.version),
             });
         }
+        if self.operations.len() > MAX_PATCH_OPERATIONS {
+            return Err(patch_error(format!(
+                "document patch contains {} operations, above the limit of {MAX_PATCH_OPERATIONS}",
+                self.operations.len()
+            )));
+        }
+        for (index, operation) in self.operations.iter().enumerate() {
+            let nodes = match operation {
+                PatchOperation::Append { nodes } | PatchOperation::Replace { nodes, .. } => nodes,
+            };
+            if nodes.is_empty() {
+                return Err(patch_error(format!(
+                    "document patch operation {index} contains no replacement nodes"
+                )));
+            }
+        }
         Ok(())
     }
+
+    /// Validate and atomically apply this patch to document-root nodes.
+    ///
+    /// Replacement targets are deliberately limited to root nodes. This keeps
+    /// the target scope explicit and prevents a provider from addressing nested
+    /// structures through an ambiguous traversal rule. Every inserted node must
+    /// carry provenance for the exact provider that returned the patch. The
+    /// source document is never modified when validation fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversionError::Ai`] for duplicate, missing, nested, or
+    /// conflicting targets, invalid provider provenance, or invalid resulting
+    /// document IR.
+    pub fn apply(&self, document: &Document, provider: &str) -> Result<Document, ConversionError> {
+        self.apply_with_limits(document, provider, &crate::ValidationLimits::default())
+    }
+
+    /// Apply this patch under explicit document-validation limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same controlled failures as [`Self::apply`], including a
+    /// resource-limit error when the candidate document exceeds `limits`.
+    pub fn apply_with_limits(
+        &self,
+        document: &Document,
+        provider: &str,
+        limits: &crate::ValidationLimits,
+    ) -> Result<Document, ConversionError> {
+        self.validate()?;
+        document.validate_with_limits(limits).map_err(|error| {
+            patch_error(format!("source document is invalid at {}: {}", error.path, error.detail))
+        })?;
+        if provider.trim().is_empty() {
+            return Err(patch_error("patch provider identity is empty"));
+        }
+
+        let root_ids =
+            document.blocks.iter().map(|node| node.id.0.as_str()).collect::<BTreeSet<_>>();
+        let all_ids = document_node_ids(document);
+        let mut replacements = BTreeMap::<String, Vec<BlockNode>>::new();
+        let mut appended = Vec::new();
+
+        for (index, operation) in self.operations.iter().enumerate() {
+            let (target, nodes) = match operation {
+                PatchOperation::Append { nodes } => (None, nodes),
+                PatchOperation::Replace { target, nodes } => (Some(target), nodes),
+            };
+            validate_patch_nodes(nodes, provider, index)?;
+            if let Some(target) = target {
+                if !all_ids.contains(target.0.as_str()) {
+                    return Err(patch_error(format!(
+                        "document patch operation {index} targets unknown node {}",
+                        target.0
+                    )));
+                }
+                if !root_ids.contains(target.0.as_str()) {
+                    return Err(patch_error(format!(
+                        "document patch operation {index} targets nested node {}; only document-root targets are allowed",
+                        target.0
+                    )));
+                }
+                if replacements.insert(target.0.clone(), nodes.clone()).is_some() {
+                    return Err(patch_error(format!(
+                        "document patch contains conflicting replacements for {}",
+                        target.0
+                    )));
+                }
+            } else {
+                appended.extend(nodes.iter().cloned());
+            }
+        }
+
+        let output_len = document.blocks.iter().try_fold(0_usize, |total, node| {
+            total.checked_add(replacements.get(&node.id.0).map_or(1, Vec::len)).ok_or_else(|| {
+                ConversionError::ResourceLimit {
+                    limit: "documentNodes",
+                    detail: "document patch root-node count overflow".into(),
+                }
+            })
+        })?;
+        let output_len = output_len.checked_add(appended.len()).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "documentNodes",
+                detail: "document patch appended-node count overflow".into(),
+            }
+        })?;
+        let mut blocks = Vec::new();
+        blocks.try_reserve(output_len).map_err(|_| ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "document patch output allocation failed".into(),
+        })?;
+        for node in &document.blocks {
+            if let Some(nodes) = replacements.remove(&node.id.0) {
+                blocks.extend(nodes);
+            } else {
+                blocks.push(node.clone());
+            }
+        }
+        blocks.extend(appended);
+
+        let candidate = Document {
+            schema_version: document.schema_version,
+            metadata: document.metadata.clone(),
+            blocks,
+        };
+        candidate.validate_with_limits(limits).map_err(|error| {
+            patch_error(format!(
+                "document patch produced invalid IR at {}: {}",
+                error.path, error.detail
+            ))
+        })?;
+        Ok(candidate)
+    }
+}
+
+fn patch_error(detail: impl Into<String>) -> ConversionError {
+    ConversionError::Ai { provider: "patch-validator".into(), detail: detail.into() }
+}
+
+fn validate_patch_nodes(
+    nodes: &[BlockNode],
+    provider: &str,
+    operation: usize,
+) -> Result<(), ConversionError> {
+    let candidate = Document { blocks: nodes.to_vec(), ..Document::default() };
+    candidate.validate().map_err(|error| {
+        patch_error(format!(
+            "document patch operation {operation} contains invalid IR at {}: {}",
+            error.path, error.detail
+        ))
+    })?;
+    for node in nodes {
+        validate_ai_provenance(node, provider, operation)?;
+    }
+    Ok(())
+}
+
+fn validate_ai_provenance(
+    node: &BlockNode,
+    provider: &str,
+    operation: usize,
+) -> Result<(), ConversionError> {
+    if node.provenance.kind != crate::ProvenanceKind::AiProvider
+        || node.provenance.provider != provider
+    {
+        return Err(patch_error(format!(
+            "document patch operation {operation} contains a node without exact provider provenance"
+        )));
+    }
+    match &node.block {
+        crate::Block::Footnote { blocks: nodes, .. }
+        | crate::Block::Page { blocks: nodes, .. }
+        | crate::Block::Slide { blocks: nodes, .. }
+        | crate::Block::Sheet { blocks: nodes, .. } => {
+            for child in nodes {
+                validate_ai_provenance(child, provider, operation)?;
+            }
+        }
+        crate::Block::List { items, .. } => {
+            for item in items {
+                for child in &item.blocks {
+                    validate_ai_provenance(child, provider, operation)?;
+                }
+            }
+        }
+        crate::Block::Table { rows, .. } => {
+            for row in rows {
+                for cell in &row.cells {
+                    for child in &cell.blocks {
+                        validate_ai_provenance(child, provider, operation)?;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn document_node_ids(document: &Document) -> BTreeSet<&str> {
+    fn visit<'a>(nodes: &'a [BlockNode], ids: &mut BTreeSet<&'a str>) {
+        for node in nodes {
+            ids.insert(node.id.0.as_str());
+            match &node.block {
+                crate::Block::Footnote { blocks: nodes, .. }
+                | crate::Block::Page { blocks: nodes, .. }
+                | crate::Block::Slide { blocks: nodes, .. }
+                | crate::Block::Sheet { blocks: nodes, .. } => visit(nodes, ids),
+                crate::Block::List { items, .. } => {
+                    for item in items {
+                        visit(&item.blocks, ids);
+                    }
+                }
+                crate::Block::Table { rows, .. } => {
+                    for row in rows {
+                        for cell in &row.cells {
+                            visit(&cell.blocks, ids);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut ids = BTreeSet::new();
+    visit(&document.blocks, &mut ids);
+    ids
 }
 
 /// Structured output returned by an AI provider.
@@ -1529,7 +1768,7 @@ pub struct AiOutput {
 /// Capability-negotiated LLM or multimodal provider.
 pub trait AiProvider: Send + Sync {
     /// Stable provider ID.
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
     /// Capabilities available under current configuration.
     fn capabilities(&self) -> BTreeSet<AiCapability>;
     /// Declare a conservative allocation peak for one policy-bound operation.
@@ -1645,6 +1884,141 @@ mod tests {
     fn document_patch_rejects_unknown_versions() {
         let patch = DocumentPatch { version: 2, operations: vec![] };
         assert_eq!(patch.validate().unwrap_err().code(), crate::ErrorCode::Ai);
+    }
+
+    fn patch_node(id: &str, provider: &str) -> BlockNode {
+        BlockNode {
+            id: crate::NodeId(id.into()),
+            block: crate::Block::Paragraph(vec![crate::Inline::Text {
+                value: id.into(),
+                marks: Vec::new(),
+            }]),
+            provenance: crate::Provenance {
+                kind: crate::ProvenanceKind::AiProvider,
+                provider: provider.into(),
+                locator: crate::SourceLocator::default(),
+                confidence: None,
+            },
+        }
+    }
+
+    fn source_node(id: &str, block: crate::Block) -> BlockNode {
+        BlockNode {
+            id: crate::NodeId(id.into()),
+            block,
+            provenance: crate::Provenance {
+                kind: crate::ProvenanceKind::NativeParser,
+                provider: "fixture".into(),
+                locator: crate::SourceLocator::default(),
+                confidence: None,
+            },
+        }
+    }
+
+    #[test]
+    fn document_patch_applies_atomically_with_exact_provider_provenance() {
+        let source = Document {
+            blocks: vec![
+                source_node("keep", crate::Block::Rule),
+                source_node("replace", crate::Block::Rule),
+            ],
+            ..Document::default()
+        };
+        let patch = DocumentPatch {
+            version: 1,
+            operations: vec![
+                PatchOperation::Replace {
+                    target: crate::NodeId("replace".into()),
+                    nodes: vec![patch_node("replacement", "remote.fixture")],
+                },
+                PatchOperation::Append { nodes: vec![patch_node("append", "remote.fixture")] },
+            ],
+        };
+
+        let output = patch.apply(&source, "remote.fixture").unwrap();
+        assert_eq!(
+            output.blocks.iter().map(|node| node.id.0.as_str()).collect::<Vec<_>>(),
+            ["keep", "replacement", "append"]
+        );
+        assert_eq!(source.blocks[1].id.0, "replace");
+    }
+
+    #[test]
+    fn document_patch_rejects_unknown_nested_and_conflicting_targets() {
+        let source = Document {
+            blocks: vec![source_node(
+                "page",
+                crate::Block::Page {
+                    number: 1,
+                    blocks: vec![source_node("nested", crate::Block::Rule)],
+                },
+            )],
+            ..Document::default()
+        };
+        for target in ["missing", "nested"] {
+            let patch = DocumentPatch {
+                version: 1,
+                operations: vec![PatchOperation::Replace {
+                    target: crate::NodeId(target.into()),
+                    nodes: vec![patch_node("replacement", "remote.fixture")],
+                }],
+            };
+            assert_eq!(
+                patch.apply(&source, "remote.fixture").unwrap_err().code(),
+                crate::ErrorCode::Ai
+            );
+        }
+
+        let source = Document {
+            blocks: vec![source_node("target", crate::Block::Rule)],
+            ..Document::default()
+        };
+        let patch = DocumentPatch {
+            version: 1,
+            operations: vec![
+                PatchOperation::Replace {
+                    target: crate::NodeId("target".into()),
+                    nodes: vec![patch_node("one", "remote.fixture")],
+                },
+                PatchOperation::Replace {
+                    target: crate::NodeId("target".into()),
+                    nodes: vec![patch_node("two", "remote.fixture")],
+                },
+            ],
+        };
+        assert_eq!(
+            patch.apply(&source, "remote.fixture").unwrap_err().code(),
+            crate::ErrorCode::Ai
+        );
+    }
+
+    #[test]
+    fn document_patch_rejects_forged_provenance_and_duplicate_ids() {
+        let source = Document {
+            blocks: vec![source_node("source", crate::Block::Rule)],
+            ..Document::default()
+        };
+        let forged = DocumentPatch {
+            version: 1,
+            operations: vec![PatchOperation::Append {
+                nodes: vec![patch_node("forged", "other.provider")],
+            }],
+        };
+        assert_eq!(
+            forged.apply(&source, "remote.fixture").unwrap_err().code(),
+            crate::ErrorCode::Ai
+        );
+
+        let duplicate = DocumentPatch {
+            version: 1,
+            operations: vec![PatchOperation::Append {
+                nodes: vec![patch_node("source", "remote.fixture")],
+            }],
+        };
+        assert_eq!(
+            duplicate.apply(&source, "remote.fixture").unwrap_err().code(),
+            crate::ErrorCode::Ai
+        );
     }
 
     #[test]

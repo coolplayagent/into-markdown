@@ -20,6 +20,7 @@ const FIXED_WORKING_BYTES: u64 = 512 * 1024;
 pub struct OpenAiImageDescriptionProvider {
     client: OpenAiCompatibleClient,
     network: ProviderNetworkPolicy,
+    provider_id: String,
 }
 
 impl std::fmt::Debug for OpenAiImageDescriptionProvider {
@@ -28,6 +29,7 @@ impl std::fmt::Debug for OpenAiImageDescriptionProvider {
             .debug_struct("OpenAiImageDescriptionProvider")
             .field("client", &self.client)
             .field("network", &self.network)
+            .field("provider_id", &self.provider_id)
             .finish()
     }
 }
@@ -36,13 +38,38 @@ impl OpenAiImageDescriptionProvider {
     /// Bind a validated transport to the exact invocation network policy.
     #[must_use]
     pub fn new(client: OpenAiCompatibleClient, network: ProviderNetworkPolicy) -> Self {
-        Self { client, network }
+        Self { client, network, provider_id: PROVIDER_ID.into() }
+    }
+
+    /// Bind a transport to an exact configured provider identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty, oversized, or non-canonical provider IDs.
+    pub fn new_with_id(
+        client: OpenAiCompatibleClient,
+        network: ProviderNetworkPolicy,
+        provider_id: impl Into<String>,
+    ) -> Result<Self, ConversionError> {
+        let provider_id = provider_id.into();
+        if provider_id.is_empty()
+            || provider_id.len() > 512
+            || !provider_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        {
+            return Err(ConversionError::ComponentUnavailable {
+                component: "image-description-provider".into(),
+                detail: "provider identity is invalid".into(),
+            });
+        }
+        Ok(Self { client, network, provider_id })
     }
 }
 
 impl AiProvider for OpenAiImageDescriptionProvider {
-    fn id(&self) -> &'static str {
-        PROVIDER_ID
+    fn id(&self) -> &str {
+        &self.provider_id
     }
 
     fn capabilities(&self) -> BTreeSet<AiCapability> {
@@ -56,8 +83,8 @@ impl AiProvider for OpenAiImageDescriptionProvider {
         context: &ExecutionContext,
     ) -> Result<u64, ConversionError> {
         context.checkpoint()?;
-        let (bytes, media_type, page) = page_image(request)?;
-        validate_request(request, media_type, page, options, &self.network)?;
+        let (bytes, media_type, page) = page_image(request, &self.provider_id)?;
+        validate_request(request, media_type, page, options, &self.network, &self.provider_id)?;
         let encoded_peak = u64::try_from(bytes.len())
             .map_err(|_| memory("image size is unrepresentable"))?
             .checked_mul(5)
@@ -80,8 +107,8 @@ impl AiProvider for OpenAiImageDescriptionProvider {
     ) -> BoxFuture<'a, Result<AiOutput, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            let (bytes, media_type, page) = page_image(request)?;
-            validate_request(request, media_type, page, options, &self.network)?;
+            let (bytes, media_type, page) = page_image(request, &self.provider_id)?;
+            validate_request(request, media_type, page, options, &self.network, &self.provider_id)?;
             let result = self
                 .client
                 .generate(
@@ -94,17 +121,17 @@ impl AiProvider for OpenAiImageDescriptionProvider {
                     },
                     context,
                 )
-                .map_err(|error| map_provider_error(&error))?;
+                .map_err(|error| map_provider_error(&self.provider_id, &error))?;
             let text = result.text.trim();
             if text.is_empty() || text.len() as u64 > options.limits.max_field_bytes {
                 return Err(ConversionError::Ai {
-                    provider: PROVIDER_ID.into(),
+                    provider: self.provider_id.clone(),
                     detail: "provider returned an empty or oversized image description".into(),
                 });
             }
             let provenance = Provenance {
                 kind: ProvenanceKind::AiProvider,
-                provider: PROVIDER_ID.into(),
+                provider: self.provider_id.clone(),
                 locator: SourceLocator { page: Some(page), ..SourceLocator::default() },
                 confidence: None,
             };
@@ -130,18 +157,21 @@ impl AiProvider for OpenAiImageDescriptionProvider {
         Box::pin(async move {
             context.checkpoint()?;
             Err(ConversionError::ComponentUnavailable {
-                component: PROVIDER_ID.into(),
+                component: self.provider_id.clone(),
                 detail: "policy-bound execution options are required".into(),
             })
         })
     }
 }
 
-fn page_image(request: AiRequest<'_>) -> Result<(&[u8], &str, u32), ConversionError> {
+fn page_image<'a>(
+    request: AiRequest<'a>,
+    provider: &str,
+) -> Result<(&'a [u8], &'a str, u32), ConversionError> {
     match request.input {
         AiInput::PageImage { bytes, media_type, page } if page > 0 => Ok((bytes, media_type, page)),
         _ => Err(ConversionError::Ai {
-            provider: PROVIDER_ID.into(),
+            provider: provider.into(),
             detail: "image description requires a page-bound encoded image".into(),
         }),
     }
@@ -153,6 +183,7 @@ fn validate_request(
     page: u32,
     options: &ConversionOptions,
     network: &ProviderNetworkPolicy,
+    provider: &str,
 ) -> Result<(), ConversionError> {
     if request.capability != AiCapability::ImageDescription
         || request.prompt.is_some()
@@ -160,7 +191,7 @@ fn validate_request(
         || page == 0
     {
         return Err(ConversionError::Ai {
-            provider: PROVIDER_ID.into(),
+            provider: provider.into(),
             detail: "image-description request contract is invalid".into(),
         });
     }
@@ -177,7 +208,7 @@ fn validate_request(
     Ok(())
 }
 
-fn map_provider_error(error: &ProviderError) -> ConversionError {
+fn map_provider_error(provider: &str, error: &ProviderError) -> ConversionError {
     match error.code() {
         ProviderErrorCode::Cancelled => ConversionError::Cancelled,
         ProviderErrorCode::Timeout => ConversionError::Timeout,
@@ -193,7 +224,7 @@ fn map_provider_error(error: &ProviderError) -> ConversionError {
         | ProviderErrorCode::RedirectDenied => {
             ConversionError::Network { detail: error.code_str().into() }
         }
-        _ => ConversionError::Ai { provider: PROVIDER_ID.into(), detail: error.code_str().into() },
+        _ => ConversionError::Ai { provider: provider.into(), detail: error.code_str().into() },
     }
 }
 

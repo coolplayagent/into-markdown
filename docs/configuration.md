@@ -111,15 +111,18 @@ protocol = "wasi-v1"
 enabled = true
 
 [capability_routes.ocr]
-primary = "official.ocr.ppocrv6/ocr"
-fallbacks = []
+mode = "prefer"
+primary = "provider:local-vision/vision-ocr"
+fallbacks = ["plugin:official.ocr.ppocrv6/ocr"]
 
 [capability_routes.transcription]
-primary = "official.media.whisper/transcription"
-fallbacks = ["corporate.media/transcription"]
+mode = "only"
+primary = "plugin:official.media.whisper/transcription"
+fallbacks = []
 
 [capability_routes.diarization]
-primary = "official.media.whisper/diarization"
+mode = "only"
+primary = "plugin:official.media.whisper/diarization"
 fallbacks = []
 
 [profiles.quality.conversion.ocr]
@@ -137,9 +140,13 @@ formula_repair = "prefer"
 和 literal-IP TCP grant；缺少的能力保持拒绝。完整清单和协议见
 [`wasi-plugins.md`](wasi-plugins.md)。
 
-Capability 引用必须是 `plugin-id/capability-id`。显式模式要求 primary 就绪；自动模式只在
-处理输入前按顺序尝试 readiness fallback，运行中的失败不会切换 provider。签名安装、官方
-包和隔离边界见 [`capability-plugins.md`](capability-plugins.md)。
+Capability 引用的规范形式是 `plugin:ID/CAPABILITY` 或
+`provider:ID/CAPABILITY`；旧的 `plugin-id/capability-id` 仍可读取并规范化为插件来源。
+`off` 禁用能力，`only` 对 primary 失败关闭，`fallback` 只在来源不可用时按顺序恢复，
+`prefer` 还允许从显式的网络、超时或 Provider/OCR 失败恢复。取消、资源超限、内部不变量和
+无效 IR 不会触发回退。远端 OCR、转写和结构化修复结果必须先经过类型、大小、来源及
+provenance 校验；结构化修复只能提交版本化 Document Patch，不能直接写入最终 IR。签名
+安装、官方包和隔离边界见 [`capability-plugins.md`](capability-plugins.md)。
 
 配置中的 `allowed_hosts`、重定向和私网策略只能收窄权限，不能启用网络。上例调用
 本机 Provider 时仍需：

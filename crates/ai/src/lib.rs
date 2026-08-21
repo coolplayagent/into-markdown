@@ -1,13 +1,18 @@
 //! AI provider contracts, bounded direct transport, and placeholder implementations.
 
+mod composite;
 mod image_description;
 mod openai;
+mod remote_capabilities;
+mod structured_patch;
 
 pub use image_description::OpenAiImageDescriptionProvider;
+pub use remote_capabilities::{OpenAiRemoteOcr, OpenAiRemoteTranscriber};
+pub use structured_patch::{OpenAiDocumentPatchProvider, StructuredAiPatchEnricher};
 
 pub use openai::{
-    GenerationEndpoint, GenerationInput, GenerationRequest, GenerationResult,
-    OpenAiCompatibleClient, ProviderConfig, ProviderError, ProviderErrorCode,
+    AudioGenerationMetadata, GenerationEndpoint, GenerationInput, GenerationRequest,
+    GenerationResult, OpenAiCompatibleClient, ProviderConfig, ProviderError, ProviderErrorCode,
     ProviderNetworkPolicy, ProviderTestResult,
 };
 
@@ -109,3 +114,4 @@ impl Transcriber for PlaceholderTranscriber {
         })
     }
 }
+pub use composite::CompositeAiProvider;

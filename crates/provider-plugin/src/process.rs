@@ -509,11 +509,17 @@ fn validate_media_result(
     if provider != expected_provider || model.trim().is_empty() || model.trim() != model {
         return Err(unavailable(expected_provider, "provider or model identity is invalid"));
     }
-    if segments.iter().any(|node| !matches!(node.block, Block::TimedSegment { .. })) {
-        return Err(unavailable(expected_provider, "media provider returned a non-timed node"));
+    if segments.iter().any(|node| {
+        !matches!(node.block, Block::TimedSegment { .. })
+            || node.provenance.kind != into_markdown_core::ProvenanceKind::AiProvider
+            || node.provenance.provider != expected_provider
+    }) {
+        return Err(unavailable(
+            expected_provider,
+            "media provider returned an invalid timed node or provenance identity",
+        ));
     }
-    let mut document = Document::default();
-    document.blocks = segments.to_vec();
+    let document = Document { blocks: segments.to_vec(), ..Document::default() };
     document
         .validate()
         .map_err(|_| unavailable(expected_provider, "media provider returned invalid IR"))
