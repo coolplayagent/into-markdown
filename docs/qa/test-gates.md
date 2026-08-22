@@ -40,4 +40,4 @@ These distinctions do not waive the product acceptance matrix: real remote route
 
 ## Pull request infrastructure
 
-Draft PR #187 triggered four workflow runs. Every reported job failed within 1–6 seconds with an empty `steps` array: Bazel platform contract, Local Web security boundary, and two plugin-manager runs. The runs contain no checkout, build, test or log output, so they are recorded as runner/account infrastructure failures before code execution. Local gates above remain the code evidence; the failed badges are not represented as passing CI.
+Every inspected PR #187 job on both the earlier and current heads failed within 1–6 seconds with an empty `steps` array: Bazel platform contract, Local Web security boundary, and plugin-manager. Two push-only workflow-file runs also failed without creating any jobs. The runs contain no checkout, build, test or log output, so they are recorded as runner/account infrastructure failures before code execution. Local gates above remain the code evidence; the failed badges are not represented as passing CI.
