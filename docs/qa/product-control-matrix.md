@@ -113,4 +113,5 @@ Build under test: `target/debug/into-md` from `codex/admin-visual-pagination` un
 |---|---:|---|
 | Three real OCR PNGs in one default-parallel batch | PASS | 3/3 succeeded in 6.92 s after `7cb3307`; the previous `transactionBusy` failure did not recur; English, mixed Chinese/English, and Simplified Chinese text were inspected. |
 | Real `.doc`, `.xls`, `.ppt` in one batch | PASS | 3/3 succeeded; document text, spreadsheet row/formula order, and two-slide order with notes were inspected. Cold elapsed time was 249.64 s and is retained as a latency concern, not a performance pass. |
+| Ten real local speech inputs with the current optimized media provider | PASS | 10/10 succeeded in 132.29 s with a locally signed isolated test package: WAV, CBR/VBR MP3, M4A/AAC, OGG/Opus, FLAC, WebM, magic/extension mismatch, and durations through 185.008 s. All 142 timestamp ranges were monotonic. This does not replace the final installed-artifact pass. |
 | Current debug CLI unit suite | PASS | 234/234 CLI unit tests passed; the focused 24-input/eight-worker output-lease regression passed. |

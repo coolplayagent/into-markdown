@@ -1,7 +1,7 @@
 # Local test gates
 
 Date: 2026-08-23
-Branch head at focused rerun: `1a18458`
+Branch head at focused rerun: `2dd29ac`
 
 ## Passing gates
 
@@ -14,6 +14,7 @@ Branch head at focused rerun: `1a18458`
 - `cargo fmt --all -- --check` and `git diff --check`: passed before the `2cf47fd` commit.
 - `cargo test -p into-markdown-cli --bin into-md -- --test-threads=1`: 234/234 passed after commit `7cb3307` added batch-output lease serialization.
 - `cargo test -p into-markdown-cli app::tests::parallel_batch_serializes_atomic_output_leases -- --exact --test-threads=1`: 1/1 passed. The test converts 24 real text inputs with eight workers into one output directory and asserts that all outputs exist without `transactionBusy`.
+- `cargo test --locked -p into-markdown-asr`: 26/26 library tests and the available 1/1 quality gate passed; the pinned-model quality test remained explicitly ignored by its test contract. The passing unit set includes incomplete trailing UTF-8, invalid provider bytes, and token bytes split inside UTF-8 recovery.
 - Console typecheck passed with Node 24.19.0 (the repository requests 24.13.0). The focused console shards passed: workbench 17/17, preview 4/4, history cleanup 1/1, history actions 1/1, and accessibility 4/4. Commit `1a18458` keeps the renamed workbench assertions in the intended shard.
 
 Core-only plugin lifecycle evidence is stored separately under `docs/qa/evidence/runtime/`.
@@ -22,7 +23,8 @@ Core-only plugin lifecycle evidence is stored separately under `docs/qa/evidence
 
 - Local OCR, current debug CLI, isolated three-plugin home, default parallel jobs: 3/3 real PNG fixtures succeeded in 6.92 seconds. The earlier run had succeeded for two images and failed the mixed image with `transactionBusy`; after `7cb3307`, English, mixed Chinese/English, and Simplified Chinese outputs all completed in the same batch. Report: `/private/tmp/into-md-ocr-rerun.FnriZk/report.json`.
 - Legacy Office, current debug CLI, isolated three-plugin home: real `.doc`, `.xls`, and `.ppt` fixtures completed 3/3. The outputs preserved document text, spreadsheet row/formula order, and two-slide order with speaker notes. The batch took 249.64 seconds, so functional acceptance passed but the high cold batch latency is recorded and is not represented as a performance pass. Report: `/private/tmp/into-md-office-rerun.G05O9t/report.json`.
-- Both runs used `--no-config` plus the isolated plugin configuration explicitly. This avoids unrelated project/global Provider configuration while retaining the installed local plugin authority.
+- Local speech, current debug CLI plus a locally signed package containing the current optimized media provider: 10/10 real speech inputs completed in one single-worker invocation in 132.29 seconds. The matrix covered WAV, CBR and VBR MP3, M4A/AAC, OGG/Opus, FLAC, WebM, an AAC/M4A file deliberately named `.mp3`, and durations through 185.008 seconds. All ten Markdown outputs were non-empty, and all 142 parsed timestamp ranges were monotonic and non-overlapping. The earlier package had failed 4/10 long recordings with an old Whisper UTF-8 error; the current provider did not reproduce it. This is current-source package evidence, not the final post-merge installed artifact. Details: `docs/qa/evidence/runtime/audio-current-release-matrix.md`; report: `docs/qa/evidence/runtime/audio-current-release-report.json`.
+- The OCR and Office runs used `--no-config` plus the isolated plugin configuration explicitly. The speech run used a fresh isolated user-data root whose only configured plugin was the current-source media package. Both approaches avoid unrelated project/global Provider configuration while retaining installed local plugin authority.
 
 ## Full repository run
 
