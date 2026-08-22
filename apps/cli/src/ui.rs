@@ -1257,7 +1257,7 @@ async fn stage_plugin_package(State(state): State<AppState>, request: Request) -
     Json(StagedPluginPackageDto { schema_version: 1, source, filename, byte_len }).into_response()
 }
 
-async fn admin_snapshot(State(state): State<AdminState>) -> Response {
+async fn admin_snapshot(State(state): State<AdminState>, uri: Uri) -> Response {
     let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
         return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
     };
@@ -1265,7 +1265,12 @@ async fn admin_snapshot(State(state): State<AdminState>) -> Response {
     let anchor = state.test_user_data_anchor.clone();
     let config = state.admin_config.clone();
     match tokio::task::spawn_blocking(move || {
-        crate::admin::snapshot(&cwd, &config, anchor.as_deref())
+        crate::admin::snapshot_with_doctor(
+            &cwd,
+            &config,
+            anchor.as_deref(),
+            uri.query().is_some_and(|query| query.split('&').any(|pair| pair == "section=doctor")),
+        )
     })
     .await
     {
@@ -2538,7 +2543,7 @@ mod tests {
         };
         let permit = state.admin_gate.clone().acquire_owned().await.unwrap();
         assert_eq!(
-            admin_snapshot(State(state.clone())).await.status(),
+            admin_snapshot(State(state.clone()), Uri::from_static("/api/admin")).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(
@@ -2812,12 +2817,24 @@ mod tests {
         assert!(snapshot_dto["plugins"].is_array());
         assert!(snapshot_dto["configuration"].is_object());
         assert!(snapshot_dto["profiles"].is_array());
-        assert!(snapshot_dto["doctor"].as_array().is_some_and(|value| !value.is_empty()));
+        assert_eq!(snapshot_dto["doctor"].as_array().map(Vec::len), Some(0));
         assert!(!snapshot.contains(&session), "session leaked in admin snapshot");
         let lowercase_snapshot = snapshot.to_ascii_lowercase();
         for secret_field in ["\"apikey\":", "\"password\":", "\"secret\":", "\"token\":"] {
             assert!(!lowercase_snapshot.contains(secret_field), "{snapshot}");
         }
+
+        let doctor_snapshot = request(
+            port,
+            &format!(
+                "GET /api/admin?section=doctor HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Into-Md-Session: {session}\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(doctor_snapshot.starts_with("HTTP/1.1 200"), "{doctor_snapshot}");
+        let doctor_dto: serde_json::Value =
+            serde_json::from_str(doctor_snapshot.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert!(doctor_dto["doctor"].as_array().is_some_and(|value| !value.is_empty()));
 
         let body = r#"{"schemaVersion":1,"action":"capability.install","target":"ocr"}"#;
         let denied = request(

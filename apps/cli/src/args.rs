@@ -555,6 +555,12 @@ pub struct ProviderAddArgs {
     pub capability: Vec<String>,
     #[arg(long, value_parser = parse_duration_ms)]
     pub timeout: Option<u64>,
+    /// Restrict this provider to one hostname; may be repeated.
+    #[arg(long = "allow-host")]
+    pub allow_host: Vec<String>,
+    /// Permit this provider to use a loopback or private-network endpoint.
+    #[arg(long)]
+    pub allow_private_network: bool,
     #[arg(long, value_enum, default_value_t)]
     pub scope: Scope,
 }

@@ -12,6 +12,7 @@ official-provider-runtime = [
     "ocr-provider-runtime",
     "dep:into-markdown-asr",
     "dep:into-markdown-ffmpeg",
+    "into-markdown-ocr/authenticated-read-only-snapshot",
 ]
 ocr-provider-runtime = ["dep:into-markdown-onnxruntime"]
 metal = ["official-provider-runtime", "into-markdown-asr/metal"]

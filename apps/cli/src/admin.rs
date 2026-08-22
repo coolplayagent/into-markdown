@@ -178,6 +178,8 @@ pub struct ProviderDto {
     pub capabilities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    pub allowed_hosts: Vec<String>,
+    pub allow_private_network: bool,
     pub default: bool,
     pub effective: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -352,22 +354,33 @@ pub struct AdminActionResult {
     pub operation_result: Option<AdminOperationResult>,
 }
 
-pub fn snapshot(
+#[cfg(test)]
+fn snapshot(
     cwd: &Path,
     context: &AdminConfigContext,
     test_user_data_anchor: Option<&Path>,
+) -> Result<AdminSnapshot, CliError> {
+    snapshot_with_doctor(cwd, context, test_user_data_anchor, true)
+}
+
+pub fn snapshot_with_doctor(
+    cwd: &Path,
+    context: &AdminConfigContext,
+    test_user_data_anchor: Option<&Path>,
+    include_doctor: bool,
 ) -> Result<AdminSnapshot, CliError> {
     crate::app::with_admin_authority(test_user_data_anchor, || {
         if context.is_default() {
             crate::app::recover_plugins_before_config_load(cwd, false)?;
         }
-        snapshot_consistent(cwd, context)
+        snapshot_consistent(cwd, context, include_doctor)
     })
 }
 
 fn snapshot_consistent(
     cwd: &Path,
     context: &AdminConfigContext,
+    include_doctor: bool,
 ) -> Result<AdminSnapshot, CliError> {
     for _ in 0..2 {
         let exact_automatic = context.is_default();
@@ -406,6 +419,7 @@ fn snapshot_consistent(
                 project_profiles: &project_profile_names,
                 synthetic_context: !exact_automatic,
             },
+            include_doctor,
         )?;
         let loaded_after = context.load(cwd)?;
         let exact_unchanged = if exact_automatic {
@@ -448,6 +462,7 @@ fn snapshot_loaded(
     context: &AdminConfigContext,
     loaded: &LoadedConfig,
     layers: &SnapshotLayers<'_>,
+    include_doctor: bool,
 ) -> Result<AdminSnapshot, CliError> {
     let global_plugins = layers.global_plugins;
     let project_plugins = layers.project_plugins;
@@ -489,6 +504,8 @@ fn snapshot_loaded(
                     .then(|| std::env::var_os(&provider.api_key_env).is_some()),
                 capabilities: provider.capabilities.clone(),
                 timeout_ms: provider.timeout_ms,
+                allowed_hosts: provider.allowed_hosts.clone(),
+                allow_private_network: provider.allow_private_network,
                 default: false,
                 effective: false,
                 shadowed_by: Some("effective".into()),
@@ -508,6 +525,8 @@ fn snapshot_loaded(
             environment_set: Some(std::env::var_os(&provider.api_key_env).is_some()),
             capabilities: provider.capabilities.clone(),
             timeout_ms: provider.timeout_ms,
+            allowed_hosts: provider.allowed_hosts.clone(),
+            allow_private_network: provider.allow_private_network,
             default: loaded.effective.default_provider.as_deref() == Some(name),
             effective: true,
             shadowed_by: None,
@@ -635,7 +654,11 @@ fn snapshot_loaded(
     }
     // Initial navigation authenticates lightweight package metadata. The
     // explicit doctor and verify actions perform full payload hashing.
-    let doctor = doctor_checks(cwd, loaded, false, synthetic_context);
+    let doctor = if include_doctor {
+        doctor_checks(cwd, loaded, false, synthetic_context)
+    } else {
+        Vec::new()
+    };
     let snapshot = AdminSnapshot {
         schema_version: 1,
         formats,
@@ -954,17 +977,22 @@ fn apply_inner(
             if !action.authorize_network {
                 return Err(policy("networkAuthorizationRequired"));
             }
-            if action.allow_private_network {
+            let loaded = context.load(cwd)?;
+            let provider = loaded
+                .effective
+                .providers
+                .get(target)
+                .ok_or_else(|| CliError::usage(format!("unknown provider '{target}'")))?;
+            if provider.allow_private_network {
                 require_dangerous(action)?;
             }
-            let loaded = context.load(cwd)?;
             let result = crate::app::test_provider(
                 &loaded,
                 &crate::args::ProviderTestArgs {
                     name: target.into(),
                     allow_network: true,
-                    allow_private_network: action.allow_private_network,
-                    allow_host: action.allow_hosts.clone(),
+                    allow_private_network: provider.allow_private_network,
+                    allow_host: Vec::new(),
                 },
             )?;
             if result.model_count > 10_000
@@ -1027,6 +1055,13 @@ fn apply_inner(
                     OsString::from("--timeout"),
                     OsString::from(format!("{timeout_ms}ms")),
                 ]);
+            }
+            for host in &action.allow_hosts {
+                arguments.push(OsString::from("--allow-host"));
+                arguments.push(OsString::from(host));
+            }
+            if action.allow_private_network {
+                arguments.push(OsString::from("--allow-private-network"));
             }
             arguments.extend([
                 OsString::from("--scope"),
@@ -1602,6 +1637,8 @@ api_key_env = "PUBLISHER_API_KEY"
         add.model = Some("fixture-model".into());
         add.api_key_env = Some("FIXTURE_API_KEY".into());
         add.capabilities = vec!["image-description".into()];
+        add.allow_hosts = vec!["example.invalid".into()];
+        add.allow_private_network = true;
         add.authorize_dangerous = true;
         apply(cwd, &context, &add, Some(&anchor)).unwrap();
         let global_before = config::scope_snapshot(Scope::Global, cwd).unwrap();
@@ -1618,6 +1655,12 @@ api_key_env = "PUBLISHER_API_KEY"
         let providers = snapshot(cwd, &context, Some(&anchor)).unwrap().providers;
         assert_eq!(providers.iter().filter(|item| item.name == "fixture").count(), 3);
         assert!(providers.iter().any(|item| item.scope == "effective" && item.effective));
+        assert!(providers.iter().any(|item| {
+            item.name == "fixture"
+                && item.scope == "effective"
+                && item.allowed_hosts == ["example.invalid"]
+                && item.allow_private_network
+        }));
         assert!(providers.iter().any(|item| {
             item.scope == "global"
                 && !item.effective

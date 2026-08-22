@@ -1166,6 +1166,8 @@ struct ProviderView<'a> {
     models: &'a std::collections::BTreeMap<String, String>,
     api_key_env: &'a str,
     capabilities: &'a [String],
+    allowed_hosts: &'a [String],
+    allow_private_network: bool,
     default: bool,
 }
 
@@ -1199,6 +1201,7 @@ fn run_providers(
         }
         Some(ProvidersCommand::Add(arguments)) => {
             config::validate_environment_name(&arguments.api_key_env)?;
+            let allowed_hosts = config::normalize_allowed_hosts(&arguments.allow_host)?;
             for capability in &arguments.capability {
                 config::validate_capability(capability)?;
             }
@@ -1237,6 +1240,8 @@ fn run_providers(
                 api_key_env: arguments.api_key_env,
                 timeout_ms: arguments.timeout,
                 capabilities: arguments.capability,
+                allowed_hosts,
+                allow_private_network: arguments.allow_private_network,
             };
             let path =
                 config::add_provider(arguments.scope, &context.cwd, &arguments.name, &provider)?;
@@ -1286,10 +1291,11 @@ pub(crate) fn test_provider(
         .get(&arguments.name)
         .ok_or_else(|| CliError::usage(format!("unknown provider '{}'", arguments.name)))?;
     let mut options = loaded.options.clone();
+    narrow_allowed_hosts(&mut options.network.allowed_hosts, &provider.allowed_hosts)?;
     apply_network_authorization(
         &mut options,
         arguments.allow_network,
-        arguments.allow_private_network,
+        provider.allow_private_network && arguments.allow_private_network,
         &arguments.allow_host,
     )?;
     validate_network_url(&provider.base_url, &options, "provider")?;
@@ -1372,6 +1378,16 @@ fn show_provider(
         writeln!(stdout, "model: {}", view.model)?;
         writeln!(stdout, "API key environment: {}", view.api_key_env)?;
         writeln!(stdout, "capabilities: {}", view.capabilities.join(", "))?;
+        writeln!(
+            stdout,
+            "allowed hosts: {}",
+            if view.allowed_hosts.is_empty() {
+                "-".to_owned()
+            } else {
+                view.allowed_hosts.join(", ")
+            }
+        )?;
+        writeln!(stdout, "allow private network: {}", view.allow_private_network)?;
         Ok(())
     }
 }
@@ -1389,6 +1405,8 @@ fn provider_view<'a>(
         models: &provider.models,
         api_key_env: &provider.api_key_env,
         capabilities: &provider.capabilities,
+        allowed_hosts: &provider.allowed_hosts,
+        allow_private_network: provider.allow_private_network,
         default: loaded.effective.default_provider.as_deref() == Some(name),
     }
 }
@@ -6814,6 +6832,76 @@ mod tests {
         let error = narrow_allowed_hosts(&mut allowed, &["other.example".into()]).unwrap_err();
         assert_eq!(error.code(), "hostAllowlistConflict");
         assert_eq!(error.exit_code(), 5);
+    }
+
+    #[test]
+    fn provider_connection_tests_use_persisted_policies_without_cross_contamination() {
+        use std::net::TcpListener;
+
+        fn models_server() -> (u16, std::thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let size = stream.read(&mut request).unwrap();
+                assert!(request[..size].starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+                let body = br#"{"object":"list","data":[{"id":"fixture-model","object":"model","created":1,"owned_by":"fixture"}]}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
+            });
+            (port, handle)
+        }
+
+        let (a_port, a_server) = models_server();
+        let (b_port, b_server) = models_server();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        fs::write(
+            &path,
+            format!(
+                r#"
+schema_version = 1
+
+[providers.a]
+type = "openai-compatible"
+base_url = "http://127.0.0.1:{a_port}/v1"
+model = "fixture-model"
+api_key_env = "PATH"
+capabilities = ["image-description"]
+allowed_hosts = ["127.0.0.1"]
+allow_private_network = true
+
+[providers.b]
+type = "openai-compatible"
+base_url = "http://localhost:{b_port}/v1"
+model = "fixture-model"
+api_key_env = "PATH"
+capabilities = ["image-description"]
+allowed_hosts = ["localhost"]
+allow_private_network = true
+"#
+            ),
+        )
+        .unwrap();
+        let mut loaded = config::load(root.path(), &[path], true, None, None).unwrap();
+        let arguments = |name: &str| crate::args::ProviderTestArgs {
+            name: name.into(),
+            allow_network: true,
+            allow_private_network: true,
+            allow_host: Vec::new(),
+        };
+        assert!(test_provider(&loaded, &arguments("a")).unwrap().configured_model_available);
+        loaded.effective.providers.get_mut("a").unwrap().allowed_hosts =
+            vec!["draft.invalid".into()];
+        assert!(test_provider(&loaded, &arguments("b")).unwrap().configured_model_available);
+        a_server.join().unwrap();
+        b_server.join().unwrap();
     }
 
     #[test]

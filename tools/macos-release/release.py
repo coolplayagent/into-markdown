@@ -23,6 +23,7 @@ VERSION = "0.0.0"
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv6-tiny-recognizer-character-table", "ppocrv6-tiny-recognizer-onnx-model"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
+SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
 LEGACY_COMPONENTS = ["libreoffice-macos-arm64"]
 FIXTURES = [
     "docx/normal.docx", "docx/corrupt.docx", "epub/normal.epub", "msg/normal.msg",
@@ -256,7 +257,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         copy_file(ffmpeg_artifacts / "ffmpeg-relink-aarch64-apple-darwin.tar", speech / "relink/ffmpeg-relink-aarch64-apple-darwin.tar", 0o644)
         media_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
         speech_manifest = provider_manifest("official.media.whisper", "bin/into-md-media-provider", speech, [
-            {"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(1048576000, 4294967296, 7200000)},
+            {"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(SPEECH_TRANSCRIPTION_MEMORY_BYTES, 4294967296, 7200000)},
             {"id": "diarization", "kind": "diarization", "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(536870912, 4294967296, 7200000)},
         ], ["Apache-2.0", "LGPL-2.1-or-later", "MIT"])
         speech_output = packages / "official.media.whisper.imp"

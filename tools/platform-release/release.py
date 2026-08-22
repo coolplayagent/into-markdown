@@ -35,6 +35,7 @@ SPEECH_COMPONENTS = [
     "silero-vad-half-onnx-model",
     "3dspeaker-eres2net-base-onnx-model",
 ]
+SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
 FIXTURES = [
     "docx/normal.docx",
     "docx/corrupt.docx",
@@ -467,7 +468,7 @@ def package_plugins(
         copy_file(cache / "ffmpeg-source", speech / "source/ffmpeg-8.1.2.tar.xz")
         copy_file(ffmpeg / f"ffmpeg-relink-{target}.tar", speech / f"relink/ffmpeg-relink-{target}.tar")
         media = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
-        speech_manifest = provider_manifest("official.media.whisper", target, f"bin/into-md-media-provider{suffix}", speech, [{"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(1048576000, 4294967296, 7200000)}, {"id": "diarization", "kind": "diarization", "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(536870912, 4294967296, 7200000)}], ["Apache-2.0", "LGPL-2.1-or-later", "MIT"])
+        speech_manifest = provider_manifest("official.media.whisper", target, f"bin/into-md-media-provider{suffix}", speech, [{"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(SPEECH_TRANSCRIPTION_MEMORY_BYTES, 4294967296, 7200000)}, {"id": "diarization", "kind": "diarization", "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(536870912, 4294967296, 7200000)}], ["Apache-2.0", "LGPL-2.1-or-later", "MIT"])
         output = packages / "official.media.whisper.imp"
         if build_provider_package(packager, speech, speech_manifest, target, signing_key, output) != signer:
             raise ReleaseError("official plugin signer identities disagree")

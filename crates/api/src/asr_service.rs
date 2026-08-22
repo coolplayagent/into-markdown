@@ -49,10 +49,17 @@ fn installed_asr_service_inner(
     read_only_sandbox: bool,
 ) -> Result<Arc<dyn Transcriber>, ConversionError> {
     context.checkpoint()?;
-    let manager = Arc::new(into_markdown_ocr::ModelManager::embedded(
-        config.writable_model_root.clone(),
-        config.bundled_model_root.clone(),
-    )?);
+    let manager = Arc::new(if read_only_sandbox {
+        into_markdown_ocr::ModelManager::embedded_authenticated_read_only_snapshot(
+            config.writable_model_root.clone(),
+            config.bundled_model_root.clone(),
+        )?
+    } else {
+        into_markdown_ocr::ModelManager::embedded(
+            config.writable_model_root.clone(),
+            config.bundled_model_root.clone(),
+        )?
+    });
     if manager.manifest().default_asr_bundle.as_deref() != Some(&config.model_bundle) {
         return Err(ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),

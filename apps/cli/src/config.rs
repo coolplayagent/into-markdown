@@ -71,6 +71,12 @@ pub struct ProviderConfig {
     pub api_key_env: String,
     pub timeout_ms: Option<u64>,
     pub capabilities: Vec<String>,
+    /// Provider-specific hostname allowlist used by connection checks and requests.
+    /// The effective policy remains intersected with the global request policy.
+    pub allowed_hosts: Vec<String>,
+    /// Persisted opt-in for provider endpoints on loopback or private networks.
+    /// Callers must still explicitly authorize network use for each request.
+    pub allow_private_network: bool,
 }
 
 /// One configured process or WASI plugin.
@@ -844,6 +850,10 @@ fn validate_provider(
     for capability in &provider.capabilities {
         validate_capability(capability)?;
     }
+    if provider.allowed_hosts.len() > 64 {
+        return Err(CliError::config(format!("provider '{name}' has too many allowed hosts")));
+    }
+    normalize_allowed_hosts(&provider.allowed_hosts)?;
     if require_complete {
         let missing = [
             ("type", provider.provider_type.is_empty()),

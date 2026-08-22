@@ -461,17 +461,88 @@ mod speech_tests {
         let mut options = into_markdown::ConversionOptions::default();
         options.asr.language = Some("zh".into());
         let context = execution_context(CancellationToken::new(), &options.limits);
+        let assembly_started = std::time::Instant::now();
         let transcriber = asr_service(&root, &options, &context).expect("speech runtime assembles");
+        let assembly_ms = assembly_started.elapsed().as_secs_f64() * 1000.0;
+        let transcription_started = std::time::Instant::now();
         let result = block_on(transcriber.transcribe(
             TranscriptionRequest { media: &bytes, media_type: "audio/webm", language: Some("zh") },
             &context,
         ))
         .expect("real audio transcribes");
+        let transcription_ms = transcription_started.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "assemblyMs": (assembly_ms * 100.0).round() / 100.0,
+                "transcriptionMs": (transcription_ms * 100.0).round() / 100.0,
+            })
+        );
         assert!(!result.segments.is_empty(), "transcript must contain timed segments");
         assert!(
             !serde_json::to_string(&result).unwrap().contains('\u{fffd}'),
             "transcript must not contain damaged UTF-8 replacement text"
         );
+    }
+
+    #[test]
+    #[ignore = "requires an installed Speech plugin and a real two-speaker audio fixture"]
+    fn installed_speech_runtime_diarizes_real_audio_outside_process_sandbox() {
+        let root = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_SPEECH_PLUGIN_ROOT")
+                .expect("INTO_MD_TEST_SPEECH_PLUGIN_ROOT is required"),
+        );
+        let input = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_AUDIO").expect("INTO_MD_TEST_AUDIO is required"),
+        );
+        let bytes = fs::read(input).expect("real audio fixture must be readable");
+        let mut options = into_markdown::ConversionOptions::default();
+        options.asr.language = Some("zh".into());
+        options.diarization.enabled = true;
+        options.diarization.expected_speakers = Some(2);
+        let context = execution_context(CancellationToken::new(), &options.limits);
+        let started = std::time::Instant::now();
+        let transcriber = asr_service(&root, &options, &context).expect("speech runtime assembles");
+        let transcription = block_on(transcriber.transcribe(
+            TranscriptionRequest { media: &bytes, media_type: "audio/wav", language: Some("zh") },
+            &context,
+        ))
+        .expect("real audio transcribes");
+        let diarizer =
+            diarization_service(&root, &options, &context).expect("diarization runtime assembles");
+        let result = block_on(diarizer.diarize(
+            into_markdown::DiarizationRequest {
+                media: &bytes,
+                media_type: "audio/wav",
+                segments: &transcription.segments,
+                expected_speakers: Some(2),
+                max_speakers: options.diarization.max_speakers,
+            },
+            &context,
+        ))
+        .expect("real audio diarizes");
+        let document = into_markdown::Document {
+            blocks: result.segments.clone(),
+            ..into_markdown::Document::default()
+        };
+        document.validate().expect("diarization result must remain valid Document IR");
+        let speakers = result
+            .segments
+            .iter()
+            .filter_map(|node| match &node.block {
+                into_markdown::Block::TimedSegment { speaker, .. } => speaker.as_deref(),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "diarizationMs": (started.elapsed().as_secs_f64() * 100_000.0).round() / 100.0,
+                "segments": result.segments.len(),
+                "speakers": speakers.len(),
+            })
+        );
+        assert_eq!(speakers.len(), 2, "the controlled two-speaker fixture must retain two labels");
     }
 
     #[test]
@@ -495,7 +566,7 @@ mod speech_tests {
             .prefix("into-md-speech-sandbox-test-")
             .tempdir()
             .expect("private runtime staging directory is available");
-        link_runtime_tree(&installed_root, staged.path());
+        copy_runtime_tree(&installed_root, staged.path());
         let staged_provider = staged.path().join("bin/into-md-media-provider");
         if staged_provider.exists() {
             fs::remove_file(&staged_provider).expect("old provider staging link is removable");
@@ -535,6 +606,7 @@ mod speech_tests {
         })
         .unwrap();
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let execution_started = std::time::Instant::now();
         let result = process
             .execute_raw(
                 PluginRequest {
@@ -547,6 +619,13 @@ mod speech_tests {
                 &context,
             )
             .expect("real audio transcribes inside the process sandbox");
+        let execution_ms = execution_started.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "sandboxExecutionMs": (execution_ms * 100.0).round() / 100.0,
+            })
+        );
         let result: into_markdown::TranscriptionResult =
             serde_json::from_str(&result.result_json).expect("transcription result is typed");
         assert!(!result.segments.is_empty(), "transcript must contain timed segments");
@@ -556,7 +635,7 @@ mod speech_tests {
         );
     }
 
-    fn link_runtime_tree(source: &Path, destination: &Path) {
+    fn copy_runtime_tree(source: &Path, destination: &Path) {
         for entry in fs::read_dir(source).expect("runtime directory is readable") {
             let entry = entry.expect("runtime entry is readable");
             let source = entry.path();
@@ -564,11 +643,19 @@ mod speech_tests {
             let metadata = entry.metadata().expect("runtime metadata is readable");
             if metadata.is_dir() {
                 fs::create_dir(&destination).expect("runtime directory is staged");
-                link_runtime_tree(&source, &destination);
+                copy_runtime_tree(&source, &destination);
             } else if metadata.is_file()
                 && !matches!(entry.file_name().to_str(), Some(".package.zip" | ".installed.json"))
             {
-                fs::hard_link(&source, &destination).expect("runtime file is staged");
+                let mut input = fs::File::open(&source).expect("runtime source opens");
+                let mut output = fs::File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(&destination)
+                    .expect("runtime destination opens");
+                std::io::copy(&mut input, &mut output).expect("runtime file is copied");
+                fs::set_permissions(&destination, metadata.permissions())
+                    .expect("runtime permissions are copied");
             }
         }
     }
