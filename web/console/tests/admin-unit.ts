@@ -218,7 +218,7 @@ test("legacy administration URLs redirect into the matching capability context",
 test("nested administration dialogs close one layer at a time and restore focus", async () => {
   const window = install("/admin/capabilities");
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api() }));
-  await waitFor(() => window.document.body.textContent.includes("Capabilities & sources"));
+  await waitFor(() => [...window.document.querySelectorAll("button")].some((button) => button.textContent === "AI services"));
   const sourceTrigger = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "AI services")!;
   sourceTrigger.focus(); sourceTrigger.click();
   await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1);
