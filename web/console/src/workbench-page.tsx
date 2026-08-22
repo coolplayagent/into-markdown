@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, CircleAlert, FolderOpen, LoaderCircle, Plus, Sparkles, Square, Trash2, UploadCloud, X,
+  CheckCircle2, CircleAlert, FolderOpen, LoaderCircle, Plus, Sparkles, Square, UploadCloud, X,
 } from "lucide-react";
 import type { ApiClient, CapabilityAdmin, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
 import { ApiError, defaultWorkbenchOptions } from "./api";
 import { AdvancedSettings, CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
+import { HistoryPanel } from "./history-panel";
+import { useCapabilities } from "./capability-store";
 import {
   SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName,
-  iconForFormat, supportsFileName, taskFormat, taskName,
+  iconForFormat, supportsFileName,
 } from "./task-ui";
 
 const MAX_BATCH_FILES = 100;
@@ -30,7 +32,8 @@ function entryKey(file: File): string {
 }
 
 export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
+  const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const directory = useRef<HTMLInputElement>(null);
   const watchers = useRef(new Map<string, AbortController>());
@@ -45,9 +48,9 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [advanced, setAdvanced] = useState(false);
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
-  const [cleaning, setCleaning] = useState(false);
-  const [ocrStatus, setOcrStatus] = useState<ComponentStatus>();
-  const [ocrCapability, setOcrCapability] = useState<CapabilityAdmin>();
+  const quickOcr = capabilities.capability("ocr");
+  const ocrStatus: ComponentStatus | undefined = quickOcr ? { available: quickOcr.status === "ready", code: quickOcr.status, detail: quickOcr.currentSourceName } : undefined;
+  const ocrCapability: CapabilityAdmin | undefined = quickOcr ? { id: "ocr", status: normalizeStatus(quickOcr.status), localStatus: normalizeStatus(quickOcr.localStatus), currentSource: quickOcr.currentSource, sources: quickOcr.sources, ...(quickOcr.version ? { version: quickOcr.version } : {}), ...(quickOcr.localVersion ? { localVersion: quickOcr.localVersion } : {}) } : undefined;
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
 
@@ -85,8 +88,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.all([api.listTasks({ limit: 100 }, controller.signal), api.status(controller.signal), api.admin(controller.signal)])
-      .then(([page, status, admin]) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); setOcrStatus(status.imageOcr); setOcrCapability(admin.capabilities.find((item) => item.id === "ocr")); })
+    void api.listTasks({ limit: 100 }, controller.signal)
+      .then((page) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setMessageScope("source");
@@ -98,11 +101,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   const installOcr = useCallback(async () => {
     await api.installCapability("ocr");
-    const status = await api.status();
-    setOcrStatus(status.imageOcr);
-    const admin = await api.admin();
-    setOcrCapability(admin.capabilities.find((item) => item.id === "ocr"));
-  }, [api]);
+    await capabilities.refresh();
+  }, [api, capabilities]);
 
   useEffect(() => {
     if (!batchId || uploading || navigatedBatch.current === batchId || entries.length === 0) return;
@@ -184,7 +184,6 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   const cleanup = async () => {
     if (!window.confirm(t("cleanupWarning"))) return;
-    setCleaning(true);
     try {
       const result = await api.cleanup();
       const page = await api.listTasks({ limit: 100 });
@@ -192,16 +191,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
       setMessageScope("source");
       setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
     } catch {
-      setMessageScope("source");
-      setMessage(t("loadTasksError"));
-    } finally {
-      setCleaning(false);
+      setMessageScope("source"); setMessage(t("loadTasksError"));
     }
   };
 
   return <section className="workbench-route" aria-labelledby="workbench-title">
     <div className="page-heading compact-heading"><div><p className="eyebrow">LOCAL WORKBENCH</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div><p>{t("convertDocumentsIntro")}</p></div>
-    <div className="conversion-layout">
+    <div className="task-workspace"><div className="conversion-layout">
       <section className="card upload-card" aria-labelledby="upload-heading">
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
         <div className="drop-zone-shell"><div id="upload-zone" className={`drop-zone ${dragging ? "dragging" : ""}`} role="button" tabIndex={0} onClick={() => input.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.current?.click(); } }} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}><span className="upload-icon" aria-hidden="true"><UploadCloud size={28} /></span><strong>{t("dropFiles")}</strong></div><button className="secondary add-file-button" type="button" disabled={uploading} onClick={() => input.current?.click()}><Plus size={17} aria-hidden="true" />{t("chooseFiles")}</button></div>
@@ -225,10 +221,6 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => setEntries((current) => current.filter((_, item) => item !== index))}><X size={17} aria-hidden="true" /></button>}</li>;
             })}</ul></div>
           </section>}
-          {recentHistory.length > 0 && <section className="recent-history" aria-labelledby="recent-history-heading">
-            <div className="recent-history-title"><strong id="recent-history-heading">{t("recentHistory")}</strong><div className="recent-history-actions"><span>{recentHistory.length}</span><button className="icon-button neutral" type="button" disabled={cleaning} aria-label={t("cleanup")} onClick={() => void cleanup()}><Trash2 size={15} aria-hidden="true" /></button></div></div>
-            <div className="recent-history-scroll"><ul>{recentHistory.map((task) => { const format = taskFormat(task); const FormatIcon = iconForFormat(format); const failure = task.status === "failed" || task.status === "interrupted" ? diagnosticLabel(task.diagnostics[0]?.code ?? "conversionFailed", t) : null; return <li key={task.id}><button className="recent-task-link" type="button" onClick={() => setActiveTaskId(task.id)}><span className="file-type-icon"><FormatIcon size={18} aria-hidden="true" /></span><span className="selected-file-name"><strong>{taskName(task, t("restoredTask"))}</strong><small className={failure ? "failure-reason" : undefined}>{format.toUpperCase()} · {new Date(task.updatedAtMs).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}{failure ? ` · ${failure}` : ""}</small></span><span className={`history-status ${task.status}`}>{t(task.status)}</span></button></li>; })}</ul></div>
-          </section>}
         </div>
       </section>
       <div className="control-column">
@@ -237,8 +229,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
-    </div>
+    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} /></div>
     <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} providerCapabilityActive={remoteOcrSelected && options.ocrPolicy !== "off"} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
+}
+
+function normalizeStatus(status: string): CapabilityAdmin["status"] {
+  if (status === "unknown" || status === "checking" || status === "disabled") return status === "disabled" ? "blocked" : "verifying";
+  return status as CapabilityAdmin["status"];
 }

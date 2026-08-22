@@ -35,6 +35,7 @@ use tokio::time::{Duration, Instant};
 const SESSION_HEADER: HeaderName = HeaderName::from_static("x-into-md-session");
 const TASK_REQUEST_HEADER: HeaderName = HeaderName::from_static("x-into-md-request");
 const TASK_FILENAME_HEADER: HeaderName = HeaderName::from_static("x-into-md-filename-b64");
+const PLUGIN_FILENAME_HEADER: HeaderName = HeaderName::from_static("x-into-md-plugin-filename-b64");
 const SEC_FETCH_MODE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-mode");
 const SEC_FETCH_SITE_HEADER: HeaderName = HeaderName::from_static("sec-fetch-site");
 const CROSS_ORIGIN_OPENER_POLICY_HEADER: HeaderName =
@@ -62,6 +63,7 @@ const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const SSE_HEARTBEAT: Duration = Duration::from_millis(100);
 const ADMIN_GRANT_TTL: Duration = Duration::from_secs(30);
+const MAX_PLUGIN_PACKAGE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 struct AdminGrant {
     binding: Vec<u8>,
@@ -161,6 +163,15 @@ struct CapabilityCheckDto {
     detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     elapsed_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StagedPluginPackageDto {
+    schema_version: u32,
+    source: String,
+    filename: String,
+    byte_len: u64,
 }
 
 impl CapabilityCache {
@@ -308,6 +319,13 @@ fn capability_evidence_path(test_user_data_anchor: Option<&Path>) -> Result<Path
         .parent()
         .ok_or_else(|| CliError::config("global configuration directory is unavailable"))?;
     Ok(parent.join("capability-status.json"))
+}
+
+fn plugin_staging_dir(test_user_data_anchor: Option<&Path>) -> Result<PathBuf, CliError> {
+    capability_evidence_path(test_user_data_anchor)?
+        .parent()
+        .map(|parent| parent.join("plugin-staging"))
+        .ok_or_else(|| CliError::config("plugin staging directory is unavailable"))
 }
 
 pub(crate) fn record_capability_verification(
@@ -613,6 +631,7 @@ where
         .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
         .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
         .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
+        .route("/admin/plugin-package", post(stage_plugin_package).fallback(api_method_not_allowed))
         .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/cancel", post(cancel_task).fallback(api_method_not_allowed))
         .route("/tasks/{id}/retry", post(retry_task).fallback(api_method_not_allowed))
@@ -1111,6 +1130,133 @@ async fn install_capability(
     }
 }
 
+async fn stage_plugin_package(State(state): State<AppState>, request: Request) -> Response {
+    if !state.admin_config.is_default() {
+        return rejection(StatusCode::FORBIDDEN, "configurationReadOnly");
+    }
+    let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
+        return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
+    };
+    if single_ascii_header(request.headers(), header::CONTENT_TYPE)
+        .is_some_and(|value| value != "application/octet-stream")
+    {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalidPluginPackageType");
+    }
+    let declared = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length == 0 || length > MAX_PLUGIN_PACKAGE_BYTES) {
+        return rejection(StatusCode::PAYLOAD_TOO_LARGE, "pluginPackageTooLarge");
+    }
+    let filename = match single_ascii_header(request.headers(), PLUGIN_FILENAME_HEADER.clone())
+        .and_then(|encoded| URL_SAFE_NO_PAD.decode(encoded).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        Some(name)
+            if name.len() <= 255
+                && name.to_ascii_lowercase().ends_with(".imp")
+                && Path::new(&name).components().count() == 1
+                && !name.contains('/')
+                && !name.contains('\\')
+                && !name.chars().any(char::is_control) =>
+        {
+            name
+        }
+        _ => return rejection(StatusCode::BAD_REQUEST, "invalidPluginPackageFilename"),
+    };
+    let staging = match plugin_staging_dir(state.test_user_data_anchor.as_deref()) {
+        Ok(path) => path,
+        Err(error) => return admin_error(&error),
+    };
+    let id = match new_session() {
+        Ok(id) => id,
+        Err(error) => return admin_error(&error),
+    };
+    let final_path = staging.join(format!("{id}.imp"));
+    let partial_path = staging.join(format!("{id}.part"));
+    let create_path = partial_path.clone();
+    let mut file = match tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&staging)?;
+        std::fs::OpenOptions::new().write(true).create_new(true).open(create_path)
+    })
+    .await
+    {
+        Ok(Ok(file)) => file,
+        Ok(Err(_)) => {
+            return rejection(StatusCode::INTERNAL_SERVER_ERROR, "pluginPackageStageFailed");
+        }
+        Err(_) => return rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
+    };
+    let deadline = Instant::now() + REQUEST_TOTAL_TIMEOUT;
+    let mut shutdown = state.shutdown.clone();
+    let mut stream = request.into_body().into_data_stream();
+    let mut byte_len = 0_u64;
+    loop {
+        let chunk = tokio::select! {
+            changed = shutdown.changed() => {
+                let _ = changed;
+                let _ = std::fs::remove_file(&partial_path);
+                return rejection(StatusCode::SERVICE_UNAVAILABLE, "shuttingDown");
+            }
+            chunk = tokio::time::timeout_at(
+                deadline.min(Instant::now() + REQUEST_IDLE_TIMEOUT),
+                stream.next(),
+            ) => match chunk {
+                Ok(chunk) => chunk,
+                Err(_) => {
+                    let _ = std::fs::remove_file(&partial_path);
+                    return rejection(StatusCode::REQUEST_TIMEOUT, "uploadTimeout");
+                }
+            },
+        };
+        let Some(chunk) = chunk else { break };
+        let Ok(chunk) = chunk else {
+            let _ = std::fs::remove_file(&partial_path);
+            return rejection(StatusCode::BAD_REQUEST, "uploadDisconnected");
+        };
+        byte_len = byte_len.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if byte_len > MAX_PLUGIN_PACKAGE_BYTES {
+            let _ = std::fs::remove_file(&partial_path);
+            return rejection(StatusCode::PAYLOAD_TOO_LARGE, "pluginPackageTooLarge");
+        }
+        let write = tokio::task::spawn_blocking(move || {
+            file.write_all(&chunk)?;
+            Ok::<_, std::io::Error>(file)
+        })
+        .await;
+        file = match write {
+            Ok(Ok(file)) => file,
+            _ => {
+                let _ = std::fs::remove_file(&partial_path);
+                return rejection(StatusCode::INTERNAL_SERVER_ERROR, "pluginPackageStageFailed");
+            }
+        };
+    }
+    if byte_len == 0 {
+        let _ = std::fs::remove_file(&partial_path);
+        return rejection(StatusCode::BAD_REQUEST, "emptyPluginPackage");
+    }
+    let finish_partial = partial_path.clone();
+    let finish_final = final_path.clone();
+    if !matches!(
+        tokio::task::spawn_blocking(move || {
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(finish_partial, finish_final)
+        })
+        .await,
+        Ok(Ok(()))
+    ) {
+        let _ = std::fs::remove_file(&partial_path);
+        return rejection(StatusCode::INTERNAL_SERVER_ERROR, "pluginPackageStageFailed");
+    }
+    let source = format!("staged:{id}");
+    Json(StagedPluginPackageDto { schema_version: 1, source, filename, byte_len }).into_response()
+}
+
 async fn admin_snapshot(State(state): State<AdminState>) -> Response {
     let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
         return rejection(StatusCode::TOO_MANY_REQUESTS, "adminBusy");
@@ -1158,7 +1304,7 @@ async fn admin_grant(State(state): State<AdminState>, request: Request) -> Respo
 }
 
 async fn admin_action(State(state): State<AdminState>, request: Request) -> Response {
-    let Ok(action) = bounded_admin_action(request).await else {
+    let Ok(mut action) = bounded_admin_action(request).await else {
         return rejection(StatusCode::BAD_REQUEST, "invalidRequest");
     };
     let Ok(_permit) = state.admin_gate.clone().try_acquire_owned() else {
@@ -1184,10 +1330,35 @@ async fn admin_action(State(state): State<AdminState>, request: Request) -> Resp
     } else if action.authorization_grant.is_some() {
         return rejection(StatusCode::BAD_REQUEST, "unexpectedAuthorizationGrant");
     }
+    let staged_package = if action.action == "plugin.install" {
+        match action.source.as_deref().and_then(|source| source.strip_prefix("staged:")) {
+            Some(id)
+                if !id.is_empty()
+                    && id.len() <= 128
+                    && id.chars().all(|value| {
+                        value.is_ascii_alphanumeric() || value == '-' || value == '_'
+                    }) =>
+            {
+                let Ok(root) = plugin_staging_dir(state.test_user_data_anchor.as_deref()) else {
+                    return rejection(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "pluginPackageStageFailed",
+                    );
+                };
+                let path = root.join(format!("{id}.imp"));
+                action.source = Some(path.to_string_lossy().into_owned());
+                Some(path)
+            }
+            Some(_) => return rejection(StatusCode::BAD_REQUEST, "invalidPluginPackageToken"),
+            None => None,
+        }
+    } else {
+        None
+    };
     let cwd = state.cwd.clone();
     let anchor = state.test_user_data_anchor.clone();
     let config = state.admin_config.clone();
-    match tokio::task::spawn_blocking(move || {
+    let outcome = tokio::task::spawn_blocking(move || {
         let result = crate::admin::apply(&cwd, &config, &action, anchor.as_deref())?;
         let loaded = crate::config::load(
             &cwd,
@@ -1198,8 +1369,11 @@ async fn admin_action(State(state): State<AdminState>, request: Request) -> Resp
         )?;
         Ok::<_, CliError>((result, loaded))
     })
-    .await
-    {
+    .await;
+    if let Some(path) = staged_package {
+        let _ = std::fs::remove_file(path);
+    }
+    match outcome {
         Ok(Ok((result, loaded))) => {
             state.tasks.update_media_config(loaded.clone());
             *state.loaded.write().unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
@@ -2279,6 +2453,34 @@ mod tests {
         assert!(response.contains("\"schemaVersion\":1"), "{response}");
         assert!(response.contains(&format!("\"code\":\"{code}\"")), "{response}");
         assert_security_headers(response);
+    }
+
+    #[tokio::test]
+    async fn browser_plugin_picker_stages_only_imp_packages_inside_private_user_data() {
+        let (directory, port, session, shutdown, server) = start().await;
+        let filename = URL_SAFE_NO_PAD.encode("local-ocr.imp");
+        let response = request(
+            port,
+            &format!(
+                "POST /api/admin/plugin-package HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nX-Into-Md-Session: {session}\r\nX-Into-Md-Plugin-Filename-B64: {filename}\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\nConnection: close\r\n\r\nimp"
+            ),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let body = response.split("\r\n\r\n").nth(1).unwrap();
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(value["filename"], "local-ocr.imp");
+        assert_eq!(value["byteLen"], 3);
+        let source = value["source"].as_str().unwrap();
+        assert!(source.starts_with("staged:"), "{source}");
+        assert!(!source.contains(directory.path().to_string_lossy().as_ref()));
+        let staged = directory
+            .path()
+            .join("user-data/into-markdown/plugin-staging")
+            .join(format!("{}.imp", source.trim_start_matches("staged:")));
+        assert_eq!(std::fs::read(&staged).unwrap(), b"imp");
+        let _ = shutdown.send(());
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]

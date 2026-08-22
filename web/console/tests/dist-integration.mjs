@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { Window } from "happy-dom";
@@ -10,9 +10,18 @@ const manifest = JSON.parse(await readFile(resolve(distDirectory, "asset-manifes
 const app = manifest.assets.find((asset) => /^\/assets\/app\.[a-f0-9]{16}\.js$/.test(asset.path));
 const bootstrap = manifest.assets.find((asset) => /^\/assets\/bootstrap\.[a-f0-9]{16}\.js$/.test(asset.path));
 assert.ok(app && bootstrap);
+let activeWindow;
+
+afterEach(() => {
+  activeWindow?.close();
+  activeWindow = undefined;
+});
 
 function installWindow(fragment = "") {
   const window = new Window({ url: `http://127.0.0.1:1/workbench${fragment}` });
+  activeWindow = window;
+  window.setInterval = () => 0;
+  window.clearInterval = () => {};
   Object.defineProperty(window.navigator, "languages", { value: ["en"], configurable: true });
   window.document.body.innerHTML = '<div id="app"></div>';
   for (const [name, value] of Object.entries({
@@ -36,16 +45,33 @@ function waitFor(predicate, timeout = 1_000) {
   });
 }
 
-test("checked-in production app mounts without a React global", async () => {
-  const window = installWindow();
-  globalThis.fetch = async (input) => new Response(JSON.stringify(String(input).includes("/api/tasks?") ? { schemaVersion: 1, tasks: [] } : {
+function mockPayload(input) {
+  const path = String(input);
+  if (path.includes("/api/tasks?")) return { schemaVersion: 1, tasks: [] };
+  if (path.includes("/api/capabilities/status")) return {
+    schemaVersion: 2,
+    generation: 1,
+    checking: false,
+    capabilities: [
+      { id: "legacy-office", name: "Legacy Office", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
+      { id: "ocr", name: "Image OCR", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
+      { id: "transcription", name: "Speech transcription", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
+      { id: "diarization", name: "Speaker identification", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
+    ],
+  };
+  return {
     schemaVersion: 1,
     localApi: { available: true, code: "available", detail: "ok" },
     documentConsole: { available: true, code: "available", detail: "ok" },
     imageOcr: { available: false, code: "notInstalled", detail: "setup required" },
     audioTranscription: { available: false, code: "notInstalled", detail: "setup required" },
     speakerDiarization: { available: false, code: "notInstalled", detail: "setup required" },
-  }), { headers: { "content-type": "application/json" } });
+  };
+}
+
+test("checked-in production app mounts without a React global", async () => {
+  const window = installWindow();
+  globalThis.fetch = async (input) => new Response(JSON.stringify(mockPayload(input)), { headers: { "content-type": "application/json" } });
   const module = await import(pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);
   module.startConsole("A".repeat(43));
   await waitFor(() => window.document.body.textContent.includes("System ready"));
@@ -85,14 +111,7 @@ test("checked-in bootstrap completes hash clear, dynamic import, mount, and auth
   let request;
   globalThis.fetch = async (input, init) => {
     request = [input, init];
-    return new Response(JSON.stringify(String(input).includes("/api/tasks?") ? { schemaVersion: 1, tasks: [] } : {
-      schemaVersion: 1,
-      localApi: { available: true, code: "available", detail: "ok" },
-      documentConsole: { available: true, code: "available", detail: "ok" },
-      imageOcr: { available: false, code: "notInstalled", detail: "setup required" },
-      audioTranscription: { available: false, code: "notInstalled", detail: "setup required" },
-      speakerDiarization: { available: false, code: "notInstalled", detail: "setup required" },
-    }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(mockPayload(input)), { headers: { "content-type": "application/json" } });
   };
   let bootstrapText = await readFile(resolve(distDirectory, bootstrap.path.slice(1)), "utf8");
   bootstrapText = bootstrapText.replace(app.path, pathToFileURL(resolve(distDirectory, app.path.slice(1))).href);

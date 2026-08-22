@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, CircleAlert, FileAudio, LoaderCircle, Mic, Pause, Play, Radio,
+  CheckCircle2, CircleAlert, Download, FileAudio, LoaderCircle, Mic, Pause, Play, Radio,
   Settings2, Square, Trash2, Upload, Users, X,
 } from "lucide-react";
 import type { ApiClient, CapabilityAdmin, ComponentStatus, MeetingOptions, TaskRecord } from "./api";
@@ -8,6 +8,9 @@ import { ApiError, meetingOptionsForLocale } from "./api";
 import { AudioSetupDialog } from "./conversion-controls";
 import { useI18n, type MessageKey } from "./i18n";
 import { ResultDialog } from "./result-page";
+import { HistoryPanel } from "./history-panel";
+import { useCapabilities } from "./capability-store";
+import { capabilitySourceLabel } from "./source-label";
 import {
   appendRecordingChunk, beginRecordingDraft, clearRecordingDraft, loadRecordingDraft,
   RecordingDraftLimitError, type RecordingDraft,
@@ -89,14 +92,9 @@ function progressMessage(stage: string | undefined, message: string | null | und
   return "recognizingContent";
 }
 
-function meetingCapabilitySource(source?: string) {
-  if (!source || source === "off") return "Off";
-  const [kind, identity = source] = source.split(":", 2);
-  return `${kind === "provider" ? "Provider" : "Local"} · ${identity.split("/", 1)[0]}`;
-}
-
 export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
   const { locale, t } = useI18n();
+  const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
@@ -115,10 +113,14 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [fromDraft, setFromDraft] = useState(false);
   const [message, setMessage] = useState("");
   const [options, setOptions] = useState<MeetingOptions>(() => meetingOptionsForLocale(locale));
-  const [audioStatus, setAudioStatus] = useState<ComponentStatus>();
-  const [diarizationStatus, setDiarizationStatus] = useState<ComponentStatus>();
-  const [transcriptionCapability, setTranscriptionCapability] = useState<CapabilityAdmin>();
-  const [diarizationCapability, setDiarizationCapability] = useState<CapabilityAdmin>();
+  const quickTranscription = capabilities.capability("transcription");
+  const quickDiarization = capabilities.capability("diarization");
+  const audioStatus: ComponentStatus | undefined = quickTranscription ? { available: quickTranscription.status === "ready", code: quickTranscription.status, detail: quickTranscription.currentSourceName } : undefined;
+  const diarizationStatus: ComponentStatus | undefined = quickDiarization ? { available: quickDiarization.status === "ready", code: quickDiarization.status, detail: quickDiarization.currentSourceName } : undefined;
+  const audioChecking = !audioStatus || ["unknown", "checking", "verifying"].includes(audioStatus.code);
+  const diarizationChecking = !diarizationStatus || ["unknown", "checking", "verifying"].includes(diarizationStatus.code);
+  const transcriptionCapability: CapabilityAdmin | undefined = quickTranscription ? quickCapability(quickTranscription) : undefined;
+  const diarizationCapability: CapabilityAdmin | undefined = quickDiarization ? quickCapability(quickDiarization) : undefined;
   const [setup, setSetup] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
@@ -139,18 +141,14 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   }, [locale]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const [status, page, admin] = await Promise.all([api.status(signal), api.listTasks({ limit: 100 }, signal), api.admin(signal)]);
-    setAudioStatus(status.audioTranscription);
-    setDiarizationStatus(status.speakerDiarization);
-    setTranscriptionCapability(admin.capabilities.find((item) => item.id === "transcription"));
-    setDiarizationCapability(admin.capabilities.find((item) => item.id === "diarization"));
+    const page = await api.listTasks({ limit: 100 }, signal);
     if (!diarizationTouched.current) {
       setOptions((current) => ({
-        ...current, diarize: status.speakerDiarization?.available === true,
+        ...current, diarize: quickDiarization?.status === "ready",
       }));
     }
     setRecent(page.tasks.filter((item) => item.workflow === "meetingTranscript"));
-  }, [api]);
+  }, [api, quickDiarization?.status]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -311,6 +309,14 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
     setFile(null); setFromDraft(false); setElapsed(0); elapsedRef.current = 0; setState("idle"); setMessage("");
   };
 
+  const saveRecording = () => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url; link.download = file.name; link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
   const chooseFile = async (next: File | undefined) => {
     if (!next) return;
     if (!supportsMeetingFile(next.name)) { setMessage(t("unsupportedRecording")); return; }
@@ -352,6 +358,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
 
   const submit = async () => {
     if (!file || task && !TERMINAL.has(task.status)) return;
+    if (audioChecking) { setMessage(t("checkingSystem")); return; }
     if (audioStatus?.available !== true) { setSetup(true); setMessage(t("audioNeedsSetupNearby")); return; }
     const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
     if (remoteTranscriptionSelected && !options.authorizeProvider) {
@@ -376,7 +383,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
 
   const installMedia = async () => {
     await api.installCapability("media");
-    await refresh();
+    await capabilities.refresh();
   };
 
   const transcriptHistory = useMemo(() => recent.filter((item) => item.id !== task?.id), [recent, task]);
@@ -393,8 +400,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
 
   return <section className="meeting-route" aria-labelledby="meeting-title">
-    <div className="page-heading compact-heading"><div><p className="eyebrow">LOCAL MEETING</p><h1 id="meeting-title">{t("meetingNotes")}</h1></div><p>{t("meetingIntro")}</p></div>
-    <div className="meeting-layout">
+    <div className="page-heading compact-heading"><div><p className="eyebrow">SPEECH TO TEXT</p><h1 id="meeting-title">{t("meetingNotes")}</h1></div><p>{t("meetingIntro")}</p></div>
+    <div className="task-workspace"><div className="meeting-layout">
       <section className="card recording-card" aria-labelledby="recording-title">
         <div className="card-heading"><div><p className="section-kicker">{t("liveMeeting")}</p><h2 id="recording-title">{t("recordMeeting")}</h2></div><Radio size={21} aria-hidden="true" /></div>
         <div className={`recorder-console ${recording ? "active" : ""}`}>
@@ -404,7 +411,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
             {state === "recording" && <button className="secondary" type="button" onClick={pause}><Pause size={17} />{t("pauseRecording")}</button>}
             {state === "paused" && <button className="secondary" type="button" onClick={resume}><Play size={17} />{t("resumeRecording")}</button>}
             {(state === "recording" || state === "paused") && <button type="button" onClick={stop}><Square size={16} />{t("endRecording")}</button>}
-            {file && <button className="secondary" type="button" onClick={() => void discard()}><Trash2 size={16} />{t("discardRecording")}</button>}
+            {file && <><button className="secondary" type="button" onClick={saveRecording}><Download size={16} />{t("saveRecording")}</button><button className="secondary" type="button" onClick={() => void discard()}><Trash2 size={16} />{t("discardRecording")}</button></>}
           </div>
           <label className="recording-source"><span>{t("recordingSource")}</span><select disabled={sourceLocked} value={recordingSource} onChange={(event) => setRecordingSource(event.target.value as RecordingSource)}><option value="microphone">{t("microphoneOnly")}</option><option value="system">{t("computerAudioOnly")}</option><option value="mixed">{t("microphoneAndComputerAudio")}</option></select>{recordingSource !== "microphone" && <small>{t("computerAudioCaptureHelp")}</small>}</label>
           {devices.length > 0 && recordingSource !== "system" && !sourceLocked && <label className="microphone-select"><span>{t("microphone")}</span><select value={deviceId} onChange={(event) => setDeviceId(event.target.value)}><option value="">{t("systemDefaultMicrophone")}</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${t("microphone")} ${index + 1}`}</option>)}</select></label>}
@@ -420,19 +427,24 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       <section className="card transcript-card" aria-labelledby="transcript-options-title">
         <div className="card-heading"><div><p className="section-kicker">{t("transcript")}</p><h2 id="transcript-options-title">{t("transcriptSettings")}</h2></div><Settings2 size={20} /></div>
         <div className="meeting-options">
-          <label className="transcript-language"><span>{t("transcriptLanguage")}</span><select value={options.transcriptLanguage} onChange={(event) => { languageTouched.current = true; setOptions((current) => ({ ...current, transcriptLanguage: event.target.value as MeetingOptions["transcriptLanguage"] })); }}><option value="auto">{t("automaticDetection")}</option><option value="zh-Hans">{t("simplifiedChinese")}</option><option value="zh-Hant">{t("traditionalChinese")}</option><option value="en">{t("english")}</option></select><small>{t("transcriptLanguageHelp")} · {meetingCapabilitySource(transcriptionCapability?.currentSource)}</small></label>
+          <label className="transcript-language"><span>{t("transcriptLanguage")}</span><select value={options.transcriptLanguage} onChange={(event) => { languageTouched.current = true; setOptions((current) => ({ ...current, transcriptLanguage: event.target.value as MeetingOptions["transcriptLanguage"] })); }}><option value="auto">{t("automaticDetection")}</option><option value="zh-Hans">{t("simplifiedChinese")}</option><option value="zh-Hant">{t("traditionalChinese")}</option><option value="en">{t("english")}</option></select><small>{t("transcriptLanguageHelp")} · {capabilitySourceLabel(transcriptionCapability?.currentSource, locale, audioStatus?.detail)}</small></label>
           {remoteTranscriptionSelected && <label className="check grant meeting-provider-grant"><input type="checkbox" checked={options.authorizeProvider} onChange={(event) => { setOptions((current) => ({ ...current, authorizeProvider: event.target.checked })); setMessage(""); }} />{t("authorizeMeetingProvider")}</label>}
-          <div className="meeting-option-row"><span><Users size={18} /><span><strong>{t("distinguishSpeakers")}</strong><small>{diarizationStatus?.available ? `${t("anonymousSpeakerLabels")} · ${meetingCapabilitySource(diarizationCapability?.currentSource)}` : t("speakerSetupNeeded")}</small></span></span><label className={`switch ${diarizationStatus?.available ? "" : "unavailable"}`}><span className="visually-hidden">{t("distinguishSpeakers")}</span><input type="checkbox" disabled={!diarizationStatus?.available} checked={options.diarize && diarizationStatus?.available === true} onChange={(event) => { diarizationTouched.current = true; setOptions((current) => ({ ...current, diarize: event.target.checked })); }} /><span /></label></div>
+          <div className="meeting-option-row"><span><Users size={18} /><span><strong>{t("distinguishSpeakers")}</strong><small>{diarizationChecking ? t("checkingSystem") : diarizationStatus?.available ? `${t("anonymousSpeakerLabels")} · ${capabilitySourceLabel(diarizationCapability?.currentSource, locale, diarizationStatus.detail)}` : t("speakerSetupNeeded")}</small></span></span><label className={`switch ${diarizationStatus?.available ? "" : "unavailable"}`}><span className="visually-hidden">{t("distinguishSpeakers")}</span><input type="checkbox" disabled={diarizationChecking || !diarizationStatus?.available} checked={options.diarize && diarizationStatus?.available === true} onChange={(event) => { diarizationTouched.current = true; setOptions((current) => ({ ...current, diarize: event.target.checked })); }} /><span /></label></div>
           {options.diarize && diarizationStatus?.available === true && <label className="expected-speakers"><span>{t("expectedSpeakers")}</span><select value={options.expectedSpeakers ?? ""} onChange={(event) => setOptions((current) => ({ ...current, expectedSpeakers: event.target.value ? Number(event.target.value) : null }))}><option value="">{t("automatic")}</option>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label>}
-          {(audioStatus?.available === false || diarizationStatus?.available === false) && <button className="prepare-media" type="button" onClick={() => setSetup(true)}><CircleAlert size={16} />{t("prepareAudioComponents")}</button>}
+          {(!audioChecking && audioStatus?.available === false || !diarizationChecking && diarizationStatus?.available === false) && <button className="prepare-media" type="button" onClick={() => setSetup(true)}><CircleAlert size={16} />{t("prepareAudioComponents")}</button>}
         </div>
         {task && <div className={`meeting-task ${task.status}`}><div><strong>{taskName(task, t("meetingTranscript"))}</strong><span>{t(task.status)}{stage ? ` · ${stage}` : ""}</span></div>{TERMINAL.has(task.status) ? <button className="secondary" type="button" onClick={() => setActiveTaskId(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}{t("viewTranscript")}</button> : <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>}
         <button className="convert-button" type="button" disabled={!file || Boolean(task && !TERMINAL.has(task.status)) || state === "stopping"} onClick={() => void submit()}>{task && !TERMINAL.has(task.status) ? <LoaderCircle className="spin" size={19} /> : <FileAudio size={19} />}{task && !TERMINAL.has(task.status) ? t("transcribing") : t("generateTranscript")}</button>
 
-        <div className="meeting-history"><div className="recent-history-title"><strong>{t("recentMeetings")}</strong><span>{transcriptHistory.length}</span></div>{transcriptHistory.length === 0 ? <p>{t("noMeetingHistory")}</p> : <ul>{transcriptHistory.slice(0, 8).map((item) => <li key={item.id}><button type="button" onClick={() => setActiveTaskId(item.id)}><span><strong>{taskName(item, t("meetingTranscript"))}</strong><small>{new Date(item.updatedAtMs).toLocaleString(locale)}</small></span><span className={`history-status ${item.status}`}>{t(item.status)}</span></button></li>)}</ul>}</div>
       </section>
-    </div>
+    </div><HistoryPanel tasks={transcriptHistory} fallbackName={t("meetingTranscript")} onOpen={setActiveTaskId} /></div>
     <AudioSetupDialog status={audioStatus?.available === false ? audioStatus : diarizationStatus} open={setup} onClose={closeSetup} onInstall={installMedia} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecent((items) => items.filter((item) => item.id !== id))} onTaskUpdated={updateVisibleTask} />}
   </section>;
+}
+
+function quickCapability(item: import("./api").CapabilityQuickView): CapabilityAdmin {
+  const status = (value: string): CapabilityAdmin["status"] => value === "unknown" || value === "checking" ? "verifying" : value === "disabled" ? "blocked" : value as CapabilityAdmin["status"];
+  return { id: item.id, status: status(item.status), localStatus: status(item.localStatus), currentSource: item.currentSource, sources: item.sources,
+    ...(item.version ? { version: item.version } : {}), ...(item.localVersion ? { localVersion: item.localVersion } : {}) };
 }

@@ -31,7 +31,7 @@ impl AdminConfigContext {
             .or_else(|| std::env::var("INTO_MD_PROFILE").ok().filter(|value| !value.is_empty()))
     }
 
-    fn is_default(&self) -> bool {
+    pub(crate) fn is_default(&self) -> bool {
         !self.no_automatic && self.explicit.is_empty() && self.selected_profile().is_none()
     }
 
