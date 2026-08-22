@@ -543,8 +543,27 @@ fn snapshot_loaded(
     for (id, plugin) in &loaded.effective.plugins {
         let package_scope =
             (!synthetic_context).then(|| effective_plugin_scope(loaded, cwd, id)).transpose()?;
+        let official_capability = match id.as_str() {
+            "official.legacy-office.libreoffice" => "legacy-office",
+            "official.ocr.ppocrv6" => "ocr",
+            "official.media.whisper" => "transcription",
+            _ => "",
+        };
+        let cached_official = capabilities.iter().find(|entry| entry.id == official_capability);
         let (verification, version) = if synthetic_context {
             ("adminConfigContextReadOnly".to_owned(), None)
+        } else if let Some(capability) = cached_official {
+            (
+                match capability.local_status.as_str() {
+                    "ready" => "metadataAuthenticated",
+                    "disabled" => "disabled",
+                    "incompatible" => "pluginUnsupportedTarget",
+                    "not-installed" => "pluginNotInstalled",
+                    _ => "pluginIntegrity",
+                }
+                .to_owned(),
+                capability.local_version.clone(),
+            )
         } else {
             match inspect_effective_plugin(loaded, cwd, id) {
                 Ok(installed) => ("metadataAuthenticated".to_owned(), Some(installed.version)),
@@ -616,15 +635,7 @@ fn snapshot_loaded(
     }
     // Initial navigation authenticates lightweight package metadata. The
     // explicit doctor and verify actions perform full payload hashing.
-    let mut doctor = doctor_checks(cwd, loaded, false);
-    if !synthetic_context {
-        for check in &mut doctor {
-            if check.status == "adminConfigContextReadOnly" {
-                check.status = "skipped".into();
-                check.detail = "run diagnostics to perform full plugin payload verification".into();
-            }
-        }
-    }
+    let doctor = doctor_checks(cwd, loaded, false, synthetic_context);
     let snapshot = AdminSnapshot {
         schema_version: 1,
         formats,
@@ -1059,6 +1070,7 @@ fn apply_inner(
             let checks = crate::app::collect_doctor_checks(
                 &crate::args::DoctorArgs {
                     json: true,
+                    deep: true,
                     allow_network: action.authorize_network,
                     allow_private_network: action.allow_private_network,
                 },
@@ -1227,16 +1239,38 @@ fn capability_plugin_id(capability: &str) -> Result<&'static str, CliError> {
     }
 }
 
-fn doctor_checks(cwd: &Path, loaded: &LoadedConfig, verify_plugins: bool) -> Vec<DoctorDto> {
-    crate::app::collect_doctor_checks(
-        &crate::args::DoctorArgs { json: true, allow_network: false, allow_private_network: false },
-        loaded,
+fn doctor_checks(
+    cwd: &Path,
+    loaded: &LoadedConfig,
+    verify_plugins: bool,
+    read_only_context: bool,
+) -> Vec<DoctorDto> {
+    let mut diagnostic_config = loaded.clone();
+    if read_only_context {
+        diagnostic_config.effective.plugins.clear();
+    }
+    let mut checks = crate::app::collect_doctor_checks(
+        &crate::args::DoctorArgs {
+            json: true,
+            deep: verify_plugins,
+            allow_network: false,
+            allow_private_network: false,
+        },
+        &diagnostic_config,
         cwd,
         verify_plugins,
-    )
-    .into_iter()
-    .map(|check| DoctorDto { id: check.id, status: check.status, detail: check.detail })
-    .collect()
+    );
+    if read_only_context {
+        checks.extend(loaded.effective.plugins.keys().map(|id| crate::app::DoctorCheck {
+            id: format!("plugin:{id}"),
+            status: "adminConfigContextReadOnly".into(),
+            detail: "此配置上下文只读，未访问插件存储".into(),
+        }));
+    }
+    checks
+        .into_iter()
+        .map(|check| DoctorDto { id: check.id, status: check.status, detail: check.detail })
+        .collect()
 }
 
 fn redact_url(value: &str) -> String {
@@ -1502,7 +1536,7 @@ api_key_env = "PUBLISHER_API_KEY"
         assert_eq!(verify_error.code(), mismatch_code);
         let doctor =
             mismatched.doctor.iter().find(|check| check.id == format!("plugin:{id}")).unwrap();
-        assert_eq!(doctor.status, "skipped");
+        assert_eq!(doctor.status, "error");
         let doctor_result =
             apply(&alias, &context, &action("doctor.run", None), Some(&anchor)).unwrap();
         let Some(AdminOperationResult::Doctor { checks }) = doctor_result.operation_result else {
@@ -1524,7 +1558,7 @@ api_key_env = "PUBLISHER_API_KEY"
         apply(&alias, &context, &action("plugin.verify", Some(id)), Some(&anchor)).unwrap();
         assert_eq!(
             repaired.doctor.iter().find(|check| check.id == format!("plugin:{id}")).unwrap().status,
-            "skipped"
+            "ok"
         );
     }
 
@@ -1699,6 +1733,7 @@ api_key_env = "PUBLISHER_API_KEY"
         let expected = crate::app::collect_doctor_checks(
             &crate::args::DoctorArgs {
                 json: true,
+                deep: false,
                 allow_network: false,
                 allow_private_network: false,
             },

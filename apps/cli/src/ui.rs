@@ -25,6 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
@@ -80,6 +81,8 @@ struct AppState {
     admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
     admin_gate: Arc<Semaphore>,
     loaded: Arc<RwLock<crate::config::LoadedConfig>>,
+    capabilities: CapabilityCache,
+    capability_checks: Arc<Mutex<std::collections::BTreeMap<String, CapabilityCheckEntry>>>,
 }
 
 #[derive(Clone)]
@@ -91,6 +94,7 @@ struct AdminState {
     admin_gate: Arc<Semaphore>,
     tasks: WebTaskBackend,
     loaded: Arc<RwLock<crate::config::LoadedConfig>>,
+    capabilities: CapabilityCache,
 }
 
 impl FromRef<AppState> for AdminState {
@@ -103,8 +107,226 @@ impl FromRef<AppState> for AdminState {
             admin_gate: state.admin_gate.clone(),
             tasks: state.tasks.clone(),
             loaded: state.loaded.clone(),
+            capabilities: state.capabilities.clone(),
         }
     }
+}
+
+#[derive(Clone)]
+struct CapabilityCache {
+    inner: Arc<RwLock<CapabilityCacheState>>,
+    refreshing: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    evidence_path: Arc<PathBuf>,
+    fingerprint: Arc<RwLock<String>>,
+}
+
+struct CapabilityCacheState {
+    capabilities: Vec<crate::app::CapabilityView>,
+    checked_at_ms: Option<u64>,
+    verified_plugins: std::collections::BTreeMap<String, u64>,
+}
+
+#[derive(serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CapabilityEvidenceFile {
+    schema_version: u32,
+    fingerprint: String,
+    checked_at_ms: u64,
+    generation: u64,
+    verified_plugins: std::collections::BTreeMap<String, u64>,
+    capabilities: Vec<crate::app::CapabilityView>,
+}
+
+struct CapabilityCheckEntry {
+    result: CapabilityCheckDto,
+    cancellation: into_markdown::CancellationToken,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityCheckDto {
+    schema_version: u32,
+    id: String,
+    capability: String,
+    capability_name: String,
+    plugin: String,
+    plugin_name: String,
+    status: &'static str,
+    stage: &'static str,
+    progress: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_ms: Option<u64>,
+}
+
+impl CapabilityCache {
+    fn new(
+        loaded: &crate::config::LoadedConfig,
+        cwd: &Path,
+        evidence_path: PathBuf,
+    ) -> Result<Self, CliError> {
+        let current = crate::app::inspect_capabilities(loaded, cwd)?;
+        let fingerprint = current.fingerprint;
+        let restored = std::fs::read(&evidence_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<CapabilityEvidenceFile>(&bytes).ok())
+            .filter(|evidence| evidence.schema_version == 2 && evidence.fingerprint == fingerprint);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+        let (mut capabilities, checked_at_ms, generation, verified_plugins) = restored.map_or_else(
+            || (current.capabilities, now, 0, std::collections::BTreeMap::new()),
+            |evidence| {
+                (
+                    evidence.capabilities,
+                    Some(evidence.checked_at_ms),
+                    evidence.generation,
+                    evidence.verified_plugins,
+                )
+            },
+        );
+        for capability in &mut capabilities {
+            let verified = capability
+                .current_source
+                .strip_prefix("plugin:")
+                .and_then(|value| value.split_once('/'))
+                .and_then(|(plugin, _)| verified_plugins.get(plugin).copied());
+            if capability.current_source.starts_with("plugin:") && verified.is_none() {
+                capability.status = "checking".into();
+                capability.local_status = "checking".into();
+                capability.version = None;
+                capability.local_version = None;
+                capability.last_verified_at_ms = None;
+            } else if let Some(verified_at_ms) = verified {
+                capability.last_verified_at_ms = Some(verified_at_ms);
+            }
+        }
+        Ok(Self {
+            inner: Arc::new(RwLock::new(CapabilityCacheState {
+                capabilities,
+                checked_at_ms,
+                verified_plugins,
+            })),
+            refreshing: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(generation)),
+            evidence_path: Arc::new(evidence_path),
+            fingerprint: Arc::new(RwLock::new(fingerprint)),
+        })
+    }
+
+    fn snapshot(&self) -> CapabilitySnapshotDto {
+        let state = self.inner.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        CapabilitySnapshotDto {
+            schema_version: 2,
+            generation: self.generation.load(Ordering::Acquire),
+            checking: self.refreshing.load(Ordering::Acquire),
+            checked_at_ms: state.checked_at_ms,
+            capabilities: state.capabilities.clone(),
+        }
+    }
+
+    fn invalidate(&self, loaded: &crate::config::LoadedConfig) {
+        let mut state = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.capabilities = crate::app::checking_capability_views(loaded);
+        state.checked_at_ms = None;
+        state.verified_plugins.clear();
+        *self.fingerprint.write().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            String::new();
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let _ = std::fs::remove_file(self.evidence_path.as_ref());
+    }
+
+    fn is_fresh(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+        let state = self.inner.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        matches!((now, state.checked_at_ms), (Some(now), Some(checked)) if now.saturating_sub(checked) < 2_000)
+    }
+
+    fn persist_verified(&self, plugin: &str) -> Result<(), CliError> {
+        let mut state = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(checked_at_ms) = state.checked_at_ms else {
+            return Err(CliError::internal("capability evidence lacks a check timestamp"));
+        };
+        state.verified_plugins.insert(plugin.into(), checked_at_ms);
+        let verified_plugins = state.verified_plugins.clone();
+        annotate_capability_verification(&mut state.capabilities, &verified_plugins);
+        let evidence = CapabilityEvidenceFile {
+            schema_version: 2,
+            fingerprint: self
+                .fingerprint
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            checked_at_ms,
+            generation: self.generation.load(Ordering::Acquire),
+            verified_plugins: state.verified_plugins.clone(),
+            capabilities: state.capabilities.clone(),
+        };
+        drop(state);
+        let parent = self
+            .evidence_path
+            .parent()
+            .ok_or_else(|| CliError::internal("capability evidence path has no parent"))?;
+        std::fs::create_dir_all(parent)?;
+        let next = self.evidence_path.with_extension("json.next");
+        let bytes = serde_json::to_vec_pretty(&evidence).map_err(|error| {
+            CliError::internal(format!("serialize capability evidence: {error}"))
+        })?;
+        std::fs::write(&next, bytes)?;
+        std::fs::rename(next, self.evidence_path.as_ref())?;
+        Ok(())
+    }
+}
+
+fn annotate_capability_verification(
+    capabilities: &mut [crate::app::CapabilityView],
+    verified_plugins: &std::collections::BTreeMap<String, u64>,
+) {
+    for capability in capabilities {
+        capability.last_verified_at_ms = capability
+            .current_source
+            .strip_prefix("plugin:")
+            .and_then(|value| value.split_once('/'))
+            .and_then(|(plugin, _)| verified_plugins.get(plugin).copied());
+    }
+}
+
+fn capability_evidence_path(test_user_data_anchor: Option<&Path>) -> Result<PathBuf, CliError> {
+    if let Some(anchor) = test_user_data_anchor {
+        return Ok(anchor.join("into-markdown").join("capability-status.json"));
+    }
+    let config = crate::config::global_config_path()?;
+    let parent = config
+        .parent()
+        .ok_or_else(|| CliError::config("global configuration directory is unavailable"))?;
+    Ok(parent.join("capability-status.json"))
+}
+
+pub(crate) fn record_capability_verification(
+    loaded: &crate::config::LoadedConfig,
+    cwd: &Path,
+    plugin: &str,
+    test_user_data_anchor: Option<&Path>,
+) -> Result<(), CliError> {
+    let cache =
+        CapabilityCache::new(loaded, cwd, capability_evidence_path(test_user_data_anchor)?)?;
+    {
+        let mut state = cache.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.checked_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+        cache.generation.fetch_add(1, Ordering::AcqRel);
+    }
+    cache.persist_verified(plugin)
 }
 
 struct DownloadSlot {
@@ -152,6 +374,17 @@ struct ComponentDto {
     available: bool,
     code: &'static str,
     detail: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilitySnapshotDto {
+    schema_version: u32,
+    generation: u64,
+    checking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checked_at_ms: Option<u64>,
+    capabilities: Vec<crate::app::CapabilityView>,
 }
 
 #[derive(Serialize)]
@@ -341,6 +574,11 @@ where
     let authority: Arc<str> = format!("127.0.0.1:{}", address.port()).into();
     let origin: Arc<str> = format!("http://{authority}").into();
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let capabilities = CapabilityCache::new(
+        &loaded,
+        &cwd,
+        capability_evidence_path(test_user_data_anchor.as_deref())?,
+    )?;
     let state = AppState {
         authority,
         origin,
@@ -353,9 +591,21 @@ where
         admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
         admin_gate: Arc::new(Semaphore::new(1)),
         loaded: Arc::new(RwLock::new(loaded)),
+        capabilities,
+        capability_checks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
     };
+    schedule_capability_refresh(&state);
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
+        .route("/capabilities/status", get(capability_snapshot).fallback(api_method_not_allowed))
+        .route(
+            "/capabilities/{id}/verify",
+            post(start_capability_check).fallback(api_method_not_allowed),
+        )
+        .route(
+            "/capability-checks/{id}",
+            get(capability_check).delete(cancel_capability_check).fallback(api_method_not_allowed),
+        )
         .route(
             "/capabilities/{id}/install",
             post(install_capability).fallback(api_method_not_allowed),
@@ -528,17 +778,11 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
-    let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    let cwd = state.cwd.clone();
-    let components = tokio::task::spawn_blocking(move || capability_statuses(&loaded, &cwd)).await;
-    let (image_ocr, audio_transcription, speaker_diarization) = components.unwrap_or_else(|_| {
-        let unavailable = ComponentDto {
-            available: false,
-            code: "componentUnavailable",
-            detail: "capability status inspection did not complete",
-        };
-        (unavailable.clone(), unavailable.clone(), unavailable)
-    });
+    schedule_capability_refresh(&state);
+    let snapshot = state.capabilities.snapshot();
+    let image_ocr = capability_component(&snapshot.capabilities, "ocr");
+    let audio_transcription = capability_component(&snapshot.capabilities, "transcription");
+    let speaker_diarization = capability_component(&snapshot.capabilities, "diarization");
     Json(StatusDto {
         schema_version: 1,
         local_api: ComponentDto {
@@ -556,6 +800,242 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
         speaker_diarization,
     })
     .into_response()
+}
+
+async fn capability_snapshot(State(state): State<AppState>) -> Response {
+    schedule_capability_refresh(&state);
+    Json(state.capabilities.snapshot()).into_response()
+}
+
+async fn start_capability_check(
+    State(state): State<AppState>,
+    AxumPath(capability): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if headers.contains_key(header::CONTENT_TYPE) {
+        return rejection(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unexpectedContentType");
+    }
+    if !request_body_is_empty(&headers) {
+        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    let Ok((plugin, shared)) = crate::app::capability_plugin(&capability) else {
+        return rejection(StatusCode::NOT_FOUND, "unknownCapability");
+    };
+    let mut checks =
+        state.capability_checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(existing) = checks.values().find(|entry| {
+        entry.result.plugin == plugin && matches!(entry.result.status, "queued" | "running")
+    }) {
+        return (StatusCode::ACCEPTED, Json(existing.result.clone())).into_response();
+    }
+    let id = match new_session() {
+        Ok(id) => id,
+        Err(error) => return admin_error(&error),
+    };
+    let cancellation = into_markdown::CancellationToken::new();
+    let result = CapabilityCheckDto {
+        schema_version: 1,
+        id: id.clone(),
+        capability: capability.clone(),
+        capability_name: crate::app::capability_name(&capability).into(),
+        plugin: plugin.into(),
+        plugin_name: crate::app::capability_plugin_name(plugin).into(),
+        status: "queued",
+        stage: "queued",
+        progress: 0,
+        code: None,
+        detail: (shared.len() > 1).then(|| {
+            format!(
+                "此次检查由{}共享",
+                shared
+                    .iter()
+                    .map(|id| crate::app::capability_name(id))
+                    .collect::<Vec<_>>()
+                    .join("和")
+            )
+        }),
+        elapsed_ms: None,
+    };
+    checks.insert(
+        id.clone(),
+        CapabilityCheckEntry { result: result.clone(), cancellation: cancellation.clone() },
+    );
+    drop(checks);
+
+    let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let cwd = state.cwd.clone();
+    let checks = state.capability_checks.clone();
+    let cache = state.capabilities.clone();
+    let task_id = id.clone();
+    tokio::spawn(async move {
+        update_capability_check(&checks, &task_id, "running", "package", 10, None, None);
+        let started = std::time::Instant::now();
+        let capability_for_work = capability.clone();
+        let progress_checks = checks.clone();
+        let progress_task_id = task_id.clone();
+        let work = tokio::task::spawn_blocking(move || {
+            let execution = into_markdown::ExecutionContext::new(
+                into_markdown::ExecutionOptions {
+                    cancellation,
+                    ..into_markdown::ExecutionOptions::default()
+                },
+                into_markdown::ResourceLimits::default(),
+            );
+            crate::app::verify_admin_effective_plugin_from_loaded_with_execution(
+                &loaded, &cwd, plugin, &execution,
+            )?;
+            execution.checkpoint().map_err(CliError::from)?;
+            update_capability_check(
+                &progress_checks,
+                &progress_task_id,
+                "running",
+                "runtime",
+                55,
+                None,
+                None,
+            );
+            if plugin == "official.media.whisper" {
+                crate::app::verify_capability_runtime("transcription", &loaded, &cwd)?;
+                update_capability_check(
+                    &progress_checks,
+                    &progress_task_id,
+                    "running",
+                    "models",
+                    85,
+                    None,
+                    None,
+                );
+                crate::app::verify_capability_runtime("diarization", &loaded, &cwd)?;
+            } else {
+                crate::app::verify_capability_runtime(&capability_for_work, &loaded, &cwd)?;
+            }
+            crate::app::capability_views(&loaded, &cwd)
+        })
+        .await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match work {
+            Ok(Ok(capabilities)) => {
+                {
+                    let mut state =
+                        cache.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.capabilities = capabilities;
+                    state.checked_at_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .ok()
+                        .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+                    cache.generation.fetch_add(1, Ordering::AcqRel);
+                }
+                let _ = cache.persist_verified(plugin);
+                update_capability_check(
+                    &checks,
+                    &task_id,
+                    "completed",
+                    "completed",
+                    100,
+                    None,
+                    Some(elapsed_ms),
+                );
+            }
+            Ok(Err(error)) => update_capability_check(
+                &checks,
+                &task_id,
+                if error.code() == "cancelled" { "cancelled" } else { "failed" },
+                "completed",
+                100,
+                Some((error.code().to_owned(), error.to_string())),
+                Some(elapsed_ms),
+            ),
+            Err(_) => update_capability_check(
+                &checks,
+                &task_id,
+                "failed",
+                "completed",
+                100,
+                Some(("backendWorkerFailed".into(), "验证进程未正常完成".into())),
+                Some(elapsed_ms),
+            ),
+        }
+    });
+    (StatusCode::ACCEPTED, Json(result)).into_response()
+}
+
+fn update_capability_check(
+    checks: &Mutex<std::collections::BTreeMap<String, CapabilityCheckEntry>>,
+    id: &str,
+    status: &'static str,
+    stage: &'static str,
+    progress: u8,
+    failure: Option<(String, String)>,
+    elapsed_ms: Option<u64>,
+) {
+    let mut checks = checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(entry) = checks.get_mut(id) else { return };
+    entry.result.status = status;
+    entry.result.stage = stage;
+    entry.result.progress = progress;
+    entry.result.elapsed_ms = elapsed_ms;
+    if let Some((code, detail)) = failure {
+        entry.result.code = Some(code);
+        entry.result.detail = Some(detail);
+    }
+}
+
+async fn capability_check(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let checks = state.capability_checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    checks.get(&id).map_or_else(
+        || rejection(StatusCode::NOT_FOUND, "unknownCapabilityCheck"),
+        |entry| Json(entry.result.clone()).into_response(),
+    )
+}
+
+async fn cancel_capability_check(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let mut checks =
+        state.capability_checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(entry) = checks.get_mut(&id) else {
+        return rejection(StatusCode::NOT_FOUND, "unknownCapabilityCheck");
+    };
+    if matches!(entry.result.status, "queued" | "running") {
+        entry.cancellation.cancel();
+        entry.result.status = "cancelling";
+        entry.result.stage = "cancelling";
+    }
+    Json(entry.result.clone()).into_response()
+}
+
+fn schedule_capability_refresh(state: &AppState) {
+    if state.capabilities.is_fresh() {
+        return;
+    }
+    if state.capabilities.refreshing.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let cache = state.capabilities.clone();
+    let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let cwd = state.cwd.clone();
+    tokio::spawn(async move {
+        let result =
+            tokio::task::spawn_blocking(move || crate::app::inspect_capabilities(&loaded, &cwd))
+                .await;
+        if let Ok(Ok(mut inspection)) = result {
+            let mut state = cache.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            annotate_capability_verification(&mut inspection.capabilities, &state.verified_plugins);
+            state.capabilities = inspection.capabilities;
+            state.checked_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+            cache.generation.fetch_add(1, Ordering::AcqRel);
+            *cache.fingerprint.write().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                inspection.fingerprint;
+        }
+        cache.refreshing.store(false, Ordering::Release);
+    });
 }
 
 async fn install_capability(
@@ -615,6 +1095,10 @@ async fn install_capability(
     match result {
         Ok(Ok(updated)) => {
             *state.loaded.write().unwrap_or_else(std::sync::PoisonError::into_inner) = updated;
+            let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.capabilities.invalidate(&loaded);
+            drop(loaded);
+            schedule_capability_refresh(&state);
             Json(serde_json::json!({
                 "schemaVersion": 1,
                 "capability": id,
@@ -719,6 +1203,8 @@ async fn admin_action(State(state): State<AdminState>, request: Request) -> Resp
         Ok(Ok((result, loaded))) => {
             state.tasks.update_media_config(loaded.clone());
             *state.loaded.write().unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
+            let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.capabilities.invalidate(&loaded);
             Json(result).into_response()
         }
         Ok(Err(error)) => admin_error(&error),
@@ -752,18 +1238,6 @@ fn admin_error(error: &CliError) -> Response {
     (status, Json(serde_json::json!({"schemaVersion": 1, "code": error.code()}))).into_response()
 }
 
-fn capability_statuses(
-    loaded: &crate::config::LoadedConfig,
-    cwd: &Path,
-) -> (ComponentDto, ComponentDto, ComponentDto) {
-    let views = crate::app::capability_views(loaded, cwd).unwrap_or_default();
-    (
-        capability_component(&views, "ocr"),
-        capability_component(&views, "transcription"),
-        capability_component(&views, "diarization"),
-    )
-}
-
 fn capability_component(views: &[crate::app::CapabilityView], capability: &str) -> ComponentDto {
     let Some(view) = views.iter().find(|view| view.id == capability) else {
         return ComponentDto {
@@ -781,6 +1255,13 @@ fn capability_component(views: &[crate::app::CapabilityView], capability: &str) 
             } else {
                 "the signed local capability package metadata is ready"
             },
+        };
+    }
+    if matches!(view.status.as_str(), "unknown" | "checking") {
+        return ComponentDto {
+            available: false,
+            code: "checking",
+            detail: "capability status is being confirmed",
         };
     }
     ComponentDto {
@@ -1479,6 +1960,7 @@ fn web_task_rejection(error: WebTaskError) -> Response {
         WebTaskError::Conflict(_) => (StatusCode::CONFLICT, "taskConflict"),
         WebTaskError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalidTaskOptions"),
         WebTaskError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "backendIo"),
+        WebTaskError::Conversion { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "conversionFailed"),
     };
     rejection(status, code)
 }
@@ -1722,6 +2204,26 @@ mod tests {
         crate::config::load(cwd, &[], true, None, None).unwrap()
     }
 
+    #[test]
+    fn checking_capability_is_neutral_instead_of_an_install_failure() {
+        let view = crate::app::CapabilityView {
+            id: "ocr".into(),
+            name: "图片 OCR".into(),
+            status: "checking".into(),
+            local_status: "checking".into(),
+            current_source: "plugin:official.ocr.ppocrv6/ocr".into(),
+            current_source_name: "本地 OCR（PP-OCR）".into(),
+            sources: vec!["plugin:official.ocr.ppocrv6/ocr".into()],
+            version: None,
+            local_version: None,
+            last_verified_at_ms: None,
+        };
+        let component = capability_component(&[view], "ocr");
+        assert!(!component.available);
+        assert_eq!(component.code, "checking");
+        assert!(!component.detail.contains("install"));
+    }
+
     async fn request(port: u16, request: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.unwrap();
         stream.write_all(request.as_bytes()).await.unwrap();
@@ -1782,6 +2284,7 @@ mod tests {
     #[tokio::test]
     async fn administration_gate_bounds_snapshot_grant_and_action_and_releases() {
         let directory = tempfile::tempdir().unwrap();
+        let loaded = test_config(directory.path());
         let state = AdminState {
             cwd: directory.path().to_owned(),
             test_user_data_anchor: Some(directory.path().join("user-data")),
@@ -1789,7 +2292,13 @@ mod tests {
             admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
             admin_gate: Arc::new(Semaphore::new(1)),
             tasks: WebTaskBackend::open(directory.path().join("backend")).unwrap(),
-            loaded: Arc::new(RwLock::new(test_config(directory.path()))),
+            capabilities: CapabilityCache::new(
+                &loaded,
+                directory.path(),
+                capability_evidence_path(Some(directory.path())).unwrap(),
+            )
+            .unwrap(),
+            loaded: Arc::new(RwLock::new(loaded)),
         };
         let body = serde_json::json!({
             "schemaVersion": 1,

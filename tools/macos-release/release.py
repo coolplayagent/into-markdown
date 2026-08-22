@@ -256,7 +256,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         copy_file(ffmpeg_artifacts / "ffmpeg-relink-aarch64-apple-darwin.tar", speech / "relink/ffmpeg-relink-aarch64-apple-darwin.tar", 0o644)
         media_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
         speech_manifest = provider_manifest("official.media.whisper", "bin/into-md-media-provider", speech, [
-            {"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(943718400, 4294967296, 7200000)},
+            {"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(1048576000, 4294967296, 7200000)},
             {"id": "diarization", "kind": "diarization", "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(536870912, 4294967296, 7200000)},
         ], ["Apache-2.0", "LGPL-2.1-or-later", "MIT"])
         speech_output = packages / "official.media.whisper.imp"

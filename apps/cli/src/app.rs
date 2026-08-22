@@ -28,7 +28,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 // Self-contained Speech and LibreOffice capability packages intentionally
 // include their audited models/runtimes. Keep the wire bound finite while
@@ -43,6 +43,9 @@ const PLUGIN_CLI_TRANSACTION: &str = ".cli-plugin-transaction.json";
 const PLUGIN_CLI_TRANSACTION_NEXT: &str = ".cli-plugin-transaction.next";
 const PLUGIN_CLI_TRANSACTION_PREVIOUS: &str = ".cli-plugin-transaction.previous";
 const PLUGIN_CLI_LOCK: &str = ".cli-plugin.lock";
+static PROCESS_SNAPSHOTS: OnceLock<
+    Mutex<BTreeMap<String, into_markdown_plugin_manager::PreparedProcessPlugin>>,
+> = OnceLock::new();
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -528,7 +531,7 @@ fn run_ui(
     ))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FormatView<'a> {
     format: &'a str,
@@ -690,18 +693,27 @@ fn detect_format(
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CapabilityView {
-    pub id: &'static str,
-    pub status: &'static str,
-    pub local_status: &'static str,
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub local_status: String,
     pub current_source: String,
+    pub current_source_name: String,
     pub sources: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_verified_at_ms: Option<u64>,
+}
+
+pub(crate) struct CapabilityInspection {
+    pub capabilities: Vec<CapabilityView>,
+    pub fingerprint: String,
 }
 
 fn run_capabilities(
@@ -727,9 +739,9 @@ fn run_capabilities(
                     writeln!(
                         context.stdout,
                         "{}\t{}\t{}\t{}",
-                        entry.id,
+                        entry.name,
                         entry.status,
-                        entry.current_source,
+                        entry.current_source_name,
                         entry.version.as_deref().unwrap_or("-")
                     )?;
                 }
@@ -757,15 +769,27 @@ fn run_capabilities(
                     &serde_json::json!({"schemaVersion": 1, "capability": entry}),
                 )
             } else {
-                writeln!(context.stdout, "capability: {}", entry.id)?;
+                writeln!(context.stdout, "capability: {}", entry.name)?;
                 writeln!(context.stdout, "status: {}", entry.status)?;
-                writeln!(context.stdout, "source: {}", entry.current_source)?;
-                writeln!(context.stdout, "available sources: {}", entry.sources.join(", "))?;
+                writeln!(context.stdout, "source: {}", entry.current_source_name)?;
+                writeln!(
+                    context.stdout,
+                    "available sources: {}",
+                    entry
+                        .sources
+                        .iter()
+                        .map(|source| capability_source_name(source))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
                 if let Some(version) = entry.version {
                     writeln!(context.stdout, "version: {version}")?;
                 }
                 Ok(())
             }
+        }
+        Some(CapabilitiesCommand::Verify { id, json }) => {
+            run_capability_verify(&id, json, loaded, context)
         }
         Some(CapabilitiesCommand::Use { id, source, scope }) => {
             validate_capability_source(&id, &source, loaded)?;
@@ -781,9 +805,136 @@ fn run_capabilities(
     }
 }
 
+fn run_capability_verify(
+    id: &str,
+    json: bool,
+    loaded: &LoadedConfig,
+    context: &mut RunContext<'_>,
+) -> Result<(), CliError> {
+    let (plugin_id, shared) = capability_plugin(id)?;
+    let started = std::time::Instant::now();
+    let installed = verify_admin_effective_plugin_from_loaded(loaded, &context.cwd, plugin_id)?;
+    verify_capability_runtime(id, loaded, &context.cwd)?;
+    #[cfg(test)]
+    let evidence_anchor = context.user_data_anchor.as_deref();
+    #[cfg(not(test))]
+    let evidence_anchor = None;
+    crate::ui::record_capability_verification(loaded, &context.cwd, plugin_id, evidence_anchor)?;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if json {
+        return write_json(
+            context.stdout,
+            &serde_json::json!({
+                "schemaVersion": 1,
+                "capability": id,
+                "plugin": plugin_id,
+                "pluginName": capability_plugin_name(plugin_id),
+                "status": "ready",
+                "version": installed.version,
+                "elapsedMs": elapsed_ms,
+                "sharedCapabilities": shared,
+            }),
+        );
+    }
+    writeln!(
+        context.stdout,
+        "{}: verified {} {} in {} ms",
+        capability_name(id),
+        capability_plugin_name(plugin_id),
+        installed.version,
+        elapsed_ms
+    )?;
+    if shared.len() > 1 {
+        writeln!(
+            context.stdout,
+            "shared verification: {}",
+            shared.iter().map(|id| capability_name(id)).collect::<Vec<_>>().join(", ")
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn capability_views(
     loaded: &LoadedConfig,
     cwd: &Path,
+) -> Result<Vec<CapabilityView>, CliError> {
+    inspect_capabilities(loaded, cwd).map(|inspection| inspection.capabilities)
+}
+
+pub(crate) fn inspect_capabilities(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> Result<CapabilityInspection, CliError> {
+    const ITEMS: [(&str, &str, &str); 4] = [
+        ("legacy-office", "official.legacy-office.libreoffice", "legacy-office"),
+        ("ocr", "official.ocr.ppocrv6", "ocr"),
+        ("transcription", "official.media.whisper", "transcription"),
+        ("diarization", "official.media.whisper", "diarization"),
+    ];
+    let mut inspected = std::collections::BTreeMap::new();
+    let mut status_tokens = BTreeMap::new();
+    for (_, plugin_id, _) in ITEMS {
+        if inspected.contains_key(plugin_id) {
+            continue;
+        }
+        let configured = loaded.effective.plugins.get(plugin_id);
+        let result = match configured {
+            Some(plugin) if !plugin.enabled => PluginInspection::Disabled,
+            Some(_) => {
+                match inspect_admin_effective_plugin_status_from_loaded(loaded, cwd, plugin_id) {
+                    Ok((installed, token)) => {
+                        status_tokens.insert(plugin_id, token);
+                        PluginInspection::Ready(installed)
+                    }
+                    Err(error) => PluginInspection::Invalid(error.code().to_owned()),
+                }
+            }
+            None => PluginInspection::NotInstalled,
+        };
+        inspected.insert(plugin_id, result);
+    }
+    let capabilities = capability_views_from_inspections(loaded, &inspected)?;
+    let fingerprint = capability_snapshot_fingerprint(loaded, &status_tokens)?;
+    Ok(CapabilityInspection { capabilities, fingerprint })
+}
+
+pub(crate) fn checking_capability_views(loaded: &LoadedConfig) -> Vec<CapabilityView> {
+    let inspected =
+        ["official.legacy-office.libreoffice", "official.ocr.ppocrv6", "official.media.whisper"]
+            .into_iter()
+            .map(|id| (id, PluginInspection::Checking))
+            .collect();
+    capability_views_from_inspections(loaded, &inspected).unwrap_or_default()
+}
+
+fn capability_snapshot_fingerprint(
+    loaded: &LoadedConfig,
+    status_tokens: &BTreeMap<&str, String>,
+) -> Result<String, CliError> {
+    let executable = std::env::current_exe().ok().and_then(|path| {
+        let metadata = path.metadata().ok()?;
+        Some(serde_json::json!({
+            "bytes": metadata.len(),
+            "modifiedMs": metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis(),
+        }))
+    });
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "coreVersion": env!("CARGO_PKG_VERSION"),
+        "coreBuild": executable,
+        "target": admin_plugin_target(),
+        "plugins": loaded.effective.plugins,
+        "providers": loaded.effective.providers,
+        "defaultProvider": loaded.effective.default_provider,
+        "routes": loaded.effective.capability_routes,
+        "pluginStatusTokens": status_tokens,
+    }))
+    .map_err(|error| CliError::internal(format!("serialize capability snapshot key: {error}")))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn capability_views_from_inspections(
+    loaded: &LoadedConfig,
+    inspected: &std::collections::BTreeMap<&str, PluginInspection>,
 ) -> Result<Vec<CapabilityView>, CliError> {
     const ITEMS: [(&str, &str, &str); 4] = [
         ("legacy-office", "official.legacy-office.libreoffice", "legacy-office"),
@@ -796,16 +947,19 @@ pub(crate) fn capability_views(
         .map(|(id, plugin_id, plugin_capability)| {
             let route = capability_route(loaded, id);
             let local = format!("plugin:{plugin_id}/{plugin_capability}");
-            let configured =
-                loaded.effective.plugins.get(plugin_id).is_some_and(|plugin| plugin.enabled);
-            let verified = configured
-                .then(|| inspect_admin_effective_plugin_from_loaded(loaded, cwd, plugin_id))
-                .transpose();
-            let (local_ready, version) = match verified {
-                Ok(Some(installed)) => (true, Some(installed.version)),
-                Ok(None) => (false, None),
-                Err(_) => (false, None),
+            let inspection = &inspected[plugin_id];
+            let (local_status, version) = match inspection {
+                PluginInspection::Ready(installed) => ("ready", Some(installed.version.clone())),
+                PluginInspection::Disabled => ("disabled", None),
+                PluginInspection::Invalid(code) if code == "componentUnavailable" => {
+                    ("incompatible", None)
+                }
+                PluginInspection::Invalid(code) if code == "notFound" => ("not-installed", None),
+                PluginInspection::Invalid(_) => ("corrupt", None),
+                PluginInspection::NotInstalled => ("not-installed", None),
+                PluginInspection::Checking => ("checking", None),
             };
+            let local_ready = local_status == "ready";
             // The official local source remains selectable while absent so the
             // management UI can offer installation without changing identity.
             let mut sources = vec![local.clone()];
@@ -815,10 +969,9 @@ pub(crate) fn capability_views(
                 }
             }
             sources.push("off".into());
-            let current_source = route
-                .primary
-                .clone()
-                .unwrap_or_else(|| if local_ready { local } else { "off".into() });
+            let current_source = route.primary.clone().unwrap_or_else(|| {
+                if local_status == "not-installed" { "off".into() } else { local }
+            });
             let remote_ready = current_source
                 .strip_prefix("provider:")
                 .and_then(|value| value.split_once('/'))
@@ -827,30 +980,94 @@ pub(crate) fn capability_views(
             let status = match current_source.as_str() {
                 "off" => "not-installed",
                 value if value.starts_with("plugin:") && local_ready => "ready",
-                value if value.starts_with("plugin:") && configured => "corrupt",
-                value if value.starts_with("plugin:") => "not-installed",
+                value if value.starts_with("plugin:") => local_status,
                 value if value.starts_with("provider:") && remote_ready => "ready",
                 value if value.starts_with("provider:") => "blocked",
                 _ => "incompatible",
             };
-            let local_status = if local_ready {
-                "ready"
-            } else if configured {
-                "corrupt"
-            } else {
-                "not-installed"
-            };
             Ok(CapabilityView {
-                id,
-                status,
-                local_status,
+                id: id.into(),
+                name: capability_name(id).into(),
+                status: status.into(),
+                local_status: local_status.into(),
+                current_source_name: capability_source_name(&current_source),
                 current_source,
                 sources,
                 local_version: version.clone(),
                 version,
+                last_verified_at_ms: None,
             })
         })
         .collect()
+}
+
+enum PluginInspection {
+    Ready(into_markdown_plugin_manager::InstalledPlugin),
+    Disabled,
+    Invalid(String),
+    NotInstalled,
+    Checking,
+}
+
+pub(crate) fn capability_name(id: &str) -> &'static str {
+    match id {
+        "legacy-office" => "旧版 Office",
+        "ocr" => "图片 OCR",
+        "transcription" => "语音转写",
+        "diarization" => "说话人识别",
+        _ => "未知能力",
+    }
+}
+
+pub(crate) fn capability_plugin_name(id: &str) -> &'static str {
+    match id {
+        "official.legacy-office.libreoffice" => "本地旧版 Office（LibreOffice）",
+        "official.ocr.ppocrv6" => "本地 OCR（PP-OCR）",
+        "official.media.whisper" => "本地语音（Whisper）",
+        _ => "本地扩展",
+    }
+}
+
+fn capability_source_name(source: &str) -> String {
+    if source == "off" {
+        return "关闭".into();
+    }
+    if let Some((plugin_id, _)) = source.strip_prefix("plugin:").and_then(|v| v.split_once('/')) {
+        return capability_plugin_name(plugin_id).into();
+    }
+    if let Some((provider_id, _)) = source.strip_prefix("provider:").and_then(|v| v.split_once('/'))
+    {
+        return format!("AI 服务：{provider_id}");
+    }
+    source.into()
+}
+
+pub(crate) fn capability_plugin(
+    id: &str,
+) -> Result<(&'static str, &'static [&'static str]), CliError> {
+    match id {
+        "legacy-office" => Ok(("official.legacy-office.libreoffice", &["legacy-office"])),
+        "ocr" => Ok(("official.ocr.ppocrv6", &["ocr"])),
+        "transcription" | "diarization" => {
+            Ok(("official.media.whisper", &["transcription", "diarization"]))
+        }
+        _ => Err(CliError::usage(format!("unknown capability '{id}'"))),
+    }
+}
+
+pub(crate) fn verify_capability_runtime(
+    id: &str,
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> Result<(), CliError> {
+    let result = match id {
+        "legacy-office" => crate::services::verify_legacy_office_runtime(loaded, cwd),
+        "ocr" => crate::services::verify_ocr_runtime(loaded, cwd),
+        "transcription" => crate::services::verify_asr_runtime(loaded, cwd),
+        "diarization" => crate::services::verify_diarization_runtime(loaded, cwd),
+        _ => return Err(CliError::usage(format!("unknown capability '{id}'"))),
+    };
+    result.map_err(CliError::from)
 }
 
 fn capability_route<'a>(loaded: &'a LoadedConfig, id: &str) -> &'a config::CapabilityRouteConfig {
@@ -873,7 +1090,6 @@ fn provider_capability_id<'a>(capabilities: &'a [String], id: &str) -> Option<&'
         "transcription" => &["audio-transcription", "transcription"],
         // No remote diarization adapter is published yet. A Provider's raw
         // capability declaration must not create a selectable dead route.
-        "diarization" => return None,
         _ => return None,
     };
     preferred
@@ -2621,21 +2837,18 @@ fn verify_plugin_pin(
 /// Verify one captured effective plugin against the store selected by the
 /// physical source-layer authority. This deliberately validates the merged
 /// pins, not merely the raw configuration in the package's store scope.
-pub(crate) fn verify_admin_effective_plugin(
+pub(crate) fn verify_admin_effective_plugin_with_execution(
     cwd: &Path,
     scope: Scope,
     id: &str,
     configured: &PluginConfig,
+    execution: &into_markdown::ExecutionContext,
 ) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
-    let execution = into_markdown::ExecutionContext::new(
-        into_markdown::ExecutionOptions::default(),
-        into_markdown::ResourceLimits::default(),
-    );
     let (global_anchor, global_relative) = global_plugin_store_scope()?;
     let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
         .map_err(plugin_manager_error)?;
     let authority = scoped_plugin_authority(scope, cwd, &global)?;
-    let installed = authority.manager.verify(id, &execution).map_err(plugin_manager_error)?;
+    let installed = authority.manager.verify(id, execution).map_err(plugin_manager_error)?;
     verify_plugin_pin(&authority.manager, configured, &installed)?;
     if let Some(project) = &authority.project {
         project.verify()?;
@@ -2669,6 +2882,34 @@ pub(crate) fn inspect_admin_effective_plugin(
     Ok(installed)
 }
 
+fn inspect_admin_effective_plugin_status_from_loaded(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+) -> Result<(into_markdown_plugin_manager::InstalledPlugin, String), CliError> {
+    let configured = loaded
+        .effective
+        .plugins
+        .get(id)
+        .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    let scope = admin_effective_plugin_scope(loaded, cwd, id)?;
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    let authority = scoped_plugin_authority(scope, cwd, &global)?;
+    let (installed, status_token) =
+        authority.manager.inspect_installed_status(id, &execution).map_err(plugin_manager_error)?;
+    verify_plugin_pin(&authority.manager, configured, &installed)?;
+    if let Some(project) = &authority.project {
+        project.verify()?;
+    }
+    Ok((installed, status_token))
+}
+
 pub(crate) fn admin_effective_plugin_scope(
     loaded: &LoadedConfig,
     cwd: &Path,
@@ -2699,16 +2940,30 @@ pub(crate) fn verify_admin_effective_plugin_from_loaded(
     cwd: &Path,
     id: &str,
 ) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    verify_admin_effective_plugin_from_loaded_with_execution(loaded, cwd, id, &execution)
+}
+
+pub(crate) fn verify_admin_effective_plugin_from_loaded_with_execution(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+    execution: &into_markdown::ExecutionContext,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
     let configured = loaded
         .effective
         .plugins
         .get(id)
         .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
-    verify_admin_effective_plugin(
+    verify_admin_effective_plugin_with_execution(
         cwd,
         admin_effective_plugin_scope(loaded, cwd, id)?,
         id,
         configured,
+        execution,
     )
 }
 
@@ -2752,12 +3007,43 @@ pub(crate) fn prepare_admin_effective_process_plugin_from_loaded(
     let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
         .map_err(plugin_manager_error)?;
     let authority = scoped_plugin_authority(scope, cwd, &global)?;
-    let installed = authority.manager.verify(id, execution).map_err(plugin_manager_error)?;
+    // A deep verification creates an owner-private immutable runtime snapshot. Reuse that
+    // snapshot for later capabilities and conversions in this process; re-checking the signed
+    // installation record below makes updates, removals and configuration changes invalidate the
+    // key without hashing hundreds of megabytes on every request.
+    let installed =
+        authority.manager.inspect_installed_record(id, execution).map_err(plugin_manager_error)?;
     verify_plugin_pin(&authority.manager, configured, &installed)?;
     if let Some(project) = &authority.project {
         project.verify()?;
     }
-    authority.manager.process_manifest(id, policy, execution).map_err(plugin_manager_error)
+    let cache = PROCESS_SNAPSHOTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        installed.root.display(),
+        installed.package_sha256,
+        installed.content_root_sha256,
+        installed.version
+    );
+    if let Some(prepared) = cache
+        .lock()
+        .map_err(|_| CliError::internal("plugin runtime cache poisoned"))?
+        .get(&key)
+        .cloned()
+    {
+        return Ok(prepared.with_policy(policy));
+    }
+    let prepared = authority
+        .manager
+        .process_manifest(id, policy.clone(), execution)
+        .map_err(plugin_manager_error)?;
+    let mut cache =
+        cache.lock().map_err(|_| CliError::internal("plugin runtime cache poisoned"))?;
+    cache.retain(|candidate, _| {
+        !candidate.starts_with(&format!("{}\u{1f}", installed.root.display()))
+    });
+    cache.insert(key, prepared.clone());
+    Ok(prepared.with_policy(policy))
 }
 
 fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
@@ -3320,15 +3606,43 @@ fn run_doctor(
     loaded: &LoadedConfig,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
-    let checks = collect_doctor_checks(arguments, loaded, &context.cwd, true);
+    let checks = collect_doctor_checks(arguments, loaded, &context.cwd, arguments.deep);
     if arguments.json {
         write_json(context.stdout, &checks)
     } else {
         writeln!(context.stdout, "CHECK\tSTATUS\tDETAIL")?;
         for check in checks {
-            writeln!(context.stdout, "{}\t{}\t{}", check.id, check.status, check.detail)?;
+            writeln!(
+                context.stdout,
+                "{}\t{}\t{}",
+                doctor_check_name(&check.id),
+                check.status,
+                check.detail
+            )?;
         }
         Ok(())
+    }
+}
+
+fn doctor_check_name(id: &str) -> String {
+    match id {
+        "configuration" => "配置".into(),
+        "platform" => "运行平台".into(),
+        "capabilityDownloads" => "能力下载".into(),
+        "temporaryDirectory" => "临时目录".into(),
+        "runtime.pdfium" => "PDF 运行组件".into(),
+        "runtime.ocr" => "本地 OCR".into(),
+        "runtime.asr" => "本地语音转写".into(),
+        "runtime.diarization" => "本地说话人识别".into(),
+        "runtime.legacy-office" => "本地旧版 Office".into(),
+        "networkProbe" => "联网检查".into(),
+        value if value.starts_with("providerEnvironment:") => {
+            format!("AI 服务 {}", value.trim_start_matches("providerEnvironment:"))
+        }
+        value if value.starts_with("plugin:") => {
+            capability_plugin_name(value.trim_start_matches("plugin:")).into()
+        }
+        _ => id.into(),
     }
 }
 
@@ -3338,6 +3652,8 @@ pub(crate) fn collect_doctor_checks(
     cwd: &Path,
     verify_plugins: bool,
 ) -> Vec<DoctorCheck> {
+    let fast_capabilities = (!verify_plugins).then(|| capability_views(loaded, cwd)).transpose();
+    let fast_capabilities = fast_capabilities.ok().flatten();
     let mut checks = vec![
         DoctorCheck {
             id: "configuration".into(),
@@ -3390,12 +3706,7 @@ pub(crate) fn collect_doctor_checks(
             },
         });
     } else {
-        append_initial_runtime_checks(&mut checks, loaded, cwd);
-        checks.push(DoctorCheck {
-            id: "runtime.diarization".into(),
-            status: "skipped".into(),
-            detail: "run diagnostics to verify the local speech plugin payload".into(),
-        });
+        append_fast_runtime_checks(&mut checks, loaded, cwd, fast_capabilities.as_deref());
     }
     for (name, provider) in &loaded.effective.providers {
         checks.push(DoctorCheck {
@@ -3412,11 +3723,12 @@ pub(crate) fn collect_doctor_checks(
     for id in loaded.effective.plugins.keys() {
         let (status, detail) = if verify_plugins {
             doctor_plugin_check(id, loaded, cwd)
+        } else if let Some(capabilities) = fast_capabilities.as_deref()
+            && let Some(check) = doctor_official_plugin_fast_check(id, capabilities)
+        {
+            check
         } else {
-            (
-                "adminConfigContextReadOnly",
-                "plugin store verification is disabled for this configuration context".into(),
-            )
+            doctor_plugin_fast_check(id, loaded, cwd)
         };
         checks.push(DoctorCheck { id: format!("plugin:{id}"), status: status.into(), detail });
     }
@@ -3472,7 +3784,12 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
     }
 }
 
-fn append_initial_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConfig, cwd: &Path) {
+fn append_fast_runtime_checks(
+    checks: &mut Vec<DoctorCheck>,
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    capabilities: Option<&[CapabilityView]>,
+) {
     for capability in into_markdown::core_capabilities()
         .iter()
         .filter(|capability| capability.kind == into_markdown::CapabilityKind::Runtime)
@@ -3496,13 +3813,82 @@ fn append_initial_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedC
                     runtime.install_hint.into()
                 },
             });
-        } else {
-            checks.push(DoctorCheck {
-                id: capability.id.into(),
-                status: "skipped".into(),
-                detail: format!("run diagnostics to verify the {} payload", runtime.component),
-            });
+            continue;
         }
+        let capability_id = match runtime.component {
+            "official.ocr.ppocrv6" => "ocr",
+            "official.media.whisper" => "transcription",
+            "official.legacy-office.libreoffice" => "legacy-office",
+            _ => continue,
+        };
+        append_fast_capability_check(checks, capability.id, capability_id, capabilities);
+    }
+    append_fast_capability_check(checks, "runtime.diarization", "diarization", capabilities);
+}
+
+fn append_fast_capability_check(
+    checks: &mut Vec<DoctorCheck>,
+    check_id: &str,
+    capability_id: &str,
+    capabilities: Option<&[CapabilityView]>,
+) {
+    let Some(capability) = capabilities
+        .and_then(|entries| entries.iter().find(|capability| capability.id == capability_id))
+    else {
+        checks.push(DoctorCheck {
+            id: check_id.into(),
+            status: "checking".into(),
+            detail: "快速状态暂不可用，请重试或运行 `into-md doctor --deep`".into(),
+        });
+        return;
+    };
+    checks.push(DoctorCheck {
+        id: check_id.into(),
+        status: doctor_fast_status(&capability.local_status).into(),
+        detail: format!(
+            "{}；完整验证请运行 `into-md capabilities verify {}`",
+            capability.current_source_name, capability_id
+        ),
+    });
+}
+
+fn doctor_fast_status(status: &str) -> &'static str {
+    match status {
+        "ready" => "ok",
+        "not-installed" => "missing",
+        "disabled" => "disabled",
+        "checking" | "unknown" => "checking",
+        "incompatible" => "incompatible",
+        "blocked" => "blocked",
+        _ => "error",
+    }
+}
+
+fn doctor_official_plugin_fast_check(
+    id: &str,
+    capabilities: &[CapabilityView],
+) -> Option<(&'static str, String)> {
+    let capability_id = match id {
+        "official.legacy-office.libreoffice" => "legacy-office",
+        "official.ocr.ppocrv6" => "ocr",
+        "official.media.whisper" => "transcription",
+        _ => return None,
+    };
+    let capability = capabilities.iter().find(|entry| entry.id == capability_id)?;
+    Some((
+        doctor_fast_status(&capability.local_status),
+        format!("{} 的已认证安装记录", capability_plugin_name(id)),
+    ))
+}
+
+fn doctor_plugin_fast_check(id: &str, loaded: &LoadedConfig, cwd: &Path) -> (&'static str, String) {
+    let effective = &loaded.effective.plugins[id];
+    if !effective.enabled {
+        return ("disabled", "插件已停用".into());
+    }
+    match inspect_admin_effective_plugin_from_loaded(loaded, cwd, id) {
+        Ok(installed) => ("ok", format!("{} 的安装记录与授权有效", installed.version)),
+        Err(error) => ("error", error.to_string()),
     }
 }
 
@@ -4008,24 +4394,42 @@ fn apply_ai_provider_overrides(
     if let Some(model) = &arguments.ai_model {
         loaded.ai_model = Some(model.clone());
     }
-    if ai_is_enabled(&loaded.options) {
+    if provider_backed_ai_capability_is_enabled(&loaded.options) {
         let Some(provider_name) = loaded.ai_provider.as_deref() else {
-            if provider_backed_ai_capability_is_enabled(&loaded.options) {
-                return Err(CliError::usage(
-                    "an enabled AI capability requires --ai-provider or a configured default \
-                     provider",
-                ));
-            }
-            return Ok(());
+            return Err(CliError::usage(
+                "an enabled AI capability requires --ai-provider or a configured default \
+                 provider",
+            ));
         };
-        let provider = loaded
-            .effective
-            .providers
-            .get(provider_name)
-            .ok_or_else(|| CliError::usage(format!("unknown AI provider '{provider_name}'")))?;
-        validate_network_url(&provider.base_url, &loaded.options, "AI provider")?;
+        validate_configured_provider_network(loaded, provider_name)?;
+    }
+    for route in
+        [&loaded.effective.capability_routes.ocr, &loaded.effective.capability_routes.transcription]
+    {
+        for source in route.primary.iter().chain(&route.fallbacks) {
+            let Ok(into_markdown_provider_plugin::CapabilitySourceRef::Provider {
+                provider_id,
+                ..
+            }) = source.parse()
+            else {
+                continue;
+            };
+            validate_configured_provider_network(loaded, &provider_id)?;
+        }
     }
     Ok(())
+}
+
+fn validate_configured_provider_network(
+    loaded: &LoadedConfig,
+    provider_name: &str,
+) -> Result<(), CliError> {
+    let provider = loaded
+        .effective
+        .providers
+        .get(provider_name)
+        .ok_or_else(|| CliError::usage(format!("unknown AI provider '{provider_name}'")))?;
+    validate_network_url(&provider.base_url, &loaded.options, "AI provider")
 }
 
 fn provider_backed_ai_capability_is_enabled(options: &ConversionOptions) -> bool {
@@ -4067,20 +4471,6 @@ fn set_ai_mode(options: &mut ConversionOptions, capability: &str, mode: AiMode) 
         "markdown-postprocess" => options.ai.markdown_postprocess = mode,
         _ => {}
     }
-}
-
-fn ai_is_enabled(options: &ConversionOptions) -> bool {
-    [
-        options.ai.vision_ocr,
-        options.ai.image_description,
-        options.ai.layout_repair,
-        options.ai.table_repair,
-        options.ai.formula_repair,
-        options.ai.audio_transcription,
-        options.ai.markdown_postprocess,
-    ]
-    .iter()
-    .any(|mode| *mode != AiMode::Off)
 }
 
 fn parse_ai_mode(value: &str) -> Result<AiMode, CliError> {
@@ -6053,7 +6443,7 @@ mod tests {
 
     #[test]
     fn doctor_runtime_checks_come_from_the_core_catalog() {
-        let (doctor, _) = invoke(&["doctor", "--json"], true).unwrap();
+        let (doctor, _) = invoke(&["doctor", "--deep", "--json"], true).unwrap();
         let checks: serde_json::Value = serde_json::from_str(&doctor).unwrap();
         let checks = checks.as_array().unwrap();
         for (id, hint) in [
@@ -6520,6 +6910,9 @@ type = "openai-compatible"
 base_url = "https://other.example/v1"
 model = "vision"
 api_key_env = "REMOTE_KEY"
+capabilities = ["vision-ocr"]
+[providers.remote.models]
+vision-ocr = "vision"
 "#,
         )
         .unwrap();
@@ -6561,11 +6954,17 @@ default_provider = "remote"
 allowed_hosts = ["allowed.example"]
 [conversion.ai]
 vision_ocr = "only"
+[capability_routes.ocr]
+mode = "only"
+primary = "provider:remote/vision-ocr"
 [providers.remote]
 type = "openai-compatible"
 base_url = "https://other.example/v1"
 model = "vision"
 api_key_env = "REMOTE_KEY"
+capabilities = ["vision-ocr"]
+[providers.remote.models]
+vision-ocr = "vision"
 "#,
         )
         .unwrap();
@@ -6600,11 +6999,26 @@ api_key_env = "REMOTE_KEY"
         fs::create_dir_all(&root).unwrap();
         let input = root.join("meeting.wav");
         fs::write(&input, b"RIFF").unwrap();
+        let config = root.join("provider.toml");
+        fs::write(
+            &config,
+            r#"schema_version = 1
+default_provider = "blocked"
+[providers.blocked]
+type = "openai-compatible"
+base_url = "http://127.0.0.1:9/v1"
+model = "unused"
+api_key_env = "MISSING_LOCAL_ASR_TEST_KEY"
+"#,
+        )
+        .unwrap();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         run(
             vec![
                 OsString::from("--no-config"),
+                OsString::from("--config"),
+                config.into_os_string(),
                 input.into_os_string(),
                 OsString::from("--ai"),
                 OsString::from("audio-transcription=only"),

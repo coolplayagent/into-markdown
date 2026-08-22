@@ -49,6 +49,13 @@ const RESOURCE_ERROR_MARKERS: [&[u8]; 4] = [
     b"Memory allocation failed",
     b"Not enough memory",
 ];
+const INCOMPLETE_MEDIA_MARKERS: [&[u8]; 5] = [
+    b"File ended prematurely",
+    b"partial file",
+    b"Packet corrupt",
+    b"corrupt input packet",
+    b"Invalid data found when processing input",
+];
 const POLL: Duration = Duration::from_millis(10);
 const EXPECTED_CONFIG: [&str; 29] = [
     "--prefix=/opt/into-markdown/ffmpeg",
@@ -545,7 +552,9 @@ impl FfmpegRuntime {
         context: &ExecutionContext,
         progress_message: Option<String>,
     ) -> Result<NormalizedAudio, ConversionError> {
-        let temporary = context.temporary_file("into-md-media-pcm")?;
+        let temporary = context
+            .temporary_file("into-md-media-pcm")
+            .map_err(|error| media_io_stage(error, "create normalized audio output"))?;
         let result = self.normalize_with_target(
             input,
             limits,
@@ -621,9 +630,15 @@ impl FfmpegRuntime {
         // index at the end and therefore require a seekable source. Preserve
         // the same request-scoped byte budget and cleanup guarantees as PCM
         // output instead of silently accepting only streamable variants.
-        let mut encoded_input = context.temporary_file("into-md-media-input")?;
-        encoded_input.write_all_checked(input)?;
-        encoded_input.flush()?;
+        let mut encoded_input = context
+            .temporary_file("into-md-media-input")
+            .map_err(|error| media_io_stage(error, "create encoded audio input"))?;
+        encoded_input
+            .write_all_checked(input)
+            .map_err(|error| media_io_stage(error, "stage encoded audio input"))?;
+        encoded_input
+            .flush()
+            .map_err(|error| media_io_stage(error, "flush encoded audio input"))?;
         let encoded_path = encoded_input.path().as_os_str().to_owned();
         let private = tempfile::Builder::new()
             .prefix("into-md-media-")
@@ -822,6 +837,12 @@ impl FfmpegRuntime {
         let output =
             out_rx.recv().map_err(|_| component("workerOutput"))?.map_err(map_reader_error)?;
         let stderr = err_rx.recv().map_err(|_| component("workerOutput"))?.unwrap_or_default();
+        if stderr_indicates_incomplete_media(&stderr) {
+            return Err(ConversionError::Malformed {
+                part: Some("media".into()),
+                detail: "truncatedOrCorruptMedia".into(),
+            });
+        }
         if !status.success() {
             match child_failure(status, &stderr) {
                 ChildFailure::Resource => return Err(resource("mediaProcessMemoryOrCpu")),
@@ -859,6 +880,12 @@ impl FfmpegRuntime {
         }
         Ok(NormalizationResult { output, frames: actual_frames })
     }
+}
+
+fn stderr_indicates_incomplete_media(stderr: &[u8]) -> bool {
+    INCOMPLETE_MEDIA_MARKERS
+        .iter()
+        .any(|marker| stderr.windows(marker.len()).any(|window| window == *marker))
 }
 
 fn expected_config() -> impl Iterator<Item = &'static str> {
@@ -1517,6 +1544,14 @@ fn resource(limit: &'static str) -> ConversionError {
 fn component(detail: &str) -> ConversionError {
     ConversionError::ComponentUnavailable { component: "ffmpeg-lgpl".into(), detail: detail.into() }
 }
+fn media_io_stage(error: ConversionError, stage: &'static str) -> ConversionError {
+    match error {
+        ConversionError::Io { detail } => ConversionError::Io {
+            detail: format!("audio normalization could not {stage}: {detail}"),
+        },
+        error => error,
+    }
+}
 fn current_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
@@ -1573,6 +1608,15 @@ mod tests {
     #[test]
     fn bounded_reader_rejects_bomb() {
         assert!(read_bounded(&b"12345"[..], 4).is_err());
+    }
+
+    #[test]
+    fn successful_decoder_output_does_not_hide_truncated_or_corrupt_input() {
+        for message in INCOMPLETE_MEDIA_MARKERS {
+            assert!(stderr_indicates_incomplete_media(message));
+        }
+        assert!(!stderr_indicates_incomplete_media(b""));
+        assert!(!stderr_indicates_incomplete_media(b"Estimating duration from bitrate"));
     }
 
     #[test]

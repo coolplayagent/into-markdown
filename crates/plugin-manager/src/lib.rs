@@ -21,6 +21,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::UNIX_EPOCH;
 use thiserror::Error;
 use zip::ZipArchive;
 
@@ -284,12 +285,22 @@ impl PackageSnapshot {
 }
 
 /// Private immutable snapshot kept alive across process-v1 verification and dispatch.
-pub struct PreparedProcessPlugin {
+struct PreparedProcessSnapshot {
     authority: into_markdown_process_plugin::PluginManifest,
-    policy: into_markdown_process_plugin::RuntimePolicy,
+    installed: InstalledPlugin,
     _snapshot_directory: tempfile::TempDir,
     _snapshot_reservation: ResourceReservation,
     _metadata_reservation: ResourceReservation,
+}
+
+/// A request policy bound to one authenticated immutable process snapshot.
+///
+/// Clones share only the already-verified private snapshot. Each capability keeps its own
+/// independently validated sandbox and resource policy.
+#[derive(Clone)]
+pub struct PreparedProcessPlugin {
+    snapshot: std::sync::Arc<PreparedProcessSnapshot>,
+    policy: into_markdown_process_plugin::RuntimePolicy,
 }
 
 /// Verified WASI component bytes and their request-scoped capability intersection.
@@ -317,6 +328,25 @@ impl PreparedWasiPlugin {
 }
 
 impl PreparedProcessPlugin {
+    /// Installed identity rebound to the manager-verified private snapshot.
+    #[must_use]
+    pub fn installed(&self) -> &InstalledPlugin {
+        &self.snapshot.installed
+    }
+
+    /// Bind another capability policy to the same authenticated immutable snapshot.
+    #[must_use]
+    pub fn with_policy(
+        &self,
+        #[allow(unused_mut)] mut policy: into_markdown_process_plugin::RuntimePolicy,
+    ) -> Self {
+        #[cfg(windows)]
+        {
+            policy.windows = self.policy.windows.clone();
+        }
+        Self { snapshot: self.snapshot.clone(), policy }
+    }
+
     /// Consume the pinned snapshot only through the sandboxed process-v1 runtime.
     pub fn execute(
         &self,
@@ -327,7 +357,7 @@ impl PreparedProcessPlugin {
         into_markdown_process_plugin::PluginError,
     > {
         into_markdown_process_plugin::ProcessPlugin::new(
-            self.authority.clone(),
+            self.snapshot.authority.clone(),
             self.policy.clone(),
         )?
         .execute(request, execution)
@@ -346,7 +376,7 @@ impl PreparedProcessPlugin {
         into_markdown_process_plugin::PluginError,
     > {
         into_markdown_process_plugin::ProcessPlugin::new(
-            self.authority.clone(),
+            self.snapshot.authority.clone(),
             self.policy.clone(),
         )?
         .execute_raw(request, execution)
@@ -1048,7 +1078,20 @@ impl PluginManager {
         execution: &ExecutionContext,
     ) -> Result<InstalledPlugin, ManagerError> {
         let _lock = self.acquire_verified_read_lock()?;
-        self.inspect_installed_record_unlocked(id, execution)
+        self.inspect_installed_status_unlocked(id, execution).map(|(installed, _)| installed)
+    }
+
+    /// Authenticate installed metadata and return a cheap identity for the current extracted
+    /// tree. The identity includes every expected file's path, size, modification time and
+    /// platform file identity, so a cached status can be invalidated without hashing model
+    /// payloads. It is display evidence only and must never replace [`Self::verify`] before use.
+    pub fn inspect_installed_status(
+        &self,
+        id: &str,
+        execution: &ExecutionContext,
+    ) -> Result<(InstalledPlugin, String), ManagerError> {
+        let _lock = self.acquire_verified_read_lock()?;
+        self.inspect_installed_status_unlocked(id, execution)
     }
 
     fn verify_unlocked(
@@ -1062,11 +1105,11 @@ impl PluginManager {
         Ok(installed)
     }
 
-    fn inspect_installed_record_unlocked(
+    fn inspect_installed_status_unlocked(
         &self,
         id: &str,
         execution: &ExecutionContext,
-    ) -> Result<InstalledPlugin, ManagerError> {
+    ) -> Result<(InstalledPlugin, String), ManagerError> {
         execution.checkpoint().map_err(map_execution_error)?;
         let _metadata_memory =
             execution.reserve_memory(MAX_MANIFEST_BYTES * 16).map_err(map_execution_error)?;
@@ -1113,16 +1156,19 @@ impl PluginManager {
                 "installed package archive size changed",
             ));
         }
-        inspect_tree_metadata(&manifest, &root, Some(execution))?;
-        Ok(InstalledPlugin {
-            id: manifest.id,
-            version: manifest.version,
-            protocol: manifest.protocol,
-            package_sha256: authority.source_archive_sha256,
-            content_root_sha256: manifest.signature.signed_payload_sha256,
-            signing_key_id: manifest.signature.key_id,
-            root,
-        })
+        let status_token = inspect_tree_metadata(&manifest, &root, Some(execution))?;
+        Ok((
+            InstalledPlugin {
+                id: manifest.id,
+                version: manifest.version,
+                protocol: manifest.protocol,
+                package_sha256: authority.source_archive_sha256,
+                content_root_sha256: manifest.signature.signed_payload_sha256,
+                signing_key_id: manifest.signature.key_id,
+                root,
+            },
+            status_token,
+        ))
     }
 
     fn verify_retained_package_unlocked(
@@ -1327,12 +1373,16 @@ impl PluginManager {
             executable_sha256: file.sha256.clone(),
             protocol_versions: vec![1],
         };
+        let snapshot_installed = InstalledPlugin { root: snapshot.clone(), ..installed };
         Ok(PreparedProcessPlugin {
-            authority,
+            snapshot: std::sync::Arc::new(PreparedProcessSnapshot {
+                authority,
+                installed: snapshot_installed,
+                _snapshot_directory: snapshot_directory,
+                _snapshot_reservation: snapshot_reservation,
+                _metadata_reservation: metadata_reservation,
+            }),
             policy,
-            _snapshot_directory: snapshot_directory,
-            _snapshot_reservation: snapshot_reservation,
-            _metadata_reservation: metadata_reservation,
         })
     }
 
@@ -2109,7 +2159,7 @@ fn inspect_tree_metadata(
     manifest: &PackageManifest,
     root: &Path,
     execution: Option<&ExecutionContext>,
-) -> Result<(), ManagerError> {
+) -> Result<String, ManagerError> {
     let expected = manifest
         .files
         .iter()
@@ -2123,6 +2173,28 @@ fn inspect_tree_metadata(
             ManagerErrorCode::InvalidPackage,
             "installed tree inventory differs",
         ));
+    }
+    let mut status_hasher = Sha256::new();
+    for relative in &expected {
+        let metadata = secure_regular_file(&root.join(relative))?;
+        status_hasher.update(relative.as_bytes());
+        status_hasher.update([0]);
+        status_hasher.update(metadata.len().to_le_bytes());
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |value| value.as_nanos());
+        status_hasher.update(modified.to_le_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            status_hasher.update(metadata.dev().to_le_bytes());
+            status_hasher.update(metadata.ino().to_le_bytes());
+            status_hasher.update(metadata.mode().to_le_bytes());
+        }
+        #[cfg(windows)]
+        status_hasher.update([u8::from(metadata.permissions().readonly())]);
     }
     for authority in &manifest.files {
         let metadata = secure_regular_file(&root.join(&authority.path))?;
@@ -2145,7 +2217,7 @@ fn inspect_tree_metadata(
             }
         }
     }
-    Ok(())
+    Ok(format!("{:x}", status_hasher.finalize()))
 }
 
 fn verify_staged(root: &Path, trusted: &TrustedSigners) -> Result<(), ManagerError> {
@@ -4021,7 +4093,8 @@ mod tests {
         let manager = PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
         manager.install_bytes(&package, None, &context()).expect("install");
         let runtime = manager.root().join("fixture.plugin/bin/plugin.exe");
-        assert!(manager.inspect_installed_record("fixture.plugin", &context()).is_ok());
+        let (_, original_status) =
+            manager.inspect_installed_status("fixture.plugin", &context()).expect("initial status");
         let mut permissions = fs::metadata(&runtime).expect("runtime metadata").permissions();
         #[cfg(unix)]
         {
@@ -4033,6 +4106,9 @@ mod tests {
         fs::set_permissions(&runtime, permissions).expect("make runtime writable for corruption");
         fs::write(&runtime, b"corrupt").expect("same-size corruption");
         assert!(manager.inspect_installed_record("fixture.plugin", &context()).is_ok());
+        let (_, changed_status) =
+            manager.inspect_installed_status("fixture.plugin", &context()).expect("changed status");
+        assert_ne!(changed_status, original_status);
         assert_eq!(
             manager.verify("fixture.plugin", &context()).expect_err("hash mismatch").code,
             ManagerErrorCode::HashMismatch
