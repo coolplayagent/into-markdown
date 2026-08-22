@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { AiMode, CapabilityAdmin, ComponentStatus, InputFormat, NetworkMode, WorkbenchOptions } from "./api";
 import { useI18n } from "./i18n";
 import { RouteLink } from "./router";
+import { capabilitySourceLabel } from "./source-label";
 import { FORMATS } from "./task-ui";
 
 function SegmentedControl<T extends string>({
@@ -28,7 +29,7 @@ function SegmentedControl<T extends string>({
 }
 
 export function CapabilityStrip({ ocr, capability, onInstallOcr }: { ocr?: ComponentStatus | undefined; capability?: CapabilityAdmin | undefined; onInstallOcr(): Promise<void> }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState(false);
   const install = async () => {
@@ -42,15 +43,15 @@ export function CapabilityStrip({ ocr, capability, onInstallOcr }: { ocr?: Compo
     </div>
     <div className="capability-item">
       <span className="capability-icon"><ScanText size={21} aria-hidden="true" /></span>
-      <div><strong>{t("imageOcr")}</strong>{ocr?.available
-        ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{capabilitySourceLabel(capability?.currentSource)}</span>
+      <div><strong>{t("imageOcr")}</strong>{!ocr || ["unknown", "checking", "verifying"].includes(ocr.code)
+        ? <span className="checking"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("checkingSystem")}</span>
+        : ocr.available
+        ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{capabilitySourceLabel(capability?.currentSource, locale, ocr.detail)}</span>
         : <><span className="needs-setup"><CircleAlert size={14} aria-hidden="true" />{t("audioNeedsSetup")}</span><button className="capability-install" type="button" disabled={installing} onClick={() => void install()}>{installing ? <LoaderCircle className="spin" size={14} /> : null}{t(installing ? "installingComponents" : "installNow")}</button><RouteLink href="/admin/capabilities" className="capability-install">Provider</RouteLink>{error && <small className="capability-error" role="status" aria-live="assertive">{t("installComponentsFailed")}</small>}</>}
       </div>
     </div>
   </section>;
 }
-
-function capabilitySourceLabel(source?: string) { if (!source || source === "off") return "—"; const [kind, identity = source] = source.split(":", 2); return `${kind === "provider" ? "Provider" : "Local"} · ${identity.split("/", 1)[0]}`; }
 
 export function OptionPanel({ value, onChange, disabled, onOpenAdvanced }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; disabled: boolean; onOpenAdvanced(): void }) {
   const { t } = useI18n();

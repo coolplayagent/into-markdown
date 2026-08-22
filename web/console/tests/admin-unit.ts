@@ -44,7 +44,7 @@ const snapshot: AdminSnapshot = {
 
 function api(actions: AdminAction[] = [], value: AdminSnapshot = snapshot): ApiClient {
   const noop = async () => { throw new Error("not used"); };
-  return { status: noop, listTasks: async () => [], getTask: noop, upload: noop, cancel: noop, watchTask: noop, preview: noop, download: noop,
+  return { status: noop, capabilitySnapshot: async () => ({ schemaVersion: 2, generation: 1, checking: false, capabilities: value.capabilities.map((item) => ({ ...item, name: item.id, currentSourceName: item.currentSource })) }), listTasks: async () => [], getTask: noop, upload: noop, cancel: noop, watchTask: noop, preview: noop, download: noop,
     admin: async () => value, adminGrant: async () => "G".repeat(43), adminAction: async (action) => { actions.push(action); return {}; } } as unknown as ApiClient;
 }
 
@@ -128,6 +128,27 @@ test("admin API uses the authenticated same-origin contract and stable error cod
   await assert.rejects(denied.adminAction({ schemaVersion: 1, action: "provider.test" }), (error: unknown) => error instanceof ApiError && error.code === "networkAuthorizationRequired");
 });
 
+test("plugin picker uploads the selected package through the authenticated staging endpoint", async () => {
+  const window = install("/admin/plugins");
+  const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+  const response = { schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: "本地 OCR.imp", byteLen: 3 };
+  const client = createApiClient(token, async (input, init) => {
+    calls.push([input, init]);
+    return new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } });
+  });
+  const file = new window.File(["imp"], "本地 OCR.imp", { type: "application/octet-stream" });
+  assert.deepEqual(await client.stagePluginPackage!(file as unknown as File), response);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]![0], "/api/admin/plugin-package");
+  assert.equal(calls[0]![1]?.method, "POST");
+  assert.equal(calls[0]![1]?.body, file);
+  assert.deepEqual(calls[0]![1]?.headers, {
+    "X-Into-Md-Session": token,
+    "Content-Type": "application/octet-stream",
+    "X-Into-Md-Plugin-Filename-B64": "5pys5ZywIE9DUi5pbXA",
+  });
+});
+
 test("administration responses share one exact one-MiB wire limit", async () => {
   const value: Record<string, string> = {};
   for (let index = 0; index < 255; index += 1) value[`p${index}`] = "x".repeat(4096);
@@ -166,6 +187,21 @@ test("failed initial load exposes an alert and retry recovery", async () => {
   await waitFor(() => window.document.querySelector('[role="alert"]') !== null);
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Reload")!.click();
   await waitFor(() => window.document.body.textContent.includes("Diagnostics")); assert.equal(calls, 2);
+});
+
+test("provider failures explain the cause beside the provider that triggered them", async () => {
+  const window = install("/admin/providers");
+  Object.defineProperty(window.navigator, "languages", { value: ["zh-CN"], configurable: true });
+  const failed = api();
+  failed.adminAction = async () => { throw new ApiError("privateNetworkDenied"); };
+  activeRoot = createRoot(window.document.getElementById("app")!);
+  activeRoot.render(createElement(App, { api: failed }));
+  await waitFor(() => window.document.body.textContent.includes("AI 服务"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "测试连接")!.click();
+  await waitFor(() => window.document.body.textContent.includes("连接被安全策略阻止"));
+  const feedback = window.document.querySelector(".admin-entity-card .capability-feedback.error");
+  assert.match(feedback?.textContent ?? "", /局域网地址/);
+  assert.equal(window.document.querySelector(".admin-section-stack > .admin-feedback"), null);
 });
 
 test("partial records expose exact-layer mutation while read-only authority stays disabled", async () => {

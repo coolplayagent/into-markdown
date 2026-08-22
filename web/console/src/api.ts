@@ -6,6 +6,20 @@ export interface ComponentStatus { available: boolean; code: string; detail: str
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; imageOcr: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
 export interface CapabilityAdmin { id: "legacy-office" | "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
+export type CapabilityQuickStatus = CapabilityAdmin["status"] | "unknown" | "checking" | "disabled";
+export interface CapabilityQuickView {
+  id: CapabilityAdmin["id"]; name: string; status: CapabilityQuickStatus; localStatus: CapabilityQuickStatus;
+  currentSource: string; currentSourceName: string; sources: string[]; version?: string; localVersion?: string;
+  lastVerifiedAtMs?: number;
+}
+export interface CapabilitySnapshot { schemaVersion: 2; generation: number; checking: boolean; checkedAtMs?: number; capabilities: CapabilityQuickView[] }
+export interface CapabilityCheck {
+  schemaVersion: 1; id: string; capability: string; capabilityName: string; plugin: string; pluginName: string;
+  status: "queued" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
+  stage: "queued" | "package" | "runtime" | "models" | "cancelling" | "completed";
+  progress: number; code?: string; detail?: string; elapsedMs?: number;
+}
+export interface StagedPluginPackage { schemaVersion: 1; source: string; filename: string; byteLen: number }
 export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; models: Record<string, string>; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
 export interface PluginAdmin { id: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; packageScope?: "global" | "project"; source?: string; sha256?: string; protocol?: string; enabled?: boolean; effective: boolean; shadowedBy?: "effective"; verification?: string; version?: string; signingKeyId?: string; signingKeySha256?: string; target?: string }
 export interface DoctorAdmin { id: string; status: string; detail: string }
@@ -114,6 +128,34 @@ function isCapabilityAdmin(value: unknown): value is CapabilityAdmin {
     && value.sources.every(sourceRef) && value.sources.includes(value.currentSource as string)
     && (value.version === undefined || safeText(value.version, 128))
     && (value.localVersion === undefined || safeText(value.localVersion, 128));
+}
+function parseCapabilitySnapshot(value: unknown): CapabilitySnapshot {
+  const statuses = new Set(["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked", "unknown", "checking", "disabled"]);
+  if (!isObject(value) || value.schemaVersion !== 2 || !Number.isSafeInteger(value.generation)
+    || typeof value.checking !== "boolean" || value.checkedAtMs !== undefined && !Number.isSafeInteger(value.checkedAtMs)
+    || !Array.isArray(value.capabilities) || value.capabilities.length > 16) throw new ApiError("invalidResponse");
+  for (const item of value.capabilities) {
+    if (!isObject(item) || !["legacy-office", "ocr", "transcription", "diarization"].includes(String(item.id))
+      || !safeText(item.name, 128) || !statuses.has(String(item.status)) || !statuses.has(String(item.localStatus))
+      || !safeText(item.currentSource, 512) || !safeText(item.currentSourceName, 256) || !stringList(item.sources, 64)
+      || item.version !== undefined && !safeText(item.version, 128)
+      || item.localVersion !== undefined && !safeText(item.localVersion, 128)
+      || item.lastVerifiedAtMs !== undefined && !Number.isSafeInteger(item.lastVerifiedAtMs)) throw new ApiError("invalidResponse");
+  }
+  return value as unknown as CapabilitySnapshot;
+}
+function parseCapabilityCheck(value: unknown): CapabilityCheck {
+  const statuses = new Set(["queued", "running", "cancelling", "cancelled", "completed", "failed"]);
+  const stages = new Set(["queued", "package", "runtime", "models", "cancelling", "completed"]);
+  if (!isObject(value) || value.schemaVersion !== 1 || !shortString(value.id, 128)
+    || !shortString(value.capability, 64) || !safeText(value.capabilityName, 128)
+    || !safeText(value.plugin, 128) || !safeText(value.pluginName, 128)
+    || !statuses.has(String(value.status)) || !stages.has(String(value.stage))
+    || !Number.isSafeInteger(value.progress) || Number(value.progress) < 0 || Number(value.progress) > 100
+    || value.code !== undefined && !shortString(value.code, 128)
+    || value.detail !== undefined && !shortString(value.detail, 4096)
+    || value.elapsedMs !== undefined && (!Number.isSafeInteger(value.elapsedMs) || Number(value.elapsedMs) < 0)) throw new ApiError("invalidResponse");
+  return value as unknown as CapabilityCheck;
 }
 function isProviderAdmin(value: unknown, configurationReadOnly: boolean): value is ProviderAdmin {
   if (!isObject(value) || !safeText(value.name, 128)
@@ -330,7 +372,12 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
 
 export interface ApiClient {
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
+  capabilitySnapshot(signal?: AbortSignal): Promise<CapabilitySnapshot>;
+  startCapabilityCheck?(id: CapabilityAdmin["id"], signal?: AbortSignal): Promise<CapabilityCheck>;
+  capabilityCheck?(id: string, signal?: AbortSignal): Promise<CapabilityCheck>;
+  cancelCapabilityCheck?(id: string, signal?: AbortSignal): Promise<CapabilityCheck>;
   installCapability(id: "ocr" | "media", signal?: AbortSignal): Promise<void>;
+  stagePluginPackage?(file: File, signal?: AbortSignal): Promise<StagedPluginPackage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
   uploadMeeting(file: File, options: MeetingOptions, signal?: AbortSignal): Promise<TaskRecord>;
@@ -368,9 +415,20 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
   }
   const client: ApiClient = {
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
+    async capabilitySnapshot(signal) { return parseCapabilitySnapshot(await jsonRequest("/api/capabilities/status", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536)); },
+    async startCapabilityCheck(id, signal) { return parseCapabilityCheck(await jsonRequest(`/api/capabilities/${id}/verify`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
+    async capabilityCheck(id, signal) { return parseCapabilityCheck(await jsonRequest(`/api/capability-checks/${encodeURIComponent(id)}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536)); },
+    async cancelCapabilityCheck(id, signal) { return parseCapabilityCheck(await jsonRequest(`/api/capability-checks/${encodeURIComponent(id)}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
     async installCapability(id, signal) {
       const value = await jsonRequest(`/api/capabilities/${id}/install`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 4096);
       if (!isObject(value) || value.schemaVersion !== 1 || value.capability !== id || value.status !== "installed") throw new ApiError("invalidResponse");
+    },
+    async stagePluginPackage(file, signal) {
+      const headers = auth(); headers["Content-Type"] = "application/octet-stream"; headers["X-Into-Md-Plugin-Filename-B64"] = base64UrlUtf8(file.name);
+      const value = await jsonRequest("/api/admin/plugin-package", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }, 4096);
+      if (!isObject(value) || value.schemaVersion !== 1 || !safeText(value.source, 4096) || !safeText(value.filename, 255)
+        || !Number.isSafeInteger(value.byteLen) || Number(value.byteLen) <= 0) throw new ApiError("invalidResponse");
+      return value as unknown as StagedPluginPackage;
     },
     async admin(signal) { return parseAdminSnapshot(await jsonRequest("/api/admin", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },
     async adminGrant(action, signal) {

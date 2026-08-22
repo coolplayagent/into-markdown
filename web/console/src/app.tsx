@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { ChevronDown, CircleAlert, Languages, LoaderCircle, Settings2, ShieldCheck } from "lucide-react";
 import type { ApiClient } from "./api";
 import { I18nProvider, useI18n } from "./i18n";
@@ -7,6 +7,7 @@ import { ThemeProvider, useTheme } from "./theme";
 import { WorkbenchPage } from "./workbench-page";
 import { MeetingPage } from "./meeting-page";
 import { AdminPage, type AdminSection } from "./admin-page";
+import { CapabilityProvider, useCapabilities } from "./capability-store";
 
 function Preferences() {
   const { locale, setLocale, t } = useI18n();
@@ -17,14 +18,12 @@ function Preferences() {
   </div>;
 }
 
-function ServiceBadge({ api }: { api: ApiClient }) {
+function ServiceBadge() {
   const { t } = useI18n();
-  const [state, setState] = useState<"checking" | "ready" | "error">("checking");
-  useEffect(() => {
-    const controller = new AbortController();
-    void api.status(controller.signal).then((value) => setState(value.localApi.available && value.documentConsole.available ? "ready" : "error"), () => { if (!controller.signal.aborted) setState("error"); });
-    return () => controller.abort();
-  }, [api]);
+  const capabilities = useCapabilities();
+  const state: "checking" | "ready" | "error" = !capabilities.snapshot
+    ? capabilities.error ? "error" : "checking"
+    : capabilities.snapshot.capabilities.some((item) => ["corrupt", "incompatible", "blocked"].includes(item.status)) ? "error" : "ready";
   const Icon = state === "checking" ? LoaderCircle : state === "ready" ? ShieldCheck : CircleAlert;
   return <span className={`service-badge ${state}`} role="status"><Icon size={17} aria-hidden="true" className={state === "checking" ? "spin" : ""} /><span>{t(state === "ready" ? "systemReady" : state === "error" ? "systemNeedsAttention" : "checkingSystem")}</span></span>;
 }
@@ -39,7 +38,7 @@ function Content({ api }: { api: ApiClient }) {
   const adminMatch = /^\/admin\/(capabilities|formats|providers|plugins|configuration|doctor)$/.exec(path);
   const adminSection = adminMatch?.[1] as AdminSection | undefined;
   useEffect(() => {
-    document.title = `${t(adminSection ?? (meeting ? "meetingNotes" : "workbench"))} · into-markdown`;
+    document.title = `${t(adminSection ?? (meeting ? "speechTranscription" : "workbench"))} · into-markdown`;
   }, [adminSection, meeting, t]);
   useEffect(() => { main.current?.focus(); }, [path]);
   return <main id="main" ref={main} tabIndex={-1}>
@@ -54,9 +53,9 @@ function Content({ api }: { api: ApiClient }) {
 function Shell({ api }: { api: ApiClient }) {
   const { t } = useI18n();
   const { path } = useRouter();
-  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") && !path.startsWith("/admin/") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink><RouteLink href="/admin/capabilities" className={path.startsWith("/admin/") ? "active" : ""}>{t("administration")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
+  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") && !path.startsWith("/admin/") ? "active" : ""}>{t("documentConversion")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("speechTranscription")}</RouteLink><RouteLink href="/admin/capabilities" className={path.startsWith("/admin/") ? "active" : ""}>{t("administration")}</RouteLink></nav><div className="header-actions"><ServiceBadge /><Preferences /></div></header><Content api={api} /></div></>;
 }
 
 export function App({ api }: { api: ApiClient }) {
-  return <I18nProvider><ThemeProvider><Router><Shell api={api} /></Router></ThemeProvider></I18nProvider>;
+  return <I18nProvider><ThemeProvider><Router><CapabilityProvider api={api}><Shell api={api} /></CapabilityProvider></Router></ThemeProvider></I18nProvider>;
 }

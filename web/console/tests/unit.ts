@@ -36,6 +36,7 @@ const testGroups = {
   ]),
   workbench: new Set([
     "workbench keeps the current batch and conversion controls in one route",
+    "workbench keeps OCR neutral while the fast capability snapshot is pending",
     "workbench rejects unsupported files before upload and explains terminal failures",
     "completed current-batch rows open their result from the whole row",
     "workbench separates the current batch from scrollable recent history",
@@ -147,6 +148,7 @@ const task = (status: TaskRecord["status"] = "running", id = "a".repeat(32)): Ta
 });
 
 const availableApi: ApiClient = {
+  async capabilitySnapshot() { return capabilitySnapshot(false); },
   async status() {
     return {
       schemaVersion: 1 as const,
@@ -177,6 +179,12 @@ const availableApi: ApiClient = {
   async admin() { return { schemaVersion: 1, formats: [], capabilities: [], providers: [], plugins: [], configuration: {}, profiles: [], doctor: [], configurationReadOnly: false }; },
   async adminAction() { return {}; },
 };
+
+function capabilitySnapshot(ready: boolean) {
+  const status = ready ? "ready" as const : "not-installed" as const;
+  const source = (id: "legacy-office" | "ocr" | "transcription" | "diarization") => ready ? `plugin:official.${id}/${id}` : "off";
+  return { schemaVersion: 2 as const, generation: 1, checking: false, checkedAtMs: 1, capabilities: (["legacy-office", "ocr", "transcription", "diarization"] as const).map((id) => ({ id, name: id, status, localStatus: status, currentSource: source(id), currentSourceName: ready ? "Local plugin" : "Off", sources: [source(id), "off"] })) };
+}
 
 test("session handoff clears every fragment and survives only in the current tab", () => {
   const values = new Map<string, string>();
@@ -498,6 +506,7 @@ test("meeting speaker names rerender artifacts through generation CAS without re
   let transcriptUploads = 0;
   const api: ApiClient = {
     ...availableApi,
+    async capabilitySnapshot() { return capabilitySnapshot(true); },
     async getTask() { return { ...completed, artifactGeneration: generation }; },
     async listTasks() { return { tasks: [completed] }; },
     async preview() { return { text: `# Transcript\n\n[00:00] ${name}: Hello`, truncated: false, contentType: "text/markdown" }; },
@@ -587,6 +596,8 @@ test("immediate cleanup requires irreversible confirmation and reports reclaimed
   const root = trackedRoot(window2.document.getElementById("app")!);
   root.render(createElement(App, { api }));
   await waitForText(window2, "old.md");
+  [...window2.document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "View all")!.click();
+  await waitFor(() => Boolean(window2.document.querySelector(".history-drawer")));
   window2.document.querySelector<HTMLButtonElement>('button[aria-label="Clean up now"]')!.click();
   await waitFor(() => cleanups === 1 && window2.document.body.textContent.includes("1.5 MiB"));
   assert.ok(warning.includes("cannot be undone"));
@@ -621,6 +632,22 @@ test("workbench keeps the current batch and conversion controls in one route", a
   cancel.click(); await waitFor(() => cancelled === 1);
   assert.equal(window.document.querySelectorAll(".current-batch li").length, 2);
   assert.equal(window.document.querySelector(".history-table-shell"), null);
+});
+
+test("workbench keeps OCR neutral while the fast capability snapshot is pending", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  let legacyStatusRequests = 0;
+  let resolveSnapshot!: (snapshot: ReturnType<typeof capabilitySnapshot>) => void;
+  const pending = new Promise<ReturnType<typeof capabilitySnapshot>>((resolve) => { resolveSnapshot = resolve; });
+  const api: ApiClient = { ...availableApi, async capabilitySnapshot() { return pending; }, async status() { legacyStatusRequests += 1; return availableApi.status(); } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Add documents");
+  assert.ok(window.document.querySelector(".capability-item")?.parentElement?.textContent?.includes("Checking"));
+  assert.equal(window.document.body.textContent.includes("Install and verify"), false);
+  assert.equal(legacyStatusRequests, 0, "the workbench must not block the fast snapshot on the legacy full status route");
+  resolveSnapshot(capabilitySnapshot(true));
+  await waitForText(window, "Local plugin");
+  assert.equal(window.document.body.textContent.includes("Install and verify"), false);
 });
 
 test("workbench rejects unsupported files before upload and explains terminal failures", async () => {
@@ -739,13 +766,14 @@ test("remote OCR requires nearby network and provider authorization without enab
   const uploaded: WorkbenchOptions[] = [];
   const api: ApiClient = {
     ...availableApi,
+    async capabilitySnapshot() { const base = capabilitySnapshot(false); return { ...base, capabilities: base.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "ready", currentSource: "provider:bailian/ocr", currentSourceName: "Bailian", sources: ["provider:bailian/ocr", "plugin:official.ocr/ocr", "off"] } : item) }; },
     async status() { return { ...(await availableApi.status()), imageOcr: { available: true, code: "available", detail: "ready" } }; },
     async admin() { return { ...(await availableApi.admin()), capabilities: [{ id: "ocr", status: "ready", localStatus: "ready", currentSource: "provider:bailian/ocr", sources: ["provider:bailian/ocr", "plugin:official.ocr/ocr", "off"] }] }; },
     async upload(_file, options) { uploaded.push(options); return task(); },
     async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "Provider · bailian");
+  await waitForText(window, "Bailian");
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["image"], "scan.jpg", { type: "image/jpeg" })] } });
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
@@ -778,6 +806,7 @@ test("meeting recording is an independent route and media never enters the docum
   const uploads: Array<[string, boolean]> = [];
   const api: ApiClient = {
     ...availableApi,
+    async capabilitySnapshot() { return capabilitySnapshot(true); },
     async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" }, speakerDiarization: { available: true, code: "available", detail: "ready" } }; },
     async uploadMeeting(file, options) {
       uploads.push([file.name, options.diarize]);
@@ -793,9 +822,9 @@ test("meeting recording is an independent route and media never enters the docum
   await waitForText(window, "recording.m4a");
   assert.equal(window.document.body.textContent.includes("Selected (1)"), false);
   [...window.document.querySelectorAll("a")]
-    .find((link) => link.textContent === "Meeting notes")!
+    .find((link) => link.textContent === "Speech transcription")!
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
-  await waitForText(window, "Record meeting");
+  await waitForText(window, "Record or import");
   assert.equal(window.document.getElementById("upload-zone"), null);
   assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent?.includes("Start recording")));
   const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
@@ -812,7 +841,7 @@ test("meeting recording is an independent route and media never enters the docum
 test("meeting page keeps recording primary and setup feedback beside transcript controls", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/meetings");
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
-  await waitForText(window, "Record meeting");
+  await waitForText(window, "Record or import");
   await waitForText(window, "Prepare audio components");
   const start = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Start recording"));
   const prepare = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Prepare audio components"));
@@ -829,11 +858,27 @@ test("meeting page keeps recording primary and setup feedback beside transcript 
   assert.equal(diarize.checked, false);
 });
 
+test("meeting keeps speech capabilities neutral while the fast snapshot is pending", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/meetings");
+  let resolveSnapshot!: (snapshot: ReturnType<typeof capabilitySnapshot>) => void;
+  const pending = new Promise<ReturnType<typeof capabilitySnapshot>>((resolve) => { resolveSnapshot = resolve; });
+  const api: ApiClient = { ...availableApi, async capabilitySnapshot() { return pending; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Record or import");
+  assert.ok(window.document.body.textContent.includes("Checking"));
+  assert.equal(window.document.body.textContent.includes("Prepare audio components"), false);
+  assert.equal(window.document.body.textContent.includes("Speaker component is not ready"), false);
+  resolveSnapshot(capabilitySnapshot(true));
+  await waitForText(window, "Local plugin");
+  assert.equal(window.document.body.textContent.includes("Prepare audio components"), false);
+});
+
 test("remote transcription requires a one-upload grant beside transcript controls", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/meetings");
   const uploads: MeetingOptions[] = [];
   const api: ApiClient = {
     ...availableApi,
+    async capabilitySnapshot() { const base = capabilitySnapshot(false); return { ...base, capabilities: base.capabilities.map((item) => item.id === "transcription" ? { ...item, status: "ready", currentSource: "provider:bailian/transcription", currentSourceName: "Bailian", sources: ["provider:bailian/transcription", "plugin:official.media/transcription", "off"] } : item.id === "diarization" ? { ...item, status: "ready", localStatus: "ready", currentSource: "plugin:official.media/diarization", currentSourceName: "Local speech", sources: ["plugin:official.media/diarization", "off"] } : item) }; },
     async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" }, speakerDiarization: { available: true, code: "available", detail: "ready" } }; },
     async admin() { return { ...(await availableApi.admin()), capabilities: [
       { id: "transcription", status: "ready", localStatus: "ready", currentSource: "provider:bailian/transcription", sources: ["provider:bailian/transcription", "plugin:official.media/transcription", "off"] },
@@ -975,7 +1020,7 @@ test("real mounted App has no axe violations; geometry-incomplete rules are not 
 test("API rejection renders a recoverable status error rather than the error boundary", async () => {
   const window = installWindow();
   const root = trackedRoot(window.document.getElementById("app")!);
-  root.render(createElement(App, { api: { ...availableApi, status: async () => { throw new ApiError("unreachable"); } } }));
+  root.render(createElement(App, { api: { ...availableApi, capabilitySnapshot: async () => { throw new ApiError("unreachable"); } } }));
   await waitFor(() => window.document.body.textContent.includes("Needs attention"));
   assert.ok(window.document.querySelector('.service-badge[role="status"]'));
   assert.equal(window.document.body.textContent.includes("The page encountered a problem"), false);
