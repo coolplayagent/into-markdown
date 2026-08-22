@@ -789,20 +789,15 @@ test("root workbench automatically opens the first successful result dialog", as
   assert.equal(window.location.pathname, "/");
 });
 
-test("workbench presents network access as one bounded switch", async () => {
+test("local workbench keeps implementation limits and network policy out of the normal flow", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
-  await waitForText(window, "Open advanced settings");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Open advanced settings")!.click();
-  await waitForText(window, "When off, conversions process local content only.");
+  await waitForText(window, "Conversion settings");
+  assert.ok(!window.document.body.textContent.includes("Open advanced settings"));
+  assert.ok(!window.document.body.textContent.includes("Input file limit"));
+  assert.ok(!window.document.body.textContent.includes("Memory limit"));
   assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
-  assert.ok(!window.document.body.textContent.includes("private-network targets"));
-  const label = [...window.document.querySelectorAll("label")].find((item) => item.textContent?.includes("Allow network access"))!;
-  const toggle = label.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  assert.equal(toggle.checked, false);
-  toggle.click();
-  await waitForText(window, "When on, conversions may access internet and local-network services.");
-  assert.equal(toggle.checked, true);
+  assert.ok(!window.document.body.textContent.includes("Allow network access"));
 });
 
 test("remote OCR requires nearby network and provider authorization without enabling unrelated AI modes", async () => {
@@ -823,21 +818,12 @@ test("remote OCR requires nearby network and provider authorization without enab
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
   await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitForText(window, "The selected capability uses a remote provider");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Open advanced settings")!.click();
-  await waitFor(() => Boolean(window.document.querySelector(".settings-sheet")));
-  const aiMode = [...window.document.querySelectorAll<HTMLSelectElement>(".settings-sheet select")]
-    .find((select) => [...select.options].some((option) => option.value === "prefer"))!;
-  assert.equal(aiMode.value, "off");
+  await waitForText(window, "The selected image-recognition source needs network access");
   const grant = [...window.document.querySelectorAll("label")]
-    .find((label) => label.textContent?.includes("I authorize these uploads"))!
+    .find((label) => label.textContent?.includes("Allow this conversion to use the selected AI service"))!
     .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
   assert.equal(grant.checked, false);
-  const network = [...window.document.querySelectorAll("label")]
-    .find((label) => label.textContent?.includes("Allow network access"))!
-    .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  network.click(); grant.click();
-  [...window.document.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]')].at(-1)!.click();
+  grant.click();
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
   await waitFor(() => uploaded.length === 1);
   assert.equal(uploaded[0]!.aiMode, "off");
@@ -932,13 +918,13 @@ test("remote transcription requires a one-upload grant beside transcript control
     async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "I authorize this audio and required network access for the selected remote provider");
+  await waitForText(window, "Allow this audio to use the selected AI service and network transcription");
   const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
   Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.webm", { type: "audio/webm" })] });
   input.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitForText(window, "meeting.webm");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
-  await waitForText(window, "Explicitly confirm the required provider authorization.");
+  await waitForText(window, "Confirm use of the selected AI service for this upload.");
   const grant = window.document.querySelector<HTMLInputElement>(".meeting-provider-grant input")!;
   grant.click();
   [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();

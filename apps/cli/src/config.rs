@@ -1170,9 +1170,16 @@ pub fn set_capability_source(
     }
     mutate_scope(scope, cwd, |root| {
         let base = format!("capability_routes.{capability}");
-        set_nested(root, &format!("{base}.mode"), toml::Value::String("only".into()))?;
-        set_nested(root, &format!("{base}.primary"), toml::Value::String(source.to_owned()))?;
-        set_nested(root, &format!("{base}.fallbacks"), toml::Value::Array(Vec::new()))
+        let mut route = toml::map::Map::new();
+        route.insert(
+            "mode".into(),
+            toml::Value::String(if source == "off" { "off" } else { "only" }.into()),
+        );
+        if source != "off" {
+            route.insert("primary".into(), toml::Value::String(source.to_owned()));
+        }
+        route.insert("fallbacks".into(), toml::Value::Array(Vec::new()));
+        set_nested(root, &base, toml::Value::Table(route))
     })
 }
 
@@ -2079,6 +2086,19 @@ primary = "plugin:official.legacy-office.libreoffice/legacy-office"
             fallbacks: Vec::new(),
         };
         assert!(validate_capability_routes(&routes).is_err());
+    }
+
+    #[test]
+    fn capability_source_off_replaces_the_exact_scope_with_a_valid_disabled_route() {
+        let root = temporary_directory("capability-off");
+        set_capability_source(Scope::Project, &root, "ocr", "provider:fixture/vision-ocr").unwrap();
+        set_capability_source(Scope::Project, &root, "ocr", "off").unwrap();
+        let parsed: RawConfig =
+            toml::from_str(&fs::read_to_string(root.join(".into-markdown.toml")).unwrap()).unwrap();
+        assert_eq!(parsed.capability_routes.ocr.mode, Some(AiMode::Off));
+        assert_eq!(parsed.capability_routes.ocr.primary, None);
+        assert!(parsed.capability_routes.ocr.fallbacks.is_empty());
+        validate_capability_routes(&parsed.capability_routes).unwrap();
     }
 
     fn temporary_directory(name: &str) -> PathBuf {

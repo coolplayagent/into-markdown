@@ -4,7 +4,7 @@ import {
 } from "lucide-react";
 import type { ApiClient, CapabilityAdmin, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
 import { ApiError, defaultWorkbenchOptions } from "./api";
-import { AdvancedSettings, CapabilityStrip, OptionPanel } from "./conversion-controls";
+import { CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
 import { HistoryPanel } from "./history-panel";
@@ -45,7 +45,6 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [message, setMessage] = useState("");
   const [messageScope, setMessageScope] = useState<MessageScope>("source");
   const [dragging, setDragging] = useState(false);
-  const [advanced, setAdvanced] = useState(false);
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
   const quickOcr = capabilities.capability("ocr");
@@ -225,12 +224,12 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
       </section>
       <div className="control-column">
         <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} onInstallOcr={installOcr} />
-        <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} onOpenAdvanced={() => setAdvanced(true)} />
+        <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} />
+        {remoteOcrSelected && options.ocrPolicy !== "off" && <label className="check grant remote-conversion-grant"><input type="checkbox" checked={options.networkMode === "unrestricted" && options.authorizeProvider} onChange={(event) => { const allowed = event.target.checked; setOptions((current) => ({ ...current, networkMode: allowed ? "unrestricted" : "restricted", authorizeProvider: allowed })); setMessage(""); }} /><span><strong>{t("authorizeRemoteConversion")}</strong><small>{t("authorizationNote")}</small></span></label>}
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
     </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} /></div>
-    <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} providerCapabilityActive={remoteOcrSelected && options.ocrPolicy !== "off"} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }

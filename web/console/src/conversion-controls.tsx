@@ -1,13 +1,11 @@
 import {
-  CheckCircle2, ChevronDown, CircleAlert, FileText, LoaderCircle, PanelRightOpen, ScanText, SlidersHorizontal,
-  Wifi, WifiOff, X,
+  CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText, X,
 } from "lucide-react";
 import { useState } from "react";
-import type { AiMode, CapabilityAdmin, ComponentStatus, InputFormat, NetworkMode, WorkbenchOptions } from "./api";
+import type { CapabilityAdmin, ComponentStatus, WorkbenchOptions } from "./api";
 import { useI18n } from "./i18n";
 import { RouteLink } from "./router";
 import { capabilitySourceLabel } from "./source-label";
-import { FORMATS } from "./task-ui";
 
 function SegmentedControl<T extends string>({
   label, value, items, onChange,
@@ -54,7 +52,7 @@ export function CapabilityStrip({ ocr, capability, onInstallOcr }: { ocr?: Compo
   </section>;
 }
 
-export function OptionPanel({ value, onChange, disabled, onOpenAdvanced }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; disabled: boolean; onOpenAdvanced(): void }) {
+export function OptionPanel({ value, onChange, disabled }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; disabled: boolean }) {
   const { t } = useI18n();
   const patch = <K extends keyof WorkbenchOptions>(key: K, next: WorkbenchOptions[K]) => onChange({ ...value, [key]: next });
   return <section className="control-card" aria-labelledby="conversion-settings-heading">
@@ -64,31 +62,7 @@ export function OptionPanel({ value, onChange, disabled, onOpenAdvanced }: { val
       <SegmentedControl label={t("recognitionMode")} value={value.ocrPolicy} onChange={(next) => patch("ocrPolicy", next)} items={[{ value: "auto", label: t("automatic"), description: t("ocrAutomaticHelp"), recommended: true }, { value: "always", label: t("forceRecognition"), description: t("ocrAlwaysHelp") }, { value: "off", label: t("off"), description: t("ocrOffHelp") }]} />
       <SegmentedControl label={t("assetMode")} value={value.assetMode} onChange={(next) => patch("assetMode", next)} items={[{ value: "extract", label: t("separateAssets"), description: t("assetExtractHelp"), recommended: true }, { value: "embed", label: t("embedAssets"), description: t("assetEmbedHelp") }, { value: "omit", label: t("omitAssets"), description: t("assetOmitHelp") }]} />
     </fieldset>
-    <button className="advanced-trigger" type="button" onClick={onOpenAdvanced}><SlidersHorizontal size={17} aria-hidden="true" /><span>{t("openAdvancedSettings")}</span><PanelRightOpen size={17} aria-hidden="true" /></button>
   </section>;
-}
-
-export function AdvancedSettings({ value, onChange, open, onClose, providerCapabilityActive = false }: { value: WorkbenchOptions; onChange(value: WorkbenchOptions): void; open: boolean; onClose(): void; providerCapabilityActive?: boolean }) {
-  const { t } = useI18n();
-  const patch = <K extends keyof WorkbenchOptions>(key: K, next: WorkbenchOptions[K]) => onChange({ ...value, [key]: next });
-  if (!open) return null;
-  return <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-    <aside className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="advanced-title">
-      <div className="sheet-heading"><div><p className="section-kicker">{t("conversionSettings")}</p><h2 id="advanced-title">{t("advancedSettings")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
-      <div className="option-grid">
-        <label><span>{t("formatHint")}</span><span className="select-shell"><select value={value.format ?? ""} onChange={(event) => patch("format", (event.target.value || null) as InputFormat | null)}><option value="">{t("automatic")}</option>{FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></span></label>
-        <label><span>{t("ocrConfidence")}</span><input type="number" min="0" max="1" step="0.05" value={value.ocrConfidence} onChange={(event) => patch("ocrConfidence", Number(event.target.value))} /></label>
-        <label><span>{t("aiMode")}</span><span className="select-shell"><select value={value.aiMode} onChange={(event) => patch("aiMode", event.target.value as AiMode)}><option value="off">{t("localOnly")}</option><option value="fallback">{t("aiWhenLocalFails")}</option><option value="prefer">{t("preferAi")}</option><option value="only">{t("aiOnly")}</option></select><ChevronDown size={15} aria-hidden="true" /></span></label>
-        <label><span>{t("maxInput")}</span><input type="number" min="1" max="512" value={value.maxInputMiB} onChange={(event) => patch("maxInputMiB", Number(event.target.value))} /></label>
-        <label><span>{t("maxMemory")}</span><input type="number" min="1" max="2048" value={value.maxMemoryMiB} onChange={(event) => patch("maxMemoryMiB", Number(event.target.value))} /></label>
-        <label><span>{t("maxPages")}</span><input type="number" min="1" max="10000" value={value.maxPages} onChange={(event) => patch("maxPages", Number(event.target.value))} /></label>
-      </div>
-      <div className="authorization-box">
-        <div className="network-choice"><div className="network-icon">{value.networkMode === "unrestricted" ? <Wifi size={18} aria-hidden="true" /> : <WifiOff size={18} aria-hidden="true" />}</div><div><strong>{t("networkAccess")}</strong><p>{t(value.networkMode === "unrestricted" ? "networkEnabledNote" : "networkDisabledNote")}</p></div><label className="switch"><span className="visually-hidden">{t("networkAccess")}</span><input type="checkbox" checked={value.networkMode === "unrestricted"} onChange={(event) => patch("networkMode", (event.target.checked ? "unrestricted" : "restricted") as NetworkMode)} /><span aria-hidden="true" /></label></div>
-        {(value.aiMode !== "off" || providerCapabilityActive) && <label className="check grant"><input type="checkbox" checked={value.authorizeProvider} onChange={(event) => patch("authorizeProvider", event.target.checked)} />{t("authorizeProvider")}</label>}
-      </div>
-    </aside>
-  </div>;
 }
 
 export function AudioSetupDialog({ status, open, onClose, onInstall }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void; onInstall(): Promise<void> }) {
