@@ -770,7 +770,7 @@ mod tests {
         assert!(!options.network.enabled);
         assert!(options.network.deny_private_networks);
         assert_eq!(options.ocr.policy, OcrPolicy::Auto);
-        assert!(options.ocr.model_bundle.is_none());
+        assert_eq!(options.ocr.minimum_confidence, 0.70);
         assert_eq!(options.ai.vision_ocr, AiMode::Off);
         assert_eq!(options.ai.image_description, AiMode::Off);
         assert_eq!(options.ai.layout_repair, AiMode::Off);

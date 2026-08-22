@@ -17,15 +17,13 @@ pub enum OcrPolicy {
 pub struct OcrOptions {
     /// Routing policy.
     pub policy: OcrPolicy,
-    /// Optional model bundle ID; the packaged default is used when absent.
-    pub model_bundle: Option<String>,
     /// Lowest confidence accepted without fallback.
     pub minimum_confidence: f32,
 }
 
 impl Default for OcrOptions {
     fn default() -> Self {
-        Self { policy: OcrPolicy::Auto, model_bundle: None, minimum_confidence: 0.70 }
+        Self { policy: OcrPolicy::Auto, minimum_confidence: 0.70 }
     }
 }
 
@@ -33,8 +31,6 @@ impl Default for OcrOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AsrOptions {
-    /// Installed multilingual Whisper bundle.
-    pub model_bundle: String,
     /// Optional BCP-47 language hint; absence enables model detection.
     pub language: Option<String>,
     /// Deterministic Han-script normalization applied after recognition.
@@ -54,7 +50,6 @@ pub struct AsrOptions {
 impl Default for AsrOptions {
     fn default() -> Self {
         Self {
-            model_bundle: "whisper-small-multilingual".into(),
             language: None,
             chinese_script: ChineseScript::Preserve,
             max_threads: 4,
@@ -86,20 +81,13 @@ pub struct DiarizationOptions {
     pub enabled: bool,
     /// Optional expected speaker count. Absence enables bounded automatic discovery.
     pub expected_speakers: Option<u16>,
-    /// Installed, reviewed VAD and speaker-embedding bundle.
-    pub model_bundle: String,
     /// Maximum anonymous speaker clusters retained for one transcript.
     pub max_speakers: u16,
 }
 
 impl Default for DiarizationOptions {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            expected_speakers: None,
-            model_bundle: "silero-vad-3dspeaker-eres2net".into(),
-            max_speakers: 16,
-        }
+        Self { enabled: false, expected_speakers: None, max_speakers: 16 }
     }
 }
 
@@ -232,7 +220,10 @@ impl Default for ResourceLimits {
             max_asset_bytes: 256 * 1024 * 1024,
             max_total_asset_bytes: 1024 * 1024 * 1024,
             max_memory_bytes: 1024 * 1024 * 1024,
-            max_temporary_bytes: 1024 * 1024 * 1024,
+            // Speech decoding and legacy Office normalization are isolated in
+            // capability processes but share this request-scoped disk budget.
+            // Their audited manifests are bounded at 4 GiB.
+            max_temporary_bytes: 4 * 1024 * 1024 * 1024,
             max_table_rows: 100_000,
             max_table_columns: 16_384,
             max_table_cells: 1_000_000,

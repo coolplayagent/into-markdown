@@ -70,6 +70,27 @@ pub struct ArchiveProjection {
     pub license_materials: Vec<LicenseMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ffmpeg_evidence: Option<FfmpegEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_transformations: Vec<NativeTransformation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeTransformation {
+    pub component_id: String,
+    pub path: String,
+    pub kind: NativeTransformationKind,
+    pub source_bytes: u64,
+    pub source_sha256: String,
+    pub output_bytes: u64,
+    pub output_sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeTransformationKind {
+    AppleCodeSign,
+    Authenticode,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

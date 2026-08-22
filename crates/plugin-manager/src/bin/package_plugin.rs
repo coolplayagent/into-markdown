@@ -14,13 +14,13 @@ use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File};
-use std::io::{Cursor, Read as _, Write as _};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
-const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_PACKAGE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_FILES: usize = 4096;
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_PACKAGE_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_FILES: usize = 10_000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -61,21 +61,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paths = collect_files(&source)?;
     let mut total = 0_u64;
     let mut files = Vec::with_capacity(paths.len());
-    let mut contents = Vec::with_capacity(paths.len());
-    for (relative, path) in paths {
+    for (relative, path) in &paths {
         validate_package_file_path(&relative)?;
-        let bytes = bounded_read(&path, MAX_FILE_BYTES)?;
-        total = total.checked_add(bytes.len() as u64).ok_or("input size overflow")?;
+        let (bytes, sha256) = bounded_digest(path, MAX_FILE_BYTES)?;
+        total = total.checked_add(bytes).ok_or("input size overflow")?;
         if total > MAX_PACKAGE_INPUT_BYTES {
-            return Err("package input exceeds 256 MiB".into());
+            return Err("package input exceeds 2 GiB".into());
         }
         files.push(PackageFile {
-            path: relative,
-            bytes: bytes.len() as u64,
-            sha256: digest(&bytes),
-            executable: is_executable(&path)?,
+            path: relative.clone(),
+            bytes,
+            sha256,
+            executable: is_executable(path)?,
         });
-        contents.push(bytes);
     }
     let mut manifest = PackageManifest {
         schema_version: template.schema_version,
@@ -101,19 +99,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     manifest.signature.signature_base64 =
         base64::engine::general_purpose::STANDARD.encode(key.sign(&payload).as_ref());
 
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let output_file = File::options().create_new(true).read(true).write(true).open(output)?;
+    let mut writer = zip::ZipWriter::new(output_file);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o644);
     writer.start_file("plugin.json", options)?;
     writer.write_all(&serde_json::to_vec(&manifest)?)?;
-    for (authority, bytes) in manifest.files.iter().zip(contents) {
+    let mut buffer = [0_u8; 1024 * 1024];
+    for (authority, (_, path)) in manifest.files.iter().zip(paths) {
         writer.start_file(&authority.path, options)?;
-        writer.write_all(&bytes)?;
+        let mut source = File::open(path)?;
+        let mut digest = Sha256::new();
+        let mut copied = 0_u64;
+        loop {
+            let count = source.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            copied = copied.checked_add(count as u64).ok_or("input size overflow")?;
+            if copied > authority.bytes {
+                return Err("input file changed while packaging".into());
+            }
+            digest.update(&buffer[..count]);
+            writer.write_all(&buffer[..count])?;
+        }
+        if copied != authority.bytes || format!("{:x}", digest.finalize()) != authority.sha256 {
+            return Err("input file changed while packaging".into());
+        }
     }
-    let archive = writer.finish()?.into_inner();
-    let mut file = File::options().create_new(true).write(true).open(output)?;
-    file.write_all(&archive)?;
+    let file = writer.finish()?;
     file.sync_all()?;
     Ok(())
 }
@@ -131,6 +146,32 @@ fn bounded_read(path: &Path, maximum: u64) -> Result<Vec<u8>, Box<dyn std::error
         return Err("input file changed while reading".into());
     }
     Ok(bytes)
+}
+
+fn bounded_digest(path: &Path, maximum: u64) -> Result<(u64, String), Box<dyn std::error::Error>> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > maximum {
+        return Err("input file size rejected".into());
+    }
+    let mut source = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total = total.checked_add(count as u64).ok_or("input size overflow")?;
+        if total > maximum {
+            return Err("input file size rejected".into());
+        }
+        digest.update(&buffer[..count]);
+    }
+    if total != metadata.len() {
+        return Err("input file changed while reading".into());
+    }
+    Ok((total, format!("{:x}", digest.finalize())))
 }
 
 fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
@@ -159,7 +200,7 @@ fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
                 }
                 output.push((relative, entry.path()));
                 if output.len() > MAX_FILES {
-                    return Err("package contains more than 4096 files".into());
+                    return Err("package contains more than 10000 files".into());
                 }
             } else {
                 return Err("special files are not package inputs".into());

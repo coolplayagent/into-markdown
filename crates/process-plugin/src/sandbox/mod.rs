@@ -41,6 +41,10 @@ pub(crate) fn spawn(
     #[cfg(unix)]
     command.env("TMPDIR", directory);
     command.env("INTO_MARKDOWN_PLUGIN_PROTOCOL", "process-v1");
+    #[cfg(target_os = "macos")]
+    if policy.macos_compatibility_child {
+        command.env("INTO_MARKDOWN_INHERITED_SANDBOX", "process-v1");
+    }
     #[cfg(unix)]
     unix::prepare(&mut command, plugin, policy, directory)?;
     #[cfg(windows)]

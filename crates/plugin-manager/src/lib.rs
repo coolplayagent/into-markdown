@@ -30,9 +30,9 @@ const ARCHIVE_NAME: &str = ".package.zip";
 const TRANSACTION_NAME: &str = ".transaction.json";
 const LOCK_NAME: &str = ".manager.lock";
 const TRUST_NAME: &str = ".trusted-signers.json";
-const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
-const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_FILES: usize = 4096;
+const MAX_PACKAGE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_FILES: usize = 10_000;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 8 * 1024 * 1024;
 static NONCE: AtomicU64 = AtomicU64::new(1);
@@ -399,6 +399,22 @@ impl PluginManager {
         Ok(lock)
     }
 
+    fn acquire_verified_read_lock(&self) -> Result<StoreLock, ManagerError> {
+        verify_store_identity(&self.root, self.root_identity)?;
+        let mut lock = StoreLock::acquire_shared_wait(&self.root)?;
+        verify_store_identity(&self.root, self.root_identity)?;
+        if fs::symlink_metadata(self.root.join(TRANSACTION_NAME)).is_ok() {
+            drop(lock);
+            let exclusive = StoreLock::acquire_wait(&self.root)?;
+            verify_store_identity(&self.root, self.root_identity)?;
+            self.recover_unlocked()?;
+            drop(exclusive);
+            lock = StoreLock::acquire_shared_wait(&self.root)?;
+            verify_store_identity(&self.root, self.root_identity)?;
+        }
+        Ok(lock)
+    }
+
     /// Open a store beneath an explicit trusted scope anchor without following links.
     pub fn open_scoped(
         anchor: &Path,
@@ -520,7 +536,7 @@ impl PluginManager {
         secure_store_root(&root)?;
         let trust_path = root.join(TRUST_NAME);
         {
-            let _lock = StoreLock::acquire(&root)?;
+            let _lock = StoreLock::acquire_wait(&root)?;
             recover_atomic_json(&trust_path)?;
         }
         let trusted_signers = load_trust_authority(&trust_path)?;
@@ -736,7 +752,10 @@ impl PluginManager {
                 "snapshot destination already exists",
             ));
         }
-        let installed = self.verify_unlocked(id, execution)?;
+        // A repair must remain possible when only extracted runtime files are
+        // corrupt. Authenticate the signed retained package independently;
+        // that package is the rollback authority and is never executed.
+        let installed = self.verify_retained_package_unlocked(id, execution)?;
         let source_path = installed.root.join(ARCHIVE_NAME);
         let mut source = open_package_file(&source_path)?;
         let metadata = source.metadata()?;
@@ -1004,12 +1023,109 @@ impl PluginManager {
         id: &str,
         execution: &ExecutionContext,
     ) -> Result<InstalledPlugin, ManagerError> {
-        let _lock = self.acquire_lock()?;
-        self.recover_unlocked()?;
+        let _lock = self.acquire_verified_read_lock()?;
         self.verify_unlocked(id, execution)
     }
 
+    /// Authenticate the signed retained package without trusting extracted
+    /// runtime files. This is only an installation/repair rollback authority.
+    pub fn inspect_retained_package(
+        &self,
+        id: &str,
+        execution: &ExecutionContext,
+    ) -> Result<InstalledPlugin, ManagerError> {
+        let _lock = self.acquire_verified_read_lock()?;
+        self.verify_retained_package_unlocked(id, execution)
+    }
+
+    /// Authenticate installed metadata and the extracted file inventory
+    /// without hashing large payloads. This is intended for responsive status
+    /// surfaces only; execution and explicit verification must continue to use
+    /// [`Self::verify`].
+    pub fn inspect_installed_record(
+        &self,
+        id: &str,
+        execution: &ExecutionContext,
+    ) -> Result<InstalledPlugin, ManagerError> {
+        let _lock = self.acquire_verified_read_lock()?;
+        self.inspect_installed_record_unlocked(id, execution)
+    }
+
     fn verify_unlocked(
+        &self,
+        id: &str,
+        execution: &ExecutionContext,
+    ) -> Result<InstalledPlugin, ManagerError> {
+        let installed = self.verify_retained_package_unlocked(id, execution)?;
+        let manifest = read_installed_manifest(&installed.root)?;
+        verify_tree(&manifest, &installed.root, Some(execution))?;
+        Ok(installed)
+    }
+
+    fn inspect_installed_record_unlocked(
+        &self,
+        id: &str,
+        execution: &ExecutionContext,
+    ) -> Result<InstalledPlugin, ManagerError> {
+        execution.checkpoint().map_err(map_execution_error)?;
+        let _metadata_memory =
+            execution.reserve_memory(MAX_MANIFEST_BYTES * 16).map_err(map_execution_error)?;
+        validate_id(id)?;
+        let root = self.root.join(id);
+        if !root.is_dir() {
+            return Err(ManagerError::new(
+                ManagerErrorCode::NotInstalled,
+                "plugin is not installed",
+            ));
+        }
+        reject_link(&root)?;
+        let (manifest_bytes, _manifest_memory) =
+            bounded_read_accounted(&root.join(MANIFEST_NAME), MAX_MANIFEST_BYTES, execution)?;
+        let manifest: PackageManifest = serde_json::from_slice(&manifest_bytes).map_err(|_| {
+            ManagerError::new(ManagerErrorCode::InvalidPackage, "installed manifest is invalid")
+        })?;
+        let fingerprint = validate_manifest(&manifest, &self.trusted_signers)?;
+        if manifest.id != id {
+            return Err(ManagerError::new(
+                ManagerErrorCode::InvalidPackage,
+                "installed id mismatch",
+            ));
+        }
+        let (authority_bytes, _authority_memory) =
+            bounded_read_accounted(&root.join(INSTALLED_NAME), MAX_MANIFEST_BYTES, execution)?;
+        let authority: InstalledAuthority =
+            serde_json::from_slice(&authority_bytes).map_err(|_| {
+                ManagerError::new(ManagerErrorCode::InvalidPackage, "authority is invalid")
+            })?;
+        if authority.manifest_sha256 != digest(&manifest_bytes)
+            || authority.signing_key_id != manifest.signature.key_id
+            || authority.signing_key_fingerprint != fingerprint
+        {
+            return Err(ManagerError::new(
+                ManagerErrorCode::Signature,
+                "installed authority differs",
+            ));
+        }
+        let archive = root.join(ARCHIVE_NAME);
+        if secure_regular_file(&archive)?.len() != authority.source_archive_bytes {
+            return Err(ManagerError::new(
+                ManagerErrorCode::HashMismatch,
+                "installed package archive size changed",
+            ));
+        }
+        inspect_tree_metadata(&manifest, &root, Some(execution))?;
+        Ok(InstalledPlugin {
+            id: manifest.id,
+            version: manifest.version,
+            protocol: manifest.protocol,
+            package_sha256: authority.source_archive_sha256,
+            content_root_sha256: manifest.signature.signed_payload_sha256,
+            signing_key_id: manifest.signature.key_id,
+            root,
+        })
+    }
+
+    fn verify_retained_package_unlocked(
         &self,
         id: &str,
         execution: &ExecutionContext,
@@ -1066,7 +1182,6 @@ impl PluginManager {
         {
             return Err(ManagerError::new(ManagerErrorCode::Signature, "installed signer drifted"));
         }
-        verify_tree(&manifest, &root, Some(execution))?;
         Ok(InstalledPlugin {
             id: manifest.id,
             version: manifest.version,
@@ -1083,8 +1198,7 @@ impl PluginManager {
         &self,
         execution: &ExecutionContext,
     ) -> Result<Vec<InstalledPlugin>, ManagerError> {
-        let _lock = self.acquire_lock()?;
-        self.recover_unlocked()?;
+        let _lock = self.acquire_verified_read_lock()?;
         let mut result = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
@@ -1152,8 +1266,7 @@ impl PluginManager {
         #[allow(unused_mut)] mut policy: into_markdown_process_plugin::RuntimePolicy,
         execution: &ExecutionContext,
     ) -> Result<PreparedProcessPlugin, ManagerError> {
-        let _store_lock = self.acquire_lock()?;
-        self.recover_unlocked()?;
+        let _store_lock = self.acquire_verified_read_lock()?;
         let installed = self.verify_unlocked(id, execution)?;
         let metadata_reservation =
             execution.reserve_memory(MAX_MANIFEST_BYTES * 8).map_err(map_execution_error)?;
@@ -1173,11 +1286,10 @@ impl PluginManager {
         }
         #[cfg(windows)]
         {
-            policy.windows = into_markdown_process_plugin::provision_windows_sandbox(&format!(
-                "{}:{id}",
-                self.root.display()
-            ))
-            .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
+            let sandbox_identity = windows_sandbox_identity(&self.root, id);
+            policy.windows =
+                into_markdown_process_plugin::provision_windows_sandbox(&sandbox_identity)
+                    .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
         }
         let snapshot_bytes = tree_size(&installed.root, execution)?;
         let snapshot_reservation =
@@ -1192,6 +1304,19 @@ impl PluginManager {
         let snapshot = snapshot_directory.path().join("runtime");
         copy_tree(&installed.root, &snapshot, execution)?;
         verify_tree(&manifest, &snapshot, Some(execution))?;
+        // The retained archive and installation receipt belong to the manager,
+        // not to the executable runtime. Large self-contained plugins can have
+        // an archive bigger than the per-runtime-file ceiling, and dispatching
+        // it would also duplicate hundreds of megabytes for every invocation.
+        for manager_file in [ARCHIVE_NAME, INSTALLED_NAME] {
+            fs::remove_file(snapshot.join(manager_file)).map_err(|_| {
+                ManagerError::new(
+                    ManagerErrorCode::Io,
+                    "manager metadata could not be removed from the process snapshot",
+                )
+            })?;
+        }
+        sync_directory(&snapshot)?;
         #[cfg(windows)]
         into_markdown_process_plugin::authorize_windows_sandbox_path(&policy.windows, &snapshot)
             .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
@@ -1282,7 +1407,9 @@ impl PluginManager {
     }
 
     fn recover(&self) -> Result<(), ManagerError> {
-        let _lock = self.acquire_lock()?;
+        verify_store_identity(&self.root, self.root_identity)?;
+        let _lock = StoreLock::acquire_wait(&self.root)?;
+        verify_store_identity(&self.root, self.root_identity)?;
         self.recover_unlocked()
     }
 
@@ -1421,11 +1548,27 @@ impl PluginManager {
 
 fn cleanup_process_identity(root: &Path, id: &str) -> Result<(), ManagerError> {
     #[cfg(windows)]
-    into_markdown_process_plugin::remove_windows_sandbox(&format!("{}:{id}", root.display()))
-        .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
+    if id != "official.legacy-office.libreoffice" {
+        let sandbox_identity = windows_sandbox_identity(root, id);
+        into_markdown_process_plugin::remove_windows_sandbox(&sandbox_identity)
+            .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
+    }
     #[cfg(not(windows))]
     let _ = (root, id);
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_sandbox_identity<'a>(root: &'a Path, id: &'a str) -> std::borrow::Cow<'a, str> {
+    if id == "official.legacy-office.libreoffice" {
+        // The signed LibreOffice runtime authority must name the exact SID used
+        // by both the provider and its separately launched compatibility
+        // worker. Keep this zero-capability identity stable across scopes; ACLs
+        // still grant only each manager-verified immutable snapshot.
+        std::borrow::Cow::Borrowed(id)
+    } else {
+        std::borrow::Cow::Owned(format!("{}:{id}", root.display()))
+    }
 }
 
 fn validate_manifest(
@@ -1944,6 +2087,49 @@ fn verify_tree(
             return Err(ManagerError::new(
                 ManagerErrorCode::HashMismatch,
                 "installed file differs",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let executable = authority.executable
+                || manifest.entrypoints.values().any(|entry| entry == &authority.path);
+            if metadata.permissions().mode() & 0o111 != if executable { 0o100 } else { 0 } {
+                return Err(ManagerError::new(
+                    ManagerErrorCode::InvalidPackage,
+                    "installed executable authority differs",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn inspect_tree_metadata(
+    manifest: &PackageManifest,
+    root: &Path,
+    execution: Option<&ExecutionContext>,
+) -> Result<(), ManagerError> {
+    let expected = manifest
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain([MANIFEST_NAME.to_owned(), INSTALLED_NAME.to_owned(), ARCHIVE_NAME.to_owned()])
+        .collect::<BTreeSet<_>>();
+    let mut actual = BTreeSet::new();
+    collect_tree(root, root, &mut actual, execution)?;
+    if actual != expected {
+        return Err(ManagerError::new(
+            ManagerErrorCode::InvalidPackage,
+            "installed tree inventory differs",
+        ));
+    }
+    for authority in &manifest.files {
+        let metadata = secure_regular_file(&root.join(&authority.path))?;
+        if metadata.len() != authority.bytes {
+            return Err(ManagerError::new(
+                ManagerErrorCode::HashMismatch,
+                "installed file size differs",
             ));
         }
         #[cfg(unix)]
@@ -3069,10 +3255,41 @@ struct StoreLock {
 }
 
 impl StoreLock {
+    fn acquire_wait(root: &Path) -> Result<Self, ManagerError> {
+        let path = root.join(LOCK_NAME);
+        let file = open_lock_file(&path)?;
+        file.lock()
+            .map_err(|_| ManagerError::new(ManagerErrorCode::Io, "plugin store lock failed"))?;
+        Ok(Self { file })
+    }
+
+    fn acquire_shared_wait(root: &Path) -> Result<Self, ManagerError> {
+        let path = root.join(LOCK_NAME);
+        let file = open_lock_file(&path)?;
+        file.lock_shared()
+            .map_err(|_| ManagerError::new(ManagerErrorCode::Io, "plugin store lock failed"))?;
+        Ok(Self { file })
+    }
+
     fn acquire(root: &Path) -> Result<Self, ManagerError> {
         let path = root.join(LOCK_NAME);
         let file = open_lock_file(&path)?;
         file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                ManagerError::new(ManagerErrorCode::Conflict, "plugin store is busy")
+            }
+            std::fs::TryLockError::Error(_) => {
+                ManagerError::new(ManagerErrorCode::Io, "plugin store lock failed")
+            }
+        })?;
+        Ok(Self { file })
+    }
+
+    #[cfg(test)]
+    fn acquire_shared(root: &Path) -> Result<Self, ManagerError> {
+        let path = root.join(LOCK_NAME);
+        let file = open_lock_file(&path)?;
+        file.try_lock_shared().map_err(|error| match error {
             std::fs::TryLockError::WouldBlock => {
                 ManagerError::new(ManagerErrorCode::Conflict, "plugin store is busy")
             }
@@ -3181,6 +3398,38 @@ mod tests {
     use into_markdown_core::{ExecutionOptions, ResourceLimits};
     use ring::signature::{Ed25519KeyPair, KeyPair as _};
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn process_read_locks_are_concurrent_and_exclude_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = StoreLock::acquire_shared(directory.path()).unwrap();
+        let second = StoreLock::acquire_shared(directory.path()).unwrap();
+        let error = match StoreLock::acquire(directory.path()) {
+            Ok(_) => panic!("exclusive lock unexpectedly overlapped shared locks"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ManagerErrorCode::Conflict);
+        drop(first);
+        drop(second);
+        assert!(StoreLock::acquire(directory.path()).is_ok());
+    }
+
+    #[test]
+    fn startup_recovery_waits_for_a_transient_store_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let held = StoreLock::acquire(directory.path()).unwrap();
+        let root = directory.path().to_owned();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let lock = StoreLock::acquire_wait(&root).unwrap();
+            sender.send(()).unwrap();
+            drop(lock);
+        });
+        assert!(receiver.recv_timeout(std::time::Duration::from_millis(50)).is_err());
+        drop(held);
+        receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        waiter.join().unwrap();
+    }
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
@@ -3763,6 +4012,72 @@ mod tests {
             .install_file(&package_path, Some(&digest(&package)), &context())
             .expect("stream install");
         assert!(manager.verify("fixture.plugin", &context()).is_ok());
+    }
+
+    #[test]
+    fn status_inspection_is_fast_metadata_only_while_explicit_verify_hashes_content() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let (package, trusted) = signed_package("fixture.plugin");
+        let manager = PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
+        manager.install_bytes(&package, None, &context()).expect("install");
+        let runtime = manager.root().join("fixture.plugin/bin/plugin.exe");
+        assert!(manager.inspect_installed_record("fixture.plugin", &context()).is_ok());
+        let mut permissions = fs::metadata(&runtime).expect("runtime metadata").permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            permissions.set_mode(0o700);
+        }
+        #[cfg(windows)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&runtime, permissions).expect("make runtime writable for corruption");
+        fs::write(&runtime, b"corrupt").expect("same-size corruption");
+        assert!(manager.inspect_installed_record("fixture.plugin", &context()).is_ok());
+        assert_eq!(
+            manager.verify("fixture.plugin", &context()).expect_err("hash mismatch").code,
+            ManagerErrorCode::HashMismatch
+        );
+        fs::write(&runtime, b"longer-corruption").expect("size corruption");
+        assert_eq!(
+            manager
+                .inspect_installed_record("fixture.plugin", &context())
+                .expect_err("size mismatch")
+                .code,
+            ManagerErrorCode::HashMismatch
+        );
+    }
+
+    #[test]
+    fn corrupt_extracted_runtime_can_be_repaired_from_an_authenticated_package() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let (package, trusted) = signed_package("fixture.plugin");
+        let package_path = temporary.path().join("fixture.zip");
+        fs::write(&package_path, &package).expect("package file");
+        let manager = PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
+        manager.install_file(&package_path, None, &context()).expect("install");
+        let runtime = manager.root().join("fixture.plugin/bin/plugin.exe");
+        let mut permissions = fs::metadata(&runtime).expect("runtime metadata").permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            permissions.set_mode(0o600);
+        }
+        #[cfg(windows)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&runtime, permissions).expect("make runtime writable for corruption");
+        fs::write(&runtime, b"corrupt").expect("corrupt extracted runtime");
+        assert_eq!(
+            manager.verify("fixture.plugin", &context()).expect_err("corruption").code,
+            ManagerErrorCode::HashMismatch
+        );
+        assert!(manager.inspect_retained_package("fixture.plugin", &context()).is_ok());
+        let backup = manager.root().join(".cli-backup-repair.zip");
+        let snapshot = manager
+            .snapshot_package("fixture.plugin", &backup, &context())
+            .expect("repair rollback snapshot");
+        manager.install_file(&package_path, None, &context()).expect("repair install");
+        assert!(manager.verify("fixture.plugin", &context()).is_ok());
+        drop(snapshot);
     }
 
     #[test]

@@ -68,4 +68,5 @@ def run(arguments: Iterable[str], *, cwd: pathlib.Path | None = None, env: dict 
 
 
 def write_json(path: pathlib.Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")

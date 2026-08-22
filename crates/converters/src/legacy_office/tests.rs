@@ -81,7 +81,7 @@ impl into_markdown_core::NestedConversionService for FakeNested {
 }
 
 fn converter() -> LegacyOfficeConverter {
-    LegacyOfficeConverter { adapter: Arc::new(FakeAdapter) }
+    LegacyOfficeConverter { adapter: Some(Arc::new(FakeAdapter)) }
 }
 
 fn input() -> ResolvedInput {
@@ -241,7 +241,7 @@ impl into_markdown_core::NestedConversionService for NativeNested {
 }
 
 #[test]
-fn missing_packaged_runtime_uses_catalog_component_and_install_hint() {
+fn missing_capability_plugin_uses_catalog_component_and_install_hint() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let services =
@@ -258,7 +258,7 @@ fn missing_packaged_runtime_uses_catalog_component_and_install_hint() {
         ConversionError::ComponentUnavailable { component, detail } => {
             assert_eq!(component, crate::core_catalog::LEGACY_OFFICE.component);
             assert!(detail.contains(crate::core_catalog::LEGACY_OFFICE.install_hint));
-            assert!(detail.contains("cause:"));
+            assert!(!detail.contains("runtimeNotPackaged"));
         }
         error => panic!("expected stable runtime error, got {error}"),
     }

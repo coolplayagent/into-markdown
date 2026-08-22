@@ -1721,8 +1721,10 @@ dependencies = [
 name = "into-markdown-official-provider"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "futures",
  "into-markdown",
+ "into-markdown-legacy-office",
  "into-markdown-process-plugin",
  "into-markdown-provider-plugin",
  "serde",
@@ -1833,6 +1835,7 @@ dependencies = [
 name = "into-markdown-provider-plugin"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "into-markdown-core",
  "into-markdown-plugin-manager",
  "into-markdown-process-plugin",

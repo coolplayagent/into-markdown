@@ -245,6 +245,9 @@ pub struct RuntimePolicy {
     pub read_only_roots: Vec<PathBuf>,
     /// Permit provider-owned helpers below the authenticated runtime root.
     pub allow_child_processes: bool,
+    /// Permit the narrowly scoped macOS services required by the signed
+    /// `LibreOffice` compatibility child. Ignored on other platforms.
+    pub macos_compatibility_child: bool,
     /// Pre-provisioned no-capability `AppContainer` authority.
     #[cfg(windows)]
     pub windows: WindowsSandboxAuthority,
@@ -264,6 +267,7 @@ impl Default for RuntimePolicy {
             environment: BTreeMap::new(),
             read_only_roots: Vec::new(),
             allow_child_processes: false,
+            macos_compatibility_child: false,
             #[cfg(windows)]
             windows: WindowsSandboxAuthority {
                 profile_name: String::new(),
@@ -811,7 +815,15 @@ impl ProcessPlugin {
                         stderr_reader,
                         PluginError::new(
                             PluginErrorCode::Plugin,
-                            format!("plugin returned {code}"),
+                            format!(
+                                "plugin returned {code}: {}",
+                                message
+                                    .chars()
+                                    .map(|character| {
+                                        if character.is_control() { ' ' } else { character }
+                                    })
+                                    .collect::<String>()
+                            ),
                         ),
                     );
                 }
@@ -915,25 +927,9 @@ fn receive_until(
                         "plugin memory limit exceeded",
                     ));
                 }
-                if let Some(exit) = child.try_wait().map_err(|()| {
-                    PluginError::new(PluginErrorCode::Crashed, "plugin wait failed")
-                })? {
-                    return Err(PluginError::new(
-                        PluginErrorCode::Crashed,
-                        match exit {
-                            sandbox::ChildExit::Success => {
-                                "plugin exited successfully before terminal response".to_owned()
-                            }
-                            sandbox::ChildExit::Failure => {
-                                "plugin exited with failure before terminal response".to_owned()
-                            }
-                            #[cfg(unix)]
-                            sandbox::ChildExit::Signaled(signal) => format!(
-                                "plugin was terminated by signal {signal} before terminal response"
-                            ),
-                        },
-                    ));
-                }
+                // A completed frame read is stronger evidence than a child-exit
+                // race. Preserve the protocol/frame classification even when
+                // the provider exits immediately after emitting invalid data.
                 let code = if detail.contains("stream ended before frame") {
                     PluginErrorCode::Crashed
                 } else if detail.contains("exceeds limit") {
@@ -1058,6 +1054,7 @@ fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
         || policy.request_timeout.is_zero()
         || policy.request_timeout > Duration::from_hours(2)
         || policy.cancellation_grace > Duration::from_secs(5)
+        || policy.macos_compatibility_child && !policy.allow_child_processes
         || policy.environment.len() > 64
         || policy.read_only_roots.len() > 16
     {
@@ -1492,6 +1489,7 @@ fn reserved_environment_name(value: &str) -> bool {
     matches!(
         value,
         "INTO_MARKDOWN_PLUGIN_PROTOCOL"
+            | "INTO_MARKDOWN_INHERITED_SANDBOX"
             | "SYSTEMROOT"
             | "WINDIR"
             | "SYSTEMDRIVE"
@@ -1529,6 +1527,7 @@ mod tests {
     fn policy_rejects_host_owned_environment_names() {
         for name in [
             "INTO_MARKDOWN_PLUGIN_PROTOCOL",
+            "INTO_MARKDOWN_INHERITED_SANDBOX",
             "SYSTEMROOT",
             "WINDIR",
             "SYSTEMDRIVE",

@@ -62,7 +62,7 @@ impl TryFrom<&AsrOptions> for WhisperConfig {
     fn try_from(options: &AsrOptions) -> Result<Self, Self::Error> {
         let language = options.language.as_deref().map(normalize_language).transpose()?;
         let config = Self {
-            model_bundle: options.model_bundle.clone(),
+            model_bundle: "whisper-small-multilingual".into(),
             language,
             chinese_script: options.chinese_script,
             max_threads: options.max_threads,
@@ -900,14 +900,12 @@ fn normalize_language(value: &str) -> Result<String, ConversionError> {
 fn model_error(bundle: &str, error: ModelManagerError) -> ConversionError {
     match error {
         ModelManagerError::Execution(error) => error,
-        ModelManagerError::NotInstalled | ModelManagerError::UnknownBundle => component(
-            bundle,
-            &format!("Whisper model is not installed; run `into-md models install {bundle}`"),
-        ),
-        ModelManagerError::Corrupt(_) => component(
-            bundle,
-            &format!("Whisper model is corrupt; reinstall with `into-md models install {bundle}`"),
-        ),
+        ModelManagerError::NotInstalled | ModelManagerError::UnknownBundle => {
+            component(bundle, "Speech capability is not installed; install the Speech plugin")
+        }
+        ModelManagerError::Corrupt(_) => {
+            component(bundle, "Speech capability is corrupt; repair or reinstall the Speech plugin")
+        }
         error => component(bundle, &format!("Whisper model verification failed: {error}")),
     }
 }
@@ -1019,7 +1017,7 @@ mod tests {
     fn missing_model_maps_to_stable_component_error_with_install_hint() {
         let error = model_error("whisper-small-multilingual", ModelManagerError::NotInstalled);
         assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
-        assert!(error.to_string().contains("models install whisper-small-multilingual"));
+        assert!(error.to_string().contains("install the Speech plugin"));
         let corrupt =
             model_error("whisper-small-multilingual", ModelManagerError::Corrupt("hash".into()));
         assert_eq!(corrupt.code(), ErrorCode::ComponentUnavailable);

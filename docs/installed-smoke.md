@@ -14,7 +14,7 @@ The runner requires an immutable installation root containing:
 
 The adapter also supplies `--audio-fixture` as a separate, license-authorized speech sample. It is
 not copied into the release archive; the macOS workflow uses the exact public-domain English sample
-bound by `fixtures/asr-quality-authority.json`. A full package must produce at least one transcript
+bound by `fixtures/asr-quality-authority.json`. A Core installation with the speech plugin must produce at least one transcript
 block from it and publish both ASR and diarization model identities.
 
 Every binary, Rust package file, vendor file, authority file, and fixture must be bound by the #60

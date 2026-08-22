@@ -5,14 +5,14 @@ export const MAX_PREVIEW_BYTES = 256 * 1024;
 export interface ComponentStatus { available: boolean; code: string; detail: string }
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; imageOcr: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
-export interface ModelAdmin { bundle: { id: string; availability: string }; status: { state: string } }
-export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
+export interface CapabilityAdmin { id: "legacy-office" | "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
+export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; models: Record<string, string>; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
 export interface PluginAdmin { id: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; packageScope?: "global" | "project"; source?: string; sha256?: string; protocol?: string; enabled?: boolean; effective: boolean; shadowedBy?: "effective"; verification?: string; version?: string; signingKeyId?: string; signingKeySha256?: string; target?: string }
 export interface DoctorAdmin { id: string; status: string; detail: string }
-export type AdminOperationResult = { kind: "detection"; sourceName?: string | null; sourceSize: number; candidates: Array<{ format: string; confidence: number; explicit: boolean; detectorId: string; reason: string; diagnostics: string[] }> } | { kind: "profile"; name: string; value: Record<string, unknown> } | { kind: "model"; operation: "show" | "path"; value: unknown } | { kind: "config"; operation: "paths" | "get" | "showMerged" | "showResolved"; value: unknown } | { kind: "doctor"; checks: DoctorAdmin[] } | { kind: "providerTest"; configuredModelAvailable: boolean; modelCount: number; capabilities: string[] };
+export type AdminOperationResult = { kind: "detection"; sourceName?: string | null; sourceSize: number; candidates: Array<{ format: string; confidence: number; explicit: boolean; detectorId: string; reason: string; diagnostics: string[] }> } | { kind: "profile"; name: string; value: Record<string, unknown> } | { kind: "config"; operation: "paths" | "get" | "showMerged" | "showResolved"; value: unknown } | { kind: "doctor"; checks: DoctorAdmin[] } | { kind: "providerTest"; configuredModelAvailable: boolean; modelCount: number; capabilities: string[] };
 export interface ProfileAdmin { name: string; scope: "global" | "project" | "effective"; effective: boolean; active: boolean; shadowedBy?: "project" }
-export interface AdminSnapshot { schemaVersion: 1; formats: FormatAdmin[]; models: { defaultBundle: string; entries: ModelAdmin[] }; providers: ProviderAdmin[]; plugins: PluginAdmin[]; configuration: Record<string, unknown>; profiles: ProfileAdmin[]; doctor: DoctorAdmin[]; operationResult?: AdminOperationResult; configurationReadOnly: boolean }
-export interface AdminAction { schemaVersion: 1; action: string; scope?: "global" | "project" | undefined; target?: string; value?: string; source?: string; sha256?: string; signingKeyId?: string; signingKeySha256?: string; providerType?: string; model?: string; apiKeyEnv?: string; capabilities?: string[]; timeoutMs?: number; charset?: string; formatHint?: string; extension?: string; mimeType?: string; allowHosts?: string[]; allowPrivateNetwork?: boolean; insecure?: boolean; force?: boolean; resolved?: boolean; from?: string; authorizationGrant?: string; authorizeDangerous?: boolean; authorizeNetwork?: boolean }
+export interface AdminSnapshot { schemaVersion: 1; formats: FormatAdmin[]; capabilities: CapabilityAdmin[]; providers: ProviderAdmin[]; plugins: PluginAdmin[]; configuration: Record<string, unknown>; profiles: ProfileAdmin[]; doctor: DoctorAdmin[]; operationResult?: AdminOperationResult; configurationReadOnly: boolean }
+export interface AdminAction { schemaVersion: 1; action: string; scope?: "global" | "project" | undefined; target?: string; value?: string; source?: string; sha256?: string; signingKeyId?: string; signingKeySha256?: string; providerType?: string; model?: string; models?: Record<string, string>; apiKeyEnv?: string; capabilities?: string[]; timeoutMs?: number; charset?: string; formatHint?: string; extension?: string; mimeType?: string; allowHosts?: string[]; allowPrivateNetwork?: boolean; insecure?: boolean; force?: boolean; resolved?: boolean; from?: string; authorizationGrant?: string; authorizeDangerous?: boolean; authorizeNetwork?: boolean }
 export interface AdminActionOutcome { operationResult?: AdminOperationResult }
 export type TaskStatus = "pending" | "running" | "converted" | "succeeded" | "failed" | "interrupted" | "cancelled";
 export interface TaskDiagnostic { code: string }
@@ -57,19 +57,20 @@ export interface WorkbenchOptions {
 }
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
-  includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 256, maxTemporaryMiB: 256,
+  includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 1024, maxTemporaryMiB: 256,
   maxPages: 10_000, networkMode: "restricted", authorizeProvider: false,
 };
 export interface MeetingOptions {
   diarize: boolean;
   expectedSpeakers: number | null;
   transcriptLanguage: "auto" | "zh-Hans" | "zh-Hant" | "en";
+  authorizeProvider: boolean;
   maxInputMiB: number;
   maxMemoryMiB: number;
   maxTemporaryMiB: number;
 }
 export const defaultMeetingOptions: MeetingOptions = {
-  diarize: true, expectedSpeakers: null, transcriptLanguage: "auto", maxInputMiB: 512,
+  diarize: true, expectedSpeakers: null, transcriptLanguage: "auto", authorizeProvider: false, maxInputMiB: 512,
   maxMemoryMiB: 1536, maxTemporaryMiB: 4096,
 };
 export function meetingOptionsForLocale(locale: string): MeetingOptions {
@@ -104,10 +105,15 @@ function isFormatAdmin(value: unknown): value is FormatAdmin {
     && (value.runtimeComponent === undefined || safeText(value.runtimeComponent, 128))
     && (value.installHint === undefined || safeText(value.installHint, 512));
 }
-function isModelAdmin(value: unknown): value is ModelAdmin {
-  if (!isObject(value) || !isObject(value.bundle) || !isObject(value.status)) return false;
-  return safeText(value.bundle.id, 128) && ["available", "planned"].includes(String(value.bundle.availability))
-    && safeText(value.status.state, 64);
+function isCapabilityAdmin(value: unknown): value is CapabilityAdmin {
+  const sourceRef = (item: unknown) => item === "off" || typeof item === "string" && /^(plugin|provider):[A-Za-z0-9._-]+\/[a-z][a-z0-9-]{0,63}$/.test(item);
+  const status = (item: unknown) => ["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked"].includes(String(item));
+  return isObject(value) && ["legacy-office", "ocr", "transcription", "diarization"].includes(String(value.id))
+    && status(value.status) && status(value.localStatus)
+    && sourceRef(value.currentSource) && stringList(value.sources, 64)
+    && value.sources.every(sourceRef) && value.sources.includes(value.currentSource as string)
+    && (value.version === undefined || safeText(value.version, 128))
+    && (value.localVersion === undefined || safeText(value.localVersion, 128));
 }
 function isProviderAdmin(value: unknown, configurationReadOnly: boolean): value is ProviderAdmin {
   if (!isObject(value) || !safeText(value.name, 128)
@@ -116,6 +122,8 @@ function isProviderAdmin(value: unknown, configurationReadOnly: boolean): value 
     || value.providerType !== undefined && value.providerType !== "openai-compatible"
     || value.baseUrl !== undefined && !safeText(value.baseUrl, 4096)
     || value.model !== undefined && !safeText(value.model, 256)
+    || !isObject(value.models) || Object.keys(value.models).length > 64
+    || Object.entries(value.models).some(([capability, model]) => !/^[a-z][a-z0-9-]{0,63}$/.test(capability) || !safeText(model, 512))
     || value.apiKeyEnv !== undefined && (typeof value.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.apiKeyEnv))
     || value.environmentSet !== undefined && typeof value.environmentSet !== "boolean"
     || typeof value.default !== "boolean" || value.timeoutMs !== undefined && (!Number.isSafeInteger(value.timeoutMs) || Number(value.timeoutMs) <= 0 || Number(value.timeoutMs) > 86_400_000)
@@ -149,7 +157,6 @@ function boundedJson(value: unknown, depth = 0): boolean {
 function isOperationResult(value: unknown): value is AdminOperationResult {
   return isDetectionResult(value) || isObject(value) && value.kind === "profile"
     && safeText(value.name, 128) && isObject(value.value) && boundedJson(value.value)
-    || isObject(value) && value.kind === "model" && ["show", "path"].includes(String(value.operation)) && boundedJson(value.value)
     || isObject(value) && value.kind === "config" && ["paths", "get", "showMerged", "showResolved"].includes(String(value.operation)) && boundedJson(value.value)
     || isObject(value) && value.kind === "doctor" && Array.isArray(value.checks) && value.checks.length <= 512
       && value.checks.every((item) => isObject(item) && shortString(item.id, 256) && shortString(item.status, 64) && shortString(item.detail))
@@ -183,7 +190,7 @@ function isPluginAdmin(value: unknown, configurationReadOnly: boolean): value is
 export function parseAdminSnapshot(value: unknown): AdminSnapshot {
   if (!isObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.formats) || value.formats.length > 128
     || value.formats.some((item) => !isFormatAdmin(item))
-    || !isObject(value.models) || !safeText(value.models.defaultBundle, 128) || !Array.isArray(value.models.entries) || value.models.entries.length > 64 || value.models.entries.some((item) => !isModelAdmin(item))
+    || !Array.isArray(value.capabilities) || value.capabilities.length !== 4 || value.capabilities.some((item) => !isCapabilityAdmin(item))
     || !Array.isArray(value.providers) || value.providers.length > 128 || value.providers.some((item) => !isProviderAdmin(item, value.configurationReadOnly === true))
     || !Array.isArray(value.plugins) || value.plugins.length > 256 || value.plugins.some((item) => !isPluginAdmin(item, value.configurationReadOnly === true))
     || !isObject(value.configuration) || typeof value.configurationReadOnly !== "boolean" || !Array.isArray(value.profiles) || value.profiles.length > 128
@@ -275,10 +282,10 @@ export function taskRequest(options: WorkbenchOptions, batchId?: string): unknow
   const unrestrictedNetwork = options.networkMode === "unrestricted";
   return { schemaVersion: 1, workflow: "conversion", format: options.format, ...(batchId ? { batchId } : {}), options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
-    ocr: { policy: options.ocrPolicy, model_bundle: null, minimum_confidence: options.ocrConfidence },
-    asr: { model_bundle: "whisper-small-multilingual", language: null, chinese_script: "preserve", max_threads: 4, max_duration_ms: null,
+    ocr: { policy: options.ocrPolicy, minimum_confidence: options.ocrConfidence },
+    asr: { language: null, chinese_script: "preserve", max_threads: 4, max_duration_ms: null,
       max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
-    diarization: { enabled: false, expected_speakers: null, model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },
+    diarization: { enabled: false, expected_speakers: null, max_speakers: 16 },
     ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: "off", markdown_postprocess: ai },
     network: { enabled: unrestrictedNetwork, max_redirects: 3, deny_private_networks: !unrestrictedNetwork, allowed_hosts: [] },
     limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
@@ -302,14 +309,14 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
     : options.transcriptLanguage === "zh-Hant" ? "traditional" : "preserve";
   return { schemaVersion: 1, workflow: "meetingTranscript", format: inferred, options: {
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
-    ocr: { policy: "off", model_bundle: null, minimum_confidence: 0.7 },
-    asr: { model_bundle: "whisper-small-multilingual", language, chinese_script: chineseScript, max_threads: 4, max_duration_ms: null,
+    ocr: { policy: "off", minimum_confidence: 0.7 },
+    asr: { language, chinese_script: chineseScript, max_threads: 4, max_duration_ms: null,
       max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
     diarization: { enabled: options.diarize, expected_speakers: options.expectedSpeakers,
-      model_bundle: "silero-vad-3dspeaker-eres2net", max_speakers: 16 },
+      max_speakers: 16 },
     ai: { vision_ocr: "off", image_description: "off", layout_repair: "off", table_repair: "off",
       formula_repair: "off", audio_transcription: "only", markdown_postprocess: "off" },
-    network: { enabled: false, max_redirects: 3, deny_private_networks: true, allowed_hosts: [] },
+    network: { enabled: options.authorizeProvider, max_redirects: 3, deny_private_networks: !options.authorizeProvider, allowed_hosts: [] },
     limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
       max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
       max_pages: 10000, max_asset_bytes: 67108864, max_total_asset_bytes: 134217728,
@@ -318,7 +325,7 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
       max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: true,
       asset_mode: "extract", asset_uri_prefix: null },
-  }, authorization: { network: false, privateNetwork: false, provider: false } };
+  }, authorization: { network: options.authorizeProvider, privateNetwork: options.authorizeProvider, provider: options.authorizeProvider } };
 }
 
 export interface ApiClient {

@@ -1326,7 +1326,7 @@ impl SafeDir {
                     fd = match opened {
                         Ok(opened) => opened,
                         Err(rustix::io::Errno::NOENT) => {
-                            rustix::fs::mkdirat(
+                            match rustix::fs::mkdirat(
                                 &fd,
                                 name,
                                 rustix::fs::Mode::RUSR
@@ -1336,8 +1336,16 @@ impl SafeDir {
                                     | rustix::fs::Mode::XGRP
                                     | rustix::fs::Mode::ROTH
                                     | rustix::fs::Mode::XOTH,
-                            )?;
-                            rustix::fs::fsync(&fd)?;
+                            ) {
+                                Ok(()) => rustix::fs::fsync(&fd)?,
+                                // Another batch worker may have created this
+                                // exact component after our failed open. The
+                                // authenticated NOFOLLOW open below decides
+                                // whether the winner created an acceptable
+                                // directory.
+                                Err(rustix::io::Errno::EXIST) => {}
+                                Err(error) => return Err(error.into()),
+                            }
                             rustix::fs::openat(
                                 &fd,
                                 name,
@@ -4333,7 +4341,7 @@ fn recovery_failed(operation: &str, error: &CliError) -> CliError {
 mod tests {
     use super::*;
     use into_markdown::{ExecutionOptions, ResourceLimits};
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
@@ -4349,6 +4357,27 @@ mod tests {
                 managed_nonce(&name).map(|_| entry.path())
             })
             .collect()
+    }
+
+    #[test]
+    fn concurrent_parent_creation_authenticates_the_winning_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().canonicalize().unwrap().join("a/b/c");
+        let barrier = Arc::new(Barrier::new(16));
+        let identities = std::thread::scope(|scope| {
+            let handles = (0..16)
+                .map(|_| {
+                    let barrier = Arc::clone(&barrier);
+                    let target = target.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        SafeDir::open_or_create_absolute(&target).unwrap().identity
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+        });
+        assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[cfg(unix)]

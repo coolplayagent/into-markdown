@@ -8,9 +8,9 @@ use std::sync::Arc;
 /// Explicit local paths required to assemble production ASR.
 #[derive(Debug, Clone)]
 pub struct InstalledAsrConfig {
-    /// Writable model root managed by `into-md models`.
+    /// Plugin-private model root.
     pub writable_model_root: PathBuf,
-    /// Optional read-only model root included by a full offline package.
+    /// Optional read-only model root included by the Speech plugin.
     pub bundled_model_root: Option<PathBuf>,
     /// Trusted directory containing the audited FFmpeg artifact.
     pub ffmpeg_trusted_root: PathBuf,
@@ -64,8 +64,7 @@ fn installed_asr_service_inner(
         error => ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
             detail: format!(
-                "installed Whisper model verification failed ({error}); run `into-md setup media` or install it with `into-md models install {}`",
-                config.model_bundle
+                "installed Speech capability verification failed ({error}); repair or reinstall the Speech plugin"
             ),
         },
     })?;
@@ -92,8 +91,7 @@ fn installed_asr_service_inner(
         component: "ffmpeg-lgpl".into(),
         detail: format!("installed FFmpeg runtime is unavailable: {error}"),
     })?;
-    let mut asr_options = options.asr.clone();
-    asr_options.model_bundle.clone_from(&config.model_bundle);
+    let asr_options = options.asr.clone();
     let whisper_config = into_markdown_asr::WhisperConfig::try_from(&asr_options)?;
     let transcriber = into_markdown_asr::WhisperSmallTranscriber::new(
         manager,
@@ -125,8 +123,7 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
-        assert!(error.to_string().contains("into-md setup media"));
-        assert!(error.to_string().contains("models install whisper-small-multilingual"));
+        assert!(error.to_string().contains("repair or reinstall the Speech plugin"));
         assert!(!error.to_string().contains("missing-authority"));
     }
 }

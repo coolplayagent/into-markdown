@@ -74,12 +74,6 @@ pub(crate) fn run(
 ) -> Result<(), String> {
     record(cases, "version", version(request, root, executor));
     record(cases, "formats-authority", catalog::compare_cli(request, root, authority, executor));
-    if runtime_is_projected(projection, "onnxruntime")? {
-        record(cases, "setup-ocr", setup(request, root, "ocr", executor));
-    }
-    if runtime_is_projected(projection, "whisper-small")? {
-        record(cases, "setup-media", setup(request, root, "media", executor));
-    }
     let doctor = doctor(request, root, executor)?;
     capabilities.extend(runtime_capabilities(authority, &doctor)?);
 
@@ -116,7 +110,7 @@ pub(crate) fn run(
             projection,
             &doctor,
             "image",
-            "onnxruntime",
+            "official.ocr.ppocrv6",
             FormatRuntimeBinding::ModeOptional,
             "ocr/ocr-english-clear-1.png",
             &["--ocr", "always"],
@@ -175,7 +169,7 @@ fn media_conversion(
     let runtime = authority
         .optional_runtimes
         .iter()
-        .find(|entry| entry.component == "whisper-small")
+        .find(|entry| entry.component == "official.media.whisper")
         .ok_or_else(|| "ASR runtime is absent from catalog authority".to_owned())?;
     if entry.runtime_component.as_deref() != Some(runtime.component.as_str())
         || entry.install_hint.as_deref() != Some(runtime.install_hint.as_str())
@@ -185,7 +179,7 @@ fn media_conversion(
     let path = &request.audio_fixture;
     let path_string = path.display().to_string();
     let available = doctor.get("runtime.asr").is_some_and(|entry| entry.status == "ok");
-    let projected = runtime_is_projected(projection, "whisper-small")?;
+    let projected = runtime_is_projected(projection, "official.media.whisper")?;
     if projected && !available {
         return Err("projected ASR runtime is unavailable after installation".into());
     }
@@ -264,7 +258,7 @@ fn legacy_conversion(
     let runtime = authority
         .optional_runtimes
         .iter()
-        .find(|entry| entry.component == "legacy-office")
+        .find(|entry| entry.component == "official.legacy-office.libreoffice")
         .ok_or_else(|| "legacy runtime is absent from catalog authority".to_owned())?;
     let path = fixture_path(request, fixture)?;
     let output = cli(
@@ -284,7 +278,7 @@ fn legacy_conversion(
         executor,
     )?;
     let available = doctor.get("runtime.legacy-office").is_some_and(|entry| entry.status == "ok");
-    let projected = runtime_is_projected(projection, "legacy-office")?;
+    let projected = runtime_is_projected(projection, "official.legacy-office.libreoffice")?;
     if projected && !available {
         return Err("projected legacy runtime is unavailable after installation".into());
     }
@@ -300,11 +294,13 @@ fn legacy_conversion(
     let event: serde_json::Value = serde_json::from_slice(&output.stderr)
         .map_err(|_| "missing legacy runtime error is not JSON")?;
     let message = event["message"].as_str().unwrap_or_default();
+    let hint = runtime.install_hint.as_str();
+    let hint_token = hint.split('`').nth(1).unwrap_or(hint);
     if output.exit_code == Some(9)
         && output.stdout.is_empty()
         && event["code"] == "componentUnavailable"
         && event["exitCode"] == 9
-        && message.contains(runtime.install_hint.as_str())
+        && message.contains(hint_token)
     {
         Ok(())
     } else {
@@ -341,20 +337,6 @@ fn doctor(
     let entries: Vec<DoctorEntry> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("doctor output is invalid: {error}"))?;
     Ok(entries.into_iter().map(|entry| (entry.id.clone(), entry)).collect())
-}
-
-fn setup(
-    request: &ValidatedRequest,
-    root: &Path,
-    capability: &str,
-    executor: &dyn Executor,
-) -> Result<(), String> {
-    let output = cli(request, root, &["setup", capability], &[], executor)?;
-    if output.exit_code == Some(0) && output.stderr.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("{capability} capability setup failed"))
-    }
 }
 
 fn runtime_capabilities(
@@ -554,25 +536,16 @@ fn runtime_is_projected(
     projection: &ArchiveProjection,
     runtime_component: &str,
 ) -> Result<bool, String> {
-    if runtime_component == "whisper-small" {
-        let ffmpeg = projection.components.iter().any(|value| value == "ffmpeg");
-        let whisper = projection.components.iter().any(|value| value == "whisper-small");
-        if whisper && !ffmpeg {
-            return Err("archive projection contains a Whisper model without FFmpeg".into());
-        }
-        return Ok(ffmpeg && whisper);
-    }
     let required: &[&str] = match runtime_component {
         "pdfium" => &["pdfium"],
-        "onnxruntime" => &[
-            "onnxruntime-cpu",
-            "ppocrv6-tiny-detector-onnx-model",
-            "ppocrv6-tiny-recognizer-onnx-model",
-            "ppocrv6-tiny-recognizer-character-table",
-        ],
-        "legacy-office" => &["libreoffice-macos-arm64"],
+        "official.ocr.ppocrv6"
+        | "official.media.whisper"
+        | "official.legacy-office.libreoffice" => &[],
         _ => return Err("catalog authority contains an unknown optional runtime".into()),
     };
+    if required.is_empty() {
+        return Ok(false);
+    }
     let present = required
         .iter()
         .filter(|component| projection.components.iter().any(|value| value == **component))
@@ -591,10 +564,10 @@ enum FormatRuntimeBinding {
 
 fn doctor_id(component: &str) -> Result<&str, String> {
     match component {
-        "onnxruntime" => Ok("runtime.ocr"),
-        "legacy-office" => Ok("runtime.legacy-office"),
+        "official.ocr.ppocrv6" => Ok("runtime.ocr"),
+        "official.legacy-office.libreoffice" => Ok("runtime.legacy-office"),
         "pdfium" => Ok("runtime.pdfium"),
-        "whisper-small" => Ok("runtime.asr"),
+        "official.media.whisper" => Ok("runtime.asr"),
         _ => Err("catalog authority contains an unknown optional runtime".into()),
     }
 }
@@ -731,20 +704,10 @@ mod tests {
         let absent = projection(&[]);
         assert!(!runtime_is_projected(&absent, "pdfium").unwrap());
 
-        let incomplete = projection(&["onnxruntime-cpu"]);
-        assert_eq!(
-            runtime_is_projected(&incomplete, "onnxruntime").unwrap_err(),
-            "archive projection contains an incomplete optional runtime"
-        );
-
-        assert!(!runtime_is_projected(&projection(&["ffmpeg"]), "whisper-small").unwrap());
+        assert!(!runtime_is_projected(&projection(&[]), "official.ocr.ppocrv6").unwrap());
+        assert!(!runtime_is_projected(&projection(&[]), "official.media.whisper").unwrap());
         assert!(
-            runtime_is_projected(&projection(&["ffmpeg", "whisper-small"]), "whisper-small")
-                .unwrap()
-        );
-        assert_eq!(
-            runtime_is_projected(&projection(&["whisper-small"]), "whisper-small").unwrap_err(),
-            "archive projection contains a Whisper model without FFmpeg"
+            !runtime_is_projected(&projection(&[]), "official.legacy-office.libreoffice").unwrap()
         );
     }
 
@@ -806,6 +769,7 @@ mod tests {
             files: vec![],
             license_materials: vec![],
             ffmpeg_evidence: None,
+            native_transformations: vec![],
         }
     }
 }

@@ -84,15 +84,15 @@ The audit and the local Bzlmod extension share
 `third_party/licenses/downloads.json`, so every managed artifact's URL and hash
 has one structured download source of truth.
 
-The standard package acquires meeting models only through the explicit `setup media` /
-`models install` flow; the full offline package includes the exact reviewed model bytes.
-Ordinary builds, tests, and conversions never download them. Silero VAD v6.2.1 is MIT-licensed, Copyright (c)
+The self-contained speech capability plugin includes the exact reviewed meeting model bytes and
+is acquired only through the explicit `setup media` flow. Ordinary builds, tests, and conversions
+never download model files separately. Silero VAD v6.2.1 is MIT-licensed, Copyright (c)
 2020-present Silero Team, with the complete text preserved in
 `third_party/licenses/silero-vad-MIT.txt`. The 3D-Speaker ERes2Net model is
 Apache-2.0; the complete license text is the repository `LICENSE`. Both ONNX
 files are bound to exact HTTPS authorities, sizes, and SHA-256 values in
-`models/manifest.json` and `third_party/licenses/downloads.json`. Their full-package
-projection also binds file ownership, license material, and SBOM integrity.
+`models/manifest.json` and `third_party/licenses/downloads.json`. The speech plugin projection also
+binds file ownership, license material, and SBOM integrity.
 
 PDFium `153.0.7999.0` (`chromium/7999`) is reviewed and hash-pinned for four
 platforms, but remains a manual input and is not in current release outputs. Its

@@ -135,8 +135,8 @@ fn whisper_small_multilingual_quality() {
         )
         .unwrap(),
     );
+    assert_eq!(authority.model.bundle, "whisper-small-multilingual");
     let mut options = AsrOptions::default();
-    options.model_bundle.clone_from(&authority.model.bundle);
     options.max_threads = authority.model.maximum_threads;
     let transcriber = WhisperSmallTranscriber::new(
         Arc::clone(&manager),

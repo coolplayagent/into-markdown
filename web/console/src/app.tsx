@@ -36,7 +36,7 @@ function Content({ api }: { api: ApiClient }) {
   const meetingResult = /^\/meetings\/results\/([0-9a-f]{32})$/.exec(path);
   const workbenchResult = /^\/results\/([0-9a-f]{32})$/.exec(path);
   const meeting = path === "/meetings" || Boolean(meetingResult);
-  const adminMatch = /^\/admin\/(formats|models|providers|plugins|configuration|doctor)$/.exec(path);
+  const adminMatch = /^\/admin\/(capabilities|formats|providers|plugins|configuration|doctor)$/.exec(path);
   const adminSection = adminMatch?.[1] as AdminSection | undefined;
   useEffect(() => {
     document.title = `${t(adminSection ?? (meeting ? "meetingNotes" : "workbench"))} · into-markdown`;
@@ -54,7 +54,7 @@ function Content({ api }: { api: ApiClient }) {
 function Shell({ api }: { api: ApiClient }) {
   const { t } = useI18n();
   const { path } = useRouter();
-  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") && !path.startsWith("/admin/") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink><RouteLink href="/admin/plugins" className={path.startsWith("/admin/") ? "active" : ""}>{t("administration")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
+  return <><a className="skip-link" href="#main">{t("skip")}</a><div className="app-shell"><header className="app-header"><RouteLink href="/workbench" className="brand" ariaLabel={t("appName")}><span className="brand-mark" aria-hidden="true">M↓</span><span>into-markdown</span></RouteLink><nav className="primary-nav" aria-label={t("primaryNavigation")}><RouteLink href="/workbench" className={!path.startsWith("/meetings") && !path.startsWith("/admin/") ? "active" : ""}>{t("workbench")}</RouteLink><RouteLink href="/meetings" className={path.startsWith("/meetings") ? "active" : ""}>{t("meetingNotes")}</RouteLink><RouteLink href="/admin/capabilities" className={path.startsWith("/admin/") ? "active" : ""}>{t("administration")}</RouteLink></nav><div className="header-actions"><ServiceBadge api={api} /><Preferences /></div></header><Content api={api} /></div></>;
 }
 
 export function App({ api }: { api: ApiClient }) {

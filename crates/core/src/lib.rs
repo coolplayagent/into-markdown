@@ -61,9 +61,9 @@ pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
     ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult,
     DiarizationRequest, DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, FormatDetector,
-    MarkdownRenderer, OcrEngine, OcrRequest, OutputEnricher, PatchOperation, ProbeOutcome,
-    Services, SourceResolver, Tensor, TensorRuntime, Transcriber, TranscriptionRequest,
-    TranscriptionResult,
+    LegacyOfficeNormalizer, LegacyOfficeRequest, LegacyOfficeResult, MarkdownRenderer, OcrEngine,
+    OcrRequest, OutputEnricher, PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor,
+    TensorRuntime, Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 #[doc(hidden)]
 pub use spi::{

@@ -1,10 +1,11 @@
 //! CLI orchestration, input expansion, policy application, and management commands.
 
 use crate::args::{
-    AssetModeArg, Cli, Command, CompletionShell, ConfigCommand, ConfigOutputFormat, ConflictPolicy,
-    ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg, FormatsCommand, LogFormat,
-    ModelsCommand, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType, ProvidersCommand,
-    RaggedRowsArg, Scope, SetupCommand, TableHeaderArg, TranscriptCommand, UiArgs,
+    AssetModeArg, CapabilitiesCommand, Cli, Command, CompletionShell, ConfigCommand,
+    ConfigOutputFormat, ConflictPolicy, ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg,
+    FormatsCommand, LogFormat, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType,
+    ProvidersCommand, RaggedRowsArg, Scope, SetupCommand, TableHeaderArg, TranscriptCommand,
+    UiArgs,
 };
 use crate::config::{self, LoadedConfig, PluginConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
@@ -29,7 +30,15 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
-const MAX_PLUGIN_PACKAGE_BYTES: u64 = 256 * 1024 * 1024;
+// Self-contained Speech and LibreOffice capability packages intentionally
+// include their audited models/runtimes. Keep the wire bound finite while
+// allowing the reviewed packages plus release metadata.
+const MAX_PLUGIN_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Installation keeps the downloaded package and a verified extracted tree in
+// one transaction. A self-contained capability package can therefore require
+// more temporary space than its final on-disk size while still remaining
+// bounded by the 2 GiB package and expanded-tree limits.
+const MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const PLUGIN_CLI_TRANSACTION: &str = ".cli-plugin-transaction.json";
 const PLUGIN_CLI_TRANSACTION_NEXT: &str = ".cli-plugin-transaction.next";
 const PLUGIN_CLI_TRANSACTION_PREVIOUS: &str = ".cli-plugin-transaction.previous";
@@ -206,6 +215,17 @@ pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), 
     let json_log = cli.global.log_format == Some(LogFormat::Json)
         || (cli.global.log_format.is_none()
             && loaded.effective.cli.log_format.as_deref() == Some("json"));
+    if loaded.legacy_model_configuration && !cli.global.quiet {
+        write_stderr_event(
+            context.stderr,
+            json_log,
+            "warning",
+            "legacyModelConfigurationIgnored",
+            "legacy model_bundle configuration is ignored; install and select the corresponding capability plugin",
+            None,
+            "into-md: legacy model_bundle configuration is ignored; install and select the corresponding capability plugin",
+        )?;
+    }
     let result = match cli.command {
         None => {
             run_conversion(cli.conversion, &cli.global, loaded, catalog, json_log, &mut context)
@@ -226,10 +246,7 @@ pub(crate) fn recover_plugins_before_config_load(
     let mut global_manager = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
         .map_err(plugin_manager_error)?;
     let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
-    let execution = into_markdown::ExecutionContext::new(
-        into_markdown::ExecutionOptions::default(),
-        into_markdown::ResourceLimits::default(),
-    );
+    let execution = plugin_lifecycle_execution_context();
     // Acquiring either scope lock first performs its config-journal recovery.
     // The pending joint journal identifies which exact scope must then be
     // reconciled; `cwd` remains relevant for project identity validation.
@@ -288,8 +305,8 @@ fn run_command(
                 detect_format(arguments, loaded, context.stdout)
             }
         },
-        Command::Models(arguments) => {
-            run_models(arguments.command, arguments.json, &loaded, catalog, context)
+        Command::Capabilities(arguments) => {
+            run_capabilities(arguments.command, arguments.json, &loaded, context)
         }
         Command::Setup(arguments) => {
             run_setup(arguments.command, global, &loaded, catalog, context)
@@ -343,50 +360,29 @@ pub(crate) fn prepare_official_capability(
     context: &mut RunContext<'_>,
 ) -> Result<LoadedConfig, CliError> {
     match command {
-        SetupCommand::Ocr { insecure, allow_private_network } => {
+        SetupCommand::Ocr { insecure: _, allow_private_network: _ } => {
             ensure_official_plugin("official.ocr.ppocrv6", global, loaded, catalog, context)?;
-            run_models(
-                Some(ModelsCommand::Install {
-                    id: "pp-ocrv6-tiny-zh-en".into(),
-                    insecure,
-                    allow_private_network,
-                }),
-                false,
-                loaded,
-                catalog,
-                context,
-            )?;
             let refreshed = reload_after_setup(global, context)?;
             crate::services::verify_ocr_runtime(&refreshed, &context.cwd)?;
             Ok(refreshed)
         }
-        SetupCommand::Media { insecure, allow_private_network } => {
+        SetupCommand::Media { insecure: _, allow_private_network: _ } => {
             ensure_official_plugin("official.media.whisper", global, loaded, catalog, context)?;
-            run_models(
-                Some(ModelsCommand::Install {
-                    id: "whisper-small-multilingual".into(),
-                    insecure,
-                    allow_private_network,
-                }),
-                false,
-                loaded,
-                catalog,
-                context,
-            )?;
-            run_models(
-                Some(ModelsCommand::Install {
-                    id: "silero-vad-3dspeaker-eres2net".into(),
-                    insecure,
-                    allow_private_network,
-                }),
-                false,
+            let refreshed = reload_after_setup(global, context)?;
+            crate::services::verify_asr_runtime(&refreshed, &context.cwd)?;
+            crate::services::verify_diarization_runtime(&refreshed, &context.cwd)?;
+            Ok(refreshed)
+        }
+        SetupCommand::LegacyOffice { insecure: _, allow_private_network: _ } => {
+            ensure_official_plugin(
+                "official.legacy-office.libreoffice",
+                global,
                 loaded,
                 catalog,
                 context,
             )?;
             let refreshed = reload_after_setup(global, context)?;
-            crate::services::verify_asr_runtime(&refreshed, &context.cwd)?;
-            crate::services::verify_diarization_runtime(&refreshed, &context.cwd)?;
+            crate::services::verify_legacy_office_runtime(&refreshed, &context.cwd)?;
             Ok(refreshed)
         }
     }
@@ -532,7 +528,7 @@ fn run_ui(
     ))
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FormatView<'a> {
     format: &'a str,
@@ -694,177 +690,254 @@ fn detect_format(
     }
 }
 
-fn run_models(
-    command: Option<ModelsCommand>,
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CapabilityView {
+    pub id: &'static str,
+    pub status: &'static str,
+    pub local_status: &'static str,
+    pub current_source: String,
+    pub sources: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_version: Option<String>,
+}
+
+fn run_capabilities(
+    command: Option<CapabilitiesCommand>,
     json: bool,
     loaded: &LoadedConfig,
-    _catalog: Catalog,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
-    if matches!(&command, Some(ModelsCommand::Install { .. })) {
-        ensure_model_parent()?;
-    }
-    let manager = model_manager()?;
-    let execution = into_markdown::ExecutionContext::new(
-        into_markdown::ExecutionOptions {
-            timeout: loaded.timeout_ms.map(std::time::Duration::from_millis),
-            ..into_markdown::ExecutionOptions::default()
-        },
-        loaded.options.limits.clone(),
-    );
     match command {
-        None => {
+        None | Some(CapabilitiesCommand::List { json: false }) => {
+            let entries = capability_views(loaded, &context.cwd)?;
             if json {
                 write_json(
                     context.stdout,
                     &serde_json::json!({
                         "schemaVersion": 1,
-                        "defaultBundle": manager.manifest().default_bundle,
-                        "models": manager.list().map_err(model_error)?,
+                        "capabilities": entries,
                     }),
                 )
             } else {
-                writeln!(
-                    context.stdout,
-                    "MODEL\tDEFAULT\tAVAILABILITY\tSTATE\tOWNERSHIP\tRUNTIME\tLANGUAGES"
-                )?;
-                for (bundle, status) in
-                    manager.manifest().bundles.iter().zip(manager.list().map_err(model_error)?)
-                {
+                writeln!(context.stdout, "CAPABILITY\tSTATUS\tSOURCE\tVERSION")?;
+                for entry in entries {
                     writeln!(
                         context.stdout,
-                        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                        bundle.id,
-                        bundle.id == manager.manifest().default_bundle,
-                        bundle.availability,
-                        status.state,
-                        status.ownership,
-                        bundle.runtime_format,
-                        bundle.languages.join(",")
+                        "{}\t{}\t{}\t{}",
+                        entry.id,
+                        entry.status,
+                        entry.current_source,
+                        entry.version.as_deref().unwrap_or("-")
                     )?;
                 }
                 Ok(())
             }
         }
-        Some(ModelsCommand::Show { id, json }) => {
-            let bundle = manager
-                .manifest()
-                .bundles
-                .iter()
-                .find(|bundle| bundle.id == id)
-                .ok_or_else(|| CliError::usage(format!("unknown model bundle '{id}'")))?;
-            let status = manager.status(&id).map_err(model_error)?;
+        Some(CapabilitiesCommand::List { json: true }) => {
+            let entries = capability_views(loaded, &context.cwd)?;
+            write_json(
+                context.stdout,
+                &serde_json::json!({
+                    "schemaVersion": 1,
+                    "capabilities": entries,
+                }),
+            )
+        }
+        Some(CapabilitiesCommand::Show { id, json }) => {
+            let entry = capability_views(loaded, &context.cwd)?
+                .into_iter()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| CliError::usage(format!("unknown capability '{id}'")))?;
             if json {
                 write_json(
                     context.stdout,
-                    &serde_json::json!({
-                        "schemaVersion": 1,
-                        "model": bundle,
-                        "status": status,
-                    }),
+                    &serde_json::json!({"schemaVersion": 1, "capability": entry}),
                 )
             } else {
-                writeln!(context.stdout, "model: {}", bundle.id)?;
-                writeln!(context.stdout, "availability: {}", bundle.availability)?;
-                writeln!(context.stdout, "state: {}", status.state)?;
-                writeln!(context.stdout, "ownership: {}", status.ownership)?;
-                writeln!(context.stdout, "upstream: {}", bundle.upstream_version)?;
-                writeln!(context.stdout, "runtime: {}", bundle.runtime_format)?;
-                writeln!(context.stdout, "languages: {}", bundle.languages.join(", "))?;
-                writeln!(context.stdout, "platforms: {}", bundle.platforms.join(", "))?;
+                writeln!(context.stdout, "capability: {}", entry.id)?;
+                writeln!(context.stdout, "status: {}", entry.status)?;
+                writeln!(context.stdout, "source: {}", entry.current_source)?;
+                writeln!(context.stdout, "available sources: {}", entry.sources.join(", "))?;
+                if let Some(version) = entry.version {
+                    writeln!(context.stdout, "version: {version}")?;
+                }
                 Ok(())
             }
         }
-        Some(ModelsCommand::Install { id, insecure, allow_private_network }) => {
-            let id = id.as_str();
-            manager.require_installable(id).map_err(model_error)?;
-            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(
-                insecure,
-                allow_private_network,
-            )
-            .map_err(|(variable, reason)| {
-                CliError::config(format!("invalid {variable}: {reason}"))
-            })?;
-            let status = manager.install(id, &fetcher, &execution).map_err(model_error)?;
-            writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
+        Some(CapabilitiesCommand::Use { id, source, scope }) => {
+            validate_capability_source(&id, &source, loaded)?;
+            let path = config::set_capability_source(scope, &context.cwd, &id, &source)?;
+            writeln!(context.stdout, "{}\t{}\t{}", id, source, path.display())?;
             Ok(())
         }
-        Some(ModelsCommand::Verify { id, json }) => {
-            let id = id.as_str();
-            let status = manager.verify_with_context(id, &execution).map_err(model_error)?;
-            if json {
-                write_json(context.stdout, &status)
+        Some(CapabilitiesCommand::Reset { id, scope }) => {
+            let path = config::reset_capability_source(scope, &context.cwd, &id)?;
+            writeln!(context.stdout, "{}\tdefault\t{}", id, path.display())?;
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn capability_views(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> Result<Vec<CapabilityView>, CliError> {
+    const ITEMS: [(&str, &str, &str); 4] = [
+        ("legacy-office", "official.legacy-office.libreoffice", "legacy-office"),
+        ("ocr", "official.ocr.ppocrv6", "ocr"),
+        ("transcription", "official.media.whisper", "transcription"),
+        ("diarization", "official.media.whisper", "diarization"),
+    ];
+    ITEMS
+        .into_iter()
+        .map(|(id, plugin_id, plugin_capability)| {
+            let route = capability_route(loaded, id);
+            let local = format!("plugin:{plugin_id}/{plugin_capability}");
+            let configured =
+                loaded.effective.plugins.get(plugin_id).is_some_and(|plugin| plugin.enabled);
+            let verified = configured
+                .then(|| inspect_admin_effective_plugin_from_loaded(loaded, cwd, plugin_id))
+                .transpose();
+            let (local_ready, version) = match verified {
+                Ok(Some(installed)) => (true, Some(installed.version)),
+                Ok(None) => (false, None),
+                Err(_) => (false, None),
+            };
+            // The official local source remains selectable while absent so the
+            // management UI can offer installation without changing identity.
+            let mut sources = vec![local.clone()];
+            for (provider_id, provider) in &loaded.effective.providers {
+                if let Some(capability_id) = provider_capability_id(&provider.capabilities, id) {
+                    sources.push(format!("provider:{provider_id}/{capability_id}"));
+                }
+            }
+            sources.push("off".into());
+            let current_source = route
+                .primary
+                .clone()
+                .unwrap_or_else(|| if local_ready { local } else { "off".into() });
+            let remote_ready = current_source
+                .strip_prefix("provider:")
+                .and_then(|value| value.split_once('/'))
+                .and_then(|(provider_id, _)| loaded.effective.providers.get(provider_id))
+                .is_some_and(|provider| std::env::var_os(&provider.api_key_env).is_some());
+            let status = match current_source.as_str() {
+                "off" => "not-installed",
+                value if value.starts_with("plugin:") && local_ready => "ready",
+                value if value.starts_with("plugin:") && configured => "corrupt",
+                value if value.starts_with("plugin:") => "not-installed",
+                value if value.starts_with("provider:") && remote_ready => "ready",
+                value if value.starts_with("provider:") => "blocked",
+                _ => "incompatible",
+            };
+            let local_status = if local_ready {
+                "ready"
+            } else if configured {
+                "corrupt"
             } else {
-                writeln!(context.stdout, "{}\t{}", status.id, status.state)?;
-                Ok(())
+                "not-installed"
+            };
+            Ok(CapabilityView {
+                id,
+                status,
+                local_status,
+                current_source,
+                sources,
+                local_version: version.clone(),
+                version,
+            })
+        })
+        .collect()
+}
+
+fn capability_route<'a>(loaded: &'a LoadedConfig, id: &str) -> &'a config::CapabilityRouteConfig {
+    match id {
+        "legacy-office" => &loaded.effective.capability_routes.legacy_office,
+        "ocr" => &loaded.effective.capability_routes.ocr,
+        "transcription" => &loaded.effective.capability_routes.transcription,
+        "diarization" => &loaded.effective.capability_routes.diarization,
+        _ => unreachable!("validated product capability"),
+    }
+}
+
+fn provider_supports_capability(capabilities: &[String], id: &str) -> bool {
+    provider_capability_id(capabilities, id).is_some()
+}
+
+fn provider_capability_id<'a>(capabilities: &'a [String], id: &str) -> Option<&'a str> {
+    let preferred: &[&str] = match id {
+        "ocr" => &["vision-ocr", "ocr"],
+        "transcription" => &["audio-transcription", "transcription"],
+        // No remote diarization adapter is published yet. A Provider's raw
+        // capability declaration must not create a selectable dead route.
+        "diarization" => return None,
+        _ => return None,
+    };
+    preferred
+        .iter()
+        .find_map(|candidate| capabilities.iter().find(|value| value.as_str() == *candidate))
+        .map(String::as_str)
+}
+
+fn validate_capability_source(
+    id: &str,
+    source: &str,
+    loaded: &LoadedConfig,
+) -> Result<(), CliError> {
+    use into_markdown_provider_plugin::{CapabilityId, CapabilitySourceRef};
+    use std::str::FromStr as _;
+    let capability = CapabilityId::from_str(id)
+        .map_err(|_| CliError::usage(format!("unknown capability '{id}'")))?;
+    let parsed = CapabilitySourceRef::from_str(source)
+        .map_err(|_| CliError::usage(format!("invalid capability source '{source}'")))?;
+    match parsed {
+        CapabilitySourceRef::Off => Ok(()),
+        CapabilitySourceRef::Plugin { plugin_id, capability_id } => {
+            let expected = match capability {
+                CapabilityId::LegacyOffice => {
+                    ("official.legacy-office.libreoffice", "legacy-office")
+                }
+                CapabilityId::Ocr => ("official.ocr.ppocrv6", "ocr"),
+                CapabilityId::Transcription => ("official.media.whisper", "transcription"),
+                CapabilityId::Diarization => ("official.media.whisper", "diarization"),
+            };
+            if (plugin_id.as_str(), capability_id.as_str()) != expected {
+                return Err(CliError::usage(format!("source '{source}' cannot provide '{id}'")));
             }
-        }
-        Some(ModelsCommand::Remove { id }) => {
-            manager.remove_with_context(&id, &execution).map_err(model_error)?;
-            writeln!(context.stdout, "removed {id}")?;
+            if !loaded.effective.plugins.get(&plugin_id).is_some_and(|plugin| plugin.enabled) {
+                return Err(CliError::component(format!(
+                    "plugin '{plugin_id}' is not installed and enabled"
+                )));
+            }
             Ok(())
         }
-        Some(ModelsCommand::Path { id }) => {
-            writeln!(context.stdout, "{}", manager.path(&id).map_err(model_error)?.display())?;
+        CapabilitySourceRef::Provider { provider_id, capability_id } => {
+            let provider = loaded
+                .effective
+                .providers
+                .get(&provider_id)
+                .ok_or_else(|| CliError::usage(format!("unknown provider '{provider_id}'")))?;
+            if !provider_supports_capability(&provider.capabilities, id)
+                || !matches!(capability_id.as_str(), value if value == id || id == "ocr" && value == "vision-ocr" || id == "transcription" && value == "audio-transcription")
+            {
+                return Err(CliError::usage(format!(
+                    "provider '{provider_id}' does not provide '{id}'"
+                )));
+            }
             Ok(())
         }
     }
 }
 
-pub(crate) fn ensure_model_parent() -> Result<(), CliError> {
-    let data_dir = directories::ProjectDirs::from("", "", "into-markdown")
-        .map(|directories| directories.data_dir().to_path_buf())
-        .ok_or_else(|| {
-            CliError::new(
-                ExitClass::Io,
-                "modelDataDirectoryUnavailable",
-                "cannot determine the platform model data directory",
-            )
-        })?;
-    ensure_model_parent_at(&data_dir)
-}
-
-fn ensure_model_parent_at(data_dir: &Path) -> Result<(), CliError> {
-    fs::create_dir_all(data_dir).map_err(CliError::from)
-}
-
-pub(crate) fn model_manager() -> Result<into_markdown::ModelManager, CliError> {
-    let writable_root = directories::ProjectDirs::from("", "", "into-markdown")
-        .map(|directories| directories.data_dir().join("models"))
-        .ok_or_else(|| {
-            CliError::new(
-                ExitClass::Io,
-                "modelDataDirectoryUnavailable",
-                "cannot determine the platform model data directory",
-            )
-        })?;
-    let bundled_root = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.canonicalize().ok())
-        .and_then(|path| path.parent().map(|parent| parent.join("models")))
-        .filter(|path| path.is_dir());
-    into_markdown::ModelManager::embedded(writable_root, bundled_root).map_err(CliError::from)
-}
-
-pub(crate) fn model_error(error: into_markdown::ModelManagerError) -> CliError {
-    use into_markdown::ModelManagerError;
-    match error {
-        ModelManagerError::UnknownBundle => CliError::usage(error.to_string()),
-        ModelManagerError::ComponentUnavailable => CliError::component(error.to_string()),
-        ModelManagerError::ReadOnly
-        | ModelManagerError::UnsafePath
-        | ModelManagerError::DataDirectoryUnsafe => {
-            CliError::new(ExitClass::Policy, "modelPolicy", error.to_string())
-        }
-        ModelManagerError::NotInstalled | ModelManagerError::Corrupt(_) => {
-            CliError::new(ExitClass::Ocr, "modelInvalid", error.to_string())
-        }
-        ModelManagerError::Busy => CliError::new(ExitClass::Io, "modelBusy", error.to_string()),
-        ModelManagerError::Execution(error) => CliError::from(error),
-        ModelManagerError::DataDirectoryUnavailable | ModelManagerError::Io(_) => {
-            CliError::new(ExitClass::Io, "modelIo", error.to_string())
-        }
-    }
+pub(crate) fn validate_admin_capability_source(
+    id: &str,
+    source: &str,
+    loaded: &LoadedConfig,
+) -> Result<(), CliError> {
+    validate_capability_source(id, source, loaded)
 }
 
 #[derive(Serialize)]
@@ -874,6 +947,7 @@ struct ProviderView<'a> {
     provider_type: &'a str,
     base_url: String,
     model: &'a str,
+    models: &'a std::collections::BTreeMap<String, String>,
     api_key_env: &'a str,
     capabilities: &'a [String],
     default: bool,
@@ -912,6 +986,26 @@ fn run_providers(
             for capability in &arguments.capability {
                 config::validate_capability(capability)?;
             }
+            let mut models = std::collections::BTreeMap::new();
+            for mapping in &arguments.model_map {
+                let (capability, model) = mapping
+                    .split_once('=')
+                    .ok_or_else(|| CliError::usage("--model-map must use CAPABILITY=MODEL"))?;
+                config::validate_capability(capability)?;
+                if model.is_empty() || model.len() > 512 || model.chars().any(char::is_control) {
+                    return Err(CliError::usage("--model-map model is invalid"));
+                }
+                if !arguments.capability.iter().any(|value| value == capability) {
+                    return Err(CliError::usage(format!(
+                        "--model-map capability '{capability}' must also be declared with --capability"
+                    )));
+                }
+                if models.insert(capability.to_owned(), model.to_owned()).is_some() {
+                    return Err(CliError::usage(format!(
+                        "duplicate --model-map capability '{capability}'"
+                    )));
+                }
+            }
             let parsed = url::Url::parse(&arguments.base_url)
                 .map_err(|error| CliError::usage(format!("invalid provider URL: {error}")))?;
             if !matches!(parsed.scheme(), "http" | "https") {
@@ -923,6 +1017,7 @@ fn run_providers(
                 },
                 base_url: arguments.base_url,
                 model: arguments.model,
+                models,
                 api_key_env: arguments.api_key_env,
                 timeout_ms: arguments.timeout,
                 capabilities: arguments.capability,
@@ -1075,6 +1170,7 @@ fn provider_view<'a>(
         provider_type: &provider.provider_type,
         base_url: redact_url(&provider.base_url),
         model: &provider.model,
+        models: &provider.models,
         api_key_env: &provider.api_key_env,
         capabilities: &provider.capabilities,
         default: loaded.effective.default_provider.as_deref() == Some(name),
@@ -1093,7 +1189,10 @@ struct OfficialPluginCatalog {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OfficialPluginRecord {
-    file: String,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
     sha256: String,
 }
 
@@ -1119,9 +1218,7 @@ fn ensure_official_plugin(
     let plugin_root = distribution.join("share/into-markdown/plugins");
     let catalog_path = plugin_root.join("official-publisher.json");
     let metadata = fs::symlink_metadata(&catalog_path).map_err(|_| {
-        CliError::component(format!(
-            "official plugin catalog is unavailable; install a standard or full distribution containing {id}"
-        ))
+        CliError::component(format!("official plugin catalog is unavailable for {id}"))
     })?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
         return Err(CliError::component("official plugin catalog is invalid"));
@@ -1129,7 +1226,7 @@ fn ensure_official_plugin(
     let catalog_bytes = fs::read(&catalog_path).map_err(CliError::from)?;
     let official: OfficialPluginCatalog = serde_json::from_slice(&catalog_bytes)
         .map_err(|_| CliError::component("official plugin catalog is invalid"))?;
-    if official.schema_version != 1 {
+    if !matches!(official.schema_version, 1 | 2) {
         return Err(CliError::component("official plugin catalog schema is unsupported"));
     }
     config::validate_sha256(&official.signing_key_sha256)?;
@@ -1138,16 +1235,22 @@ fn ensure_official_plugin(
         .get(id)
         .ok_or_else(|| CliError::component(format!("official package {id} is unavailable")))?;
     config::validate_sha256(&package.sha256)?;
-    if !matches!(
-        Path::new(&package.file).components().collect::<Vec<_>>().as_slice(),
-        [std::path::Component::Normal(_)]
-    ) {
-        return Err(CliError::component("official package filename is invalid"));
-    }
-    let package_path = plugin_root.join("packages").join(&package.file);
+    let source = match (&package.file, &package.url) {
+        (Some(file), None) => {
+            if !matches!(
+                Path::new(file).components().collect::<Vec<_>>().as_slice(),
+                [std::path::Component::Normal(_)]
+            ) {
+                return Err(CliError::component("official package filename is invalid"));
+            }
+            plugin_root.join("packages").join(file).display().to_string()
+        }
+        (None, Some(url)) => url.clone(),
+        _ => return Err(CliError::component("official package source is invalid")),
+    };
     run_plugins(
         Some(PluginsCommand::Install {
-            source: package_path.display().to_string(),
+            source,
             sha256: Some(package.sha256.clone()),
             signing_key_id: Some(official.signing_key_id),
             signing_key_sha256: Some(official.signing_key_sha256),
@@ -1159,6 +1262,14 @@ fn ensure_official_plugin(
         catalog,
         context,
     )
+}
+
+fn plugin_lifecycle_execution_context() -> into_markdown::ExecutionContext {
+    let limits = into_markdown::ResourceLimits {
+        max_temporary_bytes: MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES,
+        ..into_markdown::ResourceLimits::default()
+    };
+    into_markdown::ExecutionContext::new(into_markdown::ExecutionOptions::default(), limits)
 }
 
 fn run_plugins(
@@ -1257,10 +1368,7 @@ fn run_plugins(
             let mut global_manager =
                 PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
                     .map_err(plugin_manager_error)?;
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions::default(),
-                into_markdown::ResourceLimits::default(),
-            );
+            let execution = plugin_lifecycle_execution_context();
             let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
             recover_pending_cli_plugin_transaction(
                 &global_anchor,
@@ -1348,7 +1456,11 @@ fn run_plugins(
             let installed_before = match manager.verify(&inspected.id, &execution) {
                 Ok(installed) => Some(installed),
                 Err(error) if error.code == ManagerErrorCode::NotInstalled => None,
-                Err(error) => return Err(plugin_manager_error(error)),
+                Err(_) => Some(
+                    manager
+                        .inspect_retained_package(&inspected.id, &execution)
+                        .map_err(plugin_manager_error)?,
+                ),
             };
             match (old_config.as_ref(), installed_before.as_ref()) {
                 (Some(configured), Some(installed)) => {
@@ -1623,10 +1735,7 @@ fn run_plugins(
             }
         }
         Some(PluginsCommand::Enable { id, scope }) => {
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions::default(),
-                into_markdown::ResourceLimits::default(),
-            );
+            let execution = plugin_lifecycle_execution_context();
             let (global_anchor, global_relative) = global_plugin_store_scope()?;
             let mut global_manager =
                 PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
@@ -1673,10 +1782,7 @@ fn run_plugins(
             Ok(())
         }
         Some(PluginsCommand::Disable { id, scope }) => {
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions::default(),
-                into_markdown::ResourceLimits::default(),
-            );
+            let execution = plugin_lifecycle_execution_context();
             let (global_anchor, global_relative) = global_plugin_store_scope()?;
             let mut global_manager =
                 PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
@@ -1719,10 +1825,7 @@ fn run_plugins(
             Ok(())
         }
         Some(PluginsCommand::Remove { id, scope }) => {
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions::default(),
-                into_markdown::ResourceLimits::default(),
-            );
+            let execution = plugin_lifecycle_execution_context();
             let (global_anchor, global_relative) = global_plugin_store_scope()?;
             let mut global_manager =
                 PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
@@ -2540,6 +2643,32 @@ pub(crate) fn verify_admin_effective_plugin(
     Ok(installed)
 }
 
+/// Authenticate one captured installation record for responsive status
+/// display. Large payload hashes remain mandatory in explicit verification
+/// and immediately before process execution.
+pub(crate) fn inspect_admin_effective_plugin(
+    cwd: &Path,
+    scope: Scope,
+    id: &str,
+    configured: &PluginConfig,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    let execution = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
+    let (global_anchor, global_relative) = global_plugin_store_scope()?;
+    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
+        .map_err(plugin_manager_error)?;
+    let authority = scoped_plugin_authority(scope, cwd, &global)?;
+    let installed =
+        authority.manager.inspect_installed_record(id, &execution).map_err(plugin_manager_error)?;
+    verify_plugin_pin(&authority.manager, configured, &installed)?;
+    if let Some(project) = &authority.project {
+        project.verify()?;
+    }
+    Ok(installed)
+}
+
 pub(crate) fn admin_effective_plugin_scope(
     loaded: &LoadedConfig,
     cwd: &Path,
@@ -2576,6 +2705,24 @@ pub(crate) fn verify_admin_effective_plugin_from_loaded(
         .get(id)
         .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
     verify_admin_effective_plugin(
+        cwd,
+        admin_effective_plugin_scope(loaded, cwd, id)?,
+        id,
+        configured,
+    )
+}
+
+pub(crate) fn inspect_admin_effective_plugin_from_loaded(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    let configured = loaded
+        .effective
+        .plugins
+        .get(id)
+        .ok_or_else(|| CliError::usage(format!("unknown plugin '{id}'")))?;
+    inspect_admin_effective_plugin(
         cwd,
         admin_effective_plugin_scope(loaded, cwd, id)?,
         id,
@@ -3203,27 +3350,18 @@ pub(crate) fn collect_doctor_checks(
             detail: supported_platform_status().1,
         },
         DoctorCheck {
-            id: "modelManifest".into(),
-            status: "ok".into(),
-            detail: into_markdown::model_manifest().map_or_else(
-                |error| error.to_string(),
-                |manifest| format!("{} bundle(s)", manifest.bundles.len()),
-            ),
-        },
-        DoctorCheck {
-            id: "modelFiles".into(),
+            id: "capabilityDownloads".into(),
             status: match &crate::proxy_env::download_route() {
-                crate::proxy_env::DownloadRoute::Direct => "unavailable".into(),
+                crate::proxy_env::DownloadRoute::Direct => "ok".into(),
                 crate::proxy_env::DownloadRoute::Proxy { .. } => "ok".into(),
                 crate::proxy_env::DownloadRoute::Invalid { .. } => "error".into(),
             },
             detail: match &crate::proxy_env::download_route() {
                 crate::proxy_env::DownloadRoute::Direct => {
-                    "library model manager is available; direct downloads need network reachability"
-                        .into()
+                    "official capability plugin downloads use direct HTTPS".into()
                 }
                 crate::proxy_env::DownloadRoute::Proxy { proxy, source, .. } => format!(
-                    "model downloads route HTTPS through the CONNECT proxy from {source}: {}",
+                    "capability plugin downloads route HTTPS through the CONNECT proxy from {source}: {}",
                     proxy.redacted_endpoint()
                 ),
                 crate::proxy_env::DownloadRoute::Invalid { variable, reason } => {
@@ -3237,17 +3375,28 @@ pub(crate) fn collect_doctor_checks(
             detail: std::env::temp_dir().display().to_string(),
         },
     ];
-    append_core_runtime_checks(&mut checks, loaded, cwd);
-    let diarization_available = crate::services::verify_diarization_runtime(loaded, cwd).is_ok();
-    checks.push(DoctorCheck {
-        id: "runtime.diarization".into(),
-        status: if diarization_available { "ok" } else { "missing" }.into(),
-        detail: if diarization_available {
-            "Silero VAD, 3D-Speaker, and ONNX Runtime passed local verification".into()
-        } else {
-            "use a complete package with the pinned ONNX Runtime worker, then run `into-md setup media` to install and verify Silero VAD and 3D-Speaker".into()
-        },
-    });
+    if verify_plugins {
+        append_core_runtime_checks(&mut checks, loaded, cwd);
+        let diarization_available =
+            crate::services::verify_diarization_runtime(loaded, cwd).is_ok();
+        checks.push(DoctorCheck {
+            id: "runtime.diarization".into(),
+            status: if diarization_available { "ok" } else { "missing" }.into(),
+            detail: if diarization_available {
+                "the diarization capability in the local speech plugin passed verification".into()
+            } else {
+                "run `into-md setup media` to install or repair the local speech capability plugin"
+                    .into()
+            },
+        });
+    } else {
+        append_initial_runtime_checks(&mut checks, loaded, cwd);
+        checks.push(DoctorCheck {
+            id: "runtime.diarization".into(),
+            status: "skipped".into(),
+            detail: "run diagnostics to verify the local speech plugin payload".into(),
+        });
+    }
     for (name, provider) in &loaded.effective.providers {
         checks.push(DoctorCheck {
             id: format!("providerEnvironment:{name}"),
@@ -3323,19 +3472,49 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
     }
 }
 
+fn append_initial_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConfig, cwd: &Path) {
+    for capability in into_markdown::core_capabilities()
+        .iter()
+        .filter(|capability| capability.kind == into_markdown::CapabilityKind::Runtime)
+    {
+        let Some(runtime) = capability.runtime else {
+            checks.push(DoctorCheck {
+                id: capability.id.into(),
+                status: "error".into(),
+                detail: "invalid core runtime catalog entry".into(),
+            });
+            continue;
+        };
+        if runtime.component == "pdfium" {
+            let available = verify_core_runtime(runtime.component, loaded, cwd);
+            checks.push(DoctorCheck {
+                id: capability.id.into(),
+                status: if available { "ok" } else { "missing" }.into(),
+                detail: if available {
+                    "pdfium runtime passed its local authority verification".into()
+                } else {
+                    runtime.install_hint.into()
+                },
+            });
+        } else {
+            checks.push(DoctorCheck {
+                id: capability.id.into(),
+                status: "skipped".into(),
+                detail: format!("run diagnostics to verify the {} payload", runtime.component),
+            });
+        }
+    }
+}
+
 fn verify_core_runtime(component: &str, loaded: &LoadedConfig, cwd: &Path) -> bool {
     match component {
         "pdfium" => into_markdown::default_pdfium_runtime_path()
             .is_some_and(|path| into_markdown::verify_pdfium_runtime(&path).is_ok()),
-        "onnxruntime" => crate::services::verify_ocr_runtime(loaded, cwd).is_ok(),
-        "whisper-small" => crate::services::verify_asr_runtime(loaded, cwd).is_ok(),
+        "official.ocr.ppocrv6" => crate::services::verify_ocr_runtime(loaded, cwd).is_ok(),
+        "official.media.whisper" => crate::services::verify_asr_runtime(loaded, cwd).is_ok(),
         "speaker-diarization" => crate::services::verify_diarization_runtime(loaded, cwd).is_ok(),
-        "legacy-office" => {
-            let context = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions::default(),
-                loaded.options.limits.clone(),
-            );
-            into_markdown::verify_packaged_legacy_office_runtime(&context).is_ok()
+        "official.legacy-office.libreoffice" => {
+            crate::services::verify_legacy_office_runtime(loaded, cwd).is_ok()
         }
         _ => false,
     }
@@ -3430,6 +3609,65 @@ struct AssetOutputPlan {
     external_directory: Option<PathBuf>,
 }
 
+fn invocation_capabilities(
+    plans: &[WorkPlan],
+    explicit_format: Option<InputFormat>,
+    extension_hint: Option<&str>,
+) -> crate::services::InvocationCapabilities {
+    let hinted = explicit_format.or_else(|| extension_hint.and_then(InputFormat::from_extension));
+    let mut formats = Vec::new();
+    for plan in plans {
+        let format = hinted.or_else(|| {
+            plan.item
+                .local_path
+                .as_deref()
+                .and_then(Path::extension)
+                .and_then(OsStr::to_str)
+                .and_then(InputFormat::from_extension)
+        });
+        let Some(format) = format else {
+            // Stdin and opaque URIs are detected after service assembly. Keep
+            // every configured route available rather than guessing.
+            return crate::services::InvocationCapabilities {
+                ocr: true,
+                transcription: true,
+                diarization: true,
+                legacy_office: true,
+            };
+        };
+        formats.push(format);
+    }
+    let visual = |format| {
+        matches!(
+            format,
+            InputFormat::Pdf
+                | InputFormat::Doc
+                | InputFormat::Docx
+                | InputFormat::Ppt
+                | InputFormat::Pptx
+                | InputFormat::Xls
+                | InputFormat::Xlsx
+                | InputFormat::Odt
+                | InputFormat::Ods
+                | InputFormat::Odp
+                | InputFormat::Epub
+                | InputFormat::Html
+                | InputFormat::Image
+                | InputFormat::OutlookMsg
+        )
+    };
+    let media =
+        |format| matches!(format, InputFormat::Audio | InputFormat::Video | InputFormat::YouTube);
+    crate::services::InvocationCapabilities {
+        ocr: formats.iter().copied().any(visual),
+        transcription: formats.iter().copied().any(media),
+        diarization: formats.iter().copied().any(media),
+        legacy_office: formats
+            .iter()
+            .any(|format| matches!(format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls)),
+    }
+}
+
 fn run_conversion(
     arguments: ConversionArgs,
     global: &crate::args::GlobalArgs,
@@ -3481,7 +3719,10 @@ fn run_conversion(
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
         ..into_markdown::ExecutionOptions::default()
     };
-    let services = crate::services::assemble(&loaded, &execution, &context.cwd)?;
+    let explicit_format = arguments.format.as_deref().map(parse_format).transpose()?;
+    let capability_needs =
+        invocation_capabilities(&plans, explicit_format, arguments.extension.as_deref());
+    let services = crate::services::assemble(&loaded, &execution, &context.cwd, capability_needs)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
@@ -3490,7 +3731,7 @@ fn run_conversion(
         services,
         options: loaded.options,
         hint: FormatHint {
-            format: arguments.format.as_deref().map(parse_format).transpose()?,
+            format: explicit_format,
             extension: arguments.extension,
             media_type: arguments.mime_type,
             charset: arguments.charset,
@@ -3610,9 +3851,6 @@ fn apply_asr_overrides(
     arguments: &ConversionArgs,
     options: &mut ConversionOptions,
 ) -> Result<(), CliError> {
-    if let Some(bundle) = &arguments.asr_model {
-        options.asr.model_bundle.clone_from(bundle);
-    }
     if let Some(language) = &arguments.asr_language {
         options.asr.language = Some(language.clone());
     }
@@ -3643,8 +3881,7 @@ fn apply_asr_overrides(
             && language.len() <= 35
             && language.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     });
-    if asr.model_bundle.is_empty()
-        || !(1..=8).contains(&asr.max_threads)
+    if !(1..=8).contains(&asr.max_threads)
         || asr.max_duration_ms == Some(0)
         || !(1..=100_000).contains(&asr.max_segments)
         || !(256 * 1024 * 1024..=2 * 1024 * 1024 * 1024).contains(&asr.max_native_memory_bytes)
@@ -3668,9 +3905,6 @@ fn apply_ocr_overrides(
             OcrPolicyArg::Auto => OcrPolicy::Auto,
             OcrPolicyArg::Always => OcrPolicy::Always,
         };
-    }
-    if let Some(bundle) = &arguments.ocr_model {
-        options.ocr.model_bundle = Some(bundle.clone());
     }
     if let Some(confidence) = arguments.ocr_min_confidence {
         config::validate_confidence(confidence)?;
@@ -4852,6 +5086,16 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
+    fn plugin_lifecycle_budget_covers_package_and_extracted_tree() {
+        let execution = plugin_lifecycle_execution_context();
+        assert_eq!(
+            execution.resource_limits().max_temporary_bytes,
+            MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES
+        );
+        assert!(MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES >= 2 * MAX_PLUGIN_PACKAGE_BYTES);
+    }
+
+    #[test]
     fn plugin_test_authority_never_falls_back_to_real_user_data() {
         let error = global_plugin_store_scope().unwrap_err();
         assert_eq!(error.code(), "internal");
@@ -5815,7 +6059,7 @@ mod tests {
         for (id, hint) in [
             ("runtime.pdfium", "PDFIUM_LIBRARY"),
             ("runtime.ocr", "setup ocr"),
-            ("runtime.legacy-office", "legacy Office runtime"),
+            ("runtime.legacy-office", "setup legacy-office"),
             ("runtime.asr", "setup media"),
             ("runtime.diarization", "setup media"),
         ] {
@@ -5858,68 +6102,6 @@ mod tests {
         assert_eq!(candidates[1]["format"], "json");
         assert_eq!(candidates[2]["format"], "docx");
         assert_eq!(candidates[1]["diagnostics"][0], "filename extension and media type disagree");
-    }
-
-    #[test]
-    fn default_model_pipeline_is_explicitly_installable() {
-        let manager = model_manager().unwrap();
-        manager.require_installable(&manager.manifest().default_bundle).unwrap();
-    }
-
-    #[test]
-    fn first_model_install_creates_the_missing_product_data_parent() {
-        let temporary = tempfile::tempdir().unwrap();
-        let data_dir = temporary.path().join("missing").join("into-markdown");
-        assert!(!data_dir.exists());
-
-        ensure_model_parent_at(&data_dir).unwrap();
-
-        assert!(data_dir.is_dir());
-        assert!(!data_dir.join("models").exists());
-    }
-
-    #[test]
-    fn model_management_json_and_offline_error_codes_are_stable() {
-        let (listed, _) = invoke(&["models", "--json"], true).unwrap();
-        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
-        assert_eq!(listed["schemaVersion"], 1);
-        assert_eq!(listed["models"][0]["availability"], "available");
-        assert_eq!(listed["models"][0]["state"], "not-installed");
-        assert_eq!(listed["models"][0]["ownership"], "component-set");
-
-        let (shown, _) =
-            invoke(&["models", "show", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap();
-        let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
-        assert_eq!(shown["schemaVersion"], 1);
-        assert_eq!(shown["status"]["state"], "not-installed");
-        assert!(shown["model"]["source_artifacts"].is_array());
-        assert!(shown["model"]["runtime_artifacts"].as_array().unwrap().is_empty());
-
-        let verify =
-            invoke(&["models", "verify", "pp-ocrv6-tiny-zh-en", "--json"], true).unwrap_err();
-        assert_eq!(verify.exit_code(), 6);
-        assert_eq!(verify.code(), "modelInvalid");
-        let path = invoke(&["models", "path", "pp-ocrv6-tiny-zh-en"], true).unwrap_err();
-        assert_eq!(path.exit_code(), 6);
-        assert_eq!(path.code(), "modelInvalid");
-        let unknown = invoke(&["models", "show", "../escape"], true).unwrap_err();
-        assert_eq!(unknown.exit_code(), 2);
-    }
-
-    #[test]
-    fn model_verification_failure_classes_are_stable() {
-        let missing = model_error(into_markdown::ModelManagerError::NotInstalled);
-        assert_eq!(missing.exit_code(), 6);
-        assert_eq!(missing.code(), "modelInvalid");
-        let corrupt = model_error(into_markdown::ModelManagerError::Corrupt("hash".into()));
-        assert_eq!(corrupt.exit_code(), 6);
-        assert_eq!(corrupt.code(), "modelInvalid");
-        let io = model_error(into_markdown::ModelManagerError::Io(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "denied",
-        )));
-        assert_eq!(io.exit_code(), 4);
-        assert_eq!(io.code(), "modelIo");
     }
 
     #[test]
@@ -5998,6 +6180,37 @@ mod tests {
         disambiguate_planned_outputs(&mut plans);
         assert_eq!(plans[0].output.as_deref(), Some(Path::new("out/left/same.md")));
         assert_eq!(plans[1].output.as_deref(), Some(Path::new("out/right/same.md")));
+    }
+
+    #[test]
+    fn service_assembly_is_scoped_to_reachable_input_capabilities() {
+        let plan = |name: &str| WorkPlan {
+            item: WorkItem {
+                input: InputRef::Path(PathBuf::from(name)),
+                display: name.into(),
+                relative: PathBuf::from(name),
+                root_label: "input".into(),
+                from_directory: false,
+                local_path: Some(PathBuf::from(name)),
+            },
+            output: None,
+            output_root: None,
+        };
+        let office = invocation_capabilities(&[plan("report.xls")], None, None);
+        assert!(office.legacy_office);
+        assert!(office.ocr);
+        assert!(!office.transcription);
+        assert!(!office.diarization);
+
+        let media = invocation_capabilities(&[plan("meeting.webm")], None, None);
+        assert!(media.transcription);
+        assert!(media.diarization);
+        assert!(!media.legacy_office);
+        assert!(!media.ocr);
+
+        let unknown = invocation_capabilities(&[plan("opaque")], None, None);
+        assert!(unknown.ocr && unknown.transcription && unknown.diarization);
+        assert!(unknown.legacy_office);
     }
 
     #[test]
@@ -6510,6 +6723,17 @@ api_key_env = "REMOTE_KEY"
         let mut command = Cli::command();
         let help = command.render_help().to_string();
         assert!(!help.contains("--api-key "));
+    }
+
+    #[test]
+    fn capability_candidates_preserve_provider_protocol_ids() {
+        let capabilities = vec!["vision-ocr".to_owned(), "audio-transcription".to_owned()];
+        assert_eq!(provider_capability_id(&capabilities, "ocr"), Some("vision-ocr"));
+        assert_eq!(
+            provider_capability_id(&capabilities, "transcription"),
+            Some("audio-transcription")
+        );
+        assert_eq!(provider_capability_id(&capabilities, "diarization"), None);
     }
 
     #[test]

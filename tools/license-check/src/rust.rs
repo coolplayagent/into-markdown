@@ -15,6 +15,7 @@ struct LockedPackage {
     version: String,
     source: Option<String>,
     checksum: Option<String>,
+    #[cfg(test)]
     #[serde(default)]
     dependencies: Vec<String>,
 }
@@ -64,7 +65,11 @@ pub(crate) fn load(
         normal_runtime,
         errors,
     );
-    let mut locked = BTreeSet::new();
+    let locked: BTreeSet<_> = lock
+        .package
+        .iter()
+        .map(|package| (package.name.clone(), package.version.clone()))
+        .collect();
     let mut components = Vec::new();
     for package in lock.package {
         if package.source.as_deref()
@@ -73,7 +78,6 @@ pub(crate) fn load(
             continue;
         }
         let key = (package.name, package.version);
-        locked.insert(key.clone());
         let Some(license) = approved.get(&key) else {
             errors.push(format!("unreviewed Cargo release component {}@{}", key.0, key.1));
             continue;
@@ -112,7 +116,6 @@ pub(crate) fn load(
         });
     }
     for (key, package) in required.local {
-        locked.insert(key.clone());
         let Some(license) = approved.get(&key) else {
             errors.push(format!("unreviewed local Cargo release component {}@{}", key.0, key.1));
             continue;
@@ -161,7 +164,9 @@ pub(crate) fn validate_bazel_bridge(repository: &std::path::Path, errors: &mut V
 }
 
 fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<String>) {
+    #[cfg(test)]
     let lock = std::fs::read_to_string(repository.join("Cargo.lock")).unwrap_or_default();
+    #[cfg(test)]
     let parsed: CargoLock = match toml::from_str(&lock) {
         Ok(value) => value,
         Err(error) => {
@@ -169,7 +174,14 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
             return;
         }
     };
-    let cargo_packages = workspace_runtime_closure(&parsed.package, "into-markdown-cli", errors);
+    #[cfg(not(test))]
+    let cargo_packages = crate::cargo_runtime::workspace_normal_packages(repository, errors);
+    #[cfg(test)]
+    let cargo_packages = if repository.join("Cargo.toml").is_file() {
+        crate::cargo_runtime::workspace_normal_packages(repository, errors)
+    } else {
+        workspace_runtime_closure(&parsed.package, "into-markdown-cli", errors)
+    };
     let mut bazel_packages = BTreeSet::new();
     let mut pending = vec!["//apps/cli:into-md".to_owned()];
     let mut visited = BTreeSet::new();
@@ -244,6 +256,46 @@ fn validate_bazel_runtime_graph(repository: &std::path::Path, errors: &mut Vec<S
     }
 }
 
+#[cfg(test)]
+fn workspace_runtime_closure(
+    packages: &[LockedPackage],
+    root: &str,
+    errors: &mut Vec<String>,
+) -> BTreeSet<String> {
+    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, package) in packages.iter().enumerate() {
+        by_name.entry(&package.name).or_default().push(index);
+    }
+    let Some(root_index) =
+        by_name.get(root).and_then(|values| (values.len() == 1).then_some(values[0]))
+    else {
+        return BTreeSet::new();
+    };
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![root_index];
+    while let Some(index) = pending.pop() {
+        if !seen.insert(index) {
+            continue;
+        }
+        for dependency in &packages[index].dependencies {
+            let name = dependency.split_whitespace().next().unwrap_or_default();
+            if let Some(candidates) = by_name.get(name)
+                && candidates.len() == 1
+            {
+                pending.push(candidates[0]);
+            } else {
+                errors.push(format!(
+                    "Cargo.lock workspace dependency {dependency:?} is ambiguous or missing"
+                ));
+            }
+        }
+    }
+    seen.into_iter()
+        .filter(|&index| packages[index].source.is_none())
+        .map(|index| packages[index].name.clone())
+        .collect()
+}
+
 fn validate_direct_external_deps(
     manifest_path: &std::path::Path,
     label: &str,
@@ -292,56 +344,6 @@ fn validate_direct_external_deps(
             "Cargo/Bazel direct external runtime dependencies differ for {label}: Cargo={expected:?}, Bazel={explicit:?}, macro={uses_macro}"
         ));
     }
-}
-
-fn workspace_runtime_closure(
-    packages: &[LockedPackage],
-    root: &str,
-    errors: &mut Vec<String>,
-) -> BTreeSet<String> {
-    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, package) in packages.iter().enumerate() {
-        by_name.entry(&package.name).or_default().push(index);
-    }
-    let Some(root_index) =
-        by_name.get(root).and_then(|values| (values.len() == 1).then_some(values[0]))
-    else {
-        return BTreeSet::new();
-    };
-    let mut seen = BTreeSet::new();
-    let mut pending = vec![root_index];
-    while let Some(index) = pending.pop() {
-        if !seen.insert(index) {
-            continue;
-        }
-        for dependency in &packages[index].dependencies {
-            let mut fields = dependency.split_whitespace();
-            let name = fields.next().unwrap_or_default();
-            let version = fields
-                .next()
-                .filter(|value| value.as_bytes().first().is_some_and(u8::is_ascii_digit));
-            let matches: Vec<_> = by_name
-                .get(name)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|candidate| {
-                    version.is_none_or(|value| packages[*candidate].version == value)
-                })
-                .collect();
-            if matches.len() == 1 {
-                pending.push(matches[0]);
-            } else {
-                errors.push(format!(
-                    "Cargo.lock workspace dependency {dependency:?} is ambiguous or missing"
-                ));
-            }
-        }
-    }
-    seen.into_iter()
-        .filter(|&index| packages[index].source.is_none())
-        .map(|index| packages[index].name.clone())
-        .collect()
 }
 
 fn named_rule_body<'a>(text: &'a str, kind: &str, name: &str) -> Option<&'a str> {
@@ -701,10 +703,10 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 
     #[test]
-    fn local_runtime_license_authority_is_fail_closed() {
+    fn optional_local_model_runtime_is_excluded_from_core_authority() {
         let (root, lock_text, lock, authority_text) = normal_authority_fixture();
         let mut authority: serde_json::Value = serde_json::from_str(&authority_text).unwrap();
-        authority["local_runtime_packages"] = serde_json::json!([]);
+        authority["local_runtime_packages"] = serde_json::json!(["whisper-rs@0.16.0"]);
         let errors = normal_authority_errors(&root, &lock_text, &lock, &authority);
         assert!(errors.iter().any(|error| error.contains("local runtime authority")));
 
@@ -712,9 +714,8 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             .unwrap()
             .replace("whisper-rs\t0.16.0\tUnlicense", "whisper-rs\t0.16.0\tApache-2.0");
         let mut errors = Vec::new();
-        load(&root, &lock_text, &approvals, &authority_text, &mut errors);
-        assert!(errors.iter().any(|error| {
-            error.contains("local Cargo release component whisper-rs@0.16.0 license differs")
-        }));
+        let components = load(&root, &lock_text, &approvals, &authority_text, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(!components.iter().any(|component| component.id == "cargo:whisper-rs@0.16.0"));
     }
 }

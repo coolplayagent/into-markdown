@@ -15,7 +15,7 @@ rust_binary(
         "//crates/http-transport:http_transport",
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process-plugin",
+        "//crates/process-plugin:process_plugin",
         "//crates/provider-plugin:provider-plugin",
     ] + all_crate_deps(normal = True),
     compile_data = ["//web/console:checked_assets"],
@@ -33,7 +33,7 @@ rust_test(
         "//crates/http-transport:http_transport",
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process-plugin",
+        "//crates/process-plugin:process_plugin",
         "//crates/provider-plugin:provider-plugin",
     ] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
@@ -59,7 +59,7 @@ rust_test(
     ],
     deps = [
         "//crates/api:into_markdown",
-        "//crates/process-plugin:process-plugin",
+        "//crates/process-plugin:process_plugin",
         "@crates//:serde_json",
         "@crates//:tempfile",
         "@crates//:zip",
@@ -81,7 +81,7 @@ rust_test(
     deps = [
         "//crates/plugin-manager:plugin_manager",
         "//crates/plugin-wasi:plugin_wasi",
-        "//crates/process-plugin:process-plugin",
+        "//crates/process-plugin:process_plugin",
         "@crates//:base64",
         "@crates//:ring",
         "@crates//:serde_json",
@@ -91,72 +91,7 @@ rust_test(
     ],
     edition = "2024",
     env = {"INTO_MD_BIN": "$(location :into-md)"},
-)
-
-# Explicit packaged-binary detector -> recognizer -> CLI quality gate.
-rust_test(
-    name = "ppocrv6_cli_quality",
-    srcs = ["tests/ppocrv6_cli_quality.rs"],
-    compile_data = ["//third_party/onnxruntime:manifest.json"],
-    crate_name = "ppocrv6_cli_quality",
-    data = [
-        ":into-md",
-        "//crates/onnxruntime:onnxruntime_worker",
-        "//fixtures:corpus",
-        "//models:ppocrv6_tiny_dict.txt",
-        "//third_party/onnxruntime:cpu_runtime",
-        "@ppocrv6_tiny_detector_onnx_model_archive//file",
-        "@ppocrv6_tiny_recognizer_onnx_model_archive//file",
-    ],
-    edition = "2024",
-    rustc_flags = ["--cfg=ppocrv6_cli_quality"],
-    rustc_env = select({
-        "//third_party/onnxruntime:is_linux_arm64": {
-            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
-            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
-            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
-            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_linux_arm64",
-            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
-            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
-        },
-        "//third_party/onnxruntime:is_linux_x86_64": {
-            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
-            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
-            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.so.1.29.0",
-            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_linux_x86_64",
-            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
-            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
-        },
-        "//third_party/onnxruntime:is_macos_arm64": {
-            "OCR_CLI_BINARY": "_main/apps/cli/into-md",
-            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
-            "OCR_CLI_ORT_LIBRARY": "lib/libonnxruntime.dylib",
-            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_macos_arm64",
-            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
-            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker",
-        },
-        "//third_party/onnxruntime:is_windows_x86_64": {
-            "OCR_CLI_BINARY": "_main/apps/cli/into-md.exe",
-            "OCR_CLI_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
-            "OCR_CLI_ORT_LIBRARY": "lib/onnxruntime.dll",
-            "OCR_CLI_ORT_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
-            "OCR_CLI_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
-            "OCR_CLI_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
-        },
-        "//conditions:default": {
-            "OCR_CLI_BINARY": "unsupported",
-            "OCR_CLI_DETECTOR_REPOSITORY": "unsupported",
-            "OCR_CLI_ORT_LIBRARY": "unsupported",
-            "OCR_CLI_ORT_REPOSITORY": "unsupported",
-            "OCR_CLI_RECOGNIZER_REPOSITORY": "unsupported",
-            "OCR_CLI_WORKER": "unsupported",
-        },
-    }),
-    tags = ["manual"],
-    deps = [
-        "//crates/api:into_markdown",
-        "@crates//:serde_json",
-        "@crates//:tempfile",
-        "@crates//:unicode-normalization",
-    ],
+    # This test invokes the production process-plugin sandbox through the CLI.
+    # Bazel's macOS sandbox cannot be nested with sandbox_init(3).
+    tags = ["no-sandbox"],
 )

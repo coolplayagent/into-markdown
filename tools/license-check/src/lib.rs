@@ -1588,6 +1588,9 @@ fn validate_inventory(
         "pdfium",
         "ffmpeg",
         "libreoffice-macos-arm64",
+        "libreoffice-linux-x86_64",
+        "libreoffice-linux-arm64",
+        "libreoffice-windows-x86_64",
         "wasmtime",
         "generated-onnx-models",
         "distribution-fonts",
@@ -1773,8 +1776,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "1cf3ec6b97e84651d2d8078ff30d267dd703f4a0fe9ecc3900ccb648b7e73259";
-    const TREE_SHA256: &str = "4f0dec02899efbea4d475058d4d9150b337cf88dc31c076aa19631ae12c6155f";
+        "957ff9dcfc23a69d30976fac3455bae6741af83a6428289bbe6f23c40d2e64e6";
+    const TREE_SHA256: &str = "370d7e08d60df3467c3b1e32e1a8140ff1a6d542692414ff6780e442324d96e0";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
@@ -1804,7 +1807,7 @@ fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
         || authority.crates_io_sha256
             != "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
         || authority.patch_scope
-            != "Own abort/progress callback allocations in FullParams and release them on every drop path"
+            != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3 exactly as upstream build.rs does"
         || authority.tree_digest_algorithm
             != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
         || authority.tree_sha256 != TREE_SHA256

@@ -3,7 +3,7 @@ import {
   CheckCircle2, CircleAlert, FileAudio, LoaderCircle, Mic, Pause, Play, Radio,
   Settings2, Square, Trash2, Upload, Users, X,
 } from "lucide-react";
-import type { ApiClient, ComponentStatus, MeetingOptions, TaskRecord } from "./api";
+import type { ApiClient, CapabilityAdmin, ComponentStatus, MeetingOptions, TaskRecord } from "./api";
 import { ApiError, meetingOptionsForLocale } from "./api";
 import { AudioSetupDialog } from "./conversion-controls";
 import { useI18n, type MessageKey } from "./i18n";
@@ -89,6 +89,12 @@ function progressMessage(stage: string | undefined, message: string | null | und
   return "recognizingContent";
 }
 
+function meetingCapabilitySource(source?: string) {
+  if (!source || source === "off") return "Off";
+  const [kind, identity = source] = source.split(":", 2);
+  return `${kind === "provider" ? "Provider" : "Local"} · ${identity.split("/", 1)[0]}`;
+}
+
 export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
   const { locale, t } = useI18n();
   const input = useRef<HTMLInputElement>(null);
@@ -111,6 +117,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [options, setOptions] = useState<MeetingOptions>(() => meetingOptionsForLocale(locale));
   const [audioStatus, setAudioStatus] = useState<ComponentStatus>();
   const [diarizationStatus, setDiarizationStatus] = useState<ComponentStatus>();
+  const [transcriptionCapability, setTranscriptionCapability] = useState<CapabilityAdmin>();
+  const [diarizationCapability, setDiarizationCapability] = useState<CapabilityAdmin>();
   const [setup, setSetup] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
@@ -131,9 +139,11 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   }, [locale]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const [status, page] = await Promise.all([api.status(signal), api.listTasks({ limit: 100 }, signal)]);
+    const [status, page, admin] = await Promise.all([api.status(signal), api.listTasks({ limit: 100 }, signal), api.admin(signal)]);
     setAudioStatus(status.audioTranscription);
     setDiarizationStatus(status.speakerDiarization);
+    setTranscriptionCapability(admin.capabilities.find((item) => item.id === "transcription"));
+    setDiarizationCapability(admin.capabilities.find((item) => item.id === "diarization"));
     if (!diarizationTouched.current) {
       setOptions((current) => ({
         ...current, diarize: status.speakerDiarization?.available === true,
@@ -343,6 +353,10 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const submit = async () => {
     if (!file || task && !TERMINAL.has(task.status)) return;
     if (audioStatus?.available !== true) { setSetup(true); setMessage(t("audioNeedsSetupNearby")); return; }
+    const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
+    if (remoteTranscriptionSelected && !options.authorizeProvider) {
+      setMessage(t("authorizationRequired")); return;
+    }
     setMessage("");
     try {
       const next = await api.uploadMeeting(file, options); setTask(next); setStage(t("preparingAudio"));
@@ -376,6 +390,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const readyMessage: MessageKey = recordingSource === "system" ? "computerAudioReady"
     : recordingSource === "mixed" ? "mixedAudioReady" : "microphoneReady";
   const progress = task ? Math.round(task.progressMillionths / 10_000) : 0;
+  const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
 
   return <section className="meeting-route" aria-labelledby="meeting-title">
     <div className="page-heading compact-heading"><div><p className="eyebrow">LOCAL MEETING</p><h1 id="meeting-title">{t("meetingNotes")}</h1></div><p>{t("meetingIntro")}</p></div>
@@ -405,8 +420,9 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       <section className="card transcript-card" aria-labelledby="transcript-options-title">
         <div className="card-heading"><div><p className="section-kicker">{t("transcript")}</p><h2 id="transcript-options-title">{t("transcriptSettings")}</h2></div><Settings2 size={20} /></div>
         <div className="meeting-options">
-          <label className="transcript-language"><span>{t("transcriptLanguage")}</span><select value={options.transcriptLanguage} onChange={(event) => { languageTouched.current = true; setOptions((current) => ({ ...current, transcriptLanguage: event.target.value as MeetingOptions["transcriptLanguage"] })); }}><option value="auto">{t("automaticDetection")}</option><option value="zh-Hans">{t("simplifiedChinese")}</option><option value="zh-Hant">{t("traditionalChinese")}</option><option value="en">{t("english")}</option></select><small>{t("transcriptLanguageHelp")}</small></label>
-          <div className="meeting-option-row"><span><Users size={18} /><span><strong>{t("distinguishSpeakers")}</strong><small>{diarizationStatus?.available ? t("anonymousSpeakerLabels") : t("speakerSetupNeeded")}</small></span></span><label className={`switch ${diarizationStatus?.available ? "" : "unavailable"}`}><span className="visually-hidden">{t("distinguishSpeakers")}</span><input type="checkbox" disabled={!diarizationStatus?.available} checked={options.diarize && diarizationStatus?.available === true} onChange={(event) => { diarizationTouched.current = true; setOptions((current) => ({ ...current, diarize: event.target.checked })); }} /><span /></label></div>
+          <label className="transcript-language"><span>{t("transcriptLanguage")}</span><select value={options.transcriptLanguage} onChange={(event) => { languageTouched.current = true; setOptions((current) => ({ ...current, transcriptLanguage: event.target.value as MeetingOptions["transcriptLanguage"] })); }}><option value="auto">{t("automaticDetection")}</option><option value="zh-Hans">{t("simplifiedChinese")}</option><option value="zh-Hant">{t("traditionalChinese")}</option><option value="en">{t("english")}</option></select><small>{t("transcriptLanguageHelp")} · {meetingCapabilitySource(transcriptionCapability?.currentSource)}</small></label>
+          {remoteTranscriptionSelected && <label className="check grant meeting-provider-grant"><input type="checkbox" checked={options.authorizeProvider} onChange={(event) => { setOptions((current) => ({ ...current, authorizeProvider: event.target.checked })); setMessage(""); }} />{t("authorizeMeetingProvider")}</label>}
+          <div className="meeting-option-row"><span><Users size={18} /><span><strong>{t("distinguishSpeakers")}</strong><small>{diarizationStatus?.available ? `${t("anonymousSpeakerLabels")} · ${meetingCapabilitySource(diarizationCapability?.currentSource)}` : t("speakerSetupNeeded")}</small></span></span><label className={`switch ${diarizationStatus?.available ? "" : "unavailable"}`}><span className="visually-hidden">{t("distinguishSpeakers")}</span><input type="checkbox" disabled={!diarizationStatus?.available} checked={options.diarize && diarizationStatus?.available === true} onChange={(event) => { diarizationTouched.current = true; setOptions((current) => ({ ...current, diarize: event.target.checked })); }} /><span /></label></div>
           {options.diarize && diarizationStatus?.available === true && <label className="expected-speakers"><span>{t("expectedSpeakers")}</span><select value={options.expectedSpeakers ?? ""} onChange={(event) => setOptions((current) => ({ ...current, expectedSpeakers: event.target.value ? Number(event.target.value) : null }))}><option value="">{t("automatic")}</option>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label>}
           {(audioStatus?.available === false || diarizationStatus?.available === false) && <button className="prepare-media" type="button" onClick={() => setSetup(true)}><CircleAlert size={16} />{t("prepareAudioComponents")}</button>}
         </div>

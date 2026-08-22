@@ -28,17 +28,16 @@ is transformed into the image's page rectangle before rendering.
 
 ## 本地 OCR
 
-完整 `pp-ocrv6-tiny-zh-en` 是可安装的 detector + recognizer pipeline。两个组件精确绑定
+本地 OCR 插件内置完整 `pp-ocrv6-tiny-zh-en` detector + recognizer pipeline。两个组件精确绑定
 PaddleOCR commit `2661c7c0ef5c613e8f93c6e93b2e052399f0f854`、官方 ONNX TAR、
 归档内 ONNX/config 及 Apache-2.0；recognizer 另绑定同一 commit 的字符表。模型产物不提交
-到 Git。`ModelManager` 只有在两个组件均安装并逐文件校验后才把 pipeline 报为 installed；
-CLI 的 `models install` 使用固定来源/大小/hash transport，普通转换不下载模型。
-查询、校验、平台目录、原子安装与清理契约见[本地模型管理](models.md)。
+到 Git。插件只有在包签名、目标 ABI、两个模型组件及 ONNX Runtime 均逐文件校验后才进入
+ready；用户通过 `setup ocr` 安装或修复整个插件，普通转换不下载任何资源。
+安装、校验、原子更新与清理契约见[能力插件](capability-plugins.md)。
 
-普通 Cargo/Bazel 构建和测试既不下载模型，也不加载推理运行时。显式 manual targets
-`//crates/api:ppocrv6_image_quality` 与 `//apps/cli:ppocrv6_cli_quality` 才取得固定 detector、
-recognizer 与平台 ORT，经过产品安装事务、resolver、worker、公开 API/CLI 和统一 IR 执行
-完整真实推理；未选择这些目标时对应 Cargo integration tests 明确显示为 ignored。
+普通 Cargo/Bazel 构建和测试既不下载模型，也不加载推理运行时。显式 API 质量 target
+`//crates/api:ppocrv6_image_quality` 校验固定 detector、recognizer 与平台 ORT；发布验收则必须
+从已安装 Core 通过公开 `setup ocr` 安装签名插件，再经 CLI/Web 和统一 IR 执行完整真实推理。
 
 检测模块只接收调用方已解码且明确描述的 `PixelView`：宽、高、row stride、
 `Gray8`/`RGB8`/`BGR8`/`RGBA8`/`BGRA8`、八种 EXIF 方向和借用的像素字节。
@@ -122,7 +121,7 @@ Markdown。
 recognizer authority hash、固定内存退化算法和 seed、NFC+去 whitespace 规范化、431 个评价
 字符及 aggregate CER `≤ 0.15` 锁成机器权威。显式 manual target
 `//crates/onnxruntime:ppocrv6_merge_quality` 仍执行官方 recognizer 与 merge/IR 的独立权威；
-完整 detector→recognizer 产品质量由上述 API/CLI targets 单独覆盖。普通 Cargo/Bazel 构建
+完整 detector→recognizer 产品质量由 API 质量 target 与发布包 E2E 共同覆盖。普通 Cargo/Bazel 构建
 不会请求模型或 ORT 下载。
 
 `OcrPolicy` 可取 `off`、`auto` 或 `always`，默认值为 `auto`。自动模式下，

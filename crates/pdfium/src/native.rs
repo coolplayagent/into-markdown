@@ -150,6 +150,7 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDF_GetLastError",
 ];
 const MAX_RUNTIME_LIBRARY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_RELEASE_PROJECTION_BYTES: u64 = 32 * 1024 * 1024;
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +179,40 @@ struct ManifestTarget {
     library_sha256: String,
     format_pattern: String,
     allowed_dependencies: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseProjection {
+    schema_version: u64,
+    target: String,
+    files: Vec<ReleaseProjectionFile>,
+    #[serde(default)]
+    native_transformations: Vec<NativeTransformation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseProjectionFile {
+    path: String,
+    bytes: u64,
+    sha256: String,
+    kind: String,
+    component_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeTransformation {
+    component_id: String,
+    path: String,
+    kind: String,
+    source_bytes: u64,
+    source_sha256: String,
+    output_bytes: u64,
+    output_sha256: String,
+}
+
+struct SignedDerivativeAuthority {
+    bytes: u64,
+    sha256: String,
 }
 
 /// Supported runtime target.
@@ -1873,6 +1908,7 @@ struct Snapshot {
     path: PathBuf,
     file: Option<File>,
     bytes: Vec<u8>,
+    load_by_path: bool,
 }
 
 impl Snapshot {
@@ -1888,6 +1924,9 @@ impl Snapshot {
     fn load_path(&self) -> PathBuf {
         use std::os::fd::AsRawFd as _;
         debug_assert_eq!(self.path.parent(), Some(self.directory.path()));
+        if self.load_by_path {
+            return self.path.clone();
+        }
         let fd = self.file.as_ref().expect("snapshot file remains open").as_raw_fd();
         if cfg!(target_os = "macos") {
             PathBuf::from(format!("/dev/fd/{fd}"))
@@ -1954,22 +1993,35 @@ fn validated_snapshot_with_hook(
     if !opened_metadata.is_file() {
         return Err(Error::InvalidPath("opened runtime is not a regular file".into()));
     }
-    if opened_metadata.len() != artifact.library_size {
+    let signed_authority = if opened_metadata.len() == artifact.library_size {
+        None
+    } else {
+        signed_derivative_authority(&canonical, artifact)
+    };
+    let expected_size =
+        signed_authority.as_ref().map_or(artifact.library_size, |authority| authority.bytes);
+    if opened_metadata.len() != expected_size {
         return Err(Error::ResourceLimit {
             limit: "pdfium_runtime_bytes",
             actual: opened_metadata.len(),
-            maximum: artifact.library_size,
+            maximum: expected_size,
         });
     }
     after_metadata();
-    let bounded = artifact
-        .library_size
+    let bounded = expected_size
         .checked_add(1)
         .ok_or_else(|| Error::BinaryValidation("runtime size bound overflowed".into()))?;
+    if bounded > MAX_RUNTIME_LIBRARY_BYTES + 1 {
+        return Err(Error::ResourceLimit {
+            limit: "pdfium_runtime_bytes",
+            actual: expected_size,
+            maximum: MAX_RUNTIME_LIBRARY_BYTES,
+        });
+    }
     let capacity = usize::try_from(bounded).map_err(|_| Error::ResourceLimit {
         limit: "pdfium_runtime_bytes",
         actual: bounded,
-        maximum: artifact.library_size,
+        maximum: expected_size,
     })?;
     let mut bytes = Vec::new();
     bytes
@@ -1979,15 +2031,19 @@ fn validated_snapshot_with_hook(
         .take(bounded)
         .read_to_end(&mut bytes)
         .map_err(|error| Error::InvalidPath(error.to_string()))?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != artifact.library_size {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != expected_size {
         return Err(Error::ResourceLimit {
             limit: "pdfium_runtime_bytes",
             actual: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            maximum: artifact.library_size,
+            maximum: expected_size,
         });
     }
     let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != artifact.library_sha256 {
+    let digest_matches = actual == artifact.library_sha256
+        || signed_authority.as_ref().is_some_and(|authority| {
+            actual == authority.sha256 && verify_platform_signature(&canonical)
+        });
+    if !digest_matches {
         return Err(Error::DigestMismatch { expected: artifact.library_sha256.clone(), actual });
     }
     drop(file);
@@ -2008,7 +2064,92 @@ fn validated_snapshot_with_hook(
     drop(snapshot_file);
     let snapshot_file = open_locked(&snapshot_path)?;
     after_snapshot();
-    Ok(Snapshot { directory, path: snapshot_path, file: Some(snapshot_file), bytes })
+    Ok(Snapshot {
+        directory,
+        path: snapshot_path,
+        file: Some(snapshot_file),
+        bytes,
+        load_by_path: signed_authority.is_some(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn signed_derivative_authority(
+    path: &Path,
+    artifact: &Artifact,
+) -> Option<SignedDerivativeAuthority> {
+    let root = path.parent()?.parent()?.parent()?;
+    let manifest_path = root.join("archive-manifest.json");
+    let metadata = fs::symlink_metadata(&manifest_path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_RELEASE_PROJECTION_BYTES
+    {
+        return None;
+    }
+    let projection: ReleaseProjection =
+        serde_json::from_slice(&fs::read(manifest_path).ok()?).ok()?;
+    let relative = path.strip_prefix(root).ok()?.to_str()?;
+    if projection.schema_version != 1 || projection.target != "aarch64-apple-darwin" {
+        return None;
+    }
+    let mut files = projection.files.iter().filter(|file| {
+        file.path == relative
+            && file.kind == "component"
+            && file.component_id.as_deref() == Some("pdfium")
+    });
+    let file = files.next()?;
+    if files.next().is_some() {
+        return None;
+    }
+    let mut transformations = projection.native_transformations.iter().filter(|item| {
+        item.component_id == "pdfium"
+            && item.path == relative
+            && item.kind == "apple-code-sign"
+            && item.source_bytes == artifact.library_size
+            && item.source_sha256 == artifact.library_sha256
+            && item.output_bytes == file.bytes
+            && item.output_sha256 == file.sha256
+    });
+    let transformation = transformations.next()?;
+    if transformations.next().is_some()
+        || transformation.output_bytes > MAX_RUNTIME_LIBRARY_BYTES
+        || transformation.output_sha256.len() != 64
+        || !transformation.output_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(SignedDerivativeAuthority {
+        bytes: transformation.output_bytes,
+        sha256: transformation.output_sha256.clone(),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn signed_derivative_authority(
+    _path: &Path,
+    _artifact: &Artifact,
+) -> Option<SignedDerivativeAuthority> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn verify_platform_signature(path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict", "--verbose=0"])
+        .arg(path)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn verify_platform_signature(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(unix)]

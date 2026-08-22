@@ -35,6 +35,7 @@ pub struct RuntimeConfig {
     authority_path: PathBuf,
     bundle_root: PathBuf,
     worker_executable: PathBuf,
+    inherited_process_sandbox: bool,
 }
 
 impl RuntimeConfig {
@@ -49,13 +50,29 @@ impl RuntimeConfig {
             authority_path: authority_path.into(),
             bundle_root: bundle_root.into(),
             worker_executable: worker_executable.into(),
+            inherited_process_sandbox: false,
         }
+    }
+
+    /// Declare that the caller already runs inside the authenticated process-plugin sandbox.
+    ///
+    /// This is required on macOS because Seatbelt profiles cannot be initialized twice in one
+    /// process tree. The compatibility worker still applies its resource limits, while the
+    /// process-plugin profile remains inherited by the worker and `LibreOffice` child.
+    #[must_use]
+    pub const fn with_inherited_process_sandbox(mut self) -> Self {
+        self.inherited_process_sandbox = true;
+        self
     }
 
     /// Authority JSON path.
     #[must_use]
     pub fn authority_path(&self) -> &Path {
         &self.authority_path
+    }
+
+    pub(crate) const fn inherited_process_sandbox(&self) -> bool {
+        self.inherited_process_sandbox
     }
 }
 
@@ -111,6 +128,7 @@ pub(crate) struct VerifiedBundle {
 
 #[derive(Clone)]
 pub(crate) struct VerifiedContainer {
+    pub format: String,
     pub image_relative: String,
     pub mount_relative: String,
     pub kit_sha256: String,
@@ -393,17 +411,21 @@ fn validate_target(target: &Target, target_name: &str) -> Result<(), ConversionE
 }
 
 fn valid_process_authority(target: &Target, target_name: &str) -> bool {
-    if target_name == "aarch64-apple-darwin" && target.container.is_some() {
+    if target_name == "aarch64-apple-darwin"
+        && let Some(container) = &target.container
+    {
         let Some(child) = &target.sandbox.compatibility_child else {
             return false;
         };
+        let expected_child =
+            format!("{}/LibreOffice.app/Contents/MacOS/soffice", container.mount_path);
         return target.limits.process_limit == 2
             && target.sandbox.network == "denyIp"
             && target.sandbox.child_processes == "exactCompatibilityChild"
             && child.maximum_instances == 1
             && child.local_ip == "deny"
             && child.local_ipc == "exactEffectiveUidSessionUnixSocketOnly"
-            && child.executable == "container/LibreOffice.app/Contents/MacOS/soffice";
+            && child.executable == expected_child;
     }
     target.limits.process_limit == 1
         && target.sandbox.network == "deny"
@@ -416,9 +438,10 @@ fn container_authority_is_valid(target: &Target, target_name: &str) -> bool {
         return true;
     };
     target_name == "aarch64-apple-darwin"
-        && container.format == "udif"
-        && container.image_bytes == target.artifact_bytes
-        && container.image_sha256 == target.artifact_sha256
+        && matches!(container.format.as_str(), "udif" | "zip")
+        && (container.format != "udif"
+            || (container.image_bytes == target.artifact_bytes
+                && container.image_sha256 == target.artifact_sha256))
         && is_sha256(&container.image_sha256)
         && is_sha256(&container.kit_sha256)
         && safe_relative(&container.image_path)

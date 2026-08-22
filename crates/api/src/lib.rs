@@ -949,6 +949,7 @@ mod tests {
             ocr: Some(service_calls.clone()),
             transcriber: Some(service_calls.clone()),
             diarizer: None,
+            legacy_office: None,
             ai: Some(service_calls.clone()),
             nested: None,
         };

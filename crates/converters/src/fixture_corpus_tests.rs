@@ -270,6 +270,7 @@ fn execute(
         ocr: Some(requests.clone()),
         transcriber: Some(requests.clone()),
         diarizer: None,
+        legacy_office: None,
         ai: Some(requests.clone()),
         nested: Some(Arc::new(HtmlNested)),
     };

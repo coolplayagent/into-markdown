@@ -112,7 +112,7 @@ mod quality {
             fs::write(&artifact, corrupt).unwrap();
             let error = service_error(&service_config, &options, &context);
             assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
-            assert!(error.to_string().contains("models install pp-ocrv6-tiny-zh-en"));
+            assert!(error.to_string().contains("repair or reinstall the OCR plugin"));
             assert_eq!(context.reserved_memory_bytes(), 0);
             fs::write(&artifact, exact).unwrap();
             manager.verify("pp-ocrv6-tiny-zh-en").unwrap();

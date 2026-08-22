@@ -112,8 +112,10 @@ pub(crate) fn compare_cli(
     if reported != authority.entries {
         return Err("installed CLI formats differ from release catalog authority".into());
     }
-    if reported.iter().any(|entry| entry.status != "available" || entry.source != "core") {
-        return Err("installed CLI catalog contains non-production core entries".into());
+    if reported.iter().any(|entry| {
+        entry.status != "available" || !matches!(entry.source.as_str(), "core" | "plugin")
+    }) {
+        return Err("installed CLI catalog contains a non-production source or status".into());
     }
     Ok(())
 }

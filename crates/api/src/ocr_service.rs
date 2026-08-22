@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// Explicit local paths required to assemble the production OCR service.
 #[derive(Debug, Clone)]
 pub struct InstalledOcrConfig {
-    /// Writable model-component root managed by `into-md models`.
+    /// Plugin-private model-component root.
     pub writable_model_root: PathBuf,
     /// Optional read-only packaged model-component root.
     pub bundled_model_root: Option<PathBuf>,
@@ -54,9 +54,7 @@ pub fn installed_ocr_service(
         error => ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
             detail: format!(
-                "installed OCR pipeline verification failed ({error}); install it with `into-md \
-                 models install {}`",
-                config.model_bundle
+                "installed OCR capability verification failed ({error}); repair or reinstall the OCR plugin"
             ),
         },
     })?;
@@ -170,14 +168,14 @@ mod tests {
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let missing = failure(&config(&root.0), &options, &context);
         assert_eq!(missing.code(), ErrorCode::ComponentUnavailable);
-        assert!(missing.to_string().contains("models install pp-ocrv6-tiny-zh-en"));
+        assert!(missing.to_string().contains("repair or reinstall the OCR plugin"));
         assert!(!missing.to_string().contains("missing-library"));
         assert_eq!(context.reserved_memory_bytes(), 0);
 
         fs::create_dir_all(root.0.join("models/pp-ocrv6-tiny-detector-onnx")).unwrap();
         let corrupt = failure(&config(&root.0), &options, &context);
         assert_eq!(corrupt.code(), ErrorCode::ComponentUnavailable);
-        assert!(corrupt.to_string().contains("models install pp-ocrv6-tiny-zh-en"));
+        assert!(corrupt.to_string().contains("repair or reinstall the OCR plugin"));
         assert!(!corrupt.to_string().contains("missing-library"));
         assert_eq!(context.reserved_memory_bytes(), 0);
     }

@@ -1,4 +1,4 @@
-use crate::{CapabilityKind, PluginCapabilityDescriptor, PluginManifest};
+use crate::{CapabilityKind, PluginManifest};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -213,15 +213,13 @@ impl CapabilityId {
     }
 }
 
-/// One configured provider and optional provider-owned model bundle.
+/// One configured self-contained local provider capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderReference {
     /// Plugin package ID.
     pub plugin_id: String,
     /// Package-local capability ID.
     pub capability_id: String,
-    /// Optional package-local model bundle ID.
-    pub model_bundle: Option<String>,
 }
 
 /// Deterministic primary and ordered readiness fallback configuration.
@@ -255,8 +253,6 @@ pub struct ProviderBinding {
     pub capability_id: String,
     /// Stable provenance provider ID.
     pub provider_id: String,
-    /// Selected package-local model bundle.
-    pub model_bundle: Option<String>,
     /// Immutable installed package root.
     pub install_root: PathBuf,
 }
@@ -393,30 +389,14 @@ impl CapabilityRegistry {
         if capability.kind != kind {
             return Err("capability-kind-mismatch");
         }
-        validate_model(capability, reference.model_bundle.as_deref())?;
         Ok(ProviderBinding {
             plugin_id: plugin.manifest.id.clone(),
             plugin_version: plugin.manifest.version.clone(),
             manifest_sha256: plugin.manifest_sha256.clone(),
             capability_id: capability.id.clone(),
             provider_id: capability.provider_id.clone(),
-            model_bundle: reference.model_bundle.clone(),
             install_root: plugin.install_root.clone(),
         })
-    }
-}
-
-fn validate_model(
-    capability: &PluginCapabilityDescriptor,
-    selected: Option<&str>,
-) -> Result<(), &'static str> {
-    match selected {
-        Some(model) if capability.model_bundles.iter().any(|candidate| candidate == model) => {
-            Ok(())
-        }
-        Some(_) => Err("model-unsupported"),
-        None if capability.model_bundles.len() <= 1 => Ok(()),
-        None => Err("model-selection-required"),
     }
 }
 
@@ -429,8 +409,8 @@ fn valid_sha256(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        CAPABILITY_PROTOCOL, HostApiRange, PluginFileDescriptor, PluginPermissions,
-        PluginTargetDescriptor, ResourceEnvelope,
+        CAPABILITY_PROTOCOL, HostApiRange, PluginCapabilityDescriptor, PluginFileDescriptor,
+        PluginPermissions, PluginTargetDescriptor, ResourceEnvelope,
     };
 
     fn plugin(id: &str, capability: &str, provider: &str) -> PluginManifest {
@@ -457,7 +437,6 @@ mod tests {
                 provider_id: provider.into(),
                 languages: vec![],
                 media_types: vec!["image/png".into()],
-                model_bundles: vec![],
                 resources: ResourceEnvelope {
                     max_input_bytes: 1024,
                     max_output_bytes: 1024,
@@ -466,7 +445,6 @@ mod tests {
                     timeout_ms: 1000,
                 },
             }],
-            models: vec![],
             permissions: PluginPermissions::default(),
             licenses: vec!["Apache-2.0".into()],
         }
@@ -496,12 +474,10 @@ mod tests {
             primary: ProviderReference {
                 plugin_id: "primary.plugin".into(),
                 capability_id: "ocr".into(),
-                model_bundle: None,
             },
             fallbacks: vec![ProviderReference {
                 plugin_id: "fallback.plugin".into(),
                 capability_id: "ocr".into(),
-                model_bundle: None,
             }],
         };
         assert!(

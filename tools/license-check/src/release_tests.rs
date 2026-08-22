@@ -85,6 +85,7 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
         ],
         license_materials: vec![],
         ffmpeg_evidence: None,
+        native_transformations: vec![],
     };
     install_base_materials(&mut projection, &inputs);
     projection
@@ -447,6 +448,7 @@ fn full_offline_whisper_projection_is_hash_and_license_bound() {
         files: files.clone(),
         license_materials: vec![],
         ffmpeg_evidence: None,
+        native_transformations: vec![],
     };
     push_text_material(
         &mut projection,
@@ -795,6 +797,20 @@ fn schemas_reject_unknown_fields_and_unfixed_hashes() {
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("lacks a fixed SHA-256")));
+}
+
+#[test]
+fn modular_core_catalog_is_an_allowed_project_release_file() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.push(ArchiveFile {
+        path: "share/into-markdown/plugins/official-publisher.json".into(),
+        bytes: 128,
+        sha256: "a".repeat(64),
+        kind: ArchiveFileKind::Project,
+        component_id: None,
+        embedded_components: vec![],
+    });
+    verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
 }
 
 #[test]

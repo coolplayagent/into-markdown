@@ -17,7 +17,8 @@ into-md [选项] <输入...>
 ```text
 into-md ui
 into-md formats
-into-md models
+into-md capabilities
+into-md setup
 into-md providers
 into-md plugins
 into-md config
@@ -148,11 +149,9 @@ into-md <INPUT...>
 
 ```text
 --ocr <off|auto|always>
---ocr-model <BUNDLE_ID>
 --ocr-language <BCP47>
 --ocr-min-confidence <0..1>
 
---asr-model <BUNDLE_ID>
 --asr-language <WHISPER_LANGUAGE>
 --chinese-script <preserve|simplified|traditional>
 --asr-threads <1..8>
@@ -264,42 +263,37 @@ into-md formats detect <INPUT> [-f <FORMAT>] [--extension <EXT>]
 文本输出包含 `DETECTOR` 和 `DIAGNOSTICS` 列；JSON 候选包含稳定的
 `detectorId`、`reason` 和 `diagnostics` 字段。候选顺序是稳定契约。
 
-### 模型
+### 能力
 
 ```text
-into-md models [--json]
-into-md models show <ID> [--json]
-into-md models install <ID> [--insecure]
-into-md models verify <ID> [--json]
-into-md models remove <ID>
-into-md models path <ID>
+into-md capabilities [--json]
+into-md capabilities show <legacy-office|ocr|transcription|diarization> [--json]
+into-md capabilities use <CAPABILITY> --source <SOURCE_REF> [--scope <global|project>]
+into-md capabilities reset <CAPABILITY> [--scope <global|project>]
 ```
 
-转换过程不会自动下载模型。下载必须使用固定来源和 SHA-256，先校验再原子安装。
-只读发布模型不能被删除。`list`、`show`、`verify`、`path` 全程离线；JSON 输出包含
-`schemaVersion`、availability、state、ownership 和安装路径。完整 pipeline bundle
-`pp-ocrv6-tiny-zh-en` 与独立 detector/recognizer 组件均为 `available`。`models install`
-是唯一允许模型下载的入口，只接受清单固定的 HTTPS host、archive/member 大小与 SHA-256，
-并通过原子事务安装两个组件；转换命令绝不触发下载。安装后 CLI 的离线 `verify`、`path`
-和 `remove` 管理同一状态，转换调用只在固定 ONNX Runtime/worker 与两个组件均验证成功后
-装配 OCR。
-直连不可达时，`models install` 支持 CONNECT 代理路由：`INTO_MD_HTTPS_PROXY`（回退
+`SOURCE_REF` 使用 `plugin:<插件ID>/<能力ID>`、`provider:<Provider ID>/<能力ID>` 或 `off`。
+OCR 可选择本地插件或远端 Provider；转写和说话人能力分别路由，因此可以组合远端转写与
+本地说话人识别。LibreOffice 只由本地插件提供。JSON 输出包含当前来源、全部候选来源、
+本地插件状态与版本；不暴露插件内部模型为可管理对象。
+
+官方能力插件下载支持 CONNECT 代理路由：`INTO_MD_HTTPS_PROXY`（回退
 `HTTPS_PROXY`、`https_proxy`）取 `http://[user:pass@]host:port`，`INTO_MD_NO_PROXY`
 （回退 `NO_PROXY`、`no_proxy`）支持 `*`、精确 host 或 `.suffix` 域后缀豁免；空值视为
-未设置，非法值在下载前稳定失败。`doctor` 的 `modelFiles` 项会报告当前路由
+未设置，非法值在下载前稳定失败。`doctor` 的 `capabilityDownloads` 项会报告当前路由
 （direct、代理 host:port 或非法变量及原因）。
-系统证书库无法覆盖特殊 TLS 环境时，可为单次安装显式传入 `--insecure`，或设置
+系统证书库无法覆盖特殊 TLS 环境时，可为单次 setup 显式传入 `--insecure`，或设置
 `INTO_MD_INSECURE=1`；环境变量只接受 `0`、`1`、`false`、`true`（大小写不敏感），
 其他值会在下载前报配置错误。该选项会关闭 TLS 证书和握手签名验证，只应临时使用；
-模型内容仍必须通过清单中固定的大小与 SHA-256 校验。
-完整的清单、数据目录、事务和威胁边界见
-[本地模型管理](models.md)。
+插件包仍必须通过目录固定的 SHA-256、发布者签名、文件清单和运行时 authority 校验。
+完整的数据目录、事务和威胁边界见[能力插件](capability-plugins.md)。
 
-常用准备入口同时处理能力插件和模型：
+官方本地能力准备入口为：
 
 ```text
 into-md setup ocr [--insecure] [--allow-private-network]
 into-md setup media [--insecure] [--allow-private-network]
+into-md setup legacy-office [--insecure] [--allow-private-network]
 ```
 
 转换和状态查询不会隐式调用这两个命令。
@@ -311,7 +305,8 @@ into-md providers [--json]
 into-md providers show <NAME> [--json]
 into-md providers add <NAME> --type openai-compatible \
   --base-url <URL> --model <MODEL> --api-key-env <ENV> \
-  [--capability <NAME>] [--timeout <DURATION>] [--scope <global|project>]
+  [--capability <NAME>] [--model-map <CAPABILITY=MODEL>] \
+  [--timeout <DURATION>] [--scope <global|project>]
 into-md providers remove <NAME> [--scope <global|project>]
 into-md providers set-default <NAME> [--scope <global|project>]
 into-md providers capabilities <NAME> [--json]
@@ -319,7 +314,11 @@ into-md providers test <NAME> --allow-network [--allow-private-network]
                             [--allow-host <HOST>]...
 ```
 
-CLI 只接受 API Key 的环境变量名，不提供明文 `--api-key`。`providers test` 只允许
+CLI 只接受 API Key 的环境变量名，不提供明文 `--api-key`。`--model` 是未映射能力的默认
+远端模型；每个 `--model-map` 必须对应同一次命令声明的
+`--capability`。例如百炼 Provider 可把 `vision-ocr` 映射到 OCR 模型，同时把
+`audio-transcription` 映射到语音模型。本地插件内置模型不出现在此映射或 Provider 页面。
+`providers test` 只允许
 发送最小能力探测请求，不发送文档内容。远程输入、转换选定的 AI Provider 与
 `providers test` 共用相同的 URL 策略：仅允许无用户信息的 HTTP(S) URL，并执行配置
 与当前调用的主机交集及私网双重授权检查，之后才能进入具体后端。

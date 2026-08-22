@@ -65,6 +65,9 @@ pub struct ProviderConfig {
     pub provider_type: String,
     pub base_url: String,
     pub model: String,
+    /// Per-capability remote model overrides. Local plugin models are never
+    /// represented here because they are private plugin resources.
+    pub models: BTreeMap<String, String>,
     pub api_key_env: String,
     pub timeout_ms: Option<u64>,
     pub capabilities: Vec<String>,
@@ -142,7 +145,9 @@ pub struct DelimitedTextConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct OcrConfig {
     pub policy: Option<OcrPolicy>,
-    pub model_bundle: Option<String>,
+    /// Read-only migration input from releases that exposed local models.
+    #[serde(rename = "model_bundle", skip_serializing)]
+    pub legacy_model_bundle: Option<String>,
     pub languages: Vec<String>,
     pub minimum_confidence: Option<f32>,
 }
@@ -151,7 +156,9 @@ pub struct OcrConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AsrConfig {
-    pub model_bundle: Option<String>,
+    /// Read-only migration input from releases that exposed local models.
+    #[serde(rename = "model_bundle", skip_serializing)]
+    pub legacy_model_bundle: Option<String>,
     pub language: Option<String>,
     pub chinese_script: Option<ChineseScript>,
     pub max_threads: Option<u16>,
@@ -164,6 +171,8 @@ pub struct AsrConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilityRoutesConfig {
+    #[serde(rename = "legacy-office")]
+    pub legacy_office: CapabilityRouteConfig,
     pub ocr: CapabilityRouteConfig,
     pub transcription: CapabilityRouteConfig,
     pub diarization: CapabilityRouteConfig,
@@ -271,6 +280,8 @@ pub struct LoadedConfig {
     /// Dotted effective keys mapped to the layer that supplied their final value.
     pub sources: BTreeMap<String, String>,
     pub timeout_ms: Option<u64>,
+    /// A legacy local-model selection was accepted for read-only migration.
+    pub legacy_model_configuration: bool,
 }
 
 impl LoadedConfig {
@@ -382,6 +393,8 @@ fn load_with_global(
             "default provider '{name}' is not configured after merging all layers"
         )));
     }
+    let legacy_model_configuration = parsed.conversion.ocr.legacy_model_bundle.is_some()
+        || parsed.conversion.asr.legacy_model_bundle.is_some();
     let options = resolve_conversion_options(&parsed.conversion)?;
     let language = resolve_language(&mut parsed, language_override, &mut sources);
     let jobs = parsed.cli.jobs.unwrap_or_else(default_jobs);
@@ -406,6 +419,7 @@ fn load_with_global(
         ocr_languages: parsed.conversion.ocr.languages.clone(),
         prompts: parsed.conversion.ai.prompts.clone(),
         timeout_ms,
+        legacy_model_configuration,
         effective: parsed,
         options,
         language,
@@ -523,15 +537,9 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     if let Some(policy) = config.ocr.policy {
         options.ocr.policy = policy;
     }
-    if let Some(bundle) = &config.ocr.model_bundle {
-        options.ocr.model_bundle = Some(bundle.clone());
-    }
     if let Some(confidence) = config.ocr.minimum_confidence {
         validate_confidence(confidence)?;
         options.ocr.minimum_confidence = confidence;
-    }
-    if let Some(value) = &config.asr.model_bundle {
-        options.asr.model_bundle.clone_from(value);
     }
     if let Some(value) = &config.asr.language {
         options.asr.language = Some(value.clone());
@@ -678,6 +686,7 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
 
 fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), CliError> {
     for (name, route) in [
+        ("legacy-office", &routes.legacy_office),
         ("ocr", &routes.ocr),
         ("transcription", &routes.transcription),
         ("diarization", &routes.diarization),
@@ -735,6 +744,25 @@ fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), Cli
             let canonical = reference.parse::<CapabilitySourceRef>().map_err(|error| {
                 CliError::config(format!("capability route '{name}' is invalid: {error}"))
             })?;
+            let source_capability = match &canonical {
+                CapabilitySourceRef::Plugin { capability_id, .. }
+                | CapabilitySourceRef::Provider { capability_id, .. } => capability_id.as_str(),
+                CapabilitySourceRef::Off => continue,
+            };
+            let compatible = match name {
+                "legacy-office" => source_capability == "legacy-office",
+                "ocr" => matches!(source_capability, "ocr" | "vision-ocr"),
+                "transcription" => {
+                    matches!(source_capability, "transcription" | "audio-transcription")
+                }
+                "diarization" => source_capability == "diarization",
+                _ => false,
+            };
+            if !compatible {
+                return Err(CliError::config(format!(
+                    "source '{reference}' cannot implement capability route '{name}'"
+                )));
+            }
             if !seen.insert(canonical) {
                 return Err(CliError::config(format!(
                     "capability route '{name}' contains a duplicate source"
@@ -793,6 +821,22 @@ fn validate_provider(
             || provider.model.chars().any(char::is_control))
     {
         return Err(CliError::config(format!("provider '{name}' model is invalid")));
+    }
+    for (capability, model) in &provider.models {
+        validate_capability(capability)?;
+        if model.is_empty()
+            || model.len() > MAX_PROVIDER_MODEL_BYTES
+            || model.chars().any(char::is_control)
+        {
+            return Err(CliError::config(format!(
+                "provider '{name}' model mapping for '{capability}' is invalid"
+            )));
+        }
+        if !provider.capabilities.iter().any(|value| value == capability) {
+            return Err(CliError::config(format!(
+                "provider '{name}' maps a model for undeclared capability '{capability}'"
+            )));
+        }
     }
     if !provider.api_key_env.is_empty() {
         validate_environment_name(&provider.api_key_env)?;
@@ -1102,6 +1146,36 @@ pub fn set(scope: Scope, cwd: &Path, key: &str, input: &str) -> Result<PathBuf, 
 
 pub fn unset(scope: Scope, cwd: &Path, key: &str) -> Result<PathBuf, CliError> {
     mutate_scope(scope, cwd, |root| remove_nested(root, key))
+}
+
+/// Atomically select one product capability source in an exact scope.
+pub fn set_capability_source(
+    scope: Scope,
+    cwd: &Path,
+    capability: &str,
+    source: &str,
+) -> Result<PathBuf, CliError> {
+    if !matches!(capability, "legacy-office" | "ocr" | "transcription" | "diarization") {
+        return Err(CliError::usage(format!("unknown capability '{capability}'")));
+    }
+    mutate_scope(scope, cwd, |root| {
+        let base = format!("capability_routes.{capability}");
+        set_nested(root, &format!("{base}.mode"), toml::Value::String("only".into()))?;
+        set_nested(root, &format!("{base}.primary"), toml::Value::String(source.to_owned()))?;
+        set_nested(root, &format!("{base}.fallbacks"), toml::Value::Array(Vec::new()))
+    })
+}
+
+/// Atomically clear one explicit capability route in an exact scope.
+pub fn reset_capability_source(
+    scope: Scope,
+    cwd: &Path,
+    capability: &str,
+) -> Result<PathBuf, CliError> {
+    if !matches!(capability, "legacy-office" | "ocr" | "transcription" | "diarization") {
+        return Err(CliError::usage(format!("unknown capability '{capability}'")));
+    }
+    mutate_scope(scope, cwd, |root| remove_nested(root, &format!("capability_routes.{capability}")))
 }
 
 pub fn create_profile(
@@ -1919,7 +1993,6 @@ language = "en"
 
 [conversion.ocr]
 policy = "auto"
-model_bundle = "pp-ocrv6-tiny-zh-en"
 languages = ["zh-Hans", "zh-Hant", "en"]
 minimum_confidence = 0.70
 
@@ -1948,6 +2021,22 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn legacy_office_route_uses_the_public_hyphenated_capability_name() {
+        let parsed: RawConfig = toml::from_str(
+            r#"
+[capability_routes.legacy-office]
+mode = "only"
+primary = "plugin:official.legacy-office.libreoffice/legacy-office"
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.capability_routes.legacy_office.mode, Some(AiMode::Only));
+        let encoded = toml::to_string(&parsed).unwrap();
+        assert!(encoded.contains("[capability_routes.legacy-office]"));
+        assert!(!encoded.contains("[capability_routes.legacy_office]"));
+    }
+
+    #[test]
     fn heterogeneous_capability_routes_reject_contradictions_and_alias_duplicates() {
         let mut routes = CapabilityRoutesConfig::default();
         routes.ocr = CapabilityRouteConfig {
@@ -1970,6 +2059,13 @@ mod tests {
         routes.ocr = CapabilityRouteConfig {
             mode: Some(AiMode::Only),
             primary: Some("off".into()),
+            fallbacks: Vec::new(),
+        };
+        assert!(validate_capability_routes(&routes).is_err());
+
+        routes.ocr = CapabilityRouteConfig {
+            mode: Some(AiMode::Only),
+            primary: Some("provider:bailian/audio-transcription".into()),
             fallbacks: Vec::new(),
         };
         assert!(validate_capability_routes(&routes).is_err());
@@ -2314,6 +2410,45 @@ api_key_env = "VISION_API_KEY"
         assert!(validate_capability("vision-ocr").is_ok());
         assert!(validate_capability("magic").is_err());
         assert!(validate_sha256(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn provider_model_mappings_are_typed_and_capability_bounded() {
+        let valid: RawConfig = toml::from_str(
+            r#"
+[providers.remote]
+type = "openai-compatible"
+base_url = "https://example.com/v1"
+model = "default"
+api_key_env = "REMOTE_KEY"
+capabilities = ["vision-ocr", "audio-transcription"]
+
+[providers.remote.models]
+vision-ocr = "ocr-model"
+audio-transcription = "speech-model"
+"#,
+        )
+        .unwrap();
+        validate_common(&valid).unwrap();
+        validate_provider("remote", &valid.providers["remote"], true).unwrap();
+        assert_eq!(valid.providers["remote"].models["vision-ocr"], "ocr-model");
+
+        let invalid: RawConfig = toml::from_str(
+            r#"
+[providers.remote]
+type = "openai-compatible"
+base_url = "https://example.com/v1"
+model = "default"
+api_key_env = "REMOTE_KEY"
+capabilities = ["vision-ocr"]
+
+[providers.remote.models]
+audio-transcription = "speech-model"
+"#,
+        )
+        .unwrap();
+        let error = validate_provider("remote", &invalid.providers["remote"], true).unwrap_err();
+        assert!(error.to_string().contains("undeclared capability"));
     }
 
     #[test]

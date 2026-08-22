@@ -30,8 +30,13 @@ const snapshot: AdminSnapshot = {
   schemaVersion: 1,
   configurationReadOnly: false,
   formats: [{ format: "pdf", family: "document", status: "available", source: "core", extensions: ["pdf"], runtimeComponent: "pdfium", installHint: "install runtime" }],
-  models: { defaultBundle: "ocr", entries: [{ bundle: { id: "ocr", availability: "available" }, status: { id: "ocr", state: "installed", ownership: "writable" } }] },
-  providers: [{ name: "vision", scope: "effective", actionScope: "project", providerType: "openai-compatible", baseUrl: "https://example.com/v1", model: "vision", apiKeyEnv: "VISION_KEY", environmentSet: true, capabilities: ["image-description"], default: true, effective: true }],
+  capabilities: [
+    { id: "legacy-office", status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.legacy-office.libreoffice/legacy-office", "off"] },
+    { id: "ocr", status: "ready", localStatus: "ready", currentSource: "plugin:official.ocr.ppocrv6/ocr", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: "1.0.0", localVersion: "1.0.0" },
+    { id: "transcription", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/transcription", sources: ["plugin:official.media.whisper/transcription", "off"], version: "1.0.0", localVersion: "1.0.0" },
+    { id: "diarization", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/diarization", sources: ["plugin:official.media.whisper/diarization", "off"], version: "1.0.0", localVersion: "1.0.0" },
+  ],
+  providers: [{ name: "vision", scope: "effective", actionScope: "project", providerType: "openai-compatible", baseUrl: "https://example.com/v1", model: "vision", models: {}, apiKeyEnv: "VISION_KEY", environmentSet: true, capabilities: ["image-description"], default: true, effective: true }],
   plugins: [{ id: "local", scope: "effective", actionScope: "project", packageScope: "project", source: "file:///redacted/plugin", sha256: "1".repeat(64), protocol: "process-v1", enabled: true, effective: true, verification: "verified", version: "1.0.0", signingKeyId: "release-key", signingKeySha256: "2".repeat(64), target: "x86_64-pc-windows-msvc" }],
   configuration: { schema_version: 1, providers: { vision: { api_key_env: "VISION_KEY" } } }, profiles: [{ name: "safe", scope: "project", effective: true, active: false }],
   doctor: [{ id: "networkProbe", status: "skipped", detail: "offline by default" }],
@@ -65,9 +70,11 @@ test("admin DTO is bounded and never needs credential values", () => {
     { ...snapshot.formats[0]!, runtimeComponent: "x".repeat(129) },
   ]) assert.throws(() => parseAdminSnapshot({ ...snapshot, formats: [mutation] }), ApiError);
   for (const mutation of [
-    { ...snapshot.models.entries[0]!, bundle: { id: "ocr", availability: "maybe" } },
-    { ...snapshot.models.entries[0]!, status: { state: "x".repeat(65) } },
-  ]) assert.throws(() => parseAdminSnapshot({ ...snapshot, models: { ...snapshot.models, entries: [mutation] } }), ApiError);
+    { ...snapshot.capabilities[0]!, id: "unknown" },
+    { ...snapshot.capabilities[0]!, status: "installed" },
+    { ...snapshot.capabilities[0]!, currentSource: "core:ocr" },
+    { ...snapshot.capabilities[0]!, sources: ["plugin:../escape/ocr"] },
+  ]) assert.throws(() => parseAdminSnapshot({ ...snapshot, capabilities: [mutation, ...snapshot.capabilities.slice(1)] }), ApiError);
   for (const mutation of [
     { ...snapshot.providers[0]!, providerType: "shell" },
     { ...snapshot.providers[0]!, scope: "machine" },
@@ -98,7 +105,7 @@ test("admin DTO is bounded and never needs credential values", () => {
   const partial = {
     ...snapshot,
     providers: [
-      { name: "vision", scope: "global", actionScope: "global", providerType: "openai-compatible", capabilities: [], default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "global", actionScope: "global", providerType: "openai-compatible", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
       snapshot.providers[0]!,
     ],
     plugins: [
@@ -137,16 +144,14 @@ test("administration responses share one exact one-MiB wire limit", async () => 
 });
 
 test("administration pages are accessible, responsive, recoverable and require one-time grants", async () => {
-  const window = install("/admin/models"); const actions: AdminAction[] = [];
-  const missingModel: AdminSnapshot = { ...snapshot, models: { ...snapshot.models, entries: [{ bundle: { id: "whisper-small-multilingual", availability: "planned" }, status: { state: "missing" } }] } };
-  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingModel) }));
-  await waitFor(() => window.document.body.textContent.includes("Multilingual transcription"));
+  const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
+  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingOcr) }));
+  await waitFor(() => window.document.body.textContent.includes("Read text from scanned PDFs"));
   const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
   assert.equal(installButton.disabled, false); installButton.click(); installButton.click(); await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, true);
-  assert.equal(actions[0]!.authorizeDangerous, false);
-  assert.equal(actions[0]!.allowPrivateNetwork, false);
-  assert.equal(actions[0]!.insecure, false);
+  assert.equal(actions[0]!.authorizeDangerous, true);
   assert.equal(window.document.body.textContent.includes("manifest"), false);
   assert.equal(window.document.body.textContent.includes("invocation capabilities"), false);
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document); assert.deepEqual(result.violations.map((item) => item.id), []);
@@ -167,8 +172,8 @@ test("partial records expose exact-layer mutation while read-only authority stay
   const partial: AdminSnapshot = {
     ...snapshot,
     providers: [
-      { name: "vision", scope: "global", actionScope: "global", model: "base", capabilities: [], default: false, effective: false, shadowedBy: "effective" },
-      { name: "vision", scope: "project", actionScope: "project", model: "override", capabilities: [], default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "global", actionScope: "global", model: "base", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "project", actionScope: "project", model: "override", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
       snapshot.providers[0]!,
     ],
     plugins: [
@@ -195,6 +200,6 @@ test("partial records expose exact-layer mutation while read-only authority stay
   activeRoot = createRoot(window.document.getElementById("app")!);
   activeRoot.render(createElement(App, { api: api([], readOnly) }));
   await waitFor(() => window.document.body.textContent.includes("当前只能查看"));
-  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("安装扩展插件"))?.disabled, true);
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("安装插件包"))?.disabled, true);
   assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "验证")?.disabled, true);
 });

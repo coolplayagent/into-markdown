@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn binary() -> PathBuf {
-    option_env!("CARGO_BIN_EXE_into-md")
+    let path = option_env!("CARGO_BIN_EXE_into-md")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("INTO_MD_BIN").map(PathBuf::from))
-        .expect("Cargo or Bazel must provide the into-md binary")
+        .expect("Cargo or Bazel must provide the into-md binary");
+    if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) }
 }
 
 fn run(arguments: &[&str]) -> (i32, String) {
@@ -206,8 +207,8 @@ fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network
         ])
         .output()
         .unwrap();
-    assert_eq!(absent.status.code(), Some(9));
-    assert!(String::from_utf8_lossy(&absent.stderr).contains("componentUnavailable"));
+    assert_eq!(absent.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&absent.stderr).contains("requires --ai-provider"));
 }
 
 fn run_image_description(
@@ -375,9 +376,9 @@ fn real_cli_preserves_stable_policy_component_and_usage_exits() {
     assert_eq!(exit, 5);
     assert!(stderr.contains("networkDenied"));
 
-    let (exit, stderr) = run(&["--no-config", "models", "install", "missing"]);
+    let (exit, stderr) = run(&["--no-config", "capabilities", "show", "missing"]);
     assert_eq!(exit, 2);
-    assert!(stderr.contains("unknown") || stderr.contains("usage"));
+    assert!(stderr.contains("unknown capability"));
 
     let (exit, _) = run(&["--definitely-unknown-option"]);
     assert_eq!(exit, 2);

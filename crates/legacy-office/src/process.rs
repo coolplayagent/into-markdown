@@ -62,7 +62,7 @@ pub(crate) struct WorkerChild {
     child: windows::Child,
     _runtime_tree: Option<crate::snapshot::VerifiedTree>,
     #[cfg(target_os = "macos")]
-    container: Option<macos_container::MountedContainer>,
+    container: Option<macos_container::PreparedContainer>,
     #[cfg(target_os = "macos")]
     ipc_socket: std::path::PathBuf,
     status: Option<WorkerStatus>,
@@ -91,6 +91,7 @@ type WorkerStderr = std::fs::File;
 impl WorkerChild {
     pub(crate) fn spawn(
         bundle: &VerifiedBundle,
+        inherited_process_sandbox: bool,
         working_directory: &Path,
         temporary_root: &Path,
         address_limit: u64,
@@ -138,7 +139,12 @@ impl WorkerChild {
             let image = runtime_tree
                 .path(&authority.image_relative)
                 .ok_or_else(|| unavailable("containerIdentity"))?;
-            Some(macos_container::MountedContainer::attach(image, &mount)?)
+            Some(macos_container::PreparedContainer::prepare(
+                &authority.format,
+                image,
+                &mount,
+                context,
+            )?)
         } else {
             None
         };
@@ -151,6 +157,7 @@ impl WorkerChild {
         validate_macos_bundle(bundle, &runtime_root, &kit_library, &install_root, context)?;
         let arguments = worker_arguments(
             bundle,
+            inherited_process_sandbox,
             &runtime_root,
             &worker_original,
             &install_root,
@@ -306,6 +313,7 @@ fn canonical_working_roots(
 #[allow(clippy::too_many_arguments)]
 fn worker_arguments(
     bundle: &VerifiedBundle,
+    inherited_process_sandbox: bool,
     runtime_root: &Path,
     worker_original: &Path,
     install_root: &Path,
@@ -337,6 +345,10 @@ fn worker_arguments(
         OsString::from("--open-file-limit"),
         OsString::from(bundle.open_file_limit.to_string()),
     ];
+    if inherited_process_sandbox {
+        arguments.push(OsString::from("--inherited-process-sandbox"));
+        arguments.push(OsString::from("process-v1"));
+    }
     for path in &bundle.system_read_paths {
         arguments.push(OsString::from("--system-read"));
         arguments.push(path.as_os_str().to_owned());
@@ -675,6 +687,7 @@ mod tests {
     use into_markdown_core::{CancellationToken, ExecutionOptions, ResourceLimits};
     use std::io::BufRead as _;
     use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::MetadataExt as _;
 
     #[test]
     fn descriptor_budget_fails_before_snapshot_at_low_limit() {
@@ -772,24 +785,77 @@ mod tests {
     #[test]
     fn spawn_closes_non_cloexec_files_and_sockets_but_preserves_stdio() {
         let root = tempfile::tempdir().unwrap();
-        let secret = std::fs::File::create(root.path().join("secret")).unwrap();
+        let secret_path = root.path().join("secret");
+        let secret = std::fs::File::create(&secret_path).unwrap();
         let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
         clear_cloexec(secret.as_raw_fd());
         clear_cloexec(socket.as_raw_fd());
-        let script = format!(
-            "if (: <&{}) 2>/dev/null || (: <&{}) 2>/dev/null; then exit 41; fi; IFS= read -r line; printf '%s' \"$line\"",
-            secret.as_raw_fd(),
-            socket.as_raw_fd()
-        );
-        let mut worker = shell(&script, root.path());
+        let secret_metadata = secret.metadata().unwrap();
+        let socket_identity = descriptor_identity(socket.as_raw_fd()).unwrap();
+        std::fs::write(
+            root.path().join("descriptor-probe"),
+            format!(
+                "{} {} {} {}\n{} {} {} {}\n",
+                secret.as_raw_fd(),
+                secret_metadata.dev(),
+                secret_metadata.ino(),
+                secret_metadata.mode() & u32::from(libc::S_IFMT),
+                socket.as_raw_fd(),
+                socket_identity.0,
+                socket_identity.1,
+                socket_identity.2,
+            ),
+        )
+        .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut worker = spawn_platform(
+            &executable,
+            &[
+                OsString::from("--exact"),
+                OsString::from("process::tests::descriptor_probe_child"),
+                OsString::from("--nocapture"),
+            ],
+            root.path(),
+            512 * 1024 * 1024,
+            None,
+        )
+        .unwrap();
         let mut stdin = worker.take_stdin().unwrap();
         stdin.write_all(b"stdio-preserved\n").unwrap();
         drop(stdin);
         let mut stdout = String::new();
         worker.take_stdout().unwrap().read_to_string(&mut stdout).unwrap();
+        let mut stderr = String::new();
+        worker.take_stderr().unwrap().read_to_string(&mut stderr).unwrap();
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-        worker.wait(&context).unwrap();
-        assert_eq!(stdout, "stdio-preserved");
+        assert!(worker.wait(&context).is_ok(), "descriptor probe failed: {stderr}");
+        assert!(stdout.contains("stdio-preserved"), "child stdout was {stdout:?}");
+    }
+
+    #[test]
+    fn descriptor_probe_child() {
+        let Ok(authority) = std::fs::read_to_string("descriptor-probe") else {
+            return;
+        };
+        let values = authority
+            .split_whitespace()
+            .map(|value| value.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 8);
+        for expected in values.chunks_exact(4) {
+            let descriptor = i32::try_from(expected[0]).unwrap();
+            if let Ok(actual) = descriptor_identity(descriptor) {
+                assert_ne!(
+                    actual,
+                    (expected[1], expected[2], u32::try_from(expected[3]).unwrap()),
+                    "parent descriptor identity survived exec: {descriptor}",
+                );
+            }
+        }
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+        print!("{line}");
+        std::io::stdout().flush().unwrap();
     }
 
     #[test]
@@ -815,5 +881,21 @@ mod tests {
         // SAFETY: the descriptors are live test-owned file/socket handles and
         // F_SETFD mutates only their inheritance flag.
         assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_SETFD, 0) }, 0);
+    }
+
+    fn descriptor_identity(descriptor: i32) -> std::io::Result<(u64, u64, u32)> {
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: metadata is a live output object and descriptor is either a
+        // test-owned handle or a scalar inherited by the controlled probe.
+        if unsafe { libc::fstat(descriptor, metadata.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: successful fstat initialized every field.
+        let metadata = unsafe { metadata.assume_init() };
+        Ok((
+            metadata.st_dev as u64,
+            metadata.st_ino as u64,
+            u32::from(metadata.st_mode) & u32::from(libc::S_IFMT),
+        ))
     }
 }

@@ -9,14 +9,14 @@ mod process;
 mod routing;
 
 pub use manifest::{
-    CAPABILITY_PROTOCOL, CapabilityKind, HostApiRange, ModelArtifactDescriptor,
-    ModelBundleDescriptor, PROVIDER_MANIFEST_NAME, PluginCapabilityDescriptor,
-    PluginFileDescriptor, PluginManifest, PluginPermissions, PluginTargetDescriptor,
-    ResourceEnvelope, load_installed_manifest,
+    CAPABILITY_PROTOCOL, CapabilityKind, HostApiRange, PROVIDER_MANIFEST_NAME,
+    PluginCapabilityDescriptor, PluginFileDescriptor, PluginManifest, PluginPermissions,
+    PluginTargetDescriptor, ResourceEnvelope, load_installed_manifest,
 };
 pub use process::{
-    DiarizationParameters, OcrCapabilityResponse, OcrParameters, ProcessCapability,
-    ProcessDiarizer, ProcessOcrEngine, ProcessTranscriber, ReadinessParameters,
+    DiarizationParameters, LegacyOfficeCapabilityResponse, LegacyOfficeParameters,
+    OcrCapabilityResponse, OcrParameters, ProcessCapability, ProcessDiarizer,
+    ProcessLegacyOfficeNormalizer, ProcessOcrEngine, ProcessTranscriber, ReadinessParameters,
     TranscriptionParameters,
 };
 pub use routing::{

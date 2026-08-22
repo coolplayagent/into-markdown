@@ -160,10 +160,6 @@ pub struct ConversionArgs {
     #[arg(long, value_enum)]
     pub ocr: Option<OcrPolicyArg>,
 
-    /// Local OCR model bundle ID.
-    #[arg(long, value_name = "BUNDLE_ID")]
-    pub ocr_model: Option<String>,
-
     /// OCR language hint; may be repeated.
     #[arg(long, value_name = "BCP47")]
     pub ocr_language: Vec<String>,
@@ -171,10 +167,6 @@ pub struct ConversionArgs {
     /// Minimum accepted OCR confidence in the inclusive range 0..1.
     #[arg(long, value_name = "0..1")]
     pub ocr_min_confidence: Option<f32>,
-
-    /// Local Whisper model bundle ID.
-    #[arg(long, value_name = "BUNDLE_ID")]
-    pub asr_model: Option<String>,
 
     /// ASR language hint; absence enables model detection.
     #[arg(long, value_name = "BCP47")]
@@ -308,8 +300,8 @@ pub enum Command {
     Ui(UiArgs),
     /// List and inspect registered core input formats.
     Formats(FormatsArgs),
-    /// Inspect and manage local OCR model bundles.
-    Models(ModelsArgs),
+    /// Inspect and route optional conversion capabilities.
+    Capabilities(CapabilitiesArgs),
     /// Prepare optional local runtime components.
     Setup(SetupArgs),
     /// Re-render and relabel existing meeting transcripts.
@@ -338,7 +330,7 @@ pub struct SetupArgs {
 /// Optional component preparation operations.
 #[derive(Debug, Subcommand)]
 pub enum SetupCommand {
-    /// Install and verify the official local OCR provider and model bundle.
+    /// Install and verify the self-contained official local OCR plugin.
     Ocr {
         /// Allow development transport without TLS certificate validation.
         #[arg(long)]
@@ -347,12 +339,21 @@ pub enum SetupCommand {
         #[arg(long)]
         allow_private_network: bool,
     },
-    /// Install and verify local media transcription components.
+    /// Install and verify the self-contained official local media plugin.
     Media {
         /// Allow development transport without TLS certificate validation.
         #[arg(long)]
         insecure: bool,
         /// Permit pinned HTTPS hosts that resolve through a private local network route.
+        #[arg(long)]
+        allow_private_network: bool,
+    },
+    /// Install and verify the self-contained LibreOffice compatibility plugin.
+    LegacyOffice {
+        /// Allow development transport without TLS certificate validation.
+        #[arg(long)]
+        insecure: bool,
+        /// Permit the pinned HTTPS host to resolve through a private local network route.
         #[arg(long)]
         allow_private_network: bool,
     },
@@ -448,43 +449,43 @@ pub struct DetectArgs {
     pub allow_host: Vec<String>,
 }
 
-/// `models` arguments.
+/// `capabilities` arguments.
 #[derive(Debug, Args)]
-pub struct ModelsArgs {
+pub struct CapabilitiesArgs {
     #[command(subcommand)]
-    pub command: Option<ModelsCommand>,
+    pub command: Option<CapabilitiesCommand>,
     #[arg(long)]
     pub json: bool,
 }
 
-/// Model management operations.
+/// Capability routing operations.
 #[derive(Debug, Subcommand)]
-pub enum ModelsCommand {
-    /// Show one model bundle.
+pub enum CapabilitiesCommand {
+    /// List product capabilities and their effective sources.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one product capability and its available sources.
     Show {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Download and atomically install a hash-pinned model bundle.
-    Install {
+    /// Select a local plugin, remote provider, or off as the primary source.
+    Use {
         id: String,
-        #[arg(long)]
-        insecure: bool,
-        /// Permit the pinned HTTPS host to resolve through a private local network route.
-        #[arg(long)]
-        allow_private_network: bool,
+        #[arg(long, value_name = "SOURCE_REF")]
+        source: String,
+        #[arg(long, value_enum, default_value_t)]
+        scope: Scope,
     },
-    /// Verify installed model files without networking.
-    Verify {
+    /// Remove an explicit route and return to the product default.
+    Reset {
         id: String,
-        #[arg(long)]
-        json: bool,
+        #[arg(long, value_enum, default_value_t)]
+        scope: Scope,
     },
-    /// Remove a writable installed bundle.
-    Remove { id: String },
-    /// Print the installed path of a model bundle.
-    Path { id: String },
 }
 
 /// `providers` arguments.
@@ -539,6 +540,9 @@ pub struct ProviderAddArgs {
     pub base_url: String,
     #[arg(long)]
     pub model: String,
+    /// Map CAPABILITY=MODEL for a remote capability; may be repeated.
+    #[arg(long = "model-map", value_name = "CAPABILITY=MODEL")]
+    pub model_map: Vec<String>,
     #[arg(long)]
     pub api_key_env: String,
     #[arg(long)]

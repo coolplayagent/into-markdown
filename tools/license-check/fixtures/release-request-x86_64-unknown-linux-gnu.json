@@ -1,5 +1,5 @@
 {
   "schema_version": 1,
   "target": "x86_64-unknown-linux-gnu",
-  "components": []
+  "components": ["pdfium"]
 }

@@ -18,6 +18,7 @@ ALLOWED_HOSTS = {
     "ffmpeg.org",
     "github.com",
     "huggingface.co",
+    "mirror.aarnet.edu.au",
     "objects.githubusercontent.com",
     "paddle-model-ecology.bj.bcebos.com",
     "raw.githubusercontent.com",
