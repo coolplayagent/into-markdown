@@ -1070,15 +1070,17 @@ impl PluginManager {
 
     /// Authenticate installed metadata and the extracted file inventory
     /// without hashing large payloads. This is intended for responsive status
-    /// surfaces only; execution and explicit verification must continue to use
-    /// [`Self::verify`].
+    /// surfaces only. It cannot authorize execution by itself: the process
+    /// path additionally hashes every signed runtime file while constructing
+    /// a private immutable snapshot, and explicit verification continues to
+    /// use [`Self::verify`].
     pub fn inspect_installed_record(
         &self,
         id: &str,
         execution: &ExecutionContext,
     ) -> Result<InstalledPlugin, ManagerError> {
         let _lock = self.acquire_verified_read_lock()?;
-        self.inspect_installed_status_unlocked(id, execution).map(|(installed, _)| installed)
+        self.inspect_installed_status_unlocked(id, execution).map(|(installed, _, _, _)| installed)
     }
 
     /// Authenticate installed metadata and return a cheap identity for the current extracted
@@ -1092,6 +1094,7 @@ impl PluginManager {
     ) -> Result<(InstalledPlugin, String), ManagerError> {
         let _lock = self.acquire_verified_read_lock()?;
         self.inspect_installed_status_unlocked(id, execution)
+            .map(|(installed, status, _, _)| (installed, status))
     }
 
     fn verify_unlocked(
@@ -1109,7 +1112,7 @@ impl PluginManager {
         &self,
         id: &str,
         execution: &ExecutionContext,
-    ) -> Result<(InstalledPlugin, String), ManagerError> {
+    ) -> Result<(InstalledPlugin, String, PackageManifest, Vec<u8>), ManagerError> {
         execution.checkpoint().map_err(map_execution_error)?;
         let _metadata_memory =
             execution.reserve_memory(MAX_MANIFEST_BYTES * 16).map_err(map_execution_error)?;
@@ -1159,15 +1162,17 @@ impl PluginManager {
         let status_token = inspect_tree_metadata(&manifest, &root, Some(execution))?;
         Ok((
             InstalledPlugin {
-                id: manifest.id,
-                version: manifest.version,
-                protocol: manifest.protocol,
+                id: manifest.id.clone(),
+                version: manifest.version.clone(),
+                protocol: manifest.protocol.clone(),
                 package_sha256: authority.source_archive_sha256,
-                content_root_sha256: manifest.signature.signed_payload_sha256,
-                signing_key_id: manifest.signature.key_id,
+                content_root_sha256: manifest.signature.signed_payload_sha256.clone(),
+                signing_key_id: manifest.signature.key_id.clone(),
                 root,
             },
             status_token,
+            manifest,
+            manifest_bytes,
         ))
     }
 
@@ -1313,10 +1318,15 @@ impl PluginManager {
         execution: &ExecutionContext,
     ) -> Result<PreparedProcessPlugin, ManagerError> {
         let _store_lock = self.acquire_verified_read_lock()?;
-        let installed = self.verify_unlocked(id, execution)?;
+        // Dispatch authenticates the signed manifest and installation receipt first, then
+        // hashes each runtime byte while copying it into the private snapshot below. Rehashing
+        // the retained ZIP (and every ZIP member) here made a self-contained model plugin read
+        // several gigabytes before it could handle one request, although the retained archive is
+        // never exposed to the worker.
+        let (installed, _, manifest, manifest_bytes) =
+            self.inspect_installed_status_unlocked(id, execution)?;
         let metadata_reservation =
             execution.reserve_memory(MAX_MANIFEST_BYTES * 8).map_err(map_execution_error)?;
-        let manifest = read_installed_manifest(&installed.root)?;
         if manifest.protocol != "process-v1" {
             return Err(ManagerError::new(ManagerErrorCode::UnsupportedProtocol, "not process-v1"));
         }
@@ -1337,7 +1347,13 @@ impl PluginManager {
                 into_markdown_process_plugin::provision_windows_sandbox(&sandbox_identity)
                     .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
         }
-        let snapshot_bytes = tree_size(&installed.root, execution)?;
+        let snapshot_bytes = manifest
+            .files
+            .iter()
+            .try_fold(manifest_bytes.len() as u64, |total, file| total.checked_add(file.bytes))
+            .ok_or_else(|| {
+                ManagerError::new(ManagerErrorCode::ResourceLimit, "snapshot size overflow")
+            })?;
         let snapshot_reservation =
             execution.reserve_temporary(snapshot_bytes).map_err(map_execution_error)?;
         // The verified copy is independent of the mutable package store. Keeping it in an
@@ -1348,21 +1364,13 @@ impl PluginManager {
             .tempdir()
             .map_err(ManagerError::from)?;
         let snapshot = snapshot_directory.path().join("runtime");
-        copy_tree(&installed.root, &snapshot, execution)?;
-        verify_tree(&manifest, &snapshot, Some(execution))?;
-        // The retained archive and installation receipt belong to the manager,
-        // not to the executable runtime. Large self-contained plugins can have
-        // an archive bigger than the per-runtime-file ceiling, and dispatching
-        // it would also duplicate hundreds of megabytes for every invocation.
-        for manager_file in [ARCHIVE_NAME, INSTALLED_NAME] {
-            fs::remove_file(snapshot.join(manager_file)).map_err(|_| {
-                ManagerError::new(
-                    ManagerErrorCode::Io,
-                    "manager metadata could not be removed from the process snapshot",
-                )
-            })?;
-        }
-        sync_directory(&snapshot)?;
+        copy_verified_runtime_tree(
+            &manifest,
+            &manifest_bytes,
+            &installed.root,
+            &snapshot,
+            execution,
+        )?;
         #[cfg(windows)]
         into_markdown_process_plugin::authorize_windows_sandbox_path(&policy.windows, &snapshot)
             .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
@@ -2731,34 +2739,6 @@ fn bounded_read_accounted(
     Ok((bytes, reservation))
 }
 
-fn tree_size(root: &Path, execution: &ExecutionContext) -> Result<u64, ManagerError> {
-    let mut total = 0_u64;
-    let mut pending = vec![root.to_owned()];
-    while let Some(directory) = pending.pop() {
-        execution.checkpoint().map_err(map_execution_error)?;
-        reject_link(&directory)?;
-        for entry in fs::read_dir(directory)? {
-            execution.checkpoint().map_err(map_execution_error)?;
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() {
-                let metadata = secure_regular_file(&entry.path())?;
-                total = total.checked_add(metadata.len()).ok_or_else(|| {
-                    ManagerError::new(ManagerErrorCode::ResourceLimit, "tree size overflow")
-                })?;
-            } else {
-                return Err(ManagerError::new(
-                    ManagerErrorCode::PathTraversal,
-                    "tree entry rejected",
-                ));
-            }
-        }
-    }
-    Ok(total)
-}
-
 fn reject_link(path: &Path) -> Result<(), ManagerError> {
     let metadata = fs::symlink_metadata(path)?;
     #[cfg(windows)]
@@ -3099,45 +3079,116 @@ fn file_link_count(path: &Path, _: &std::fs::Metadata) -> Result<u64, ManagerErr
     Ok(winx::winapi_util::file::information(&file)?.number_of_links())
 }
 
-fn copy_tree(
+fn copy_verified_runtime_tree(
+    manifest: &PackageManifest,
+    manifest_bytes: &[u8],
     source: &Path,
     destination: &Path,
     execution: &ExecutionContext,
 ) -> Result<(), ManagerError> {
     fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
+    fs::write(destination.join(MANIFEST_NAME), manifest_bytes)?;
+    for authority in &manifest.files {
         execution.checkpoint().map_err(map_execution_error)?;
-        let entry = entry?;
-        let name = entry.file_name();
-        let from = entry.path();
-        let to = destination.join(name);
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_tree(&from, &to, execution)?;
-        } else if kind.is_file() {
-            let _ = secure_regular_file(&from)?;
-            let mut input = File::open(&from)?;
-            let mut output = OpenOptions::new().create_new(true).write(true).open(&to)?;
-            let mut buffer = [0_u8; 16 * 1024];
-            loop {
-                execution.checkpoint().map_err(map_execution_error)?;
-                let read = input.read(&mut buffer)?;
-                if read == 0 {
-                    break;
-                }
-                output.write_all(&buffer[..read])?;
-            }
-            output.sync_all()?;
-            let permissions = fs::metadata(&from)?.permissions();
-            fs::set_permissions(&to, permissions)?;
-        } else {
+        let from = source.join(&authority.path);
+        // Keep the no-follow handle pinned for the whole copy. A second no-follow handle after
+        // the path and ACL check proves that the check applied to this exact file, closing the
+        // replacement window between metadata validation and opening the source.
+        let mut input = open_package_file(&from)?;
+        let identity = file_identity(&input)?;
+        let metadata = input.metadata()?;
+        let checked_metadata = secure_regular_file(&from)?;
+        let witness = open_package_file(&from)?;
+        if file_identity(&witness)? != identity
+            || checked_metadata.len() != metadata.len()
+            || checked_metadata.permissions() != metadata.permissions()
+        {
             return Err(ManagerError::new(
                 ManagerErrorCode::PathTraversal,
-                "snapshot entry rejected",
+                "installed runtime file changed before copying",
             ));
         }
+        #[cfg(test)]
+        pause_runtime_copy_for_replacement_test(source)?;
+        if metadata.len() != authority.bytes {
+            return Err(ManagerError::new(
+                ManagerErrorCode::HashMismatch,
+                "installed runtime file size differs",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let executable = authority.executable
+                || manifest.entrypoints.values().any(|entry| entry == &authority.path);
+            if metadata.permissions().mode() & 0o111 != if executable { 0o100 } else { 0 } {
+                return Err(ManagerError::new(
+                    ManagerErrorCode::InvalidPackage,
+                    "installed executable authority differs",
+                ));
+            }
+        }
+        let to = destination.join(&authority.path);
+        let parent = to.parent().ok_or_else(|| {
+            ManagerError::new(ManagerErrorCode::PathTraversal, "snapshot path rejected")
+        })?;
+        fs::create_dir_all(parent)?;
+        let mut output = OpenOptions::new().create_new(true).write(true).open(&to)?;
+        let mut hasher = Sha256::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            execution.checkpoint().map_err(map_execution_error)?;
+            let read = input.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            total = total.checked_add(read as u64).ok_or_else(|| {
+                ManagerError::new(ManagerErrorCode::InvalidPackage, "runtime file size overflow")
+            })?;
+            if total > authority.bytes {
+                return Err(ManagerError::new(
+                    ManagerErrorCode::HashMismatch,
+                    "installed runtime file grew while copying",
+                ));
+            }
+            hasher.update(&buffer[..read]);
+            output.write_all(&buffer[..read])?;
+        }
+        if total != authority.bytes
+            || format!("{:x}", hasher.finalize()) != authority.sha256
+            || file_identity(&input)? != identity
+        {
+            return Err(ManagerError::new(
+                ManagerErrorCode::HashMismatch,
+                "installed runtime file differs",
+            ));
+        }
+        fs::set_permissions(&to, metadata.permissions())?;
     }
-    sync_tree(destination)
+    // The snapshot is request-scoped and never participates in crash recovery, so forcing its
+    // hundreds of megabytes through durable storage would add latency without adding authority.
+    // The signed digest was checked while copying and the sandbox pins this private directory.
+    Ok(())
+}
+
+#[cfg(test)]
+fn pause_runtime_copy_for_replacement_test(source: &Path) -> Result<(), ManagerError> {
+    let Some(store_root) = source.parent() else { return Ok(()) };
+    let pause = store_root.join(".test-runtime-copy-pause");
+    if !pause.exists() {
+        return Ok(());
+    }
+    let ready = store_root.join(".test-runtime-copy-ready");
+    fs::write(&ready, b"ready")?;
+    for _ in 0..5_000 {
+        if !pause.exists() {
+            let _ = fs::remove_file(&ready);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    Err(ManagerError::new(ManagerErrorCode::Timeout, "runtime copy replacement test timed out"))
 }
 
 fn write_atomic_json(path: &Path, value: &impl Serialize) -> Result<(), ManagerError> {
@@ -3524,6 +3575,28 @@ mod tests {
         )
     }
 
+    fn relative_file_inventory(root: &Path) -> BTreeSet<String> {
+        let mut files = BTreeSet::new();
+        let mut directories = vec![root.to_path_buf()];
+        while let Some(directory) = directories.pop() {
+            for entry in fs::read_dir(&directory).expect("read snapshot directory") {
+                let entry = entry.expect("snapshot entry");
+                let path = entry.path();
+                if entry.file_type().expect("snapshot file type").is_dir() {
+                    directories.push(path);
+                } else {
+                    files.insert(
+                        path.strip_prefix(root)
+                            .expect("snapshot relative path")
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        files
+    }
+
     fn signed_package_with_files(
         id: &str,
         entrypoint: &str,
@@ -3863,6 +3936,187 @@ mod tests {
         assert_eq!(
             manager.verify("fixture.plugin", &context()).expect_err("tamper").code,
             ManagerErrorCode::HashMismatch
+        );
+    }
+
+    #[test]
+    fn process_snapshot_contains_only_the_manifest_inventory() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let (package, trusted) = signed_package_with_files(
+            "fixture.plugin",
+            "bin/plugin",
+            vec![
+                ("bin/plugin", b"executable".as_slice(), 0o700),
+                ("models/model.bin", b"model-bytes".as_slice(), 0o600),
+            ],
+        );
+        let manager = PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
+        manager.install_bytes(&package, None, &context()).expect("install");
+
+        let prepared = manager
+            .process_manifest(
+                "fixture.plugin",
+                into_markdown_process_plugin::RuntimePolicy::default(),
+                &context(),
+            )
+            .expect("prepare process snapshot");
+        assert_eq!(
+            relative_file_inventory(&prepared.installed().root),
+            BTreeSet::from([
+                MANIFEST_NAME.to_owned(),
+                "bin/plugin".to_owned(),
+                "models/model.bin".to_owned(),
+            ])
+        );
+        assert!(!prepared.installed().root.join(ARCHIVE_NAME).exists());
+        assert!(!prepared.installed().root.join(INSTALLED_NAME).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_snapshot_has_the_exact_authorized_appcontainer_acl() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let (package, trusted) = signed_package_with_files(
+            "fixture.plugin",
+            "bin/plugin.exe",
+            vec![("bin/plugin.exe", b"executable".as_slice(), 0o700)],
+        );
+        let manager = PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
+        manager.install_bytes(&package, None, &context()).expect("install");
+        let prepared = manager
+            .process_manifest(
+                "fixture.plugin",
+                into_markdown_process_plugin::RuntimePolicy::default(),
+                &context(),
+            )
+            .expect("prepare process snapshot");
+        into_markdown_process_plugin::verify_windows_sandbox_path(
+            &prepared.policy.windows,
+            &prepared.installed().root,
+        )
+        .expect("snapshot ACL remains exact");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_snapshot_rejects_runtime_link_replacements() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        for replacement in ["symlink", "hardlink"] {
+            let temporary = tempfile::tempdir().expect("tempdir");
+            let (package, trusted) = signed_package_with_files(
+                "fixture.plugin",
+                "bin/plugin",
+                vec![("bin/plugin", b"executable".as_slice(), 0o700)],
+            );
+            let manager =
+                PluginManager::open(temporary.path().join("plugins"), trusted).expect("open");
+            manager.install_bytes(&package, None, &context()).expect("install");
+            let runtime = manager.root().join("fixture.plugin/bin/plugin");
+            let replacement_file = temporary.path().join(format!("{replacement}-target"));
+            fs::write(&replacement_file, b"executable").expect("replacement bytes");
+            fs::set_permissions(&replacement_file, fs::Permissions::from_mode(0o700))
+                .expect("replacement permissions");
+            fs::remove_file(&runtime).expect("remove installed runtime");
+            if replacement == "symlink" {
+                symlink(&replacement_file, &runtime).expect("symlink replacement");
+            } else {
+                fs::hard_link(&replacement_file, &runtime).expect("hardlink replacement");
+            }
+
+            let error = match manager.process_manifest(
+                "fixture.plugin",
+                into_markdown_process_plugin::RuntimePolicy::default(),
+                &context(),
+            ) {
+                Ok(_) => panic!("link replacement unexpectedly prepared: {replacement}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, ManagerErrorCode::PathTraversal, "{replacement}");
+        }
+    }
+
+    #[test]
+    fn process_snapshot_pins_runtime_bytes_across_path_replacement_race() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let (package, trusted) = signed_package_with_files(
+            "fixture.plugin",
+            "bin/plugin",
+            vec![("bin/plugin", b"authenticated".as_slice(), 0o700)],
+        );
+        let root = temporary.path().join("plugins");
+        let manager = PluginManager::open(&root, trusted).expect("open");
+        manager.install_bytes(&package, None, &context()).expect("install");
+        fs::write(root.join(".test-runtime-copy-pause"), b"pause").expect("arm copy pause");
+
+        let prepare = std::thread::spawn(move || {
+            manager.process_manifest(
+                "fixture.plugin",
+                into_markdown_process_plugin::RuntimePolicy::default(),
+                &context(),
+            )
+        });
+        let ready = root.join(".test-runtime-copy-ready");
+        for _ in 0..5_000 {
+            if ready.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ready.exists(), "runtime copy did not reach the replacement window");
+        let runtime = root.join("fixture.plugin/bin/plugin");
+        fs::rename(&runtime, root.join("fixture.plugin/bin/authenticated-backup"))
+            .expect("move authenticated path");
+        fs::write(&runtime, b"untrusted!!!!").expect("write replacement");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+                .expect("replacement permissions");
+        }
+        fs::remove_file(root.join(".test-runtime-copy-pause")).expect("release copy pause");
+
+        let prepared = prepare.join().expect("prepare thread").expect("pinned snapshot");
+        assert_eq!(
+            fs::read(prepared.installed().root.join("bin/plugin")).expect("snapshot runtime"),
+            b"authenticated"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an installed real plugin store"]
+    fn installed_process_snapshot_reports_real_runtime_timing() {
+        let root = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_PLUGIN_STORE")
+                .expect("INTO_MD_TEST_PLUGIN_STORE is required"),
+        );
+        let id =
+            std::env::var("INTO_MD_TEST_PLUGIN_ID").expect("INTO_MD_TEST_PLUGIN_ID is required");
+        let manager = PluginManager::open_persisted(root).expect("open installed plugin store");
+        let mut limits = ResourceLimits::default();
+        limits.max_temporary_bytes = 4 * 1024 * 1024 * 1024;
+        limits.max_memory_bytes = 4 * 1024 * 1024 * 1024;
+        let execution = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let started = std::time::Instant::now();
+        let prepared = manager
+            .process_manifest(
+                &id,
+                into_markdown_process_plugin::RuntimePolicy::default(),
+                &execution,
+            )
+            .expect("prepare installed runtime snapshot");
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let bytes = relative_file_inventory(&prepared.installed().root)
+            .into_iter()
+            .map(|relative| fs::metadata(prepared.installed().root.join(relative)).unwrap().len())
+            .sum::<u64>();
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "plugin": id,
+                "snapshotBytes": bytes,
+                "snapshotMs": (elapsed_ms * 100.0).round() / 100.0,
+            })
         );
     }
 

@@ -121,6 +121,14 @@ pub(crate) fn authorize_path(
     verify_runtime_tree(path, app.as_ptr(), true)
 }
 
+pub(crate) fn verify_authorized_path(
+    authority: &crate::WindowsSandboxAuthority,
+    path: &Path,
+) -> Result<(), PluginError> {
+    let app = AppContainerSid::derive_verified(&authority.profile_name, &authority.sid)?;
+    verify_runtime_tree(path, app.as_ptr(), true)
+}
+
 fn verify_runtime_tree(path: &Path, app_sid: PSID, root: bool) -> Result<(), PluginError> {
     use std::os::windows::fs::MetadataExt as _;
     let metadata = std::fs::symlink_metadata(path)

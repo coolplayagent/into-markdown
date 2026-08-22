@@ -6,6 +6,12 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Internal boundary used only by the signed official process provider. Normal
+# library consumers retain complete content-digest verification.
+authenticated-read-only-snapshot = []
+
 [dependencies]
 clipper2-rust.workspace = true
 image.workspace = true

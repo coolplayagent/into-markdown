@@ -1071,15 +1071,28 @@ fn merge_adjacent_speaker_turns(
 }
 
 fn can_merge_speaker_turns(left: &BlockNode, right: &BlockNode) -> bool {
-    let Block::TimedSegment { range: left_range, speaker: left_speaker, .. } = &left.block else {
+    let Block::TimedSegment {
+        range: left_range, speaker: left_speaker, tokens: left_tokens, ..
+    } = &left.block
+    else {
         return false;
     };
-    let Block::TimedSegment { range: right_range, speaker: right_speaker, .. } = &right.block
+    let Block::TimedSegment {
+        range: right_range,
+        speaker: right_speaker,
+        tokens: right_tokens,
+        ..
+    } = &right.block
     else {
         return false;
     };
     left_speaker.is_some()
         && left_speaker == right_speaker
+        // A tokenless segment carries transcript text without word timing evidence. Merging it
+        // with a tokenized turn would produce a segment whose tokens no longer reproduce its
+        // content, violating Document IR and silently dropping text if content were rebuilt from
+        // only the timed tokens.
+        && left_tokens.is_empty() == right_tokens.is_empty()
         && right_range.start_ms >= left_range.end_ms
         && right_range.start_ms - left_range.end_ms <= SAME_SPEAKER_MERGE_GAP_MS
 }
@@ -1610,6 +1623,35 @@ mod tests {
             .collect::<String>();
         assert_eq!(text, "We should meet tomorrow.");
         assert_eq!(merged[0].provenance.locator.time, Some(*range));
+
+        let mut mixed_evidence = vec![
+            node(
+                "segment-tokenized",
+                TimeRange { start_ms: 4_000, end_ms: 5_000 },
+                vec![token(4_000, 5_000, "Timed", Some("speaker-1"))],
+                "Timed",
+            ),
+            node(
+                "segment-tokenless",
+                TimeRange { start_ms: 5_100, end_ms: 6_000 },
+                Vec::new(),
+                " but preserved",
+            ),
+        ];
+        let Block::TimedSegment { speaker, speaker_confidence, .. } = &mut mixed_evidence[1].block
+        else {
+            panic!("timed segment")
+        };
+        *speaker = Some("speaker-1".into());
+        *speaker_confidence = Some(0.8);
+        let mixed_evidence = merge_adjacent_speaker_turns(mixed_evidence).unwrap();
+        assert_eq!(mixed_evidence.len(), 2, "tokenless transcript evidence cannot be merged away");
+        into_markdown_core::Document {
+            blocks: mixed_evidence,
+            ..into_markdown_core::Document::default()
+        }
+        .validate()
+        .unwrap();
 
         let mut noncontiguous = merged.clone();
         let Block::TimedSegment { speaker, tokens, .. } = &mut noncontiguous[0].block else {

@@ -138,7 +138,9 @@ fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network
             "schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\n\
              base_url = \"http://{address}/v1\"\nmodel = \"controlled-vision\"\n\
              api_key_env = \"IMAGE_DESCRIPTION_TEST_KEY\"\n\
-             capabilities = [\"image-description\"]\n"
+             capabilities = [\"image-description\"]\n\
+             allowed_hosts = [\"127.0.0.1\"]\n\
+             allow_private_network = true\n"
         ),
     )
     .unwrap();
@@ -331,7 +333,7 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
     let config = directory.path().join("provider.toml");
     std::fs::write(
         &config,
-        format!("schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\nmodel = \"model\"\napi_key_env = \"PROVIDER_TEST_KEY\"\ncapabilities = [\"image-description\"]\n"),
+        format!("schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\nmodel = \"model\"\napi_key_env = \"PROVIDER_TEST_KEY\"\ncapabilities = [\"image-description\"]\nallowed_hosts = [\"127.0.0.1\"]\nallow_private_network = true\n"),
     ).unwrap();
 
     let denied = Command::new(binary())

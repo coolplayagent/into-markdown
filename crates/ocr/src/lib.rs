@@ -1028,6 +1028,14 @@ pub struct ModelManager {
     manifest: ModelManifest,
     writable_root: PathBuf,
     bundled_root: Option<PathBuf>,
+    verification: ModelVerification,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelVerification {
+    ContentDigest,
+    #[cfg(any(feature = "authenticated-read-only-snapshot", test))]
+    AuthenticatedReadOnlySnapshot,
 }
 
 /// Hash-verified runtime model bytes and retained request accounting.
@@ -1050,11 +1058,58 @@ impl ModelManager {
         writable_root: PathBuf,
         bundled_root: Option<PathBuf>,
     ) -> Result<Self, ConversionError> {
-        Ok(Self::new(ModelManifest::embedded()?, writable_root, bundled_root))
+        Ok(Self::new(
+            ModelManifest::embedded()?,
+            writable_root,
+            bundled_root,
+            ModelVerification::ContentDigest,
+        ))
     }
 
-    fn new(manifest: ModelManifest, writable_root: PathBuf, bundled_root: Option<PathBuf>) -> Self {
-        Self { manifest, writable_root, bundled_root }
+    /// Creates a manager for bytes already authenticated while constructing a private runtime
+    /// snapshot which the caller exposes through a replacement-protected read-only sandbox.
+    ///
+    /// This mode still validates the complete model inventory, install state, file type, and
+    /// exact sizes on every use. It skips redundant multi-hundred-megabyte digests in the worker;
+    /// callers outside that sandbox boundary must use [`Self::embedded`].
+    #[cfg(feature = "authenticated-read-only-snapshot")]
+    #[doc(hidden)]
+    pub fn embedded_authenticated_read_only_snapshot(
+        writable_root: PathBuf,
+        bundled_root: Option<PathBuf>,
+    ) -> Result<Self, ConversionError> {
+        Ok(Self::new(
+            ModelManifest::embedded()?,
+            writable_root,
+            bundled_root,
+            ModelVerification::AuthenticatedReadOnlySnapshot,
+        ))
+    }
+
+    fn new(
+        manifest: ModelManifest,
+        writable_root: PathBuf,
+        bundled_root: Option<PathBuf>,
+        verification: ModelVerification,
+    ) -> Self {
+        Self { manifest, writable_root, bundled_root, verification }
+    }
+
+    fn verify_directory(
+        &self,
+        bundle: &ModelBundle,
+        path: &Path,
+        context: &ExecutionContext,
+    ) -> Result<(), ModelManagerError> {
+        match self.verification {
+            ModelVerification::ContentDigest => {
+                verify_directory_with_context(bundle, path, context)
+            }
+            #[cfg(any(feature = "authenticated-read-only-snapshot", test))]
+            ModelVerification::AuthenticatedReadOnlySnapshot => {
+                verify_directory_metadata_with_context(bundle, path, context)
+            }
+        }
     }
 
     /// Embedded manifest accessor.
@@ -1110,8 +1165,7 @@ impl ModelManager {
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
             if safe_existing_directory(&path)? {
-                let state =
-                    verification_state(verify_directory_with_context(bundle, &path, context))?;
+                let state = verification_state(self.verify_directory(bundle, &path, context))?;
                 return Ok(ModelStatus {
                     schema_version: 1,
                     id: id.to_owned(),
@@ -1124,7 +1178,7 @@ impl ModelManager {
         }
         let path = self.writable_root.join(id);
         if safe_existing_directory(&path)? {
-            let state = verification_state(verify_directory_with_context(bundle, &path, context))?;
+            let state = verification_state(self.verify_directory(bundle, &path, context))?;
             return Ok(ModelStatus {
                 schema_version: 1,
                 id: id.to_owned(),
@@ -1177,7 +1231,7 @@ impl ModelManager {
             };
         }
         let path = status.path.as_ref().ok_or(ModelManagerError::NotInstalled)?;
-        verify_directory_with_context(self.bundle(id)?, path, context)?;
+        self.verify_directory(self.bundle(id)?, path, context)?;
         Ok(status)
     }
 
@@ -1834,6 +1888,34 @@ fn verify_directory_with_context(
     path: &Path,
     context: &ExecutionContext,
 ) -> Result<(), ModelManagerError> {
+    verify_directory_metadata_with_context(bundle, path, context)?;
+    for artifact in &bundle.runtime_artifacts {
+        context.checkpoint()?;
+        let file_path = path.join(&artifact.file_name);
+        let mut file =
+            required_regular_file(&file_path, &format!("{} is missing", artifact.file_name))?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            context.checkpoint()?;
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        if format!("{:x}", digest.finalize()) != artifact.sha256 {
+            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn verify_directory_metadata_with_context(
+    bundle: &ModelBundle,
+    path: &Path,
+    context: &ExecutionContext,
+) -> Result<(), ModelManagerError> {
     context.checkpoint()?;
     reject_symlink(path)?;
     let state_path = path.join("install-state.json");
@@ -1859,23 +1941,10 @@ fn verify_directory_with_context(
     for artifact in &bundle.runtime_artifacts {
         context.checkpoint()?;
         let file_path = path.join(&artifact.file_name);
-        let mut file =
+        let file =
             required_regular_file(&file_path, &format!("{} is missing", artifact.file_name))?;
         let metadata = file.metadata()?;
         if metadata.len() != artifact.size {
-            return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
-        }
-        let mut digest = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            context.checkpoint()?;
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
-        }
-        if format!("{:x}", digest.finalize()) != artifact.sha256 {
             return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
         }
     }
@@ -2740,8 +2809,12 @@ mod tests {
     #[test]
     fn pipeline_reports_missing_components_without_network_or_filesystem_mutation() {
         let temp = tempfile::tempdir().unwrap();
-        let manager =
-            ModelManager::new(ModelManifest::embedded().unwrap(), temp.path().join("models"), None);
+        let manager = ModelManager::new(
+            ModelManifest::embedded().unwrap(),
+            temp.path().join("models"),
+            None,
+            ModelVerification::ContentDigest,
+        );
         let status = manager.status("pp-ocrv6-tiny-zh-en").unwrap();
         assert_eq!(status.state, "not-installed");
         assert_eq!(status.ownership, "component-set");
@@ -2780,6 +2853,7 @@ mod tests {
             ModelManifest::embedded().unwrap(),
             writable.clone(),
             Some(bundled.clone()),
+            ModelVerification::ContentDigest,
         );
         let status = manager.status(id).unwrap();
         assert_eq!(status.state, "not-installed");
@@ -2834,6 +2908,13 @@ mod tests {
     }
 
     fn installable_manager(root: &Path) -> ModelManager {
+        installable_manager_with_verification(root, ModelVerification::ContentDigest)
+    }
+
+    fn installable_manager_with_verification(
+        root: &Path,
+        verification: ModelVerification,
+    ) -> ModelManager {
         #[cfg(windows)]
         windows_transaction_fs::harden_test_directory(root).unwrap();
         let mut manifest = ModelManifest::embedded().unwrap();
@@ -2855,7 +2936,7 @@ mod tests {
             platforms: vec!["aarch64-apple-darwin".into()],
             license: "MIT".into(),
         }];
-        ModelManager::new(manifest, root.to_path_buf(), None)
+        ModelManager::new(manifest, root.to_path_buf(), None, verification)
     }
 
     const TEST_INSTALL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
@@ -2922,6 +3003,27 @@ mod tests {
         assert_eq!(fs::read(manager.path(id).unwrap().join("model.onnx")).unwrap(), b"hello");
         manager.install(id, &fetcher, &execution(5)).unwrap();
         assert_eq!(fetcher.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn authenticated_read_only_snapshot_uses_inventory_while_normal_manager_hashes() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = installable_manager(temp.path());
+        let fetcher = BytesFetcher {
+            bytes: b"hello".to_vec(),
+            opens: std::sync::atomic::AtomicUsize::new(0),
+        };
+        manager.install(TEST_INSTALL_ID, &fetcher, &execution(5)).unwrap();
+        fs::write(temp.path().join(TEST_INSTALL_ID).join("model.onnx"), b"jello").unwrap();
+
+        assert!(matches!(manager.verify(TEST_INSTALL_ID), Err(ModelManagerError::Corrupt(_))));
+        let snapshot = installable_manager_with_verification(
+            temp.path(),
+            ModelVerification::AuthenticatedReadOnlySnapshot,
+        );
+        assert_eq!(snapshot.verify(TEST_INSTALL_ID).unwrap().state, "installed");
+        fs::write(temp.path().join(TEST_INSTALL_ID).join("model.onnx"), b"shorter").unwrap();
+        assert!(matches!(snapshot.verify(TEST_INSTALL_ID), Err(ModelManagerError::Corrupt(_))));
     }
 
     #[test]

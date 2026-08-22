@@ -164,6 +164,21 @@ pub fn authorize_windows_sandbox_path(
     sandbox::windows::authorize_path(authority, path)
 }
 
+/// Verify one runtime snapshot still has the exact current-user plus
+/// provisioned `AppContainer` ACL installed by
+/// [`authorize_windows_sandbox_path`].
+///
+/// # Errors
+///
+/// Returns an error for inherited, broadened, missing, or reparse-point ACLs.
+#[cfg(windows)]
+pub fn verify_windows_sandbox_path(
+    authority: &WindowsSandboxAuthority,
+    path: &Path,
+) -> Result<(), PluginError> {
+    sandbox::windows::verify_authorized_path(authority, path)
+}
+
 /// Atomically create one directory with a current-user-only protected DACL.
 ///
 /// # Errors

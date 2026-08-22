@@ -950,11 +950,7 @@ fn remote_client(
         component: format!("provider.{provider_name}"),
         detail: error.code_str().into(),
     })?;
-    let network = ProviderNetworkPolicy {
-        allow_network: loaded.options.network.enabled,
-        allow_private_network: !loaded.options.network.deny_private_networks,
-        allowed_hosts: loaded.options.network.allowed_hosts.clone(),
-    };
+    let network = provider_network_policy(loaded, configured)?;
     Ok((OpenAiCompatibleClient::new(config, network.clone()), network, model))
 }
 
@@ -990,11 +986,7 @@ fn assemble_ai_provider(
     let timeout = std::time::Duration::from_millis(
         configured.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
     );
-    let network = ProviderNetworkPolicy {
-        allow_network: loaded.options.network.enabled,
-        allow_private_network: !loaded.options.network.deny_private_networks,
-        allowed_hosts: loaded.options.network.allowed_hosts.clone(),
-    };
+    let network = provider_network_policy(loaded, configured).map_err(CliError::from)?;
     let provider_id = format!("provider.{name}");
     let client = || {
         TransportProviderConfig::parse(
@@ -1047,6 +1039,52 @@ fn assemble_ai_provider(
         1 => Ok(adapters.pop()),
         _ => Ok(Some(Arc::new(CompositeAiProvider::new(provider_id, adapters)?))),
     }
+}
+
+fn provider_network_policy(
+    loaded: &LoadedConfig,
+    provider: &crate::config::ProviderConfig,
+) -> Result<ProviderNetworkPolicy, ConversionError> {
+    let configured_hosts = crate::config::normalize_allowed_hosts(
+        &loaded.options.network.allowed_hosts,
+    )
+    .map_err(|error| ConversionError::ComponentUnavailable {
+        component: "provider.network".into(),
+        detail: error.code().into(),
+    })?;
+    let provider_hosts =
+        crate::config::normalize_allowed_hosts(&provider.allowed_hosts).map_err(|error| {
+            ConversionError::ComponentUnavailable {
+                component: "provider.network".into(),
+                detail: error.code().into(),
+            }
+        })?;
+    let allowed_hosts = match (configured_hosts.is_empty(), provider_hosts.is_empty()) {
+        (true, true) => Vec::new(),
+        (false, true) => configured_hosts,
+        (true, false) => provider_hosts,
+        (false, false) => {
+            let provider_hosts =
+                provider_hosts.into_iter().collect::<std::collections::BTreeSet<_>>();
+            let intersection = configured_hosts
+                .into_iter()
+                .filter(|host| provider_hosts.contains(host))
+                .collect::<Vec<_>>();
+            if intersection.is_empty() {
+                return Err(ConversionError::ComponentUnavailable {
+                    component: "provider.network".into(),
+                    detail: "providerHostAllowlistConflict".into(),
+                });
+            }
+            intersection
+        }
+    };
+    Ok(ProviderNetworkPolicy {
+        allow_network: loaded.options.network.enabled,
+        allow_private_network: !loaded.options.network.deny_private_networks
+            && provider.allow_private_network,
+        allowed_hosts,
+    })
 }
 
 #[cfg(test)]
@@ -1433,6 +1471,74 @@ audio-transcription = "qwen3-asr-flash"
         let (_, _, asr_model) = remote_client(&loaded, "bailian", "audio-transcription").unwrap();
         assert_eq!(ocr_model, "qwen3.5-ocr");
         assert_eq!(asr_model, "qwen3-asr-flash");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote_provider_network_policies_are_isolated_per_provider() {
+        let (root, mut loaded) = loaded_config(
+            "remote-network-isolation",
+            r#"
+schema_version = 1
+
+[conversion.network]
+allowed_hosts = ["a.example", "b.example"]
+
+[providers.a]
+type = "openai-compatible"
+base_url = "https://a.example/v1"
+model = "model-a"
+api_key_env = "PROVIDER_A_KEY"
+capabilities = ["vision-ocr"]
+allowed_hosts = ["a.example"]
+allow_private_network = false
+
+[providers.b]
+type = "openai-compatible"
+base_url = "https://b.example/v1"
+model = "model-b"
+api_key_env = "PROVIDER_B_KEY"
+capabilities = ["vision-ocr"]
+allowed_hosts = ["b.example"]
+allow_private_network = true
+"#,
+        );
+        loaded.options.network.enabled = true;
+        loaded.options.network.deny_private_networks = false;
+        let (_, a, _) = remote_client(&loaded, "a", "vision-ocr").unwrap();
+        let (_, b, _) = remote_client(&loaded, "b", "vision-ocr").unwrap();
+        assert_eq!(a.allowed_hosts, vec!["a.example"]);
+        assert!(!a.allow_private_network);
+        assert_eq!(b.allowed_hosts, vec!["b.example"]);
+        assert!(b.allow_private_network);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disjoint_provider_and_request_host_policies_fail_closed() {
+        let (root, loaded) = loaded_config(
+            "remote-network-conflict",
+            r#"
+schema_version = 1
+
+[conversion.network]
+allowed_hosts = ["request.example"]
+
+[providers.fixture]
+type = "openai-compatible"
+base_url = "https://provider.example/v1"
+model = "fixture"
+api_key_env = "PROVIDER_KEY"
+capabilities = ["vision-ocr"]
+allowed_hosts = ["provider.example"]
+"#,
+        );
+        let error = remote_client(&loaded, "fixture", "vision-ocr").unwrap_err();
+        assert!(matches!(
+            error,
+            ConversionError::ComponentUnavailable { ref detail, .. }
+                if detail == "providerHostAllowlistConflict"
+        ));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -67,10 +67,17 @@ fn installed_diarization_service_inner(
             detail: "speaker diarization is not enabled for this request".into(),
         });
     }
-    let manager = Arc::new(into_markdown_ocr::ModelManager::embedded(
-        config.writable_model_root.clone(),
-        config.bundled_model_root.clone(),
-    )?);
+    let manager = Arc::new(if read_only_sandbox {
+        into_markdown_ocr::ModelManager::embedded_authenticated_read_only_snapshot(
+            config.writable_model_root.clone(),
+            config.bundled_model_root.clone(),
+        )?
+    } else {
+        into_markdown_ocr::ModelManager::embedded(
+            config.writable_model_root.clone(),
+            config.bundled_model_root.clone(),
+        )?
+    });
     if manager.manifest().default_diarization_bundle.as_deref() != Some(&config.model_bundle) {
         return Err(ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
