@@ -211,7 +211,7 @@ RSS 声明，模型 session/run 和请求预算仍独立检查。Identity/Expand
 模型。独立 recognizer component 的回归验证仍由显式
 `//crates/onnxruntime:ppocrv6_recognizer_quality` 执行；完整产品 pipeline 另外固定官方
 detector/recognizer artifact，并由 `//crates/api:ppocrv6_image_quality` 与
-`//apps/cli:ppocrv6_cli_quality` 从真实产品装配路径执行。
+真实产品装配路径由安装后的 Core 与签名 OCR 插件 E2E 执行。
 
 OCR-to-IR merge 另有显式
 `//crates/onnxruntime:ppocrv6_merge_quality`：它先核对 #55 manifest、12 图和 merge quality
@@ -329,7 +329,7 @@ native `exec == target` 组合。CI 在四个 native runner 上对其余三个 f
 core test、public consumer、probe、C++ embedding test 和普通聚合目标逐项检查 config 入口，
 覆盖全部十二种 host→foreign 组合；还单独绕过 aspect 验证 mandatory C++ 与 test consumer
 仍被 toolchain 自身拒绝。这些普通目标不引用 manual ONNX Runtime、PDFium、FFmpeg 或
-模型下载目标，因此四平台门禁不会获取其大型制品。
+能力插件资源目标，因此 Core 四平台门禁不会获取其大型制品。
 
 仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
@@ -570,13 +570,19 @@ Unicode word token WER 必须各不高于 15%；对应常见噪声样本必须�
 断言每段时间戳单调、有界，语言检测结果正确，所有置信度有限且位于 `[0,1]`。这些阈值不可
 由普通单元测试、接口 stub 或只验证模型 hash 的测试宣称满足。
 
-## 模型下载代理路由
+## 能力插件下载代理路由
 
 传输库的代理单测（`cargo test -p into-markdown-http-transport`）用注入式假连接逐字节断言：
 CONNECT 请求行与 `Proxy-Authorization` 头精确、凭证不出现在任何字节中；2xx 以外的代理应答、
 head 后提前隧道字节（smuggling）与畸形应答映射稳定错误；`NO_PROXY` 的 `*`/精确/后缀语义、
 明文 origin 永不入隧道；豁免与直连目标不触发任何代理解析。CLI 侧 `proxy_env` 单测固定
 `INTO_MD_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy` 优先级、空值等于未设置与非法值
-fail closed；`model_fetch` 的 scripted transport 维持 whisper 单跳重定向 authority（xet
-bridge 域 + 精确 object hash），重定向到其它 host 或篡改 hash 均稳定拒绝。库与确定性测试
+fail closed；官方插件目录与安装 transport 固定 HTTPS 来源、完整包 hash 与签名，重定向到
+其它 host 或篡改 hash 均稳定拒绝。库与确定性测试
 不读取环境变量：默认客户端行为与所有既有测试在设置代理变量的环境中不变。
+
+## 四目标模块化发布验收
+
+四目标模块化发布的原生归档、插件安装、确定性和签名门禁见
+[`platform-modular-release.md`](platform-modular-release.md)。交叉编译只验证接口和工具链，不能
+替代 Linux ARM64 或 Windows 的真实安装、AppContainer、LibreOffice、OCR、音频和卸载验收。

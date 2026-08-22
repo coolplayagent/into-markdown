@@ -40,7 +40,9 @@ cargo check --workspace
 ```
 
 The supported targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows
-x86_64. macOS x86_64 is intentionally unsupported.
+x86_64. macOS x86_64 is intentionally unsupported. See the
+[macOS release](docs/macos-arm64-release.md) and
+[Linux/Windows release](docs/platform-modular-release.md) boundaries.
 
 ## Command line
 
@@ -53,15 +55,16 @@ printf 'name\tage\nAlice\t42\n' | bazel run //apps/cli:into-md -- --format tsv -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
-bazel run //apps/cli:into-md -- models
-bazel run //apps/cli:into-md -- models show pp-ocrv6-tiny-zh-en --json
+bazel run //apps/cli:into-md -- capabilities --json
+bazel run //apps/cli:into-md -- capabilities show ocr --json
+bazel run //apps/cli:into-md -- setup ocr
 bazel run //apps/cli:into-md -- doctor
 bazel run //apps/cli:into-md -- ui
 ```
 
 The CLI accepts conversion inputs directly and has no `convert` subcommand. It
 defines batch files and directories, stdin, URIs, OCR/AI routing, structured
-JSON, portable bundles, layered configuration, providers, models, and plugins.
+JSON, portable bundles, layered configuration, providers, capabilities, and plugins.
 Network and AI access are disabled by default; remote sources and providers
 require an explicit `--allow-network` on every invocation.
 
@@ -148,18 +151,13 @@ external-only Asset without being downloaded; inline, relative, and unsafe targe
 produce explicit diagnostics and safe fallbacks. Raw HTML and blockquotes use explicit
 non-executable IR fallbacks; see the [format matrix](docs/formats.md) for the full policy.
 
-Model discovery, offline verification, path lookup, and guarded cleanup are
-implemented. The `pp-ocrv6-tiny-zh-en` product pipeline binds separately reviewed detector and
-recognizer components, official ONNX archive structure, the character table, and transactional
-install authority. Only `models install` uses the fixed-host, fixed-size, hash-pinned library
-transport; conversion never downloads models automatically. CLI and API conversion assemble OCR
-only after the signed capability package, isolated runtime, both components, and readiness check
-verify successfully. The standard distribution includes signed OCR and media provider packages;
-`setup ocr` and `setup media` install their models explicitly, while the full offline distribution
-includes those models. A provider failure after execution begins never triggers a silent fallback.
-Windows model installation remains fail-closed until durable, reparse-safe
-directory-handle flushing is implemented; path resolution and offline metadata remain available.
-Other unavailable format conversion remains unavailable.
+Local OCR, speech, and legacy Office support ship as three self-contained signed capability
+plugins. The OCR plugin owns PP-OCRv6, ONNX Runtime, its character table, and fixed model files;
+the speech plugin owns FFmpeg, Whisper, VAD, speaker models, and their runtimes; the legacy Office
+plugin owns LibreOffice. Users install, verify, update, and remove each plugin as one unit rather
+than managing its models separately. `setup ocr`, `setup media`, and `setup legacy-office` install
+and verify official packages; conversion never downloads them implicitly. Local plugins and remote
+providers use the same typed routing, fallback, and provenance contract.
 
 The detailed design documents are maintained in Chinese. See the
 [architecture](docs/architecture.md), [interface contract](docs/interfaces.md),

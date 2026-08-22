@@ -121,13 +121,13 @@ PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输
 普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
 第三方声明目录；显式联网制品审计见 `tools/pdfium-audit.sh`。
 
-LibreOffice runtime 当前不进入仓库、普通测试或 release inventory；机器契约
-`third_party/legacy-office/authority.schema.json` 与隔离 worker 已实现，但平台制品只能由包装任务
-在核对该安装内 `LICENSE`、完整 third-party notice、文件清单、ABI、size 与 SHA-256 后发布。
+LibreOffice runtime 不进入仓库、普通测试或 Core；只进入对应目标的旧 Office 能力插件。机器契约
+`third_party/legacy-office/authority.schema.json` 与隔离 worker 会在原生包装任务中核对该安装内
+`LICENSE`、完整文件清单、ABI、artifact size/SHA-256 和依赖闭包后生成并随插件签名。
 ELF/Mach-O/PE 递归依赖也必须分别进入 package inventory 或平台精确 `systemLibraries`；
 LibreOffice core 的 MPL-2.0 不能替代随具体版本变化的所有 bundled component 许可。
 
-FFmpeg、Wasmtime、字体和生成模型只是占位项。未来纳入时
+Wasmtime、字体和未受审能力模型仍是占位项。FFmpeg 只进入语音能力插件，并
 必须记录具体版本、源码 URL、哈希、补丁、构建开关、许可证文本与 NOTICE 要求。
 FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件；未知配置直接
 阻止发布。

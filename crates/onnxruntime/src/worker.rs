@@ -421,6 +421,7 @@ fn spawn_worker_windows(
     Ok(WorkerProcess { child, _job: job })
 }
 
+#[cfg(any(windows, test))]
 const fn align_physical_memory_limit(limit: u64, page_size: u64) -> Option<u64> {
     if page_size == 0 {
         return None;

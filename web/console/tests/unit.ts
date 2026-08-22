@@ -7,7 +7,7 @@ import {
   createApiClient, ApiError, defaultMeetingOptions, defaultWorkbenchOptions, meetingTaskRequest,
   meetingOptionsForLocale, parseTask,
 } from "../src/api";
-import type { ApiClient, TaskRecord } from "../src/api";
+import type { ApiClient, MeetingOptions, TaskRecord, WorkbenchOptions } from "../src/api";
 import { App } from "../src/app";
 import { requestMicrophone, requestSystemAudio } from "../src/meeting-page";
 import { JsonTree, SafeMarkdownPreview } from "../src/preview";
@@ -41,9 +41,11 @@ const testGroups = {
     "workbench separates the current batch from scrollable recent history",
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
+    "remote OCR requires nearby network and provider authorization without enabling unrelated AI modes",
     "meeting recording is an independent route and media never enters the document workbench",
     "Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices",
     "meeting page keeps recording primary and setup feedback beside transcript controls",
+    "remote transcription requires a one-upload grant beside transcript controls",
     "workbench reports the bounded upload rejection code",
     "API rejection renders a recoverable status error rather than the error boundary",
     "ErrorBoundary contains provider render errors and focuses its fallback heading",
@@ -172,7 +174,7 @@ const availableApi: ApiClient = {
   },
   async preview() { return { text: "", truncated: false, contentType: "text/plain" }; },
   async download() { return { blob: new Blob(), filename: "result.md" }; },
-  async admin() { return { schemaVersion: 1, formats: [], models: { defaultBundle: "default", entries: [] }, providers: [], plugins: [], configuration: {}, profiles: [], doctor: [], configurationReadOnly: false }; },
+  async admin() { return { schemaVersion: 1, formats: [], capabilities: [], providers: [], plugins: [], configuration: {}, profiles: [], doctor: [], configurationReadOnly: false }; },
   async adminAction() { return {}; },
 };
 
@@ -280,6 +282,10 @@ test("meeting request binds language hints to deterministic Chinese script outpu
   const automatic = meetingTaskRequest(file, defaultMeetingOptions) as any;
   assert.equal(automatic.options.asr.language, null);
   assert.equal(automatic.options.asr.chinese_script, "preserve");
+  const remote = meetingTaskRequest(file, { ...defaultMeetingOptions, authorizeProvider: true }) as any;
+  assert.equal(remote.options.network.enabled, true);
+  assert.equal(remote.options.network.deny_private_networks, false);
+  assert.deepEqual(remote.authorization, { network: true, privateNetwork: true, provider: true });
 });
 
 test("API client sends only the strict POST contract and validates bounded DTOs", async () => {
@@ -354,8 +360,9 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.equal(request.batchId, batchId);
   assert.equal(request.format, "pdf");
   assert.equal(request.options.ocr.policy, "always");
+  assert.equal(request.options.limits.max_memory_bytes, 1024 * 1024 * 1024);
   assert.deepEqual(request.options.asr, {
-    model_bundle: "whisper-small-multilingual", language: null, chinese_script: "preserve", max_threads: 4,
+    language: null, chinese_script: "preserve", max_threads: 4,
     max_duration_ms: null, max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024,
   });
   assert.equal(request.options.ai.audio_transcription, "off");
@@ -727,6 +734,45 @@ test("workbench presents network access as one bounded switch", async () => {
   assert.equal(toggle.checked, true);
 });
 
+test("remote OCR requires nearby network and provider authorization without enabling unrelated AI modes", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const uploaded: WorkbenchOptions[] = [];
+  const api: ApiClient = {
+    ...availableApi,
+    async status() { return { ...(await availableApi.status()), imageOcr: { available: true, code: "available", detail: "ready" } }; },
+    async admin() { return { ...(await availableApi.admin()), capabilities: [{ id: "ocr", status: "ready", localStatus: "ready", currentSource: "provider:bailian/ocr", sources: ["provider:bailian/ocr", "plugin:official.ocr/ocr", "off"] }] }; },
+    async upload(_file, options) { uploaded.push(options); return task(); },
+    async watchTask() {},
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Provider · bailian");
+  const drop = new window.Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["image"], "scan.jpg", { type: "image/jpeg" })] } });
+  window.document.getElementById("upload-zone")!.dispatchEvent(drop);
+  await waitForText(window, "Selected (1)");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitForText(window, "The selected capability uses a remote provider");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
+  await waitFor(() => Boolean(window.document.querySelector(".settings-sheet")));
+  const aiMode = [...window.document.querySelectorAll<HTMLSelectElement>(".settings-sheet select")]
+    .find((select) => [...select.options].some((option) => option.value === "prefer"))!;
+  assert.equal(aiMode.value, "off");
+  const grant = [...window.document.querySelectorAll("label")]
+    .find((label) => label.textContent?.includes("I authorize these uploads"))!
+    .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  assert.equal(grant.checked, false);
+  const network = [...window.document.querySelectorAll("label")]
+    .find((label) => label.textContent?.includes("Allow network access"))!
+    .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  network.click(); grant.click();
+  [...window.document.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]')].at(-1)!.click();
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
+  await waitFor(() => uploaded.length === 1);
+  assert.equal(uploaded[0]!.aiMode, "off");
+  assert.equal(uploaded[0]!.networkMode, "unrestricted");
+  assert.equal(uploaded[0]!.authorizeProvider, true);
+});
+
 test("meeting recording is an independent route and media never enters the document workbench", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const uploads: Array<[string, boolean]> = [];
@@ -781,6 +827,34 @@ test("meeting page keeps recording primary and setup feedback beside transcript 
   const diarize = window.document.querySelector<HTMLInputElement>('.meeting-options input[type="checkbox"]')!;
   assert.equal(diarize.disabled, true);
   assert.equal(diarize.checked, false);
+});
+
+test("remote transcription requires a one-upload grant beside transcript controls", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/meetings");
+  const uploads: MeetingOptions[] = [];
+  const api: ApiClient = {
+    ...availableApi,
+    async status() { return { ...(await availableApi.status()), audioTranscription: { available: true, code: "available", detail: "ready" }, speakerDiarization: { available: true, code: "available", detail: "ready" } }; },
+    async admin() { return { ...(await availableApi.admin()), capabilities: [
+      { id: "transcription", status: "ready", localStatus: "ready", currentSource: "provider:bailian/transcription", sources: ["provider:bailian/transcription", "plugin:official.media/transcription", "off"] },
+      { id: "diarization", status: "ready", localStatus: "ready", currentSource: "plugin:official.media/diarization", sources: ["plugin:official.media/diarization", "off"] },
+    ] }; },
+    async uploadMeeting(_file, options) { uploads.push(options); return { ...task(), workflow: "meetingTranscript" }; },
+    async watchTask() {},
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "I authorize this audio and required network access for the selected remote provider");
+  const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.webm", { type: "audio/webm" })] });
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitForText(window, "meeting.webm");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
+  await waitForText(window, "Explicitly confirm the required provider authorization.");
+  const grant = window.document.querySelector<HTMLInputElement>(".meeting-provider-grant input")!;
+  grant.click();
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
+  await waitFor(() => uploads.length === 1);
+  assert.equal(uploads[0]!.authorizeProvider, true);
 });
 
 test("Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices", async () => {

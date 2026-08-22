@@ -265,7 +265,40 @@
       "version": "26.2.5",
       "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
       "license": "MPL-2.0",
-      "obligations": "Full macOS ARM64 profile only. Preserve the complete official DMG as the immutable license/source bundle, extracted LibreOffice.app license materials, and generated full-file/runtime dependency authority."
+      "obligations": "macOS ARM64 LibreOffice capability plugin only. Preserve the complete official DMG as the immutable license/source bundle, extracted LibreOffice.app license materials, and generated full-file/runtime dependency authority."
+    },
+    {
+      "id": "libreoffice-linux-x86_64",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "26.2.5",
+      "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/deb/x86_64/LibreOffice_26.2.5_Linux_x86-64_deb.tar.gz",
+      "license": "MPL-2.0",
+      "obligations": "Linux x86_64 LibreOffice capability plugin only. Preserve the exact official Debian archive authority, complete extracted license and runtime inventory, ELF dependency closure, ABI evidence, and signed plugin SBOM."
+    },
+    {
+      "id": "libreoffice-linux-arm64",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "26.2.5",
+      "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/deb/aarch64/LibreOffice_26.2.5_Linux_aarch64_deb.tar.gz",
+      "license": "MPL-2.0",
+      "obligations": "Linux ARM64 LibreOffice capability plugin only. Preserve the exact official Debian archive authority, complete extracted license and runtime inventory, ELF dependency closure, ABI evidence, and signed plugin SBOM."
+    },
+    {
+      "id": "libreoffice-windows-x86_64",
+      "kind": "native-runtime",
+      "status": "reviewed",
+      "included_in_release": false,
+      "release_eligible": true,
+      "version": "26.2.5",
+      "source": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/win/x86_64/LibreOffice_26.2.5_Win_x86-64.msi",
+      "license": "MPL-2.0",
+      "obligations": "Windows x86_64 LibreOffice capability plugin only. Preserve the exact official MSI authority, complete extracted license and runtime inventory, PE dependency closure, ABI and AppContainer evidence, Authenticode state, and signed plugin SBOM."
     },
     {
       "id": "wasmtime",

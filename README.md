@@ -22,7 +22,9 @@ cargo check --workspace
 ```
 
 支持的目标平台为 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows
-x86_64。项目明确不支持 macOS x86_64。
+x86_64。项目明确不支持 macOS x86_64。模块化发布边界见
+[`macOS 发布`](docs/macos-arm64-release.md)和
+[`Linux/Windows 发布`](docs/platform-modular-release.md)。
 
 ## 命令行
 
@@ -35,14 +37,15 @@ printf 'name\tage\nAlice\t42\n' | bazel run //apps/cli:into-md -- --format tsv -
 bazel run //apps/cli:into-md -- report.pdf -o report.md
 bazel run //apps/cli:into-md -- documents/ --recursive --output-dir markdown/
 bazel run //apps/cli:into-md -- formats
-bazel run //apps/cli:into-md -- models
-bazel run //apps/cli:into-md -- models show pp-ocrv6-tiny-zh-en --json
+bazel run //apps/cli:into-md -- capabilities --json
+bazel run //apps/cli:into-md -- capabilities show ocr --json
+bazel run //apps/cli:into-md -- setup ocr
 bazel run //apps/cli:into-md -- doctor
 bazel run //apps/cli:into-md -- ui
 ```
 
 CLI 采用直接输入形式，不提供 `convert` 子命令。支持多文件与目录批量处理、stdin、
-URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider、模型与插件管理。
+URI、OCR/AI 策略、结构化 JSON、资源 Bundle、分层配置、Provider、能力与插件管理。
 联网与 AI 默认关闭，远程输入和 Provider 每次都需要显式 `--allow-network`。
 
 `into-md ui` 启动固定监听 `127.0.0.1` 的本地 Web 安全入口和嵌入式 React 控制台壳，默认使用系统分配端口并
@@ -121,16 +124,12 @@ AppContainer，不在转换路径创建或删除持久 profile。运行时制品
 任务独立交付。worker/kit 与非系统依赖只从 authority 校验后的请求私有只读快照 exec/load，
 输出必须通过 exact ZIP、CRC、内容类型与根 relationship 的 DOCX/PPTX/XLSX family 审计。
 
-模型查询、显式安装、离线校验、路径和安全清理后端已实现。完整
-`pp-ocrv6-tiny-zh-en` pipeline 绑定可安装的 detector 与 recognizer 组件；两者分别固定官方
-ONNX/TAR/config，recognizer 另外固定字符表，全部经过 SHA-256、归档结构、license 与安装事务
-校验。只有 `models install` 会使用固定 host、固定大小与固定 hash 的模型 transport；普通转换
-不会自动下载。官方 OCR/音频实现作为签名 capability-provider 包随标准发布物交付；标准包通过
-`setup ocr` / `setup media` 显式安装模型，完整离线包直接使用随包模型。宿主只在签名、
-文件清单、隔离 runtime、模型与 readiness 全部验证通过后路由真实 OCR、转写或说话人分离，
-运行中失败不会静默切换 provider。其他尚未可用的格式转换后端仍明确拒绝。
-Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
-同样 fail closed；目录解析和离线元数据查询不受影响。
+本地 OCR、语音和旧版 Office 以三个自包含签名能力插件交付。OCR 插件内含 PP-OCRv6、
+ONNX Runtime、字符表和固定模型；语音插件内含 FFmpeg、Whisper、VAD、说话人模型及其运行时；
+旧版 Office 插件内含 LibreOffice runtime。用户安装、校验、更新和移除整个插件，不单独管理
+其中的模型。`setup ocr`、`setup media` 与 `setup legacy-office` 从官方目录安装并验证对应插件，
+普通转换不会自动下载。宿主只在包签名、完整文件清单、目标 ABI、隔离 runtime 和 readiness
+全部通过后路由能力；本地插件和远端 Provider 共用同一来源选择、回退与 provenance 契约。
 
 抽取资源按完整内容 SHA-256 去重并使用 MIME 权威扩展名；主 Markdown 与全部资源
 通过带持久 journal 的同一输出事务提交，进程中断后会恢复为完整旧集合或完成完整
@@ -142,7 +141,6 @@ Windows 模型安装在 reparse-safe 目录 handle 持久同步完成审计前
 
 实现路线详见[架构设计](docs/architecture.md)、[接口契约](docs/interfaces.md)、
 [格式矩阵](docs/formats.md)、[OCR 与 AI](docs/ocr-and-ai.md)、
-[本地模型管理](docs/models.md)、
 [OCR 与音频能力插件](docs/capability-plugins.md)、
 [安全模型](docs/security.md)和[测试策略](docs/testing.md)。
 命令与配置契约详见[命令行设计](docs/cli.md)和[配置文件](docs/configuration.md)，

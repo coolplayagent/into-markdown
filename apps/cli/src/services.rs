@@ -160,6 +160,10 @@ impl Transcriber for RoutedTranscriber {
         &self.id
     }
 
+    fn accepts_result_provider(&self, provider: &str) -> bool {
+        self.sources.iter().any(|source| source.id() == provider)
+    }
+
     fn transcribe<'a>(
         &'a self,
         request: TranscriptionRequest<'a>,
@@ -178,7 +182,11 @@ impl Transcriber for RoutedTranscriber {
                         });
                     }
                     Ok(result) => return Ok(result),
-                    Err(error) if can_route_fallback(self.mode, &error) => {
+                    Err(error)
+                        if can_route_fallback(self.mode, &error)
+                            || self.mode == CapabilityRouteMode::Prefer
+                                && source.allows_prefer_fallback(&error) =>
+                    {
                         last_error = Some(error);
                     }
                     Err(error) => return Err(error),
@@ -213,17 +221,36 @@ pub(crate) fn assemble(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
     cwd: &Path,
+    needs: InvocationCapabilities,
 ) -> Result<Services, CliError> {
-    assemble_at(loaded, execution, cwd)
+    assemble_at(loaded, execution, cwd, needs)
 }
 
-/// Assemble the exact local media services required by one durable Web meeting
-/// request. The helper verifies installed components and never downloads them.
-#[derive(Clone, PartialEq, Eq)]
+/// Optional capabilities that can actually be reached by the current input set.
+/// Keeping this separate from installation state prevents an unrelated broken
+/// plugin from blocking formats that do not use it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct InvocationCapabilities {
+    pub(crate) ocr: bool,
+    pub(crate) transcription: bool,
+    pub(crate) diarization: bool,
+    pub(crate) legacy_office: bool,
+}
+
+/// Assemble the exact local or remote media services required by one durable
+/// Web meeting request. The helper verifies installed components and never
+/// downloads them.
+#[derive(Clone, PartialEq)]
 struct WebMediaKey {
-    model_revision: u128,
-    asr: into_markdown::AsrOptions,
-    diarization_bundle: Option<String>,
+    capability_revision: u128,
+    options: ConversionOptions,
+}
+
+#[derive(Clone, PartialEq)]
+struct WebConversionKey {
+    capability_revision: u128,
+    options: ConversionOptions,
+    needs: InvocationCapabilities,
 }
 
 struct SingleEntryCache<K, V> {
@@ -258,28 +285,46 @@ impl<K, V> Default for SingleEntryCache<K, V> {
     }
 }
 
-/// Process-local, bounded cache for the native services used by Web meetings.
+/// Process-local, bounded cache for the routed services used by Web meetings.
 /// A configuration or installed-model revision change atomically replaces the
 /// previous entry; construction failures are never cached.
 #[derive(Default)]
 pub(crate) struct WebMediaServiceCache {
     services: SingleEntryCache<WebMediaKey, Services>,
+    conversion_services: SingleEntryCache<WebConversionKey, Services>,
     loaded: Mutex<Option<LoadedConfig>>,
     cwd: Mutex<Option<PathBuf>>,
 }
 
 impl WebMediaServiceCache {
-    pub(crate) fn assemble(&self, options: &ConversionOptions) -> Result<Services, CliError> {
-        let key = WebMediaKey {
-            model_revision: media_model_revision(),
-            asr: options.asr.clone(),
-            diarization_bundle: options
-                .diarization
-                .enabled
-                .then(|| options.diarization.model_bundle.clone()),
+    pub(crate) fn assemble_conversion(
+        &self,
+        options: &ConversionOptions,
+        needs: InvocationCapabilities,
+    ) -> Result<Option<Services>, CliError> {
+        let loaded = self.loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let cwd = self.cwd.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let (Some(mut loaded), Some(cwd)) = (loaded, cwd) else { return Ok(None) };
+        let key = WebConversionKey {
+            capability_revision: media_model_revision(),
+            options: options.clone(),
+            needs,
         };
+        self.conversion_services
+            .get_or_try_insert_with(key, || {
+                // The durable Web request, rather than the CLI launch defaults,
+                // owns the exact OCR/AI/resource policy used by this engine.
+                loaded.options = options.clone();
+                assemble_at(&loaded, &ExecutionOptions::default(), &cwd, needs)
+            })
+            .map(Some)
+    }
+
+    pub(crate) fn assemble(&self, options: &ConversionOptions) -> Result<Services, CliError> {
+        let key =
+            WebMediaKey { capability_revision: media_model_revision(), options: options.clone() };
         self.services.get_or_try_insert_with(key, || {
-            let loaded = self
+            let mut loaded = self
                 .loaded
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -287,6 +332,10 @@ impl WebMediaServiceCache {
                 .ok_or_else(|| {
                     CliError::component("Web media capability routing is unavailable")
                 })?;
+            // The durable meeting request owns network authorization, limits,
+            // language, and routing modes. Launch-time defaults must not leak
+            // into a remotely routed transcription service.
+            loaded.options = options.clone();
             let cwd = self
                 .cwd
                 .lock()
@@ -295,27 +344,23 @@ impl WebMediaServiceCache {
                 .ok_or_else(|| CliError::component("Web capability scope is unavailable"))?;
             // Cached native services outlive any one request, so their verified
             // model leases must not retain a request cancellation/progress sink.
-            let context = ExecutionContext::new(
-                ExecutionOptions::default(),
-                into_markdown::ResourceLimits::default(),
-            );
-            let mut services = Services {
-                transcriber: Some(assemble_asr_options(&loaded, options, &context, &cwd)?),
-                ..Services::default()
-            };
-            if options.diarization.enabled {
-                services.diarizer = Some(
-                    assemble_diarization_config(&loaded, options, &context, &cwd)
-                        .map_err(CliError::from)?,
-                );
-            }
-            Ok(services)
+            assemble_at(
+                &loaded,
+                &ExecutionOptions::default(),
+                &cwd,
+                InvocationCapabilities {
+                    transcription: true,
+                    diarization: options.diarization.enabled,
+                    ..InvocationCapabilities::default()
+                },
+            )
         })
     }
 
     pub(crate) fn with_config(loaded: LoadedConfig, cwd: PathBuf) -> Self {
         Self {
             services: SingleEntryCache::default(),
+            conversion_services: SingleEntryCache::default(),
             loaded: Mutex::new(Some(loaded)),
             cwd: Mutex::new(Some(cwd)),
         }
@@ -324,6 +369,7 @@ impl WebMediaServiceCache {
     pub(crate) fn update_config(&self, loaded: LoadedConfig) {
         *self.loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(loaded);
         self.services.clear();
+        self.conversion_services.clear();
     }
 }
 
@@ -360,12 +406,20 @@ pub(crate) fn verify_diarization_runtime(
     assemble_diarization_config(loaded, &options, &context, cwd).map(drop)
 }
 
-/// Revision of model, plugin, and routing authority used to invalidate a
+/// Verify construction of the self-contained legacy Office plugin route.
+pub(crate) fn verify_legacy_office_runtime(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> Result<(), ConversionError> {
+    let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
+    assemble_legacy_office_config(loaded, &context, cwd).map(drop)
+}
+
+/// Revision of plugin and routing authority used to invalidate a
 /// cached unavailable status after an explicit capability installation.
 pub(crate) fn media_model_revision() -> u128 {
     let mut revision = 1_u128;
     let paths = [
-        writable_model_root().ok(),
         directories::ProjectDirs::from("", "", "into-markdown")
             .map(|directories| directories.data_dir().join("plugins")),
         crate::config::global_config_path().ok(),
@@ -386,12 +440,14 @@ fn assemble_at(
     loaded: &LoadedConfig,
     execution: &ExecutionOptions,
     cwd: &Path,
+    needs: InvocationCapabilities,
 ) -> Result<Services, CliError> {
     let mut services = Services::default();
     let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
-    if loaded.options.ocr.policy != OcrPolicy::Off
-        || loaded.options.ai.vision_ocr != AiMode::Off
-        || configured_route_is_active(&loaded.effective.capability_routes.ocr)
+    if needs.ocr
+        && (loaded.options.ocr.policy != OcrPolicy::Off
+            || loaded.options.ai.vision_ocr != AiMode::Off
+            || configured_route_is_active(&loaded.effective.capability_routes.ocr))
     {
         match assemble_ocr(loaded, &context, cwd) {
             Ok(engine) => services.ocr = Some(engine),
@@ -402,16 +458,33 @@ fn assemble_at(
     if ai_provider_service_enabled(&loaded.options) {
         services.ai = assemble_ai_provider(loaded)?;
     }
-    if loaded.options.ai.audio_transcription != AiMode::Off
-        || configured_route_is_active(&loaded.effective.capability_routes.transcription)
+    if needs.transcription
+        && (loaded.options.ai.audio_transcription != AiMode::Off
+            || configured_route_is_active(&loaded.effective.capability_routes.transcription)
+            || loaded
+                .effective
+                .plugins
+                .get("official.media.whisper")
+                .is_some_and(|plugin| plugin.enabled))
     {
         services.transcriber = Some(assemble_asr(loaded, &context, cwd)?);
     }
-    if loaded.options.diarization.enabled {
+    if needs.diarization && loaded.options.diarization.enabled {
         services.diarizer = Some(
             assemble_diarization_config(loaded, &loaded.options, &context, cwd)
                 .map_err(CliError::from)?,
         );
+    }
+    if needs.legacy_office
+        && (configured_route_is_active(&loaded.effective.capability_routes.legacy_office)
+            || loaded
+                .effective
+                .plugins
+                .get("official.legacy-office.libreoffice")
+                .is_some_and(|plugin| plugin.enabled))
+    {
+        services.legacy_office =
+            Some(assemble_legacy_office_config(loaded, &context, cwd).map_err(CliError::from)?);
     }
     Ok(services)
 }
@@ -428,27 +501,23 @@ fn strict_media_mode(options: &ConversionOptions) -> into_markdown_provider_plug
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn resolve_process_capability(
     loaded: &LoadedConfig,
     cwd: &Path,
     kind: into_markdown_provider_plugin::CapabilityKind,
     configured: &CapabilityRouteConfig,
     default_primary: &str,
-    model_bundle: Option<String>,
     mode: into_markdown_provider_plugin::ResolutionMode,
     context: &ExecutionContext,
 ) -> Result<into_markdown_provider_plugin::ProcessCapability, ConversionError> {
     use into_markdown_provider_plugin::{CapabilityRegistry, CapabilityRoute, ProcessCapability};
 
-    let primary = parse_provider_reference(
-        configured.primary.as_deref().unwrap_or(default_primary),
-        model_bundle.as_deref(),
-    )?;
+    let primary =
+        parse_provider_reference(configured.primary.as_deref().unwrap_or(default_primary))?;
     let fallbacks = configured
         .fallbacks
         .iter()
-        .map(|reference| parse_provider_reference(reference, model_bundle.as_deref()))
+        .map(|reference| parse_provider_reference(reference))
         .collect::<Result<Vec<_>, _>>()?;
     let route = CapabilityRoute { primary, fallbacks };
     let mut registry = CapabilityRegistry::new();
@@ -496,16 +565,15 @@ fn resolve_process_capability(
         }
         packages.insert(reference.plugin_id.clone(), (installed, manifest));
     }
-    let roots = provider_model_roots()?;
     let mut readiness_errors = BTreeMap::new();
     let mut ready = BTreeMap::new();
     let binding = registry.resolve(kind, &route, mode, |binding| {
         let Some((_installed, manifest)) = packages.get(&binding.plugin_id) else {
             return false;
         };
-        let result = ProcessCapability::runtime_policy(manifest, binding, roots.clone())
+        let result = ProcessCapability::runtime_policy(manifest, binding)
             .map_err(CliError::from)
-            .and_then(|(policy, model_roots)| {
+            .and_then(|policy| {
                 crate::app::prepare_admin_effective_process_plugin_from_loaded(
                     loaded,
                     cwd,
@@ -514,7 +582,7 @@ fn resolve_process_capability(
                     context,
                 )
                 .and_then(|process| {
-                    ProcessCapability::new(process, manifest, binding.clone(), model_roots)
+                    ProcessCapability::new(process, manifest, binding.clone())
                         .map_err(CliError::from)
                 })
             })
@@ -538,13 +606,10 @@ fn resolve_process_capability(
     let binding = binding.map_err(|error| {
         let mut details = registration_errors.into_values().collect::<Vec<_>>();
         details.extend(readiness_errors.into_values());
+        details.push(capability_setup_hint(kind).to_owned());
         ConversionError::ComponentUnavailable {
             component: capability_name(kind).into(),
-            detail: if details.is_empty() {
-                format!("{error}; {}", capability_setup_hint(kind))
-            } else {
-                format!("{error}; {}", details.join("; "))
-            },
+            detail: format!("{error}; {}", details.join("; ")),
         }
     })?;
     ready.remove(&format!("{}/{}", binding.plugin_id, binding.capability_id)).ok_or_else(|| {
@@ -557,34 +622,26 @@ fn resolve_process_capability(
 
 fn parse_provider_reference(
     value: &str,
-    model_bundle: Option<&str>,
 ) -> Result<into_markdown_provider_plugin::ProviderReference, ConversionError> {
-    let Some((plugin_id, capability_id)) = value.split_once('/') else {
-        return Err(ConversionError::ComponentUnavailable {
+    match value.parse::<CapabilitySourceRef>().map_err(|error| {
+        ConversionError::ComponentUnavailable {
             component: "capability-routing".into(),
-            detail: format!("invalid provider reference '{value}'"),
-        });
-    };
-    Ok(into_markdown_provider_plugin::ProviderReference {
-        plugin_id: plugin_id.into(),
-        capability_id: capability_id.into(),
-        model_bundle: model_bundle.map(str::to_owned),
-    })
-}
-
-fn provider_model_roots() -> Result<Vec<PathBuf>, ConversionError> {
-    let mut roots = vec![writable_model_root()?];
-    if let Ok(executable) = canonical_executable()
-        && let Some(directory) = executable.parent()
-        && let Some(bundled) = bundled_model_root(directory)
-    {
-        roots.push(bundled);
+            detail: error.to_string(),
+        }
+    })? {
+        CapabilitySourceRef::Plugin { plugin_id, capability_id } => {
+            Ok(into_markdown_provider_plugin::ProviderReference { plugin_id, capability_id })
+        }
+        _ => Err(ConversionError::ComponentUnavailable {
+            component: "capability-routing".into(),
+            detail: format!("'{value}' is not a local plugin capability source"),
+        }),
     }
-    Ok(roots)
 }
 
 const fn capability_name(kind: into_markdown_provider_plugin::CapabilityKind) -> &'static str {
     match kind {
+        into_markdown_provider_plugin::CapabilityKind::LegacyOffice => "legacy-office-plugin",
         into_markdown_provider_plugin::CapabilityKind::Ocr => "ocr-plugin",
         into_markdown_provider_plugin::CapabilityKind::Transcription => "transcription-plugin",
         into_markdown_provider_plugin::CapabilityKind::Diarization => "diarization-plugin",
@@ -595,6 +652,9 @@ const fn capability_setup_hint(
     kind: into_markdown_provider_plugin::CapabilityKind,
 ) -> &'static str {
     match kind {
+        into_markdown_provider_plugin::CapabilityKind::LegacyOffice => {
+            "run `into-md setup legacy-office`"
+        }
         into_markdown_provider_plugin::CapabilityKind::Ocr => "run `into-md setup ocr`",
         into_markdown_provider_plugin::CapabilityKind::Transcription
         | into_markdown_provider_plugin::CapabilityKind::Diarization => "run `into-md setup media`",
@@ -613,12 +673,29 @@ fn assemble_diarization_config(
         into_markdown_provider_plugin::CapabilityKind::Diarization,
         &loaded.effective.capability_routes.diarization,
         "official.media.whisper/diarization",
-        Some(options.diarization.model_bundle.clone()),
         strict_media_mode(options),
         context,
     )?
     .diarizer(options.clone())
     .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::Diarizer>)
+}
+
+fn assemble_legacy_office_config(
+    loaded: &LoadedConfig,
+    context: &ExecutionContext,
+    cwd: &Path,
+) -> Result<Arc<dyn into_markdown::LegacyOfficeNormalizer>, ConversionError> {
+    resolve_process_capability(
+        loaded,
+        cwd,
+        into_markdown_provider_plugin::CapabilityKind::LegacyOffice,
+        &loaded.effective.capability_routes.legacy_office,
+        "official.legacy-office.libreoffice/legacy-office",
+        into_markdown_provider_plugin::ResolutionMode::RequiredPrimary,
+        context,
+    )?
+    .legacy_office()
+    .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::LegacyOfficeNormalizer>)
 }
 
 fn assemble_asr(
@@ -635,11 +712,16 @@ fn assemble_asr_options(
     context: &ExecutionContext,
     cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::Transcriber>, CliError> {
+    let default_mode = if options.ai.audio_transcription == AiMode::Off {
+        AiMode::Only
+    } else {
+        options.ai.audio_transcription
+    };
     let route = unified_route(
         CapabilityId::Transcription,
         &loaded.effective.capability_routes.transcription,
         "plugin:official.media.whisper/transcription",
-        options.ai.audio_transcription,
+        default_mode,
     )
     .map_err(CliError::from)?;
     let eligible = route.eligible_sources().map_err(|error| {
@@ -657,7 +739,6 @@ fn assemble_asr_options(
                     into_markdown_provider_plugin::CapabilityKind::Transcription,
                     &configured,
                     &format!("{plugin_id}/{capability_id}"),
-                    Some(options.asr.model_bundle.clone()),
                     into_markdown_provider_plugin::ResolutionMode::RequiredPrimary,
                     context,
                 )
@@ -698,8 +779,6 @@ fn assemble_ocr(
     context: &ExecutionContext,
     cwd: &Path,
 ) -> Result<Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
-    let model_bundle =
-        loaded.options.ocr.model_bundle.clone().unwrap_or_else(|| "pp-ocrv6-tiny-zh-en".into());
     let default_mode = if loaded.options.ai.vision_ocr == AiMode::Off {
         AiMode::Only
     } else {
@@ -728,7 +807,6 @@ fn assemble_ocr(
                     into_markdown_provider_plugin::CapabilityKind::Ocr,
                     &configured,
                     &format!("{plugin_id}/{capability_id}"),
-                    Some(model_bundle.clone()),
                     into_markdown_provider_plugin::ResolutionMode::RequiredPrimary,
                     context,
                 )
@@ -860,7 +938,8 @@ fn remote_client(
             detail: format!("provider does not declare {capability}"),
         });
     }
-    let model = configured.model.clone();
+    let model =
+        configured.models.get(capability).cloned().unwrap_or_else(|| configured.model.clone());
     let timeout = std::time::Duration::from_millis(
         configured.timeout_ms.or(loaded.timeout_ms).unwrap_or(30_000),
     );
@@ -974,28 +1053,6 @@ fn assemble_ai_provider(
     }
 }
 
-fn writable_model_root() -> Result<PathBuf, into_markdown::ConversionError> {
-    directories::ProjectDirs::from("", "", "into-markdown")
-        .map(|directories| directories.data_dir().join("models"))
-        .ok_or_else(|| into_markdown::ConversionError::ComponentUnavailable {
-            component: "ocr-models".into(),
-            detail: "platform model data directory is unavailable".into(),
-        })
-}
-
-fn bundled_model_root(directory: &Path) -> Option<PathBuf> {
-    let path = directory.join("models");
-    path.is_dir().then_some(path)
-}
-
-fn canonical_executable() -> Result<PathBuf, String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("cannot resolve the current executable: {error}"))?;
-    executable
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve the installed executable: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1027,6 +1084,28 @@ mod tests {
         id: &'static str,
         outcome: Result<OcrResult, ConversionError>,
         calls: AtomicUsize,
+    }
+
+    struct FixtureTranscriber {
+        id: &'static str,
+        outcome: Result<TranscriptionResult, ConversionError>,
+        calls: AtomicUsize,
+    }
+
+    impl Transcriber for FixtureTranscriber {
+        fn id(&self) -> &str {
+            self.id
+        }
+
+        fn transcribe<'a>(
+            &'a self,
+            _request: TranscriptionRequest<'a>,
+            _context: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let outcome = self.outcome.clone();
+            Box::pin(async move { outcome })
+        }
     }
 
     impl OcrEngine for FixtureOcr {
@@ -1117,6 +1196,25 @@ mod tests {
     }
 
     #[test]
+    fn installed_local_transcription_defaults_to_the_plugin_route() {
+        let route = unified_route(
+            CapabilityId::Transcription,
+            &CapabilityRouteConfig::default(),
+            "plugin:official.media.whisper/transcription",
+            AiMode::Only,
+        )
+        .unwrap();
+        assert_eq!(route.mode, CapabilityRouteMode::Only);
+        assert_eq!(
+            route.primary,
+            CapabilitySourceRef::Plugin {
+                plugin_id: "official.media.whisper".into(),
+                capability_id: "transcription".into(),
+            }
+        );
+    }
+
+    #[test]
     fn routed_ocr_uses_ordered_fallback_without_swallowing_disallowed_failures() {
         let successful = || {
             Arc::new(FixtureOcr {
@@ -1162,6 +1260,43 @@ mod tests {
             Err(ConversionError::Network { .. })
         ));
         assert_eq!(fallback.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn routed_transcriber_preserves_and_accepts_the_selected_source_identity() {
+        let primary = Arc::new(FixtureTranscriber {
+            id: "remote",
+            outcome: Err(ConversionError::Network { detail: "offline".into() }),
+            calls: AtomicUsize::new(0),
+        });
+        let fallback = Arc::new(FixtureTranscriber {
+            id: "local",
+            outcome: Ok(TranscriptionResult {
+                provider: "local".into(),
+                model: "fixture".into(),
+                ..TranscriptionResult::default()
+            }),
+            calls: AtomicUsize::new(0),
+        });
+        let route = RoutedTranscriber {
+            id: "route.transcription".into(),
+            mode: CapabilityRouteMode::Prefer,
+            sources: vec![primary.clone(), fallback.clone()],
+        };
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            into_markdown::ResourceLimits::default(),
+        );
+        let result = block_on(route.transcribe(
+            TranscriptionRequest { media: b"fixture", media_type: "audio/wav", language: None },
+            &context,
+        ))
+        .unwrap();
+        assert_eq!(result.provider, "local");
+        assert!(route.accepts_result_provider(&result.provider));
+        assert!(!route.accepts_result_provider("route.transcription"));
+        assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1230,6 +1365,19 @@ capabilities = ["image-description", "table-repair"]
     }
 
     #[test]
+    fn web_media_cache_key_includes_the_durable_network_grant() {
+        let local = ConversionOptions::default();
+        let mut remote = local.clone();
+        remote.network.enabled = true;
+        remote.network.deny_private_networks = false;
+        let revision = 42;
+        assert!(
+            WebMediaKey { capability_revision: revision, options: local }
+                != WebMediaKey { capability_revision: revision, options: remote }
+        );
+    }
+
+    #[test]
     fn explicit_remote_transcription_route_activates_with_legacy_ai_mode_off() {
         let (root, loaded) = loaded_config(
             "remote-transcription-route",
@@ -1252,11 +1400,43 @@ primary = "provider:bailian/audio-transcription"
 fallbacks = []
 "#,
         );
-        let services = assemble(&loaded, &ExecutionOptions::default(), &root).unwrap();
+        let services = assemble(
+            &loaded,
+            &ExecutionOptions::default(),
+            &root,
+            InvocationCapabilities { transcription: true, ..InvocationCapabilities::default() },
+        )
+        .unwrap();
         assert_eq!(
             services.transcriber.as_deref().map(Transcriber::id),
             Some("provider.bailian.audio-transcription")
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote_capabilities_select_their_own_provider_models() {
+        let (root, loaded) = loaded_config(
+            "remote-model-map",
+            r#"
+schema_version = 1
+
+[providers.bailian]
+type = "openai-compatible"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+model = "shared-default"
+api_key_env = "DASHSCOPE_API_KEY"
+capabilities = ["vision-ocr", "audio-transcription"]
+
+[providers.bailian.models]
+vision-ocr = "qwen3.5-ocr"
+audio-transcription = "qwen3-asr-flash"
+"#,
+        );
+        let (_, _, ocr_model) = remote_client(&loaded, "bailian", "vision-ocr").unwrap();
+        let (_, _, asr_model) = remote_client(&loaded, "bailian", "audio-transcription").unwrap();
+        assert_eq!(ocr_model, "qwen3.5-ocr");
+        assert_eq!(asr_model, "qwen3-asr-flash");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

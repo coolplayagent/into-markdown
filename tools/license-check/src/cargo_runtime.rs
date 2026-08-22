@@ -22,7 +22,6 @@ struct NormalRuntimeAuthority {
 struct CargoMetadata {
     packages: Vec<MetadataPackage>,
     workspace_members: Vec<String>,
-    resolve: Option<MetadataResolve>,
 }
 
 #[derive(Deserialize)]
@@ -43,28 +42,6 @@ pub(crate) struct LocalRuntimePackage {
 pub(crate) struct RuntimeClosure {
     pub(crate) registry: BTreeSet<(String, String)>,
     pub(crate) local: BTreeMap<(String, String), LocalRuntimePackage>,
-}
-
-#[derive(Deserialize)]
-struct MetadataResolve {
-    nodes: Vec<MetadataNode>,
-}
-
-#[derive(Deserialize)]
-struct MetadataNode {
-    id: String,
-    deps: Vec<MetadataDependency>,
-}
-
-#[derive(Deserialize)]
-struct MetadataDependency {
-    pkg: String,
-    dep_kinds: Vec<MetadataDependencyKind>,
-}
-
-#[derive(Deserialize)]
-struct MetadataDependencyKind {
-    kind: Option<String>,
 }
 
 pub(crate) fn packages(
@@ -105,7 +82,7 @@ pub(crate) fn packages(
                 .to_owned(),
         );
     }
-    let (computed_normal, local) = metadata_normal_packages(repository, &metadata, errors);
+    let (computed_normal, local, _) = cargo_tree_normal_packages(repository, &metadata, errors);
     if normal != computed_normal {
         errors.push(
             "Cargo normal package authority differs from cargo metadata normal dependency closure"
@@ -128,6 +105,17 @@ pub(crate) fn packages(
         );
     }
     RuntimeClosure { registry: normal, local }
+}
+
+pub(crate) fn workspace_normal_packages(
+    repository: &Path,
+    errors: &mut Vec<String>,
+) -> BTreeSet<String> {
+    let Some(metadata) = cargo_metadata(repository, errors) else {
+        return BTreeSet::new();
+    };
+    let (_, _, workspace) = cargo_tree_normal_packages(repository, &metadata, errors);
+    workspace
 }
 
 fn cargo_metadata(repository: &Path, errors: &mut Vec<String>) -> Option<CargoMetadata> {
@@ -186,44 +174,85 @@ fn workspace_manifests(
     paths
 }
 
-fn metadata_normal_packages(
+fn cargo_tree_normal_packages(
     repository: &Path,
     metadata: &CargoMetadata,
     errors: &mut Vec<String>,
-) -> (BTreeSet<(String, String)>, BTreeMap<(String, String), LocalRuntimePackage>) {
-    let Some(resolve) = &metadata.resolve else {
-        errors.push("cargo metadata lacks a resolve graph".to_owned());
-        return (BTreeSet::new(), BTreeMap::new());
+) -> (BTreeSet<(String, String)>, BTreeMap<(String, String), LocalRuntimePackage>, BTreeSet<String>)
+{
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = match Command::new(cargo)
+        .args([
+            "tree",
+            "--locked",
+            "--offline",
+            "-p",
+            "into-markdown-cli",
+            "-e",
+            "normal",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+            "--target",
+            "all",
+        ])
+        .current_dir(repository)
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            errors.push(format!(
+                "cargo tree failed for normal-runtime authority: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+            return (BTreeSet::new(), BTreeMap::new(), BTreeSet::new());
+        }
+        Err(error) => {
+            errors.push(format!("cannot run cargo tree for normal-runtime authority: {error}"));
+            return (BTreeSet::new(), BTreeMap::new(), BTreeSet::new());
+        }
     };
-    let packages: BTreeMap<_, _> =
-        metadata.packages.iter().map(|package| (package.id.as_str(), package)).collect();
-    let nodes: BTreeMap<_, _> = resolve.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
-    let roots: Vec<_> = metadata
+    let registry: BTreeMap<_, _> = metadata
         .packages
         .iter()
-        .filter(|package| package.name == "into-markdown-cli" && package.source.is_none())
+        .filter(|package| {
+            package.source.as_deref()
+                == Some("registry+https://github.com/rust-lang/crates.io-index")
+        })
+        .map(|package| ((package.name.as_str(), package.version.as_str()), package))
         .collect();
-    let [root] = roots.as_slice() else {
-        errors.push("cargo metadata must contain one workspace into-markdown-cli root".to_owned());
-        return (BTreeSet::new(), BTreeMap::new());
-    };
-    let mut visited = BTreeSet::new();
-    let mut pending = vec![root.id.as_str()];
+    let workspace: BTreeMap<_, _> = metadata
+        .packages
+        .iter()
+        .filter(|package| package.source.is_none())
+        .map(|package| ((package.name.as_str(), package.version.as_str()), package))
+        .collect();
     let mut normal = BTreeSet::new();
     let mut local = BTreeMap::new();
-    while let Some(id) = pending.pop() {
-        if !visited.insert(id) {
-            continue;
+    let mut workspace_normal = BTreeSet::new();
+    let tree = match std::str::from_utf8(&output.stdout) {
+        Ok(value) => value,
+        Err(_) => {
+            errors.push("cargo tree returned non-UTF-8 package identities".to_owned());
+            return (normal, local, workspace_normal);
         }
-        let Some(package) = packages.get(id) else {
-            errors.push(format!("cargo metadata resolve references unknown package {id}"));
+    };
+    for line in tree.lines() {
+        let line = line.strip_suffix(" (*)").unwrap_or(line);
+        let mut fields = line.split_whitespace();
+        let (Some(name), Some(version)) = (fields.next(), fields.next()) else {
+            errors.push(format!("cargo tree returned malformed package identity {line:?}"));
             continue;
         };
-        if package.source.as_deref()
-            == Some("registry+https://github.com/rust-lang/crates.io-index")
-        {
-            normal.insert((package.name.clone(), package.version.clone()));
-        } else if package.source.is_none() {
+        let Some(version) = version.strip_prefix('v') else {
+            errors.push(format!("cargo tree returned malformed package version {line:?}"));
+            continue;
+        };
+        if registry.contains_key(&(name, version)) {
+            normal.insert((name.to_owned(), version.to_owned()));
+        } else if let Some(package) = workspace.get(&(name, version)) {
+            workspace_normal.insert(package.name.clone());
             let manifest = Path::new(&package.manifest_path);
             if let Ok(relative) = manifest.strip_prefix(repository) {
                 let relative = relative.to_string_lossy().replace('\\', "/");
@@ -241,18 +270,11 @@ fn metadata_normal_packages(
                     }
                 }
             }
-        }
-        let Some(node) = nodes.get(id) else {
-            errors.push(format!("cargo metadata lacks resolve node for {id}"));
-            continue;
-        };
-        for dependency in &node.deps {
-            if dependency.dep_kinds.iter().any(|kind| kind.kind.is_none()) {
-                pending.push(&dependency.pkg);
-            }
+        } else {
+            errors.push(format!("cargo tree package {name}@{version} is absent from metadata"));
         }
     }
-    (normal, local)
+    (normal, local, workspace_normal)
 }
 
 fn validate_manifest_hashes(

@@ -214,6 +214,7 @@ mod tests {
                 .collect(),
             license_materials: vec![],
             ffmpeg_evidence: None,
+            native_transformations: vec![],
         };
         let manifest = install.join("archive-manifest.json");
         fs::write(&manifest, serde_json::to_vec(&projection).unwrap()).unwrap();

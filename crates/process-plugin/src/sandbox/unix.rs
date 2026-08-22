@@ -32,6 +32,7 @@ pub(super) fn prepare(
         directory,
         &policy.read_only_roots,
         policy.allow_child_processes,
+        policy.macos_compatibility_child,
     )
     .map_err(|_| {
         PluginError::new(crate::PluginErrorCode::SandboxUnavailable, "Seatbelt setup failed")
@@ -380,6 +381,7 @@ mod macos {
             temporary: &Path,
             read_only_roots: &[std::path::PathBuf],
             allow_child_processes: bool,
+            compatibility_child: bool,
         ) -> std::io::Result<Self> {
             let mut ancestors = std::collections::BTreeSet::new();
             for root in std::iter::once(runtime)
@@ -396,7 +398,37 @@ mod macos {
             }
             let runtime = escape(runtime)?;
             let temporary = escape(temporary)?;
-            let mut profile = if allow_child_processes {
+            let mut profile = if compatibility_child {
+                String::from(
+                    "(version 1)\n(deny default)\n(import \"system.sb\")\n(deny network*)\n(allow process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow user-preference-read)\n(allow signal (target self))\n\
+                     (allow mach-lookup\n\
+                       (global-name \"com.apple.FontObjectsServer\")\n\
+                       (global-name \"com.apple.fonts\")\n\
+                       (global-name \"com.apple.system.opendirectoryd.libinfo\")\n\
+                       (global-name \"com.apple.SystemConfiguration.configd\")\n\
+                       (global-name \"com.apple.CoreServices.coreservicesd\")\n\
+                       (global-name \"com.apple.DiskArbitration.diskarbitrationd\")\n\
+                       (global-name \"com.apple.pasteboard.1\")\n\
+                       (global-name \"com.apple.distributed_notifications@Uv3\")\n\
+                       (global-name \"com.apple.tccd.system\")\n\
+                       (global-name \"com.apple.windowserver.active\")\n\
+                       (global-name \"com.apple.coreservices.launchservicesd\")\n\
+                       (global-name \"com.apple.lsd.mapdb\")\n\
+                       (global-name \"com.apple.lsd.modifydb\")\n\
+                       (global-name \"com.apple.dock.server\")\n\
+                       (global-name \"com.apple.iohideventsystem\")\n\
+                       (global-name \"com.apple.windowmanager.server\")\n\
+                       (global-name \"com.apple.CARenderServer\")\n\
+                       (global-name \"com.apple.pbs.fetch_services\")\n\
+                       (global-name \"com.apple.appkit.restoration_storage\")\n\
+                       (global-name \"com.apple.coreservices.appleevents\")\n\
+                       (global-name \"com.apple.touchbarserver.mig\")\n\
+                       (global-name \"com.apple.window_proxies\"))\n\
+                     (allow iokit-open-user-client\n\
+                       (iokit-user-client-class \"IOHIDParamUserClient\")\n\
+                       (iokit-user-client-class \"IOSurfaceRootUserClient\"))\n",
+                )
+            } else if allow_child_processes {
                 String::from(
                     "(version 1)\n(deny default)\n(import \"dyld-support.sb\")\n(deny network*)\n(allow process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow signal (target self))\n",
                 )
@@ -405,8 +437,22 @@ mod macos {
                     "(version 1)\n(deny default)\n(import \"dyld-support.sb\")\n(deny network*)\n(deny process-fork)\n(allow process-info*)\n(allow sysctl-read)\n(allow signal (target self))\n",
                 )
             };
-            writeln!(profile, "(allow process-exec (subpath \"{runtime}\"))")
+            if allow_child_processes {
+                // Linux Landlock already grants execute within the private
+                // request directory when child processes are declared. Match
+                // that contract on macOS so an authenticated provider can
+                // stage and execute its package-owned helper below the only
+                // writable root; the inherited Seatbelt still denies network
+                // and access outside the runtime/request trees.
+                writeln!(
+                    profile,
+                    "(allow process-exec (subpath \"{runtime}\") (subpath \"{temporary}\"))"
+                )
                 .map_err(std::io::Error::other)?;
+            } else {
+                writeln!(profile, "(allow process-exec (subpath \"{runtime}\"))")
+                    .map_err(std::io::Error::other)?;
+            }
             writeln!(
                 profile,
                 "(allow file-read* (subpath \"{runtime}\") (subpath \"{temporary}\"))"
@@ -414,6 +460,29 @@ mod macos {
             .map_err(std::io::Error::other)?;
             writeln!(profile, "(allow file-write* (subpath \"{temporary}\"))")
                 .map_err(std::io::Error::other)?;
+            if compatibility_child {
+                // LibreOffice derives one per-user, per-profile socket name in
+                // /private/tmp. The nested worker applies the exact literal;
+                // this outer profile grants only the fixed uid-bound namespace.
+                // SAFETY: geteuid has no arguments and no failure condition.
+                let uid = unsafe { libc::geteuid() };
+                writeln!(
+                    profile,
+                    "(allow file-read* file-write* \
+                     (regex #\"^/private/tmp/OSL_PIPE_{uid}_SingleOfficeIPC_[0-9a-f]+$\"))\n\
+                     (allow file-read-metadata file-write-data (literal \"/private/tmp\"))\n\
+                     (allow network*\n\
+                       (local unix-socket (regex #\"^/(private/)?tmp/OSL_PIPE_{uid}_SingleOfficeIPC_[0-9a-f]+$\"))\n\
+                       (remote unix-socket (regex #\"^/(private/)?tmp/OSL_PIPE_{uid}_SingleOfficeIPC_[0-9a-f]+$\")))"
+                )
+                .map_err(std::io::Error::other)?;
+                writeln!(
+                    profile,
+                    "(allow file-read* (literal \"/private/var/db/.AppleSetupDone\"))\n\
+                     (allow file-issue-extension (subpath \"{runtime}\") (subpath \"{temporary}\"))"
+                )
+                .map_err(std::io::Error::other)?;
+            }
             for root in ["/usr/lib", "/System/Library"] {
                 writeln!(profile, "(allow file-read* (subpath \"{root}\"))")
                     .map_err(std::io::Error::other)?;
@@ -424,11 +493,16 @@ mod macos {
                     .map_err(std::io::Error::other)?;
             }
             for ancestor in ancestors {
-                writeln!(
-                    profile,
-                    "(allow file-read-metadata file-test-existence (literal \"{ancestor}\"))"
-                )
-                .map_err(std::io::Error::other)?;
+                if compatibility_child {
+                    writeln!(profile, "(allow file-read* (literal \"{ancestor}\"))")
+                        .map_err(std::io::Error::other)?;
+                } else {
+                    writeln!(
+                        profile,
+                        "(allow file-read-metadata file-test-existence (literal \"{ancestor}\"))"
+                    )
+                    .map_err(std::io::Error::other)?;
+                }
             }
             let profile =
                 std::ffi::CString::new(profile).map_err(|_| std::io::ErrorKind::InvalidInput)?;

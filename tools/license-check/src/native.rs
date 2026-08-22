@@ -1,8 +1,11 @@
 //! Target-specific native runtime bindings used by archive projection verification.
 
-use crate::schema::{ArchiveFile, ArchiveFileKind, IntegrityEvidence};
+use crate::schema::{
+    ArchiveFile, ArchiveFileKind, IntegrityEvidence, NativeTransformation, NativeTransformationKind,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -11,8 +14,10 @@ pub(crate) fn validate(
     target: &str,
     components: &[String],
     files: &[ArchiveFile],
+    transformations: &[NativeTransformation],
     errors: &mut Vec<String>,
 ) {
+    validate_transformations(target, components, files, transformations, errors);
     if components.iter().any(|id| id == "onnxruntime-cpu") {
         validate_runtime(
             repository,
@@ -24,6 +29,7 @@ pub(crate) fn validate(
             "sha256",
             "native_archives",
             files,
+            transformations,
             errors,
         );
     }
@@ -38,11 +44,149 @@ pub(crate) fn validate(
             "archive_sha256",
             "pdfium_archives",
             files,
+            transformations,
             errors,
         );
     }
     if components.iter().any(|id| id == "libreoffice-macos-arm64") {
         validate_libreoffice(repository, target, files, errors);
+    }
+}
+
+fn validate_transformations(
+    target: &str,
+    components: &[String],
+    files: &[ArchiveFile],
+    transformations: &[NativeTransformation],
+    errors: &mut Vec<String>,
+) {
+    let expected_kind = match target {
+        "aarch64-apple-darwin" => Some(NativeTransformationKind::AppleCodeSign),
+        "x86_64-pc-windows-msvc" => Some(NativeTransformationKind::Authenticode),
+        _ => None,
+    };
+    let mut subjects = HashSet::new();
+    for transformation in transformations {
+        let subject = (&transformation.component_id, &transformation.path);
+        if !subjects.insert(subject) {
+            errors.push(format!(
+                "duplicate native transformation for {}:{}",
+                transformation.component_id, transformation.path
+            ));
+        }
+        if expected_kind != Some(transformation.kind) {
+            errors.push(format!(
+                "native transformation kind is invalid for target {target}: {}",
+                transformation.path
+            ));
+        }
+        if !components.contains(&transformation.component_id) {
+            errors.push(format!(
+                "native transformation references an unselected component: {}",
+                transformation.component_id
+            ));
+        }
+        if !matches!(transformation.component_id.as_str(), "pdfium" | "onnxruntime-cpu") {
+            errors.push(format!(
+                "native transformation has no fixed native authority: {}",
+                transformation.component_id
+            ));
+        }
+        let outputs = files
+            .iter()
+            .filter(|file| {
+                file.kind == ArchiveFileKind::Component
+                    && file.component_id.as_deref() == Some(transformation.component_id.as_str())
+                    && file.path == transformation.path
+                    && file.bytes == transformation.output_bytes
+                    && file.sha256 == transformation.output_sha256
+            })
+            .count();
+        if outputs != 1 {
+            errors.push(format!(
+                "native transformation output is not bound to exactly one projected file: {}:{}",
+                transformation.component_id, transformation.path
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pdfium_authority(target: &str) -> (u64, String) {
+        let repository = crate::repository_root().unwrap();
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(repository.join("third_party/pdfium/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let authority = manifest.pointer(&format!("/targets/{target}")).unwrap();
+        (
+            authority.get("library_size").and_then(Value::as_u64).unwrap(),
+            authority.get("library_sha256").and_then(Value::as_str).unwrap().to_owned(),
+        )
+    }
+
+    fn signed_pdfium() -> (Vec<String>, Vec<ArchiveFile>, Vec<NativeTransformation>) {
+        let target = "aarch64-apple-darwin";
+        let (source_bytes, source_sha256) = pdfium_authority(target);
+        let file = ArchiveFile {
+            path: "lib/pdfium/libpdfium.dylib".to_owned(),
+            bytes: source_bytes + 512,
+            sha256: "a".repeat(64),
+            kind: ArchiveFileKind::Component,
+            component_id: Some("pdfium".to_owned()),
+            embedded_components: vec![],
+        };
+        let transformation = NativeTransformation {
+            component_id: "pdfium".to_owned(),
+            path: file.path.clone(),
+            kind: NativeTransformationKind::AppleCodeSign,
+            source_bytes,
+            source_sha256,
+            output_bytes: file.bytes,
+            output_sha256: file.sha256.clone(),
+        };
+        (vec!["pdfium".to_owned()], vec![file], vec![transformation])
+    }
+
+    #[test]
+    fn signed_native_file_is_bound_to_its_fixed_source() {
+        let (components, files, transformations) = signed_pdfium();
+        let mut errors = Vec::new();
+        validate(
+            &crate::repository_root().unwrap(),
+            "aarch64-apple-darwin",
+            &components,
+            &files,
+            &transformations,
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn signed_native_file_rejects_wrong_source_output_and_kind() {
+        let (components, files, transformations) = signed_pdfium();
+        for mutate in 0..3 {
+            let mut candidate = transformations.clone();
+            match mutate {
+                0 => candidate[0].source_sha256 = "b".repeat(64),
+                1 => candidate[0].output_sha256 = "c".repeat(64),
+                _ => candidate[0].kind = NativeTransformationKind::Authenticode,
+            }
+            let mut errors = Vec::new();
+            validate(
+                &crate::repository_root().unwrap(),
+                "aarch64-apple-darwin",
+                &components,
+                &files,
+                &candidate,
+                &mut errors,
+            );
+            assert!(!errors.is_empty(), "mutation {mutate} must fail closed");
+        }
     }
 }
 
@@ -90,6 +234,7 @@ fn validate_runtime(
     archive_hash_field: &str,
     downloads_group: &str,
     files: &[ArchiveFile],
+    transformations: &[NativeTransformation],
     errors: &mut Vec<String>,
 ) {
     let Some(manifest) = read_json(&repository.join(manifest_path), errors) else { return };
@@ -99,21 +244,40 @@ fn validate_runtime(
     };
     let size = authority.get(size_field).and_then(Value::as_u64).unwrap_or_default();
     let hash = authority.get(library_hash_field).and_then(Value::as_str).unwrap_or_default();
-    if !files.iter().any(|file| {
-        file.kind == ArchiveFileKind::Component
-            && file.component_id.as_deref() == Some(component)
-            && file.bytes == size
-            && file.sha256 == hash
-    }) {
+    let owned: Vec<_> =
+        files.iter().filter(|file| file.component_id.as_deref() == Some(component)).collect();
+    let valid = |file: &&ArchiveFile| {
+        let fixed = file.bytes == size && file.sha256 == hash;
+        let signed = transformations.iter().any(|transformation| {
+            transformation.component_id == component
+                && transformation.path == file.path
+                && transformation.source_bytes == size
+                && transformation.source_sha256 == hash
+                && transformation.output_bytes == file.bytes
+                && transformation.output_sha256 == file.sha256
+        });
+        file.kind == ArchiveFileKind::Component && (fixed || signed)
+    };
+    if !owned.iter().any(valid) {
         errors.push(format!(
             "projected {component} file does not match target library size and SHA-256"
         ));
     }
-    for file in files.iter().filter(|file| file.component_id.as_deref() == Some(component)) {
-        if file.kind != ArchiveFileKind::Component || file.bytes != size || file.sha256 != hash {
+    for file in owned {
+        if !valid(&file) {
             errors.push(format!(
                 "projected {component} contains a file outside its target authority: {}",
                 file.path
+            ));
+        }
+    }
+    for transformation in
+        transformations.iter().filter(|transformation| transformation.component_id == component)
+    {
+        if transformation.source_bytes != size || transformation.source_sha256 != hash {
+            errors.push(format!(
+                "native transformation source does not match {component} target authority: {}",
+                transformation.path
             ));
         }
     }

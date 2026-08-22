@@ -62,7 +62,7 @@
     },
     {
       "id": "libreoffice",
-      "url": "https://download.documentfoundation.org/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
+      "url": "https://mirror.aarnet.edu.au/pub/tdf/libreoffice/stable/26.2.5/mac/aarch64/LibreOffice_26.2.5_MacOS_aarch64.dmg",
       "bytes": 297407265,
       "sha256": "c99fb4fe574437fc4cb820a4ca15271bca325920861f7139858b36d7f9df78ad"
     }

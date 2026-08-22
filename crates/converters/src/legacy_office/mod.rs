@@ -7,8 +7,8 @@ mod tests;
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    FormatCandidate, FormatHint, InputFormat, NestedConversionRequest, ProbeOutcome, ResolvedInput,
-    ResourceReservation, Services, SourceMetadata,
+    FormatCandidate, FormatHint, InputFormat, LegacyOfficeRequest, NestedConversionRequest,
+    ProbeOutcome, ResolvedInput, ResourceReservation, Services, SourceMetadata,
 };
 use into_markdown_legacy_office::{LegacyOfficeRuntime, NormalizedFormat};
 use std::fmt;
@@ -99,20 +99,20 @@ fn remap_packaged_runtime_error(packaged: bool, error: ConversionError) -> Conve
 
 /// Isolated converter for DOC, PPT/PPS/POT, and XLS compound documents.
 pub struct LegacyOfficeConverter {
-    adapter: Arc<dyn CompatibilityAdapter>,
+    adapter: Option<Arc<dyn CompatibilityAdapter>>,
 }
 
 impl LegacyOfficeConverter {
     /// Use one explicitly configured, authority-validated compatibility runtime.
     #[must_use]
     pub fn with_runtime(runtime: LegacyOfficeRuntime) -> Self {
-        Self { adapter: Arc::new(RuntimeAdapter { runtime: Some(runtime) }) }
+        Self { adapter: Some(Arc::new(RuntimeAdapter { runtime: Some(runtime) })) }
     }
 }
 
 impl Default for LegacyOfficeConverter {
     fn default() -> Self {
-        Self { adapter: Arc::new(RuntimeAdapter { runtime: None }) }
+        Self { adapter: None }
     }
 }
 
@@ -179,8 +179,47 @@ impl Converter for LegacyOfficeConverter {
                 .max_archive_entry_bytes
                 .min(context.available_memory_bytes())
                 .min(into_markdown_legacy_office::MAX_NORMALIZED_PACKAGE_BYTES);
-            let normalized =
-                self.adapter.normalize(&input.bytes, candidate.format, maximum_output, context)?;
+            let normalized = if let Some(adapter) = &self.adapter {
+                adapter.normalize(&input.bytes, candidate.format, maximum_output, context)?
+            } else {
+                let normalizer = services.legacy_office.as_ref().ok_or_else(|| {
+                    ConversionError::ComponentUnavailable {
+                        component: crate::core_catalog::LEGACY_OFFICE.component.into(),
+                        detail: "run `into-md setup legacy-office`".into(),
+                    }
+                })?;
+                let result = normalizer
+                    .normalize(
+                        LegacyOfficeRequest {
+                            document: &input.bytes,
+                            source_format: candidate.format,
+                            maximum_output_bytes: maximum_output,
+                        },
+                        context,
+                    )
+                    .await?;
+                if result.provider != normalizer.id()
+                    || result.version.trim().is_empty()
+                    || result.artifact_sha256.len() != 64
+                    || !result
+                        .artifact_sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(ConversionError::ComponentUnavailable {
+                        component: normalizer.id().into(),
+                        detail: "legacy Office provider identity is invalid".into(),
+                    });
+                }
+                AdapterOutput {
+                    bytes: result.bytes,
+                    format: normalized_format(result.format)?,
+                    version: result.version,
+                    artifact_sha256: result.artifact_sha256,
+                    target: result.target,
+                    memory: result.memory,
+                }
+            };
             if normalized.format != expected_output(candidate.format)? {
                 return Err(ConversionError::ComponentUnavailable {
                     component: "legacy-office-worker".into(),
@@ -249,6 +288,18 @@ impl Converter for LegacyOfficeConverter {
             )?;
             Ok(output)
         })
+    }
+}
+
+fn normalized_format(format: InputFormat) -> Result<NormalizedFormat, ConversionError> {
+    match format {
+        InputFormat::Docx => Ok(NormalizedFormat::Docx),
+        InputFormat::Pptx => Ok(NormalizedFormat::Pptx),
+        InputFormat::Xlsx => Ok(NormalizedFormat::Xlsx),
+        _ => Err(ConversionError::ComponentUnavailable {
+            component: "legacy-office-worker".into(),
+            detail: "workerProtocol".into(),
+        }),
     }
 }
 

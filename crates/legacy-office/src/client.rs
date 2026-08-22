@@ -26,11 +26,19 @@ pub(crate) fn convert(
     context: &ExecutionContext,
 ) -> Result<NormalizedPackage, ConversionError> {
     let bundle = verify(config, context)?;
-    convert_verified(&bundle, bytes, source_format, maximum_output_bytes, context)
+    convert_verified(
+        &bundle,
+        config.inherited_process_sandbox(),
+        bytes,
+        source_format,
+        maximum_output_bytes,
+        context,
+    )
 }
 
 fn convert_verified(
     bundle: &VerifiedBundle,
+    inherited_process_sandbox: bool,
     bytes: &[u8],
     source_format: InputFormat,
     maximum_output_bytes: u64,
@@ -64,6 +72,7 @@ fn convert_verified(
     let address_limit = worker_address_limit(bundle, input_bytes, maximum_output_bytes, context)?;
     let mut worker = WorkerChild::spawn(
         bundle,
+        inherited_process_sandbox,
         working_directory.path(),
         &worker_temporary,
         address_limit,

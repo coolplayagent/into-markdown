@@ -17,6 +17,7 @@ pub(crate) struct Policy {
     pub file_limit: u64,
     pub open_file_limit: u32,
     pub system_read_paths: Vec<PathBuf>,
+    pub inherited_process_sandbox: bool,
     #[cfg(windows)]
     pub app_container_sid: String,
 }
@@ -37,6 +38,7 @@ impl Policy {
         #[cfg(windows)]
         let mut app_container_sid = None;
         let mut system_read_paths = Vec::new();
+        let mut inherited_process_sandbox = false;
         let mut arguments = arguments;
         while let Some(flag) = arguments.next() {
             let value = arguments.next().ok_or(())?;
@@ -54,6 +56,12 @@ impl Policy {
                 "--open-file-limit" => set_number(&mut open_file_limit, &value)?,
                 "--system-read" if system_read_paths.len() < MAX_SYSTEM_PATHS => {
                     system_read_paths.push(PathBuf::from(value));
+                }
+                "--inherited-process-sandbox" if value == "process-v1" => {
+                    if inherited_process_sandbox {
+                        return Err(());
+                    }
+                    inherited_process_sandbox = true;
                 }
                 #[cfg(windows)]
                 "--app-container-sid" => set_text(&mut app_container_sid, value)?,
@@ -73,6 +81,7 @@ impl Policy {
             file_limit: file_limit.ok_or(())?,
             open_file_limit: open_file_limit.ok_or(())?,
             system_read_paths,
+            inherited_process_sandbox,
             #[cfg(windows)]
             app_container_sid: app_container_sid.ok_or(())?,
         };
@@ -117,6 +126,14 @@ impl Policy {
         }
         Ok(())
     }
+}
+
+pub(crate) fn install_or_inherit(policy: &Policy) -> Result<(), ()> {
+    #[cfg(target_os = "macos")]
+    if policy.inherited_process_sandbox {
+        return install_unix_limits(policy);
+    }
+    install(policy)
 }
 
 #[cfg(not(windows))]

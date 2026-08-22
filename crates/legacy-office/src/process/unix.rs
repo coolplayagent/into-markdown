@@ -31,13 +31,34 @@ pub(super) fn ensure_descriptor_budget(
     }
     // SAFETY: the successful call initialized every field.
     let limit = unsafe { limit.assume_init() }.rlim_cur;
-    let open = std::fs::read_dir("/dev/fd")
-        .map_err(|_| super::unavailable("workerDescriptorBudget"))?
-        .count();
+    let open = open_descriptor_count(limit)?;
     if !descriptor_budget_fits(runtime_files, open, limit) {
         return Err(super::unavailable("workerDescriptorBudget"));
     }
     Ok(())
+}
+
+fn open_descriptor_count(
+    limit: libc::rlim_t,
+) -> Result<usize, into_markdown_core::ConversionError> {
+    let maximum = usize::try_from(limit).unwrap_or(usize::MAX).min(4_096);
+    let mut open = 0_usize;
+    for descriptor in 0..maximum {
+        // F_GETFD does not open a path, so the check remains available inside
+        // Landlock and Seatbelt profiles that deliberately hide /proc and
+        // /dev/fd from capability processes.
+        let result =
+            unsafe { libc::fcntl(i32::try_from(descriptor).unwrap_or(i32::MAX), libc::F_GETFD) };
+        if result >= 0 {
+            open = open.saturating_add(1);
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EBADF) {
+            return Err(super::unavailable("workerDescriptorBudget"));
+        }
+    }
+    Ok(open)
 }
 
 pub(super) fn descriptor_budget_fits(

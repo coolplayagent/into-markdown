@@ -267,7 +267,7 @@ fn preopen_is_absent_by_default_and_scoped_when_granted() {
     std::fs::write(directory.path().join("probe.txt"), "preopen-ok").unwrap();
     let mut granted = manifest();
     granted.capabilities.preopens.push(PreopenGrant {
-        host_path: directory.path().to_path_buf(),
+        host_path: directory.path().canonicalize().unwrap(),
         guest_path: "/input".into(),
         writable: false,
     });
@@ -291,7 +291,7 @@ fn preopen_symlink_cannot_escape_the_granted_directory() {
     symlink(outside.path(), root.path().join("escape")).unwrap();
     let mut scoped = manifest();
     scoped.capabilities.preopens.push(PreopenGrant {
-        host_path: root.path().to_path_buf(),
+        host_path: root.path().canonicalize().unwrap(),
         guest_path: "/input".into(),
         writable: false,
     });

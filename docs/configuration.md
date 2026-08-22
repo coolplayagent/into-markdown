@@ -44,7 +44,6 @@ timeout_ms = 120000
 
 [conversion.ocr]
 policy = "auto"
-model_bundle = "pp-ocrv6-tiny-zh-en"
 languages = ["zh-Hans", "zh-Hant", "en"]
 minimum_confidence = 0.70
 
@@ -83,7 +82,7 @@ max_pages = 10000
 max_asset_bytes = 268435456
 max_total_asset_bytes = 1073741824
 max_memory_bytes = 1073741824
-max_temporary_bytes = 1073741824
+max_temporary_bytes = 4294967296
 max_table_rows = 100000
 max_table_columns = 16384
 max_table_cells = 1000000
@@ -104,6 +103,10 @@ api_key_env = "LOCAL_VISION_API_KEY"
 timeout_ms = 60000
 capabilities = ["vision-ocr", "image-description", "table-repair"]
 
+[providers.local-vision.models]
+vision-ocr = "ocr-model"
+image-description = "vision-model"
+
 [plugins.corporate-parser]
 source = "/opt/into-markdown/plugins/corporate-parser.wasm"
 sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -114,6 +117,11 @@ enabled = true
 mode = "prefer"
 primary = "provider:local-vision/vision-ocr"
 fallbacks = ["plugin:official.ocr.ppocrv6/ocr"]
+
+[capability_routes.legacy-office]
+mode = "only"
+primary = "plugin:official.legacy-office.libreoffice/legacy-office"
+fallbacks = []
 
 [capability_routes.transcription]
 mode = "only"
@@ -147,6 +155,10 @@ Capability 引用的规范形式是 `plugin:ID/CAPABILITY` 或
 无效 IR 不会触发回退。远端 OCR、转写和结构化修复结果必须先经过类型、大小、来源及
 provenance 校验；结构化修复只能提交版本化 Document Patch，不能直接写入最终 IR。签名
 安装、官方包和隔离边界见 [`capability-plugins.md`](capability-plugins.md)。
+
+旧配置中的 `conversion.ocr.model_bundle` 和 `conversion.asr.model_bundle` 只为迁移而读取，
+不会写回；CLI 会给出一次明确提示。新的公共配置不暴露本地模型目录或模型选择，本地模型
+随整个能力插件安装、校验、更新和移除。Provider 的远端模型 ID 仍由 Provider 配置管理。
 
 配置中的 `allowed_hosts`、重定向和私网策略只能收窄权限，不能启用网络。上例调用
 本机 Provider 时仍需：
@@ -204,7 +216,8 @@ Provider 和插件配置，但不能赋予联网或私网权限。
 普通配置层和 Profile 都可以只写 Provider 的部分字段，以覆盖更低层的同名
 Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL、类型、环境变量名和能力；
 全部层合并后，Provider 必须包含 `type`、`base_url`、`model` 与 `api_key_env`，否则
-配置整体无效。单独校验一个不完整文件也会失败。
+配置整体无效。`models` 表只覆盖已声明 capability 的远端模型；没有映射时使用 Provider 的
+默认 `model`。本地能力插件的模型是插件私有资源，不属于这个表。单独校验一个不完整文件也会失败。
 
 `conversion.network.deny_private_networks` 只能省略或设为 `true`；设为 `false` 会被
 拒绝。配置文件和 Profile 中的 `allow_network`、`allow_private_network` 及任何未知

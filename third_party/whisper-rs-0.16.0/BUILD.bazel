@@ -8,6 +8,10 @@ rust_library(
     crate_features = [],
     crate_name = "whisper_rs",
     edition = "2021",
+    # Cargo's build.rs forwards this exact value from whisper-rs-sys. Bazel
+    # compiles the vendored wrapper directly, so keep the upstream binding
+    # version explicit and in sync with whisper.cpp/CMakeLists.txt.
+    rustc_env = {"WHISPER_CPP_VERSION": "1.8.3"},
     deps = [
         "@crates//:libc",
         "@crates//:whisper-rs-sys",

@@ -25,17 +25,27 @@ PINNED_PDFIUM_SHA256 = "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc
 PINNED_PDFIUM_BUILD_ROOT = b"/Users/runner/work/pdfium-binaries/"
 
 
-def audit(root: pathlib.Path, profile: str, maximum_macos: str) -> None:
+def audit(
+    root: pathlib.Path,
+    profile: str,
+    maximum_macos: str,
+    signed_source_derivatives: dict[str, str] | None = None,
+) -> None:
+    derivatives = signed_source_derivatives or {}
     for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
         if path.suffix == ".imp":
-            audit_plugin_package(path, maximum_macos)
+            audit_plugin_package(path, maximum_macos, derivatives)
             continue
         description = run(["/usr/bin/file", "-b", str(path)])
         if "Mach-O" in description:
-            audit_macho(path, maximum_macos, description)
+            audit_macho(path, maximum_macos, description, derivatives)
 
 
-def audit_plugin_package(path: pathlib.Path, maximum_macos: str) -> None:
+def audit_plugin_package(
+    path: pathlib.Path,
+    maximum_macos: str,
+    signed_source_derivatives: dict[str, str] | None = None,
+) -> None:
     try:
         with zipfile.ZipFile(path) as package:
             manifest = json.loads(package.read("plugin.json"))
@@ -55,7 +65,11 @@ def audit_plugin_package(path: pathlib.Path, maximum_macos: str) -> None:
             if provider["id"] != manifest["id"] or provider["version"] != manifest["version"]:
                 raise ReleaseError(f"plugin provider identity differs: {path.name}")
             for name, authority in declared.items():
-                must_execute = name.startswith("bin/") or name == "ffmpeg/ffmpeg"
+                must_execute = (
+                    name.startswith("bin/")
+                    or name == "ffmpeg/ffmpeg"
+                    or name.endswith("/legacy-office-worker")
+                )
                 if authority.get("executable") is not must_execute:
                     raise ReleaseError(
                         f"plugin executable authority differs: {path.name}:{name}"
@@ -66,18 +80,34 @@ def audit_plugin_package(path: pathlib.Path, maximum_macos: str) -> None:
                 data = package.read(name)
                 if hashlib.sha256(data).hexdigest() != authority["sha256"]:
                     raise ReleaseError(f"plugin file digest changed: {path.name}:{name}")
-                with tempfile.NamedTemporaryFile(prefix="into-md-plugin-audit-") as extracted:
-                    extracted.write(data)
-                    extracted.flush()
-                    candidate = pathlib.Path(extracted.name)
+                # Preserve the signed entry basename so the pinned third-party
+                # binary exception remains identity-bound during package
+                # inspection. A random temporary basename made the exact
+                # ONNX Runtime digest look like an unknown developer build.
+                basename = pathlib.PurePosixPath(name).name
+                if not basename or basename in {".", ".."}:
+                    raise ReleaseError(f"plugin file name is invalid: {path.name}:{name}")
+                with tempfile.TemporaryDirectory(prefix="into-md-plugin-audit-") as directory:
+                    candidate = pathlib.Path(directory) / basename
+                    candidate.write_bytes(data)
                     description = run(["/usr/bin/file", "-b", str(candidate)])
                     if "Mach-O" in description:
-                        audit_macho(candidate, maximum_macos, description)
+                        audit_macho(
+                            candidate,
+                            maximum_macos,
+                            description,
+                            signed_source_derivatives or {},
+                        )
     except (KeyError, json.JSONDecodeError, OSError, zipfile.BadZipFile) as error:
         raise ReleaseError(f"plugin package audit failed: {path.name}: {error}") from error
 
 
-def audit_macho(path: pathlib.Path, maximum_macos: str, description: str | None = None) -> None:
+def audit_macho(
+    path: pathlib.Path,
+    maximum_macos: str,
+    description: str | None = None,
+    signed_source_derivatives: dict[str, str] | None = None,
+) -> None:
     description = description or run(["/usr/bin/file", "-b", str(path)])
     if "Mach-O" not in description or "arm64" not in description or "x86_64" in description:
         raise ReleaseError(f"release binary is not thin arm64 Mach-O: {path.name}")
@@ -92,7 +122,7 @@ def audit_macho(path: pathlib.Path, maximum_macos: str, description: str | None 
         raise ReleaseError(
             f"Mach-O contains forbidden loader path {forbidden!r}: {path}"
         )
-    audit_embedded_paths(path)
+    audit_embedded_paths(path, signed_source_derivatives or {})
     for identity in dependency_identities(dependencies):
         if identity.startswith("/") and not identity.startswith(("/usr/lib/", "/System/Library/")):
             raise ReleaseError(f"Mach-O has a non-system absolute dependency: {path.name}")
@@ -113,16 +143,20 @@ def dependency_identities(output: str) -> list[str]:
     ]
 
 
-def audit_embedded_paths(path: pathlib.Path) -> None:
+def audit_embedded_paths(
+    path: pathlib.Path,
+    signed_source_derivatives: dict[str, str] | None = None,
+) -> None:
     data = path.read_bytes()
+    source_sha256 = (signed_source_derivatives or {}).get(hashlib.sha256(data).hexdigest())
     if (
         path.name == "libonnxruntime.dylib"
-        and hashlib.sha256(data).hexdigest() == PINNED_ONNX_SHA256
+        and (hashlib.sha256(data).hexdigest() == PINNED_ONNX_SHA256 or source_sha256 == PINNED_ONNX_SHA256)
     ):
         data = data.replace(PINNED_ONNX_BUILD_ROOT, b"")
     if (
         path.name == "libpdfium.dylib"
-        and hashlib.sha256(data).hexdigest() == PINNED_PDFIUM_SHA256
+        and (hashlib.sha256(data).hexdigest() == PINNED_PDFIUM_SHA256 or source_sha256 == PINNED_PDFIUM_SHA256)
     ):
         data = data.replace(PINNED_PDFIUM_BUILD_ROOT, b"")
     if any(value in data for value in FORBIDDEN_BYTES):

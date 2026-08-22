@@ -24,7 +24,7 @@ pub(crate) use macos_ipc::remove_office_ipc as macos_remove_office_ipc;
 pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<(), u8> {
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
     let runtime = PreparedRuntime::new(&policy).map_err(|()| 72)?;
-    sandbox::install(&policy).map_err(|()| 70)?;
+    sandbox::install_or_inherit(&policy).map_err(|()| 70)?;
     let runtime = runtime.load().map_err(|()| 72)?;
     match run_request(&policy, &runtime) {
         Ok(()) => Ok(()),
@@ -183,12 +183,16 @@ struct NativeRuntime {
     install_root: CString,
     #[cfg(target_os = "macos")]
     soffice: PathBuf,
+    #[cfg(target_os = "macos")]
+    inherited_process_sandbox: bool,
 }
 
 struct PreparedRuntime {
     authority: crate::authority::VerifiedBundle,
     #[cfg(not(target_os = "macos"))]
     install_root: CString,
+    #[cfg(target_os = "macos")]
+    inherited_process_sandbox: bool,
 }
 
 impl PreparedRuntime {
@@ -219,6 +223,8 @@ impl PreparedRuntime {
             authority,
             #[cfg(not(target_os = "macos"))]
             install_root: path_c_string(&policy.install_root)?,
+            #[cfg(target_os = "macos")]
+            inherited_process_sandbox: policy.inherited_process_sandbox,
         })
     }
 
@@ -231,7 +237,11 @@ impl PreparedRuntime {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(());
             }
-            Ok(NativeRuntime { authority: self.authority, soffice })
+            Ok(NativeRuntime {
+                authority: self.authority,
+                soffice,
+                inherited_process_sandbox: self.inherited_process_sandbox,
+            })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -274,11 +284,24 @@ impl NativeRuntime {
             let temporary = profile.parent().ok_or(ERROR_RUNTIME)?;
             let user_installation = format!("-env:UserInstallation={}", file_url(profile));
             let ipc = OfficeIpcSocket::new(profile)?;
-            let seatbelt =
-                macos_soffice_profile(&self.authority.root, temporary, &self.soffice, ipc.path())?;
-            let status = Command::new("/usr/bin/sandbox-exec")
-                .args(["-p", &seatbelt])
-                .arg(&self.soffice)
+            let seatbelt = (!self.inherited_process_sandbox)
+                .then(|| {
+                    macos_soffice_profile(
+                        &self.authority.root,
+                        temporary,
+                        &self.soffice,
+                        ipc.path(),
+                    )
+                })
+                .transpose()?;
+            let mut command = if let Some(seatbelt) = &seatbelt {
+                let mut command = Command::new("/usr/bin/sandbox-exec");
+                command.args(["-p", seatbelt]).arg(&self.soffice);
+                command
+            } else {
+                Command::new(&self.soffice)
+            };
+            let status = command
                 .args([
                     "--headless",
                     "--nologo",

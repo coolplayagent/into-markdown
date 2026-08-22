@@ -69,10 +69,7 @@ impl Converter for MediaConverter {
             let transcriber = services.transcriber.as_ref().ok_or_else(|| {
                 ConversionError::ComponentUnavailable {
                     component: "whisper-small".into(),
-                    detail: format!(
-                        "offline media transcription requires `into-md models install {}` and the pinned FFmpeg runtime",
-                        options.asr.model_bundle
-                    ),
+                    detail: "media transcription requires an installed local media plugin or an enabled remote Provider".into(),
                 }
             })?;
             let media_type =
@@ -91,7 +88,7 @@ impl Converter for MediaConverter {
                     context,
                 )
                 .await?;
-            if result.provider != transcriber.id()
+            if !transcriber.accepts_result_provider(&result.provider)
                 || result.model.is_empty()
                 || result.segments.len()
                     > usize::try_from(options.asr.max_segments).unwrap_or(usize::MAX)
@@ -113,10 +110,8 @@ impl Converter for MediaConverter {
                 let diarizer = services.diarizer.as_ref().ok_or_else(|| {
                     ConversionError::ComponentUnavailable {
                         component: "speaker-diarization".into(),
-                        detail: format!(
-                            "offline speaker diarization requires `into-md models install {}`",
-                            options.diarization.model_bundle
-                        ),
+                        detail: "speaker diarization requires the installed local media plugin"
+                            .into(),
                     }
                 })?;
                 let diarization_result = diarizer

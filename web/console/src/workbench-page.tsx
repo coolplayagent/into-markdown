@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, CircleAlert, FolderOpen, LoaderCircle, Plus, Sparkles, Square, Trash2, UploadCloud, X,
 } from "lucide-react";
-import type { ApiClient, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
+import type { ApiClient, CapabilityAdmin, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
 import { ApiError, defaultWorkbenchOptions } from "./api";
 import { AdvancedSettings, CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
@@ -47,6 +47,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
   const [cleaning, setCleaning] = useState(false);
   const [ocrStatus, setOcrStatus] = useState<ComponentStatus>();
+  const [ocrCapability, setOcrCapability] = useState<CapabilityAdmin>();
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
 
@@ -84,8 +85,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.all([api.listTasks({ limit: 100 }, controller.signal), api.status(controller.signal)])
-      .then(([page, status]) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); setOcrStatus(status.imageOcr); })
+    void Promise.all([api.listTasks({ limit: 100 }, controller.signal), api.status(controller.signal), api.admin(controller.signal)])
+      .then(([page, status, admin]) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); setOcrStatus(status.imageOcr); setOcrCapability(admin.capabilities.find((item) => item.id === "ocr")); })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setMessageScope("source");
@@ -99,6 +100,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     await api.installCapability("ocr");
     const status = await api.status();
     setOcrStatus(status.imageOcr);
+    const admin = await api.admin();
+    setOcrCapability(admin.capabilities.find((item) => item.id === "ocr"));
   }, [api]);
 
   useEffect(() => {
@@ -113,6 +116,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   }, [batchId, entries, uploading]);
 
   const selectedBytes = useMemo(() => entries.reduce((sum, entry) => sum + entry.file.size, 0), [entries]);
+  const remoteOcrSelected = ocrCapability?.currentSource.startsWith("provider:") === true;
   const recentHistory = useMemo(() => {
     const currentIds = new Set(entries.flatMap((entry) => entry.task ? [entry.task.id] : []));
     return recentTasks.filter((task) => TERMINAL.has(task.status) && !currentIds.has(task.id));
@@ -142,7 +146,12 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   const submit = async () => {
     if (!entries.length || uploading || entries.some((entry) => entry.task)) return;
-    if (options.aiMode !== "off" && !options.authorizeProvider) {
+    if (remoteOcrSelected && options.ocrPolicy !== "off" && options.networkMode !== "unrestricted") {
+      setMessageScope("controls");
+      setMessage(t("remoteNetworkRequired"));
+      return;
+    }
+    if ((options.aiMode !== "off" || remoteOcrSelected && options.ocrPolicy !== "off") && !options.authorizeProvider) {
       setMessageScope("controls");
       setMessage(t("authorizationRequired"));
       return;
@@ -223,13 +232,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         </div>
       </section>
       <div className="control-column">
-        <CapabilityStrip ocr={ocrStatus} onInstallOcr={installOcr} />
+        <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} onInstallOcr={installOcr} />
         <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} onOpenAdvanced={() => setAdvanced(true)} />
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
     </div>
-    <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} />
+    <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} providerCapabilityActive={remoteOcrSelected && options.ocrPolicy !== "off"} />
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }

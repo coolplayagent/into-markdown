@@ -370,7 +370,7 @@ SocketAddr，Host 与 TLS SNI 使用同一个 canonical hostname。HTTP 只允�
 非公网地址；公网 Provider 必须使用 HTTPS。重定向和 protocol upgrade 均拒绝，因此
 Authorization 不会跨 origin 转发。
 
-模型下载的 CLI 层是唯一的代理入口：操作者可用 `INTO_MD_HTTPS_PROXY`（回退到 curl 风格的
+官方能力插件下载是唯一使用该代理入口的产品流程：操作者可用 `INTO_MD_HTTPS_PROXY`（回退到 curl 风格的
 `HTTPS_PROXY`、`https_proxy`）显式注入一个 `http://[user:pass@]host:port` 的 CONNECT 代理，
 并用 `INTO_MD_NO_PROXY`（回退 `NO_PROXY`、`no_proxy`）按 `*`、精确 host 或域后缀豁免。
 代理仅承载策略已独立授权并解析的 HTTPS origin 隧道；TLS 仍在 origin 端到端终止，SNI 与

@@ -25,7 +25,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
@@ -530,32 +530,14 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     }
     let loaded = state.loaded.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     let cwd = state.cwd.clone();
-    let ocr_config = loaded.clone();
-    let audio_config = loaded.clone();
-    let diarization_config = loaded;
-    let ocr_cwd = cwd.clone();
-    let audio_cwd = cwd.clone();
-    let (image_ocr, audio_transcription, speaker_diarization) = tokio::join!(
-        tokio::task::spawn_blocking(move || ocr_runtime_status(&ocr_config, &ocr_cwd)),
-        tokio::task::spawn_blocking(move || audio_runtime_status(&audio_config, &audio_cwd)),
-        tokio::task::spawn_blocking(move || {
-            diarization_runtime_status(&diarization_config, &cwd)
-        }),
-    );
-    let image_ocr = image_ocr.unwrap_or(ComponentDto {
-        available: false,
-        code: "componentUnavailable",
-        detail: "OCR provider verification did not complete",
-    });
-    let audio_transcription = audio_transcription.unwrap_or(ComponentDto {
-        available: false,
-        code: "componentUnavailable",
-        detail: "audio runtime verification did not complete",
-    });
-    let speaker_diarization = speaker_diarization.unwrap_or(ComponentDto {
-        available: false,
-        code: "componentUnavailable",
-        detail: "speaker diarization runtime verification did not complete",
+    let components = tokio::task::spawn_blocking(move || capability_statuses(&loaded, &cwd)).await;
+    let (image_ocr, audio_transcription, speaker_diarization) = components.unwrap_or_else(|_| {
+        let unavailable = ComponentDto {
+            available: false,
+            code: "componentUnavailable",
+            detail: "capability status inspection did not complete",
+        };
+        (unavailable.clone(), unavailable.clone(), unavailable)
     });
     Json(StatusDto {
         schema_version: 1,
@@ -770,80 +752,49 @@ fn admin_error(error: &CliError) -> Response {
     (status, Json(serde_json::json!({"schemaVersion": 1, "code": error.code()}))).into_response()
 }
 
-fn ocr_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
-    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
-    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
-        if crate::services::verify_ocr_runtime(loaded, cwd).is_ok() {
-            ComponentDto {
-                available: true,
-                code: "available",
-                detail: "signed OCR provider and PP-OCRv6 model passed isolated verification",
-            }
-        } else {
-            ComponentDto {
-                available: false,
-                code: "componentUnavailable",
-                detail: "install the signed OCR provider and PP-OCRv6 model",
-            }
-        }
-    })
+fn capability_statuses(
+    loaded: &crate::config::LoadedConfig,
+    cwd: &Path,
+) -> (ComponentDto, ComponentDto, ComponentDto) {
+    let views = crate::app::capability_views(loaded, cwd).unwrap_or_default();
+    (
+        capability_component(&views, "ocr"),
+        capability_component(&views, "transcription"),
+        capability_component(&views, "diarization"),
+    )
 }
 
-fn diarization_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
-    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
-    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
-        if crate::services::verify_diarization_runtime(loaded, cwd).is_ok() {
-            ComponentDto {
-                available: true,
-                code: "available",
-                detail: "Silero VAD and 3D-Speaker ERes2Net passed local verification",
-            }
-        } else {
-            ComponentDto {
-                available: false,
-                code: "componentUnavailable",
-                detail: "install silero-vad-3dspeaker-eres2net and the pinned local runtimes",
-            }
-        }
-    })
-}
-
-fn audio_runtime_status(loaded: &crate::config::LoadedConfig, cwd: &Path) -> ComponentDto {
-    static STATUS: OnceLock<Mutex<Option<(u128, ComponentDto)>>> = OnceLock::new();
-    cached_runtime_status(&STATUS, crate::services::media_model_revision(), || {
-        if crate::services::verify_asr_runtime(loaded, cwd).is_ok() {
-            ComponentDto {
-                available: true,
-                code: "available",
-                detail: "Whisper model and pinned LGPL FFmpeg runtime passed local verification",
-            }
-        } else {
-            ComponentDto {
-                available: false,
-                code: "componentUnavailable",
-                detail: "install whisper-small-multilingual and the pinned LGPL FFmpeg runtime",
-            }
-        }
-    })
-}
-
-fn cached_runtime_status(
-    cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>>,
-    revision: u128,
-    verify: impl FnOnce() -> ComponentDto,
-) -> ComponentDto {
-    let mut cache = cache
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((cached_revision, status)) = cache.as_ref()
-        && (status.available || *cached_revision == revision)
-    {
-        return status.clone();
+fn capability_component(views: &[crate::app::CapabilityView], capability: &str) -> ComponentDto {
+    let Some(view) = views.iter().find(|view| view.id == capability) else {
+        return ComponentDto {
+            available: false,
+            code: "componentUnavailable",
+            detail: "capability status is unavailable",
+        };
+    };
+    if view.status == "ready" {
+        return ComponentDto {
+            available: true,
+            code: "available",
+            detail: if view.current_source.starts_with("provider:") {
+                "the configured remote capability source is ready"
+            } else {
+                "the signed local capability package metadata is ready"
+            },
+        };
     }
-    let status = verify();
-    *cache = Some((revision, status.clone()));
-    status
+    ComponentDto {
+        available: false,
+        code: "componentUnavailable",
+        detail: match capability {
+            "ocr" => "install local OCR or configure an authorized OCR Provider",
+            "transcription" => {
+                "install local speech or configure an authorized transcription Provider"
+            }
+            "diarization" => "install or repair the local speech capability plugin",
+            _ => "capability source is unavailable",
+        },
+    }
 }
 
 async fn upload_task(State(state): State<AppState>, request: Request) -> Response {
@@ -1842,7 +1793,7 @@ mod tests {
         };
         let body = serde_json::json!({
             "schemaVersion": 1,
-            "action": "model.remove",
+            "action": "capability.remove",
             "target": "fixture",
             "authorizeDangerous": true
         })
@@ -1862,7 +1813,7 @@ mod tests {
             .to_owned();
         let authorized_body = serde_json::json!({
             "schemaVersion": 1,
-            "action": "model.remove",
+            "action": "capability.remove",
             "target": "fixture",
             "authorizeDangerous": true,
             "authorizationGrant": token,
@@ -1896,33 +1847,6 @@ mod tests {
             admin_action(State(state), authorized_request()).await.status(),
             StatusCode::FORBIDDEN
         );
-    }
-
-    #[test]
-    fn runtime_status_cache_invalidates_unavailable_after_setup_and_pins_available_results() {
-        let unavailable_cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>> =
-            Box::leak(Box::new(OnceLock::new()));
-        let unavailable_calls = std::sync::atomic::AtomicUsize::new(0);
-        let unavailable = || {
-            unavailable_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            ComponentDto { available: false, code: "componentUnavailable", detail: "missing" }
-        };
-        assert!(!cached_runtime_status(unavailable_cache, 7, unavailable).available);
-        assert!(!cached_runtime_status(unavailable_cache, 7, unavailable).available);
-        assert_eq!(unavailable_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert!(!cached_runtime_status(unavailable_cache, 8, unavailable).available);
-        assert_eq!(unavailable_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
-
-        let available_cache: &'static OnceLock<Mutex<Option<(u128, ComponentDto)>>> =
-            Box::leak(Box::new(OnceLock::new()));
-        let available_calls = std::sync::atomic::AtomicUsize::new(0);
-        let available = || {
-            available_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            ComponentDto { available: true, code: "available", detail: "ready" }
-        };
-        assert!(cached_runtime_status(available_cache, 7, available).available);
-        assert!(cached_runtime_status(available_cache, 8, available).available);
-        assert_eq!(available_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -2171,8 +2095,8 @@ mod tests {
         let snapshot_dto: serde_json::Value = serde_json::from_str(snapshot_body).unwrap();
         assert_eq!(snapshot_dto["schemaVersion"], 1);
         assert!(snapshot_dto["formats"].as_array().is_some_and(|value| !value.is_empty()));
-        assert!(snapshot_dto["models"]["defaultBundle"].is_string());
-        assert!(snapshot_dto["models"]["entries"].is_array());
+        assert_eq!(snapshot_dto["capabilities"].as_array().map(Vec::len), Some(4));
+        assert!(snapshot_dto.get("models").is_none());
         assert!(snapshot_dto["providers"].is_array());
         assert!(snapshot_dto["plugins"].is_array());
         assert!(snapshot_dto["configuration"].is_object());
@@ -2184,7 +2108,7 @@ mod tests {
             assert!(!lowercase_snapshot.contains(secret_field), "{snapshot}");
         }
 
-        let body = r#"{"schemaVersion":1,"action":"model.install","target":"pp-ocrv6-tiny-zh-en"}"#;
+        let body = r#"{"schemaVersion":1,"action":"capability.install","target":"ocr"}"#;
         let denied = request(
             port,
             &format!(

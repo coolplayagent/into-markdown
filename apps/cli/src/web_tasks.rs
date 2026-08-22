@@ -147,8 +147,7 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
     }
     validate_web_asr_options(&options.asr)?;
     let diarization = &options.diarization;
-    if diarization.model_bundle != "silero-vad-3dspeaker-eres2net"
-        || !(1..=64).contains(&diarization.max_speakers)
+    if !(1..=64).contains(&diarization.max_speakers)
         || diarization
             .expected_speakers
             .is_some_and(|expected| expected == 0 || expected > diarization.max_speakers)
@@ -277,13 +276,11 @@ fn valid_batch_id(value: &str) -> bool {
 }
 
 fn validate_web_asr_options(options: &AsrOptions) -> Result<(), WebTaskError> {
-    if options.model_bundle == "whisper-small-multilingual"
-        && options.language.as_ref().is_none_or(|language| {
-            !language.is_empty()
-                && language.len() <= 35
-                && language.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-        && (1..=8).contains(&options.max_threads)
+    if options.language.as_ref().is_none_or(|language| {
+        !language.is_empty()
+            && language.len() <= 35
+            && language.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) && (1..=8).contains(&options.max_threads)
         && options.max_duration_ms != Some(0)
         && (1..=100_000).contains(&options.max_segments)
         && (256 * 1024 * 1024..=2 * 1024 * 1024 * 1024).contains(&options.max_native_memory_bytes)
@@ -1065,6 +1062,7 @@ impl WebTaskBackend {
 
     /// Open durable stores, recover nonterminal tasks, and start bounded workers.
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, WebTaskError> {
         Self::open_internal(root.into(), None)
     }
@@ -1215,6 +1213,7 @@ impl WebTaskBackend {
     }
 
     /// Begin one streamed upload. The returned guard removes uncommitted bytes.
+    #[cfg(test)]
     pub fn begin_upload(
         &self,
         display_name: &str,
@@ -2676,7 +2675,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 id: job.id.clone(),
             })),
         };
-        let meeting_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
+        let routed_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
             let services = shared
                 .media_services
                 .assemble(&persisted.options)
@@ -2686,9 +2685,15 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                     .map_err(|error| WebTaskError::Io(error.to_string()))?,
             )
         } else {
-            None
+            shared
+                .media_services
+                .assemble_conversion(&persisted.options, web_invocation_capabilities(&persisted))
+                .map_err(|error| WebTaskError::Io(error.to_string()))?
+                .map(into_markdown::default_engine_with_services)
+                .transpose()
+                .map_err(|error| WebTaskError::Io(error.to_string()))?
         };
-        let engine = meeting_engine.as_ref().unwrap_or(&shared.engine);
+        let engine = routed_engine.as_ref().unwrap_or(&shared.engine);
         let mut request = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from(bytes),
             Some(persisted.name.clone()),
@@ -2752,6 +2757,30 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
         } else {
             finish_terminal_or_stop(shared, &job.id, false);
         }
+    }
+}
+
+fn web_invocation_capabilities(
+    request: &PersistedRequest,
+) -> crate::services::InvocationCapabilities {
+    let format = request.hint.format.or_else(|| {
+        request.hint.extension.as_deref().and_then(InputFormat::from_extension).or_else(|| {
+            Path::new(&request.name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(InputFormat::from_extension)
+        })
+    });
+    crate::services::InvocationCapabilities {
+        ocr: request.options.ocr.policy != OcrPolicy::Off
+            || request.options.ai.vision_ocr != AiMode::Off,
+        transcription: matches!(format, Some(InputFormat::Audio | InputFormat::Video))
+            || request.options.ai.audio_transcription != AiMode::Off,
+        diarization: request.options.diarization.enabled,
+        legacy_office: matches!(
+            format,
+            Some(InputFormat::Doc | InputFormat::Xls | InputFormat::Ppt)
+        ),
     }
 }
 
@@ -4554,6 +4583,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn durable_web_requests_assemble_capabilities_from_options_and_filename() {
+        let mut request = PersistedRequest {
+            schema_version: 1,
+            workflow: WebWorkflow::Conversion,
+            name: "scan.jpg".into(),
+            hint: FormatHint::default(),
+            batch_id: None,
+            options: ConversionOptions::default(),
+        };
+        let image = web_invocation_capabilities(&request);
+        assert!(image.ocr);
+        assert!(!image.legacy_office);
+
+        request.name = "archive.DOC".into();
+        let legacy = web_invocation_capabilities(&request);
+        assert!(legacy.legacy_office);
+
+        request.options.ocr.policy = OcrPolicy::Off;
+        request.name = "meeting.webm".into();
+        let media = web_invocation_capabilities(&request);
+        assert!(!media.ocr);
+        assert!(media.transcription);
+    }
+
+    #[test]
     fn web_task_request_uses_shared_options_and_requires_one_time_grants() {
         let mut request = WebTaskRequest {
             format: Some(InputFormat::Pdf),
@@ -4597,6 +4651,9 @@ mod tests {
             Err(WebTaskError::Invalid(_))
         ));
         request.authorization.provider = true;
+        assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+
+        request.options.ai.markdown_postprocess = AiMode::Off;
         assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
 
         request.options.limits.max_input_bytes = MAX_FILE_BYTES + 1;

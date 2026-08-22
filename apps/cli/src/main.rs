@@ -6,7 +6,6 @@ mod args;
 mod config;
 mod error;
 mod i18n;
-mod model_fetch;
 mod output;
 mod proxy_env;
 mod services;

@@ -2,6 +2,16 @@ common --enable_bzlmod
 build --announce_rc
 build --incompatible_strict_action_env
 build --show_timestamps
+# Native Cargo build scripts (notably whisper.cpp) invoke the host CMake
+# executable. Keep the action environment explicit while preserving the
+# developer/CI toolchain path on every supported host.
+build --action_env=PATH
+# Keep native macOS dependencies aligned with the packaged runtime authority in
+# tools/macos-release/authority.json. The variable is ignored by non-Apple
+# targets but prevents upstream CMake defaults from silently selecting 10.11.
+build --action_env=MACOSX_DEPLOYMENT_TARGET=14.0
+build --macos_minimum_os=14.0
+build --host_macos_minimum_os=14.0
 # Rust 1.97 mangles allocator symbols.  Use rules_rust's rust_static_library
 # bridge so Rust libraries remain linkable from native C++ without a target C++
 # compiler being needed merely to analyze a rejected foreign configuration.

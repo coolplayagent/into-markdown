@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read as _;
 use std::path::{Component, Path};
-use url::Url;
 
 /// Exact manifest schema understood by this host.
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -14,8 +13,6 @@ pub const CAPABILITY_PROTOCOL: &str = "capability-provider";
 pub const PROVIDER_MANIFEST_NAME: &str = "provider.json";
 const MAX_PLUGIN_FILES: usize = 10_000;
 const MAX_CAPABILITIES: usize = 64;
-const MAX_MODELS: usize = 128;
-const MAX_MODEL_ARTIFACTS: usize = 128;
 const MAX_DECLARED_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
 /// Host API range accepted by a package.
@@ -32,6 +29,8 @@ pub struct HostApiRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityKind {
+    /// Legacy binary Office normalization through a private LibreOffice runtime.
+    LegacyOffice,
     /// Image or rendered-page OCR.
     Ocr,
     /// Time-aligned speech transcription.
@@ -72,9 +71,6 @@ pub struct PluginCapabilityDescriptor {
     /// Accepted MIME media types.
     #[serde(default)]
     pub media_types: Vec<String>,
-    /// Model bundles offered by this provider.
-    #[serde(default)]
-    pub model_bundles: Vec<String>,
     /// Host-enforced request limits.
     pub resources: ResourceEnvelope,
 }
@@ -104,39 +100,6 @@ pub struct PluginTargetDescriptor {
     pub entrypoint: String,
     /// Complete target file inventory, including the entrypoint.
     pub files: Vec<PluginFileDescriptor>,
-}
-
-/// One model or runtime artifact declared by a plugin.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ModelArtifactDescriptor {
-    /// Package-specific role such as `model`, `detector`, or `vad`.
-    pub role: String,
-    /// Portable final filename.
-    pub file_name: String,
-    /// Exact byte length.
-    pub bytes: u64,
-    /// Lowercase SHA-256.
-    pub sha256: String,
-    /// Optional pinned HTTPS acquisition URL.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// SPDX license expression or reviewed identifier.
-    pub license: String,
-}
-
-/// Installable model bundle owned by a provider plugin.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ModelBundleDescriptor {
-    /// Stable package-local bundle ID.
-    pub id: String,
-    /// Human-readable upstream identity.
-    pub upstream_version: String,
-    /// Platforms on which this exact bundle is supported.
-    pub platforms: Vec<String>,
-    /// Complete artifact inventory.
-    pub artifacts: Vec<ModelArtifactDescriptor>,
 }
 
 /// Ambient capabilities requested by a package. All default to denied.
@@ -171,9 +134,6 @@ pub struct PluginManifest {
     pub targets: Vec<PluginTargetDescriptor>,
     /// Exported provider capabilities.
     pub capabilities: Vec<PluginCapabilityDescriptor>,
-    /// Model bundles declared by this package.
-    #[serde(default)]
-    pub models: Vec<ModelBundleDescriptor>,
     /// Explicit ambient authority.
     #[serde(default)]
     pub permissions: PluginPermissions,
@@ -199,14 +159,12 @@ impl PluginManifest {
             || self.targets.len() > 16
             || self.capabilities.is_empty()
             || self.capabilities.len() > MAX_CAPABILITIES
-            || self.models.len() > MAX_MODELS
             || self.licenses.is_empty()
             || self.licenses.iter().any(|value| value.is_empty() || value.len() > 256)
         {
             return Err("manifest identity, compatibility, or inventory is invalid".into());
         }
         self.validate_targets()?;
-        self.validate_models()?;
         self.validate_capabilities()
     }
 
@@ -255,60 +213,7 @@ impl PluginManifest {
         Ok(())
     }
 
-    fn validate_models(&self) -> Result<(), String> {
-        let mut ids = BTreeSet::new();
-        for model in &self.models {
-            if !valid_id(&model.id, 128)
-                || !ids.insert(&model.id)
-                || model.upstream_version.is_empty()
-                || model.upstream_version.len() > 1024
-                || model.platforms.is_empty()
-                || model.artifacts.is_empty()
-                || model.artifacts.len() > MAX_MODEL_ARTIFACTS
-            {
-                return Err("model bundle identity or inventory is invalid".into());
-            }
-            let mut platforms = BTreeSet::new();
-            if model
-                .platforms
-                .iter()
-                .any(|platform| !valid_target(platform) || !platforms.insert(platform.as_str()))
-            {
-                return Err("model platform inventory is invalid".into());
-            }
-            let mut roles = BTreeSet::new();
-            let mut names = BTreeSet::new();
-            for artifact in &model.artifacts {
-                if !valid_id(&artifact.role, 64)
-                    || !roles.insert(&artifact.role)
-                    || !portable_component(&artifact.file_name)
-                    || !names.insert(artifact.file_name.to_ascii_lowercase())
-                    || artifact.bytes == 0
-                    || artifact.bytes > MAX_DECLARED_BYTES
-                    || !valid_sha256(&artifact.sha256)
-                    || artifact.license.is_empty()
-                    || artifact.license.len() > 256
-                {
-                    return Err("model artifact authority is invalid or ambiguous".into());
-                }
-                if let Some(url) = &artifact.url {
-                    let parsed = Url::parse(url).map_err(|_| "model URL is invalid")?;
-                    if parsed.scheme() != "https"
-                        || parsed.host_str().is_none()
-                        || !parsed.username().is_empty()
-                        || parsed.password().is_some()
-                        || parsed.fragment().is_some()
-                    {
-                        return Err("model URL is not an authenticated HTTPS authority".into());
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn validate_capabilities(&self) -> Result<(), String> {
-        let model_ids = self.models.iter().map(|model| model.id.as_str()).collect::<BTreeSet<_>>();
         let mut ids = BTreeSet::new();
         let mut providers = BTreeSet::new();
         for capability in &self.capabilities {
@@ -328,10 +233,8 @@ impl PluginManifest {
                 || resources.timeout_ms > 24 * 60 * 60 * 1000
                 || capability.languages.len() > 256
                 || capability.media_types.len() > 256
-                || capability.model_bundles.len() > MAX_MODELS
-                || capability.model_bundles.iter().any(|model| !model_ids.contains(model.as_str()))
             {
-                return Err("capability identity, models, or resource envelope is invalid".into());
+                return Err("capability identity or resource envelope is invalid".into());
             }
             if capability.languages.iter().any(|value| !valid_language(value))
                 || capability.media_types.iter().any(|value| !valid_media_type(value))
@@ -507,7 +410,6 @@ mod tests {
                 provider_id: "official.ocr.ppocrv6.image".into(),
                 languages: vec!["zh-Hans".into(), "en".into()],
                 media_types: vec!["image/png".into()],
-                model_bundles: vec!["pp-ocrv6-tiny-zh-en".into()],
                 resources: ResourceEnvelope {
                     max_input_bytes: 128 * 1024 * 1024,
                     max_output_bytes: 24 * 1024 * 1024,
@@ -515,19 +417,6 @@ mod tests {
                     max_temporary_bytes: 128 * 1024 * 1024,
                     timeout_ms: 60_000,
                 },
-            }],
-            models: vec![ModelBundleDescriptor {
-                id: "pp-ocrv6-tiny-zh-en".into(),
-                upstream_version: "PP-OCRv6 tiny".into(),
-                platforms: vec!["aarch64-apple-darwin".into()],
-                artifacts: vec![ModelArtifactDescriptor {
-                    role: "detector".into(),
-                    file_name: "detector.onnx".into(),
-                    bytes: 1,
-                    sha256: "b".repeat(64),
-                    url: Some("https://example.invalid/detector.onnx".into()),
-                    license: "Apache-2.0".into(),
-                }],
             }],
             permissions: PluginPermissions::default(),
             licenses: vec!["Apache-2.0".into()],
@@ -540,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_path_aliases_unknown_models_and_ambient_http() {
+    fn rejects_path_aliases() {
         let mut value = manifest();
         value.targets[0].files.push(PluginFileDescriptor {
             path: "BIN/PROVIDER".into(),
@@ -548,12 +437,6 @@ mod tests {
             sha256: "c".repeat(64),
             executable: false,
         });
-        assert!(value.validate().is_err());
-        let mut value = manifest();
-        value.capabilities[0].model_bundles = vec!["missing".into()];
-        assert!(value.validate().is_err());
-        let mut value = manifest();
-        value.models[0].artifacts[0].url = Some("http://example.invalid/model".into());
         assert!(value.validate().is_err());
     }
 }

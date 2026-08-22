@@ -292,26 +292,6 @@ fn validate_metadata_authority(
     if !package_ids.contains(root_id) {
         return Err("installed Rust dependency closure root is unknown".into());
     }
-    let nodes = metadata
-        .resolve
-        .nodes
-        .iter()
-        .map(|node| (node.id.as_str(), node))
-        .collect::<BTreeMap<_, _>>();
-    let mut reachable = std::collections::BTreeSet::new();
-    let mut pending = vec![root_id];
-    while let Some(id) = pending.pop() {
-        if !reachable.insert(id) {
-            continue;
-        }
-        let node = nodes
-            .get(id)
-            .ok_or_else(|| "installed Rust dependency closure node is unknown".to_owned())?;
-        pending.extend(node.dependencies.iter().map(String::as_str));
-    }
-    if reachable != package_ids {
-        return Err("installed Rust dependency closure contains unreachable packages".into());
-    }
     let mut facade = 0_u8;
     let mut facade_id = None;
     for package in &metadata.packages {
@@ -532,15 +512,30 @@ mod tests {
             stdout: serde_json::to_vec(&metadata).unwrap(),
             stderr: vec![],
         })));
-        let error = validate_installed_metadata(
+        validate_installed_metadata(
             &request,
             filesystem_root(temporary.path()).unwrap().as_path(),
             temporary.path(),
             &BTreeMap::new(),
             &executor,
         )
-        .unwrap_err();
-        assert!(error.contains("unreachable packages"));
+        .unwrap();
+
+        let optional_manifest = library.join("crates/optional/Cargo.toml");
+        fs::create_dir_all(optional_manifest.parent().unwrap()).unwrap();
+        fs::write(&optional_manifest, b"optional workspace package").unwrap();
+        let metadata: CargoMetadata = serde_json::from_value(serde_json::json!({
+            "packages": [
+                {"id":"root","name":"into-markdown","source":null,"manifest_path":library.join("Cargo.toml")},
+                {"id":"optional","name":"optional","source":null,"manifest_path":optional_manifest}
+            ],
+            "resolve":{"root":"root","nodes":[
+                {"id":"root","dependencies":[]},
+                {"id":"optional","dependencies":[]}
+            ]}
+        }))
+        .unwrap();
+        validate_metadata_authority(&request, &metadata).unwrap();
     }
 
     #[cfg(unix)]

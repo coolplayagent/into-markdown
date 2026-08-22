@@ -23,6 +23,7 @@ pub(super) fn verified(target: &Target) -> Result<Option<VerifiedContainer>, Con
         .as_ref()
         .map(|container| {
             Ok(VerifiedContainer {
+                format: container.format.clone(),
                 image_relative: container.image_path.clone(),
                 mount_relative: container.mount_path.clone(),
                 kit_sha256: container.kit_sha256.clone(),
@@ -43,7 +44,11 @@ pub(crate) fn validate_mounted(
         return Ok(());
     };
     let mount = checked_join(runtime_root, &container.mount_relative)?;
-    require_readonly_mount(&mount)?;
+    if container.format == "udif" {
+        require_readonly_mount(&mount)?;
+    } else if container.format != "zip" {
+        return Err(unavailable("containerFormat"));
+    }
     validate_abi(
         kit_library,
         &Abi {

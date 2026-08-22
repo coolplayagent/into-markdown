@@ -23,13 +23,17 @@ pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
     install_hint: "install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file",
 };
 pub(crate) const LEGACY_OFFICE: RuntimeRequirement = RuntimeRequirement {
-    component: "legacy-office",
-    install_hint: "install the authority-verified legacy Office runtime for this platform",
+    component: "official.legacy-office.libreoffice",
+    install_hint: "run `into-md setup legacy-office`",
 };
-const OCR: RuntimeRequirement =
-    RuntimeRequirement { component: "onnxruntime", install_hint: "run `into-md setup ocr`" };
-const ASR: RuntimeRequirement =
-    RuntimeRequirement { component: "whisper-small", install_hint: "run `into-md setup media`" };
+const OCR: RuntimeRequirement = RuntimeRequirement {
+    component: "official.ocr.ppocrv6",
+    install_hint: "run `into-md setup ocr`",
+};
+const ASR: RuntimeRequirement = RuntimeRequirement {
+    component: "official.media.whisper",
+    install_hint: "run `into-md setup media`",
+};
 
 const AVAILABLE: FormatStatus = FormatStatus::Available;
 const CORE: CapabilitySource = CapabilitySource::Core;
@@ -65,11 +69,11 @@ const FORMATS: &[FormatDescriptor] = &[
 
 const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(0, Some(PDFIUM)),
-    catalog(1, Some(LEGACY_OFFICE)),
+    plugin_catalog(1, LEGACY_OFFICE),
     catalog(2, None),
-    catalog(3, Some(LEGACY_OFFICE)),
+    plugin_catalog(3, LEGACY_OFFICE),
     catalog(4, None),
-    catalog(5, Some(LEGACY_OFFICE)),
+    plugin_catalog(5, LEGACY_OFFICE),
     catalog(6, None),
     catalog(7, None),
     catalog(8, None),
@@ -88,8 +92,8 @@ const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(21, None),
     catalog(22, None),
     catalog(23, None),
-    catalog(24, Some(ASR)),
-    catalog(25, Some(ASR)),
+    plugin_catalog(24, ASR),
+    plugin_catalog(25, ASR),
 ];
 
 const fn format(
@@ -102,6 +106,14 @@ const fn format(
 
 const fn catalog(index: usize, runtime: Option<RuntimeRequirement>) -> CatalogFormatDescriptor {
     CatalogFormatDescriptor { descriptor: &FORMATS[index], source: CORE, runtime }
+}
+
+const fn plugin_catalog(index: usize, runtime: RuntimeRequirement) -> CatalogFormatDescriptor {
+    CatalogFormatDescriptor {
+        descriptor: &FORMATS[index],
+        source: CapabilitySource::Plugin,
+        runtime: Some(runtime),
+    }
 }
 
 const CAPABILITIES: &[CapabilityDescriptor] = &[
@@ -135,7 +147,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     ),
     component("builtin.converter.epub", CapabilityKind::Converter, 240, &[InputFormat::Epub]),
     component("builtin.converter.rtf", CapabilityKind::Converter, 240, &[InputFormat::Rtf]),
-    runtime_converter(
+    plugin_converter(
         "builtin.converter.legacy-office",
         230,
         &[InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls],
@@ -164,16 +176,16 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
         &[InputFormat::Csv, InputFormat::Tsv],
     ),
     component("builtin.converter.text", CapabilityKind::Converter, 100, &[InputFormat::Text]),
-    runtime_converter(
+    plugin_converter(
         "builtin.converter.media-transcript",
         255,
         &[InputFormat::Audio, InputFormat::Video],
         ASR,
     ),
     runtime("runtime.pdfium", PDFIUM),
-    runtime("runtime.ocr", OCR),
-    runtime("runtime.legacy-office", LEGACY_OFFICE),
-    runtime("runtime.asr", ASR),
+    plugin_runtime("runtime.ocr", OCR),
+    plugin_runtime("runtime.legacy-office", LEGACY_OFFICE),
+    plugin_runtime("runtime.asr", ASR),
 ];
 
 const fn component(
@@ -210,11 +222,40 @@ const fn runtime_converter(
     }
 }
 
+const fn plugin_converter(
+    id: &'static str,
+    priority: i32,
+    formats: &'static [InputFormat],
+    runtime: RuntimeRequirement,
+) -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        id,
+        kind: CapabilityKind::Converter,
+        source: CapabilitySource::Plugin,
+        availability: CapabilityAvailability::OptionalRuntime,
+        priority,
+        formats,
+        runtime: Some(runtime),
+    }
+}
+
 const fn runtime(id: &'static str, runtime: RuntimeRequirement) -> CapabilityDescriptor {
     CapabilityDescriptor {
         id,
         kind: CapabilityKind::Runtime,
         source: CapabilitySource::OptionalRuntime,
+        availability: CapabilityAvailability::OptionalRuntime,
+        priority: 0,
+        formats: &[],
+        runtime: Some(runtime),
+    }
+}
+
+const fn plugin_runtime(id: &'static str, runtime: RuntimeRequirement) -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        id,
+        kind: CapabilityKind::Runtime,
+        source: CapabilitySource::Plugin,
         availability: CapabilityAvailability::OptionalRuntime,
         priority: 0,
         formats: &[],
@@ -329,8 +370,10 @@ pub fn validate_core_capabilities(
         }
         match capability.kind {
             CapabilityKind::Runtime => {
-                if capability.source != CapabilitySource::OptionalRuntime
-                    || capability.availability != CapabilityAvailability::OptionalRuntime
+                if !matches!(
+                    capability.source,
+                    CapabilitySource::OptionalRuntime | CapabilitySource::Plugin
+                ) || capability.availability != CapabilityAvailability::OptionalRuntime
                     || capability.priority != 0
                     || capability.runtime.is_none()
                 {
@@ -341,7 +384,11 @@ pub fn validate_core_capabilities(
                 }
             }
             kind => {
-                if capability.source != CapabilitySource::Core {
+                if capability.source != CapabilitySource::Core
+                    && !(capability.source == CapabilitySource::Plugin
+                        && capability.kind == CapabilityKind::Converter
+                        && capability.availability == CapabilityAvailability::OptionalRuntime)
+                {
                     return catalog_error(format!(
                         "registered capability {} is not core",
                         capability.id
@@ -413,7 +460,7 @@ fn validate_format_coverage(
 ) -> Result<(), ConversionError> {
     for catalog_entry in FORMAT_CATALOG {
         let descriptor = catalog_entry.descriptor;
-        if catalog_entry.source != CapabilitySource::Core
+        if !matches!(catalog_entry.source, CapabilitySource::Core | CapabilitySource::Plugin)
             || descriptor.status != FormatStatus::Available
         {
             return catalog_error(format!(
@@ -433,7 +480,7 @@ fn validate_format_coverage(
                     descriptor.format
                 ),
             })?;
-        if converter.runtime != catalog_entry.runtime {
+        if converter.runtime != catalog_entry.runtime || converter.source != catalog_entry.source {
             return catalog_error(format!(
                 "core format {} runtime requirement drifted",
                 descriptor.format
@@ -618,9 +665,11 @@ mod tests {
         )));
         assert!(FORMAT_CATALOG.iter().any(|entry| entry.descriptor.format == InputFormat::Audio));
         assert!(FORMAT_CATALOG.iter().any(|entry| entry.descriptor.format == InputFormat::Video));
-        assert!(CAPABILITIES.iter().all(
-            |entry| !entry.id.contains("mediawiki") && entry.source != CapabilitySource::Plugin
-        ));
+        assert!(CAPABILITIES.iter().all(|entry| !entry.id.contains("mediawiki")));
+        assert!(CAPABILITIES.iter().any(|entry| {
+            entry.id == "builtin.converter.media-transcript"
+                && entry.source == CapabilitySource::Plugin
+        }));
     }
 
     #[test]

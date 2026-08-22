@@ -151,6 +151,7 @@ pub fn verify_archive_projection(
         &projection.target,
         &projection.components,
         &projection.files,
+        &projection.native_transformations,
         &mut errors,
     );
     models_fixtures::validate(repository, &projection.components, &projection.files, &mut errors);
@@ -287,19 +288,34 @@ fn validate_catalog_runtime_authority(
         .iter()
         .filter_map(|capability| capability.runtime.map(|runtime| runtime.component))
         .collect();
-    let expected = BTreeSet::from(["legacy-office", "onnxruntime", "pdfium", "whisper-small"]);
+    let expected = BTreeSet::from([
+        "official.legacy-office.libreoffice",
+        "official.media.whisper",
+        "official.ocr.ppocrv6",
+        "pdfium",
+    ]);
     if catalog != expected {
         errors.push(format!(
             "core runtime catalog differs from license projection authority: {catalog:?}"
         ));
     }
-    for id in OCR_RUNTIME_COMPONENTS.into_iter().chain(["pdfium", "whisper-small"]) {
+    for id in OCR_RUNTIME_COMPONENTS.into_iter().chain([
+        "3dspeaker-eres2net-base-onnx-model",
+        "ffmpeg",
+        "libreoffice-macos-arm64",
+        "libreoffice-linux-x86_64",
+        "libreoffice-linux-arm64",
+        "libreoffice-windows-x86_64",
+        "pdfium",
+        "silero-vad-half-onnx-model",
+        "whisper-small",
+    ]) {
         if by_id
             .get(id)
             .is_none_or(|component| component.status != "reviewed" || !component.release_eligible)
         {
             errors.push(format!(
-                "core runtime catalog component {id} lacks reviewed release authority"
+                "core or official capability plugin component {id} lacks reviewed release authority"
             ));
         }
     }
@@ -461,6 +477,7 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
                     | "bin/onnxruntime-worker.exe"
                     | "bin/legacy-office-runtime/legacy-office-worker"
                     | "bin/legacy-office-runtime/legacy-office-worker.exe"
+                    | "share/into-markdown/plugins/official-publisher.json"
                     | "install"
                     | "uninstall"
             ) || file.path.starts_with("lib/into-markdown-rust/")

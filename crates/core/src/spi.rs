@@ -1367,6 +1367,21 @@ pub struct TranscriptionResult {
 pub trait Transcriber: Send + Sync {
     /// Stable provider ID.
     fn id(&self) -> &str;
+    /// Whether a completed result belongs to an implementation selected by
+    /// this transcriber. Direct providers accept only their own identity;
+    /// routers override this to retain the exact selected source in
+    /// provenance instead of rewriting it to a generic route identity.
+    fn accepts_result_provider(&self, provider: &str) -> bool {
+        provider == self.id()
+    }
+    /// Whether a source-specific execution limit may be recovered by the next
+    /// explicitly configured source in a `prefer` route. Direct local engines
+    /// fail closed by default; remote adapters may opt in for provider limits
+    /// that a self-contained local plugin does not share.
+    fn allows_prefer_fallback(&self, error: &ConversionError) -> bool {
+        let _ = error;
+        false
+    }
     /// Transcribe media.
     fn transcribe<'a>(
         &'a self,
@@ -1412,6 +1427,47 @@ pub trait Diarizer: Send + Sync {
         request: DiarizationRequest<'a>,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<DiarizationResult, ConversionError>>;
+}
+
+/// Borrowed request for normalizing one legacy binary Office document into OOXML.
+#[derive(Debug, Clone, Copy)]
+pub struct LegacyOfficeRequest<'a> {
+    /// Original compound-document bytes.
+    pub document: &'a [u8],
+    /// Exact detected legacy source format.
+    pub source_format: InputFormat,
+    /// Maximum retained normalized package size.
+    pub maximum_output_bytes: u64,
+}
+
+/// Authenticated normalized OOXML package returned by a local compatibility plugin.
+pub struct LegacyOfficeResult {
+    /// Normalized DOCX, XLSX, or PPTX bytes.
+    pub bytes: Box<[u8]>,
+    /// Exact normalized OOXML format.
+    pub format: InputFormat,
+    /// Stable provider identity declared by the signed plugin.
+    pub provider: String,
+    /// `LibreOffice` runtime version.
+    pub version: String,
+    /// Hash of the verified runtime authority.
+    pub artifact_sha256: String,
+    /// Runtime target triple.
+    pub target: String,
+    /// Live request-memory charge for `bytes`.
+    pub memory: ResourceReservation,
+}
+
+/// Local self-contained legacy Office compatibility provider.
+pub trait LegacyOfficeNormalizer: Send + Sync {
+    /// Stable provider ID.
+    fn id(&self) -> &str;
+    /// Normalize a legacy binary document using the plugin-owned runtime.
+    fn normalize<'a>(
+        &'a self,
+        request: LegacyOfficeRequest<'a>,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<LegacyOfficeResult, ConversionError>>;
 }
 
 /// Optional AI operation exposed by a provider.
@@ -1852,6 +1908,8 @@ pub struct Services {
     pub transcriber: Option<Arc<dyn Transcriber>>,
     /// Anonymous speaker diarization implementation.
     pub diarizer: Option<Arc<dyn Diarizer>>,
+    /// Legacy binary Office compatibility implementation.
+    pub legacy_office: Option<Arc<dyn LegacyOfficeNormalizer>>,
     /// AI provider.
     pub ai: Option<Arc<dyn AiProvider>>,
     /// Request-authority-preserving dispatcher for already-resolved container members.
@@ -1871,6 +1929,7 @@ mod tests {
         let _: Option<&dyn OcrEngine> = None;
         let _: Option<&dyn Transcriber> = None;
         let _: Option<&dyn Diarizer> = None;
+        let _: Option<&dyn LegacyOfficeNormalizer> = None;
         let _: Option<&dyn AiProvider> = None;
         let _: Option<&dyn TensorRuntime> = None;
     }

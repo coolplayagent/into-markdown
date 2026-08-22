@@ -1,3 +1,4 @@
+import hashlib
 import pathlib
 import tempfile
 import unittest
@@ -37,6 +38,20 @@ class AuditTest(unittest.TestCase):
                     audit_embedded_paths(candidate)
             candidate.write_bytes(b"/usr/src/into-markdown\0")
             audit_embedded_paths(candidate)
+
+    def test_signed_derivative_requires_exact_in_process_source_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = pathlib.Path(temporary) / "libpdfium.dylib"
+            candidate.write_bytes(b"Mach-O\0/Users/runner/work/pdfium-binaries/\0signed")
+            with self.assertRaises(ReleaseError):
+                audit_embedded_paths(candidate)
+            digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            audit_embedded_paths(
+                candidate,
+                {
+                    digest: "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc601d52b0"
+                },
+            )
 
 
 if __name__ == "__main__":

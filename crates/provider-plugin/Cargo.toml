@@ -7,6 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
 into-markdown-core = { path = "../core" }
 into-markdown-plugin-manager = { path = "../plugin-manager" }
 into-markdown-process-plugin = { path = "../process-plugin" }

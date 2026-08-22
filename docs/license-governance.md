@@ -40,8 +40,11 @@ The following files are projections or evidence and must agree with the componen
 - `fixtures/manifest.json` and `fixtures/downloads.json` distinguish repository-owned test data from
   manually acquired licensed inputs. Fixtures are not silently promoted to release components.
 
-LibreOffice, Wasmtime, generated models, and distribution fonts remain denied from release while
-their inventory entries are planned or lack complete immutable acquisition and notice evidence.
+LibreOffice is released only inside the target-specific signed capability plugin after its exact
+artifact, complete runtime inventory, dependency closure, license material, and ABI authority have
+been generated and verified. Wasmtime, generated models outside reviewed capability packages, and
+distribution fonts remain denied while their inventory entries are planned or lack complete
+immutable acquisition and notice evidence.
 
 ## Trust boundaries and threat model
 

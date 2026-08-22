@@ -2324,15 +2324,14 @@ impl TransactionLock {
     }
 }
 
+#[cfg(windows)]
 fn validate_flat_private_directory(path: &Path) -> Result<(), ModelManagerError> {
-    #[cfg(windows)]
     windows_transaction_fs::validate_private_directory(path)?;
     reject_symlink(path)?;
     for entry in bounded_directory_entries(path, MAX_MODEL_BUNDLE_ENTRIES)? {
         if !entry.file_type()?.is_file() {
             return Err(ModelManagerError::UnsafePath);
         }
-        #[cfg(windows)]
         windows_transaction_fs::validate_private_file(&entry.path())?;
     }
     Ok(())

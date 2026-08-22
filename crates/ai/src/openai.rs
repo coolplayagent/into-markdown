@@ -76,6 +76,8 @@ pub enum ProviderErrorCode {
     Cancelled,
     /// Provider returned HTTP 401.
     Unauthorized,
+    /// Provider rejected the request contract with HTTP 400 or 422.
+    BadRequest,
     /// Provider returned HTTP 403.
     Forbidden,
     /// Provider returned HTTP 404.
@@ -131,6 +133,7 @@ impl ProviderError {
             ProviderErrorCode::Timeout => "providerTimeout",
             ProviderErrorCode::Cancelled => "cancelled",
             ProviderErrorCode::Unauthorized => "providerUnauthorized",
+            ProviderErrorCode::BadRequest => "providerBadRequest",
             ProviderErrorCode::Forbidden => "providerForbidden",
             ProviderErrorCode::NotFound => "providerNotFound",
             ProviderErrorCode::Conflict => "providerConflict",
@@ -1637,6 +1640,10 @@ struct ModelsListWire {
     data: Vec<ModelWire>,
     #[serde(default)]
     has_more: bool,
+    #[serde(default)]
+    first_id: Option<String>,
+    #[serde(default)]
+    last_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1658,6 +1665,7 @@ fn parse_models_response(
 ) -> Result<ProviderTestResult, ProviderError> {
     match response.status {
         200 => {}
+        400 | 422 => return Err(ProviderError::new(ProviderErrorCode::BadRequest)),
         401 => return Err(ProviderError::new(ProviderErrorCode::Unauthorized)),
         403 => return Err(ProviderError::new(ProviderErrorCode::Forbidden)),
         404 => return Err(ProviderError::new(ProviderErrorCode::NotFound)),
@@ -1679,6 +1687,14 @@ fn parse_models_response(
     }
     if list.data.len() > MAX_MODELS {
         return Err(ProviderError::new(ProviderErrorCode::ResponseTooLarge));
+    }
+    for cursor in [list.first_id.as_deref(), list.last_id.as_deref()].into_iter().flatten() {
+        if cursor.is_empty()
+            || cursor.len() > MAX_MODEL_ID_BYTES
+            || cursor.chars().any(char::is_control)
+        {
+            return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+        }
     }
     for model in &list.data {
         if model.object != "model"
@@ -1780,6 +1796,12 @@ struct ChatChoiceWire {
 struct ChatMessageWire {
     role: String,
     content: Option<String>,
+    // Qwen OCR adds a provider-specific structured result beside the standard
+    // OpenAI-compatible `content` field. It is parsed through the same bounded
+    // JSON reader but is not trusted as IR; the typed OCR adapter materializes
+    // only the validated text response and supplies its own provenance.
+    #[serde(default)]
+    ocr_result: Option<serde_json::Value>,
     #[serde(default)]
     refusal: Option<String>,
     #[serde(default)]
@@ -1854,6 +1876,10 @@ fn parse_chat_text(
     {
         return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
     }
+    if expects_audio && message.ocr_result.is_some() {
+        return Err(ProviderError::new(ProviderErrorCode::InvalidResponse));
+    }
+    let _ = message.ocr_result;
     let audio = if expects_audio {
         let seconds = usage
             .as_ref()
@@ -2178,6 +2204,7 @@ fn consume_responses_metadata(value: &ResponsesResponseWire) {
 fn ensure_success_status(status: u16) -> Result<(), ProviderError> {
     match status {
         200..=299 => Ok(()),
+        400 | 422 => Err(ProviderError::new(ProviderErrorCode::BadRequest)),
         401 => Err(ProviderError::new(ProviderErrorCode::Unauthorized)),
         403 => Err(ProviderError::new(ProviderErrorCode::Forbidden)),
         404 => Err(ProviderError::new(ProviderErrorCode::NotFound)),
@@ -2754,6 +2781,15 @@ mod tests {
     }
 
     #[test]
+    fn chat_parser_accepts_bounded_qwen_ocr_extension_without_trusting_it_as_text() {
+        let response = br#"{"id":"chatcmpl-ocr","object":"chat.completion","created":1720000000,"model":"qwen3.5-ocr","choices":[{"index":0,"message":{"role":"assistant","content":"Invoice 123","ocr_result":{"pages":[{"text":"untrusted alternate"}]}},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#;
+        let result =
+            parse_generation_fixture(response, GenerationEndpoint::ChatCompletions).unwrap();
+        assert_eq!(result.text, "Invoice 123");
+        assert!(result.audio.is_none());
+    }
+
+    #[test]
     fn raw_http_parser_rejects_ambiguous_or_illegal_syntax() {
         let cases: &[&[u8]] = &[
             b"HTTP/1.1 20 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
@@ -3084,6 +3120,33 @@ mod tests {
             .code(),
             ProviderErrorCode::Incomplete
         );
+    }
+
+    #[test]
+    fn completed_models_page_accepts_standard_cursor_metadata() {
+        let config = ProviderConfig::parse(
+            "https://provider.example/v1",
+            "configured",
+            "PATH",
+            Duration::from_secs(1),
+            ["vision-ocr".into()],
+        )
+        .unwrap();
+        let context = context();
+        let mut memory = memory_budget(&context);
+        let body = br#"{"object":"list","data":[{"id":"configured","object":"model","created":0,"owned_by":"test"}],"has_more":false,"first_id":"model-id-0","last_id":"model-id-0"}"#;
+        memory.grow(body.len()).unwrap();
+        let result = parse_models_response(
+            HttpResponse { status: 200, retry_after: None, body: body.to_vec() },
+            &config,
+            &context,
+            Instant::now() + Duration::from_secs(1),
+            &mut memory,
+        )
+        .unwrap();
+        assert!(result.configured_model_available);
+        assert_eq!(result.model_count, 1);
+        assert!(result.capabilities.is_empty());
     }
 
     #[test]

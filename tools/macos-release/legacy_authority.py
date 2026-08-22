@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pathlib
+import stat
 import tempfile
+import zipfile
 
 from common import ReleaseError, regular_files, run, sha256, write_json
 
@@ -23,6 +25,7 @@ def generate(
         target_worker.chmod(0o755)
     if image.stat().st_size != artifact["bytes"] or sha256(image) != artifact["sha256"]:
         raise ReleaseError("LibreOffice image disagrees with fixed authority")
+    container_image = runtime / "LibreOffice.app.zip"
     with tempfile.TemporaryDirectory(prefix="into-md-lo-authority-") as temporary:
         mount = pathlib.Path(temporary) / "mount"
         mount.mkdir()
@@ -32,6 +35,8 @@ def generate(
                 "-readonly", "-mountpoint", str(mount), str(image),
             ])
             app = mount / "LibreOffice.app"
+            run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
+            write_app_zip(app, container_image)
             files = sorted(
                 (path for path in app.rglob("*") if path.is_file()),
                 key=lambda path: path.as_posix(),
@@ -52,7 +57,7 @@ def generate(
     inventory = []
     for path, role in [
         (target_worker, "worker"),
-        (image, "runtime"),
+        (container_image, "runtime"),
         (license_path, "license"),
     ]:
         inventory.append({
@@ -82,10 +87,10 @@ def generate(
                 "kitLibrary": f"container/{kit_relative}",
                 "worker": "legacy-office-worker",
                 "container": {
-                    "format": "udif",
-                    "imagePath": image.relative_to(runtime).as_posix(),
-                    "imageBytes": artifact["bytes"],
-                    "imageSha256": artifact["sha256"],
+                    "format": "zip",
+                    "imagePath": container_image.relative_to(runtime).as_posix(),
+                    "imageBytes": container_image.stat().st_size,
+                    "imageSha256": sha256(container_image),
                     "mountPath": "container",
                     "kitSha256": kit_digest,
                 },
@@ -122,6 +127,69 @@ def generate(
     destination = runtime / "authority.json"
     write_json(destination, value)
     return destination
+
+
+def write_app_zip(app: pathlib.Path, destination: pathlib.Path) -> None:
+    if not app.is_dir() or app.is_symlink():
+        raise ReleaseError("LibreOffice image omits the application bundle")
+    entries = sorted(app.rglob("*"), key=lambda path: path.relative_to(app).as_posix())
+    if not entries or len(entries) > 25_000:
+        raise ReleaseError("LibreOffice application entry count is outside the reviewed bound")
+    with zipfile.ZipFile(
+        destination,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+        allowZip64=True,
+    ) as archive:
+        root = zipfile.ZipInfo("LibreOffice.app/", date_time=(2026, 8, 22, 0, 0, 0))
+        root.create_system = 3
+        root.external_attr = (stat.S_IFDIR | 0o755) << 16
+        root.compress_type = zipfile.ZIP_STORED
+        archive.writestr(root, b"", compress_type=zipfile.ZIP_STORED)
+        for path in entries:
+            relative = path.relative_to(app).as_posix()
+            name = f"LibreOffice.app/{relative}"
+            metadata = path.lstat()
+            if stat.S_ISDIR(metadata.st_mode):
+                name += "/"
+                contents = b""
+                mode = stat.S_IFDIR | 0o755
+                compression = zipfile.ZIP_STORED
+            elif stat.S_ISLNK(metadata.st_mode):
+                contents = path.readlink().as_posix().encode("utf-8")
+                if not safe_symlink(relative, contents.decode("utf-8")):
+                    raise ReleaseError(f"LibreOffice contains an unsafe symbolic link: {relative}")
+                mode = stat.S_IFLNK | 0o777
+                compression = zipfile.ZIP_STORED
+            elif stat.S_ISREG(metadata.st_mode):
+                contents = path.read_bytes()
+                mode = stat.S_IFREG | (0o555 if metadata.st_mode & 0o111 else 0o444)
+                compression = zipfile.ZIP_DEFLATED
+            else:
+                raise ReleaseError(f"LibreOffice contains an unsupported file type: {relative}")
+            info = zipfile.ZipInfo(name, date_time=(2026, 8, 22, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = mode << 16
+            info.compress_type = compression
+            archive.writestr(info, contents, compress_type=compression, compresslevel=9)
+
+
+def safe_symlink(relative: str, target: str) -> bool:
+    target_path = pathlib.PurePosixPath(target)
+    if not target or target_path.is_absolute() or len(target) > 4096:
+        return False
+    depth = len(pathlib.PurePosixPath(relative).parent.parts)
+    for part in target_path.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            depth -= 1
+        else:
+            depth += 1
+        if depth < 0:
+            return False
+    return True
 
 
 def find_kit(files: list[pathlib.Path]) -> pathlib.Path:

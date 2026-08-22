@@ -201,6 +201,7 @@ mod tests {
             files,
             license_materials: vec![],
             ffmpeg_evidence: None,
+            native_transformations: vec![],
         };
         fs::write(&manifest, serde_json::to_vec(&projection).unwrap()).unwrap();
         let temp_root = temporary.path().join("empty-temp");
@@ -264,7 +265,7 @@ mod tests {
             stdout: vec![],
             stderr: br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup media"}"#.to_vec(),
         });
-        let legacy = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the authority-verified legacy Office runtime for this platform"}"#.to_vec();
+        let legacy = br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup legacy-office"}"#.to_vec();
         for _ in 0..3 {
             outputs.push_back(CommandOutput {
                 exit_code: Some(9),

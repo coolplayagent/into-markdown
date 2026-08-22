@@ -133,7 +133,7 @@ fn map_model_error(error: ModelManagerError) -> ConversionError {
         other => ConversionError::ComponentUnavailable {
             component: BUNDLE_ID.into(),
             detail: format!(
-                "installed diarization model verification failed ({other}); install it with `into-md models install {BUNDLE_ID}`"
+                "installed Speech capability verification failed ({other}); repair or reinstall the Speech plugin"
             ),
         },
     }

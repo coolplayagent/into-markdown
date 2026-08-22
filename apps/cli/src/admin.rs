@@ -1,6 +1,6 @@
 //! Shared, bounded administration DTOs used by the local Web console.
 //!
-//! This module deliberately calls the same catalog, configuration and model
+//! This module deliberately calls the same catalog, configuration and capability
 //! services as the CLI.  It never shells out to `into-md`, reads API-key
 //! values, or returns an unredacted configuration value.
 
@@ -8,6 +8,7 @@ use crate::args::Scope;
 use crate::config::{self, LoadedConfig};
 use crate::error::{CliError, ExitClass};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -118,12 +119,20 @@ fn verify_effective_plugin(
     crate::app::verify_admin_effective_plugin_from_loaded(loaded, cwd, id)
 }
 
+fn inspect_effective_plugin(
+    loaded: &LoadedConfig,
+    cwd: &Path,
+    id: &str,
+) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
+    crate::app::inspect_admin_effective_plugin_from_loaded(loaded, cwd, id)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSnapshot {
     pub schema_version: u32,
     pub formats: Vec<FormatDto>,
-    pub models: ModelsDto,
+    pub capabilities: Vec<crate::app::CapabilityView>,
     pub providers: Vec<ProviderDto>,
     pub plugins: Vec<PluginDto>,
     pub configuration: serde_json::Value,
@@ -150,13 +159,6 @@ pub struct FormatDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelsDto {
-    pub default_bundle: String,
-    pub entries: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ProviderDto {
     pub name: String,
     pub scope: String,
@@ -168,6 +170,7 @@ pub struct ProviderDto {
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    pub models: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -244,10 +247,6 @@ pub enum AdminOperationResult {
         name: String,
         value: serde_json::Map<String, serde_json::Value>,
     },
-    Model {
-        operation: String,
-        value: serde_json::Value,
-    },
     Config {
         operation: String,
         value: serde_json::Value,
@@ -299,6 +298,8 @@ pub struct AdminAction {
     pub signing_key_sha256: Option<String>,
     pub provider_type: Option<String>,
     pub model: Option<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
     pub api_key_env: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
@@ -467,15 +468,7 @@ fn snapshot_loaded(
             install_hint: entry.runtime.map(|value| value.install_hint.into()),
         })
         .collect();
-    let manager = crate::app::model_manager()?;
-    let statuses = manager.list().map_err(crate::app::model_error)?;
-    let entries = manager
-        .manifest()
-        .bundles
-        .iter()
-        .zip(statuses)
-        .map(|(bundle, status)| serde_json::json!({ "bundle": bundle, "status": status }))
-        .collect();
+    let capabilities = crate::app::capability_views(loaded, cwd)?;
     let mut providers = Vec::new();
     for (scope_name, scoped_providers) in
         [("global", global_providers), ("project", project_providers)]
@@ -489,6 +482,7 @@ fn snapshot_loaded(
                     .then(|| provider.provider_type.clone()),
                 base_url: (!provider.base_url.is_empty()).then(|| redact_url(&provider.base_url)),
                 model: (!provider.model.is_empty()).then(|| provider.model.clone()),
+                models: provider.models.clone(),
                 api_key_env: (!provider.api_key_env.is_empty())
                     .then(|| provider.api_key_env.clone()),
                 environment_set: (!provider.api_key_env.is_empty())
@@ -509,6 +503,7 @@ fn snapshot_loaded(
             provider_type: Some(provider.provider_type.clone()),
             base_url: Some(redact_url(&provider.base_url)),
             model: Some(provider.model.clone()),
+            models: provider.models.clone(),
             api_key_env: Some(provider.api_key_env.clone()),
             environment_set: Some(std::env::var_os(&provider.api_key_env).is_some()),
             capabilities: provider.capabilities.clone(),
@@ -551,8 +546,8 @@ fn snapshot_loaded(
         let (verification, version) = if synthetic_context {
             ("adminConfigContextReadOnly".to_owned(), None)
         } else {
-            match verify_effective_plugin(loaded, cwd, id) {
-                Ok(installed) => ("verified".to_owned(), Some(installed.version)),
+            match inspect_effective_plugin(loaded, cwd, id) {
+                Ok(installed) => ("metadataAuthenticated".to_owned(), Some(installed.version)),
                 Err(error) => (error.code().to_owned(), None),
             }
         };
@@ -619,11 +614,21 @@ fn snapshot_loaded(
             "administration snapshot exceeds its profile limit",
         ));
     }
-    let doctor = doctor_checks(cwd, loaded, !synthetic_context);
+    // Initial navigation authenticates lightweight package metadata. The
+    // explicit doctor and verify actions perform full payload hashing.
+    let mut doctor = doctor_checks(cwd, loaded, false);
+    if !synthetic_context {
+        for check in &mut doctor {
+            if check.status == "adminConfigContextReadOnly" {
+                check.status = "skipped".into();
+                check.detail = "run diagnostics to perform full plugin payload verification".into();
+            }
+        }
+    }
     let snapshot = AdminSnapshot {
         schema_version: 1,
         formats,
-        models: ModelsDto { default_bundle: manager.manifest().default_bundle.clone(), entries },
+        capabilities,
         providers,
         plugins,
         configuration,
@@ -700,6 +705,7 @@ fn apply_inner(
         || action.action.starts_with("provider.")
         || action.action.starts_with("config.")
         || action.action.starts_with("profile.")
+        || action.action.starts_with("capability.")
     {
         context.ensure_mutation_allowed()?;
     }
@@ -754,73 +760,40 @@ fn apply_inner(
                 candidates: detected.candidates,
             });
         }
-        "model.verify" => {
-            let manager = crate::app::model_manager()?;
-            let id =
-                if target.is_empty() { manager.manifest().default_bundle.as_str() } else { target };
-            manager.verify(id).map_err(crate::app::model_error)?;
-        }
-        "model.show" => {
-            let output = run_admin_cli(
-                context,
-                cwd,
-                vec![
-                    OsString::from("models"),
-                    OsString::from("show"),
-                    OsString::from(target),
-                    OsString::from("--json"),
-                ],
-                test_user_data_anchor,
-            )?;
-            let value = serde_json::from_str(&output)
-                .map_err(|error| CliError::internal(format!("parse model details: {error}")))?;
-            operation_result =
-                Some(AdminOperationResult::Model { operation: "show".into(), value });
-        }
-        "model.path" => {
-            let output = run_admin_cli(
-                context,
-                cwd,
-                vec![OsString::from("models"), OsString::from("path"), OsString::from(target)],
-                test_user_data_anchor,
-            )?;
-            operation_result = Some(AdminOperationResult::Model {
-                operation: "path".into(),
-                value: serde_json::Value::String(output.trim().into()),
-            });
-        }
-        "model.remove" => {
-            require_dangerous(action)?;
-            crate::app::model_manager()?.remove(target).map_err(crate::app::model_error)?;
-        }
-        "model.install" => {
+        "capability.install" => {
             if !action.authorize_network {
                 return Err(policy("networkAuthorizationRequired"));
             }
-            crate::app::ensure_model_parent()?;
+            require_dangerous(action)?;
+            let setup_target = match target {
+                "legacy-office" => "legacy-office",
+                "ocr" => "ocr",
+                "transcription" | "diarization" | "media" => "media",
+                _ => return Err(CliError::usage("unknown capability")),
+            };
+            let command = vec![OsString::from("setup"), OsString::from(setup_target)];
+            run_admin_cli(context, cwd, command, test_user_data_anchor)?;
+        }
+        "capability.use" => {
+            require_dangerous(action)?;
+            let source = action
+                .source
+                .as_deref()
+                .or(action.value.as_deref())
+                .ok_or_else(|| CliError::usage("capability.use requires a source"))?;
             let loaded = context.load(cwd)?;
-            let manager = crate::app::model_manager()?;
-            let id =
-                if target.is_empty() { manager.manifest().default_bundle.as_str() } else { target };
-            let execution = into_markdown::ExecutionContext::new(
-                into_markdown::ExecutionOptions {
-                    timeout: loaded.timeout_ms.map(std::time::Duration::from_millis),
-                    ..into_markdown::ExecutionOptions::default()
-                },
-                loaded.options.limits,
-            );
-            manager.require_installable(id).map_err(crate::app::model_error)?;
-            if action.insecure || action.allow_private_network {
-                require_dangerous(action)?;
-            }
-            let fetcher = crate::model_fetch::PinnedModelFetcher::from_environment(
-                action.insecure,
-                action.allow_private_network,
-            )
-            .map_err(|(variable, reason)| {
-                CliError::config(format!("invalid {variable}: {reason}"))
-            })?;
-            manager.install(id, &fetcher, &execution).map_err(crate::app::model_error)?;
+            crate::app::validate_admin_capability_source(target, source, &loaded)?;
+            config::set_capability_source(scope, cwd, target, source)?;
+        }
+        "capability.verify" => {
+            let plugin_id = capability_plugin_id(target)?;
+            let loaded = context.load(cwd)?;
+            verify_effective_plugin(&loaded, cwd, plugin_id)?;
+        }
+        "capability.remove" => {
+            require_dangerous(action)?;
+            let plugin_id = capability_plugin_id(target)?;
+            run_plugin_command(context, cwd, scope, "remove", plugin_id, test_user_data_anchor)?;
         }
         "plugin.enable" | "plugin.disable" => {
             if action.action == "plugin.enable" {
@@ -1034,6 +1007,10 @@ fn apply_inner(
                 arguments.push(OsString::from("--capability"));
                 arguments.push(OsString::from(capability));
             }
+            for (capability, model) in &action.models {
+                arguments.push(OsString::from("--model-map"));
+                arguments.push(OsString::from(format!("{capability}={model}")));
+            }
             if let Some(timeout_ms) = action.timeout_ms {
                 arguments.extend([
                     OsString::from("--timeout"),
@@ -1160,10 +1137,8 @@ fn admin_config_key_allowed(key: &str) -> bool {
         "conversion.delimited_text.header",
         "conversion.delimited_text.ragged_rows",
         "conversion.ocr.policy",
-        "conversion.ocr.model_bundle",
         "conversion.ocr.languages",
         "conversion.ocr.minimum_confidence",
-        "conversion.asr.model_bundle",
         "conversion.asr.language",
         "conversion.asr.chinese_script",
         "conversion.asr.max_threads",
@@ -1243,6 +1218,15 @@ fn policy(code: &'static str) -> CliError {
     CliError::new(ExitClass::Policy, code, "explicit one-time authorization is required")
 }
 
+fn capability_plugin_id(capability: &str) -> Result<&'static str, CliError> {
+    match capability {
+        "legacy-office" => Ok("official.legacy-office.libreoffice"),
+        "ocr" => Ok("official.ocr.ppocrv6"),
+        "transcription" | "diarization" | "media" => Ok("official.media.whisper"),
+        _ => Err(CliError::usage("unknown capability")),
+    }
+}
+
 fn doctor_checks(cwd: &Path, loaded: &LoadedConfig, verify_plugins: bool) -> Vec<DoctorDto> {
     crate::app::collect_doctor_checks(
         &crate::args::DoctorArgs { json: true, allow_network: false, allow_private_network: false },
@@ -1290,6 +1274,7 @@ mod tests {
             signing_key_sha256: None,
             provider_type: None,
             model: None,
+            models: BTreeMap::new(),
             api_key_env: None,
             capabilities: Vec::new(),
             timeout_ms: None,
@@ -1390,9 +1375,9 @@ api_key_env = "PUBLISHER_API_KEY"
     fn dangerous_and_network_actions_require_per_request_confirmation() {
         let action = AdminAction {
             schema_version: 1,
-            action: "model.remove".into(),
+            action: "capability.remove".into(),
             scope: ActionScope::Global,
-            target: Some("x".into()),
+            target: Some("ocr".into()),
             value: None,
             source: None,
             sha256: None,
@@ -1400,6 +1385,7 @@ api_key_env = "PUBLISHER_API_KEY"
             signing_key_sha256: None,
             provider_type: None,
             model: None,
+            models: BTreeMap::new(),
             api_key_env: None,
             capabilities: Vec::new(),
             timeout_ms: None,
@@ -1441,6 +1427,7 @@ api_key_env = "PUBLISHER_API_KEY"
                 signing_key_sha256: None,
                 provider_type: None,
                 model: None,
+                models: BTreeMap::new(),
                 api_key_env: None,
                 capabilities: Vec::new(),
                 timeout_ms: None,
@@ -1491,7 +1478,7 @@ api_key_env = "PUBLISHER_API_KEY"
         let installed =
             initial.plugins.iter().find(|plugin| plugin.id == id && plugin.effective).unwrap();
         assert_eq!(installed.package_scope.as_deref(), Some("global"));
-        assert_eq!(installed.verification.as_deref(), Some("verified"));
+        assert_eq!(installed.verification.as_deref(), Some("metadataAuthenticated"));
 
         std::fs::write(
             cwd.join(".into-markdown.toml"),
@@ -1503,7 +1490,7 @@ api_key_env = "PUBLISHER_API_KEY"
         let mismatched_plugin =
             mismatched.plugins.iter().find(|plugin| plugin.id == id && plugin.effective).unwrap();
         let mismatch_code = mismatched_plugin.verification.as_deref().unwrap();
-        assert_ne!(mismatch_code, "verified");
+        assert_ne!(mismatch_code, "metadataAuthenticated");
         assert_eq!(mismatched_plugin.package_scope.as_deref(), Some("global"));
         assert!(mismatched.plugins.iter().any(|plugin| {
             plugin.id == id
@@ -1515,8 +1502,15 @@ api_key_env = "PUBLISHER_API_KEY"
         assert_eq!(verify_error.code(), mismatch_code);
         let doctor =
             mismatched.doctor.iter().find(|check| check.id == format!("plugin:{id}")).unwrap();
-        assert_ne!(doctor.status, "ok");
-        assert!(doctor.detail.contains(mismatch_code));
+        assert_eq!(doctor.status, "skipped");
+        let doctor_result =
+            apply(&alias, &context, &action("doctor.run", None), Some(&anchor)).unwrap();
+        let Some(AdminOperationResult::Doctor { checks }) = doctor_result.operation_result else {
+            panic!("doctor action must return checks")
+        };
+        let deep_check = checks.iter().find(|check| check.id == format!("plugin:{id}")).unwrap();
+        assert_ne!(deep_check.status, "ok");
+        assert!(deep_check.detail.contains(mismatch_code));
 
         std::fs::write(
             alias.join(".into-markdown.toml"),
@@ -1526,11 +1520,11 @@ api_key_env = "PUBLISHER_API_KEY"
         let repaired = snapshot(&alias, &context, Some(&anchor)).unwrap();
         let repaired_plugin =
             repaired.plugins.iter().find(|plugin| plugin.id == id && plugin.effective).unwrap();
-        assert_eq!(repaired_plugin.verification.as_deref(), Some("verified"));
+        assert_eq!(repaired_plugin.verification.as_deref(), Some("metadataAuthenticated"));
         apply(&alias, &context, &action("plugin.verify", Some(id)), Some(&anchor)).unwrap();
         assert_eq!(
             repaired.doctor.iter().find(|check| check.id == format!("plugin:{id}")).unwrap().status,
-            "ok"
+            "skipped"
         );
     }
 
@@ -1696,7 +1690,7 @@ api_key_env = "PUBLISHER_API_KEY"
     }
 
     #[test]
-    fn administration_doctor_is_the_cli_service_dto() {
+    fn administration_snapshot_uses_the_shallow_doctor_service_dto() {
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path();
         let anchor = cwd.join("user-data");
@@ -1710,7 +1704,7 @@ api_key_env = "PUBLISHER_API_KEY"
             },
             &loaded,
             cwd,
-            true,
+            false,
         );
         let actual = snapshot(cwd, &context, Some(&anchor)).unwrap().doctor;
         assert_eq!(actual.len(), expected.len());
@@ -1839,14 +1833,10 @@ api_key_env = "PUBLISHER_API_KEY"
             assert_eq!(error.code(), "adminConfigContextReadOnly");
             assert!(!anchor.exists());
         }
-        let model_error = apply(
-            cwd,
-            &explicit_context,
-            &action("model.verify", Some("missing-model")),
-            Some(&anchor),
-        )
-        .unwrap_err();
-        assert_ne!(model_error.code(), "adminConfigContextReadOnly");
+        let capability_error =
+            apply(cwd, &explicit_context, &action("capability.verify", Some("ocr")), Some(&anchor))
+                .unwrap_err();
+        assert_eq!(capability_error.code(), "adminConfigContextReadOnly");
 
         let profile_context = AdminConfigContext {
             explicit: vec![explicit.clone()],

@@ -8,9 +8,9 @@ use std::sync::Arc;
 /// Explicit verified paths required for speaker diarization.
 #[derive(Debug, Clone)]
 pub struct InstalledDiarizationConfig {
-    /// Writable model root managed by `into-md models`.
+    /// Plugin-private model root.
     pub writable_model_root: PathBuf,
-    /// Optional read-only model root included in a full offline package.
+    /// Optional read-only model root included in the Speech plugin.
     pub bundled_model_root: Option<PathBuf>,
     /// Trusted root containing the audited ONNX Runtime distribution.
     pub runtime_trusted_root: PathBuf,
@@ -82,8 +82,7 @@ fn installed_diarization_service_inner(
         error => ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
             detail: format!(
-                "installed diarization model verification failed ({error}); install it with `into-md models install {}`",
-                config.model_bundle
+                "installed Speech capability verification failed ({error}); repair or reinstall the Speech plugin"
             ),
         },
     })?;
@@ -187,7 +186,7 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
-        assert!(error.to_string().contains("models install silero-vad-3dspeaker-eres2net"));
+        assert!(error.to_string().contains("repair or reinstall the Speech plugin"));
         assert!(!error.to_string().contains("missing-authority"));
     }
 }
