@@ -5,7 +5,7 @@
   "items": [
     {
       "input": "/private/tmp/into-md-audio-extended/long-real.aac",
-      "output": "/private/tmp/into-md-audio-current-full/into-md-audio-extended/long-real.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/into-md-audio-extended/long-real.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -15,7 +15,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-extended/magic-mismatch.mp3",
-      "output": "/private/tmp/into-md-audio-current-full/magic-mismatch.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/magic-mismatch.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -25,7 +25,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-extended/very-long-real.webm",
-      "output": "/private/tmp/into-md-audio-current-full/very-long-real.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/very-long-real.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -35,7 +35,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/long-real-vbr.mp3",
-      "output": "/private/tmp/into-md-audio-current-full/long-real-vbr.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/long-real-vbr.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -45,7 +45,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/long-real.webm",
-      "output": "/private/tmp/into-md-audio-current-full/into-md-audio-matrix/long-real.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/into-md-audio-matrix/long-real.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -55,7 +55,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/medium-real-aac.m4a",
-      "output": "/private/tmp/into-md-audio-current-full/medium-real-aac.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/medium-real-aac.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -65,7 +65,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/medium-real-opus.ogg",
-      "output": "/private/tmp/into-md-audio-current-full/medium-real-opus.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/medium-real-opus.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -75,7 +75,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/medium-real.flac",
-      "output": "/private/tmp/into-md-audio-current-full/medium-real.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/medium-real.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -85,7 +85,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/short-real-cbr.mp3",
-      "output": "/private/tmp/into-md-audio-current-full/short-real-cbr.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/short-real-cbr.md",
       "format": null,
       "status": "success",
       "diagnostics": [],
@@ -95,7 +95,7 @@
     },
     {
       "input": "/private/tmp/into-md-audio-matrix/short-real-pcm24.wav",
-      "output": "/private/tmp/into-md-audio-current-full/short-real-pcm24.md",
+      "output": "/private/tmp/into-md-audio-current-full-release/short-real-pcm24.md",
       "format": null,
       "status": "success",
       "diagnostics": [],

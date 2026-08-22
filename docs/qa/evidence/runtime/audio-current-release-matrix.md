@@ -7,9 +7,9 @@ release artifact and does not replace the post-merge `~/.local/bin/into-md` blac
 
 ## Provenance
 
-- Branch head during the run: `2dd29ac`.
-- Host CLI: `target/debug/into-md`, SHA-256
-  `f580d8a48a4e9c4208735c2677704774e790d39b67adf170c21e495a3d3866fb`.
+- Branch head during the optimized full-matrix run: `c4b2f56`.
+- Host CLI: current optimized `into-md`, SHA-256
+  `02b51fa28622c0aee2ed2a45ee367f69a69a73603789c1f6e4ad8157ccd4997c`.
 - Media provider: current source, optimized `--release --features metal` build, SHA-256
   `1cdf9ee5bfcd21dfcd9f67c92f54ec70f74a593bcf29722541619e69a72237d7`.
 - Test package: `official.media.whisper`, SHA-256
@@ -19,8 +19,8 @@ release artifact and does not replace the post-merge `~/.local/bin/into-md` blac
 - Isolated user-data root: `/private/tmp/into-md-media-source-e2e.4xsIru`.
 - Installed provider, ONNX worker and FFmpeg modes were all inspected as `0500` before conversion.
 - Machine report: `docs/qa/evidence/runtime/audio-current-release-report.json`, copied byte-for-byte
-  from `/private/tmp/into-md-audio-current-full/report.json`, SHA-256
-  `79e37fd0fb1d1c8dcfa3f4f36d30c54669316ebc75374b9303caf4111df8365a`.
+  from `/private/tmp/into-md-audio-current-full-release/report.json`, SHA-256
+  `18c0b930396a80f0503ca46aa834633c8745f7b0c2a495f14ea1e577a3f81933`.
 
 The test package reused the previously authenticated model, FFmpeg, ONNX and license resources, replaced
 the media provider with the current optimized build, regenerated both signed inventories, restored the
@@ -41,7 +41,9 @@ claiming a complete release assembly.
    non-executable. That package is rejected as product evidence.
 4. After restoring the helper executable modes and regenerating the signed package, a 31-second WebM
    probe passed. The other three previously failing long inputs then passed 3/3.
-5. The final uniform matrix below passed 10/10 in one `--jobs 1` invocation in 132.29 seconds.
+5. A debug-host uniform matrix passed 10/10 in one `--jobs 1` invocation in 132.29 seconds.
+6. The final optimized-host uniform matrix below passed 10/10 in 103.63 seconds. All ten Markdown
+   artifacts were byte-identical to the debug-host results.
 
 ## Uniform real-audio matrix
 
