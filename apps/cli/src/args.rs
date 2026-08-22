@@ -348,7 +348,7 @@ pub enum SetupCommand {
         #[arg(long)]
         allow_private_network: bool,
     },
-    /// Install and verify the self-contained LibreOffice compatibility plugin.
+    /// Install and verify the self-contained `LibreOffice` compatibility plugin.
     LegacyOffice {
         /// Allow development transport without TLS certificate validation.
         #[arg(long)]
@@ -468,6 +468,12 @@ pub enum CapabilitiesCommand {
     },
     /// Show one product capability and its available sources.
     Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fully verify the selected local capability package and its runtime.
+    Verify {
         id: String,
         #[arg(long)]
         json: bool,
@@ -720,6 +726,9 @@ pub enum ProfileCommand {
 pub struct DoctorArgs {
     #[arg(long)]
     pub json: bool,
+    /// Re-hash plugin payloads and verify local runtimes and bundled models.
+    #[arg(long)]
+    pub deep: bool,
     #[arg(long)]
     pub allow_network: bool,
     #[arg(long, requires = "allow_network")]
@@ -986,5 +995,20 @@ mod tests {
                 command: SetupCommand::Media { insecure: false, allow_private_network: true },
             }))
         ));
+    }
+
+    #[test]
+    fn capability_verify_and_deep_doctor_are_explicit_commands() {
+        let verify =
+            Cli::try_parse_from(["into-md", "capabilities", "verify", "ocr", "--json"]).unwrap();
+        assert!(matches!(
+            verify.command,
+            Some(Command::Capabilities(CapabilitiesArgs {
+                command: Some(CapabilitiesCommand::Verify { id, json: true }),
+                ..
+            })) if id == "ocr"
+        ));
+        let doctor = Cli::try_parse_from(["into-md", "doctor", "--deep"]).unwrap();
+        assert!(matches!(doctor.command, Some(Command::Doctor(DoctorArgs { deep: true, .. }))));
     }
 }

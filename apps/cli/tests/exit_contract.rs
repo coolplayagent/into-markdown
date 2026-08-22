@@ -189,7 +189,12 @@ fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network
             "mode {mode}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("A controlled CLI image."));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("A controlled CLI image."),
+            "mode {mode} stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("pdf-page"));
     }
     server.join().unwrap();
@@ -219,6 +224,7 @@ fn run_image_description(
 ) -> std::process::Output {
     let mut command = Command::new(binary());
     command.args([
+        "--no-config",
         "--config",
         config.to_str().unwrap(),
         image.to_str().unwrap(),

@@ -538,53 +538,49 @@ fn resolve_process_capability(
                 .insert(key, "plugin is disabled or does not use process-v1".to_owned());
             continue;
         }
-        let installed = match crate::app::verify_admin_effective_plugin_from_loaded(
+        let prepared = match crate::app::prepare_admin_effective_process_plugin_from_loaded(
             loaded,
             cwd,
             &reference.plugin_id,
+            into_markdown_process_plugin::RuntimePolicy::default(),
+            context,
         ) {
-            Ok(installed) => installed,
+            Ok(prepared) => prepared,
             Err(error) => {
                 registration_errors.insert(key, error.to_string());
                 continue;
             }
         };
         let (manifest, descriptor_sha256) =
-            match into_markdown_provider_plugin::load_installed_manifest(&installed) {
+            match into_markdown_provider_plugin::load_installed_manifest(prepared.installed()) {
                 Ok(authority) => authority,
                 Err(error) => {
                     registration_errors.insert(key, error);
                     continue;
                 }
             };
-        if let Err(error) =
-            registry.register(manifest.clone(), descriptor_sha256, installed.root.clone(), true)
-        {
+        if let Err(error) = registry.register(
+            manifest.clone(),
+            descriptor_sha256,
+            prepared.installed().root.clone(),
+            true,
+        ) {
             registration_errors.insert(key, error.to_string());
             continue;
         }
-        packages.insert(reference.plugin_id.clone(), (installed, manifest));
+        packages.insert(reference.plugin_id.clone(), (prepared, manifest));
     }
     let mut readiness_errors = BTreeMap::new();
     let mut ready = BTreeMap::new();
     let binding = registry.resolve(kind, &route, mode, |binding| {
-        let Some((_installed, manifest)) = packages.get(&binding.plugin_id) else {
+        let Some((prepared, manifest)) = packages.get(&binding.plugin_id) else {
             return false;
         };
         let result = ProcessCapability::runtime_policy(manifest, binding)
             .map_err(CliError::from)
             .and_then(|policy| {
-                crate::app::prepare_admin_effective_process_plugin_from_loaded(
-                    loaded,
-                    cwd,
-                    &binding.plugin_id,
-                    policy,
-                    context,
-                )
-                .and_then(|process| {
-                    ProcessCapability::new(process, manifest, binding.clone())
-                        .map_err(CliError::from)
-                })
+                ProcessCapability::new(prepared.with_policy(policy), manifest, binding.clone())
+                    .map_err(CliError::from)
             })
             .and_then(|capability| {
                 capability.verify_ready(&loaded.options, context).map_err(CliError::from)?;

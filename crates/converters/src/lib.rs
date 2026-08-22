@@ -895,6 +895,8 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         (InputFormat::Audio, 0.96, "audio magic bytes")
     } else if valid_mpeg_audio_frame_header(bytes) {
         (InputFormat::Audio, 0.92, "MPEG audio frame header")
+    } else if valid_adts_aac_header(bytes) {
+        (InputFormat::Audio, 0.96, "ADTS AAC frame headers")
     } else if bytes.starts_with(b"OggS") {
         return Some(detect_ogg(bytes));
     } else if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
@@ -905,6 +907,33 @@ fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
         return None;
     };
     Some(FormatCandidate::new(format, confidence, evidence))
+}
+
+fn valid_adts_aac_header(bytes: &[u8]) -> bool {
+    let Some(first_bytes) = adts_aac_frame_bytes(bytes, 0) else {
+        return false;
+    };
+    adts_aac_frame_bytes(bytes, first_bytes).is_some()
+}
+
+fn adts_aac_frame_bytes(bytes: &[u8], offset: usize) -> Option<usize> {
+    let header = bytes.get(offset..offset.checked_add(7)?)?;
+    if header[0] != 0xff || header[1] & 0xf6 != 0xf0 {
+        return None;
+    }
+    let sample_rate_index = (header[2] >> 2) & 0x0f;
+    let channel_configuration = ((header[2] & 1) << 2) | (header[3] >> 6);
+    if sample_rate_index == 0x0f || channel_configuration == 0 {
+        return None;
+    }
+    let frame_bytes = usize::from(header[3] & 0x03) << 11
+        | usize::from(header[4]) << 3
+        | usize::from(header[5] >> 5);
+    let header_bytes = if header[1] & 1 == 1 { 7 } else { 9 };
+    if frame_bytes < header_bytes || offset.checked_add(frame_bytes)? > bytes.len() {
+        return None;
+    }
+    Some(frame_bytes)
 }
 
 fn valid_mpeg_audio_frame_header(bytes: &[u8]) -> bool {
@@ -3615,6 +3644,20 @@ mod tests {
         assert!(detect(b"\0\0\0\x10ftypM4A ").is_empty());
         assert!(detect(b"\0\0\0\x0cftypM4A ").is_empty());
         assert!(detect(b"\0\0\0\x20ftypM4A \0\0\0\0").is_empty());
+    }
+
+    #[test]
+    fn adts_aac_requires_two_complete_consistent_frame_boundaries() {
+        let frame = [0xff, 0xf1, 0x50, 0x80, 0x00, 0xff, 0xfc];
+        let mut audio = frame.to_vec();
+        audio.extend_from_slice(&frame);
+        let candidate = detect(&audio);
+        assert_eq!(candidate[0].format, InputFormat::Audio);
+        assert!((candidate[0].confidence - 0.96).abs() < f32::EPSILON);
+        assert!(detect(&frame).is_empty());
+        let mut invalid_sample_rate = audio;
+        invalid_sample_rate[2] |= 0x3c;
+        assert!(detect(&invalid_sample_rate).is_empty());
     }
 
     #[test]

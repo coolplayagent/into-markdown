@@ -591,7 +591,22 @@ fn decode_timed_tokens(tokens: Vec<TimedTokenBytes>) -> Result<Vec<TimedToken>, 
         confidence_count = 0;
     }
     if !pending.is_empty() {
-        return Err(component(PROVIDER_ID, "Whisper token text was not valid UTF-8"));
+        // whisper.cpp token text is byte-oriented. A model can end a segment
+        // with an incomplete or otherwise invalid UTF-8 token even though the
+        // segment itself is usable. The upstream binding exposes lossy text
+        // for this reason; preserve the timed evidence instead of failing the
+        // complete recording because of one model-emitted byte sequence.
+        output.try_reserve(1).map_err(|_| resource("asrSegments"))?;
+        output.push(TimedToken {
+            range: pending_range.take().ok_or_else(|| {
+                component(PROVIDER_ID, "Whisper token timing buffer is inconsistent")
+            })?,
+            text: String::from_utf8_lossy(&pending).into_owned(),
+            confidence: (confidence_count != 0)
+                .then(|| (confidence_total / f64::from(confidence_count)) as f32),
+            speaker: None,
+            speaker_confidence: None,
+        });
     }
     Ok(output)
 }
@@ -716,8 +731,7 @@ fn collect_window_segments(
             {
                 continue;
             }
-            let text = String::from_utf8(owned_bytes)
-                .map_err(|_| component(PROVIDER_ID, "Whisper token text was not valid UTF-8"))?;
+            let text = String::from_utf8_lossy(&owned_bytes).into_owned();
             let confidence = if probability_count == 0 {
                 0.0
             } else {
@@ -739,9 +753,9 @@ fn collect_window_segments(
                 continue;
             }
             let text = segment
-                .to_str()
+                .to_str_lossy()
                 .map_err(|_| component(PROVIDER_ID, "Whisper returned invalid segment text"))?
-                .to_owned();
+                .into_owned();
             (text, start_ms, end_ms, segment_confidence(&segment))
         };
         if text.is_empty() {
@@ -1011,6 +1025,19 @@ mod tests {
         assert_eq!(tokens[0].text, "张");
         assert_eq!(tokens[0].range, TimeRange { start_ms: 0, end_ms: 30 });
         assert_eq!(tokens[0].confidence, Some(0.9));
+    }
+
+    #[test]
+    fn model_emitted_invalid_trailing_token_does_not_fail_complete_recording() {
+        let tokens = decode_timed_tokens(vec![TimedTokenBytes {
+            range: TimeRange { start_ms: 0, end_ms: 10 },
+            bytes: vec![0xe5, 0xbc],
+            confidence: Some(0.7),
+        }])
+        .unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].text, "�");
+        assert_eq!(tokens[0].range, TimeRange { start_ms: 0, end_ms: 10 });
     }
 
     #[test]

@@ -432,8 +432,12 @@ impl Transcriber for ProcessTranscriber {
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<TranscriptionResult, ConversionError>> {
         Box::pin(async move {
-            let _working_memory =
-                context.reserve_memory(self.capability.resources.max_memory_bytes)?;
+            // The process sandbox independently enforces the signed child-memory ceiling. The
+            // host request budget accounts for the bounded response retained in this process;
+            // charging the child's entire ceiling here both double-counted it and made a valid
+            // self-contained Speech plugin impossible under the default host budget.
+            let _result_memory =
+                context.reserve_memory(self.capability.resources.max_output_bytes)?;
             let parameters = TranscriptionParameters {
                 schema_version: PROTOCOL_VERSION,
                 capability_id: self.capability.binding.capability_id.clone(),
@@ -474,8 +478,8 @@ impl Diarizer for ProcessDiarizer {
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<DiarizationResult, ConversionError>> {
         Box::pin(async move {
-            let _working_memory =
-                context.reserve_memory(self.capability.resources.max_memory_bytes)?;
+            let _result_memory =
+                context.reserve_memory(self.capability.resources.max_output_bytes)?;
             let parameters = DiarizationParameters {
                 schema_version: PROTOCOL_VERSION,
                 capability_id: self.capability.binding.capability_id.clone(),

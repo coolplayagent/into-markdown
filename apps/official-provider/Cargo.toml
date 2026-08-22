@@ -32,5 +32,9 @@ into-markdown-provider-plugin = { path = "../../crates/provider-plugin" }
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true
+
 [lints]
 workspace = true

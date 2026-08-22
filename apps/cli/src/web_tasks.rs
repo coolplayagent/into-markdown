@@ -75,6 +75,8 @@ pub enum WebTaskError {
     Invalid(String),
     #[error("backend I/O failed: {0}")]
     Io(String),
+    #[error("conversion failed during {stage}: {code}")]
+    Conversion { code: String, stage: String },
 }
 
 /// One-time grants accompanying a Web upload. Grants are checked before task
@@ -335,6 +337,18 @@ pub(crate) struct WebTaskRecord {
     pub(crate) format: Option<InputFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failure: Option<WebTaskFailure>,
+}
+
+/// Stable, non-secret failure information rendered next to the failed task.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WebTaskFailure {
+    schema_version: u32,
+    pub(crate) code: String,
+    pub(crate) stage: String,
+    pub(crate) retryable: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1279,12 +1293,14 @@ impl WebTaskBackend {
     pub(crate) fn web_record(&self, record: TaskRecord) -> Result<WebTaskRecord, WebTaskError> {
         let _history = lock(&self.owner.shared.history_mutation);
         let request = self.persisted_request(&record.id)?;
+        let failure = load_task_failure(&self.owner.shared, &record.id)?;
         Ok(WebTaskRecord {
             record,
             workflow: request.as_ref().map_or(WebWorkflow::Conversion, |value| value.workflow),
             display_name: request.as_ref().map(|request| request.name.clone()),
             format: request.as_ref().and_then(|request| request.hint.format),
             batch_id: request.and_then(|request| request.batch_id),
+            failure,
         })
     }
 
@@ -2676,22 +2692,32 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             })),
         };
         let routed_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
-            let services = shared
-                .media_services
-                .assemble(&persisted.options)
-                .map_err(|error| WebTaskError::Io(error.to_string()))?;
-            Some(
-                into_markdown::default_engine_with_services(services)
-                    .map_err(|error| WebTaskError::Io(error.to_string()))?,
-            )
+            let services = shared.media_services.assemble(&persisted.options).map_err(|error| {
+                WebTaskError::Conversion {
+                    code: error.code().into(),
+                    stage: "capabilityRouting".into(),
+                }
+            })?;
+            Some(into_markdown::default_engine_with_services(services).map_err(|error| {
+                WebTaskError::Conversion {
+                    code: error.code().as_str().into(),
+                    stage: "conversionSetup".into(),
+                }
+            })?)
         } else {
             shared
                 .media_services
                 .assemble_conversion(&persisted.options, web_invocation_capabilities(&persisted))
-                .map_err(|error| WebTaskError::Io(error.to_string()))?
+                .map_err(|error| WebTaskError::Conversion {
+                    code: error.code().into(),
+                    stage: "capabilityRouting".into(),
+                })?
                 .map(into_markdown::default_engine_with_services)
                 .transpose()
-                .map_err(|error| WebTaskError::Io(error.to_string()))?
+                .map_err(|error| WebTaskError::Conversion {
+                    code: error.code().as_str().into(),
+                    stage: "conversionSetup".into(),
+                })?
         };
         let engine = routed_engine.as_ref().unwrap_or(&shared.engine);
         let mut request = ConversionRequest::new(InputRef::bytes(
@@ -2710,7 +2736,10 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             if job.cancellation.is_cancelled() {
                 WebTaskError::Cancelled
             } else {
-                WebTaskError::Io(error.to_string())
+                WebTaskError::Conversion {
+                    code: error.code().as_str().into(),
+                    stage: "conversion".into(),
+                }
             }
         })?;
         let current = lock(&shared.task_store).get(&job.id)?.ok_or(WebTaskError::NotFound)?;
@@ -2742,6 +2771,8 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
         Ok(())
     })();
     if let Err(error) = result {
+        let failure = failure_from_error(&error);
+        let _ = persist_task_failure(shared, &job.id, &failure);
         let published = shared
             .objects
             .open_child_private(std::ffi::OsStr::new(job.id.as_str()))
@@ -4038,6 +4069,66 @@ fn load_persisted_request(task: &SafeDir) -> Result<Option<PersistedRequest>, We
         return Err(WebTaskError::Unsafe("persisted request is incompatible".into()));
     }
     Ok(Some(request))
+}
+
+fn failure_from_error(error: &WebTaskError) -> WebTaskFailure {
+    let (code, stage, retryable) = match error {
+        WebTaskError::Conversion { code, stage } => {
+            let retryable = matches!(
+                code.as_str(),
+                "network" | "networkDenied" | "timeout" | "componentUnavailable" | "ai"
+            );
+            (code.clone(), stage.clone(), retryable)
+        }
+        WebTaskError::Limit(_) => ("resourceLimit".into(), "storage".into(), false),
+        WebTaskError::Unsafe(_) => ("unsafeStorage".into(), "storage".into(), false),
+        WebTaskError::Cancelled => ("cancelled".into(), "conversion".into(), true),
+        WebTaskError::NotFound => ("notFound".into(), "storage".into(), false),
+        WebTaskError::Conflict(_) => ("taskConflict".into(), "storage".into(), true),
+        WebTaskError::Invalid(_) => ("invalidTaskOptions".into(), "conversionSetup".into(), false),
+        WebTaskError::Io(_) => ("backendIo".into(), "storage".into(), true),
+    };
+    WebTaskFailure { schema_version: 1, code, stage, retryable }
+}
+
+fn persist_task_failure(
+    shared: &Shared,
+    id: &TaskId,
+    failure: &WebTaskFailure,
+) -> Result<(), WebTaskError> {
+    let task = shared
+        .objects
+        .open_child_private(std::ffi::OsStr::new(id.as_str()))
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    let bytes = bounded_json(failure, 4096, "task failure")?;
+    write_private_handle(&task, "failure.json", &bytes)
+}
+
+fn load_task_failure(shared: &Shared, id: &TaskId) -> Result<Option<WebTaskFailure>, WebTaskError> {
+    let task = shared
+        .objects
+        .open_child_private(std::ffi::OsStr::new(id.as_str()))
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    let Some(file) = task
+        .open_regular_optional(std::ffi::OsStr::new("failure.json"))
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    validate_private_file(&file)?;
+    let bytes = read_file_bounded(file, 4096)?;
+    validate_json_shape(&bytes, 8, 64, 256)?;
+    let failure: WebTaskFailure = serde_json::from_slice(&bytes)
+        .map_err(|_| WebTaskError::Unsafe("task failure record is invalid".into()))?;
+    if failure.schema_version != 1
+        || failure.code.len() > 64
+        || failure.stage.len() > 64
+        || !failure.code.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !failure.stage.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err(WebTaskError::Unsafe("task failure record is incompatible".into()));
+    }
+    Ok(Some(failure))
 }
 
 fn write_all_checked(file: &mut impl Write, bytes: &[u8]) -> Result<(), WebTaskError> {
@@ -6089,7 +6180,12 @@ mod tests {
         let mut valid = backend.begin_upload("valid.txt", None).unwrap();
         valid.write_chunk(b"still runs").unwrap();
         let valid = valid.finish().unwrap();
-        assert_eq!(wait_terminal(&backend, &invalid.id).status, TaskStatus::Failed);
+        let failed = wait_terminal(&backend, &invalid.id);
+        assert_eq!(failed.status, TaskStatus::Failed);
+        let failure = backend.web_record(failed).unwrap().failure.unwrap();
+        assert_eq!(failure.code, "malformed");
+        assert_eq!(failure.stage, "conversion");
+        assert!(!failure.retryable);
         assert_eq!(wait_terminal(&backend, &valid.id).status, TaskStatus::Succeeded);
     }
 

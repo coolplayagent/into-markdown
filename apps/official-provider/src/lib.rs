@@ -439,6 +439,134 @@ const fn legacy_worker_name() -> &'static str {
 }
 
 #[cfg(test)]
+mod speech_tests {
+    use super::*;
+    use into_markdown_process_plugin::{
+        PluginManifest, PluginRequest, ProcessPlugin, RuntimePolicy,
+    };
+    use sha2::{Digest as _, Sha256};
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "requires an installed Speech plugin and a real audio fixture"]
+    fn installed_speech_runtime_transcribes_real_audio_outside_process_sandbox() {
+        let root = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_SPEECH_PLUGIN_ROOT")
+                .expect("INTO_MD_TEST_SPEECH_PLUGIN_ROOT is required"),
+        );
+        let input = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_AUDIO").expect("INTO_MD_TEST_AUDIO is required"),
+        );
+        let bytes = fs::read(input).expect("real audio fixture must be readable");
+        let mut options = into_markdown::ConversionOptions::default();
+        options.asr.language = Some("zh".into());
+        let context = execution_context(CancellationToken::new(), &options.limits);
+        let transcriber = asr_service(&root, &options, &context).expect("speech runtime assembles");
+        let result = block_on(transcriber.transcribe(
+            TranscriptionRequest { media: &bytes, media_type: "audio/webm", language: Some("zh") },
+            &context,
+        ))
+        .expect("real audio transcribes");
+        assert!(!result.segments.is_empty(), "transcript must contain timed segments");
+    }
+
+    #[test]
+    #[ignore = "requires an installed Speech runtime, built provider, and real audio fixture"]
+    fn installed_speech_runtime_transcribes_real_audio_inside_process_sandbox() {
+        let installed_root = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_SPEECH_PLUGIN_ROOT")
+                .expect("INTO_MD_TEST_SPEECH_PLUGIN_ROOT is required"),
+        );
+        let provider = PathBuf::from(
+            std::env::var_os("INTO_MD_TEST_MEDIA_PROVIDER")
+                .expect("INTO_MD_TEST_MEDIA_PROVIDER is required"),
+        )
+        .canonicalize()
+        .expect("built provider path is valid");
+        let input = fs::read(
+            std::env::var_os("INTO_MD_TEST_AUDIO").expect("INTO_MD_TEST_AUDIO is required"),
+        )
+        .expect("real audio fixture must be readable");
+        let staged = tempfile::Builder::new()
+            .prefix("into-md-speech-sandbox-test-")
+            .tempdir()
+            .expect("private runtime staging directory is available");
+        link_runtime_tree(&installed_root, staged.path());
+        let staged_provider = staged.path().join("bin/into-md-media-provider");
+        if staged_provider.exists() {
+            fs::remove_file(&staged_provider).expect("old provider staging link is removable");
+        }
+        fs::hard_link(&provider, &staged_provider).expect("built provider is staged");
+        let digest = format!("{:x}", Sha256::digest(fs::read(&provider).unwrap()));
+        let mut policy = RuntimePolicy {
+            max_frame_bytes: 64 * 1024 * 1024,
+            max_output_bytes: 24 * 1024 * 1024,
+            max_memory_bytes: 1536 * 1024 * 1024,
+            max_file_bytes: 4 * 1024 * 1024 * 1024,
+            max_open_files: 1024,
+            request_timeout: Duration::from_secs(10 * 60),
+            allow_child_processes: true,
+            ..RuntimePolicy::default()
+        };
+        policy.macos_compatibility_child = false;
+        let process = ProcessPlugin::new(
+            PluginManifest {
+                plugin_id: MEDIA_PLUGIN_ID.into(),
+                executable: staged_provider.canonicalize().unwrap(),
+                runtime_root: staged.path().canonicalize().unwrap(),
+                executable_sha256: digest,
+                protocol_versions: vec![1],
+            },
+            policy,
+        )
+        .expect("process authority is valid");
+        let mut options = into_markdown::ConversionOptions::default();
+        options.asr.language = Some("zh".into());
+        let parameters = serde_json::to_string(&TranscriptionParameters {
+            schema_version: 1,
+            capability_id: "transcription".into(),
+            media_type: "audio/webm".into(),
+            language: Some("zh".into()),
+            options,
+        })
+        .unwrap();
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let result = process
+            .execute_raw(
+                PluginRequest {
+                    request_id: "real-speech-sandbox",
+                    input_format: "transcription",
+                    source_name: Some("recording.webm"),
+                    parameters_json: Some(&parameters),
+                    source: &input,
+                },
+                &context,
+            )
+            .expect("real audio transcribes inside the process sandbox");
+        let result: into_markdown::TranscriptionResult =
+            serde_json::from_str(&result.result_json).expect("transcription result is typed");
+        assert!(!result.segments.is_empty(), "transcript must contain timed segments");
+    }
+
+    fn link_runtime_tree(source: &Path, destination: &Path) {
+        for entry in fs::read_dir(source).expect("runtime directory is readable") {
+            let entry = entry.expect("runtime entry is readable");
+            let source = entry.path();
+            let destination = destination.join(entry.file_name());
+            let metadata = entry.metadata().expect("runtime metadata is readable");
+            if metadata.is_dir() {
+                fs::create_dir(&destination).expect("runtime directory is staged");
+                link_runtime_tree(&source, &destination);
+            } else if metadata.is_file()
+                && !matches!(entry.file_name().to_str(), Some(".package.zip" | ".installed.json"))
+            {
+                fs::hard_link(&source, &destination).expect("runtime file is staged");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use into_markdown::OcrPolicy;

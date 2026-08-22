@@ -1729,6 +1729,8 @@ dependencies = [
  "into-markdown-provider-plugin",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
