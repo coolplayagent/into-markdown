@@ -61,3 +61,20 @@ claiming a complete release assembly.
 All ten Markdown artifacts were non-empty. A separate parser checked all 142 timestamp ranges: every
 range satisfied `start < end`, and every next range started at or after the prior range ended. The
 extension/magic mismatch was detected from bytes rather than accepted only by filename.
+
+## Ten-second-class cold-process timing
+
+The 113,971-byte, 9.059-second `medium-real-aac.m4a` fixture was then converted twice in separate
+processes with the same installed test package and isolated user-data root.
+
+| Host CLI | SHA-256 | Run 1 | Run 2 | Output SHA-256 |
+|---|---|---:|---:|---|
+| Current debug CLI | `f580d8a48a4e9c4208735c2677704774e790d39b67adf170c21e495a3d3866fb` | 34.28 s | 33.36 s | `afa03a7cff0ba4f1dd99771d002116b81c7da7946f0d3a5fea906aa1f736e1ce` |
+| Current optimized CLI | `02b51fa28622c0aee2ed2a45ee367f69a69a73603789c1f6e4ad8157ccd4997c` | 9.24 s | 8.10 s | `afa03a7cff0ba4f1dd99771d002116b81c7da7946f0d3a5fea906aa1f736e1ce` |
+
+A one-second sample taken eight seconds into the debug run captured all 713 main-thread samples under
+`PluginManager::process_manifest -> copy_verified_runtime_tree -> SHA-256`, with the digest in the
+unoptimized `sha2::soft` implementation and no provider process launched yet. The optimized CLI kept the
+same authenticated-copy boundary and produced byte-identical transcript output while bringing both cold
+process runs below ten seconds. These timings prove the current optimized build behavior; the final
+installed binary still needs the same measurement after PR merge and reinstall.
