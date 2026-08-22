@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Activity, CheckCircle2, CircleAlert, Cloud, Download, FileSearch,
+  Activity, CheckCircle2, ChevronDown, CircleAlert, Cloud, Download, FileSearch,
   Package, Plus, Search, Settings2, ShieldCheck, Speech, ScanText, FileType2, Trash2, Wrench, X,
 } from "lucide-react";
 import type {
@@ -9,6 +9,7 @@ import type {
 } from "./api";
 import { useI18n, type Locale } from "./i18n";
 import { RouteLink } from "./router";
+import { useDialogLifecycle } from "./dialog-lifecycle";
 
 export type AdminSection = "capabilities" | "formats" | "providers" | "plugins" | "configuration" | "doctor";
 export const adminSections: AdminSection[] = ["capabilities", "configuration", "doctor"];
@@ -19,32 +20,14 @@ function cacheSnapshot(api: ApiClient, section: AdminSection, snapshot: AdminSna
 interface ActionOptions { dangerous?: boolean; network?: boolean; confirm?: string; success: string }
 interface ActionFeedback { target: string; kind: "error" | "success"; message: string }
 
-function useDialogLifecycle<T extends HTMLElement>(open: boolean, close: () => void) {
-  const dialogRef = useRef<T>(null);
-  const closeRef = useRef(close);
-  closeRef.current = close;
+function useClampedPage(page: number, total: number, pageSize: number, setPage: (page: number) => void) {
   useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const frame = window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])")?.focus();
-    });
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !dialogRef.current) return;
-      const dialogs = document.querySelectorAll('[role="dialog"]');
-      if (dialogs[dialogs.length - 1] !== dialogRef.current) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      closeRef.current();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("keydown", onKeyDown);
-      if (previous?.isConnected) window.requestAnimationFrame(() => previous.focus());
-    };
-  }, [open]);
-  return dialogRef;
+    const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+    if (page > lastPage) setPage(lastPage);
+  }, [page, pageSize, setPage, total]);
+}
+function clampedPage(page: number, total: number, pageSize: number) {
+  return Math.min(page, Math.max(0, Math.ceil(total / pageSize) - 1));
 }
 interface SectionProps {
   api: ApiClient;
@@ -182,7 +165,13 @@ function FormatRow({ item, locale }: { item: FormatAdmin; locale: Locale }) {
 function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refreshAdmin, initialContext }: SectionProps & { refreshAdmin: () => Promise<void>; initialContext?: "formats" | "providers" | "plugins" }) {
   const c = copy(locale);
   const [sourceManager, setSourceManager] = useState<"formats" | "providers" | "plugins" | null>(initialContext ?? null);
+  const previousInitialContext = useRef(initialContext);
   const sourceManagerRef = useDialogLifecycle<HTMLElement>(Boolean(sourceManager), () => setSourceManager(null));
+  useEffect(() => {
+    if (previousInitialContext.current === initialContext) return;
+    previousInitialContext.current = initialContext;
+    setSourceManager(initialContext ?? null);
+  }, [initialContext]);
   const find = (id: CapabilityAdmin["id"]) => snapshot.capabilities.find((item) => item.id === id)!;
   return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.capabilitiesTitle} body={c.capabilitiesBody} action={<div className="source-manager-actions"><button className="secondary" type="button" onClick={() => setSourceManager("providers")}><Cloud size={17} />{c.providersTitle}</button><button className="secondary" type="button" onClick={() => setSourceManager("plugins")}><Package size={17} />{c.pluginsTitle}</button></div>} />
     <div className="admin-grid capability-grid">
@@ -233,7 +222,8 @@ function CapabilityVerifyButton({ api, capability, locale, disabled, fallback, o
 function ProvidersSection({ snapshot, busy, locale, act, feedback }: SectionProps) {
   const c = copy(locale); const [open, setOpen] = useState(false); const [editing, setEditing] = useState(false); const [name, setName] = useState(""); const [url, setUrl] = useState(""); const [model, setModel] = useState(""); const [ocrModel, setOcrModel] = useState(""); const [transcriptionModel, setTranscriptionModel] = useState(""); const [env, setEnv] = useState(""); const [capabilities, setCapabilities] = useState(""); const [timeout, setTimeoutValue] = useState(""); const [scope, setScope] = useState<"global" | "project">("project"); const [hosts, setHosts] = useState(""); const [privateNetwork, setPrivateNetwork] = useState(false); const [page, setPage] = useState(0);
   const effective = snapshot.providers.filter((item) => item.effective); const validTimeout = timeout === "" || /^[1-9][0-9]{0,7}$/.test(timeout) && Number(timeout) <= 86_400_000;
-  const visible = effective.slice(page * 6, page * 6 + 6);
+  const visiblePage = clampedPage(page, effective.length, 6); const visible = effective.slice(visiblePage * 6, visiblePage * 6 + 6);
+  useClampedPage(page, effective.length, 6, setPage);
   const providerCapabilities = [...new Set([...csv(capabilities), ...(ocrModel ? ["vision-ocr"] : []), ...(transcriptionModel ? ["audio-transcription"] : [])])];
   const dialogRef = useDialogLifecycle<HTMLElement>(open, () => setOpen(false));
   const clear = () => { setEditing(false); setName(""); setUrl(""); setModel(""); setOcrModel(""); setTranscriptionModel(""); setEnv(""); setCapabilities(""); setTimeoutValue(""); setScope("project"); setHosts(""); setPrivateNetwork(false); };
@@ -243,7 +233,7 @@ function ProvidersSection({ snapshot, busy, locale, act, feedback }: SectionProp
     {open && <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}><article ref={dialogRef} className="setup-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title"><div className="drawer-heading"><h2 id="provider-dialog-title">{editing ? `${c.edit} ${name}` : c.addProvider}</h2><button className="icon-button neutral" type="button" aria-label={c.cancel} onClick={() => setOpen(false)}><X size={19} /></button></div><div className="admin-form-grid"><Field label={c.serviceName}><input value={name} disabled={editing} maxLength={128} onChange={(event) => setName(event.target.value)} /></Field><Field label={c.baseUrl}><input value={url} maxLength={4096} placeholder="https://api.example.com/v1" onChange={(event) => setUrl(event.target.value)} /></Field><Field label={c.apiKeyEnv}><input value={env} maxLength={128} placeholder="AI_SERVICE_API_KEY" onChange={(event) => setEnv(event.target.value)} /></Field><Field label={c.model}><input value={model} maxLength={512} onChange={(event) => setModel(event.target.value)} /></Field><Field label={c.ocrModel}><input value={ocrModel} maxLength={512} onChange={(event) => setOcrModel(event.target.value)} /></Field><Field label={c.transcriptionModel}><input value={transcriptionModel} maxLength={512} onChange={(event) => setTranscriptionModel(event.target.value)} /></Field></div>
       <div className="admin-dialog-section"><h3>{locale === "zh-CN" ? "连接选项" : "Connection options"}</h3><div className="admin-form-grid"><Field label={c.timeout}><input value={timeout} inputMode="numeric" maxLength={8} aria-invalid={!validTimeout} onChange={(event) => setTimeoutValue(event.target.value)} /></Field><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field><Field label={c.hosts}><input value={hosts} maxLength={4096} onChange={(event) => setHosts(event.target.value)} /></Field><CheckField label={c.privateNetwork} checked={privateNetwork} setChecked={setPrivateNetwork} /></div></div>
       <div className="admin-form-actions"><button className="secondary" type="button" onClick={() => setOpen(false)}>{c.cancel}</button><button disabled={busy || !name || !url || !model || !env || !validTimeout} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.add", scope, target: name, source: url, providerType: "openai-compatible", model, models: { ...(ocrModel ? { "vision-ocr": ocrModel } : {}), ...(transcriptionModel ? { "audio-transcription": transcriptionModel } : {}) }, apiKeyEnv: env, capabilities: providerCapabilities, allowHosts: csv(hosts), allowPrivateNetwork: privateNetwork, ...(timeout ? { timeoutMs: Number(timeout) } : {}) }, { dangerous: true, success: c.providerAddedSuccess }).then((ok) => { if (ok) setOpen(false); })}>{editing ? c.save : c.add}</button></div></article></div>}
-    {effective.length === 0 ? <EmptyState icon={<Cloud />} title={c.noProviders} body={c.noProvidersBody} /> : <><div className="admin-grid">{visible.map((item) => <ProviderCard key={`${item.scope}:${item.name}`} item={item} all={snapshot.providers} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} onEdit={() => edit(item)} feedback={feedback?.target === item.name ? feedback : null} />)}</div><PageControls page={page} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
+    {effective.length === 0 ? <EmptyState icon={<Cloud />} title={c.noProviders} body={c.noProvidersBody} /> : <><div className="admin-grid">{visible.map((item) => <ProviderCard key={`${item.scope}:${item.name}`} item={item} all={snapshot.providers} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} onEdit={() => edit(item)} feedback={feedback?.target === item.name ? feedback : null} />)}</div><PageControls page={visiblePage} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
   </div>;
 }
 
@@ -260,7 +250,8 @@ function ProviderCard({ item, all, busy, locale, readOnly, act, onEdit, feedback
 
 function PluginsSection({ api, snapshot, busy, locale, act, feedback }: SectionProps) {
   const c = copy(locale); const [open, setOpen] = useState(false); const [source, setSource] = useState(""); const [file, setFile] = useState<File | null>(null); const [localError, setLocalError] = useState(""); const [sha, setSha] = useState(""); const [signer, setSigner] = useState(""); const [fingerprint, setFingerprint] = useState(""); const [scope, setScope] = useState<"global" | "project">("project"); const [page, setPage] = useState(0);
-  const effective = snapshot.plugins.filter((item) => item.effective); const visible = effective.slice(page * 6, page * 6 + 6);
+  const effective = snapshot.plugins.filter((item) => item.effective); const visiblePage = clampedPage(page, effective.length, 6); const visible = effective.slice(visiblePage * 6, visiblePage * 6 + 6);
+  useClampedPage(page, effective.length, 6, setPage);
   const dialogRef = useDialogLifecycle<HTMLElement>(open, () => setOpen(false));
   const install = async () => {
     setLocalError("");
@@ -273,7 +264,7 @@ function PluginsSection({ api, snapshot, busy, locale, act, feedback }: SectionP
   };
   return <div className="admin-section-stack admin-source-section"><SectionTitle icon={<Package />} title={c.pluginsTitle} body={c.pluginsBody} action={<button type="button" disabled={snapshot.configurationReadOnly} onClick={() => setOpen(true)}><Plus size={17} />{c.addPlugin}</button>} />
     {open && <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}><article ref={dialogRef} className="setup-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-dialog-title"><div className="drawer-heading"><h2 id="plugin-dialog-title">{c.addPlugin}</h2><button className="icon-button neutral" type="button" aria-label={c.cancel} onClick={() => setOpen(false)}><X size={19} /></button></div><Field label={locale === "zh-CN" ? "从电脑选择" : "Choose from this computer"} {...(file?.name ? { hint: file.name } : {})}><input className="plugin-file-input" type="file" accept=".imp,application/octet-stream" onChange={(event) => { setFile(event.target.files?.[0] ?? null); if (event.target.files?.[0]) setSource(""); }} /></Field><div className="dialog-divider"><span>{locale === "zh-CN" ? "或者" : "or"}</span></div><Field label={locale === "zh-CN" ? "从 HTTPS 地址安装" : "Install from an HTTPS URL"}><input value={source} maxLength={4096} placeholder="https://…/plugin.imp" onChange={(event) => { setSource(event.target.value); if (event.target.value) setFile(null); }} /></Field>{localError && <p className="capability-feedback error" role="alert">{localError}</p>}<div className="admin-dialog-section"><h3>{locale === "zh-CN" ? "安装选项" : "Installation options"}</h3><div className="admin-form-grid"><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field><Field label={c.sha}><input value={sha} maxLength={64} onChange={(event) => setSha(event.target.value)} /></Field><Field label={c.signer}><input value={signer} maxLength={128} onChange={(event) => setSigner(event.target.value)} /></Field><Field label={c.fingerprint}><input value={fingerprint} maxLength={64} onChange={(event) => setFingerprint(event.target.value)} /></Field></div></div><div className="admin-form-actions"><button className="secondary" type="button" onClick={() => setOpen(false)}>{c.cancel}</button><button disabled={busy || !file && !source} type="button" onClick={() => void install()}>{c.install}</button></div></article></div>}
-    {effective.length === 0 ? <EmptyState icon={<Package />} title={c.noPlugins} body={c.noPluginsBody} /> : <><div className="admin-grid">{visible.map((item) => <PluginCard key={`${item.scope}:${item.id}`} item={item} all={snapshot.plugins} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === item.id ? feedback : null} />)}</div><PageControls page={page} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
+    {effective.length === 0 ? <EmptyState icon={<Package />} title={c.noPlugins} body={c.noPluginsBody} /> : <><div className="admin-grid">{visible.map((item) => <PluginCard key={`${item.scope}:${item.id}`} item={item} all={snapshot.plugins} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === item.id ? feedback : null} />)}</div><PageControls page={visiblePage} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
   </div>;
 }
 
@@ -300,6 +291,9 @@ function ConfigurationSection({ snapshot, busy, locale, act, feedback }: Section
   };
   const reset = () => { setValues(preferenceDefaults); setDirty(new Set(Object.keys(preferenceDefaults) as Array<keyof PreferenceValues>)); };
   const zhLocale = locale === "zh-CN";
+  const invalidTimeout = !Number.isInteger(values.timeoutMinutes) || values.timeoutMinutes < 1 || values.timeoutMinutes > 1440;
+  const invalidJobs = !Number.isInteger(values.jobs) || values.jobs < 1 || values.jobs > 64;
+  const invalidPreferences = invalidTimeout || invalidJobs;
   const configFeedback = feedback && (feedback.target.startsWith("conversion.") || feedback.target.startsWith("cli.")) ? feedback : null;
   return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.configTitle} body={c.configBody} />
     <div className="preference-groups">
@@ -320,15 +314,15 @@ function ConfigurationSection({ snapshot, busy, locale, act, feedback }: Section
         <PreferenceRow label={zhLocale ? "中文输出" : "Chinese output"} description={zhLocale ? "选择中文逐字稿的字形" : "Choose Chinese transcript glyphs"}><select value={values.chineseScript} onChange={(event) => update("chineseScript", event.target.value)}><option value="preserve">{zhLocale ? "保持原样" : "Preserve"}</option><option value="simplified">{zhLocale ? "简体中文" : "Simplified"}</option><option value="traditional">{zhLocale ? "繁体中文" : "Traditional"}</option></select></PreferenceRow>
       </PreferenceGroup>
       <PreferenceGroup title={zhLocale ? "性能" : "Performance"} icon={<Activity size={19} />} collapsed>
-        <PreferenceRow label={zhLocale ? "转换超时" : "Conversion timeout"} description={zhLocale ? "单个任务允许运行的最长时间" : "Maximum time for one task"}><div className="preference-with-unit"><input type="number" min="1" max="1440" value={values.timeoutMinutes} onChange={(event) => update("timeoutMinutes", Number(event.target.value))} /><span>{zhLocale ? "分钟" : "min"}</span></div></PreferenceRow>
-        <PreferenceRow label={zhLocale ? "并行任务" : "Concurrent tasks"} description={zhLocale ? "同时处理的文件数量" : "Number of files processed at once"}><input type="number" min="1" max="64" value={values.jobs} onChange={(event) => update("jobs", Number(event.target.value))} /></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "转换超时" : "Conversion timeout"} description={zhLocale ? "单个任务允许运行的最长时间" : "Maximum time for one task"} {...(invalidTimeout ? { error: zhLocale ? "请输入 1–1440 之间的整数。" : "Enter a whole number from 1 to 1440." } : {})}><div className="preference-with-unit"><input type="number" min="1" max="1440" aria-invalid={invalidTimeout} value={values.timeoutMinutes} onChange={(event) => update("timeoutMinutes", Number(event.target.value))} /><span>{zhLocale ? "分钟" : "min"}</span></div></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "并行任务" : "Concurrent tasks"} description={zhLocale ? "同时处理的文件数量" : "Number of files processed at once"} {...(invalidJobs ? { error: zhLocale ? "请输入 1–64 之间的整数。" : "Enter a whole number from 1 to 64." } : {})}><input type="number" min="1" max="64" aria-invalid={invalidJobs} value={values.jobs} onChange={(event) => update("jobs", Number(event.target.value))} /></PreferenceRow>
       </PreferenceGroup>
       <PreferenceGroup title={zhLocale ? "隐私与网络" : "Privacy and network"} icon={<ShieldCheck size={19} />} collapsed>
         <PreferenceRow label={zhLocale ? "阻止访问局域网" : "Block private networks"} description={zhLocale ? "防止远端请求访问本机或局域网地址" : "Prevent remote requests from reaching local addresses"}><label className="preference-switch"><input type="checkbox" checked={values.denyPrivateNetworks} onChange={(event) => update("denyPrivateNetworks", event.target.checked)} /><span /></label></PreferenceRow>
         <PreferenceRow label={zhLocale ? "允许访问的主机" : "Allowed hosts"} description={zhLocale ? "多个主机用逗号分隔" : "Separate multiple hosts with commas"}><input value={values.allowedHosts} onChange={(event) => update("allowedHosts", event.target.value)} /></PreferenceRow>
       </PreferenceGroup>
     </div>
-    <div className="preference-savebar"><button className="secondary" disabled={busy || snapshot.configurationReadOnly} type="button" onClick={reset}>{c.restore}</button><span className={configFeedback?.kind === "error" ? "error" : dirty.size ? "changed" : ""} role={configFeedback?.kind === "error" ? "alert" : "status"}>{configFeedback?.message ?? (dirty.size ? (zhLocale ? `${dirty.size} 项更改尚未保存` : `${dirty.size} unsaved changes`) : (zhLocale ? "设置已保存" : "Preferences saved"))}</span><button disabled={busy || snapshot.configurationReadOnly || dirty.size === 0} type="button" onClick={() => void save()}><CheckCircle2 size={17} />{c.save}</button></div>
+    <div className="preference-savebar"><button className="secondary" disabled={busy || snapshot.configurationReadOnly} type="button" onClick={reset}>{c.restore}</button><span className={configFeedback?.kind === "error" ? "error" : dirty.size ? "changed" : ""} role={configFeedback?.kind === "error" ? "alert" : "status"}>{configFeedback?.message ?? (dirty.size ? (zhLocale ? `${dirty.size} 项更改尚未保存` : `${dirty.size} unsaved changes`) : (zhLocale ? "设置已保存" : "Preferences saved"))}</span><button disabled={busy || snapshot.configurationReadOnly || dirty.size === 0 || invalidPreferences} type="button" onClick={() => void save()}><CheckCircle2 size={17} />{c.save}</button></div>
   </div>;
 }
 
@@ -385,15 +379,16 @@ function configAt(configuration: Record<string, unknown>, path: string): unknown
 function stringValue(value: unknown, fallback: string) { return typeof value === "string" ? value : fallback; }
 function numberValue(value: unknown, fallback: number) { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
 function booleanValue(value: unknown, fallback: boolean) { return typeof value === "boolean" ? value : fallback; }
-function PreferenceGroup({ title, icon, collapsed = false, children }: { title: string; icon: ReactNode; collapsed?: boolean; children: ReactNode }) { return <details className="card preference-group" open={!collapsed}><summary><span>{icon}</span><strong>{title}</strong></summary><div className="preference-rows">{children}</div></details>; }
-function PreferenceRow({ label, description, children }: { label: string; description: string; children: ReactNode }) { return <div className="preference-row"><div><strong>{label}</strong><small>{description}</small></div><div className="preference-control">{children}</div></div>; }
+function PreferenceGroup({ title, icon, collapsed = false, children }: { title: string; icon: ReactNode; collapsed?: boolean; children: ReactNode }) { return <details className="card preference-group" open={!collapsed}><summary><span>{icon}</span><strong>{title}</strong><ChevronDown className="preference-chevron" size={17} aria-hidden="true" /></summary><div className="preference-rows">{children}</div></details>; }
+function PreferenceRow({ label, description, error, children }: { label: string; description: string; error?: string; children: ReactNode }) { return <div className="preference-row"><div><strong>{label}</strong><small>{description}</small></div><div className="preference-control">{children}{error && <small className="preference-error" role="alert">{error}</small>}</div></div>; }
 
 function DoctorSection({ snapshot, busy, locale, act }: SectionProps) {
-  const c = copy(locale); const [network, setNetwork] = useState(false); const [page, setPage] = useState(0); const checks = snapshot.operationResult?.kind === "doctor" ? snapshot.operationResult.checks : snapshot.doctor; const uniqueChecks = [...new Map(checks.map((item) => [item.id, item])).values()]; const issueGroups = groupDoctorChecks(uniqueChecks.filter((item) => !isHealthy(item) && !isSkipped(item))); const visibleIssues = issueGroups.slice(page * 5, page * 5 + 5); const passed = uniqueChecks.filter(isHealthy); const skipped = uniqueChecks.filter(isSkipped);
+  const c = copy(locale); const [network, setNetwork] = useState(false); const [page, setPage] = useState(0); const checks = snapshot.operationResult?.kind === "doctor" ? snapshot.operationResult.checks : snapshot.doctor; const uniqueChecks = [...new Map(checks.map((item) => [item.id, item])).values()]; const issueGroups = groupDoctorChecks(uniqueChecks.filter((item) => !isHealthy(item) && !isSkipped(item))); const visiblePage = clampedPage(page, issueGroups.length, 5); const visibleIssues = issueGroups.slice(visiblePage * 5, visiblePage * 5 + 5); const passed = uniqueChecks.filter(isHealthy); const skipped = uniqueChecks.filter(isSkipped);
+  useClampedPage(page, issueGroups.length, 5, setPage);
   return <div className="admin-section-stack"><SectionTitle icon={<Wrench />} title={c.doctorTitle} body={c.doctorBody} action={<button disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "doctor.run", allowPrivateNetwork: false }, { network, success: c.doctorDone })}><Activity size={17} />{c.run}</button>} />
     <label className="admin-doctor-network"><input type="checkbox" checked={network} onChange={(event) => setNetwork(event.target.checked)} />{c.checkNetwork}</label>
     <div className={`card doctor-summary ${issueGroups.length === 0 ? "healthy" : "attention"}`}>{issueGroups.length === 0 ? <CheckCircle2 size={30} /> : <CircleAlert size={30} />}<div><h2>{issueGroups.length === 0 ? c.healthy : `${issueGroups.length} ${c.attention}`}</h2><p>{issueGroups.length === 0 ? c.healthyBody : `${passed.length} ${c.passed}${skipped.length ? ` · ${skipped.length} ${c.notRun}` : ""}`}</p></div></div>
-    {issueGroups.length > 0 && <><div className="doctor-list">{visibleIssues.map((group) => <DoctorCard key={group.key} item={group.items[0]!} related={group.items} locale={locale} />)}</div><PageControls page={page} total={issueGroups.length} pageSize={5} setPage={setPage} locale={locale} /></>}
+    {issueGroups.length > 0 && <><div className="doctor-list">{visibleIssues.map((group) => <DoctorCard key={group.key} item={group.items[0]!} related={group.items} locale={locale} />)}</div><PageControls page={visiblePage} total={issueGroups.length} pageSize={5} setPage={setPage} locale={locale} /></>}
     {passed.length > 0 && <details className="card admin-advanced doctor-passed"><summary>{c.passedChecks}（{passed.length}）</summary><div className="doctor-list">{passed.map((item) => <DoctorCard key={item.id} item={item} locale={locale} />)}</div></details>}
     {skipped.length > 0 && <details className="card admin-advanced doctor-passed"><summary>{c.skippedChecks}（{skipped.length}）</summary><div className="doctor-list">{skipped.map((item) => <DoctorCard key={item.id} item={item} locale={locale} />)}</div></details>}
   </div>;

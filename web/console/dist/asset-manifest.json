@@ -2,29 +2,29 @@
   "schemaVersion": 1,
   "assets": [
     {
-      "path": "/assets/app.18a896f0915c6a4d.js",
-      "sha256": "18a896f0915c6a4d25dc002ffa8a1b9fb1b80cec538c4f3113962c8b1516e277",
-      "bytes": 674531,
+      "path": "/assets/app.3bc77a6a37815833.js",
+      "sha256": "3bc77a6a378158337205f789d71e3b39945497b9dfd0768d358c5e71ee2f97b4",
+      "bytes": 677362,
       "mime": "text/javascript; charset=utf-8",
       "cache": "immutable"
     },
     {
-      "path": "/assets/app.39cddcad8ea7ca79.css",
-      "sha256": "39cddcad8ea7ca79aad32ee3cfb1c1b646bb257517bb227692f299ac4702fc2a",
-      "bytes": 60599,
+      "path": "/assets/app.9c97eeb1b4e258b9.css",
+      "sha256": "9c97eeb1b4e258b9a8196ed76adb99683a3fef3084d9f49b0fa9f18dfad57908",
+      "bytes": 60768,
       "mime": "text/css; charset=utf-8",
       "cache": "immutable"
     },
     {
-      "path": "/assets/bootstrap.827cf75ca606089d.js",
-      "sha256": "827cf75ca606089da51552ca5fb17a3852806f123a7b877167bfdab25e2b218f",
+      "path": "/assets/bootstrap.3bdf7a4af7959a9a.js",
+      "sha256": "3bdf7a4af7959a9a8a2287e3ea5103b8ec78ab2a279c0cd8b0f9def621e50522",
       "bytes": 1458,
       "mime": "text/javascript; charset=utf-8",
       "cache": "immutable"
     },
     {
       "path": "/index.html",
-      "sha256": "ab28d203df93639c29732f31054b9754b35c9f6bb24d2945db8583a9f8612925",
+      "sha256": "65303904fe78cfb6f6f81e8e03a966d94195b9708f6a5923b3b221dc9966790c",
       "bytes": 496,
       "mime": "text/html; charset=utf-8",
       "cache": "no-store"

@@ -16,7 +16,7 @@ import {
   RecordingDraftLimitError, type RecordingDraft,
 } from "./recording-store";
 import {
-  MEETING_FILE_ACCEPT, TERMINAL, bytesLabel, executionStageLabel, listAllTasks, supportsMeetingFile, taskName,
+  MEETING_FILE_ACCEPT, TERMINAL, bytesLabel, diagnosticLabel, executionStageLabel, listAllTasks, supportsMeetingFile, taskName,
 } from "./task-ui";
 
 type RecorderState = "idle" | "requesting" | "recording" | "paused" | "stopping" | "draft";
@@ -133,39 +133,45 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [stage, setStage] = useState("");
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
 
-  const stopMeter = useCallback(() => {
+  const stopMeter = useCallback((reset = true) => {
     if (meterFrame.current) window.cancelAnimationFrame(meterFrame.current);
     meterFrame.current = 0;
     const context = meterContext.current;
     meterContext.current = null;
     if (context) void context.close().catch(() => {});
-    setWaveform(Array.from({ length: 24 }, () => 0.06));
+    if (reset) setWaveform(Array.from({ length: 24 }, () => 0.06));
   }, []);
 
   const startMeter = useCallback(async (media: MediaStream) => {
     stopMeter();
     if (!globalThis.AudioContext) return;
     const context = new AudioContext();
-    await context.resume();
-    const analyser = context.createAnalyser();
-    analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.72;
-    context.createMediaStreamSource(media).connect(analyser);
-    meterContext.current = context;
-    const samples = new Uint8Array(analyser.fftSize);
-    const draw = () => {
-      analyser.getByteTimeDomainData(samples);
-      let energy = 0;
-      for (const sample of samples) {
-        const normalized = (sample - 128) / 128;
-        energy += normalized * normalized;
-      }
-      const rms = Math.sqrt(energy / samples.length);
-      const level = recorder.current?.state === "recording" ? Math.min(1, Math.max(0.06, rms * 8)) : 0.06;
-      setWaveform((current) => [...current.slice(1), level]);
+    try {
+      await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.72;
+      context.createMediaStreamSource(media).connect(analyser);
+      meterContext.current = context;
+      const samples = new Uint8Array(analyser.fftSize);
+      const draw = () => {
+        analyser.getByteTimeDomainData(samples);
+        let energy = 0;
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          energy += normalized * normalized;
+        }
+        const rms = Math.sqrt(energy / samples.length);
+        const level = recorder.current?.state === "recording" ? Math.min(1, Math.max(0.06, rms * 8)) : 0.06;
+        setWaveform((current) => [...current.slice(1), level]);
+        meterFrame.current = window.requestAnimationFrame(draw);
+      };
       meterFrame.current = window.requestAnimationFrame(draw);
-    };
-    meterFrame.current = window.requestAnimationFrame(draw);
+    } catch (error) {
+      if (meterContext.current === context) meterContext.current = null;
+      void context.close().catch(() => {});
+      throw error;
+    }
   }, [stopMeter]);
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
@@ -220,7 +226,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
     stream.current?.getTracks().forEach((track) => track.stop());
     sourceStreams.current.forEach((source) => source.getTracks().forEach((track) => track.stop()));
     void mixer.current?.close().catch(() => {});
-    stopMeter();
+    stopMeter(false);
   }, [stopMeter]);
 
   const loadDevices = async () => {
@@ -292,7 +298,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       chunkIndex.current = 0; elapsedRef.current = 0; setElapsed(0); setFile(null); setFromDraft(false);
       writes.current = Promise.resolve(); stream.current = media; sourceStreams.current = acquired;
       mixer.current = mixing; recorder.current = next;
-      await startMeter(media);
+      await startMeter(media).catch(() => {});
       next.addEventListener("dataavailable", (event) => {
         if (event.data.size === 0) return;
         const index = chunkIndex.current++;
@@ -414,7 +420,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
         catch { setMessage(t("recordingStorageUnavailable")); }
       }
     } catch (error) {
-      setMessage(`${t("uploadFailed")} (${error instanceof ApiError ? error.code : "unreachable"})`);
+      setMessage(`${t("uploadFailed")}${locale === "zh-CN" ? "：" : ": "}${diagnosticLabel(error instanceof ApiError ? error.code : "unreachable", t)}`);
     }
   };
 

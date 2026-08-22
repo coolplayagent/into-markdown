@@ -24,7 +24,7 @@ afterEach(async () => {
   activeWindow?.close(); activeWindow = null;
   for (const name of globals) Reflect.deleteProperty(globalThis, name);
 });
-function waitFor(predicate: () => boolean): Promise<void> { const started = Date.now(); return new Promise((resolve, reject) => { const poll = () => predicate() ? resolve() : Date.now() - started > 1_500 ? reject(new Error("DOM timeout")) : setTimeout(poll, 5); poll(); }); }
+function waitFor(predicate: () => boolean, label = "DOM timeout"): Promise<void> { const started = Date.now(); return new Promise((resolve, reject) => { const poll = () => predicate() ? resolve() : Date.now() - started > 1_500 ? reject(new Error(label)) : setTimeout(poll, 5); poll(); }); }
 
 const snapshot: AdminSnapshot = {
   schemaVersion: 1,
@@ -202,7 +202,7 @@ test("preferences render a stable five-section shell while the admin snapshot is
   assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "Save")?.disabled, true);
   await waitFor(() => typeof resolveAdmin === "function");
   resolveAdmin(snapshot);
-  await waitFor(() => window.document.querySelector('[aria-busy="true"]') === null);
+  await waitFor(() => window.document.body.textContent.includes("Concurrent tasks"));
   assert.equal(window.document.querySelectorAll(".preference-group").length, 5);
 });
 
@@ -213,22 +213,34 @@ test("legacy administration URLs redirect into the matching capability context",
   assert.equal(window.location.pathname, "/admin/capabilities");
   assert.equal(window.document.querySelector('[role="dialog"]')?.textContent?.includes("AI services"), true);
   assert.equal(window.document.querySelectorAll(".admin-tabs a").length, 3);
+
+  window.history.pushState({}, "", "/admin/plugins");
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);
+  assert.equal(window.document.querySelector('[role="dialog"]')?.textContent?.includes("AI services"), false);
 });
 
 test("nested administration dialogs close one layer at a time and restore focus", async () => {
   const window = install("/admin/capabilities");
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api() }));
-  await waitFor(() => [...window.document.querySelectorAll("button")].some((button) => button.textContent === "AI services"));
+  await waitFor(() => [...window.document.querySelectorAll("button")].some((button) => button.textContent === "AI services"), "source manager trigger did not render");
   const sourceTrigger = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "AI services")!;
   sourceTrigger.focus(); sourceTrigger.click();
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1, "source manager dialog did not open");
   const providerTrigger = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"] button')].find((button) => button.textContent === "Connect AI service")!;
   providerTrigger.focus(); providerTrigger.click();
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2, "nested provider dialog did not open");
+  const nestedDialog = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1)!;
+  const nestedFocusable = [...nestedDialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
+  const firstNested = nestedFocusable[0]!; const lastNested = nestedFocusable[nestedFocusable.length - 1]!;
+  lastNested.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  assert.equal(window.document.activeElement, firstNested);
+  firstNested.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+  assert.equal(window.document.activeElement, lastNested);
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.activeElement === providerTrigger);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.activeElement === providerTrigger, "nested dialog did not close and restore its trigger");
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 0 && window.document.activeElement === sourceTrigger);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 0 && window.document.activeElement === sourceTrigger, "source dialog did not close and restore its trigger");
 });
 
 test("diagnostics group failures by remediation target rather than check id", async () => {
@@ -243,6 +255,35 @@ test("diagnostics group failures by remediation target rather than check id", as
   assert.equal(window.document.querySelectorAll(".doctor-card").length, 2);
   const speech = [...window.document.querySelectorAll<HTMLElement>(".doctor-card")].find((card) => card.textContent?.includes("Speech transcription"))!;
   assert.equal(speech.textContent?.includes("Speaker identification"), true);
+});
+
+test("diagnostics clamp pagination after a rerun removes the last page", async () => {
+  const window = install("/admin/doctor");
+  let current: AdminSnapshot = { ...snapshot, doctor: Array.from({ length: 6 }, (_, index) => ({ id: `check-${index}`, status: "failed", detail: `failure ${index}` })) };
+  const client = api();
+  client.admin = async () => current;
+  client.adminAction = async () => { current = { ...current, doctor: current.doctor.slice(0, 1) }; return {}; };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("6 need attention"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Next")!.click();
+  await waitFor(() => window.document.body.textContent.includes("failure 5"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Run again")!.click();
+  await waitFor(() => window.document.body.textContent.includes("1 need attention") && window.document.body.textContent.includes("failure 0"));
+  assert.equal(window.document.querySelector(".admin-pagination"), null);
+});
+
+test("preferences keep invalid numeric feedback beside its control and block saving", async () => {
+  const window = install("/admin/configuration"); const actions: AdminAction[] = [];
+  const invalid: AdminSnapshot = { ...snapshot, configuration: { ...snapshot.configuration, cli: { jobs: 0 } } };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, invalid) }));
+  await waitFor(() => window.document.body.textContent.includes("Concurrent tasks"));
+  const performance = [...window.document.querySelectorAll<HTMLDetailsElement>(".preference-group")].find((group) => group.textContent?.includes("Concurrent tasks"))!;
+  performance.open = true;
+  const jobs = [...performance.querySelectorAll<HTMLInputElement>('input[type="number"]')].at(-1)!;
+  await waitFor(() => jobs.getAttribute("aria-invalid") === "true", "invalid concurrent task count was not reported");
+  assert.match(jobs.closest(".preference-control")?.textContent ?? "", /whole number from 1 to 64/);
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "Save")?.disabled, true);
+  assert.equal(actions.length, 0);
 });
 
 test("provider failures explain the cause beside the provider that triggered them", async () => {

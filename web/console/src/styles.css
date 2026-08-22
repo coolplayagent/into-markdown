@@ -304,8 +304,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .preference-group { padding: 0 !important; overflow: clip; }
 .preference-group > summary { min-height: 3.25rem; display: flex; align-items: center; gap: .7rem; padding: .75rem .9rem; cursor: pointer; list-style: none; }
 .preference-group > summary::-webkit-details-marker { display: none; }
-.preference-group > summary::after { content: "⌄"; margin-left: auto; color: var(--muted); font-size: 1rem; transition: transform .16s ease; }
-.preference-group[open] > summary::after { transform: rotate(180deg); }
+.preference-chevron { margin-left: auto; color: var(--muted); transition: transform .16s ease; }
+.preference-group[open] .preference-chevron { transform: rotate(180deg); }
 .preference-group > summary > span { display: grid; place-items: center; color: var(--accent); }
 .preference-group > summary strong { font-size: .88rem; }
 .preference-rows { border-top: 1px solid var(--border); }
@@ -314,8 +314,10 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .preference-row > div:first-child { display: grid; gap: .18rem; }
 .preference-row strong { font-size: .76rem; }
 .preference-row small { color: var(--muted); font-size: .65rem; line-height: 1.4; }
-.preference-control { min-width: 0; }
+.preference-control { min-width: 0; display: grid; gap: .25rem; }
 .preference-control > input, .preference-control > select, .preference-with-unit { width: 100%; min-height: 2.45rem; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: .5rem; color: var(--text); background: var(--surface); font: inherit; font-size: .72rem; }
+.preference-control > input[aria-invalid="true"], .preference-with-unit:has(input[aria-invalid="true"]) { border-color: var(--error); }
+.preference-control > .preference-error { color: var(--error); }
 .preference-range { display: grid; grid-template-columns: minmax(0, 1fr) 3.5rem; align-items: center; gap: .7rem; }
 .preference-range output { padding: .4rem; border: 1px solid var(--border); border-radius: .45rem; text-align: center; font-size: .72rem; }
 .preference-with-unit { display: flex; align-items: center; padding: 0 .6rem; }

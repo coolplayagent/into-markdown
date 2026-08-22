@@ -1,11 +1,12 @@
 import {
-  CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText, X,
+  ArrowRight, CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText, X,
 } from "lucide-react";
 import { useState } from "react";
 import type { CapabilityAdmin, ComponentStatus, WorkbenchOptions } from "./api";
 import { useI18n } from "./i18n";
 import { RouteLink } from "./router";
 import { capabilitySourceLabel } from "./source-label";
+import { useDialogLifecycle } from "./dialog-lifecycle";
 
 function SegmentedControl<T extends string>({
   label, value, items, onChange,
@@ -69,21 +70,22 @@ export function AudioSetupDialog({ status, open, onClose, onInstall }: { status?
   const { t } = useI18n();
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState(false);
+  const dialogRef = useDialogLifecycle<HTMLElement>(open, onClose);
   if (!open) return null;
   const install = async () => {
     setInstalling(true); setError(false);
     try { await onInstall(); onClose(); } catch { setError(true); } finally { setInstalling(false); }
   };
   return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-    <section className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-setup-title">
+    <section ref={dialogRef} className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-setup-title">
       <div className="sheet-heading"><div><p className="section-kicker">{t("audioTranscription")}</p><h2 id="audio-setup-title">{t("prepareAudioTitle")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <div className="source-choice-list">
         <button className="source-choice" type="button" onClick={() => void install()} disabled={installing}>
           <span><strong>{t("installLocalSpeech")}</strong><small>{t("runsOnThisDevice")}</small></span>
-          {installing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <span aria-hidden="true">→</span>}
+          {installing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <ArrowRight size={18} aria-hidden="true" />}
         </button>
         <RouteLink className="source-choice" href="/admin/capabilities">
-          <span><strong>{t("chooseAiService")}</strong><small>{t("usesNetwork")}</small></span><span aria-hidden="true">→</span>
+          <span><strong>{t("chooseAiService")}</strong><small>{t("usesNetwork")}</small></span><ArrowRight size={18} aria-hidden="true" />
         </RouteLink>
       </div>
       {status?.detail && <p className="runtime-detail"><CircleAlert size={16} aria-hidden="true" />{t("speechSourceUnavailable")}</p>}

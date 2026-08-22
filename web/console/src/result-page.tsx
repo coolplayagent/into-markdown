@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Braces, CheckCircle2, ChevronDown, CircleAlert, Code2, Download, Eye, FileJson, Info,
@@ -8,6 +8,7 @@ import type { ApiClient, ArtifactPreview, SpeakerLabels, TaskRecord } from "./ap
 import { DismissibleMenu } from "./dismissible-menu";
 import { SafeMarkdownPreview } from "./preview";
 import { useI18n } from "./i18n";
+import { useDialogLifecycle } from "./dialog-lifecycle";
 import {
   TERMINAL, artifactLabel, bytesLabel, diagnosticLabel, downloadArtifact, iconForFormat, taskFormat,
   taskName,
@@ -22,24 +23,7 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
   onTaskUpdated?(task: TaskRecord): void;
 }) {
   const { t } = useI18n();
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const frame = window.requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLElement>("button")?.focus());
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || dialogRef.current?.querySelector('[role="menu"]')) return;
-      event.preventDefault();
-      onCloseRef.current();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", handleKeyDown);
-      if (previous?.isConnected) window.requestAnimationFrame(() => previous.focus());
-    };
-  }, []);
+  const dialogRef = useDialogLifecycle<HTMLElement>(true, onClose, (dialog) => !dialog.querySelector('[role="menu"]'));
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [batch, setBatch] = useState<TaskRecord[]>([]);
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
