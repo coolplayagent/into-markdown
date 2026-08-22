@@ -574,39 +574,61 @@ fn decode_timed_tokens(tokens: Vec<TimedTokenBytes>) -> Result<Vec<TimedToken>, 
             confidence_total += f64::from(confidence);
             confidence_count = confidence_count.saturating_add(1);
         }
-        let Ok(text) = std::str::from_utf8(&pending) else { continue };
-        output.try_reserve(1).map_err(|_| resource("asrSegments"))?;
-        output.push(TimedToken {
-            range: pending_range.take().ok_or_else(|| {
-                component(PROVIDER_ID, "Whisper token timing buffer is inconsistent")
-            })?,
-            text: text.to_owned(),
-            confidence: (confidence_count != 0)
-                .then(|| (confidence_total / f64::from(confidence_count)) as f32),
-            speaker: None,
-            speaker_confidence: None,
-        });
+        if std::str::from_utf8(&pending).is_err() {
+            continue;
+        }
+        let text = decode_provider_text(&pending)?;
+        if !text.is_empty() {
+            output.try_reserve(1).map_err(|_| resource("asrSegments"))?;
+            output.push(TimedToken {
+                range: pending_range.take().ok_or_else(|| {
+                    component(PROVIDER_ID, "Whisper token timing buffer is inconsistent")
+                })?,
+                text,
+                confidence: (confidence_count != 0)
+                    .then(|| (confidence_total / f64::from(confidence_count)) as f32),
+                speaker: None,
+                speaker_confidence: None,
+            });
+        } else {
+            pending_range = None;
+        }
         pending.clear();
         confidence_total = 0.0;
         confidence_count = 0;
     }
-    if !pending.is_empty() {
-        // whisper.cpp token text is byte-oriented. A model can end a segment
-        // with an incomplete or otherwise invalid UTF-8 token even though the
-        // segment itself is usable. The upstream binding exposes lossy text
-        // for this reason; preserve the timed evidence instead of failing the
-        // complete recording because of one model-emitted byte sequence.
-        output.try_reserve(1).map_err(|_| resource("asrSegments"))?;
-        output.push(TimedToken {
-            range: pending_range.take().ok_or_else(|| {
-                component(PROVIDER_ID, "Whisper token timing buffer is inconsistent")
-            })?,
-            text: String::from_utf8_lossy(&pending).into_owned(),
-            confidence: (confidence_count != 0)
-                .then(|| (confidence_total / f64::from(confidence_count)) as f32),
-            speaker: None,
-            speaker_confidence: None,
-        });
+    // whisper.cpp token text is byte-oriented. A timestamp boundary can leave
+    // an incomplete UTF-8 code point at the end of the selected token range.
+    // It has no valid textual evidence, so do not turn it into a visible U+FFFD
+    // character. The enclosing segment retains the complete provider text.
+    Ok(output)
+}
+
+fn decode_provider_text(bytes: &[u8]) -> Result<String, ConversionError> {
+    let mut output = String::new();
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                output.try_reserve(valid.len()).map_err(|_| resource("asrTranscriptBytes"))?;
+                output.extend(valid.chars().filter(|character| *character != '\u{fffd}'));
+                break;
+            }
+            Err(error) => {
+                let valid = &remaining[..error.valid_up_to()];
+                output.try_reserve(valid.len()).map_err(|_| resource("asrTranscriptBytes"))?;
+                output.extend(
+                    std::str::from_utf8(valid)
+                        .map_err(|_| {
+                            component(PROVIDER_ID, "Whisper UTF-8 prefix is inconsistent")
+                        })?
+                        .chars()
+                        .filter(|character| *character != '\u{fffd}'),
+                );
+                let Some(invalid_len) = error.error_len() else { break };
+                remaining = &remaining[error.valid_up_to() + invalid_len..];
+            }
+        }
     }
     Ok(output)
 }
@@ -683,6 +705,8 @@ fn collect_window_segments(
         let mut probability_total = 0.0_f64;
         let mut probability_count = 0_u32;
         let mut saw_timed_token = false;
+        let mut timed_token_count = 0_u32;
+        let mut owned_timed_token_count = 0_u32;
         let mut owned_token_bytes = Vec::new();
         for token_index in 0..segment.n_tokens() {
             let Some(token) = segment.get_token(token_index) else { continue };
@@ -695,6 +719,7 @@ fn collect_window_segments(
                 continue;
             }
             saw_timed_token = true;
+            timed_token_count = timed_token_count.saturating_add(1);
             let start_ms = offset_ms.saturating_add(token_start.saturating_mul(10));
             let end_ms = offset_ms.saturating_add(token_end.saturating_mul(10));
             let Some((start_ms, end_ms)) = clip_provider_range(start_ms, end_ms, decoded_end_ms)
@@ -705,6 +730,7 @@ fn collect_window_segments(
             if !owns_timestamp(midpoint_frame, ownership_start_frame, ownership_end_frame) {
                 continue;
             }
+            owned_timed_token_count = owned_timed_token_count.saturating_add(1);
             let bytes = token
                 .to_bytes()
                 .map_err(|_| component(PROVIDER_ID, "Whisper returned invalid token text"))?;
@@ -731,7 +757,13 @@ fn collect_window_segments(
             {
                 continue;
             }
-            let text = String::from_utf8_lossy(&owned_bytes).into_owned();
+            let text = if owned_timed_token_count == timed_token_count {
+                decode_provider_text(segment.to_bytes().map_err(|_| {
+                    component(PROVIDER_ID, "Whisper returned invalid segment text")
+                })?)?
+            } else {
+                decode_provider_text(&owned_bytes)?
+            };
             let confidence = if probability_count == 0 {
                 0.0
             } else {
@@ -1028,16 +1060,26 @@ mod tests {
     }
 
     #[test]
-    fn model_emitted_invalid_trailing_token_does_not_fail_complete_recording() {
+    fn incomplete_trailing_token_is_not_rendered_as_replacement_text() {
         let tokens = decode_timed_tokens(vec![TimedTokenBytes {
             range: TimeRange { start_ms: 0, end_ms: 10 },
             bytes: vec![0xe5, 0xbc],
             confidence: Some(0.7),
         }])
         .unwrap();
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].text, "�");
-        assert_eq!(tokens[0].range, TimeRange { start_ms: 0, end_ms: 10 });
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn invalid_provider_bytes_are_dropped_without_damaging_valid_text() {
+        let text = decode_provider_text("before\u{fffd}".as_bytes())
+            .and_then(|prefix| {
+                decode_provider_text(b"\xe5\xbc after\xff done")
+                    .map(|suffix| format!("{prefix}{suffix}"))
+            })
+            .unwrap();
+        assert_eq!(text, "before after done");
+        assert!(!text.contains('\u{fffd}'));
     }
 
     #[test]
