@@ -26,6 +26,7 @@ const testGroups = {
   preview: new Set([
     "Markdown preview never creates executable or resource-loading DOM",
     "result dialog provides reading and source views with a closed details drawer",
+    "failed results keep the document area stable and expose retry beside the failure",
     "meeting speaker names rerender artifacts through generation CAS without rerunning transcription",
   ]),
   history_actions: new Set([
@@ -40,6 +41,7 @@ const testGroups = {
     "workbench rejects unsupported files before upload and explains terminal failures",
     "completed current-batch rows open their result from the whole row",
     "workbench separates the current batch from scrollable recent history",
+    "history paginates in place and loads records beyond the first server page",
     "root workbench automatically opens the first successful result dialog",
     "workbench presents network access as one bounded switch",
     "remote OCR requires nearby network and provider authorization without enabling unrelated AI modes",
@@ -47,7 +49,7 @@ const testGroups = {
     "Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices",
     "meeting page keeps recording primary and setup feedback beside transcript controls",
     "remote transcription requires a one-upload grant beside transcript controls",
-    "workbench reports the bounded upload rejection code",
+    "workbench explains upload rejection without exposing an internal code",
     "API rejection renders a recoverable status error rather than the error boundary",
     "ErrorBoundary contains provider render errors and focuses its fallback heading",
   ]),
@@ -492,6 +494,21 @@ test("result dialog provides reading and source views with a closed details draw
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
 });
 
+test("failed results keep the document area stable and expose retry beside the failure", async () => {
+  const window = installWindow();
+  const failed = { ...task("failed"), displayName: "recording.webm", workflow: "meetingTranscript" as const,
+    diagnostics: [{ code: "componentUnavailable" }] };
+  window.history.replaceState(null, "", `/meetings/results/${failed.id}`);
+  const api: ApiClient = { ...availableApi, async getTask() { return failed; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "A required local dependency is not ready");
+  assert.equal(window.document.querySelector(".result-drawer"), null);
+  assert.equal(window.document.querySelector(".result-body")?.classList.contains("drawer-open"), false);
+  assert.ok([...window.document.querySelectorAll(".result-empty button")].some((button) => button.textContent === "Retry"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Details and resources")!.click();
+  await waitFor(() => Boolean(window.document.querySelector(".result-drawer")));
+});
+
 test("meeting speaker names rerender artifacts through generation CAS without rerunning transcription", async () => {
   const window = installWindow();
   const completed = { ...task("succeeded"), workflow: "meetingTranscript" as const,
@@ -596,8 +613,6 @@ test("immediate cleanup requires irreversible confirmation and reports reclaimed
   const root = trackedRoot(window2.document.getElementById("app")!);
   root.render(createElement(App, { api }));
   await waitForText(window2, "old.md");
-  [...window2.document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "View all")!.click();
-  await waitFor(() => Boolean(window2.document.querySelector(".history-drawer")));
   window2.document.querySelector<HTMLButtonElement>('button[aria-label="Clean up now"]')!.click();
   await waitFor(() => cleanups === 1 && window2.document.body.textContent.includes("1.5 MiB"));
   assert.ok(warning.includes("cannot be undone"));
@@ -710,6 +725,33 @@ test("workbench separates the current batch from scrollable recent history", asy
   assert.equal(window.location.pathname, "/workbench");
 });
 
+test("history paginates in place and loads records beyond the first server page", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const records = Array.from({ length: 8 }, (_, index) => ({
+    ...task("succeeded", String(index + 1).padStart(32, "0")),
+    displayName: `archive-${index + 1}.pdf`, format: "pdf" as const, updatedAtMs: 100 - index,
+  }));
+  let requests = 0;
+  const api: ApiClient = {
+    ...availableApi,
+    async listTasks(filters) {
+      requests += 1;
+      if (!filters?.after) return { tasks: records.slice(0, 7), nextCursor: { updatedAtMs: 94, id: records[6]!.id } };
+      return { tasks: records.slice(7) };
+    },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "archive-1.pdf");
+  await waitFor(() => requests >= 2);
+  assert.equal(window.document.querySelectorAll(".recent-history li").length, 6);
+  assert.equal(window.document.body.textContent.includes("archive-8.pdf"), false);
+  window.document.querySelector<HTMLButtonElement>('.history-rail-footer button[aria-label="Next"]')!.click();
+  await waitForText(window, "archive-8.pdf");
+  assert.equal(window.document.querySelectorAll(".recent-history li").length, 2);
+  assert.equal(window.document.querySelector(".history-rail")?.textContent?.includes("2/2"), true);
+  assert.equal(window.document.querySelector(".history-rail")?.textContent?.includes("View all"), false);
+});
+
 test("completed current-batch rows open their result from the whole row", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const completed = { ...task("succeeded"), displayName: "contract.md", format: "markdown" as const };
@@ -726,8 +768,10 @@ test("completed current-batch rows open their result from the whole row", async 
   await waitFor(() => window.document.querySelector(".result-dialog") === null);
   const row = window.document.querySelector<HTMLButtonElement>(".current-task-link")!;
   assert.ok(row.textContent.includes("contract.md"));
-  row.click();
+  row.focus(); row.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
+  window.document.querySelector<HTMLButtonElement>('.result-dialog button[aria-label="Close"]')!.click();
+  await waitFor(() => window.document.activeElement === row);
 });
 
 test("root workbench automatically opens the first successful result dialog", async () => {
@@ -748,8 +792,8 @@ test("root workbench automatically opens the first successful result dialog", as
 test("workbench presents network access as one bounded switch", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
-  await waitForText(window, "Advanced settings");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
+  await waitForText(window, "Open advanced settings");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Open advanced settings")!.click();
   await waitForText(window, "When off, conversions process local content only.");
   assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
   assert.ok(!window.document.body.textContent.includes("private-network targets"));
@@ -780,7 +824,7 @@ test("remote OCR requires nearby network and provider authorization without enab
   await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
   await waitForText(window, "The selected capability uses a remote provider");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Open advanced settings")!.click();
   await waitFor(() => Boolean(window.document.querySelector(".settings-sheet")));
   const aiMode = [...window.document.querySelectorAll<HTMLSelectElement>(".settings-sheet select")]
     .find((select) => [...select.options].some((option) => option.value === "prefer"))!;
@@ -919,7 +963,7 @@ test("Chinese meeting UI defaults to Simplified Chinese without overriding expli
   assert.equal(transcriptLanguage.value, "zh-Hant");
 });
 
-test("workbench reports the bounded upload rejection code", async () => {
+test("workbench explains upload rejection without exposing an internal code", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const api: ApiClient = {
     ...availableApi,
@@ -932,7 +976,8 @@ test("workbench reports the bounded upload rejection code", async () => {
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
   zone.dispatchEvent(drop); await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitForText(window, "Upload failed: contract.md (invalidTaskOptions)");
+  await waitForText(window, "contract.md: The conversion settings are invalid");
+  assert.equal(window.document.body.textContent.includes("invalidTaskOptions"), false);
 });
 
 test("shell primitives expose keyboard focus and language-safe DOM behavior", () => {

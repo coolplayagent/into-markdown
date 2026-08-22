@@ -3,9 +3,25 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ApiClient, ArtifactReference, InputFormat, TaskRecord } from "./api";
-import type { MessageKey } from "./i18n";
+import type { Locale, MessageKey } from "./i18n";
 
 export const TERMINAL = new Set(["succeeded", "failed", "interrupted", "cancelled"]);
+
+export async function listAllTasks(api: ApiClient, signal?: AbortSignal): Promise<TaskRecord[]> {
+  const tasks: TaskRecord[] = [];
+  let after: { updatedAtMs: number; id: string } | undefined;
+  const seen = new Set<string>();
+  do {
+    const page = await api.listTasks({ limit: 100, ...(after ? { after } : {}) }, signal);
+    tasks.push(...page.tasks);
+    if (!page.nextCursor) break;
+    const key = `${page.nextCursor.updatedAtMs}:${page.nextCursor.id}`;
+    if (seen.has(key)) break;
+    seen.add(key);
+    after = page.nextCursor;
+  } while (!signal?.aborted);
+  return tasks;
+}
 
 export const FORMATS: InputFormat[] = [
   "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf",
@@ -89,6 +105,20 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
 
 export function diagnosticLabel(code: string, t: (key: MessageKey) => string): string {
   return t(DIAGNOSTIC_MESSAGES[code] ?? "conversionFailedReason");
+}
+
+export function executionStageLabel(stage: string, locale: Locale): string {
+  const labels: Readonly<Record<string, [string, string]>> = {
+    resolving: ["准备文件", "Preparing file"],
+    detecting: ["识别格式", "Identifying format"],
+    probing: ["选择转换方式", "Selecting converter"],
+    converting: ["转换内容", "Converting content"],
+    ocr: ["识别图片文字", "Reading image text"],
+    ai: ["处理内容", "Processing content"],
+    rendering: ["生成 Markdown", "Generating Markdown"],
+    completed: ["完成", "Completed"],
+  };
+  return (labels[stage] ?? ["处理中", "Processing"])[locale === "zh-CN" ? 0 : 1];
 }
 
 export function iconForFormat(format: string): LucideIcon {

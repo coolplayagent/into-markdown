@@ -16,7 +16,7 @@ import {
   RecordingDraftLimitError, type RecordingDraft,
 } from "./recording-store";
 import {
-  MEETING_FILE_ACCEPT, TERMINAL, bytesLabel, supportsMeetingFile, taskName,
+  MEETING_FILE_ACCEPT, TERMINAL, bytesLabel, executionStageLabel, listAllTasks, supportsMeetingFile, taskName,
 } from "./task-ui";
 
 type RecorderState = "idle" | "requesting" | "recording" | "paused" | "stopping" | "draft";
@@ -100,6 +100,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const stream = useRef<MediaStream | null>(null);
   const sourceStreams = useRef<MediaStream[]>([]);
   const mixer = useRef<AudioContext | null>(null);
+  const meterContext = useRef<AudioContext | null>(null);
+  const meterFrame = useRef(0);
   const chunkIndex = useRef(0);
   const elapsedRef = useRef(0);
   const writes = useRef<Promise<void>>(Promise.resolve());
@@ -109,6 +111,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const recordingFailure = useRef<MessageKey | null>(null);
   const [state, setState] = useState<RecorderState>("idle");
   const [elapsed, setElapsed] = useState(0);
+  const [waveform, setWaveform] = useState<number[]>(() => Array.from({ length: 24 }, () => 0.06));
   const [file, setFile] = useState<File | null>(null);
   const [fromDraft, setFromDraft] = useState(false);
   const [message, setMessage] = useState("");
@@ -130,6 +133,41 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [stage, setStage] = useState("");
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
 
+  const stopMeter = useCallback(() => {
+    if (meterFrame.current) window.cancelAnimationFrame(meterFrame.current);
+    meterFrame.current = 0;
+    const context = meterContext.current;
+    meterContext.current = null;
+    if (context) void context.close().catch(() => {});
+    setWaveform(Array.from({ length: 24 }, () => 0.06));
+  }, []);
+
+  const startMeter = useCallback(async (media: MediaStream) => {
+    stopMeter();
+    if (!globalThis.AudioContext) return;
+    const context = new AudioContext();
+    await context.resume();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.72;
+    context.createMediaStreamSource(media).connect(analyser);
+    meterContext.current = context;
+    const samples = new Uint8Array(analyser.fftSize);
+    const draw = () => {
+      analyser.getByteTimeDomainData(samples);
+      let energy = 0;
+      for (const sample of samples) {
+        const normalized = (sample - 128) / 128;
+        energy += normalized * normalized;
+      }
+      const rms = Math.sqrt(energy / samples.length);
+      const level = recorder.current?.state === "recording" ? Math.min(1, Math.max(0.06, rms * 8)) : 0.06;
+      setWaveform((current) => [...current.slice(1), level]);
+      meterFrame.current = window.requestAnimationFrame(draw);
+    };
+    meterFrame.current = window.requestAnimationFrame(draw);
+  }, [stopMeter]);
+
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
 
   useEffect(() => {
@@ -141,13 +179,13 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   }, [locale]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const page = await api.listTasks({ limit: 100 }, signal);
+    const tasks = await listAllTasks(api, signal);
     if (!diarizationTouched.current) {
       setOptions((current) => ({
         ...current, diarize: quickDiarization?.status === "ready",
       }));
     }
-    setRecent(page.tasks.filter((item) => item.workflow === "meetingTranscript"));
+    setRecent(tasks.filter((item) => item.workflow === "meetingTranscript"));
   }, [api, quickDiarization?.status]);
 
   useEffect(() => {
@@ -182,7 +220,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
     stream.current?.getTracks().forEach((track) => track.stop());
     sourceStreams.current.forEach((source) => source.getTracks().forEach((track) => track.stop()));
     void mixer.current?.close().catch(() => {});
-  }, []);
+    stopMeter();
+  }, [stopMeter]);
 
   const loadDevices = async () => {
     const values = await navigator.mediaDevices.enumerateDevices();
@@ -206,6 +245,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       sourceStreams.current.forEach((source) => source.getTracks().forEach((track) => track.stop()));
       sourceStreams.current = [];
       void mixer.current?.close().catch(() => {}); mixer.current = null;
+      stopMeter();
       stream.current = null; recorder.current = null;
     }
   };
@@ -252,6 +292,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       chunkIndex.current = 0; elapsedRef.current = 0; setElapsed(0); setFile(null); setFromDraft(false);
       writes.current = Promise.resolve(); stream.current = media; sourceStreams.current = acquired;
       mixer.current = mixing; recorder.current = next;
+      await startMeter(media);
       next.addEventListener("dataavailable", (event) => {
         if (event.data.size === 0) return;
         const index = chunkIndex.current++;
@@ -285,6 +326,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       stream.current?.getTracks().forEach((track) => track.stop());
       sourceStreams.current = [];
       void mixing?.close().catch(() => {}); mixer.current = null;
+      stopMeter();
       stream.current = null; recorder.current = null; setState("idle");
       setMessage(error instanceof DOMException && error.name === "NotAllowedError"
         ? t(requesting === "system" ? "systemAudioPermissionDenied" : "microphonePermissionDenied")
@@ -400,12 +442,13 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
 
   return <section className="meeting-route" aria-labelledby="meeting-title">
-    <div className="page-heading compact-heading"><div><p className="eyebrow">SPEECH TO TEXT</p><h1 id="meeting-title">{t("meetingNotes")}</h1></div><p>{t("meetingIntro")}</p></div>
+    <div className="page-heading compact-heading"><div><p className="eyebrow">SPEECH TO TEXT</p><h1 id="meeting-title">{t("meetingNotes")}</h1></div></div>
     <div className="task-workspace"><div className="meeting-layout">
       <section className="card recording-card" aria-labelledby="recording-title">
         <div className="card-heading"><div><p className="section-kicker">{t("liveMeeting")}</p><h2 id="recording-title">{t("recordMeeting")}</h2></div><Radio size={21} aria-hidden="true" /></div>
         <div className={`recorder-console ${recording ? "active" : ""}`}>
           <div className="recording-status"><span className="recording-orb"><Mic size={28} aria-hidden="true" /></span><div><strong>{state === "recording" ? t("recordingNow") : state === "paused" ? t("recordingPaused") : state === "stopping" ? t("savingRecording") : state === "requesting" ? t("connectingAudioSource") : file ? t("recordingReady") : t(readyMessage)}</strong><time>{durationLabel(elapsed)}</time></div></div>
+          <div className={`recording-waveform ${state === "recording" ? "live" : ""}`} aria-hidden="true">{waveform.map((level, index) => <i key={index} style={{ height: `${Math.round(14 + level * 86)}%` }} />)}</div>
           <div className="recorder-actions">
             {!recording && !file && <button type="button" disabled={state === "requesting"} onClick={() => void start()}>{state === "requesting" ? <LoaderCircle className="spin" size={18} /> : <Mic size={18} />}{t("startRecording")}</button>}
             {state === "recording" && <button className="secondary" type="button" onClick={pause}><Pause size={17} />{t("pauseRecording")}</button>}
@@ -433,7 +476,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
           {options.diarize && diarizationStatus?.available === true && <label className="expected-speakers"><span>{t("expectedSpeakers")}</span><select value={options.expectedSpeakers ?? ""} onChange={(event) => setOptions((current) => ({ ...current, expectedSpeakers: event.target.value ? Number(event.target.value) : null }))}><option value="">{t("automatic")}</option>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label>}
           {(!audioChecking && audioStatus?.available === false || !diarizationChecking && diarizationStatus?.available === false) && <button className="prepare-media" type="button" onClick={() => setSetup(true)}><CircleAlert size={16} />{t("prepareAudioComponents")}</button>}
         </div>
-        {task && <div className={`meeting-task ${task.status}`}><div><strong>{taskName(task, t("meetingTranscript"))}</strong><span>{t(task.status)}{stage ? ` · ${stage}` : ""}</span></div>{TERMINAL.has(task.status) ? <button className="secondary" type="button" onClick={() => setActiveTaskId(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}{t("viewTranscript")}</button> : <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>}
+        {task && <div className={`meeting-task ${task.status}`}><div><strong>{taskName(task, t("meetingTranscript"))}</strong><span>{t(task.status)}{!TERMINAL.has(task.status) && stage ? ` · ${executionStageLabel(stage, locale)}` : ""}</span></div>{TERMINAL.has(task.status) ? <button className="secondary" type="button" onClick={() => setActiveTaskId(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}{t("viewTranscript")}</button> : <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>}
         <button className="convert-button" type="button" disabled={!file || Boolean(task && !TERMINAL.has(task.status)) || state === "stopping"} onClick={() => void submit()}>{task && !TERMINAL.has(task.status) ? <LoaderCircle className="spin" size={19} /> : <FileAudio size={19} />}{task && !TERMINAL.has(task.status) ? t("transcribing") : t("generateTranscript")}</button>
 
       </section>

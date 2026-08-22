@@ -10,8 +10,8 @@ import { ResultDialog } from "./result-page";
 import { HistoryPanel } from "./history-panel";
 import { useCapabilities } from "./capability-store";
 import {
-  SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName,
-  iconForFormat, supportsFileName,
+  SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName, listAllTasks,
+  executionStageLabel, iconForFormat, supportsFileName,
 } from "./task-ui";
 
 const MAX_BATCH_FILES = 100;
@@ -32,7 +32,7 @@ function entryKey(file: File): string {
 }
 
 export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const directory = useRef<HTMLInputElement>(null);
@@ -88,8 +88,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   useEffect(() => {
     const controller = new AbortController();
-    void api.listTasks({ limit: 100 }, controller.signal)
-      .then((page) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); })
+    void listAllTasks(api, controller.signal)
+      .then((tasks) => { setRecentTasks(tasks.filter((task) => task.workflow === "conversion")); })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setMessageScope("source");
@@ -171,7 +171,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         const code = error instanceof ApiError ? error.code : "unreachable";
         setEntries((current) => current.map((item) => item.key === entry.key ? { ...item, error: code } : item));
         setMessageScope("source");
-        setMessage(`${t("uploadFailed")}: ${entry.file.name} (${code})`);
+        setMessage(`${entry.file.name}${locale === "zh-CN" ? "：" : ": "}${diagnosticLabel(code, t)}`);
       }
     }
     setUploading(false);
@@ -186,8 +186,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     if (!window.confirm(t("cleanupWarning"))) return;
     try {
       const result = await api.cleanup();
-      const page = await api.listTasks({ limit: 100 });
-      setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion"));
+      const tasks = await listAllTasks(api);
+      setRecentTasks(tasks.filter((task) => task.workflow === "conversion"));
       setMessageScope("source");
       setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
     } catch {
@@ -196,7 +196,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   };
 
   return <section className="workbench-route" aria-labelledby="workbench-title">
-    <div className="page-heading compact-heading"><div><p className="eyebrow">LOCAL WORKBENCH</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div><p>{t("convertDocumentsIntro")}</p></div>
+    <div className="page-heading compact-heading"><div><p className="eyebrow">DOCUMENT TO MARKDOWN</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div></div>
     <div className="task-workspace"><div className="conversion-layout">
       <section className="card upload-card" aria-labelledby="upload-heading">
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
@@ -216,7 +216,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const percent = entry.task ? Math.round(entry.task.progressMillionths / 10_000) : 0;
               const failureCode = entry.error ?? entry.task?.diagnostics[0]?.code;
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
-              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${diagnosticLabel(failureCode ?? "conversionFailed", t)}` : entry.task ? `${t(entry.task.status)}${entry.stage ? ` · ${entry.stage}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
+              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${diagnosticLabel(failureCode ?? "conversionFailed", t)}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
               if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => setActiveTaskId(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;
               return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => setEntries((current) => current.filter((_, item) => item !== index))}><X size={17} aria-hidden="true" /></button>}</li>;
             })}</ul></div>

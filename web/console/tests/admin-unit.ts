@@ -36,7 +36,7 @@ const snapshot: AdminSnapshot = {
     { id: "transcription", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/transcription", sources: ["plugin:official.media.whisper/transcription", "off"], version: "1.0.0", localVersion: "1.0.0" },
     { id: "diarization", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/diarization", sources: ["plugin:official.media.whisper/diarization", "off"], version: "1.0.0", localVersion: "1.0.0" },
   ],
-  providers: [{ name: "vision", scope: "effective", actionScope: "project", providerType: "openai-compatible", baseUrl: "https://example.com/v1", model: "vision", models: {}, apiKeyEnv: "VISION_KEY", environmentSet: true, capabilities: ["image-description"], default: true, effective: true }],
+  providers: [{ name: "vision", scope: "effective", actionScope: "project", providerType: "openai-compatible", baseUrl: "https://example.com/v1", model: "vision", models: {}, apiKeyEnv: "VISION_KEY", environmentSet: true, capabilities: ["image-description"], allowedHosts: ["example.com"], allowPrivateNetwork: false, default: true, effective: true }],
   plugins: [{ id: "local", scope: "effective", actionScope: "project", packageScope: "project", source: "file:///redacted/plugin", sha256: "1".repeat(64), protocol: "process-v1", enabled: true, effective: true, verification: "verified", version: "1.0.0", signingKeyId: "release-key", signingKeySha256: "2".repeat(64), target: "x86_64-pc-windows-msvc" }],
   configuration: { schema_version: 1, providers: { vision: { api_key_env: "VISION_KEY" } } }, profiles: [{ name: "safe", scope: "project", effective: true, active: false }],
   doctor: [{ id: "networkProbe", status: "skipped", detail: "offline by default" }],
@@ -82,6 +82,8 @@ test("admin DTO is bounded and never needs credential values", () => {
     { ...snapshot.providers[0]!, model: undefined },
     { ...snapshot.providers[0]!, apiKeyEnv: "SECRET VALUE" },
     { ...snapshot.providers[0]!, capabilities: ["BAD"] },
+    { ...snapshot.providers[0]!, allowedHosts: ["bad host"] },
+    { ...snapshot.providers[0]!, allowPrivateNetwork: undefined },
     { ...snapshot.providers[0]!, default: undefined },
   ]) assert.throws(() => parseAdminSnapshot({ ...snapshot, providers: [mutation] }), ApiError);
   for (const mutation of [
@@ -105,7 +107,7 @@ test("admin DTO is bounded and never needs credential values", () => {
   const partial = {
     ...snapshot,
     providers: [
-      { name: "vision", scope: "global", actionScope: "global", providerType: "openai-compatible", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "global", actionScope: "global", providerType: "openai-compatible", models: {}, capabilities: [], allowedHosts: [], allowPrivateNetwork: false, default: false, effective: false, shadowedBy: "effective" },
       snapshot.providers[0]!,
     ],
     plugins: [
@@ -168,7 +170,7 @@ test("administration pages are accessible, responsive, recoverable and require o
   const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
   const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingOcr) }));
-  await waitFor(() => window.document.body.textContent.includes("Read text from scanned PDFs"));
+  await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
   const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
   assert.equal(installButton.disabled, false); installButton.click(); installButton.click(); await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, true);
@@ -189,11 +191,66 @@ test("failed initial load exposes an alert and retry recovery", async () => {
   await waitFor(() => window.document.body.textContent.includes("Diagnostics")); assert.equal(calls, 2);
 });
 
+test("preferences render a stable five-section shell while the admin snapshot is delayed", async () => {
+  const window = install("/admin/configuration");
+  let resolveAdmin!: (value: AdminSnapshot) => void;
+  const delayed = api(); delayed.admin = async () => new Promise<AdminSnapshot>((resolve) => { resolveAdmin = resolve; });
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: delayed }));
+  await waitFor(() => window.document.body.textContent.includes("Documents and recognition"));
+  for (const title of ["Documents and recognition", "Output", "Speech transcription", "Performance", "Privacy and network"]) assert.equal(window.document.body.textContent.includes(title), true);
+  assert.equal(window.document.querySelector('[aria-busy="true"]') !== null, true);
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "Save")?.disabled, true);
+  await waitFor(() => typeof resolveAdmin === "function");
+  resolveAdmin(snapshot);
+  await waitFor(() => window.document.querySelector('[aria-busy="true"]') === null);
+  assert.equal(window.document.querySelectorAll(".preference-group").length, 5);
+});
+
+test("legacy administration URLs redirect into the matching capability context", async () => {
+  const window = install("/admin/providers");
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api() }));
+  await waitFor(() => window.document.querySelector('[role="dialog"]') !== null);
+  assert.equal(window.location.pathname, "/admin/capabilities");
+  assert.equal(window.document.querySelector('[role="dialog"]')?.textContent?.includes("AI services"), true);
+  assert.equal(window.document.querySelectorAll(".admin-tabs a").length, 3);
+});
+
+test("nested administration dialogs close one layer at a time and restore focus", async () => {
+  const window = install("/admin/capabilities");
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api() }));
+  await waitFor(() => window.document.body.textContent.includes("Capabilities & sources"));
+  const sourceTrigger = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "AI services")!;
+  sourceTrigger.focus(); sourceTrigger.click();
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1);
+  const providerTrigger = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"] button')].find((button) => button.textContent === "Connect AI service")!;
+  providerTrigger.focus(); providerTrigger.click();
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2);
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.activeElement === providerTrigger);
+  window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 0 && window.document.activeElement === sourceTrigger);
+});
+
+test("diagnostics group failures by remediation target rather than check id", async () => {
+  const window = install("/admin/doctor");
+  const grouped: AdminSnapshot = { ...snapshot, doctor: [
+    { id: "runtime.asr", status: "failed", detail: "transcriber unavailable" },
+    { id: "runtime.diarization", status: "failed", detail: "speaker resources unavailable" },
+    { id: "runtime.ocr", status: "failed", detail: "ocr unavailable" },
+  ] };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api([], grouped) }));
+  await waitFor(() => window.document.body.textContent.includes("2 need attention"));
+  assert.equal(window.document.querySelectorAll(".doctor-card").length, 2);
+  const speech = [...window.document.querySelectorAll<HTMLElement>(".doctor-card")].find((card) => card.textContent?.includes("Speech transcription"))!;
+  assert.equal(speech.textContent?.includes("Speaker identification"), true);
+});
+
 test("provider failures explain the cause beside the provider that triggered them", async () => {
   const window = install("/admin/providers");
   Object.defineProperty(window.navigator, "languages", { value: ["zh-CN"], configurable: true });
+  let failureCode = "privateNetworkDenied";
   const failed = api();
-  failed.adminAction = async () => { throw new ApiError("privateNetworkDenied"); };
+  failed.adminAction = async () => { throw new ApiError(failureCode); };
   activeRoot = createRoot(window.document.getElementById("app")!);
   activeRoot.render(createElement(App, { api: failed }));
   await waitFor(() => window.document.body.textContent.includes("AI 服务"));
@@ -202,14 +259,56 @@ test("provider failures explain the cause beside the provider that triggered the
   const feedback = window.document.querySelector(".admin-entity-card .capability-feedback.error");
   assert.match(feedback?.textContent ?? "", /局域网地址/);
   assert.equal(window.document.querySelector(".admin-section-stack > .admin-feedback"), null);
+  failureCode = "providerSecretMissing";
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "测试连接")!.click();
+  await waitFor(() => window.document.body.textContent.includes("密钥环境变量"));
+  assert.equal(window.document.body.textContent.includes("providerSecretMissing"), false);
+});
+
+test("provider tests use each persisted network policy and ignore another dialog draft", async () => {
+  const providers: AdminSnapshot = {
+    ...snapshot,
+    providers: [
+      { ...snapshot.providers[0]!, name: "alpha", baseUrl: "https://alpha.example/v1", allowedHosts: ["alpha.example"], allowPrivateNetwork: false, default: true },
+      { ...snapshot.providers[0]!, name: "beta", baseUrl: "http://127.0.0.1:9443/v1", allowedHosts: ["127.0.0.1"], allowPrivateNetwork: true, default: false },
+    ],
+  };
+  const window = install("/admin/providers"); const actions: AdminAction[] = [];
+  activeRoot = createRoot(window.document.getElementById("app")!);
+  activeRoot.render(createElement(App, { api: api(actions, providers) }));
+  await waitFor(() => window.document.body.textContent.includes("alpha.example"));
+  const cards = [...window.document.querySelectorAll<HTMLElement>(".admin-entity-card")];
+  const alpha = cards.find((card) => card.textContent?.includes("alpha.example"))!;
+  const beta = cards.find((card) => card.textContent?.includes("127.0.0.1"))!;
+
+  [...alpha.querySelectorAll("button")].find((button) => button.textContent === "Edit")!.click();
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2);
+  const dialog = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1)!;
+  const hostField = [...dialog.querySelectorAll("label")].find((label) => label.textContent?.includes("Allowed hosts"))!;
+  const hostInput = hostField.querySelector("input")!;
+  hostInput.value = "draft-only.example";
+  hostInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click();
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1);
+
+  [...beta.querySelectorAll("button")].find((button) => button.textContent === "Test connection")!.click();
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.action, "provider.test");
+  assert.equal(actions[0]!.scope, "project");
+  assert.equal(actions[0]!.target, "beta");
+  assert.equal(actions[0]!.authorizeNetwork, true);
+  assert.equal(actions[0]!.authorizeDangerous, true);
+  assert.equal(actions[0]!.authorizationGrant, "G".repeat(43));
+  assert.equal("allowHosts" in actions[0]!, false);
+  assert.equal("allowPrivateNetwork" in actions[0]!, false);
 });
 
 test("partial records expose exact-layer mutation while read-only authority stays disabled", async () => {
   const partial: AdminSnapshot = {
     ...snapshot,
     providers: [
-      { name: "vision", scope: "global", actionScope: "global", model: "base", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
-      { name: "vision", scope: "project", actionScope: "project", model: "override", models: {}, capabilities: [], default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "global", actionScope: "global", model: "base", models: {}, capabilities: [], allowedHosts: [], allowPrivateNetwork: false, default: false, effective: false, shadowedBy: "effective" },
+      { name: "vision", scope: "project", actionScope: "project", model: "override", models: {}, capabilities: [], allowedHosts: [], allowPrivateNetwork: false, default: false, effective: false, shadowedBy: "effective" },
       snapshot.providers[0]!,
     ],
     plugins: [
@@ -236,6 +335,6 @@ test("partial records expose exact-layer mutation while read-only authority stay
   activeRoot = createRoot(window.document.getElementById("app")!);
   activeRoot.render(createElement(App, { api: api([], readOnly) }));
   await waitFor(() => window.document.body.textContent.includes("当前只能查看"));
-  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("安装插件包"))?.disabled, true);
+  assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("安装扩展"))?.disabled, true);
   assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "验证")?.disabled, true);
 });

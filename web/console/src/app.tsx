@@ -36,14 +36,19 @@ function Content({ api }: { api: ApiClient }) {
   const workbenchResult = /^\/results\/([0-9a-f]{32})$/.exec(path);
   const meeting = path === "/meetings" || Boolean(meetingResult);
   const adminMatch = /^\/admin\/(capabilities|formats|providers|plugins|configuration|doctor)$/.exec(path);
-  const adminSection = adminMatch?.[1] as AdminSection | undefined;
+  const requestedAdminSection = adminMatch?.[1] as AdminSection | undefined;
+  const legacyAdminContext = requestedAdminSection === "providers" || requestedAdminSection === "plugins" || requestedAdminSection === "formats" ? requestedAdminSection : undefined;
+  const adminSection = legacyAdminContext ? "capabilities" : requestedAdminSection;
+  useEffect(() => {
+    if (legacyAdminContext) window.history.replaceState(null, "", "/admin/capabilities");
+  }, [legacyAdminContext]);
   useEffect(() => {
     document.title = `${t(adminSection ?? (meeting ? "speechTranscription" : "workbench"))} · into-markdown`;
   }, [adminSection, meeting, t]);
   useEffect(() => { main.current?.focus(); }, [path]);
   return <main id="main" ref={main} tabIndex={-1}>
     <div className="route-surface">{adminSection
-      ? <AdminPage api={api} section={adminSection} />
+      ? <AdminPage api={api} section={adminSection} {...(legacyAdminContext ? { initialContext: legacyAdminContext } : {})} />
       : meeting
       ? <MeetingPage api={api} initialTaskId={meetingResult?.[1]} />
       : <WorkbenchPage api={api} initialTaskId={workbenchResult?.[1]} />}</div>

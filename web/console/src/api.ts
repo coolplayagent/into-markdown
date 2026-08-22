@@ -20,7 +20,7 @@ export interface CapabilityCheck {
   progress: number; code?: string; detail?: string; elapsedMs?: number;
 }
 export interface StagedPluginPackage { schemaVersion: 1; source: string; filename: string; byteLen: number }
-export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; models: Record<string, string>; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; default: boolean; effective: boolean; shadowedBy?: "effective" }
+export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; models: Record<string, string>; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; allowedHosts: string[]; allowPrivateNetwork: boolean; default: boolean; effective: boolean; shadowedBy?: "effective" }
 export interface PluginAdmin { id: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; packageScope?: "global" | "project"; source?: string; sha256?: string; protocol?: string; enabled?: boolean; effective: boolean; shadowedBy?: "effective"; verification?: string; version?: string; signingKeyId?: string; signingKeySha256?: string; target?: string }
 export interface DoctorAdmin { id: string; status: string; detail: string }
 export type AdminOperationResult = { kind: "detection"; sourceName?: string | null; sourceSize: number; candidates: Array<{ format: string; confidence: number; explicit: boolean; detectorId: string; reason: string; diagnostics: string[] }> } | { kind: "profile"; name: string; value: Record<string, unknown> } | { kind: "config"; operation: "paths" | "get" | "showMerged" | "showResolved"; value: unknown } | { kind: "doctor"; checks: DoctorAdmin[] } | { kind: "providerTest"; configuredModelAvailable: boolean; modelCount: number; capabilities: string[] };
@@ -168,6 +168,9 @@ function isProviderAdmin(value: unknown, configurationReadOnly: boolean): value 
     || Object.entries(value.models).some(([capability, model]) => !/^[a-z][a-z0-9-]{0,63}$/.test(capability) || !safeText(model, 512))
     || value.apiKeyEnv !== undefined && (typeof value.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.apiKeyEnv))
     || value.environmentSet !== undefined && typeof value.environmentSet !== "boolean"
+    || !Array.isArray(value.allowedHosts) || value.allowedHosts.length > 64
+    || value.allowedHosts.some((host) => !safeText(host, 253) || /\s|\//.test(host))
+    || typeof value.allowPrivateNetwork !== "boolean"
     || typeof value.default !== "boolean" || value.timeoutMs !== undefined && (!Number.isSafeInteger(value.timeoutMs) || Number(value.timeoutMs) <= 0 || Number(value.timeoutMs) > 86_400_000)
     || !Array.isArray(value.capabilities) || value.capabilities.length > 64
     || !value.capabilities.every((item) => typeof item === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(item))) return false;
@@ -391,7 +394,7 @@ export interface ApiClient {
   watchTask(id: string, onEvent: (event: TaskEvent) => void, signal: AbortSignal): Promise<void>;
   preview(id: string, key: string, signal?: AbortSignal): Promise<ArtifactPreview>;
   download(id: string, key: string, signal?: AbortSignal): Promise<ArtifactDownload>;
-  admin(signal?: AbortSignal): Promise<AdminSnapshot>;
+  admin(signal?: AbortSignal, section?: string): Promise<AdminSnapshot>;
   adminGrant(action: AdminAction, signal?: AbortSignal): Promise<string>;
   adminAction(action: AdminAction, signal?: AbortSignal): Promise<AdminActionOutcome>;
 }
@@ -430,7 +433,7 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
         || !Number.isSafeInteger(value.byteLen) || Number(value.byteLen) <= 0) throw new ApiError("invalidResponse");
       return value as unknown as StagedPluginPackage;
     },
-    async admin(signal) { return parseAdminSnapshot(await jsonRequest("/api/admin", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },
+    async admin(signal, section) { const query = section ? `?section=${encodeURIComponent(section)}` : ""; return parseAdminSnapshot(await jsonRequest(`/api/admin${query}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },
     async adminGrant(action, signal) {
       const headers = auth(); headers["Content-Type"] = "application/json";
       const value = await jsonRequest("/api/admin/grant", { method: "POST", headers, body: JSON.stringify(action), ...(signal ? { signal } : {}) }, 4096);
