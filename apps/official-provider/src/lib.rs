@@ -468,6 +468,10 @@ mod speech_tests {
         ))
         .expect("real audio transcribes");
         assert!(!result.segments.is_empty(), "transcript must contain timed segments");
+        assert!(
+            !serde_json::to_string(&result).unwrap().contains('\u{fffd}'),
+            "transcript must not contain damaged UTF-8 replacement text"
+        );
     }
 
     #[test]
@@ -546,6 +550,10 @@ mod speech_tests {
         let result: into_markdown::TranscriptionResult =
             serde_json::from_str(&result.result_json).expect("transcription result is typed");
         assert!(!result.segments.is_empty(), "transcript must contain timed segments");
+        assert!(
+            !serde_json::to_string(&result).unwrap().contains('\u{fffd}'),
+            "transcript must not contain damaged UTF-8 replacement text"
+        );
     }
 
     fn link_runtime_tree(source: &Path, destination: &Path) {
