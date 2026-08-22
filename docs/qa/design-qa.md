@@ -39,11 +39,11 @@ Contact sheets live beside the source captures under `docs/qa/evidence/edge/`. S
 ## Interaction and accessibility review
 
 - Local validation, task failure, provider failure, plugin upload failure, and save confirmation are rendered beside the initiating control or object.
-- Result and administration dialogs move focus inside on open, close only the topmost layer on Escape, and restore focus to the trigger on close.
+- Result, capability-source, AI-service, local-extension, and speech-source dialogs share one lifecycle: focus moves inside on open, Tab and Shift+Tab remain in the topmost dialog, Escape closes only that layer, and close restores focus to the trigger.
 - Permanent deletion uses danger styling, names the affected object, and requires confirmation.
 - Terminal task state is expressed in user language; internal values such as `failed`, `succeeded`, `conflict`, and provider error codes are not appended to normal task rows.
 - Initial Preferences rendering uses a five-section skeleton and stable save area while data is fetched; a delayed response cannot overwrite a newer section request.
-- Pagination controls report the current range/page, expose disabled boundary states, and remain reachable on narrow viewports.
+- Pagination controls report the current range/page, expose disabled boundary states, and remain reachable on narrow viewports. If deletion or a diagnostic rerun removes the current last page, the visible list and page indicator clamp immediately to the last page that still exists instead of rendering an empty intermediate page.
 
 ## Design exploration comparison
 

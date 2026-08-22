@@ -1,7 +1,7 @@
 # Local test gates
 
 Date: 2026-08-23
-Branch head at focused rerun: `2dd29ac`
+Branch head at focused rerun: `dd3c6f1`
 
 ## Passing gates
 
@@ -16,6 +16,7 @@ Branch head at focused rerun: `2dd29ac`
 - `cargo test -p into-markdown-cli app::tests::parallel_batch_serializes_atomic_output_leases -- --exact --test-threads=1`: 1/1 passed. The test converts 24 real text inputs with eight workers into one output directory and asserts that all outputs exist without `transactionBusy`.
 - `cargo test --locked -p into-markdown-asr`: 26/26 library tests and the available 1/1 quality gate passed; the pinned-model quality test remained explicitly ignored by its test contract. The passing unit set includes incomplete trailing UTF-8, invalid provider bytes, and token bytes split inside UTF-8 recovery.
 - Console typecheck passed with Node 24.19.0 (the repository requests 24.13.0). The focused console shards passed: workbench 17/17, preview 4/4, history cleanup 1/1, history actions 1/1, and accessibility 4/4. Commit `1a18458` keeps the renamed workbench assertions in the intended shard.
+- After the final code self-review in `dd3c6f1`, the complete Web gate was rerun: 9/9 targets passed, the TypeScript build passed, and `//apps/cli:cli_test` passed with the regenerated embedded assets. The administration bundle now runs 15/15 tests, including deletion/rerun pagination clamping, legacy-context synchronization, nested Tab/Shift+Tab focus containment, numeric preference validation, and focus restoration.
 
 Core-only plugin lifecycle evidence is stored separately under `docs/qa/evidence/runtime/`.
 

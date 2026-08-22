@@ -97,6 +97,8 @@ Build under test: `target/debug/into-md` from `codex/admin-visual-pagination` un
 | Diagnostics | Run / retry | PENDING | Needs visible execution with both local and permitted-network states. |
 | Diagnostics | Details expand/collapse | PENDING | Needs visible operation trace. |
 
+Supporting regression evidence at `dd3c6f1` does not change any pending Edge row: 15/15 administration tests cover invalid numeric feedback beside its input, save blocking, legacy source-context changes, nested dialog focus containment, and page clamping after a diagnostic rerun removes the former last page.
+
 ## Responsive and installed-artifact acceptance
 
 | Requirement | Result | Evidence / next condition |
