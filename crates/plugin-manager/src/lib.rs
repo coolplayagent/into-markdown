@@ -356,7 +356,7 @@ impl PreparedProcessPlugin {
         into_markdown_process_plugin::PluginExecution,
         into_markdown_process_plugin::PluginError,
     > {
-        into_markdown_process_plugin::ProcessPlugin::new(
+        into_markdown_process_plugin::ProcessPlugin::from_manager_verified_private_snapshot(
             self.snapshot.authority.clone(),
             self.policy.clone(),
         )?
@@ -375,7 +375,7 @@ impl PreparedProcessPlugin {
         into_markdown_process_plugin::RawPluginExecution,
         into_markdown_process_plugin::PluginError,
     > {
-        into_markdown_process_plugin::ProcessPlugin::new(
+        into_markdown_process_plugin::ProcessPlugin::from_manager_verified_private_snapshot(
             self.snapshot.authority.clone(),
             self.policy.clone(),
         )?

@@ -4,6 +4,7 @@ import { Window } from "happy-dom";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "../src/app";
+import { friendlyError } from "../src/admin-page";
 import { ApiError, createApiClient, parseAdminSnapshot } from "../src/api";
 import type { AdminAction, AdminSnapshot, ApiClient } from "../src/api";
 
@@ -99,6 +100,10 @@ test("admin DTO is bounded and never needs credential values", () => {
     profiles: [{ ...snapshot.profiles[0]!, scope: "effective" }],
   };
   assert.equal(parseAdminSnapshot(readOnly).configurationReadOnly, true);
+  assert.doesNotThrow(() => parseAdminSnapshot({
+    ...snapshot,
+    capabilities: snapshot.capabilities.map((item) => item.id === "transcription" ? { ...item, status: "disabled", localStatus: "disabled" } : item),
+  }));
   for (const mutation of [
     { ...readOnly, providers: snapshot.providers },
     { ...readOnly, plugins: snapshot.plugins },
@@ -128,6 +133,23 @@ test("admin API uses the authenticated same-origin contract and stable error cod
   assert.deepEqual(calls[0]![1]?.headers, { "X-Into-Md-Session": token });
   const denied = createApiClient(token, async () => new Response('{"schemaVersion":1,"code":"networkAuthorizationRequired"}', { status: 403, headers: { "content-type": "application/json" } }));
   await assert.rejects(denied.adminAction({ schemaVersion: 1, action: "provider.test" }), (error: unknown) => error instanceof ApiError && error.code === "networkAuthorizationRequired");
+});
+
+test("known administration failures explain the next action without a generic incomplete message", () => {
+  const codes = [
+    "requestFailed", "resourceLimit", "transactionIndeterminate", "notFound", "io", "conflict",
+    "hashMismatch", "signature", "componentUnavailable", "invalidPackage", "invalidPluginUrl",
+    "networkDenied", "dns", "connect", "tls", "invalidHttp", "networkUnavailable", "pluginDownload",
+    "storeChanged", "plaintextSecretRejected", "adminConfigContextReadOnly",
+  ];
+  for (const code of codes) {
+    const message = friendlyError(code, "zh-CN");
+    assert.equal(message.includes("操作未完成"), false, `${code} used the old generic message`);
+    assert.ok(message.length >= 12, `${code} did not explain a recovery action`);
+  }
+  assert.match(friendlyError("signature", "zh-CN"), /受信任来源/);
+  assert.match(friendlyError("resourceLimit", "zh-CN"), /磁盘或内存/);
+  assert.match(friendlyError("connect", "zh-CN"), /地址、端口和服务状态/);
 });
 
 test("plugin picker uploads the selected package through the authenticated staging endpoint", async () => {
@@ -172,7 +194,11 @@ test("administration pages are accessible, responsive, recoverable and require o
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingOcr) }));
   await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
   const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
-  assert.equal(installButton.disabled, false); installButton.click(); installButton.click(); await waitFor(() => actions.length === 1);
+  assert.equal(installButton.disabled, false); installButton.click();
+  await waitFor(() => window.document.body.textContent.includes("Choose how to install"));
+  assert.equal(actions.length, 0);
+  const onlineButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install the official plugin online")!;
+  onlineButton.click(); onlineButton.click(); await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, true);
   assert.equal(actions[0]!.authorizeDangerous, true);
   assert.equal(window.document.body.textContent.includes("manifest"), false);
@@ -182,6 +208,140 @@ test("administration pages are accessible, responsive, recoverable and require o
   assert.equal(window.document.querySelector("main") !== null, true);
 });
 
+test("capability install chooser keeps local packages offline", async () => {
+  const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
+  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
+  const client = api(actions, missingOcr);
+  client.stagePluginPackage = async (file) => ({ schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: file.name, byteLen: file.size });
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
+  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
+  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
+  await waitFor(() => window.document.body.textContent.includes("Install a plugin from this computer"));
+  const fileInput = window.document.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "ocr.imp", { type: "application/octet-stream" })], configurable: true });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")?.disabled === false);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")!.click();
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.action, "plugin.install");
+  assert.equal(actions[0]!.target, "ocr");
+  assert.equal(actions[0]!.source, "/private/plugin-staging/upload.imp");
+  assert.equal(actions[0]!.authorizeDangerous, true);
+  assert.equal(actions[0]!.authorizeNetwork, false);
+});
+
+test("capability install chooser locks before staging a large local package", async () => {
+  const window = install("/admin/capabilities"); const actions: AdminAction[] = []; let stageCalls = 0;
+  let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number }) => void;
+  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
+  const client = api(actions, missingOcr);
+  client.stagePluginPackage = async () => { stageCalls += 1; return new Promise((resolve) => { resolveStage = resolve; }); };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
+  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
+  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
+  await waitFor(() => window.document.body.textContent.includes("Install a plugin from this computer"));
+  const dialog = window.document.querySelector<HTMLElement>(".capability-install-dialog")!;
+  const fileInput = dialog.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "large.imp", { type: "application/octet-stream" })], configurable: true });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => [...dialog.querySelectorAll("button")].some((button) => button.textContent === "Install selected plugin" && !button.disabled));
+  const installButton = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")!;
+  installButton.click(); installButton.click();
+  await waitFor(() => stageCalls === 1 && dialog.textContent?.includes("Reading and verifying the plugin package") === true);
+  assert.equal(installButton.disabled, true);
+  assert.equal(dialog.querySelectorAll(".plugin-install-status").length, 1);
+  assert.equal(dialog.getAttribute("aria-busy"), "true");
+  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3 });
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.authorizeNetwork, false);
+});
+
+test("local plugin installation locks its stable action slot before a large package is staged", async () => {
+  const window = install("/admin/plugins"); const actions: AdminAction[] = [];
+  const client = api(actions); let stageCalls = 0; let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number }) => void;
+  client.stagePluginPackage = async () => { stageCalls += 1; return new Promise((resolve) => { resolveStage = resolve; }); };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install extension")!.click();
+  await waitFor(() => window.document.querySelector(".plugin-install-dialog") !== null);
+  const installer = window.document.querySelector<HTMLElement>(".plugin-install-dialog")!;
+  const fileInput = installer.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "large.imp", { type: "application/octet-stream" })], configurable: true });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => [...installer.querySelectorAll("button")].some((button) => button.textContent === "Install" && !button.disabled));
+  const installButton = [...installer.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
+  installButton.click(); installButton.click();
+  await waitFor(() => stageCalls === 1 && installer.textContent?.includes("Reading and verifying the plugin package") === true);
+  assert.equal(installButton.disabled, true);
+  assert.equal(installer.querySelectorAll(".plugin-install-status").length, 1);
+  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3 });
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.authorizeNetwork, false);
+  await waitFor(() => window.document.querySelector(".source-manager-feedback")?.textContent === "Extension installed");
+  assert.equal(window.document.querySelectorAll(".source-manager-feedback").length, 1);
+});
+
+test("local plugin installation reports backend rejection inside the unchanged installer", async () => {
+  const window = install("/admin/plugins");
+  const client = api();
+  client.stagePluginPackage = async () => ({ schemaVersion: 1, source: "/private/plugin-staging/bad.imp", filename: "bad.imp", byteLen: 3 });
+  client.adminAction = async () => { throw new ApiError("signature"); };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install extension")!.click();
+  await waitFor(() => window.document.querySelector(".plugin-install-dialog") !== null);
+  const installer = window.document.querySelector<HTMLElement>(".plugin-install-dialog")!;
+  const fileInput = installer.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "bad.imp", { type: "application/octet-stream" })], configurable: true });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => [...installer.querySelectorAll("button")].some((button) => button.textContent === "Install" && !button.disabled));
+  [...installer.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
+  await waitFor(() => installer.textContent?.includes("trusted source") === true);
+  assert.equal(window.document.querySelector(".plugin-install-dialog"), installer);
+  assert.equal(installer.querySelectorAll(".plugin-install-status").length, 1);
+});
+
+test("capability verification keeps progress and cancellation in one stable action slot", async () => {
+  const window = install("/admin/capabilities"); let cancelled = false;
+  const client = api();
+  const check = (status: "running" | "cancelled") => ({ schemaVersion: 1 as const, id: "check-1", capability: "ocr", capabilityName: "Image OCR", plugin: "official.ocr.ppocrv6", pluginName: "Local OCR", status, stage: "package" as const, progress: status === "running" ? 10 : 0 });
+  client.startCapabilityCheck = async () => check("running");
+  client.capabilityCheck = async () => check(cancelled ? "cancelled" : "running");
+  client.cancelCapabilityCheck = async () => { cancelled = true; return check("cancelled"); };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Image OCR"));
+  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
+  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Verify")!.click();
+  await waitFor(() => ocrCard.querySelector(".capability-verify button")?.textContent?.includes("10% · Cancel") === true);
+  assert.equal(ocrCard.querySelectorAll(".capability-verify button").length, 1);
+  assert.equal(ocrCard.querySelector(".capability-feedback"), null);
+  (ocrCard.querySelector(".capability-verify button") as HTMLButtonElement).click();
+  await waitFor(() => cancelled && ocrCard.querySelector(".capability-verify button")?.textContent === "Verify");
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(ocrCard.querySelectorAll(".capability-verify button").length, 1);
+});
+
+test("capability verification confirms success without adding or moving controls", async () => {
+  const window = install("/admin/capabilities");
+  const client = api();
+  const running = { schemaVersion: 1 as const, id: "check-2", capability: "ocr", capabilityName: "Image OCR", plugin: "official.ocr.ppocrv6", pluginName: "Local OCR", status: "running" as const, stage: "package" as const, progress: 10 };
+  const completed = { ...running, status: "completed" as const, stage: "completed" as const, progress: 100 };
+  client.startCapabilityCheck = async () => running;
+  client.capabilityCheck = async () => completed;
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Image OCR"));
+  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
+  const slot = ocrCard.querySelector<HTMLElement>(".capability-verify")!;
+  const button = slot.querySelector<HTMLButtonElement>("button")!;
+  button.click();
+  await waitFor(() => button.textContent === "Verified");
+  assert.equal(slot.querySelectorAll("button").length, 1);
+  assert.equal(slot.querySelectorAll("p").length, 0);
+  assert.equal(button.dataset.state, "success");
+});
+
 test("failed initial load exposes an alert and retry recovery", async () => {
   const window = install("/admin/doctor"); let calls = 0;
   const failed = api(); failed.admin = async () => { calls += 1; if (calls === 1) throw new ApiError("unreachable"); return snapshot; };
@@ -189,6 +349,53 @@ test("failed initial load exposes an alert and retry recovery", async () => {
   await waitFor(() => window.document.querySelector('[role="alert"]') !== null);
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Reload")!.click();
   await waitFor(() => window.document.body.textContent.includes("Diagnostics")); assert.equal(calls, 2);
+});
+
+test("a busy administration refresh waits quietly and retries without a global error", async () => {
+  const window = install("/admin/capabilities"); let calls = 0;
+  const client = api();
+  client.admin = async () => { calls += 1; if (calls === 1) throw new ApiError("adminBusy"); return snapshot; };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(window.document.querySelector('[role="alert"]'), null);
+  assert.equal(window.document.body.textContent.includes("operation did not complete"), false);
+  await waitFor(() => window.document.body.textContent.includes("Image OCR") && calls === 2, "busy administration refresh did not recover");
+  assert.equal(window.document.querySelector('[role="alert"]'), null);
+});
+
+test("a successful action waits for a busy post-action refresh without reporting failure", async () => {
+  const window = install("/admin/plugins"); let adminCalls = 0;
+  const actions: AdminAction[] = []; const client = api(actions);
+  client.admin = async () => { adminCalls += 1; if (adminCalls === 2) throw new ApiError("adminBusy"); return snapshot; };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);
+  const dialog = window.document.querySelector<HTMLElement>('[role="dialog"]')!;
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Verify")!.click();
+  await waitFor(() => dialog.textContent?.includes("Verification completed") === true && adminCalls >= 3, "post-action refresh did not recover");
+  assert.equal(dialog.textContent?.includes("operation did not complete"), false);
+  assert.equal(actions[0]?.action, "plugin.verify");
+});
+
+test("navigating while diagnostics run does not issue a conflicting refresh or disturb the next page", async () => {
+  const window = install("/admin/doctor");
+  const sections: Array<string | undefined> = [];
+  let resolveAction!: (value: {}) => void;
+  let actionStarted = false;
+  const client = api();
+  client.admin = async (_signal, section) => { sections.push(section); return snapshot; };
+  client.adminAction = async () => { actionStarted = true; return new Promise((resolve) => { resolveAction = resolve; }); };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Check this computer"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Check this computer")!.click();
+  await waitFor(() => actionStarted);
+  [...window.document.querySelectorAll<HTMLAnchorElement>(".admin-tabs a")].find((link) => link.textContent === "Capabilities & sources")!.click();
+  await waitFor(() => window.location.pathname === "/admin/capabilities");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(sections, ["doctor"]);
+  assert.equal(window.document.querySelector('[role="alert"]'), null);
+  resolveAction({});
+  await waitFor(() => sections.includes("capabilities") && window.document.body.textContent.includes("Image OCR"), "capability page did not refresh after diagnostics");
+  assert.equal(window.document.querySelector('[role="alert"]'), null);
 });
 
 test("preferences render a stable five-section shell while the admin snapshot is delayed", async () => {
@@ -204,6 +411,8 @@ test("preferences render a stable five-section shell while the admin snapshot is
   resolveAdmin(snapshot);
   await waitFor(() => window.document.body.textContent.includes("Concurrent tasks"));
   assert.equal(window.document.querySelectorAll(".preference-group").length, 5);
+  assert.equal(window.document.body.textContent.includes("Block private networks"), false);
+  assert.equal(window.document.body.textContent.includes("Allowed hosts"), true);
 });
 
 test("legacy administration URLs redirect into the matching capability context", async () => {
@@ -220,7 +429,7 @@ test("legacy administration URLs redirect into the matching capability context",
   assert.equal(window.document.querySelector('[role="dialog"]')?.textContent?.includes("AI services"), false);
 });
 
-test("nested administration dialogs close one layer at a time and restore focus", async () => {
+test("administration source manager swaps list and editor without stacking overlays", async () => {
   const window = install("/admin/capabilities");
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api() }));
   await waitFor(() => [...window.document.querySelectorAll("button")].some((button) => button.textContent === "AI services"), "source manager trigger did not render");
@@ -229,16 +438,18 @@ test("nested administration dialogs close one layer at a time and restore focus"
   await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1, "source manager dialog did not open");
   const providerTrigger = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"] button')].find((button) => button.textContent === "Connect AI service")!;
   providerTrigger.focus(); providerTrigger.click();
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2, "nested provider dialog did not open");
-  const nestedDialog = [...window.document.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1)!;
-  const nestedFocusable = [...nestedDialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
-  const firstNested = nestedFocusable[0]!; const lastNested = nestedFocusable[nestedFocusable.length - 1]!;
-  lastNested.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-  assert.equal(window.document.activeElement, firstNested);
-  firstNested.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
-  assert.equal(window.document.activeElement, lastNested);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2 && window.document.querySelector(".admin-inline-editor"), "provider editor did not replace the list view");
+  assert.equal(window.document.querySelectorAll(".sheet-backdrop").length, 1);
+  assert.equal(window.document.querySelectorAll(".source-manager-dialog > .admin-section-stack > .admin-grid .admin-entity-card").length, 0);
+  const editor = window.document.querySelector<HTMLElement>(".admin-inline-editor")!;
+  const editorFocusable = [...editor.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
+  const firstEditor = editorFocusable[0]!; const lastEditor = editorFocusable[editorFocusable.length - 1]!;
+  lastEditor.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  assert.equal(window.document.activeElement, firstEditor);
+  firstEditor.focus(); window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+  assert.equal(window.document.activeElement, lastEditor);
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.activeElement === providerTrigger, "nested dialog did not close and restore its trigger");
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.activeElement?.textContent === "Connect AI service", "editor did not return to the list and restore the matching action");
   window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 0 && window.document.activeElement === sourceTrigger, "source dialog did not close and restore its trigger");
 });
@@ -257,6 +468,23 @@ test("diagnostics group failures by remediation target rather than check id", as
   assert.equal(speech.textContent?.includes("Speaker identification"), true);
 });
 
+test("a missing Core PDF runtime stays a Core repair issue without internal setup instructions", async () => {
+  const window = install("/admin/doctor");
+  const missingPdfium: AdminSnapshot = { ...snapshot, doctor: [
+    { id: "runtime.pdfium", status: "missing", detail: "install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file" },
+    { id: "providerEnvironment:qa", status: "missing", detail: "QA_SERVICE_API_KEY" },
+  ] };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api([], missingPdfium) }));
+  await waitFor(() => window.document.body.textContent.includes("current Core installation is incomplete"));
+  const card = window.document.querySelector<HTMLElement>(".doctor-card")!;
+  assert.equal(card.textContent?.includes("runtime.pdfium"), false);
+  assert.equal(card.textContent?.includes("PDFIUM_LIBRARY"), false);
+  assert.equal(card.textContent?.includes("Open preferences"), false);
+  assert.equal(card.textContent?.includes("Reinstall or repair into-md Core"), true);
+  assert.equal(window.document.body.textContent.includes("providerEnvironment:qa"), false);
+  assert.equal(window.document.body.textContent.includes("QA_SERVICE_API_KEY"), false);
+});
+
 test("diagnostics clamp pagination after a rerun removes the last page", async () => {
   const window = install("/admin/doctor");
   let current: AdminSnapshot = { ...snapshot, doctor: Array.from({ length: 6 }, (_, index) => ({ id: `check-${index}`, status: "failed", detail: `failure ${index}` })) };
@@ -267,7 +495,7 @@ test("diagnostics clamp pagination after a rerun removes the last page", async (
   await waitFor(() => window.document.body.textContent.includes("6 need attention"));
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Next")!.click();
   await waitFor(() => window.document.body.textContent.includes("failure 5"));
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Run again")!.click();
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Check this computer")!.click();
   await waitFor(() => window.document.body.textContent.includes("1 need attention") && window.document.body.textContent.includes("failure 0"));
   assert.equal(window.document.querySelector(".admin-pagination"), null);
 });
@@ -284,6 +512,24 @@ test("preferences keep invalid numeric feedback beside its control and block sav
   assert.match(jobs.closest(".preference-control")?.textContent ?? "", /whole number from 1 to 64/);
   assert.equal([...window.document.querySelectorAll("button")].find((button) => button.textContent === "Save")?.disabled, true);
   assert.equal(actions.length, 0);
+});
+
+test("OCR language preferences expose combinable choices instead of a free-form code field", async () => {
+  const window = install("/admin/configuration"); const actions: AdminAction[] = [];
+  const combined: AdminSnapshot = { ...snapshot, configuration: { ...snapshot.configuration, conversion: { ocr: { languages: ["zh-Hans", "en"] } } } };
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, combined) }));
+  await waitFor(() => window.document.body.textContent.includes("OCR languages"));
+  const choices = window.document.querySelector<HTMLSelectElement>('[aria-label="OCR language options"]')!;
+  assert.equal(choices.options.length, 8);
+  assert.equal(choices.value, "zh-Hans,en");
+  choices.selectedIndex = 1; assert.equal(choices.value, "zh-Hans,en");
+  choices.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => window.document.body.textContent.includes("1 unsaved change"));
+  assert.equal(window.document.querySelector<HTMLSelectElement>('[aria-label="OCR language options"]')?.value, "zh-Hans,en");
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Save")!.click();
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.target, "conversion.ocr.languages");
+  assert.equal(actions[0]!.value, '["zh-Hans","en"]');
 });
 
 test("provider failures explain the cause beside the provider that triggered them", async () => {
@@ -320,7 +566,6 @@ test("provider tests use each persisted network policy and ignore another dialog
   await waitFor(() => window.document.body.textContent.includes("alpha.example"));
   const cards = [...window.document.querySelectorAll<HTMLElement>(".admin-entity-card")];
   const alpha = cards.find((card) => card.textContent?.includes("alpha.example"))!;
-  const beta = cards.find((card) => card.textContent?.includes("127.0.0.1"))!;
 
   [...alpha.querySelectorAll("button")].find((button) => button.textContent === "Edit")!.click();
   await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 2);
@@ -330,9 +575,10 @@ test("provider tests use each persisted network policy and ignore another dialog
   hostInput.value = "draft-only.example";
   hostInput.dispatchEvent(new window.Event("input", { bubbles: true }));
   [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click();
-  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1);
+  await waitFor(() => window.document.querySelectorAll('[role="dialog"]').length === 1 && window.document.querySelectorAll(".source-manager-dialog .admin-entity-card").length === 2);
 
-  [...beta.querySelectorAll("button")].find((button) => button.textContent === "Test connection")!.click();
+  const refreshedBeta = [...window.document.querySelectorAll<HTMLElement>(".source-manager-dialog .admin-entity-card")].find((card) => card.textContent?.includes("127.0.0.1"))!;
+  [...refreshedBeta.querySelectorAll("button")].find((button) => button.textContent === "Test connection")!.click();
   await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.action, "provider.test");
   assert.equal(actions[0]!.scope, "project");

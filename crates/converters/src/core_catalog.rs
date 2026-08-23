@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
     component: "pdfium",
-    install_hint: "install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file",
+    install_hint: "repair the installed into-md Core package, then run diagnostics again",
 };
 pub(crate) const LEGACY_OFFICE: RuntimeRequirement = RuntimeRequirement {
     component: "official.legacy-office.libreoffice",

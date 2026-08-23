@@ -1,7 +1,7 @@
 # Local test gates
 
 Date: 2026-08-23
-Branch head at focused rerun: `dd3c6f1`
+Branch under final review: the final `codex/admin-visual-pagination` PR head, including the Web, cold-start and evidence patch described below.
 
 ## Passing gates
 
@@ -16,7 +16,12 @@ Branch head at focused rerun: `dd3c6f1`
 - `cargo test -p into-markdown-cli app::tests::parallel_batch_serializes_atomic_output_leases -- --exact --test-threads=1`: 1/1 passed. The test converts 24 real text inputs with eight workers into one output directory and asserts that all outputs exist without `transactionBusy`.
 - `cargo test --locked -p into-markdown-asr`: 26/26 library tests and the available 1/1 quality gate passed; the pinned-model quality test remained explicitly ignored by its test contract. The passing unit set includes incomplete trailing UTF-8, invalid provider bytes, and token bytes split inside UTF-8 recovery.
 - Console typecheck passed with Node 24.19.0 (the repository requests 24.13.0). The focused console shards passed: workbench 17/17, preview 4/4, history cleanup 1/1, history actions 1/1, and accessibility 4/4. Commit `1a18458` keeps the renamed workbench assertions in the intended shard.
-- After the final code self-review in `dd3c6f1`, the complete Web gate was rerun: 9/9 targets passed, the TypeScript build passed, and `//apps/cli:cli_test` passed with the regenerated embedded assets. The administration bundle now runs 15/15 tests, including deletion/rerun pagination clamping, legacy-context synchronization, nested Tab/Shift+Tab focus containment, numeric preference validation, and focus restoration.
+- After the final code self-review, the complete Web gate was rerun: 9/9 targets passed, the TypeScript build passed, and regenerated assets matched the embedded release manifest. The administration bundle now runs 27/27 tests, including local install failure/success feedback, fixed verification and save slots, curated OCR language serialization, deletion/rerun pagination clamping, legacy-context synchronization, numeric preference validation, focus restoration, and the Core-only PDF repair contract.
+- After the 1024×768 Edge pass found a clipped capability action, the responsive card was stacked at the 70rem breakpoint and the final checked-in console assets were regenerated. The combined Web/CLI gate then passed 10/10 targets, `cargo fmt --all -- --check` and `git diff --check` passed, and the release-style package binary hashed to `20d1fd6f151258b61b4e487d024eeefd968074e6daf24cbc8ba758283bc5d808`.
+- A release-style package assembled with the pinned PDFium runtime passed `runtime.pdfium` deep diagnostics and converted `fixtures/small/pdf/titled-table.pdf` into a 127-byte non-empty Markdown artifact preserving its title and table. Microsoft Edge loaded that same package and listed PDF among ten healthy checks; no PDF plugin or Preferences repair action was presented.
+- The final responsive package repeated that black-box Core check: `runtime.pdfium` was `ok`, the same real PDF again produced 127 bytes, and the real 9.059-second M4A produced a non-empty timed transcript in 4.16 seconds with the configured local media plugin.
+- The optimized release binary completed a real 60.008-second two-speaker conversation with diarization in 13.35 seconds wall time and 793,247,744 bytes peak RSS. The final Edge task for the same 386,156-byte source completed in 14,501 ms with both speaker labels, 15 monotonic timestamp ranges and empty diagnostics.
+- `//crates/asr:asr_test`, `//crates/plugin-manager:plugin_manager_test`, `//crates/plugin-manager:plugin_manager_process_e2e_test`, `//crates/process-plugin:process_plugin_test`, and `//crates/process-plugin:process_plugin_integration_test` all passed after removing the duplicate manager-to-runtime copy. The process-manager E2E uses a zero dispatch temporary-byte budget, so the former duplicate runtime staging would fail the regression.
 
 Core-only plugin lifecycle evidence is stored separately under `docs/qa/evidence/runtime/`.
 
@@ -34,7 +39,7 @@ Core-only plugin lifecycle evidence is stored separately under `docs/qa/evidence
 
 1. `//apps/cli:exit_contract_test`: 13/15 passed; the provider double-authorization and invalid-notebook tests expected exit 5 but received exit 2. The exact same two assertions were reproduced from an isolated detached `origin/main` (`120853c`) worktree. This is a confirmed pre-existing baseline failure, not introduced by PR 2.
 2. `//tools/installed-smoke:installed_smoke_test`: two timing-sensitive process tests failed in the parallel run, then the focused target passed 21/21.
-3. `//tools/license-check:license_check` and `//tools/license-check:license_check_unit_test`: the repository reports stale Cargo normal-runtime authorities and nondeterministic/stale npm SPDX authority. PR 2 does not modify `Cargo.lock`, `apps/official-provider/Cargo.toml`, `crates/api/Cargo.toml`, `crates/ocr/Cargo.toml`, or `tools/license-check`; these are recorded as pre-existing repository audit failures and are not suppressed.
+3. `//tools/license-check:license_check` and `//tools/license-check:license_check_unit_test`: the repository still reports stale Cargo normal-runtime authorities for `Cargo.lock`, `apps/official-provider/Cargo.toml`, `crates/api/Cargo.toml`, and `crates/ocr/Cargo.toml`. This patch updates only the reviewed ASR decoding authority and regenerated npm Web authority; their two focused rejection tests pass. The unrelated Cargo authority failures remain fail-closed and are not suppressed.
 
 These distinctions do not waive the product acceptance matrix: real remote routes, remaining Edge controls, final installed-artifact checks and exact final screenshots remain explicitly pending or blocked in `product-control-matrix.md`.
 

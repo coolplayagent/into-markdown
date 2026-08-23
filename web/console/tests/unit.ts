@@ -617,6 +617,8 @@ test("immediate cleanup requires irreversible confirmation and reports reclaimed
   window2.document.querySelector<HTMLButtonElement>('button[aria-label="Clean up now"]')!.click();
   await waitFor(() => cleanups === 1 && window2.document.body.textContent.includes("1.5 MiB"));
   assert.ok(warning.includes("cannot be undone"));
+  assert.ok(window2.document.querySelector(".history-rail .history-rail-feedback")?.textContent.includes("1.5 MiB"));
+  assert.equal(window2.document.querySelector(".upload-card .picker-feedback"), null);
   const axe = (await import("axe-core")).default;
   assert.deepEqual((await axe.run(window2.document)).violations.map((violation) => violation.id), []);
 });
@@ -834,7 +836,8 @@ test("remote OCR requires nearby network and provider authorization without enab
 
 test("meeting recording is an independent route and media never enters the document workbench", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
-  const uploads: Array<[string, boolean]> = [];
+  const uploads: Array<[string, boolean]> = []; let cancellations = 0; let cancelRequested = false;
+  let emitTaskEvent: Parameters<ApiClient["watchTask"]>[1] | undefined;
   const api: ApiClient = {
     ...availableApi,
     async capabilitySnapshot() { return capabilitySnapshot(true); },
@@ -843,7 +846,12 @@ test("meeting recording is an independent route and media never enters the docum
       uploads.push([file.name, options.diarize]);
       return { ...task("running", "b".repeat(32)), workflow: "meetingTranscript" };
     },
-    async watchTask() {},
+    async cancel(id) { cancellations += 1; cancelRequested = true; return { ...task("running", id), workflow: "meetingTranscript" }; },
+    async getTask(id) { return { ...task(uploads.length > 1 ? "failed" : cancelRequested ? "cancelled" : "running", id), workflow: "meetingTranscript" }; },
+    async watchTask(_id, onEvent, signal) {
+      emitTaskEvent = onEvent;
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    },
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitForText(window, "Add documents");
@@ -859,14 +867,41 @@ test("meeting recording is an independent route and media never enters the docum
   assert.equal(window.document.getElementById("upload-zone"), null);
   assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent?.includes("Start recording")));
   const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
-  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.m4a", { type: "audio/mp4" })] });
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.m4a", { type: "audio/mp4" })], configurable: true });
   input.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitForText(window, "meeting.m4a");
+  const stableActionPanel = window.document.querySelector(".transcript-action-panel");
+  const speechCapabilityStrip = window.document.querySelector(".speech-capability-strip");
+  assert.ok(speechCapabilityStrip?.closest(".transcript-control-column"));
+  assert.ok(stableActionPanel?.parentElement?.classList.contains("transcript-control-column"));
+  assert.equal(stableActionPanel?.closest(".transcript-card"), null);
   [...window.document.querySelectorAll("button")]
     .find((button) => button.textContent?.includes("Create transcript"))!
     .click();
   await waitFor(() => uploads.length === 1);
   assert.deepEqual(uploads, [["meeting.m4a", true]]);
+  await waitForText(window, "Cancel transcription");
+  assert.equal(window.document.querySelector(".transcript-action-panel"), stableActionPanel);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Cancel transcription")!.click();
+  await waitFor(() => cancellations === 1 && window.document.body.textContent.includes("Cancelling"));
+  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Cancelling" && button.disabled));
+  emitTaskEvent?.({ schemaVersion: 1, sequence: 1, taskId: "b".repeat(32), kind: "progress", status: "cancelled",
+    progressMillionths: 250_000, terminal: true, execution: { stage: "completed", basisPoints: 2_500,
+      completedUnits: 1, totalUnits: 4, message: null } });
+  await waitForText(window, "Cancelled");
+  assert.equal(window.document.querySelector(".transcript-action-panel"), stableActionPanel);
+  await waitForText(window, "Task details");
+  assert.ok(stableActionPanel?.textContent?.includes("Task details"));
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "another.webm", { type: "audio/webm" })], configurable: true });
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitForText(window, "another.webm");
+  assert.ok(stableActionPanel?.textContent?.includes("Create transcript"));
+  assert.equal(stableActionPanel?.textContent?.includes("Transcribe again"), false);
+  [...stableActionPanel!.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
+  await waitFor(() => uploads.length === 2);
+  await waitForText(window, "Failed");
+  await waitFor(() => stableActionPanel?.textContent?.includes("Task details") === true);
+  assert.ok(stableActionPanel?.textContent?.includes("Task details"));
 });
 
 test("meeting page keeps recording primary and setup feedback beside transcript controls", async () => {
@@ -875,9 +910,10 @@ test("meeting page keeps recording primary and setup feedback beside transcript 
   await waitForText(window, "Record or import");
   await waitForText(window, "Prepare audio components");
   const start = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Start recording"));
-  const prepare = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Prepare audio components"));
+  const prepare = [...window.document.querySelectorAll<HTMLAnchorElement>("a")].find((link) => link.textContent?.includes("Prepare audio components"));
   assert.ok(start?.closest(".recorder-console"));
   assert.ok(prepare?.closest(".meeting-options"));
+  assert.equal(prepare?.getAttribute("href"), "/admin/capabilities");
   const source = window.document.querySelector<HTMLSelectElement>(".recording-source select")!;
   assert.deepEqual([...source.options].map((option) => option.textContent), [
     "Microphone only", "Computer audio only", "Microphone + computer audio",

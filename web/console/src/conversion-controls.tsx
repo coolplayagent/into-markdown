@@ -1,12 +1,8 @@
-import {
-  ArrowRight, CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText, X,
-} from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, CircleAlert, FileText, LoaderCircle, ScanText } from "lucide-react";
 import type { CapabilityAdmin, ComponentStatus, WorkbenchOptions } from "./api";
 import { useI18n } from "./i18n";
 import { RouteLink } from "./router";
 import { capabilitySourceLabel } from "./source-label";
-import { useDialogLifecycle } from "./dialog-lifecycle";
 
 function SegmentedControl<T extends string>({
   label, value, items, onChange,
@@ -19,7 +15,7 @@ function SegmentedControl<T extends string>({
   const { t } = useI18n();
   return <div className="segmented-field">
     <span>{label}</span>
-    <div className="segmented-control" role="group" aria-label={label}>
+    <div className={`segmented-control ${items.length === 2 ? "two" : ""}`} role="group" aria-label={label}>
       {items.map((item) => <button key={item.value} type="button" aria-pressed={value === item.value} onClick={() => onChange(item.value)}>
         {item.label}{item.recommended && <small>{t("recommended")}</small>}
       </button>)}
@@ -28,14 +24,8 @@ function SegmentedControl<T extends string>({
   </div>;
 }
 
-export function CapabilityStrip({ ocr, capability, onInstallOcr }: { ocr?: ComponentStatus | undefined; capability?: CapabilityAdmin | undefined; onInstallOcr(): Promise<void> }) {
+export function CapabilityStrip({ ocr, capability }: { ocr?: ComponentStatus | undefined; capability?: CapabilityAdmin | undefined }) {
   const { locale, t } = useI18n();
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState(false);
-  const install = async () => {
-    setInstalling(true); setError(false);
-    try { await onInstallOcr(); } catch { setError(true); } finally { setInstalling(false); }
-  };
   return <section className="capability-strip" aria-label={t("capabilities")}>
     <div className="capability-item">
       <span className="capability-icon"><FileText size={21} aria-hidden="true" /></span>
@@ -47,7 +37,7 @@ export function CapabilityStrip({ ocr, capability, onInstallOcr }: { ocr?: Compo
         ? <span className="checking"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("checkingSystem")}</span>
         : ocr.available
         ? <span className="ready"><CheckCircle2 size={14} aria-hidden="true" />{capabilitySourceLabel(capability?.currentSource, locale, ocr.detail)}</span>
-        : <><span className="needs-setup"><CircleAlert size={14} aria-hidden="true" />{t("sourceNeeded")}</span><span className="capability-actions"><button className="capability-install" type="button" disabled={installing} onClick={() => void install()}>{installing ? <LoaderCircle className="spin" size={14} /> : null}{t(installing ? "installingComponents" : "installLocalOcr")}</button><RouteLink href="/admin/capabilities" className="capability-install">{t("chooseAiService")}</RouteLink></span>{error && <small className="capability-error" role="status" aria-live="assertive">{t("installComponentsFailed")}</small>}</>}
+        : <><span className="needs-setup"><CircleAlert size={14} aria-hidden="true" />{t("sourceNeeded")}</span><RouteLink href="/admin/capabilities" className="capability-install">{locale === "zh-CN" ? "前往设置" : "Open settings"}</RouteLink></>}
       </div>
     </div>
   </section>;
@@ -61,36 +51,7 @@ export function OptionPanel({ value, onChange, disabled }: { value: WorkbenchOpt
     <fieldset className="quick-option-grid" disabled={disabled}>
       <div className="segmented-field"><span>{t("outputFormat")}</span><div className="segmented-control single" aria-label={t("outputFormat")}><button type="button" aria-pressed="true"><FileText size={16} aria-hidden="true" /> Markdown</button></div></div>
       <SegmentedControl label={t("recognitionMode")} value={value.ocrPolicy} onChange={(next) => patch("ocrPolicy", next)} items={[{ value: "auto", label: t("automatic"), description: t("ocrAutomaticHelp"), recommended: true }, { value: "always", label: t("forceRecognition"), description: t("ocrAlwaysHelp") }, { value: "off", label: t("off"), description: t("ocrOffHelp") }]} />
-      <SegmentedControl label={t("assetMode")} value={value.assetMode} onChange={(next) => patch("assetMode", next)} items={[{ value: "extract", label: t("separateAssets"), description: t("assetExtractHelp"), recommended: true }, { value: "embed", label: t("embedAssets"), description: t("assetEmbedHelp") }, { value: "omit", label: t("omitAssets"), description: t("assetOmitHelp") }]} />
+      <SegmentedControl label={t("assetMode")} value={value.assetMode === "embed" ? "extract" : value.assetMode} onChange={(next) => patch("assetMode", next)} items={[{ value: "extract", label: t("separateAssets"), description: t("assetExtractHelp"), recommended: true }, { value: "omit", label: t("omitAssets"), description: t("assetOmitHelp") }]} />
     </fieldset>
   </section>;
-}
-
-export function AudioSetupDialog({ status, open, onClose, onInstall }: { status?: ComponentStatus | undefined; open: boolean; onClose(): void; onInstall(): Promise<void> }) {
-  const { t } = useI18n();
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState(false);
-  const dialogRef = useDialogLifecycle<HTMLElement>(open, onClose);
-  if (!open) return null;
-  const install = async () => {
-    setInstalling(true); setError(false);
-    try { await onInstall(); onClose(); } catch { setError(true); } finally { setInstalling(false); }
-  };
-  return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-    <section ref={dialogRef} className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-setup-title">
-      <div className="sheet-heading"><div><p className="section-kicker">{t("audioTranscription")}</p><h2 id="audio-setup-title">{t("prepareAudioTitle")}</h2></div><button className="icon-button neutral" type="button" aria-label={t("close")} onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
-      <div className="source-choice-list">
-        <button className="source-choice" type="button" onClick={() => void install()} disabled={installing}>
-          <span><strong>{t("installLocalSpeech")}</strong><small>{t("runsOnThisDevice")}</small></span>
-          {installing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <ArrowRight size={18} aria-hidden="true" />}
-        </button>
-        <RouteLink className="source-choice" href="/admin/capabilities">
-          <span><strong>{t("chooseAiService")}</strong><small>{t("usesNetwork")}</small></span><ArrowRight size={18} aria-hidden="true" />
-        </RouteLink>
-      </div>
-      {status?.detail && <p className="runtime-detail"><CircleAlert size={16} aria-hidden="true" />{t("speechSourceUnavailable")}</p>}
-      {error && <p className="runtime-detail" role="status"><CircleAlert size={16} aria-hidden="true" />{t("installComponentsFailed")}</p>}
-      <div className="dialog-actions"><button className="secondary" type="button" onClick={onClose} disabled={installing}>{t("close")}</button></div>
-    </section>
-  </div>;
 }

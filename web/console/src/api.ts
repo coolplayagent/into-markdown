@@ -5,8 +5,8 @@ export const MAX_PREVIEW_BYTES = 256 * 1024;
 export interface ComponentStatus { available: boolean; code: string; detail: string }
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; imageOcr: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
-export interface CapabilityAdmin { id: "legacy-office" | "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
-export type CapabilityQuickStatus = CapabilityAdmin["status"] | "unknown" | "checking" | "disabled";
+export interface CapabilityAdmin { id: "legacy-office" | "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
+export type CapabilityQuickStatus = CapabilityAdmin["status"] | "unknown" | "checking";
 export interface CapabilityQuickView {
   id: CapabilityAdmin["id"]; name: string; status: CapabilityQuickStatus; localStatus: CapabilityQuickStatus;
   currentSource: string; currentSourceName: string; sources: string[]; version?: string; localVersion?: string;
@@ -121,7 +121,7 @@ function isFormatAdmin(value: unknown): value is FormatAdmin {
 }
 function isCapabilityAdmin(value: unknown): value is CapabilityAdmin {
   const sourceRef = (item: unknown) => item === "off" || typeof item === "string" && /^(plugin|provider):[A-Za-z0-9._-]+\/[a-z][a-z0-9-]{0,63}$/.test(item);
-  const status = (item: unknown) => ["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked"].includes(String(item));
+  const status = (item: unknown) => ["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked", "disabled"].includes(String(item));
   return isObject(value) && ["legacy-office", "ocr", "transcription", "diarization"].includes(String(value.id))
     && status(value.status) && status(value.localStatus)
     && sourceRef(value.currentSource) && stringList(value.sources, 64)

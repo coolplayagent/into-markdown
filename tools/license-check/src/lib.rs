@@ -697,7 +697,8 @@ struct AsrQualityModel {
     bytes: u64,
     sha256: String,
     runtime: String,
-    beam_size: u32,
+    decoding_strategy: String,
+    candidate_count: u32,
     maximum_threads: u16,
 }
 
@@ -1684,7 +1685,7 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
 fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
     validate_whisper_rs_patch(root, errors);
     const REVIEWED_AUTHORITY_SHA256: &str =
-        "83e6941eabdfbc3e6127c6fb50af80b6768f50dc0ad13e85739db78592cafab7";
+        "59d5ff5c604bc69681bbf024030b1c243a810d63397d61f448469af2568f2ef4";
     let authority_path = root.join("fixtures/asr-quality-authority.json");
     match fs::read(&authority_path) {
         Ok(bytes)
@@ -1699,13 +1700,14 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
             authority_path.display()
         )),
     }
-    if authority.schema_version != 2
+    if authority.schema_version != 3
         || authority.model.bundle != "whisper-small-multilingual"
         || authority.model.bytes != 487_601_967
         || authority.model.sha256
             != "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
         || authority.model.runtime != "whisper-rs 0.16.0 / bundled whisper.cpp CPU"
-        || authority.model.beam_size != 5
+        || authority.model.decoding_strategy != "greedy"
+        || authority.model.candidate_count != 1
         || authority.model.maximum_threads != 4
         || authority.normalization.zh
             != "Unicode alphanumeric code points after whitespace and punctuation removal"

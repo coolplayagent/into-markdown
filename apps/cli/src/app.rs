@@ -6487,7 +6487,7 @@ mod tests {
         let checks: serde_json::Value = serde_json::from_str(&doctor).unwrap();
         let checks = checks.as_array().unwrap();
         for (id, hint) in [
-            ("runtime.pdfium", "PDFIUM_LIBRARY"),
+            ("runtime.pdfium", "repair the installed into-md Core package"),
             ("runtime.ocr", "setup ocr"),
             ("runtime.legacy-office", "setup legacy-office"),
             ("runtime.asr", "setup media"),

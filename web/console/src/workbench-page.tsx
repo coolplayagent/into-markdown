@@ -46,6 +46,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [messageScope, setMessageScope] = useState<MessageScope>("source");
   const [dragging, setDragging] = useState(false);
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
+  const [historyFeedback, setHistoryFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
   const quickOcr = capabilities.capability("ocr");
   const ocrStatus: ComponentStatus | undefined = quickOcr ? { available: quickOcr.status === "ready", code: quickOcr.status, detail: quickOcr.currentSourceName } : undefined;
@@ -88,20 +89,14 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   useEffect(() => {
     const controller = new AbortController();
     void listAllTasks(api, controller.signal)
-      .then((tasks) => { setRecentTasks(tasks.filter((task) => task.workflow === "conversion")); })
+      .then((tasks) => { setRecentTasks(tasks.filter((task) => task.workflow === "conversion")); setHistoryFeedback(null); })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setMessageScope("source");
-          setMessage(t("loadTasksError"));
+          setHistoryFeedback({ kind: "error", message: t("loadTasksError") });
         }
       });
     return () => controller.abort();
   }, [api, batchFinished, t]);
-
-  const installOcr = useCallback(async () => {
-    await api.installCapability("ocr");
-    await capabilities.refresh();
-  }, [api, capabilities]);
 
   useEffect(() => {
     if (!batchId || uploading || navigatedBatch.current === batchId || entries.length === 0) return;
@@ -183,14 +178,14 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   const cleanup = async () => {
     if (!window.confirm(t("cleanupWarning"))) return;
+    setHistoryFeedback(null);
     try {
       const result = await api.cleanup();
       const tasks = await listAllTasks(api);
       setRecentTasks(tasks.filter((task) => task.workflow === "conversion"));
-      setMessageScope("source");
-      setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
+      setHistoryFeedback({ kind: "success", message: t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)) });
     } catch {
-      setMessageScope("source"); setMessage(t("loadTasksError"));
+      setHistoryFeedback({ kind: "error", message: t("loadTasksError") });
     }
   };
 
@@ -223,13 +218,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         </div>
       </section>
       <div className="control-column">
-        <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} onInstallOcr={installOcr} />
+        <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} />
         <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} />
         {remoteOcrSelected && options.ocrPolicy !== "off" && <label className="check grant remote-conversion-grant"><input type="checkbox" checked={options.networkMode === "unrestricted" && options.authorizeProvider} onChange={(event) => { const allowed = event.target.checked; setOptions((current) => ({ ...current, networkMode: allowed ? "unrestricted" : "restricted", authorizeProvider: allowed })); setMessage(""); }} /><span><strong>{t("authorizeRemoteConversion")}</strong><small>{t("authorizationNote")}</small></span></label>}
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
-    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} /></div>
+    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} feedback={historyFeedback} /></div>
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }

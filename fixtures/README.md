@@ -98,7 +98,7 @@ quality consumer. This corpus neither embeds the model nor implements recognitio
 ## ASR quality authority
 
 `asr-quality-authority.json` pins the exact Whisper small multilingual model, `whisper-rs` /
-whisper.cpp CPU runtime, beam width, thread ceiling, normalization rules, deterministic 10 dB SNR
+whisper.cpp CPU runtime, decoding strategy and candidate count, thread ceiling, normalization rules, deterministic 10 dB SNR
 noise generator, and the 15% clean / 25% noisy CER and WER limits. The ignored
 `//crates/asr:asr_quality_test` target exercises the production FFmpeg normalization and Whisper
 inference path, validates detected language, timestamps and confidence, and emits a stable sorted
