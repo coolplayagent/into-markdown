@@ -4,14 +4,14 @@ import {
 } from "lucide-react";
 import type { ApiClient, CapabilityAdmin, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
 import { ApiError, defaultWorkbenchOptions } from "./api";
-import { AdvancedSettings, CapabilityStrip, OptionPanel } from "./conversion-controls";
+import { CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
 import { HistoryPanel } from "./history-panel";
 import { useCapabilities } from "./capability-store";
 import {
-  SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName,
-  iconForFormat, supportsFileName,
+  SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName, listAllTasks,
+  executionStageLabel, iconForFormat, supportsFileName,
 } from "./task-ui";
 
 const MAX_BATCH_FILES = 100;
@@ -32,7 +32,7 @@ function entryKey(file: File): string {
 }
 
 export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const directory = useRef<HTMLInputElement>(null);
@@ -45,8 +45,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const [message, setMessage] = useState("");
   const [messageScope, setMessageScope] = useState<MessageScope>("source");
   const [dragging, setDragging] = useState(false);
-  const [advanced, setAdvanced] = useState(false);
   const [recentTasks, setRecentTasks] = useState<TaskRecord[]>([]);
+  const [historyFeedback, setHistoryFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | undefined>(initialTaskId);
   const quickOcr = capabilities.capability("ocr");
   const ocrStatus: ComponentStatus | undefined = quickOcr ? { available: quickOcr.status === "ready", code: quickOcr.status, detail: quickOcr.currentSourceName } : undefined;
@@ -88,21 +88,15 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   useEffect(() => {
     const controller = new AbortController();
-    void api.listTasks({ limit: 100 }, controller.signal)
-      .then((page) => { setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion")); })
+    void listAllTasks(api, controller.signal)
+      .then((tasks) => { setRecentTasks(tasks.filter((task) => task.workflow === "conversion")); setHistoryFeedback(null); })
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setMessageScope("source");
-          setMessage(t("loadTasksError"));
+          setHistoryFeedback({ kind: "error", message: t("loadTasksError") });
         }
       });
     return () => controller.abort();
   }, [api, batchFinished, t]);
-
-  const installOcr = useCallback(async () => {
-    await api.installCapability("ocr");
-    await capabilities.refresh();
-  }, [api, capabilities]);
 
   useEffect(() => {
     if (!batchId || uploading || navigatedBatch.current === batchId || entries.length === 0) return;
@@ -171,7 +165,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         const code = error instanceof ApiError ? error.code : "unreachable";
         setEntries((current) => current.map((item) => item.key === entry.key ? { ...item, error: code } : item));
         setMessageScope("source");
-        setMessage(`${t("uploadFailed")}: ${entry.file.name} (${code})`);
+        setMessage(`${entry.file.name}${locale === "zh-CN" ? "：" : ": "}${diagnosticLabel(code, t)}`);
       }
     }
     setUploading(false);
@@ -184,19 +178,19 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   const cleanup = async () => {
     if (!window.confirm(t("cleanupWarning"))) return;
+    setHistoryFeedback(null);
     try {
       const result = await api.cleanup();
-      const page = await api.listTasks({ limit: 100 });
-      setRecentTasks(page.tasks.filter((task) => task.workflow === "conversion"));
-      setMessageScope("source");
-      setMessage(t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)));
+      const tasks = await listAllTasks(api);
+      setRecentTasks(tasks.filter((task) => task.workflow === "conversion"));
+      setHistoryFeedback({ kind: "success", message: t("cleanupResult").replace("{tasks}", String(result.deletedTasks)).replace("{bytes}", (result.reclaimedBytes / 1048576).toFixed(1)) });
     } catch {
-      setMessageScope("source"); setMessage(t("loadTasksError"));
+      setHistoryFeedback({ kind: "error", message: t("loadTasksError") });
     }
   };
 
   return <section className="workbench-route" aria-labelledby="workbench-title">
-    <div className="page-heading compact-heading"><div><p className="eyebrow">LOCAL WORKBENCH</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div><p>{t("convertDocumentsIntro")}</p></div>
+    <div className="page-heading compact-heading"><div><p className="eyebrow">DOCUMENT TO MARKDOWN</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div></div>
     <div className="task-workspace"><div className="conversion-layout">
       <section className="card upload-card" aria-labelledby="upload-heading">
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
@@ -216,7 +210,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const percent = entry.task ? Math.round(entry.task.progressMillionths / 10_000) : 0;
               const failureCode = entry.error ?? entry.task?.diagnostics[0]?.code;
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
-              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${diagnosticLabel(failureCode ?? "conversionFailed", t)}` : entry.task ? `${t(entry.task.status)}${entry.stage ? ` · ${entry.stage}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
+              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${diagnosticLabel(failureCode ?? "conversionFailed", t)}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
               if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => setActiveTaskId(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;
               return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => setEntries((current) => current.filter((_, item) => item !== index))}><X size={17} aria-hidden="true" /></button>}</li>;
             })}</ul></div>
@@ -224,13 +218,13 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         </div>
       </section>
       <div className="control-column">
-        <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} onInstallOcr={installOcr} />
-        <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} onOpenAdvanced={() => setAdvanced(true)} />
+        <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} />
+        <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} />
+        {remoteOcrSelected && options.ocrPolicy !== "off" && <label className="check grant remote-conversion-grant"><input type="checkbox" checked={options.networkMode === "unrestricted" && options.authorizeProvider} onChange={(event) => { const allowed = event.target.checked; setOptions((current) => ({ ...current, networkMode: allowed ? "unrestricted" : "restricted", authorizeProvider: allowed })); setMessage(""); }} /><span><strong>{t("authorizeRemoteConversion")}</strong><small>{t("authorizationNote")}</small></span></label>}
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
-    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} /></div>
-    <AdvancedSettings value={options} onChange={setOptions} open={advanced} onClose={() => setAdvanced(false)} providerCapabilityActive={remoteOcrSelected && options.ocrPolicy !== "off"} />
+    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} feedback={historyFeedback} /></div>
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }

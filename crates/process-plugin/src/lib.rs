@@ -340,6 +340,13 @@ pub struct RawPluginExecution {
 pub struct ProcessPlugin {
     plugin: ValidatedPlugin,
     policy: RuntimePolicy,
+    runtime_staging: RuntimeStaging,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeStaging {
+    CopyBeforeLaunch,
+    ManagerVerifiedPrivateSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -360,7 +367,27 @@ impl ProcessPlugin {
     pub fn new(manifest: PluginManifest, policy: RuntimePolicy) -> Result<Self, PluginError> {
         validate_policy(&policy)?;
         let plugin = validate_manifest(manifest, policy.max_file_bytes)?;
-        Ok(Self { plugin, policy })
+        Ok(Self { plugin, policy, runtime_staging: RuntimeStaging::CopyBeforeLaunch })
+    }
+
+    /// Bind a plugin-manager-verified private runtime snapshot.
+    ///
+    /// The caller must retain exclusive ownership of the immutable snapshot for
+    /// this value's full lifetime. The executable is still revalidated before
+    /// every launch and every request receives a fresh writable working
+    /// directory and sandbox. This path avoids copying large, already-private
+    /// model runtimes a second time immediately before execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginErrorCode::Authority`] when manifest or policy authority is invalid.
+    pub fn from_manager_verified_private_snapshot(
+        manifest: PluginManifest,
+        policy: RuntimePolicy,
+    ) -> Result<Self, PluginError> {
+        validate_policy(&policy)?;
+        let plugin = validate_manifest(manifest, policy.max_file_bytes)?;
+        Ok(Self { plugin, policy, runtime_staging: RuntimeStaging::ManagerVerifiedPrivateSnapshot })
     }
 
     /// Execute one plugin request, forwarding progress and respecting cancellation/deadlines.
@@ -419,7 +446,14 @@ impl ProcessPlugin {
             context.reserve_memory(encoded_bound).map_err(|error| map_execution_error(&error))?;
         verify_executable(&self.plugin, self.policy.max_file_bytes)?;
         let directory_guard = sandbox::working_directory(&self.policy)?;
-        let staged = stage_plugin(&self.plugin, &self.policy, directory_guard, context)?;
+        let staged = match self.runtime_staging {
+            RuntimeStaging::CopyBeforeLaunch => {
+                stage_plugin(&self.plugin, &self.policy, directory_guard, context)?
+            }
+            RuntimeStaging::ManagerVerifiedPrivateSnapshot => {
+                stage_private_snapshot(&self.plugin, directory_guard, context)?
+            }
+        };
         verify_executable(&staged.plugin, self.policy.max_file_bytes)?;
         let mut child = sandbox::spawn(&staged.plugin, &self.policy, &staged.working_directory)?;
         let mut stdin = child
@@ -1224,6 +1258,29 @@ fn stage_plugin(
         working_directory: working,
         _directory: directory_guard,
         _temporary: temporary,
+    })
+}
+
+fn stage_private_snapshot(
+    plugin: &ValidatedPlugin,
+    directory_guard: tempfile::TempDir,
+    context: &ExecutionContext,
+) -> Result<StagedPlugin, PluginError> {
+    context.checkpoint().map_err(|error| map_execution_error(&error))?;
+    let private_root = directory_guard.path().canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Launch, "private working directory identity failed")
+    })?;
+    let working = private_root.join("work");
+    std::fs::create_dir(&working)
+        .map_err(|_| PluginError::new(PluginErrorCode::Launch, "private work directory failed"))?;
+    let working = working.canonicalize().map_err(|_| {
+        PluginError::new(PluginErrorCode::Launch, "private work directory unavailable")
+    })?;
+    Ok(StagedPlugin {
+        plugin: plugin.clone(),
+        working_directory: working,
+        _directory: directory_guard,
+        _temporary: context.reserve_temporary(0).map_err(|error| map_execution_error(&error))?,
     })
 }
 

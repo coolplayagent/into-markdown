@@ -1,0 +1,40 @@
+(01:58:20) INFO: Options provided by the client:
+  Inherited 'common' options: --isatty=0 --terminal_columns=80
+(01:58:20) INFO: Reading rc options for 'test' from /Users/yx/projects/document-convert/into-markdown-web-experience/.bazelrc:
+  Inherited 'common' options: --enable_bzlmod
+(01:58:20) INFO: Reading rc options for 'test' from /Users/yx/projects/document-convert/into-markdown-web-experience/.bazelrc:
+  Inherited 'build' options: --announce_rc --incompatible_strict_action_env --show_timestamps --action_env=PATH --action_env=MACOSX_DEPLOYMENT_TARGET=14.0 --macos_minimum_os=14.0 --host_macos_minimum_os=14.0 --@rules_rust//rust/settings:experimental_use_allocator_libraries_with_mangled_symbols=true
+(01:58:20) INFO: Reading rc options for 'test' from /Users/yx/projects/document-convert/into-markdown-web-experience/.bazelrc:
+  'test' options: --test_output=errors
+(01:58:20) INFO: Current date is 2026-08-23
+(01:58:20) Computing main repo mapping:
+(01:58:20) Loading:
+(01:58:20) Loading: 0 packages loaded
+(01:58:20) Analyzing: target //apps/cli:plugin_lifecycle_test (0 packages loaded, 0 targets configured)
+(01:58:20) Analyzing: target //apps/cli:plugin_lifecycle_test (0 packages loaded, 0 targets configured)
+
+(01:58:20) INFO: Analyzed target //apps/cli:plugin_lifecycle_test (0 packages loaded, 2 targets configured).
+(01:58:22) [5 / 7] Compiling Rust bin into-md (14 files); 1s darwin-sandbox
+(01:58:24) [6 / 7] [Prepa] runfiles for //apps/cli:plugin_lifecycle_test
+(01:58:26) [7 / 8] Testing //apps/cli:plugin_lifecycle_test; 1s local
+(01:58:33) [7 / 8] Testing //apps/cli:plugin_lifecycle_test; 9s local
+(01:58:33) INFO: From Testing //apps/cli:plugin_lifecycle_test:
+==================== Test output for //apps/cli:plugin_lifecycle_test:
+
+running 2 tests
+test real_cli_rejects_permissive_user_data_anchor_before_writing ... ok
+test isolated_cli_lifecycle_executes_signed_process_and_wasi_plugins ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.05s
+
+================================================================================
+(01:58:33) INFO: Found 1 test target...
+Target //apps/cli:plugin_lifecycle_test up-to-date:
+  bazel-bin/apps/cli/plugin_lifecycle_test
+(01:58:33) INFO: Elapsed time: 13.604s, Critical Path: 13.39s
+(01:58:33) INFO: 4 processes: 4 action cache hit, 2 internal, 1 darwin-sandbox, 2 local.
+(01:58:33) INFO: Build completed successfully, 4 total actions
+//apps/cli:plugin_lifecycle_test                                         PASSED in 9.1s
+
+Executed 1 out of 1 test: 1 test passes.
+There were tests whose specified size is too big. Use the --test_verbose_timeout_warnings command line option to see which ones these are.

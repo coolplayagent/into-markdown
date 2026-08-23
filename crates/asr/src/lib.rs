@@ -481,7 +481,14 @@ fn decode_window(
     };
     let language =
         requested_language.or_else(|| detected.as_ref().map(|(value, _)| value.as_str()));
-    let mut params = FullParams::new(SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 });
+    // The reviewed small model is already the accuracy boundary for the
+    // bundled offline path.  Running a five-candidate beam made short and
+    // medium recordings slower than real time on current Apple silicon while
+    // providing no useful warm-start benefit: every isolated capability
+    // request starts with a fresh decoder process.  Greedy decoding keeps one
+    // candidate, preserves deterministic token timestamps, and removes the
+    // dominant avoidable multiplier from every request.
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(i32::try_from(threads).map_err(|_| resource("asrConfiguration"))?);
     params.set_translate(false);
     params.set_no_timestamps(false);

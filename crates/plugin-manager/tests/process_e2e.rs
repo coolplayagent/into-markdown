@@ -211,6 +211,12 @@ fn signed_install_prepares_and_executes_real_process_guest() {
     manager
         .verify("fixture.manager-process", &execution)
         .expect("store remains available while snapshots are retained");
+    // Dispatch must consume the manager-owned verified snapshot directly. A
+    // zero temporary-byte budget still permits the fresh working directory and
+    // inline request, but would reject the former second runtime-tree copy.
+    let mut dispatch_limits = ResourceLimits::default();
+    dispatch_limits.max_temporary_bytes = 0;
+    let dispatch_execution = ExecutionContext::new(ExecutionOptions::default(), dispatch_limits);
     let output = prepared
         .execute(
             into_markdown_process_plugin::PluginRequest {
@@ -220,7 +226,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
                 source: b"ok",
                 parameters_json: None,
             },
-            &execution,
+            &dispatch_execution,
         )
         .expect("execute");
     assert_eq!(output.result.markdown, "manager-process-ok");
@@ -233,7 +239,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
                 source: b"ok",
                 parameters_json: None,
             },
-            &execution,
+            &dispatch_execution,
         )
         .expect("execute second retained runtime");
     assert_eq!(second_output.result.markdown, "manager-process-ok");

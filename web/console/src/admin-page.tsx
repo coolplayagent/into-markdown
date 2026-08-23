@@ -1,20 +1,34 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Activity, CheckCircle2, CircleAlert, Cloud, Download, FileSearch,
-  Package, Plus, Search, Settings2, ShieldCheck, Speech, ScanText, FileType2, Wrench,
+  Activity, Blocks, CheckCircle2, ChevronDown, ChevronLeft, CircleAlert, Cloud, Download, FileSearch,
+  Package, Plus, Search, Settings2, ShieldCheck, Speech, ScanText, FileType2, Trash2, Wrench, X,
 } from "lucide-react";
 import type {
-  AdminAction, AdminOperationResult, AdminSnapshot, ApiClient, DoctorAdmin,
+  AdminAction, AdminSnapshot, ApiClient, DoctorAdmin,
   CapabilityAdmin, FormatAdmin, PluginAdmin, ProviderAdmin,
 } from "./api";
 import { useI18n, type Locale } from "./i18n";
 import { RouteLink } from "./router";
+import { useDialogLifecycle } from "./dialog-lifecycle";
 
 export type AdminSection = "capabilities" | "formats" | "providers" | "plugins" | "configuration" | "doctor";
-export const adminSections: AdminSection[] = ["capabilities", "formats", "providers", "plugins", "configuration", "doctor"];
+export const adminSections: AdminSection[] = ["capabilities", "configuration", "doctor"];
+const adminSnapshotCache = new WeakMap<ApiClient, Map<AdminSection, AdminSnapshot>>();
+function cachedSnapshot(api: ApiClient, section: AdminSection) { return adminSnapshotCache.get(api)?.get(section); }
+function cacheSnapshot(api: ApiClient, section: AdminSection, snapshot: AdminSnapshot) { const cache = adminSnapshotCache.get(api) ?? new Map<AdminSection, AdminSnapshot>(); cache.set(section, snapshot); adminSnapshotCache.set(api, cache); }
 
 interface ActionOptions { dangerous?: boolean; network?: boolean; confirm?: string; success: string }
 interface ActionFeedback { target: string; kind: "error" | "success"; message: string }
+
+function useClampedPage(page: number, total: number, pageSize: number, setPage: (page: number) => void) {
+  useEffect(() => {
+    const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+    if (page > lastPage) setPage(lastPage);
+  }, [page, pageSize, setPage, total]);
+}
+function clampedPage(page: number, total: number, pageSize: number) {
+  return Math.min(page, Math.max(0, Math.ceil(total / pageSize) - 1));
+}
 interface SectionProps {
   api: ApiClient;
   snapshot: AdminSnapshot;
@@ -24,73 +38,72 @@ interface SectionProps {
   feedback?: ActionFeedback | null;
 }
 
-const adminConfigKeys = [
-  "cli.language", "cli.jobs", "cli.color", "cli.progress", "cli.log_format", "conversion.timeout_ms",
-  "conversion.text.decoding_mode", "conversion.delimited_text.header", "conversion.delimited_text.ragged_rows",
-  "conversion.ocr.policy", "conversion.ocr.languages", "conversion.ocr.minimum_confidence",
-  "conversion.asr.language", "conversion.asr.chinese_script", "conversion.asr.max_threads",
-  "conversion.asr.max_duration_ms", "conversion.asr.max_segments", "conversion.asr.max_native_memory_bytes",
-  "conversion.ai.vision_ocr", "conversion.ai.image_description", "conversion.ai.layout_repair", "conversion.ai.table_repair",
-  "conversion.ai.formula_repair", "conversion.ai.audio_transcription", "conversion.ai.markdown_postprocess",
-  "conversion.ai.provider", "conversion.ai.model", "conversion.network.max_redirects", "conversion.network.allowed_hosts",
-  "conversion.network.deny_private_networks", "conversion.limits.max_input_bytes", "conversion.limits.max_decompressed_bytes",
-  "conversion.limits.max_archive_entries", "conversion.limits.max_archive_depth", "conversion.limits.max_archive_entry_bytes",
-  "conversion.limits.max_archive_compression_ratio", "conversion.limits.max_nesting_depth", "conversion.limits.max_pages",
-  "conversion.limits.max_asset_bytes", "conversion.limits.max_total_asset_bytes", "conversion.limits.max_memory_bytes",
-  "conversion.limits.max_temporary_bytes", "conversion.limits.max_table_rows", "conversion.limits.max_table_columns",
-  "conversion.limits.max_table_cells", "conversion.limits.max_field_bytes", "conversion.output.emit",
-  "conversion.output.asset_mode", "conversion.output.conflict", "conversion.output.asset_directory_suffix",
-  "conversion.output.include_provenance",
-] as const;
-
 const zh = {
   heading: "系统管理", intro: "查看转换能力、连接 AI 服务，并处理本机运行问题。",
-  tabs: { capabilities: "能力", formats: "格式", providers: "Provider", plugins: "插件", configuration: "配置", doctor: "诊断" },
+  tabs: { capabilities: "能力与来源", formats: "格式支持", providers: "AI 服务", plugins: "扩展插件", configuration: "偏好设置", doctor: "运行诊断" },
   loading: "正在读取本机状态…", retry: "重新加载", viewOnly: "当前只能查看", viewOnlyBody: "本次启动未开放修改权限。你仍可以查看状态和运行只读检查。",
-  success: "操作已完成", advanced: "高级选项", technical: "更多信息", cancel: "取消", add: "添加", edit: "编辑", save: "保存", remove: "删除", verify: "验证", install: "安装", test: "测试连接", setDefault: "设为默认", enable: "启用", disable: "停用", show: "查看", path: "查看位置", restore: "恢复默认", create: "创建", copy: "复制自",
+  success: "操作已完成", advanced: "安装校验", technical: "详情", cancel: "取消", add: "添加", edit: "编辑", save: "保存", remove: "卸载", verify: "验证", install: "安装", test: "测试连接", setDefault: "设为默认", enable: "启用", disable: "停用", show: "查看", path: "查看位置", restore: "恢复默认", create: "创建", copy: "复制自",
   formatsTitle: "识别文件格式", formatsBody: "输入一个本地文件路径，确认它能否被转换。", localPath: "文件路径", localPathHint: "例如 /path/to/report.pdf", detect: "开始识别", charset: "文本编码", formatHint: "指定格式", extension: "文件扩展名", mime: "MIME 类型", hosts: "允许访问的主机", privateNetwork: "允许访问局域网地址", formatLibrary: "支持的格式", formatSearch: "搜索格式或扩展名", allFormats: "全部格式", needsRuntime: "需要额外组件", ready: "可用", unavailable: "不可用", source: "来源", extensions: "扩展名", runtime: "所需组件",
-  capabilitiesTitle: "转换能力", capabilitiesBody: "选择本地能力插件或远端 Provider。内置模型随插件安装，不需要单独管理。", installed: "已安装", notInstalled: "未安装", defaultModel: "默认 AI 服务", downloadOptions: "下载选项", insecure: "允许使用不安全的 HTTP 下载", capabilityRemoveConfirm: "确定卸载这个本地能力插件吗？远端 Provider 配置不会受影响。", currentSource: "当前来源", localPlugin: "本地插件", remoteProvider: "远端 Provider", off: "关闭", officeCapability: "旧版 Office", officeCapabilityBody: "转换 .doc、.xls 和 .ppt 文件", ocrCapability: "图片 OCR", ocrCapabilityBody: "识别扫描 PDF 和图片中的文字", speechCapability: "语音", speechCapabilityBody: "分别选择转写和说话人识别来源", transcription: "语音转写", diarization: "说话人识别", useSource: "使用此来源", repair: "修复", capabilityInstallSuccess: "能力插件已安装", capabilitySourceSuccess: "能力来源已更新", capabilityVerifySuccess: "能力插件验证通过", capabilityRemoveSuccess: "能力插件已卸载", localOnly: "仅支持本地插件",
-  providersTitle: "AI 服务", providersBody: "连接兼容 OpenAI 接口的服务，用于视觉识别、内容修复等可选能力。纯本地转换不需要配置。", noProviders: "尚未连接 AI 服务", noProvidersBody: "文档、OCR 和语音能力仍可在本机运行。只有需要云端 AI 增强时才添加服务。", addProvider: "连接 AI 服务", serviceName: "服务名称", baseUrl: "API 地址", model: "默认模型", ocrModel: "OCR 模型", transcriptionModel: "转写模型", modelMappingHint: "留空时使用默认模型。远端模型映射属于 Provider 配置，不是本地模型管理。", apiKeyEnv: "密钥环境变量", apiKeyHint: "例如 DASHSCOPE_API_KEY。这里只保存变量名，不保存密钥。", capabilities: "支持的能力", timeout: "超时时间（毫秒）", scope: "保存位置", project: "当前项目", global: "所有项目", environmentReady: "密钥已就绪", environmentMissing: "未找到密钥", inherited: "沿用上层设置", effective: "当前生效", overridden: "已被覆盖", providerRemoveConfirm: "确定删除这个 AI 服务配置吗？", providerDefaultSuccess: "已设为默认 AI 服务", providerAddedSuccess: "AI 服务已添加", providerTestSuccess: "连接测试已完成",
-  pluginsTitle: "插件", pluginsBody: "查看签名、作用域、包来源和平台兼容性。官方能力请在“能力”页安装和切换。", noPlugins: "尚未安装插件", noPluginsBody: "Core 可以独立运行；需要旧版 Office、OCR 或语音时，可前往“能力”安装对应插件。", addPlugin: "安装插件包", packageSource: "插件包路径或 HTTPS 地址", sha: "文件校验值（SHA-256）", signer: "签名方 ID", fingerprint: "签名指纹", pluginRemoveConfirm: "确定删除这个插件吗？", pluginInstallSuccess: "插件已安装", pluginVerifySuccess: "插件验证已完成", enabled: "已启用", disabled: "已停用", version: "版本", target: "适用平台", protocol: "协议", verification: "验证状态",
-  configTitle: "设置", configBody: "调整转换行为。常用设置可以直接修改，内部名称和原始配置收在详情中。", chooseSetting: "选择设置", value: "设置值", readCurrent: "读取当前值", promptName: "提示词名称", addPrompt: "选择提示词设置", profiles: "设置方案", newProfile: "新方案名称", copyFrom: "复制已有方案", noProfiles: "还没有自定义设置方案。", configTools: "检查与迁移", configToolsBody: "用于定位配置文件、验证已有配置或初始化新配置。", validationPath: "要验证的配置文件", resolved: "显示合并后的最终值", force: "覆盖已有配置文件", paths: "配置文件位置", validate: "验证配置", initialize: "初始化配置", rawConfig: "查看完整配置（已隐藏敏感值）", configSaved: "设置已保存", configRestored: "已恢复默认设置", profileCreated: "设置方案已创建", profileRemoveConfirm: "确定删除这个设置方案吗？",
-  doctorTitle: "运行诊断", doctorBody: "检查本机运行环境，并给出可以直接执行的处理建议。", run: "重新检查", checkNetwork: "同时检查联网能力", healthy: "没有发现问题", healthyBody: "当前检查项目均正常。", attention: "项需要处理", passed: "项正常", notRun: "项未检查", passedChecks: "查看正常项目", skippedChecks: "查看未检查项目", impact: "影响", nextStep: "处理建议", doctorDone: "诊断已完成",
+  capabilitiesTitle: "能力与来源", capabilitiesBody: "", installed: "已安装", notInstalled: "未安装", defaultModel: "默认 AI 服务", downloadOptions: "下载选项", insecure: "允许使用不安全的 HTTP 下载", capabilityRemoveConfirm: "确定卸载这项本地能力吗？", currentSource: "当前使用", chooseSource: "选择来源", localPlugin: "本地", remoteProvider: "AI 服务", off: "关闭", officeCapability: "旧版 Office", officeCapabilityBody: "转换 .doc、.xls 和 .ppt", ocrCapability: "图片 OCR", ocrCapabilityBody: "识别扫描 PDF 和图片", speechCapability: "语音", speechCapabilityBody: "语音转写与说话人识别", transcription: "语音转写", diarization: "说话人识别", useSource: "使用所选来源", repair: "修复", chooseInstallMethod: "选择安装方式", installFromComputer: "从电脑安装插件", localPackageHint: "选择一个 .imp 插件包；此方式不需要联网。", installSelectedPackage: "安装所选插件", installOfficialOnline: "在线安装官方插件", networkRequired: "需要联网下载插件及其运行资源。", capabilityInstallSuccess: "已安装", capabilitySourceSuccess: "来源已更新", capabilityVerifySuccess: "验证通过", capabilityRemoveSuccess: "已卸载", localOnly: "本地",
+  providersTitle: "AI 服务", providersBody: "", noProviders: "尚未连接 AI 服务", noProvidersBody: "可按需连接一个 AI 服务。", addProvider: "连接 AI 服务", serviceName: "服务名称", baseUrl: "API 地址", model: "默认模型", ocrModel: "OCR 模型", transcriptionModel: "转写模型", modelMappingHint: "未指定时使用默认模型。", apiKeyEnv: "密钥环境变量", apiKeyHint: "填写保存密钥的环境变量名称。", capabilities: "支持的能力", timeout: "超时时间（毫秒）", scope: "保存位置", project: "当前项目", global: "所有项目", environmentReady: "密钥已就绪", environmentMissing: "未找到密钥", inherited: "沿用上层设置", effective: "当前生效", overridden: "已被覆盖", providerRemoveConfirm: "确定删除这个 AI 服务吗？", providerRemoveSuccess: "AI 服务设置已删除", providerDefaultSuccess: "已设为默认 AI 服务", providerAddedSuccess: "AI 服务已添加", providerTestSuccess: "连接测试已完成",
+  pluginsTitle: "本地扩展", pluginsBody: "", noPlugins: "尚未安装本地扩展", noPluginsBody: "", addPlugin: "安装扩展", packageSource: "安装来源", sha: "SHA-256", signer: "签名方", fingerprint: "签名指纹", pluginRemoveConfirm: "确定卸载这个本地扩展吗？", pluginInstallSuccess: "本地扩展已安装", pluginVerifySuccess: "验证完成", pluginEnableSuccess: "本地扩展已启用", pluginDisableSuccess: "本地扩展已停用", pluginRemoveSuccess: "本地扩展已卸载", enabled: "已启用", disabled: "已停用", version: "版本", target: "适用平台", protocol: "协议", verification: "验证状态",
+  configTitle: "偏好设置", configBody: "", chooseSetting: "选择设置", value: "设置值", readCurrent: "读取当前值", promptName: "提示词名称", addPrompt: "选择提示词设置", profiles: "设置方案", newProfile: "新方案名称", copyFrom: "复制已有方案", noProfiles: "还没有自定义设置方案。", configTools: "配置文件", configToolsBody: "", validationPath: "配置文件", resolved: "显示最终值", force: "覆盖已有配置文件", paths: "配置文件位置", validate: "验证配置", initialize: "初始化配置", rawConfig: "完整配置", configSaved: "设置已保存", configRestored: "已恢复默认设置", profileCreated: "设置方案已创建", profileRemoveConfirm: "确定删除这个设置方案吗？",
+  doctorTitle: "运行诊断", doctorBody: "检查本机运行环境，并给出可以直接执行的处理建议。", run: "重新检查", healthy: "没有发现问题", healthyBody: "当前检查项目均正常。", attention: "项需要处理", passed: "项正常", notRun: "项未检查", passedChecks: "查看正常项目", skippedChecks: "查看未检查项目", impact: "影响", nextStep: "处理建议", doctorDone: "诊断已完成",
   detectionResult: "识别结果", confidence: "匹配度", providerResult: "连接结果", availableModels: "可用模型", result: "操作结果", rawResult: "查看原始结果",
 };
 const en: typeof zh = {
   heading: "System management", intro: "Check conversion capabilities, connect AI services, and resolve local runtime issues.",
-  tabs: { capabilities: "Capabilities", formats: "Formats", providers: "Providers", plugins: "Plugins", configuration: "Configuration", doctor: "Diagnostics" },
+  tabs: { capabilities: "Capabilities & sources", formats: "Format support", providers: "AI services", plugins: "Extensions", configuration: "Preferences", doctor: "Diagnostics" },
   loading: "Reading local status…", retry: "Reload", viewOnly: "View-only mode", viewOnlyBody: "This launch does not allow configuration changes. You can still inspect status and run read-only checks.",
-  success: "Done", advanced: "Advanced options", technical: "More information", cancel: "Cancel", add: "Add", edit: "Edit", save: "Save", remove: "Remove", verify: "Verify", install: "Install", test: "Test connection", setDefault: "Set as default", enable: "Enable", disable: "Disable", show: "Show", path: "Show location", restore: "Restore default", create: "Create", copy: "Copy from",
+  success: "Done", advanced: "Installation checks", technical: "Details", cancel: "Cancel", add: "Add", edit: "Edit", save: "Save", remove: "Uninstall", verify: "Verify", install: "Install", test: "Test connection", setDefault: "Set as default", enable: "Enable", disable: "Disable", show: "Show", path: "Show location", restore: "Restore default", create: "Create", copy: "Copy from",
   formatsTitle: "Identify a file format", formatsBody: "Enter a local file path to confirm whether it can be converted.", localPath: "File path", localPathHint: "For example, /path/to/report.pdf", detect: "Identify format", charset: "Text encoding", formatHint: "Specify format", extension: "File extension", mime: "MIME type", hosts: "Allowed hosts", privateNetwork: "Allow local-network addresses", formatLibrary: "Supported formats", formatSearch: "Search formats or extensions", allFormats: "All formats", needsRuntime: "Additional component required", ready: "Available", unavailable: "Unavailable", source: "Source", extensions: "Extensions", runtime: "Required component",
-  capabilitiesTitle: "Conversion capabilities", capabilitiesBody: "Choose a local capability plugin or remote Provider. Built-in models are installed with the plugin and are not managed separately.", installed: "Installed", notInstalled: "Not installed", defaultModel: "Default AI service", downloadOptions: "Download options", insecure: "Allow insecure HTTP downloads", capabilityRemoveConfirm: "Remove this local capability plugin? Remote Provider settings are unaffected.", currentSource: "Current source", localPlugin: "Local plugin", remoteProvider: "Remote Provider", off: "Off", officeCapability: "Legacy Office", officeCapabilityBody: "Convert .doc, .xls, and .ppt files", ocrCapability: "Image OCR", ocrCapabilityBody: "Read text from scanned PDFs and images", speechCapability: "Speech", speechCapabilityBody: "Choose transcription and speaker identification sources separately", transcription: "Speech transcription", diarization: "Speaker identification", useSource: "Use this source", repair: "Repair", capabilityInstallSuccess: "Capability plugin installed", capabilitySourceSuccess: "Capability source updated", capabilityVerifySuccess: "Capability plugin verified", capabilityRemoveSuccess: "Capability plugin removed", localOnly: "Available as a local plugin only",
-  providersTitle: "AI services", providersBody: "Connect OpenAI-compatible services for optional vision, repair, and enhancement tasks. Local conversion works without one.", noProviders: "No AI service connected", noProvidersBody: "Documents, OCR, and transcription can still run locally. Add a service only when cloud AI enhancement is needed.", addProvider: "Connect AI service", serviceName: "Service name", baseUrl: "API address", model: "Default model", ocrModel: "OCR model", transcriptionModel: "Transcription model", modelMappingHint: "Leave blank to use the default model. Remote mappings belong to the Provider, not local model management.", apiKeyEnv: "API key environment variable", apiKeyHint: "For example, DASHSCOPE_API_KEY. Only the variable name is saved; the key is not stored here.", capabilities: "Capabilities", timeout: "Timeout (milliseconds)", scope: "Save for", project: "This project", global: "All projects", environmentReady: "API key ready", environmentMissing: "API key not found", inherited: "Inherited", effective: "Active", overridden: "Overridden", providerRemoveConfirm: "Remove this AI service configuration?", providerDefaultSuccess: "Default AI service updated", providerAddedSuccess: "AI service added", providerTestSuccess: "Connection test completed",
-  pluginsTitle: "Plugins", pluginsBody: "Inspect signatures, scope, package origin, and platform compatibility. Install and switch official capabilities from Capabilities.", noPlugins: "No plugins installed", noPluginsBody: "Core works on its own. Open Capabilities when you need Legacy Office, OCR, or Speech.", addPlugin: "Install plugin package", packageSource: "Plugin package path or HTTPS URL", sha: "File checksum (SHA-256)", signer: "Signer ID", fingerprint: "Signing fingerprint", pluginRemoveConfirm: "Remove this plugin?", pluginInstallSuccess: "Plugin installed", pluginVerifySuccess: "Plugin verification completed", enabled: "Enabled", disabled: "Disabled", version: "Version", target: "Platform", protocol: "Protocol", verification: "Verification",
-  configTitle: "Settings", configBody: "Adjust conversion behavior. Common values are editable here; internal names and raw configuration stay in details.", chooseSetting: "Choose a setting", value: "Value", readCurrent: "Read current value", promptName: "Prompt name", addPrompt: "Select prompt setting", profiles: "Setting profiles", newProfile: "New profile name", copyFrom: "Copy an existing profile", noProfiles: "No custom profiles yet.", configTools: "Inspect and migrate", configToolsBody: "Locate configuration files, validate existing configuration, or initialize a new file.", validationPath: "Configuration file to validate", resolved: "Show fully resolved values", force: "Overwrite an existing configuration file", paths: "Configuration locations", validate: "Validate configuration", initialize: "Initialize configuration", rawConfig: "View full configuration (secrets hidden)", configSaved: "Setting saved", configRestored: "Default restored", profileCreated: "Profile created", profileRemoveConfirm: "Remove this setting profile?",
-  doctorTitle: "Diagnostics", doctorBody: "Check the local runtime and get concrete steps for anything that needs attention.", run: "Run again", checkNetwork: "Also check network access", healthy: "No issues found", healthyBody: "All current checks passed.", attention: "need attention", passed: "passed", notRun: "not checked", passedChecks: "View passing checks", skippedChecks: "View checks not run", impact: "Impact", nextStep: "What to do", doctorDone: "Diagnostics completed",
+  capabilitiesTitle: "Capabilities & sources", capabilitiesBody: "", installed: "Installed", notInstalled: "Not installed", defaultModel: "Default AI service", downloadOptions: "Download options", insecure: "Allow insecure HTTP downloads", capabilityRemoveConfirm: "Uninstall this local capability?", currentSource: "In use", chooseSource: "Choose a source", localPlugin: "Local", remoteProvider: "AI service", off: "Off", officeCapability: "Legacy Office", officeCapabilityBody: "Convert .doc, .xls, and .ppt", ocrCapability: "Image OCR", ocrCapabilityBody: "Read scanned PDFs and images", speechCapability: "Speech", speechCapabilityBody: "Transcription and speaker identification", transcription: "Speech transcription", diarization: "Speaker identification", useSource: "Use selected source", repair: "Repair", chooseInstallMethod: "Choose how to install", installFromComputer: "Install a plugin from this computer", localPackageHint: "Choose an .imp plugin package. This option does not need network access.", installSelectedPackage: "Install selected plugin", installOfficialOnline: "Install the official plugin online", networkRequired: "Downloads the plugin and its runtime resources over the network.", capabilityInstallSuccess: "Installed", capabilitySourceSuccess: "Source updated", capabilityVerifySuccess: "Verified", capabilityRemoveSuccess: "Uninstalled", localOnly: "Local",
+  providersTitle: "AI services", providersBody: "", noProviders: "No AI service connected", noProvidersBody: "Connect one when needed.", addProvider: "Connect AI service", serviceName: "Service name", baseUrl: "API address", model: "Default model", ocrModel: "OCR model", transcriptionModel: "Transcription model", modelMappingHint: "Uses the default model when blank.", apiKeyEnv: "API key environment variable", apiKeyHint: "Enter the environment variable that holds the key.", capabilities: "Capabilities", timeout: "Timeout (milliseconds)", scope: "Save for", project: "This project", global: "All projects", environmentReady: "API key ready", environmentMissing: "API key not found", inherited: "Inherited", effective: "Active", overridden: "Overridden", providerRemoveConfirm: "Remove this AI service?", providerRemoveSuccess: "AI service setting removed", providerDefaultSuccess: "Default AI service updated", providerAddedSuccess: "AI service added", providerTestSuccess: "Connection test completed",
+  pluginsTitle: "Local extensions", pluginsBody: "", noPlugins: "No local extensions installed", noPluginsBody: "", addPlugin: "Install extension", packageSource: "Package path or HTTPS URL", sha: "File checksum (SHA-256)", signer: "Signer ID", fingerprint: "Signing fingerprint", pluginRemoveConfirm: "Uninstall this local extension?", pluginInstallSuccess: "Extension installed", pluginVerifySuccess: "Verification completed", pluginEnableSuccess: "Extension enabled", pluginDisableSuccess: "Extension disabled", pluginRemoveSuccess: "Extension uninstalled", enabled: "Enabled", disabled: "Disabled", version: "Version", target: "Platform", protocol: "Protocol", verification: "Verification",
+  configTitle: "Preferences", configBody: "", chooseSetting: "Choose a setting", value: "Value", readCurrent: "Read current value", promptName: "Prompt name", addPrompt: "Select prompt setting", profiles: "Setting profiles", newProfile: "New profile name", copyFrom: "Copy an existing profile", noProfiles: "No custom profiles yet.", configTools: "Configuration file", configToolsBody: "", validationPath: "Configuration file", resolved: "Show resolved values", force: "Overwrite existing file", paths: "Configuration locations", validate: "Validate configuration", initialize: "Initialize configuration", rawConfig: "Full configuration", configSaved: "Setting saved", configRestored: "Default restored", profileCreated: "Profile created", profileRemoveConfirm: "Remove this setting profile?",
+  doctorTitle: "Diagnostics", doctorBody: "Check the local runtime and get concrete steps for anything that needs attention.", run: "Run again", healthy: "No issues found", healthyBody: "All current checks passed.", attention: "need attention", passed: "passed", notRun: "not checked", passedChecks: "View passing checks", skippedChecks: "View checks not run", impact: "Impact", nextStep: "What to do", doctorDone: "Diagnostics completed",
   detectionResult: "Detection result", confidence: "Confidence", providerResult: "Connection result", availableModels: "Available models", result: "Operation result", rawResult: "View raw result",
 };
 function copy(locale: Locale) { return locale === "zh-CN" ? zh : en; }
 
-export function AdminPage({ api, section }: { api: ApiClient; section: AdminSection }) {
+export function AdminPage({ api, section, initialContext }: { api: ApiClient; section: AdminSection; initialContext?: "formats" | "providers" | "plugins" }) {
   const { locale } = useI18n();
   const c = copy(locale);
-  const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<AdminSnapshot | null>(() => cachedSnapshot(api, section) ?? null);
   const [error, setError] = useState("");
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const actionInFlight = useRef(false);
 
-  useEffect(() => { setActionFeedback(null); }, [section]);
+  useEffect(() => { setActionFeedback(null); setSnapshot(cachedSnapshot(api, section) ?? null); }, [api, section]);
   useEffect(() => {
+    if (actionInFlight.current) return;
     const controller = new AbortController();
+    let retryTimer: number | undefined;
     setError("");
-    void api.admin(controller.signal).then(setSnapshot, (reason: unknown) => {
-      if (!controller.signal.aborted) setError(errorCode(reason));
+    void api.admin(controller.signal, section).then((next) => { cacheSnapshot(api, section, next); setSnapshot(next); }, (reason: unknown) => {
+      if (controller.signal.aborted) return;
+      const code = errorCode(reason);
+      if (code === "adminBusy") {
+        retryTimer = window.setTimeout(() => setAttempt((value) => value + 1), 400);
+        return;
+      }
+      setError(code);
     });
-    return () => controller.abort();
-  }, [api, attempt]);
-  const refreshAdmin = async () => setSnapshot(await api.admin());
+    return () => { controller.abort(); if (retryTimer !== undefined) window.clearTimeout(retryTimer); };
+  }, [api, attempt, busy, section]);
+  const refreshAdmin = async () => {
+    for (let refreshAttempt = 0; ; refreshAttempt += 1) {
+      try {
+        const next = await api.admin(undefined, section);
+        cacheSnapshot(api, section, next); setSnapshot(next); return;
+      } catch (reason) {
+        if (errorCode(reason) !== "adminBusy" || refreshAttempt >= 5) throw reason;
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+      }
+    }
+  };
 
   const act = async (action: AdminAction, options: ActionOptions) => {
     if (actionInFlight.current || options.confirm && !window.confirm(options.confirm)) return false;
@@ -105,7 +118,7 @@ export function AdminPage({ api, section }: { api: ApiClient; section: AdminSect
       const outcome = await api.adminAction({ ...requested, ...(authorizationGrant ? { authorizationGrant } : {}) });
       const operationResult = outcome.operationResult;
       if (operationResult) setSnapshot((current) => current ? { ...current, operationResult } : current);
-      else setSnapshot(await api.admin());
+      else await refreshAdmin();
       setActionFeedback({ target: feedbackTarget, kind: "success", message: options.success });
       return true;
     } catch (reason) {
@@ -126,96 +139,114 @@ export function AdminPage({ api, section }: { api: ApiClient; section: AdminSect
     }
   };
 
-  return <section className="admin-page">
-    <div className="page-heading"><p className="eyebrow">into-md</p><h1>{c.heading}</h1><p>{c.intro}</p></div>
+  return <section className={`admin-page ${section === "configuration" ? "admin-page-preferences" : ""}`}>
     <div className="admin-shell"><nav className="admin-tabs" aria-label={c.heading}>
-      {adminSections.map((item) => <RouteLink key={item} href={`/admin/${item}`} className={section === item ? "active" : ""}>{c.tabs[item]}</RouteLink>)}
+      {adminSections.map((item) => <RouteLink key={item} href={`/admin/${item}`} className={section === item ? "active" : ""}>{adminNavIcon(item)}<span>{c.tabs[item]}</span></RouteLink>)}
     </nav>
-    <div className="admin-content">{error && <Feedback kind="error"><strong>{friendlyError(error, locale)}</strong><button type="button" className="secondary" onClick={() => setAttempt((value) => value + 1)}>{c.retry}</button></Feedback>}
-    {!snapshot && !error ? <div className="admin-loading" role="status"><Activity className="spinner" size={18} /><span>{c.loading}</span></div> : snapshot ? <>
+    <div className={`admin-content ${section === "configuration" ? "preferences-content" : ""}`}><h1 className="visually-hidden">{c.tabs[section]}</h1>{error && <Feedback kind="error"><strong>{friendlyError(error, locale)}</strong><button type="button" className="secondary" onClick={() => setAttempt((value) => value + 1)}>{c.retry}</button></Feedback>}
+    {!snapshot && !error ? section === "configuration" ? <PreferencesSkeleton locale={locale} /> : <div className="admin-loading" role="status"><Activity className="spinner" size={18} /><span>{c.loading}</span></div> : snapshot ? <>
       {snapshot.configurationReadOnly && (section === "capabilities" || section === "providers" || section === "plugins" || section === "configuration") && <Feedback kind="readonly"><ShieldCheck size={20} /><div><strong>{c.viewOnly}</strong><p>{c.viewOnlyBody}</p></div></Feedback>}
-      {section === "capabilities" && <CapabilitiesSection api={api} refreshAdmin={refreshAdmin} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} />}
-      {section === "formats" && <FormatsSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} />}
-      {section === "providers" && <ProvidersSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} />}
-      {section === "plugins" && <PluginsSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} />}
+      {section === "capabilities" && <CapabilitiesSection api={api} refreshAdmin={refreshAdmin} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} {...(initialContext ? { initialContext } : {})} />}
       {section === "configuration" && <ConfigurationSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} />}
       {section === "doctor" && <DoctorSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={actionFeedback} />}
     </> : null}</div></div>
   </section>;
 }
 
-function FormatsSection({ snapshot, busy, locale, act }: SectionProps) {
+function adminNavIcon(section: AdminSection) {
+  if (section === "capabilities") return <Blocks size={17} />;
+  if (section === "formats") return <FileType2 size={17} />;
+  if (section === "providers") return <Cloud size={17} />;
+  if (section === "plugins") return <Package size={17} />;
+  if (section === "configuration") return <Settings2 size={17} />;
+  return <Activity size={17} />;
+}
+
+function FormatsSection({ snapshot, locale }: SectionProps) {
   const c = copy(locale);
-  const [source, setSource] = useState(""); const [charset, setCharset] = useState("");
-  const [hint, setHint] = useState(""); const [extension, setExtension] = useState(""); const [mime, setMime] = useState("");
-  const [hosts, setHosts] = useState(""); const [privateNetwork, setPrivateNetwork] = useState(false); const [search, setSearch] = useState(""); const [page, setPage] = useState(0);
+  const [search, setSearch] = useState(""); const [page, setPage] = useState(0);
   const formats = useMemo(() => snapshot.formats.filter((item) => `${item.format} ${item.family} ${item.extensions.join(" ")}`.toLowerCase().includes(search.toLowerCase().trim())), [snapshot.formats, search]);
-  const visibleFormats = formats.slice(page * 12, page * 12 + 12);
+  const visibleFormats = formats.slice(page * 8, page * 8 + 8);
+  useEffect(() => { if (page > Math.max(0, Math.ceil(formats.length / 8) - 1)) setPage(0); }, [formats.length, page]);
   return <div className="admin-section-stack">
-    <SectionTitle icon={<FileSearch />} title={c.formatsTitle} body={c.formatsBody} />
-    <article className="card admin-tool-card">
-      <Field label={c.localPath} hint={c.localPathHint}><input value={source} maxLength={4096} onChange={(event) => setSource(event.target.value)} /></Field>
-      <details className="admin-advanced"><summary>{c.advanced}</summary><div className="admin-form-grid">
-        <Field label={c.formatHint}><input value={hint} maxLength={64} onChange={(event) => setHint(event.target.value)} /></Field>
-        <Field label={c.extension}><input value={extension} maxLength={32} onChange={(event) => setExtension(event.target.value)} /></Field>
-        <Field label={c.mime}><input value={mime} maxLength={128} onChange={(event) => setMime(event.target.value)} /></Field>
-        <Field label={c.charset}><input value={charset} maxLength={128} onChange={(event) => setCharset(event.target.value)} /></Field>
-        <Field label={c.hosts}><input value={hosts} maxLength={4096} onChange={(event) => setHosts(event.target.value)} /></Field>
-        <CheckField label={c.privateNetwork} checked={privateNetwork} setChecked={setPrivateNetwork} />
-      </div></details>
-      <div className="admin-form-actions"><button disabled={busy || !source} type="button" onClick={() => void act({ schemaVersion: 1, action: "format.detect", source, ...(charset ? { charset } : {}), ...(hint ? { formatHint: hint } : {}), ...(extension ? { extension } : {}), ...(mime ? { mimeType: mime } : {}), allowHosts: csv(hosts), allowPrivateNetwork: privateNetwork }, { network: /^https?:\/\//i.test(source), dangerous: privateNetwork, success: c.success })}><Search size={17} />{c.detect}</button></div>
-      <OperationResult result={snapshot.operationResult} locale={locale} only="detection" />
-    </article>
+    <SectionTitle icon={<FileSearch />} title={c.formatLibrary} body={locale === "zh-CN" ? "查看当前可转换的文件类型与所需组件。" : "See which file types are available and which components they need."} />
     <div className="admin-list-heading"><div><h2>{c.formatLibrary}</h2><p>{snapshot.formats.length} {c.allFormats.toLowerCase()}</p></div><label className="admin-search"><Search size={16} /><span className="sr-only">{c.formatSearch}</span><input placeholder={c.formatSearch} value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }} /></label></div>
-    <div className="admin-grid">{visibleFormats.map((item) => <FormatCard key={item.format} item={item} locale={locale} />)}</div>
-    <PageControls page={page} total={formats.length} pageSize={12} setPage={setPage} locale={locale} />
+    <div className="card admin-table-shell"><div className="admin-table-scroll"><table className="admin-table"><thead><tr><th>{locale === "zh-CN" ? "格式" : "Format"}</th><th>{locale === "zh-CN" ? "类型" : "Type"}</th><th>{c.extensions}</th><th>{c.runtime}</th><th>{locale === "zh-CN" ? "状态" : "Status"}</th></tr></thead><tbody>{visibleFormats.map((item) => <FormatRow key={item.format} item={item} locale={locale} />)}</tbody></table></div><PageControls page={page} total={formats.length} pageSize={8} setPage={setPage} locale={locale} /></div>
   </div>;
 }
 
-function FormatCard({ item, locale }: { item: FormatAdmin; locale: Locale }) {
+function FormatRow({ item, locale }: { item: FormatAdmin; locale: Locale }) {
   const c = copy(locale); const ready = item.status === "supported" || item.status === "available" || !item.runtimeComponent;
-  return <article className="card admin-entity-card"><div className="entity-card-heading"><div className="entity-icon"><FileSearch size={18} /></div><div><h3>{item.format}</h3><p>{friendlyFamily(item.family, locale)}</p></div><StatusBadge tone={ready ? "ok" : "warning"}>{ready ? c.ready : c.needsRuntime}</StatusBadge></div>
-    <div className="chip-row">{item.extensions.map((value) => <span className="status-pill" key={value}>{value}</span>)}</div>
-    {item.runtimeComponent && <details className="admin-advanced"><summary>{c.technical}</summary><dl className="admin-detail-list"><Detail label={c.runtime} value={item.runtimeComponent} /><Detail label={c.source} value={item.source} />{item.installHint && <Detail label={c.install} value={item.installHint} />}</dl></details>}
-  </article>;
+  return <tr><td><strong>{item.format.toUpperCase()}</strong></td><td>{friendlyFamily(item.family, locale)}</td><td>{item.extensions.join("、")}</td><td>{item.runtimeComponent ? pluginDisplayName(item.runtimeComponent, locale) : locale === "zh-CN" ? "内置" : "Built in"}</td><td><StatusBadge tone={ready ? "ok" : "warning"}>{ready ? c.ready : c.needsRuntime}</StatusBadge></td></tr>;
 }
 
-function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refreshAdmin }: SectionProps & { refreshAdmin: () => Promise<void> }) {
+function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refreshAdmin, initialContext }: SectionProps & { refreshAdmin: () => Promise<void>; initialContext?: "formats" | "providers" | "plugins" }) {
   const c = copy(locale);
+  const [sourceManager, setSourceManager] = useState<"formats" | "providers" | "plugins" | null>(initialContext ?? null);
+  const previousInitialContext = useRef(initialContext);
+  const sourceManagerRef = useDialogLifecycle<HTMLElement>(Boolean(sourceManager), () => setSourceManager(null));
+  useEffect(() => {
+    if (previousInitialContext.current === initialContext) return;
+    previousInitialContext.current = initialContext;
+    setSourceManager(initialContext ?? null);
+  }, [initialContext]);
   const find = (id: CapabilityAdmin["id"]) => snapshot.capabilities.find((item) => item.id === id)!;
-  return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.capabilitiesTitle} body={c.capabilitiesBody} />
+  return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.capabilitiesTitle} body={c.capabilitiesBody} action={<div className="source-manager-actions"><button className="secondary" type="button" onClick={() => setSourceManager("providers")}><Cloud size={17} />{c.providersTitle}</button><button className="secondary" type="button" onClick={() => setSourceManager("plugins")}><Package size={17} />{c.pluginsTitle}</button></div>} />
     <div className="admin-grid capability-grid">
       <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("legacy-office")} title={c.officeCapability} body={c.officeCapabilityBody} icon={<FileType2 size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === "legacy-office" ? feedback : null} />
       <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("ocr")} title={c.ocrCapability} body={c.ocrCapabilityBody} icon={<ScanText size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === "ocr" ? feedback : null} />
-      <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("transcription")} title={c.transcription} body={locale === "zh-CN" ? "将音频和视频转换为带时间的逐字稿" : "Turn audio and video into timestamped transcripts"} icon={<Speech size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback && ["transcription", "media"].includes(feedback.target) ? feedback : null} removeTarget="media" />
-      <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("diarization")} title={c.diarization} body={locale === "zh-CN" ? "在逐字稿中区分不同发言人" : "Separate speakers in a transcript"} icon={<Speech size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === "diarization" ? feedback : null} manageLocal={false} removeTarget="media" />
+      <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("transcription")} title={c.transcription} body={locale === "zh-CN" ? "将音频和视频转换为带时间的逐字稿" : "Turn audio and video into timestamped transcripts"} icon={<Speech size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback && ["transcription", "media"].includes(feedback.target) ? feedback : null} />
+      <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("diarization")} title={c.diarization} body={locale === "zh-CN" ? "在逐字稿中区分不同发言人" : "Separate speakers in a transcript"} icon={<Speech size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === "diarization" ? feedback : null} manageLocal={false} />
     </div>
+    {sourceManager && <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSourceManager(null); }}><article ref={sourceManagerRef} className="setup-dialog admin-dialog source-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="source-manager-title"><div className="drawer-heading"><h2 id="source-manager-title">{sourceManager === "providers" ? c.providersTitle : sourceManager === "plugins" ? c.pluginsTitle : c.tabs.formats}</h2><button className="icon-button neutral" type="button" aria-label={c.cancel} onClick={() => setSourceManager(null)}><X size={19} /></button></div>{sourceManager === "providers" ? <ProvidersSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={feedback ?? null} /> : sourceManager === "plugins" ? <PluginsSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} feedback={feedback ?? null} /> : <FormatsSection api={api} snapshot={snapshot} busy={busy} locale={locale} act={act} />}</article></div>}
   </div>;
 }
 
-function CapabilityCard({ api, refreshAdmin, item, title, body, icon, busy, locale, readOnly, act, feedback, manageLocal = true, removeTarget }: { api: ApiClient; refreshAdmin: () => Promise<void>; item: CapabilityAdmin; title: string; body: string; icon: ReactNode; busy: boolean; locale: Locale; readOnly: boolean; act: SectionProps["act"]; feedback?: ActionFeedback | null; manageLocal?: boolean; removeTarget?: string }) {
-  const c = copy(locale); const ready = item.status === "ready"; const localInstalled = item.localStatus !== "not-installed";
-  return <article className="card admin-entity-card"><div className="entity-card-heading"><div className="entity-icon">{icon}</div><div><h3>{title}</h3><p>{body}</p></div><StatusBadge tone={ready ? "ok" : item.status === "corrupt" ? "warning" : "neutral"}>{friendlyCapabilityStatus(item.status, locale)}</StatusBadge></div>
+function CapabilityCard({ api, refreshAdmin, item, title, body, icon, busy, locale, readOnly, act, feedback, manageLocal = true }: { api: ApiClient; refreshAdmin: () => Promise<void>; item: CapabilityAdmin; title: string; body: string; icon: ReactNode; busy: boolean; locale: Locale; readOnly: boolean; act: SectionProps["act"]; feedback?: ActionFeedback | null; manageLocal?: boolean }) {
+  const ready = item.status === "ready";
+  return <article className="card admin-entity-card capability-row"><div className="entity-card-heading"><div className="entity-icon">{icon}</div><div><h3>{title}</h3><p>{body}</p></div><StatusBadge tone={ready ? "ok" : item.status === "corrupt" ? "warning" : "neutral"}>{friendlyCapabilityStatus(item.status, locale)}</StatusBadge></div>
     <CapabilityControl api={api} refreshAdmin={refreshAdmin} item={item} manageLocal={manageLocal} busy={busy} locale={locale} readOnly={readOnly} act={act} feedback={feedback ?? null} />
-    <details className="admin-advanced"><summary>{locale === "zh-CN" ? "版本与来源详情" : "Version and source details"}</summary><dl className="admin-detail-list"><Detail label="ID" value={item.id} /><Detail label={c.version} value={item.localVersion ?? "—"} /></dl>{localInstalled && manageLocal && <button className="danger" data-capability-target={removeTarget ?? item.id} disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "capability.remove", scope: "global", target: removeTarget ?? item.id }, { dangerous: true, confirm: c.capabilityRemoveConfirm, success: c.capabilityRemoveSuccess })}>{c.remove}</button>}</details>
   </article>;
 }
 
 function CapabilityControl({ api, refreshAdmin, item, label, manageLocal = true, busy, locale, readOnly, act, feedback }: { api: ApiClient; refreshAdmin: () => Promise<void>; item: CapabilityAdmin; label?: string; manageLocal?: boolean; busy: boolean; locale: Locale; readOnly: boolean; act: SectionProps["act"]; feedback?: ActionFeedback | null }) {
-  const c = copy(locale); const [source, setSource] = useState(item.currentSource); const localReady = item.localStatus === "ready"; const needsRepair = item.localStatus === "corrupt" || item.localStatus === "incompatible";
+  const c = copy(locale); const [source, setSource] = useState(item.currentSource); const [installOpen, setInstallOpen] = useState(false); const localReady = item.localStatus === "ready"; const needsRepair = item.localStatus === "corrupt" || item.localStatus === "incompatible";
   useEffect(() => setSource(item.currentSource), [item.currentSource]);
-  return <div className="capability-control">{label && <h4>{label}</h4>}<Field label={c.currentSource}><select value={source} disabled={busy || readOnly} onChange={(event) => setSource(event.target.value)}>{item.sources.map((value) => <option key={value} value={value} disabled={value.startsWith("plugin:") && item.localStatus === "not-installed"}>{friendlyCapabilitySource(value, locale)}</option>)}</select></Field>
-    <div className="admin-form-actions"><button data-capability-target={item.id} disabled={busy || readOnly || source === item.currentSource} type="button" onClick={() => void act({ schemaVersion: 1, action: "capability.use", scope: "project", target: item.id, source }, { dangerous: true, success: c.capabilitySourceSuccess })}>{c.useSource}</button>{manageLocal && (localReady ? <CapabilityVerifyButton api={api} capability={item.id} locale={locale} disabled={busy} fallback={() => act({ schemaVersion: 1, action: "capability.verify", target: item.id }, { success: c.capabilityVerifySuccess })} onComplete={refreshAdmin} /> : <button data-capability-target={item.id} disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "capability.install", target: item.id }, { dangerous: true, network: true, success: c.capabilityInstallSuccess })}><Download size={17} />{needsRepair ? c.repair : c.install}</button>)}</div>
-    <p className="admin-note" role="status" aria-live="polite">{friendlyCapabilityStatus(item.status, locale)} · {friendlyCapabilitySource(item.currentSource, locale)}</p>
-    {feedback && <p className={`capability-feedback ${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"} aria-live={feedback.kind === "error" ? "assertive" : "polite"}>{feedback.kind === "success" && <CheckCircle2 size={16} />}{feedback.message}</p>}
+  return <div className="capability-control">{label && <h4>{label}</h4>}<div className="capability-current-source"><span>{c.currentSource}</span><strong>{friendlyCapabilitySource(item.currentSource, locale)}</strong></div><Field label={c.chooseSource}><select value={source} disabled={busy || readOnly} onChange={(event) => setSource(event.target.value)}>{item.sources.map((value) => <option key={value} value={value} disabled={value.startsWith("plugin:") && item.localStatus === "not-installed"}>{friendlyCapabilitySource(value, locale)}</option>)}</select></Field>
+    <div className="admin-form-actions capability-action-slot">{source !== item.currentSource ? <button data-capability-target={item.id} disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "capability.use", scope: "project", target: item.id, source }, { dangerous: true, success: c.capabilitySourceSuccess })}>{c.useSource}</button> : manageLocal ? localReady ? <CapabilityVerifyButton api={api} capability={item.id} locale={locale} disabled={busy || readOnly} fallback={() => act({ schemaVersion: 1, action: "capability.verify", target: item.id }, { success: c.capabilityVerifySuccess })} onComplete={refreshAdmin} /> : <button data-capability-target={item.id} disabled={busy || readOnly} type="button" onClick={() => setInstallOpen(true)}><Download size={17} />{needsRepair ? c.repair : c.install}</button> : null}{feedback?.kind === "error" && <p className="capability-verify-error" role="alert">{feedback.message}</p>}</div>
+    {installOpen && <CapabilityInstallDialog api={api} item={item} busy={busy} locale={locale} act={act} onClose={() => setInstallOpen(false)} />}
   </div>;
 }
 
+function CapabilityInstallDialog({ api, item, busy, locale, act, onClose }: { api: ApiClient; item: CapabilityAdmin; busy: boolean; locale: Locale; act: SectionProps["act"]; onClose: () => void }) {
+  const c = copy(locale); const [file, setFile] = useState<File | null>(null); const [localError, setLocalError] = useState(""); const [staging, setStaging] = useState(false); const stagingInFlight = useRef(false);
+  const dialogRef = useDialogLifecycle<HTMLElement>(true, onClose);
+  const installLocal = async () => {
+    if (stagingInFlight.current) return;
+    setLocalError("");
+    if (!file) { setLocalError(locale === "zh-CN" ? "请先选择一个 .imp 插件包。" : "Choose an .imp plugin package first."); return; }
+    if (!api.stagePluginPackage) { setLocalError(locale === "zh-CN" ? "当前服务不支持从浏览器上传插件包。" : "This service cannot upload a plugin package from the browser."); return; }
+    stagingInFlight.current = true; setStaging(true);
+    try {
+      const staged = await api.stagePluginPackage(file);
+      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope: "project", target: item.id, source: staged.source }, { dangerous: true, success: c.capabilityInstallSuccess });
+      if (ok) onClose(); else setLocalError(locale === "zh-CN" ? "插件未能安装，请检查插件包后重试。" : "The plugin could not be installed. Check the package and try again.");
+    } catch (reason) { setLocalError(friendlyError(errorCode(reason), locale)); }
+    finally { stagingInFlight.current = false; setStaging(false); }
+  };
+  const installOfficial = async () => {
+    const ok = await act({ schemaVersion: 1, action: "capability.install", target: item.id }, { dangerous: true, network: true, success: c.capabilityInstallSuccess });
+    if (ok) onClose(); else setLocalError(locale === "zh-CN" ? "官方插件未能安装，请检查网络后重试。" : "The official plugin could not be installed. Check the network and try again.");
+  };
+  return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !staging) onClose(); }}><article ref={dialogRef} className="setup-dialog admin-dialog capability-install-dialog" role="dialog" aria-modal="true" aria-busy={staging} aria-labelledby={`capability-install-${item.id}`}><div className="drawer-heading"><h2 id={`capability-install-${item.id}`}>{c.chooseInstallMethod}</h2><button className="icon-button neutral" disabled={staging} type="button" aria-label={c.cancel} onClick={onClose}><X size={19} /></button></div><section className="install-choice"><div><h3>{c.installFromComputer}</h3><p>{c.localPackageHint}</p></div><input className="plugin-file-input" disabled={staging} aria-label={c.installFromComputer} type="file" accept=".imp,application/octet-stream" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setLocalError(""); }} /><div className="plugin-install-status">{staging ? <p className="capability-feedback progress" role="status">{locale === "zh-CN" ? "正在读取并验证插件包…" : "Reading and verifying the plugin package…"}</p> : localError ? <p className="capability-feedback error" role="alert">{localError}</p> : null}</div><button type="button" disabled={busy || staging || !file} onClick={() => void installLocal()}>{staging ? locale === "zh-CN" ? "正在安装…" : "Installing…" : c.installSelectedPackage}</button></section><div className="dialog-divider"><span>{locale === "zh-CN" ? "或者" : "or"}</span></div><section className="install-choice online"><div><h3>{c.installOfficialOnline}</h3><p>{c.networkRequired}</p></div><button className="secondary" type="button" disabled={busy || staging} onClick={() => void installOfficial()}><Download size={17} />{c.installOfficialOnline}</button></section></article></div>;
+}
+
 function CapabilityVerifyButton({ api, capability, locale, disabled, fallback, onComplete }: { api: ApiClient; capability: CapabilityAdmin["id"]; locale: Locale; disabled: boolean; fallback: () => Promise<unknown>; onComplete: () => Promise<void> }) {
-  const c = copy(locale); const [check, setCheck] = useState<import("./api").CapabilityCheck | null>(null); const [error, setError] = useState("");
+  const c = copy(locale); const [check, setCheck] = useState<import("./api").CapabilityCheck | null>(null); const [error, setError] = useState(""); const [success, setSuccess] = useState(false); const successTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (successTimer.current !== null) window.clearTimeout(successTimer.current); }, []);
   const running = check && ["queued", "running", "cancelling"].includes(check.status);
   const start = async () => {
-    setError("");
+    setError(""); setSuccess(false); if (successTimer.current !== null) window.clearTimeout(successTimer.current);
     if (!api.startCapabilityCheck || !api.capabilityCheck) { await fallback(); return; }
     try {
       let next = await api.startCapabilityCheck(capability); setCheck(next);
@@ -223,124 +254,327 @@ function CapabilityVerifyButton({ api, capability, locale, disabled, fallback, o
         await new Promise((resolve) => window.setTimeout(resolve, 350));
         next = await api.capabilityCheck(next.id); setCheck(next);
       }
-      if (next.status === "completed") { await onComplete(); window.dispatchEvent(new Event("into-md-capabilities-changed")); }
+      if (next.status === "completed") { await onComplete(); window.dispatchEvent(new Event("into-md-capabilities-changed")); setCheck(null); setSuccess(true); successTimer.current = window.setTimeout(() => { setSuccess(false); successTimer.current = null; }, 3_000); }
       else if (next.status === "failed") setError(friendlyError(next.code ?? "requestFailed", locale));
+      else if (next.status === "cancelled") setCheck(null);
     } catch (reason) { setError(friendlyError(errorCode(reason), locale)); }
   };
-  return <div className="capability-verify"><button className="secondary" data-capability-target={capability} disabled={disabled || Boolean(running)} type="button" onClick={() => void start()}>{running ? <Activity className="spinner" size={16} /> : null}{running ? `${check?.progress ?? 0}%` : c.verify}</button>{running && api.cancelCapabilityCheck && <button className="tertiary" type="button" onClick={() => void api.cancelCapabilityCheck?.(check!.id).then(setCheck)}>{c.cancel}</button>}{check && <p className={`capability-feedback ${check.status === "completed" ? "success" : check.status === "failed" ? "error" : "progress"}`} role={check.status === "failed" ? "alert" : "status"}>{check.status === "completed" ? c.capabilityVerifySuccess : check.status === "failed" ? error : `${friendlyCheckStage(check.stage, locale)} · ${check.progress}%`}</p>}</div>;
+  const cancel = async () => {
+    if (!check || !api.cancelCapabilityCheck) return;
+    setError("");
+    try { setCheck(await api.cancelCapabilityCheck(check.id)); }
+    catch (reason) { setError(friendlyError(errorCode(reason), locale)); }
+  };
+  const progress = check?.progress ?? 0;
+  const canCancel = Boolean(running && api.cancelCapabilityCheck);
+  const label = running ? canCancel ? `${progress}% · ${c.cancel}` : `${progress}%` : success ? c.capabilityVerifySuccess : c.verify;
+  const accessibleLabel = running ? `${friendlyCheckStage(check!.stage, locale)}，${progress}%${canCancel ? `，${c.cancel}` : ""}` : error ? `${error}，${c.verify}` : label;
+  return <div className="capability-verify"><button className="secondary" data-capability-target={capability} data-state={running ? "running" : error ? "failed" : success ? "success" : "idle"} disabled={disabled || Boolean(running && !canCancel)} type="button" aria-label={accessibleLabel} title={error || undefined} onClick={() => void (running ? cancel() : start())}>{running ? <Activity className="spinner" size={16} /> : success ? <CheckCircle2 size={16} /> : null}{label}</button>{error && <p className="capability-verify-error" role="alert">{error}</p>}</div>;
 }
 
 function ProvidersSection({ snapshot, busy, locale, act, feedback }: SectionProps) {
   const c = copy(locale); const [open, setOpen] = useState(false); const [editing, setEditing] = useState(false); const [name, setName] = useState(""); const [url, setUrl] = useState(""); const [model, setModel] = useState(""); const [ocrModel, setOcrModel] = useState(""); const [transcriptionModel, setTranscriptionModel] = useState(""); const [env, setEnv] = useState(""); const [capabilities, setCapabilities] = useState(""); const [timeout, setTimeoutValue] = useState(""); const [scope, setScope] = useState<"global" | "project">("project"); const [hosts, setHosts] = useState(""); const [privateNetwork, setPrivateNetwork] = useState(false); const [page, setPage] = useState(0);
   const effective = snapshot.providers.filter((item) => item.effective); const validTimeout = timeout === "" || /^[1-9][0-9]{0,7}$/.test(timeout) && Number(timeout) <= 86_400_000;
-  const visible = effective.slice(page * 6, page * 6 + 6);
+  const visiblePage = clampedPage(page, effective.length, 6); const visible = effective.slice(visiblePage * 6, visiblePage * 6 + 6);
+  useClampedPage(page, effective.length, 6, setPage);
   const providerCapabilities = [...new Set([...csv(capabilities), ...(ocrModel ? ["vision-ocr"] : []), ...(transcriptionModel ? ["audio-transcription"] : [])])];
+  const returnFocusSelector = useRef("");
+  useEffect(() => { if (open || !returnFocusSelector.current) return; const frame = window.requestAnimationFrame(() => document.querySelector<HTMLElement>(returnFocusSelector.current)?.focus()); return () => window.cancelAnimationFrame(frame); }, [open]);
+  const closeEditor = () => setOpen(false);
+  const dialogRef = useDialogLifecycle<HTMLElement>(open, closeEditor);
   const clear = () => { setEditing(false); setName(""); setUrl(""); setModel(""); setOcrModel(""); setTranscriptionModel(""); setEnv(""); setCapabilities(""); setTimeoutValue(""); setScope("project"); setHosts(""); setPrivateNetwork(false); };
-  const add = () => { clear(); setOpen(true); };
-  const edit = (item: ProviderAdmin) => { setEditing(true); setName(item.name); setUrl(item.baseUrl ?? ""); setModel(item.model ?? ""); setOcrModel(item.models["vision-ocr"] ?? item.models.ocr ?? ""); setTranscriptionModel(item.models["audio-transcription"] ?? item.models.transcription ?? ""); setEnv(item.apiKeyEnv ?? ""); setCapabilities(item.capabilities.filter((value) => !["vision-ocr", "ocr", "audio-transcription", "transcription"].includes(value)).join(", ")); setTimeoutValue(item.timeoutMs ? String(item.timeoutMs) : ""); setScope(item.actionScope ?? "project"); setOpen(true); };
-  return <div className="admin-section-stack"><SectionTitle icon={<Cloud />} title={c.providersTitle} body={c.providersBody} action={<button type="button" disabled={snapshot.configurationReadOnly} onClick={add}><Plus size={17} />{c.addProvider}</button>} />
-    {open && <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}><article className="setup-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title"><div className="drawer-heading"><h2 id="provider-dialog-title">{editing ? `${c.edit} ${name}` : c.addProvider}</h2><button className="icon-button neutral" type="button" aria-label={c.cancel} onClick={() => setOpen(false)}>×</button></div><div className="admin-form-grid"><Field label={c.serviceName}><input value={name} disabled={editing} maxLength={128} onChange={(event) => setName(event.target.value)} /></Field><Field label={c.baseUrl}><input value={url} maxLength={4096} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" onChange={(event) => setUrl(event.target.value)} /></Field><Field label={c.model}><input value={model} maxLength={512} onChange={(event) => setModel(event.target.value)} /></Field><Field label={c.apiKeyEnv} hint={c.apiKeyHint}><input value={env} maxLength={128} placeholder="DASHSCOPE_API_KEY" onChange={(event) => setEnv(event.target.value)} /></Field><Field label={c.ocrModel} hint={c.modelMappingHint}><input value={ocrModel} maxLength={512} onChange={(event) => setOcrModel(event.target.value)} /></Field><Field label={c.transcriptionModel} hint={c.modelMappingHint}><input value={transcriptionModel} maxLength={512} onChange={(event) => setTranscriptionModel(event.target.value)} /></Field></div>
-      <details className="admin-advanced"><summary>{c.advanced}</summary><div className="admin-form-grid"><Field label={c.capabilities}><input value={capabilities} maxLength={1024} onChange={(event) => setCapabilities(event.target.value)} /></Field><Field label={c.timeout}><input value={timeout} inputMode="numeric" maxLength={8} aria-invalid={!validTimeout} onChange={(event) => setTimeoutValue(event.target.value)} /></Field><Field label={c.hosts}><input value={hosts} maxLength={4096} onChange={(event) => setHosts(event.target.value)} /></Field><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field><CheckField label={c.privateNetwork} checked={privateNetwork} setChecked={setPrivateNetwork} /></div></details>
-      <div className="admin-form-actions"><button className="secondary" type="button" onClick={() => setOpen(false)}>{c.cancel}</button><button disabled={busy || !name || !url || !model || !env || !validTimeout} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.add", scope, target: name, source: url, providerType: "openai-compatible", model, models: { ...(ocrModel ? { "vision-ocr": ocrModel } : {}), ...(transcriptionModel ? { "audio-transcription": transcriptionModel } : {}) }, apiKeyEnv: env, capabilities: providerCapabilities, ...(timeout ? { timeoutMs: Number(timeout) } : {}) }, { dangerous: true, success: c.providerAddedSuccess }).then((ok) => { if (ok) setOpen(false); })}>{editing ? c.save : c.add}</button></div></article></div>}
-    {effective.length === 0 ? <EmptyState icon={<Cloud />} title={c.noProviders} body={c.noProvidersBody} /> : <><div className="admin-grid">{visible.map((item) => <ProviderCard key={`${item.scope}:${item.name}`} item={item} all={snapshot.providers} busy={busy} locale={locale} hosts={hosts} privateNetwork={privateNetwork} readOnly={snapshot.configurationReadOnly} act={act} onEdit={() => edit(item)} feedback={feedback?.target === item.name ? feedback : null} />)}</div><PageControls page={page} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
+  const add = () => { clear(); returnFocusSelector.current = '[data-provider-add="true"]'; setOpen(true); };
+  const edit = (item: ProviderAdmin) => { setEditing(true); setName(item.name); setUrl(item.baseUrl ?? ""); setModel(item.model ?? ""); setOcrModel(item.models["vision-ocr"] ?? item.models.ocr ?? ""); setTranscriptionModel(item.models["audio-transcription"] ?? item.models.transcription ?? ""); setEnv(item.apiKeyEnv ?? ""); setCapabilities(item.capabilities.filter((value) => !["vision-ocr", "ocr", "audio-transcription", "transcription"].includes(value)).join(", ")); setTimeoutValue(item.timeoutMs ? String(item.timeoutMs) : ""); setScope(item.actionScope ?? "project"); setHosts(item.allowedHosts.join(", ")); setPrivateNetwork(item.allowPrivateNetwork); returnFocusSelector.current = `[data-provider-edit="${encodeURIComponent(item.name)}"]`; setOpen(true); };
+  const editor = <section ref={dialogRef} className="admin-inline-editor provider-edit-dialog" role="dialog" aria-modal="false" aria-labelledby="provider-dialog-title"><div className="drawer-heading"><h2 id="provider-dialog-title">{editing ? `${c.edit} ${name}` : c.addProvider}</h2><button className="icon-button neutral" type="button" aria-label={locale === "zh-CN" ? "返回 AI 服务列表" : "Back to AI services"} onClick={closeEditor}><ChevronLeft size={19} /></button></div><div className="admin-dialog-scroll"><div className="admin-form-grid"><Field label={c.serviceName}><input value={name} disabled={editing} maxLength={128} onChange={(event) => setName(event.target.value)} /></Field><Field label={c.baseUrl}><input value={url} maxLength={4096} placeholder="https://api.example.com/v1" onChange={(event) => setUrl(event.target.value)} /></Field><Field label={c.apiKeyEnv}><input value={env} maxLength={128} placeholder="AI_SERVICE_API_KEY" onChange={(event) => setEnv(event.target.value)} /></Field><Field label={c.model}><input value={model} maxLength={512} onChange={(event) => setModel(event.target.value)} /></Field><Field label={c.ocrModel}><input value={ocrModel} maxLength={512} onChange={(event) => setOcrModel(event.target.value)} /></Field><Field label={c.transcriptionModel}><input value={transcriptionModel} maxLength={512} onChange={(event) => setTranscriptionModel(event.target.value)} /></Field></div>
+      <div className="admin-dialog-section"><h3>{locale === "zh-CN" ? "连接选项" : "Connection options"}</h3><div className="admin-form-grid"><Field label={c.timeout}><input value={timeout} inputMode="numeric" maxLength={8} aria-invalid={!validTimeout} onChange={(event) => setTimeoutValue(event.target.value)} /></Field><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field><Field label={c.hosts}><input value={hosts} maxLength={4096} onChange={(event) => setHosts(event.target.value)} /></Field><CheckField label={c.privateNetwork} checked={privateNetwork} setChecked={setPrivateNetwork} /></div></div></div>
+      <div className="admin-form-actions admin-dialog-actions"><button className="secondary" type="button" onClick={closeEditor}>{c.cancel}</button><button disabled={busy || !name || !url || !model || !env || !validTimeout} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.add", scope, target: name, source: url, providerType: "openai-compatible", model, models: { ...(ocrModel ? { "vision-ocr": ocrModel } : {}), ...(transcriptionModel ? { "audio-transcription": transcriptionModel } : {}) }, apiKeyEnv: env, capabilities: providerCapabilities, allowHosts: csv(hosts), allowPrivateNetwork: privateNetwork, ...(timeout ? { timeoutMs: Number(timeout) } : {}) }, { dangerous: true, success: c.providerAddedSuccess }).then((ok) => { if (ok) closeEditor(); })}>{editing ? c.save : c.add}</button></div></section>;
+  return <div className={`admin-section-stack admin-source-section${open ? " editing-source" : ""}`}><SectionTitle icon={<Cloud />} title={c.providersTitle} body={c.providersBody} action={!open ? <button data-provider-add="true" type="button" disabled={snapshot.configurationReadOnly} onClick={add}><Plus size={17} />{c.addProvider}</button> : undefined} />
+    {open ? editor : effective.length === 0 ? <EmptyState icon={<Cloud />} title={c.noProviders} body={c.noProvidersBody} /> : <><div className="admin-grid">{visible.map((item) => <ProviderCard key={`${item.scope}:${item.name}`} item={item} all={snapshot.providers} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} onEdit={() => edit(item)} feedback={feedback?.target === item.name ? feedback : null} />)}</div><PageControls page={visiblePage} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
   </div>;
 }
 
-function ProviderCard({ item, all, busy, locale, hosts, privateNetwork, readOnly, act, onEdit, feedback }: { item: ProviderAdmin; all: ProviderAdmin[]; busy: boolean; locale: Locale; hosts: string; privateNetwork: boolean; readOnly: boolean; act: SectionProps["act"]; onEdit: () => void; feedback?: ActionFeedback | null }) {
+function ProviderCard({ item, all, busy, locale, readOnly, act, onEdit, feedback }: { item: ProviderAdmin; all: ProviderAdmin[]; busy: boolean; locale: Locale; readOnly: boolean; act: SectionProps["act"]; onEdit: () => void; feedback?: ActionFeedback | null }) {
   const c = copy(locale); const layers = all.filter((candidate) => candidate.name === item.name && candidate.scope !== "effective" && candidate.actionScope); const capabilities = [...new Set([...item.capabilities, ...Object.keys(item.models)])];
   return <article className="card admin-entity-card"><div className="entity-card-heading"><div className="entity-icon"><Cloud size={18} /></div><div><h3>{item.name}</h3><p>{item.model ?? c.inherited}</p></div>{item.default ? <StatusBadge tone="ok">{c.defaultModel}</StatusBadge> : <StatusBadge tone={item.environmentSet === false ? "warning" : "neutral"}>{item.environmentSet === false ? c.environmentMissing : c.environmentReady}</StatusBadge>}</div>
     <p className="admin-endpoint breakable">{item.baseUrl ?? c.inherited}</p><div className="chip-row">{capabilities.length === 0 ? <span className="status-pill">{locale === "zh-CN" ? "通用文本模型" : "General text"}</span> : capabilities.map((value) => <span className="status-pill" key={value}>{friendlyProviderCapability(value, locale)}</span>)}</div>
-    <div className="admin-form-actions"><button className="secondary" disabled={busy || readOnly || !item.actionScope} type="button" onClick={onEdit}>{c.edit}</button><button disabled={busy || readOnly || !item.actionScope} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.test", scope: item.actionScope, target: item.name, allowHosts: csv(hosts), allowPrivateNetwork: privateNetwork }, { network: true, dangerous: privateNetwork, success: c.providerTestSuccess })}>{c.test}</button>{!item.default && item.actionScope && <button className="secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.set-default", scope: item.actionScope, target: item.name }, { dangerous: true, success: c.providerDefaultSuccess })}>{c.setDefault}</button>}</div>
-    {feedback && <p className={`capability-feedback ${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
-    <details className="admin-advanced"><summary>{locale === "zh-CN" ? "连接详情" : "Connection details"}</summary><dl className="admin-detail-list"><Detail label={c.apiKeyEnv} value={item.apiKeyEnv ?? c.inherited} /><Detail label={c.timeout} value={item.timeoutMs ? String(item.timeoutMs) : c.inherited} />{Object.entries(item.models).map(([capability, mappedModel]) => <Detail key={capability} label={`${c.model} · ${friendlyProviderCapability(capability, locale)}`} value={mappedModel} />)}</dl>{layers.length > 0 && <ul className="admin-layer-list">{layers.map((layer) => <li key={layer.scope}><span>{friendlyScope(layer.scope, locale)}</span><button className="danger" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.remove", scope: layer.actionScope, target: item.name }, { dangerous: true, confirm: c.providerRemoveConfirm, success: c.success })}>{c.remove}</button></li>)}</ul>}</details>
+    <div className="entity-card-actions"><div className="entity-primary-actions"><button data-provider-edit={encodeURIComponent(item.name)} className="secondary" disabled={busy || readOnly || !item.actionScope} type="button" onClick={onEdit}>{c.edit}</button><button disabled={busy || readOnly || !item.actionScope} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.test", scope: item.actionScope, target: item.name }, { network: true, dangerous: item.allowPrivateNetwork, success: c.providerTestSuccess })}>{c.test}</button>{!item.default && item.actionScope && <button className="secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.set-default", scope: item.actionScope, target: item.name }, { dangerous: true, success: c.providerDefaultSuccess })}>{c.setDefault}</button>}</div>{layers.length > 0 && <div className="entity-danger-actions">{layers.map((layer) => <button key={layer.scope} className="danger secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "provider.remove", scope: layer.actionScope, target: item.name }, { dangerous: true, confirm: c.providerRemoveConfirm, success: c.providerRemoveSuccess })}><Trash2 size={16} />{locale === "zh-CN" ? `删除${layer.scope === "global" ? "所有项目" : "当前项目"}设置` : `Remove ${layer.scope === "global" ? "global" : "project"} settings`}</button>)}</div>}{feedback && <p className={`capability-feedback ${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}</div>
   </article>;
 }
 
 function PluginsSection({ api, snapshot, busy, locale, act, feedback }: SectionProps) {
-  const c = copy(locale); const [open, setOpen] = useState(false); const [source, setSource] = useState(""); const [file, setFile] = useState<File | null>(null); const [localError, setLocalError] = useState(""); const [sha, setSha] = useState(""); const [signer, setSigner] = useState(""); const [fingerprint, setFingerprint] = useState(""); const [scope, setScope] = useState<"global" | "project">("project"); const [page, setPage] = useState(0);
-  const effective = snapshot.plugins.filter((item) => item.effective); const visible = effective.slice(page * 6, page * 6 + 6);
+  const c = copy(locale); const [open, setOpen] = useState(false); const [source, setSource] = useState(""); const [file, setFile] = useState<File | null>(null); const [localError, setLocalError] = useState(""); const [staging, setStaging] = useState(false); const [scope, setScope] = useState<"global" | "project">("project"); const [page, setPage] = useState(0);
+  const effective = snapshot.plugins.filter((item) => item.effective); const visiblePage = clampedPage(page, effective.length, 6); const visible = effective.slice(visiblePage * 6, visiblePage * 6 + 6);
+  const installFeedback = feedback && !effective.some((item) => item.id === feedback.target) ? feedback : null;
+  const stagingInFlight = useRef(false);
+  useClampedPage(page, effective.length, 6, setPage);
+  useEffect(() => { if (open) return; const frame = window.requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-plugin-add="true"]')?.focus()); return () => window.cancelAnimationFrame(frame); }, [open]);
+  const closeInstaller = () => setOpen(false);
+  const dialogRef = useDialogLifecycle<HTMLElement>(open, closeInstaller);
   const install = async () => {
-    setLocalError("");
+    if (stagingInFlight.current) return;
+    stagingInFlight.current = true; setLocalError(""); setStaging(true);
     try {
       const packageSource = file ? (api.stagePluginPackage ? (await api.stagePluginPackage(file)).source : "") : source;
       if (!packageSource) { setLocalError(locale === "zh-CN" ? "当前服务不支持从浏览器上传插件包，请使用 HTTPS 地址。" : "This service cannot upload a plugin package from the browser. Use an HTTPS URL instead."); return; }
-      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope, source: packageSource, ...(sha ? { sha256: sha } : {}), ...(signer ? { signingKeyId: signer } : {}), ...(fingerprint ? { signingKeySha256: fingerprint } : {}) }, { dangerous: true, network: /^https:\/\//i.test(packageSource), success: c.pluginInstallSuccess });
-      if (ok) { setOpen(false); setFile(null); setSource(""); }
+      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope, source: packageSource }, { dangerous: true, network: /^https:\/\//i.test(packageSource), success: c.pluginInstallSuccess });
+      if (ok) { closeInstaller(); setFile(null); setSource(""); }
     } catch (reason) { setLocalError(friendlyError(errorCode(reason), locale)); }
+    finally { stagingInFlight.current = false; setStaging(false); }
   };
-  return <div className="admin-section-stack"><SectionTitle icon={<Package />} title={c.pluginsTitle} body={c.pluginsBody} action={<button type="button" disabled={snapshot.configurationReadOnly} onClick={() => setOpen(true)}><Plus size={17} />{c.addPlugin}</button>} />
-    {open && <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}><article className="setup-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-dialog-title"><div className="drawer-heading"><h2 id="plugin-dialog-title">{c.addPlugin}</h2><button className="icon-button neutral" type="button" aria-label={c.cancel} onClick={() => setOpen(false)}>×</button></div><Field label={locale === "zh-CN" ? "从电脑选择" : "Choose from this computer"} hint={file?.name ?? (locale === "zh-CN" ? "选择一个 .imp 插件安装包" : "Choose an .imp plugin package")}><input className="plugin-file-input" type="file" accept=".imp,application/octet-stream" onChange={(event) => { setFile(event.target.files?.[0] ?? null); if (event.target.files?.[0]) setSource(""); }} /></Field><div className="dialog-divider"><span>{locale === "zh-CN" ? "或者" : "or"}</span></div><Field label={locale === "zh-CN" ? "从 HTTPS 地址安装" : "Install from an HTTPS URL"}><input value={source} maxLength={4096} placeholder="https://…/plugin.imp" onChange={(event) => { setSource(event.target.value); if (event.target.value) setFile(null); }} /></Field>{localError && <p className="capability-feedback error" role="alert">{localError}</p>}<details className="admin-advanced"><summary>{c.advanced}</summary><div className="admin-form-grid"><Field label={c.sha}><input value={sha} maxLength={64} onChange={(event) => setSha(event.target.value)} /></Field><Field label={c.signer}><input value={signer} maxLength={128} onChange={(event) => setSigner(event.target.value)} /></Field><Field label={c.fingerprint}><input value={fingerprint} maxLength={64} onChange={(event) => setFingerprint(event.target.value)} /></Field><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field></div></details><div className="admin-form-actions"><button className="secondary" type="button" onClick={() => setOpen(false)}>{c.cancel}</button><button disabled={busy || !file && !source} type="button" onClick={() => void install()}>{c.install}</button></div></article></div>}
-    {effective.length === 0 ? <EmptyState icon={<Package />} title={c.noPlugins} body={c.noPluginsBody} /> : <><div className="admin-grid">{visible.map((item) => <PluginCard key={`${item.scope}:${item.id}`} item={item} all={snapshot.plugins} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === item.id ? feedback : null} />)}</div><PageControls page={page} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
+  const installer = <section ref={dialogRef} className="admin-inline-editor plugin-install-dialog" role="dialog" aria-modal="false" aria-labelledby="plugin-dialog-title" aria-busy={staging}><div className="drawer-heading"><h2 id="plugin-dialog-title">{c.addPlugin}</h2><button className="icon-button neutral" disabled={staging} type="button" aria-label={locale === "zh-CN" ? "返回本地扩展列表" : "Back to local extensions"} onClick={closeInstaller}><ChevronLeft size={19} /></button></div><div className="admin-dialog-scroll"><Field label={locale === "zh-CN" ? "从电脑选择插件包" : "Choose a plugin package from this computer"} {...(file?.name ? { hint: file.name } : { hint: locale === "zh-CN" ? "支持 .imp 插件包；从电脑安装不需要联网。" : "Supports .imp packages. Installing from this computer does not use the network." })}><input className="plugin-file-input" disabled={staging} type="file" accept=".imp,application/octet-stream" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setLocalError(""); if (event.target.files?.[0]) setSource(""); }} /></Field><div className="dialog-divider"><span>{locale === "zh-CN" ? "或者" : "or"}</span></div><Field label={locale === "zh-CN" ? "从 HTTPS 地址安装" : "Install from an HTTPS URL"} hint={locale === "zh-CN" ? "只有选择此方式时才会联网下载。" : "Network access is used only when you choose this option."}><input value={source} disabled={staging} maxLength={4096} placeholder="https://…/plugin.imp" onChange={(event) => { setSource(event.target.value); setLocalError(""); if (event.target.value) setFile(null); }} /></Field><div className="plugin-install-status">{staging ? <p className="capability-feedback progress" role="status">{locale === "zh-CN" ? "正在读取并验证插件包…" : "Reading and verifying the plugin package…"}</p> : localError ? <p className="capability-feedback error" role="alert">{localError}</p> : installFeedback ? <p className={`capability-feedback ${installFeedback.kind}`} role={installFeedback.kind === "error" ? "alert" : "status"}>{installFeedback.message}</p> : null}</div><Field label={locale === "zh-CN" ? "安装到" : "Install for"}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field></div><div className="admin-form-actions admin-dialog-actions"><button className="secondary" disabled={staging} type="button" onClick={closeInstaller}>{c.cancel}</button><button disabled={busy || staging || !file && !source} type="button" onClick={() => void install()}>{staging ? locale === "zh-CN" ? "正在安装…" : "Installing…" : c.install}</button></div></section>;
+  return <div className={`admin-section-stack admin-source-section${open ? " editing-source" : ""}`}><SectionTitle icon={<Package />} title={c.pluginsTitle} body={c.pluginsBody} action={!open ? <div className="source-manager-actions">{installFeedback && <span className={`source-manager-feedback ${installFeedback.kind}`} role={installFeedback.kind === "error" ? "alert" : "status"}>{installFeedback.message}</span>}<button data-plugin-add="true" type="button" disabled={snapshot.configurationReadOnly} onClick={() => setOpen(true)}><Plus size={17} />{c.addPlugin}</button></div> : undefined} />
+    {open ? installer : effective.length === 0 ? <EmptyState icon={<Package />} title={c.noPlugins} body={c.noPluginsBody} /> : <><div className="admin-grid">{visible.map((item) => <PluginCard key={`${item.scope}:${item.id}`} item={item} all={snapshot.plugins} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === item.id ? feedback : null} />)}</div><PageControls page={visiblePage} total={effective.length} pageSize={6} setPage={setPage} locale={locale} /></>}
   </div>;
 }
 
 function PluginCard({ item, all, busy, locale, readOnly, act, feedback }: { item: PluginAdmin; all: PluginAdmin[]; busy: boolean; locale: Locale; readOnly: boolean; act: SectionProps["act"]; feedback?: ActionFeedback | null }) {
-  const c = copy(locale); const layers = all.filter((candidate) => candidate.id === item.id && candidate.scope !== "effective" && candidate.actionScope);
+  const c = copy(locale); const layers = all.filter((candidate) => candidate.id === item.id && candidate.scope !== "effective" && candidate.actionScope); const editableLayer = layers[0];
   return <article className="card admin-entity-card"><div className="entity-card-heading"><div className="entity-icon"><Package size={18} /></div><div><h3>{pluginDisplayName(item.id, locale)}</h3><p>{item.version && item.version !== "0.0.0" ? `${c.version} ${item.version}` : pluginDescription(item.id, locale)}</p></div><StatusBadge tone={item.enabled === false ? "neutral" : "ok"}>{item.enabled === false ? c.disabled : c.enabled}</StatusBadge></div>
-    <div className="admin-form-actions"><button className="secondary" disabled={busy || readOnly || !item.actionScope} type="button" onClick={() => void act({ schemaVersion: 1, action: "plugin.verify", scope: item.actionScope, target: item.id }, { success: c.pluginVerifySuccess })}>{c.verify}</button></div>
-    {feedback && <p className={`capability-feedback ${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
-    <details className="admin-advanced"><summary>{locale === "zh-CN" ? "安装与签名信息" : "Installation and signature"}</summary><dl className="admin-detail-list"><Detail label="ID" value={item.id} /><Detail label={c.packageSource} value={item.source ?? c.inherited} /><Detail label={c.target} value={item.target ?? c.inherited} /><Detail label={c.protocol} value={item.protocol ?? c.inherited} /><Detail label={c.verification} value={item.verification ?? c.inherited} /><Detail label={c.sha} value={item.sha256 ?? c.inherited} /><Detail label={c.signer} value={item.signingKeyId ?? c.inherited} /></dl></details>
-    {layers.length > 0 && <ul className="admin-layer-list visible-actions">{layers.map((layer) => <li key={layer.scope}><span>{friendlyScope(layer.scope, locale)}</span><div className="task-actions"><button className="secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: layer.enabled === false ? "plugin.enable" : "plugin.disable", scope: layer.actionScope, target: item.id }, { dangerous: layer.enabled === false, success: c.success })}>{layer.enabled === false ? c.enable : c.disable}</button><button className="danger" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "plugin.remove", scope: layer.actionScope, target: item.id }, { dangerous: true, confirm: c.pluginRemoveConfirm, success: c.success })}>{c.remove}</button></div></li>)}</ul>}
+    <div className="admin-form-actions entity-card-actions"><button className="secondary" disabled={busy || readOnly || !item.actionScope} type="button" onClick={() => void act({ schemaVersion: 1, action: "plugin.verify", scope: item.actionScope, target: item.id }, { success: c.pluginVerifySuccess })}>{c.verify}</button>{editableLayer?.actionScope && <button className="secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: editableLayer.enabled === false ? "plugin.enable" : "plugin.disable", scope: editableLayer.actionScope, target: item.id }, { dangerous: true, ...(editableLayer.enabled === false ? {} : { confirm: locale === "zh-CN" ? "停用后，使用这项本地能力的任务将无法运行。确定停用吗？" : "Tasks using this local capability will stop working. Disable it?" }), success: editableLayer.enabled === false ? c.pluginEnableSuccess : c.pluginDisableSuccess })}>{editableLayer.enabled === false ? c.enable : c.disable}</button>}{editableLayer?.actionScope && <button className="danger secondary" disabled={busy || readOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "plugin.remove", scope: editableLayer.actionScope, target: item.id }, { dangerous: true, confirm: c.pluginRemoveConfirm, success: c.pluginRemoveSuccess })}><Trash2 size={16} />{c.remove}</button>}{feedback && <p className={`capability-feedback ${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}</div>
   </article>;
 }
 
-function ConfigurationSection({ snapshot, busy, locale, act }: SectionProps) {
-  const c = copy(locale); const [key, setKey] = useState("conversion.ocr.policy"); const [value, setValue] = useState("auto"); const [scope, setScope] = useState<"global" | "project">("project"); const [prompt, setPrompt] = useState(""); const [profile, setProfile] = useState(""); const [from, setFrom] = useState(""); const [source, setSource] = useState(""); const [resolved, setResolved] = useState(false); const [force, setForce] = useState(false);
-  return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.configTitle} body={c.configBody} />
-    <div className="admin-grid admin-config-grid"><article className="card admin-tool-card"><h2>{c.chooseSetting}</h2><Field label={c.chooseSetting}><select value={key} onChange={(event) => setKey(event.target.value)}>{adminConfigKeys.map((item) => <option key={item} value={item}>{friendlyConfigKey(item, locale)}</option>)}</select></Field><Field label={c.value}><input value={value} maxLength={4096} onChange={(event) => setValue(event.target.value)} /></Field><Field label={c.scope}><ScopeSelect value={scope} onChange={setScope} locale={locale} /></Field><div className="admin-form-actions"><button className="secondary" disabled={busy || !key} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.get", target: key }, { success: c.success })}>{c.readCurrent}</button><button disabled={busy || snapshot.configurationReadOnly || !key} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.set", scope, target: key, value }, { dangerous: true, success: c.configSaved })}>{c.save}</button><button className="secondary" disabled={busy || snapshot.configurationReadOnly || !key} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.unset", scope, target: key }, { dangerous: true, success: c.configRestored })}>{c.restore}</button></div><details className="admin-advanced"><summary>{c.technical}</summary><code className="breakable">{key}</code><div className="admin-form-row"><Field label={c.promptName}><input value={prompt} pattern="[A-Za-z0-9_-]+" maxLength={128} onChange={(event) => setPrompt(event.target.value)} /></Field><button className="secondary" disabled={!/^[A-Za-z0-9_-]{1,128}$/.test(prompt)} type="button" onClick={() => setKey(`conversion.ai.prompts.${prompt}`)}>{c.addPrompt}</button></div></details></article>
-      <article className="card admin-tool-card"><h2>{c.profiles}</h2>{snapshot.profiles.length === 0 ? <p className="muted">{c.noProfiles}</p> : <ul className="admin-simple-list">{snapshot.profiles.map((item) => <li key={`${item.scope}:${item.name}`}><div><strong>{item.name}</strong><small>{friendlyScope(item.scope, locale)}{item.active ? ` · ${c.effective}` : ""}</small></div><div className="task-actions"><button className="secondary" disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "profile.show", scope: item.scope === "global" ? "global" : "project", target: item.name }, { success: c.success })}>{c.show}</button>{item.scope !== "effective" && <button className="danger" disabled={busy || snapshot.configurationReadOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "profile.remove", scope: item.scope === "global" ? "global" : "project", target: item.name }, { dangerous: true, confirm: c.profileRemoveConfirm, success: c.success })}>{c.remove}</button>}</div></li>)}</ul>}<Field label={c.newProfile}><input value={profile} maxLength={128} onChange={(event) => setProfile(event.target.value)} /></Field><Field label={c.copyFrom}><input value={from} maxLength={128} onChange={(event) => setFrom(event.target.value)} /></Field><div className="admin-form-actions"><button disabled={busy || snapshot.configurationReadOnly || !/^[A-Za-z0-9_-]{1,128}$/.test(profile)} type="button" onClick={() => void act({ schemaVersion: 1, action: "profile.create", scope, target: profile, ...(from ? { from } : {}) }, { dangerous: true, success: c.profileCreated })}>{c.create}</button></div></article></div>
-    <article className="card admin-tool-card"><h2>{c.configTools}</h2><p>{c.configToolsBody}</p><details className="admin-advanced"><summary>{c.advanced}</summary><div className="admin-form-grid"><Field label={c.validationPath}><input value={source} maxLength={4096} onChange={(event) => setSource(event.target.value)} /></Field><CheckField label={c.resolved} checked={resolved} setChecked={setResolved} /><CheckField label={c.force} checked={force} setChecked={setForce} /></div></details><div className="task-actions"><button className="secondary" disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.paths" }, { success: c.success })}>{c.paths}</button><button className="secondary" disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.validate", ...(source ? { source } : {}) }, { success: c.success })}>{c.validate}</button><button className="secondary" disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.show", resolved }, { success: c.success })}>{c.show}</button><button disabled={busy || snapshot.configurationReadOnly} type="button" onClick={() => void act({ schemaVersion: 1, action: "config.init", scope, force }, { dangerous: true, success: c.success })}>{c.initialize}</button></div></article>
-    <OperationResult result={snapshot.operationResult} locale={locale} />
-    <details className="card admin-advanced admin-raw-config"><summary>{c.rawConfig}</summary><pre className="config-json">{JSON.stringify(snapshot.configuration, null, 2)}</pre></details>
+function ConfigurationSection({ snapshot, busy, locale, act, feedback }: SectionProps) {
+  const c = copy(locale); const [values, setValues] = useState(() => preferenceValues(snapshot.configuration)); const [dirty, setDirty] = useState<Set<keyof PreferenceValues>>(new Set());
+  const configurationRef = useRef(snapshot.configuration);
+  useEffect(() => {
+    if (configurationRef.current === snapshot.configuration) return;
+    configurationRef.current = snapshot.configuration;
+    if (dirty.size === 0) setValues(preferenceValues(snapshot.configuration));
+  }, [dirty.size, snapshot.configuration]);
+  const update = <K extends keyof PreferenceValues>(key: K, value: PreferenceValues[K]) => { setValues((current) => ({ ...current, [key]: value })); setDirty((current) => new Set(current).add(key)); };
+  const ocrLanguageOptions = [
+    ["", locale === "zh-CN" ? "自动检测" : "Detect automatically"],
+    ["zh-Hans,en", locale === "zh-CN" ? "简体中文和英语" : "Simplified Chinese and English"],
+    ["zh-Hant,en", locale === "zh-CN" ? "繁体中文和英语" : "Traditional Chinese and English"],
+    ["zh-Hans,zh-Hant,en", locale === "zh-CN" ? "简体中文、繁体中文和英语" : "Simplified Chinese, Traditional Chinese and English"],
+    ["zh-Hans", locale === "zh-CN" ? "仅简体中文" : "Simplified Chinese only"],
+    ["zh-Hant", locale === "zh-CN" ? "仅繁体中文" : "Traditional Chinese only"],
+    ["en", locale === "zh-CN" ? "英语" : "English"],
+    ["zh-Hans,zh-Hant", locale === "zh-CN" ? "简体中文和繁体中文" : "Simplified and Traditional Chinese"],
+  ] as const;
+  const save = async () => {
+    for (const key of dirty) {
+      const setting = preferenceSetting(key, values[key]);
+      const ok = await act({ schemaVersion: 1, action: "config.set", scope: "project", target: setting.key, value: setting.value }, { dangerous: true, success: c.configSaved });
+      if (!ok) return;
+    }
+    setDirty(new Set());
+  };
+  const reset = () => { setValues(preferenceDefaults); setDirty(new Set(Object.keys(preferenceDefaults) as Array<keyof PreferenceValues>)); };
+  const zhLocale = locale === "zh-CN";
+  const invalidTimeout = !Number.isInteger(values.timeoutMinutes) || values.timeoutMinutes < 1 || values.timeoutMinutes > 1440;
+  const invalidJobs = !Number.isInteger(values.jobs) || values.jobs < 1 || values.jobs > 64;
+  const invalidPreferences = invalidTimeout || invalidJobs;
+  const configFeedback = feedback && (feedback.target.startsWith("conversion.") || feedback.target.startsWith("cli.")) ? feedback : null;
+  return <div className="admin-section-stack preferences-layout"><SectionTitle icon={<Settings2 />} title={c.configTitle} body={c.configBody} />
+    <div className="preference-scroll"><div className="preference-groups">
+      <PreferenceGroup title={zhLocale ? "文稿与识别" : "Documents and recognition"} icon={<ScanText size={19} />}>
+        <PreferenceRow label={zhLocale ? "扫描内容识别" : "OCR for scanned content"} description={zhLocale ? "自动判断是否需要识别扫描页" : "Automatically detect scanned pages"}><select value={values.ocrPolicy} onChange={(event) => update("ocrPolicy", event.target.value)}><option value="auto">{zhLocale ? "自动" : "Automatic"}</option><option value="always">{zhLocale ? "始终识别" : "Always"}</option><option value="off">{zhLocale ? "关闭" : "Off"}</option></select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "识别语言" : "OCR languages"} description={zhLocale ? "选择文稿中使用的一种或多种语言" : "Choose one or more languages used in the document"}><select aria-label={zhLocale ? "识别语言选项" : "OCR language options"} value={values.ocrLanguages} onChange={(event) => update("ocrLanguages", event.target.value)}>{ocrLanguageOptions.map(([value, label]) => <option key={value || "auto"} value={value}>{label}</option>)}</select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "最低识别置信度" : "Minimum OCR confidence"} description={zhLocale ? "低于此值的内容会被忽略" : "Content below this value is ignored"}><div className="preference-range"><input type="range" min="0" max="100" value={values.ocrConfidence} onChange={(event) => update("ocrConfidence", Number(event.target.value))} /><output>{values.ocrConfidence}%</output></div></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "无法解码的字符" : "Invalid text bytes"} description={zhLocale ? "遇到损坏字符时的处理方式" : "How malformed characters are handled"}><select value={values.decoding} onChange={(event) => update("decoding", event.target.value)}><option value="strict">{zhLocale ? "停止转换" : "Stop conversion"}</option><option value="replace">{zhLocale ? "替换并继续" : "Replace and continue"}</option></select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "表格首行" : "Table header row"} description={zhLocale ? "决定 CSV 和 TSV 的第一行如何处理" : "How the first CSV or TSV row is handled"}><select value={values.tableHeader} onChange={(event) => update("tableHeader", event.target.value)}><option value="auto">{zhLocale ? "自动判断" : "Automatic"}</option><option value="always">{zhLocale ? "作为标题" : "Use as header"}</option><option value="never">{zhLocale ? "作为数据" : "Use as data"}</option></select></PreferenceRow>
+      </PreferenceGroup>
+      <PreferenceGroup title={zhLocale ? "输出结果" : "Output"} icon={<Download size={19} />}>
+        <PreferenceRow label={zhLocale ? "图片与附件" : "Images and attachments"} description={zhLocale ? "选择转换结果如何保存附件" : "Choose how attachments are saved"}><select value={values.assetMode} onChange={(event) => update("assetMode", event.target.value)}><option value="extract">{zhLocale ? "保存到同名文件夹" : "Save in a companion folder"}</option><option value="embed">{zhLocale ? "直接写入 Markdown" : "Embed in Markdown"}</option><option value="omit">{zhLocale ? "不保存附件" : "Do not save attachments"}</option></select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "文件重名时" : "When files already exist"} description={zhLocale ? "避免意外覆盖已有文件" : "Prevent accidental overwrites"}><select value={values.conflict} onChange={(event) => update("conflict", event.target.value)}><option value="rename">{zhLocale ? "自动重命名" : "Rename automatically"}</option><option value="error">{zhLocale ? "停止并提示" : "Stop and ask"}</option><option value="overwrite">{zhLocale ? "覆盖文件" : "Overwrite"}</option></select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "保留来源信息" : "Keep source information"} description={zhLocale ? "在结果中保留页码和来源位置" : "Keep page and source locations in the result"}><label className="preference-switch"><input type="checkbox" checked={values.provenance} onChange={(event) => update("provenance", event.target.checked)} /><span /></label></PreferenceRow>
+      </PreferenceGroup>
+      <PreferenceGroup title={zhLocale ? "语音转写" : "Speech transcription"} icon={<Speech size={19} />} collapsed>
+        <PreferenceRow label={zhLocale ? "默认语言" : "Default language"} description={zhLocale ? "选择转写时优先识别的语言" : "Choose the language to prioritize during transcription"}><select value={values.asrLanguage} onChange={(event) => update("asrLanguage", event.target.value)}><option value="">{zhLocale ? "自动检测" : "Detect automatically"}</option><option value="zh-Hans">{zhLocale ? "简体中文" : "Simplified Chinese"}</option><option value="zh-Hant">{zhLocale ? "繁体中文" : "Traditional Chinese"}</option><option value="en">{zhLocale ? "英语" : "English"}</option></select></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "中文输出" : "Chinese output"} description={zhLocale ? "选择中文逐字稿的字形" : "Choose Chinese transcript glyphs"}><select value={values.chineseScript} onChange={(event) => update("chineseScript", event.target.value)}><option value="preserve">{zhLocale ? "保持原样" : "Preserve"}</option><option value="simplified">{zhLocale ? "简体中文" : "Simplified"}</option><option value="traditional">{zhLocale ? "繁体中文" : "Traditional"}</option></select></PreferenceRow>
+      </PreferenceGroup>
+      <PreferenceGroup title={zhLocale ? "性能" : "Performance"} icon={<Activity size={19} />} collapsed>
+        <PreferenceRow label={zhLocale ? "转换超时" : "Conversion timeout"} description={zhLocale ? "单个任务允许运行的最长时间" : "Maximum time for one task"} {...(invalidTimeout ? { error: zhLocale ? "请输入 1–1440 之间的整数。" : "Enter a whole number from 1 to 1440." } : {})}><div className="preference-with-unit"><input type="number" min="1" max="1440" aria-invalid={invalidTimeout} value={values.timeoutMinutes} onChange={(event) => update("timeoutMinutes", Number(event.target.value))} /><span>{zhLocale ? "分钟" : "min"}</span></div></PreferenceRow>
+        <PreferenceRow label={zhLocale ? "并行任务" : "Concurrent tasks"} description={zhLocale ? "同时处理的文件数量" : "Number of files processed at once"} {...(invalidJobs ? { error: zhLocale ? "请输入 1–64 之间的整数。" : "Enter a whole number from 1 to 64." } : {})}><input type="number" min="1" max="64" aria-invalid={invalidJobs} value={values.jobs} onChange={(event) => update("jobs", Number(event.target.value))} /></PreferenceRow>
+      </PreferenceGroup>
+      <PreferenceGroup title={zhLocale ? "隐私与网络" : "Privacy and network"} icon={<ShieldCheck size={19} />} collapsed>
+        <PreferenceRow label={zhLocale ? "允许访问的主机" : "Allowed hosts"} description={zhLocale ? "多个主机用逗号分隔" : "Separate multiple hosts with commas"}><input value={values.allowedHosts} onChange={(event) => update("allowedHosts", event.target.value)} /></PreferenceRow>
+      </PreferenceGroup>
+    </div></div>
+    <div className="preference-savebar"><button className="secondary" disabled={busy || snapshot.configurationReadOnly} type="button" onClick={reset}>{c.restore}</button><span className={configFeedback?.kind === "error" ? "error" : dirty.size ? "changed" : ""} role={configFeedback?.kind === "error" ? "alert" : "status"}>{configFeedback?.message ?? (dirty.size ? (zhLocale ? `${dirty.size} 项更改尚未保存` : `${dirty.size} unsaved changes`) : (zhLocale ? "设置已保存" : "Preferences saved"))}</span><button disabled={busy || snapshot.configurationReadOnly || dirty.size === 0 || invalidPreferences} type="button" onClick={() => void save()}><CheckCircle2 size={17} />{c.save}</button></div>
   </div>;
 }
 
+function PreferencesSkeleton({ locale }: { locale: Locale }) {
+  const c = copy(locale); const zhLocale = locale === "zh-CN";
+  const groups = zhLocale ? ["文稿与识别", "输出结果", "语音转写", "性能", "隐私与网络"] : ["Documents and recognition", "Output", "Speech transcription", "Performance", "Privacy and network"];
+  return <div className="admin-section-stack preferences-layout" aria-busy="true"><SectionTitle icon={<Settings2 />} title={c.configTitle} body="" /><div className="preference-scroll"><div className="preference-groups preference-skeleton" role="status" aria-label={c.loading}>{groups.map((title, index) => <div className="card preference-group" key={title}><div className="preference-skeleton-heading"><span className="skeleton-icon" /><strong>{title}</strong></div>{index < 2 && <div className="preference-rows"><div className="preference-row"><div><span className="skeleton-line wide" /><span className="skeleton-line" /></div><span className="skeleton-control" /></div></div>}</div>)}</div></div><div className="preference-savebar skeleton-savebar"><button className="secondary" type="button" disabled>{c.restore}</button><span>{c.loading}</span><button type="button" disabled>{c.save}</button></div></div>;
+}
+
+interface PreferenceValues {
+  ocrPolicy: string; ocrLanguages: string; ocrConfidence: number; decoding: string; tableHeader: string;
+  assetMode: string; conflict: string; provenance: boolean; asrLanguage: string; chineseScript: string;
+  timeoutMinutes: number; jobs: number; allowedHosts: string;
+}
+const preferenceDefaults: PreferenceValues = {
+  ocrPolicy: "auto", ocrLanguages: "", ocrConfidence: 70, decoding: "strict", tableHeader: "auto",
+  assetMode: "extract", conflict: "rename", provenance: true, asrLanguage: "", chineseScript: "preserve",
+  timeoutMinutes: 10, jobs: 4, allowedHosts: "",
+};
+function preferenceValues(configuration: Record<string, unknown>): PreferenceValues {
+  const value = (path: string) => configAt(configuration, path);
+  const languages = value("conversion.ocr.languages"); const hosts = value("conversion.network.allowed_hosts");
+  return {
+    ocrPolicy: stringValue(value("conversion.ocr.policy"), preferenceDefaults.ocrPolicy),
+    ocrLanguages: normalizeLanguageChoice(Array.isArray(languages) ? languages : stringValue(languages, preferenceDefaults.ocrLanguages).split(",")),
+    ocrConfidence: Math.round(numberValue(value("conversion.ocr.minimum_confidence"), .7) * 100),
+    decoding: stringValue(value("conversion.text.decoding_mode"), preferenceDefaults.decoding),
+    tableHeader: stringValue(value("conversion.delimited_text.header"), preferenceDefaults.tableHeader),
+    assetMode: stringValue(value("conversion.output.asset_mode"), preferenceDefaults.assetMode),
+    conflict: stringValue(value("conversion.output.conflict"), preferenceDefaults.conflict),
+    provenance: booleanValue(value("conversion.output.include_provenance"), preferenceDefaults.provenance),
+    asrLanguage: stringValue(value("conversion.asr.language"), preferenceDefaults.asrLanguage),
+    chineseScript: stringValue(value("conversion.asr.chinese_script"), preferenceDefaults.chineseScript),
+    timeoutMinutes: Math.max(1, Math.round(numberValue(value("conversion.timeout_ms"), 600_000) / 60_000)),
+    jobs: numberValue(value("cli.jobs"), preferenceDefaults.jobs),
+    allowedHosts: Array.isArray(hosts) ? hosts.join(", ") : stringValue(hosts, preferenceDefaults.allowedHosts),
+  };
+}
+function preferenceSetting(key: keyof PreferenceValues, value: PreferenceValues[keyof PreferenceValues]) {
+  const mapping: Record<keyof PreferenceValues, string> = {
+    ocrPolicy: "conversion.ocr.policy", ocrLanguages: "conversion.ocr.languages", ocrConfidence: "conversion.ocr.minimum_confidence",
+    decoding: "conversion.text.decoding_mode", tableHeader: "conversion.delimited_text.header", assetMode: "conversion.output.asset_mode",
+    conflict: "conversion.output.conflict", provenance: "conversion.output.include_provenance", asrLanguage: "conversion.asr.language",
+    chineseScript: "conversion.asr.chinese_script", timeoutMinutes: "conversion.timeout_ms", jobs: "cli.jobs",
+    allowedHosts: "conversion.network.allowed_hosts",
+  };
+  if (key === "ocrLanguages") return {
+    key: mapping[key],
+    value: JSON.stringify(String(value).split(",").filter(Boolean)),
+  };
+  if (key === "allowedHosts") return { key: mapping[key], value: JSON.stringify(String(value).split(",").map((item) => item.trim()).filter(Boolean)) };
+  if (key === "ocrConfidence") return { key: mapping[key], value: String(Number(value) / 100) };
+  if (key === "timeoutMinutes") return { key: mapping[key], value: String(Number(value) * 60_000) };
+  return { key: mapping[key], value: String(value) };
+}
+function configAt(configuration: Record<string, unknown>, path: string): unknown { let current: unknown = configuration; for (const part of path.split(".")) { if (!current || typeof current !== "object" || Array.isArray(current)) return undefined; current = (current as Record<string, unknown>)[part]; } return current; }
+function stringValue(value: unknown, fallback: string) { return typeof value === "string" ? value : fallback; }
+function numberValue(value: unknown, fallback: number) { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
+function booleanValue(value: unknown, fallback: boolean) { return typeof value === "boolean" ? value : fallback; }
+function normalizeLanguageChoice(values: unknown[]) { const selected = new Set(values.map(String).map((item) => item.trim()).filter((item) => ["zh-Hans", "zh-Hant", "en"].includes(item))); return ["zh-Hans", "zh-Hant", "en"].filter((item) => selected.has(item)).join(","); }
+function PreferenceGroup({ title, icon, collapsed = false, children }: { title: string; icon: ReactNode; collapsed?: boolean; children: ReactNode }) { return <details className="card preference-group" open={!collapsed}><summary><span>{icon}</span><strong>{title}</strong><ChevronDown className="preference-chevron" size={17} aria-hidden="true" /></summary><div className="preference-rows">{children}</div></details>; }
+function PreferenceRow({ label, description, error, children }: { label: string; description: string; error?: string; children: ReactNode }) { return <div className="preference-row"><div><strong>{label}</strong><small>{description}</small></div><div className="preference-control">{children}{error && <small className="preference-error" role="alert">{error}</small>}</div></div>; }
+
 function DoctorSection({ snapshot, busy, locale, act }: SectionProps) {
-  const c = copy(locale); const [network, setNetwork] = useState(false); const [page, setPage] = useState(0); const checks = snapshot.operationResult?.kind === "doctor" ? snapshot.operationResult.checks : snapshot.doctor; const issues = checks.filter((item) => !isHealthy(item) && !isSkipped(item)); const visibleIssues = issues.slice(page * 5, page * 5 + 5); const passed = checks.filter(isHealthy); const skipped = checks.filter(isSkipped);
-  return <div className="admin-section-stack"><SectionTitle icon={<Wrench />} title={c.doctorTitle} body={c.doctorBody} action={<button disabled={busy} type="button" onClick={() => void act({ schemaVersion: 1, action: "doctor.run", allowPrivateNetwork: false }, { network, success: c.doctorDone })}><Activity size={17} />{c.run}</button>} />
-    <label className="admin-doctor-network"><input type="checkbox" checked={network} onChange={(event) => setNetwork(event.target.checked)} />{c.checkNetwork}</label>
-    <div className={`card doctor-summary ${issues.length === 0 ? "healthy" : "attention"}`}>{issues.length === 0 ? <CheckCircle2 size={30} /> : <CircleAlert size={30} />}<div><h2>{issues.length === 0 ? c.healthy : `${issues.length} ${c.attention}`}</h2><p>{issues.length === 0 ? c.healthyBody : `${passed.length} ${c.passed}${skipped.length ? ` · ${skipped.length} ${c.notRun}` : ""}`}</p></div></div>
-    {issues.length > 0 && <><div className="doctor-list">{visibleIssues.map((item) => <DoctorCard key={item.id} item={item} locale={locale} />)}</div><PageControls page={page} total={issues.length} pageSize={5} setPage={setPage} locale={locale} /></>}
+  const c = copy(locale); const [page, setPage] = useState(0); const checks = snapshot.operationResult?.kind === "doctor" ? snapshot.operationResult.checks : snapshot.doctor; const uniqueChecks = [...new Map(checks.map((item) => [item.id, item])).values()]; const issueGroups = groupDoctorChecks(uniqueChecks.filter((item) => !isHealthy(item) && !isSkipped(item))); const visiblePage = clampedPage(page, issueGroups.length, 5); const visibleIssues = issueGroups.slice(visiblePage * 5, visiblePage * 5 + 5); const passed = uniqueChecks.filter(isHealthy); const skipped = uniqueChecks.filter(isSkipped);
+  useClampedPage(page, issueGroups.length, 5, setPage);
+  const run = (network: boolean) => void act({ schemaVersion: 1, action: "doctor.run", allowPrivateNetwork: false }, { network, success: c.doctorDone });
+  return <div className="admin-section-stack"><SectionTitle icon={<Wrench />} title={c.doctorTitle} body={c.doctorBody} action={<div className="doctor-run-actions"><button disabled={busy} type="button" onClick={() => run(false)}><Activity size={17} />{locale === "zh-CN" ? "检查本机" : "Check this computer"}</button><button className="secondary" disabled={busy} type="button" onClick={() => run(true)}><Cloud size={17} />{locale === "zh-CN" ? "检查本机与 AI 服务" : "Check computer and AI services"}</button></div>} />
+    <div className={`card doctor-summary ${issueGroups.length === 0 ? "healthy" : "attention"}`}>{issueGroups.length === 0 ? <CheckCircle2 size={30} /> : <CircleAlert size={30} />}<div><h2>{issueGroups.length === 0 ? c.healthy : `${issueGroups.length} ${c.attention}`}</h2><p>{issueGroups.length === 0 ? c.healthyBody : `${passed.length} ${c.passed}${skipped.length ? ` · ${skipped.length} ${c.notRun}` : ""}`}</p></div></div>
+    {issueGroups.length > 0 && <><div className="doctor-list">{visibleIssues.map((group) => <DoctorCard key={group.key} item={group.items[0]!} related={group.items} locale={locale} />)}</div><PageControls page={visiblePage} total={issueGroups.length} pageSize={5} setPage={setPage} locale={locale} /></>}
     {passed.length > 0 && <details className="card admin-advanced doctor-passed"><summary>{c.passedChecks}（{passed.length}）</summary><div className="doctor-list">{passed.map((item) => <DoctorCard key={item.id} item={item} locale={locale} />)}</div></details>}
     {skipped.length > 0 && <details className="card admin-advanced doctor-passed"><summary>{c.skippedChecks}（{skipped.length}）</summary><div className="doctor-list">{skipped.map((item) => <DoctorCard key={item.id} item={item} locale={locale} />)}</div></details>}
   </div>;
 }
 
-function DoctorCard({ item, locale }: { item: DoctorAdmin; locale: Locale }) {
+function DoctorCard({ item, related = [item], locale }: { item: DoctorAdmin; related?: DoctorAdmin[]; locale: Locale }) {
   const c = copy(locale); const info = doctorInfo(item, locale); const healthy = isHealthy(item); const skipped = isSkipped(item);
-  return <article className="card doctor-card"><div className="doctor-card-heading">{healthy ? <CheckCircle2 size={20} /> : <CircleAlert size={20} />}<div><h3>{info.title}</h3><StatusBadge tone={healthy ? "ok" : skipped ? "neutral" : "warning"}>{friendlyStatus(item.status, locale)}</StatusBadge></div></div>{!healthy && !skipped && <div className="doctor-guidance"><div><strong>{c.impact}</strong><p>{info.impact}</p></div><div><strong>{c.nextStep}</strong><p>{info.action}</p></div></div>}<details className="admin-advanced"><summary>{c.technical}</summary><p><code>{item.id}</code></p><p className="breakable">{item.detail}</p></details></article>;
+  const technical = related.filter((check) => { const id = check.id.toLowerCase(); return !id.startsWith("runtime.") && !id.startsWith("provider") && !id.includes("plugin"); });
+  return <article className="card doctor-card"><div className="doctor-card-heading">{healthy ? <CheckCircle2 size={20} /> : <CircleAlert size={20} />}<div><h3>{info.title}</h3><StatusBadge tone={healthy ? "ok" : skipped ? "neutral" : "warning"}>{friendlyStatus(item.status, locale)}</StatusBadge></div>{!healthy && !skipped && info.href && info.actionLabel && <RouteLink href={info.href} className="secondary doctor-action">{info.actionLabel}</RouteLink>}</div>{related.length > 1 && <div className="chip-row" aria-label={locale === "zh-CN" ? "受影响能力" : "Affected capabilities"}>{related.map((check) => <span className="status-pill" key={check.id}>{doctorAffectedLabel(check, locale)}</span>)}</div>}{!healthy && !skipped && <div className="doctor-guidance"><div><strong>{c.impact}</strong><p>{info.impact}</p></div><div><strong>{c.nextStep}</strong><p>{info.action}</p></div></div>}{technical.length > 0 && <div className="doctor-technical">{technical.map((check) => <div key={check.id}><code>{check.id}</code><p className="breakable">{check.detail}</p></div>)}</div>}</article>;
 }
 
-function SectionTitle({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) { return <header className="admin-section-title"><div className="admin-section-icon">{icon}</div><div><h2>{title}</h2><p>{body}</p></div>{action && <div className="admin-section-action">{action}</div>}</header>; }
+function SectionTitle({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) { return <header className="admin-section-title"><div className="admin-section-icon">{icon}</div><div><h2>{title}</h2>{body && <p>{body}</p>}</div>{action && <div className="admin-section-action">{action}</div>}</header>; }
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) { return <label className="admin-field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>; }
 function CheckField({ label, checked, setChecked }: { label: string; checked: boolean; setChecked: (value: boolean) => void }) { return <label className="check admin-check"><input type="checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)} /><span>{label}</span></label>; }
 function ScopeSelect({ value, onChange, locale }: { value: "global" | "project"; onChange: (value: "global" | "project") => void; locale: Locale }) { const c = copy(locale); return <select value={value} onChange={(event) => onChange(event.target.value === "global" ? "global" : "project")}><option value="project">{c.project}</option><option value="global">{c.global}</option></select>; }
 function Feedback({ kind, children }: { kind: "error" | "success" | "readonly"; children: ReactNode }) { return <div className={`admin-feedback ${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</div>; }
 function StatusBadge({ tone, children }: { tone: "ok" | "warning" | "neutral"; children: ReactNode }) { return <span className={`admin-status ${tone}`}>{children}</span>; }
-function Detail({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd className="breakable">{value}</dd></div>; }
 function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) { return <article className="card admin-empty"><div className="entity-icon">{icon}</div><h2>{title}</h2><p>{body}</p></article>; }
 function PageControls({ page, total, pageSize, setPage, locale }: { page: number; total: number; pageSize: number; setPage: (page: number) => void; locale: Locale }) { const pages = Math.max(1, Math.ceil(total / pageSize)); if (pages <= 1) return null; return <nav className="admin-pagination" aria-label={locale === "zh-CN" ? "翻页" : "Pagination"}><span>{locale === "zh-CN" ? `第 ${page + 1} / ${pages} 页` : `Page ${page + 1} of ${pages}`}</span><div><button className="secondary" type="button" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>{locale === "zh-CN" ? "上一页" : "Previous"}</button><button className="secondary" type="button" disabled={page + 1 >= pages} onClick={() => setPage(Math.min(pages - 1, page + 1))}>{locale === "zh-CN" ? "下一页" : "Next"}</button></div></nav>; }
 
-function OperationResult({ result, locale, only }: { result: AdminOperationResult | undefined; locale: Locale; only?: AdminOperationResult["kind"] }) {
-  const c = copy(locale); if (!result || only && result.kind !== only) return null;
-  if (result.kind === "detection") return <div className="admin-result"><h3>{c.detectionResult}</h3>{result.candidates.length === 0 ? <p>—</p> : result.candidates.slice(0, 3).map((item) => <div className="admin-result-row" key={`${item.format}:${item.detectorId}`}><strong>{item.format}</strong><span>{c.confidence} {Math.round(item.confidence * 100)}%</span></div>)}</div>;
-  if (result.kind === "providerTest") return <div className="admin-result"><h3>{c.providerResult}</h3><div className="admin-result-row"><strong>{result.configuredModelAvailable ? c.ready : c.unavailable}</strong><span>{result.modelCount} {c.availableModels.toLowerCase()}</span></div></div>;
-  return <details className="card admin-advanced"><summary>{c.result}</summary><pre className="config-json">{JSON.stringify(result, null, 2)}</pre></details>;
-}
-
 function csv(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
 function errorCode(reason: unknown) { return reason instanceof Error && "code" in reason ? String((reason as { code: unknown }).code) : "requestFailed"; }
-function friendlyError(code: string, locale: Locale) { const chinese = locale === "zh-CN"; const known: Record<string, [string, string]> = { unreachable: ["无法连接本地服务，请确认 into-md 仍在运行。", "Cannot reach the local service. Make sure into-md is still running."], requestFailed: ["操作没有完成，请重试。", "The operation did not complete. Try again."], authorizationRequired: ["本次操作需要重新确认，请再试一次。", "This action needs fresh confirmation. Try again."], networkAuthorizationRequired: ["本次测试需要明确授权联网，请重新测试并确认联网。", "This test needs explicit network permission. Run it again and approve network access."], privateNetworkDenied: ["连接被安全策略阻止：这是局域网地址。编辑该 AI 服务，在高级选项中允许访问局域网后重试。", "The security policy blocked this private-network address. Edit the AI service, allow private-network access under Advanced options, then retry."], invalidAction: ["当前输入无法执行，请检查后重试。", "The current input cannot be used. Check it and try again."], configurationReadOnly: ["当前为只读模式，不能修改设置。", "Settings cannot be changed in view-only mode."] }; return (known[code] ?? [chinese ? `操作失败（${code}）。` : `Operation failed (${code}).`, chinese ? `操作失败（${code}）。` : `Operation failed (${code}).`])[chinese ? 0 : 1]; }
+export function friendlyError(code: string, locale: Locale) {
+  const chinese = locale === "zh-CN";
+  const known: Record<string, [string, string]> = {
+    unreachable: ["无法连接本地服务，请确认 into-md 仍在运行。", "Cannot reach the local service. Make sure into-md is still running."],
+    invalidSession: ["本地服务已经重新启动，请从新的会话入口重新打开。", "The local service restarted. Open it again from the new session link."],
+    invalidResponse: ["本机状态没有正确加载，请重新加载后再试。", "The local status did not load correctly. Reload and try again."],
+    adminBusy: ["另一项系统操作仍在进行，请稍候。", "Another system operation is still running. Try again shortly."],
+    requestFailed: ["本地服务没有返回可用结果。请重试；如果问题持续，请重新加载页面。", "The local service did not return a usable result. Try again; if it persists, reload the page."],
+    responseTooLarge: ["本地服务返回的内容超过安全上限。请减少当前项目中的配置项后重试。", "The local service returned more data than the safety limit allows. Reduce the current project's configuration entries and try again."],
+    invalidEvent: ["任务状态更新已中断。请重新加载页面以恢复最新状态。", "Task status updates were interrupted. Reload the page to recover the latest state."],
+    authorizationRequired: ["本次操作需要重新确认，请再试一次。", "This action needs fresh confirmation. Try again."],
+    dangerousActionConfirmationRequired: ["本次更改需要重新确认。请再次执行并确认操作。", "This change needs fresh confirmation. Run it again and confirm the action."],
+    networkAuthorizationRequired: ["本次测试需要明确授权联网，请重新测试并确认联网。", "This test needs explicit network permission. Run it again and approve network access."],
+    networkDenied: ["联网被当前安全设置阻止。请检查允许的地址后重试。", "The current security settings blocked network access. Check the allowed addresses and try again."],
+    dns: ["无法解析服务地址。请检查地址和网络连接。", "The service address could not be resolved. Check the address and network connection."],
+    connect: ["无法连接到目标服务。请确认地址、端口和服务状态。", "Could not connect to the target service. Check the address, port, and service status."],
+    tls: ["无法建立安全连接。请检查目标服务的 HTTPS 证书。", "Could not establish a secure connection. Check the target service's HTTPS certificate."],
+    invalidHttp: ["目标服务返回了无效响应。请检查服务地址和兼容性。", "The target service returned an invalid response. Check its address and compatibility."],
+    networkUnavailable: ["当前设备无法联网。请恢复网络后重试。", "This device is currently offline. Restore network access and try again."],
+    pluginDownload: ["插件包下载失败。请检查网络后重新安装。", "The plugin package could not be downloaded. Check the network and install again."],
+    privateNetworkDenied: ["连接被安全策略阻止：这是局域网地址。编辑该 AI 服务并允许访问局域网，然后重试。", "The security policy blocked this private-network address. Edit the AI service, allow local-network access, then retry."],
+    providerSecretMissing: ["未找到这个 AI 服务所需的密钥环境变量。请设置密钥后重新启动 into-md，再测试连接。", "The environment variable for this AI service key is missing. Set it, restart into-md, then test again."],
+    cancelled: ["操作已取消。", "The action was cancelled."],
+    timeout: ["操作超过等待时间。请重试；大插件包可稍后再检查。", "The action exceeded its time limit. Try again; large plugin packages may need to be checked later."],
+    resourceLimit: ["操作超过当前资源上限。请释放磁盘或内存空间后重试。", "The action exceeded the current resource limit. Free disk space or memory and try again."],
+    transactionIndeterminate: ["插件更改的最终状态尚未确认。请重新加载后检查插件状态，再决定是否重试。", "The final plugin state could not be confirmed. Reload and check the plugin before trying again."],
+    notFound: ["目标已不存在或已被移除。请重新加载最新状态。", "The item no longer exists or was removed. Reload the latest state."],
+    io: ["无法读写本机插件数据。请检查磁盘空间和文件权限。", "Local plugin data could not be read or written. Check disk space and file permissions."],
+    conflict: ["另一项插件更改正在进行。请等待它结束后重试。", "Another plugin change is in progress. Wait for it to finish and try again."],
+    hashMismatch: ["插件包完整性检查失败。请重新获取可信的插件包。", "The plugin package failed its integrity check. Obtain a new package from a trusted source."],
+    signature: ["无法验证插件发布者。请使用受信任来源提供的插件包。", "The plugin publisher could not be verified. Use a package from a trusted source."],
+    componentUnavailable: ["这个插件不支持当前系统或当前版本。请选择兼容的插件包。", "This plugin does not support the current system or version. Choose a compatible package."],
+    invalidPackage: ["所选文件不是有效的插件包。请重新选择 .imp 文件。", "The selected file is not a valid plugin package. Choose an .imp file again."],
+    invalidPluginUrl: ["插件下载地址无效。请使用不含账号信息的 HTTPS 地址。", "The plugin download address is invalid. Use an HTTPS address without embedded credentials."],
+    pluginManager: ["本机插件管理器拒绝了这次更改。请重新加载插件状态后重试。", "The local plugin manager rejected this change. Reload the plugin state and try again."],
+    storeChanged: ["插件状态刚刚发生变化。已停止本次操作，请重新加载后再试。", "The plugin state changed during this action. Reload before trying again."],
+    config: ["这个设置值不符合要求，请检查当前字段后重试。", "This setting value is not valid. Check the current field and try again."],
+    adminConfigKeyDenied: ["当前设置不能在这里修改。", "This setting cannot be changed here."],
+    adminConfigContextReadOnly: ["当前设置来源为只读，不能在这里修改。", "The current settings source is read-only and cannot be changed here."],
+    plaintextSecretRejected: ["这里不能直接保存密钥。请填写保存密钥的环境变量名称。", "Secrets cannot be saved here directly. Enter the environment variable name that stores the key."],
+    invalidAction: ["当前输入无法执行，请检查后重试。", "The current input cannot be used. Check it and try again."],
+    configurationReadOnly: ["当前为只读模式，不能修改设置。", "Settings cannot be changed in view-only mode."],
+  };
+  return (known[code] ?? ["本地服务返回了当前版本无法识别的问题。请重新加载；如果仍然出现，请重新启动 into-md。", "The local service returned a problem this version does not recognize. Reload the page; if it persists, restart into-md."])[chinese ? 0 : 1];
+}
 function friendlyFamily(value: string, locale: Locale) { const zhNames: Record<string, string> = { document: "文档", text: "文本", image: "图片", audio: "音频", video: "视频", archive: "压缩包", data: "数据", presentation: "演示文稿", spreadsheet: "表格" }; return locale === "zh-CN" ? zhNames[value.toLowerCase()] ?? value : value; }
-function friendlyScope(value: string, locale: Locale) { const c = copy(locale); return value === "global" ? c.global : value === "project" ? c.project : c.effective; }
 function friendlyStatus(value: string, locale: Locale) { if (value.toLowerCase() === "skipped") return locale === "zh-CN" ? "未检查" : "Not checked"; const healthy = ["ok", "pass", "passed", "ready", "healthy", "available"].includes(value.toLowerCase()); return healthy ? copy(locale).ready : locale === "zh-CN" ? "需要处理" : "Needs attention"; }
 function friendlyCheckStage(value: string, locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<string, [string, string]> = { queued: ["等待验证", "Waiting"], package: ["检查插件包", "Checking package"], runtime: ["检查运行环境", "Checking runtime"], models: ["测试内置模型", "Testing bundled models"], cancelling: ["正在取消", "Cancelling"], completed: ["验证完成", "Completed"] }; return names[value]?.[chinese ? 0 : 1] ?? value; }
 function isHealthy(item: DoctorAdmin) { return ["ok", "pass", "passed", "ready", "healthy", "available"].includes(item.status.toLowerCase()); }
 function isSkipped(item: DoctorAdmin) { return item.status.toLowerCase() === "skipped"; }
-function friendlyCapabilityStatus(value: CapabilityAdmin["status"], locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<CapabilityAdmin["status"], [string, string]> = { "not-installed": ["未安装", "Not installed"], downloading: ["下载中", "Downloading"], verifying: ["验证中", "Verifying"], ready: ["可用", "Ready"], "update-available": ["可更新", "Update available"], corrupt: ["需要修复", "Needs repair"], incompatible: ["不兼容", "Incompatible"], blocked: ["已阻止", "Blocked"] }; return names[value][chinese ? 0 : 1]; }
+function doctorRemediationKey(item: DoctorAdmin) {
+  const id = item.id.toLowerCase();
+  if (id === "runtime.asr" || id === "runtime.diarization" || id.includes("official.media.whisper")) return "plugin:media";
+  if (id === "runtime.ocr" || id.includes("official.ocr.ppocrv6")) return "plugin:ocr";
+  if (id === "runtime.legacy-office" || id.includes("official.legacy-office")) return "plugin:legacy-office";
+  if (id.startsWith("providerenvironment:") || id.startsWith("provider:")) return `provider:${id.slice(id.indexOf(":") + 1).split(/[/.]/, 1)[0]}`;
+  if (id.includes("provider") || id.includes("api")) return "provider:connection";
+  if (id.includes("plugin")) return `plugin:${id.replace(/^.*plugin[:.]/, "").split(/[/.]/, 1)[0]}`;
+  if (id.includes("config")) return "preferences";
+  if (id.includes("network")) return "network";
+  return id;
+}
+function groupDoctorChecks(items: DoctorAdmin[]) {
+  const groups = new Map<string, DoctorAdmin[]>();
+  for (const item of items) groups.set(doctorRemediationKey(item), [...(groups.get(doctorRemediationKey(item)) ?? []), item]);
+  return [...groups].map(([key, grouped]) => ({ key, items: grouped }));
+}
+function doctorAffectedLabel(item: DoctorAdmin, locale: Locale) {
+  const id = item.id.toLowerCase(); const chinese = locale === "zh-CN";
+  if (id.includes("diarization")) return chinese ? "说话人识别" : "Speaker identification";
+  if (id.includes("asr") || id.includes("transcription")) return chinese ? "语音转写" : "Speech transcription";
+  if (id.includes("ocr")) return chinese ? "图片 OCR" : "Image OCR";
+  if (id.includes("legacy")) return chinese ? "旧版 Office" : "Legacy Office";
+  return item.id.replaceAll(/[._-]+/g, " ");
+}
+function friendlyCapabilityStatus(value: CapabilityAdmin["status"], locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<CapabilityAdmin["status"], [string, string]> = { "not-installed": ["未安装", "Not installed"], downloading: ["下载中", "Downloading"], verifying: ["验证中", "Verifying"], ready: ["可用", "Ready"], "update-available": ["可更新", "Update available"], corrupt: ["需要修复", "Needs repair"], incompatible: ["不兼容", "Incompatible"], blocked: ["已阻止", "Blocked"], disabled: ["已停用", "Disabled"] }; return names[value][chinese ? 0 : 1]; }
 function friendlyCapabilitySource(value: string, locale: Locale) { const c = copy(locale); if (value === "off") return c.off; const [, identity = value] = value.split(":", 2); const name = identity.split("/", 1)[0] ?? identity; return value.startsWith("plugin:") ? `${c.localPlugin} · ${pluginDisplayName(name, locale)}` : `${c.remoteProvider} · ${name}`; }
-function friendlyProviderCapability(value: string, locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<string, [string, string]> = { "vision-ocr": ["图片 OCR", "Image OCR"], ocr: ["图片 OCR", "Image OCR"], "audio-transcription": ["语音转写", "Speech transcription"], transcription: ["语音转写", "Speech transcription"], diarization: ["说话人识别", "Speaker identification"], chat: ["文本生成", "Text generation"], vision: ["视觉理解", "Vision"] }; return names[value]?.[chinese ? 0 : 1] ?? value; }
+function friendlyProviderCapability(value: string, locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<string, [string, string]> = { "vision-ocr": ["图片 OCR", "Image OCR"], ocr: ["图片 OCR", "Image OCR"], "image-description": ["图片理解", "Image understanding"], "audio-transcription": ["语音转写", "Speech transcription"], transcription: ["语音转写", "Speech transcription"], diarization: ["说话人识别", "Speaker identification"], chat: ["文本生成", "Text generation"], vision: ["视觉理解", "Vision"] }; return names[value]?.[chinese ? 0 : 1] ?? value; }
 function pluginDisplayName(id: string, locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<string, [string, string]> = { "official.legacy-office.libreoffice": ["旧版 Office 转换", "Legacy Office conversion"], "official.ocr.ppocrv6": ["本地 OCR（PP-OCR）", "Local OCR (PP-OCR)"], "official.media.whisper": ["本地语音（Whisper）", "Local speech (Whisper)"] }; return names[id]?.[chinese ? 0 : 1] ?? id; }
 function pluginDescription(id: string, locale: Locale) { const chinese = locale === "zh-CN"; if (id.includes("legacy-office")) return chinese ? "转换 .doc、.xls 和 .ppt 文件" : "Converts .doc, .xls, and .ppt files"; if (id.includes("ocr")) return chinese ? "识别扫描 PDF 和图片中的文字" : "Recognizes text in scans and images"; if (id.includes("media") || id.includes("whisper")) return chinese ? "语音转写与说话人识别" : "Speech transcription and speaker identification"; return chinese ? "本地扩展能力" : "Local extension capability"; }
-function friendlyConfigKey(key: string, locale: Locale) { const chinese = locale === "zh-CN"; const names: Record<string, [string, string]> = { "conversion.ocr.policy": ["扫描件文字识别", "OCR behavior"], "conversion.ocr.languages": ["OCR 识别语言", "OCR languages"], "conversion.asr.language": ["语音识别语言", "Transcription language"], "conversion.asr.chinese_script": ["中文输出字形", "Chinese output script"], "conversion.timeout_ms": ["转换超时时间", "Conversion timeout"], "conversion.ai.provider": ["默认 AI 服务", "Default AI service"], "conversion.ai.model": ["默认 AI 模型", "Default AI model"], "conversion.output.asset_mode": ["图片等资源的保存方式", "Asset handling"], "conversion.output.include_provenance": ["保留来源信息", "Include provenance"], "cli.language": ["界面语言", "Interface language"], "cli.jobs": ["并行任务数", "Concurrent jobs"] }; const name = names[key]?.[chinese ? 0 : 1] ?? key.split(".").slice(-2).join(" · "); return `${name} — ${key}`; }
-function doctorInfo(item: DoctorAdmin, locale: Locale) { const chinese = locale === "zh-CN"; const id = item.id.toLowerCase(); if (id === "runtime.pdfium") return { title: chinese ? "PDF 解析组件" : "PDF parser", impact: chinese ? "PDF 文件可能无法转换。" : "PDF files may not convert.", action: chinese ? "修复 Core 中的 PDFium 组件，然后重新检查。" : "Repair the PDFium component in Core, then run diagnostics again." }; if (id === "runtime.ocr") return { title: chinese ? "OCR 能力" : "OCR capability", impact: chinese ? "扫描件和图片中的文字无法识别。" : "Text in scans and images cannot be recognized.", action: chinese ? "前往“能力”安装本地 OCR 插件或选择远端 Provider。" : "Open Capabilities to install local OCR or select a remote Provider." }; if (id === "runtime.legacy-office") return { title: chinese ? "旧版 Office 能力" : "Legacy Office capability", impact: chinese ? "旧版 Word、Excel 或 PowerPoint 文件无法转换。" : "Older Word, Excel, or PowerPoint files cannot convert.", action: chinese ? "前往“能力”安装或修复旧版 Office 插件。" : "Open Capabilities to install or repair the Legacy Office plugin." }; if (id === "runtime.asr") return { title: chinese ? "语音转写能力" : "Transcription capability", impact: chinese ? "音频和视频无法转写为文字。" : "Audio and video cannot be transcribed.", action: chinese ? "前往“能力”安装语音插件或选择远端 Provider。" : "Open Capabilities to install Speech or select a remote Provider." }; if (id === "runtime.diarization") return { title: chinese ? "说话人识别能力" : "Speaker identification capability", impact: chinese ? "会议转写可以生成文字，但无法区分不同发言人。" : "Meetings can be transcribed, but speakers cannot be separated.", action: chinese ? "前往“能力”安装或修复本地语音插件。" : "Open Capabilities to install or repair the local Speech plugin." }; if (id.includes("provider") || id.includes("api")) return { title: chinese ? "Provider 连接" : "Provider connection", impact: chinese ? "远端能力无法运行。" : "Remote capabilities cannot run.", action: chinese ? "前往“Provider”检查地址、远端模型映射和密钥环境变量。" : "Check the address, remote model mapping, and key environment variable under Providers." }; if (id.includes("plugin")) return { title: chinese ? "能力插件" : "Capability plugin", impact: chinese ? "对应的本地能力可能不可用。" : "The corresponding local capability may be unavailable.", action: chinese ? "前往“能力”执行验证或修复。" : "Open Capabilities to verify or repair it." }; if (id.includes("config")) return { title: chinese ? "配置文件" : "Configuration", impact: chinese ? "部分设置可能没有生效。" : "Some settings may not be applied.", action: chinese ? "前往“配置”验证配置文件。" : "Open Configuration and validate the file." }; if (id.includes("network")) return { title: chinese ? "网络访问检查" : "Network check", impact: chinese ? "本次没有检查联网能力。" : "Network access was not checked this time.", action: chinese ? "需要下载插件或连接 Provider 时，勾选联网检查后重试。" : "Enable the network check when downloading plugins or using Providers." }; return { title: item.id.replaceAll(/[._-]+/g, " "), impact: chinese ? "相关能力可能无法正常工作。" : "The related capability may not work correctly.", action: chinese ? "展开“更多信息”查看原因，修复后重新检查。" : "Open more information, address the cause, and run diagnostics again." }; }
+function doctorInfo(item: DoctorAdmin, locale: Locale) {
+  const chinese = locale === "zh-CN"; const id = item.id.toLowerCase(); const capabilityHref = "/admin/capabilities"; const preferenceHref = "/admin/configuration";
+  const capabilityAction = chinese ? "前往能力与来源" : "Open capabilities"; const preferenceAction = chinese ? "前往偏好设置" : "Open preferences";
+  if (id === "runtime.pdfium") return { title: chinese ? "PDF 解析组件" : "PDF parser", impact: chinese ? "当前 Core 安装不完整，PDF 文件可能无法转换。" : "The current Core installation is incomplete, so PDF files may not convert.", action: chinese ? "重新安装或修复 into-md Core，然后点击页面右上角的“重新检查”。" : "Reinstall or repair into-md Core, then select “Run again” at the top of this page.", href: undefined, actionLabel: undefined };
+  if (["runtime.ocr", "runtime.legacy-office", "runtime.asr", "runtime.diarization"].includes(id)) { const title = id === "runtime.ocr" ? (chinese ? "OCR 能力" : "OCR capability") : id === "runtime.legacy-office" ? (chinese ? "旧版 Office 能力" : "Legacy Office capability") : id === "runtime.asr" ? (chinese ? "语音转写能力" : "Transcription capability") : (chinese ? "说话人识别能力" : "Speaker identification capability"); return { title, impact: chinese ? "对应的本地转换功能无法使用。" : "The related local conversion feature is unavailable.", action: chinese ? "选择可用来源，或安装、修复对应的本地扩展。" : "Choose an available source, or install or repair its local extension.", href: capabilityHref, actionLabel: capabilityAction }; }
+  if (id.startsWith("providerenvironment:")) { const name = item.id.slice(item.id.indexOf(":") + 1); return { title: `${chinese ? "AI 服务" : "AI service"} · ${name}`, impact: chinese ? "这个 AI 服务需要的密钥环境变量没有就绪。" : "The environment variable required by this AI service is not available.", action: chinese ? "编辑这个 AI 服务，检查密钥环境变量名称和当前进程环境。" : "Edit this AI service and check its key environment variable.", href: "/admin/providers", actionLabel: chinese ? "检查 AI 服务" : "Check AI service" }; }
+  if (id.includes("provider") || id.includes("api")) return { title: chinese ? "AI 服务连接" : "AI service connection", impact: chinese ? "远端能力无法运行。" : "Remote capabilities cannot run.", action: chinese ? "检查服务地址、模型映射和密钥环境变量。" : "Check the service address, model mappings, and key environment variable.", href: "/admin/providers", actionLabel: chinese ? "检查 AI 服务" : "Check AI service" };
+  if (id.includes("plugin")) return { title: chinese ? "本地扩展" : "Local extension", impact: chinese ? "对应的本地能力可能不可用。" : "The corresponding local capability may be unavailable.", action: chinese ? "验证、启用或重新安装对应扩展。" : "Verify, enable, or reinstall the extension.", href: "/admin/plugins", actionLabel: chinese ? "修复本地扩展" : "Repair local extension" };
+  if (id.includes("config")) return { title: chinese ? "偏好设置" : "Preferences", impact: chinese ? "部分设置可能没有生效。" : "Some settings may not be applied.", action: chinese ? "检查偏好设置并保存。" : "Review and save preferences.", href: preferenceHref, actionLabel: preferenceAction };
+  if (id.includes("network")) return { title: chinese ? "网络访问检查" : "Network check", impact: chinese ? "本次没有检查联网能力。" : "Network access was not checked this time.", action: chinese ? "需要使用 AI 服务时，运行页面顶部的“检查本机与 AI 服务”。" : "Use “Check computer and AI services” at the top of this page when an AI service is needed.", href: undefined, actionLabel: undefined };
+  return { title: item.id.replaceAll(/[._-]+/g, " "), impact: chinese ? "相关功能可能无法正常工作。" : "The related feature may not work correctly.", action: chinese ? "查看下方原因，完成处理后在页面顶部重新检查。" : "Review the cause below, address it, then run the check again at the top of this page.", href: undefined, actionLabel: undefined };
+}

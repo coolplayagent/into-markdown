@@ -4151,7 +4151,9 @@ fn run_conversion(
         vec![process_stdout(&plans[0], &policy, catalog, json_log, context)?]
     } else if plans.len() == 1 {
         let plan = &plans[0];
-        let (output_path, diagnostics, warnings) = process_file_task_inner(plan, &policy)?;
+        let output_phase = Mutex::new(());
+        let (output_path, diagnostics, warnings) =
+            process_file_task_inner(plan, &policy, &output_phase)?;
         vec![BatchItemReport {
             input: plan.item.display.clone(),
             output: Some(output_path.display().to_string()),
@@ -4826,11 +4828,17 @@ fn process_batch(
 ) -> Result<Vec<BatchItemReport>, CliError> {
     let task_count = plans.len();
     let queue = Arc::new(Mutex::new(VecDeque::from(plans)));
+    // Conversions may run in parallel, but the atomic writer intentionally
+    // leases an output parent directory. Keep only the short preflight and
+    // commit phases serialized so sibling outputs cannot trip each other's
+    // authenticated parent lease.
+    let output_phase = Arc::new(Mutex::new(()));
     let (sender, receiver) = mpsc::channel();
     let worker_count = jobs.max(1).min(task_count.max(1));
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let queue = Arc::clone(&queue);
+            let output_phase = Arc::clone(&output_phase);
             let sender = sender.clone();
             let policy = policy.clone();
             scope.spawn(move || {
@@ -4843,7 +4851,7 @@ fn process_batch(
                         break;
                     };
                     let index_key = task.item.display.clone();
-                    let report = process_file_task(task, &policy);
+                    let report = process_file_task(task, &policy, &output_phase);
                     if sender.send((index_key, report)).is_err() {
                         break;
                     }
@@ -4860,8 +4868,12 @@ fn process_batch(
     Ok(reports.into_iter().map(|(_, report)| report).collect())
 }
 
-fn process_file_task(plan: WorkPlan, policy: &ExecutionPolicy) -> BatchItemReport {
-    match process_file_task_inner(&plan, policy) {
+fn process_file_task(
+    plan: WorkPlan,
+    policy: &ExecutionPolicy,
+    output_phase: &Mutex<()>,
+) -> BatchItemReport {
+    match process_file_task_inner(&plan, policy, output_phase) {
         Ok((output_path, diagnostics, warnings)) => BatchItemReport {
             input: plan.item.display,
             output: Some(output_path.display().to_string()),
@@ -4888,10 +4900,15 @@ fn process_file_task(plan: WorkPlan, policy: &ExecutionPolicy) -> BatchItemRepor
 fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
+    output_phase: &Mutex<()>,
 ) -> Result<(PathBuf, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
-    let output_path = output::preflight_file(requested, policy.conflict, &policy.output_context)?;
+    let output_path = {
+        let _guard =
+            output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
+        output::preflight_file(requested, policy.conflict, &policy.output_context)?
+    };
     let asset_output = plan_file_asset_output(
         policy.emit,
         policy.asset_mode,
@@ -4900,15 +4917,20 @@ fn process_file_task_inner(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
-    let outcome = output::write_output_set(
-        &output_path,
-        &output::encode_result(&result, policy.emit)?,
-        &result,
-        asset_output.external_directory.as_deref(),
-        policy.asset_mode,
-        policy.conflict,
-        &policy.output_context,
-    )?;
+    let encoded = output::encode_result(&result, policy.emit)?;
+    let outcome = {
+        let _guard =
+            output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
+        output::write_output_set(
+            &output_path,
+            &encoded,
+            &result,
+            asset_output.external_directory.as_deref(),
+            policy.asset_mode,
+            policy.conflict,
+            &policy.output_context,
+        )?
+    };
     let mut warnings = Vec::new();
     if outcome.renamed || output_path != requested {
         warnings.push(format!(
@@ -6465,7 +6487,7 @@ mod tests {
         let checks: serde_json::Value = serde_json::from_str(&doctor).unwrap();
         let checks = checks.as_array().unwrap();
         for (id, hint) in [
-            ("runtime.pdfium", "PDFIUM_LIBRARY"),
+            ("runtime.pdfium", "repair the installed into-md Core package"),
             ("runtime.ocr", "setup ocr"),
             ("runtime.legacy-office", "setup legacy-office"),
             ("runtime.asr", "setup media"),
@@ -6566,6 +6588,53 @@ mod tests {
         assert!(String::from_utf8(stdout).unwrap().contains("sub/a.md"));
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_batch_serializes_atomic_output_leases() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let input = root.join("input");
+        let output = root.join("output");
+        fs::create_dir_all(&input).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        let mut arguments = Vec::new();
+        for index in 0..24 {
+            let path = input.join(format!("item-{index:02}.txt"));
+            fs::write(&path, format!("parallel item {index}\n")).unwrap();
+            arguments.push(path.into_os_string());
+        }
+        arguments.extend([
+            OsString::from("--jobs"),
+            OsString::from("8"),
+            OsString::from("--output-dir"),
+            output.clone().into_os_string(),
+            OsString::from("--progress"),
+            OsString::from("never"),
+        ]);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = run(
+            arguments,
+            RunContext {
+                user_data_anchor: Some(root.join("user-data")),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "batch failed: {result:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        for index in 0..24 {
+            let path = output.join(format!("item-{index:02}.md"));
+            assert!(path.is_file(), "missing {}", path.display());
+        }
+        assert!(!String::from_utf8(stderr).unwrap().contains("transactionBusy"));
     }
 
     #[test]

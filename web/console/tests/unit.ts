@@ -26,6 +26,7 @@ const testGroups = {
   preview: new Set([
     "Markdown preview never creates executable or resource-loading DOM",
     "result dialog provides reading and source views with a closed details drawer",
+    "failed results keep the document area stable and expose retry beside the failure",
     "meeting speaker names rerender artifacts through generation CAS without rerunning transcription",
   ]),
   history_actions: new Set([
@@ -40,14 +41,16 @@ const testGroups = {
     "workbench rejects unsupported files before upload and explains terminal failures",
     "completed current-batch rows open their result from the whole row",
     "workbench separates the current batch from scrollable recent history",
+    "history paginates in place and loads records beyond the first server page",
     "root workbench automatically opens the first successful result dialog",
-    "workbench presents network access as one bounded switch",
+    "local workbench keeps implementation limits and network policy out of the normal flow",
     "remote OCR requires nearby network and provider authorization without enabling unrelated AI modes",
     "meeting recording is an independent route and media never enters the document workbench",
     "Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices",
     "meeting page keeps recording primary and setup feedback beside transcript controls",
+    "meeting keeps speech capabilities neutral while the fast snapshot is pending",
     "remote transcription requires a one-upload grant beside transcript controls",
-    "workbench reports the bounded upload rejection code",
+    "workbench explains upload rejection without exposing an internal code",
     "API rejection renders a recoverable status error rather than the error boundary",
     "ErrorBoundary contains provider render errors and focuses its fallback heading",
   ]),
@@ -492,6 +495,21 @@ test("result dialog provides reading and source views with a closed details draw
   assert.deepEqual(result.violations.map((violation) => violation.id), []);
 });
 
+test("failed results keep the document area stable and expose retry beside the failure", async () => {
+  const window = installWindow();
+  const failed = { ...task("failed"), displayName: "recording.webm", workflow: "meetingTranscript" as const,
+    diagnostics: [{ code: "componentUnavailable" }] };
+  window.history.replaceState(null, "", `/meetings/results/${failed.id}`);
+  const api: ApiClient = { ...availableApi, async getTask() { return failed; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "A required local dependency is not ready");
+  assert.equal(window.document.querySelector(".result-drawer"), null);
+  assert.equal(window.document.querySelector(".result-body")?.classList.contains("drawer-open"), false);
+  assert.ok([...window.document.querySelectorAll(".result-empty button")].some((button) => button.textContent === "Retry"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Details and resources")!.click();
+  await waitFor(() => Boolean(window.document.querySelector(".result-drawer")));
+});
+
 test("meeting speaker names rerender artifacts through generation CAS without rerunning transcription", async () => {
   const window = installWindow();
   const completed = { ...task("succeeded"), workflow: "meetingTranscript" as const,
@@ -596,11 +614,11 @@ test("immediate cleanup requires irreversible confirmation and reports reclaimed
   const root = trackedRoot(window2.document.getElementById("app")!);
   root.render(createElement(App, { api }));
   await waitForText(window2, "old.md");
-  [...window2.document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "View all")!.click();
-  await waitFor(() => Boolean(window2.document.querySelector(".history-drawer")));
   window2.document.querySelector<HTMLButtonElement>('button[aria-label="Clean up now"]')!.click();
   await waitFor(() => cleanups === 1 && window2.document.body.textContent.includes("1.5 MiB"));
   assert.ok(warning.includes("cannot be undone"));
+  assert.ok(window2.document.querySelector(".history-rail .history-rail-feedback")?.textContent.includes("1.5 MiB"));
+  assert.equal(window2.document.querySelector(".upload-card .picker-feedback"), null);
   const axe = (await import("axe-core")).default;
   assert.deepEqual((await axe.run(window2.document)).violations.map((violation) => violation.id), []);
 });
@@ -710,6 +728,33 @@ test("workbench separates the current batch from scrollable recent history", asy
   assert.equal(window.location.pathname, "/workbench");
 });
 
+test("history paginates in place and loads records beyond the first server page", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const records = Array.from({ length: 8 }, (_, index) => ({
+    ...task("succeeded", String(index + 1).padStart(32, "0")),
+    displayName: `archive-${index + 1}.pdf`, format: "pdf" as const, updatedAtMs: 100 - index,
+  }));
+  let requests = 0;
+  const api: ApiClient = {
+    ...availableApi,
+    async listTasks(filters) {
+      requests += 1;
+      if (!filters?.after) return { tasks: records.slice(0, 7), nextCursor: { updatedAtMs: 94, id: records[6]!.id } };
+      return { tasks: records.slice(7) };
+    },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "archive-1.pdf");
+  await waitFor(() => requests >= 2);
+  assert.equal(window.document.querySelectorAll(".recent-history li").length, 6);
+  assert.equal(window.document.body.textContent.includes("archive-8.pdf"), false);
+  window.document.querySelector<HTMLButtonElement>('.history-rail-footer button[aria-label="Next"]')!.click();
+  await waitForText(window, "archive-8.pdf");
+  assert.equal(window.document.querySelectorAll(".recent-history li").length, 2);
+  assert.equal(window.document.querySelector(".history-rail")?.textContent?.includes("2/2"), true);
+  assert.equal(window.document.querySelector(".history-rail")?.textContent?.includes("View all"), false);
+});
+
 test("completed current-batch rows open their result from the whole row", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const completed = { ...task("succeeded"), displayName: "contract.md", format: "markdown" as const };
@@ -726,8 +771,10 @@ test("completed current-batch rows open their result from the whole row", async 
   await waitFor(() => window.document.querySelector(".result-dialog") === null);
   const row = window.document.querySelector<HTMLButtonElement>(".current-task-link")!;
   assert.ok(row.textContent.includes("contract.md"));
-  row.click();
+  row.focus(); row.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
+  window.document.querySelector<HTMLButtonElement>('.result-dialog button[aria-label="Close"]')!.click();
+  await waitFor(() => window.document.activeElement === row);
 });
 
 test("root workbench automatically opens the first successful result dialog", async () => {
@@ -745,20 +792,15 @@ test("root workbench automatically opens the first successful result dialog", as
   assert.equal(window.location.pathname, "/");
 });
 
-test("workbench presents network access as one bounded switch", async () => {
+test("local workbench keeps implementation limits and network policy out of the normal flow", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api: availableApi }));
-  await waitForText(window, "Advanced settings");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
-  await waitForText(window, "When off, conversions process local content only.");
+  await waitForText(window, "Conversion settings");
+  assert.ok(!window.document.body.textContent.includes("Open advanced settings"));
+  assert.ok(!window.document.body.textContent.includes("Input file limit"));
+  assert.ok(!window.document.body.textContent.includes("Memory limit"));
   assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
-  assert.ok(!window.document.body.textContent.includes("private-network targets"));
-  const label = [...window.document.querySelectorAll("label")].find((item) => item.textContent?.includes("Allow network access"))!;
-  const toggle = label.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  assert.equal(toggle.checked, false);
-  toggle.click();
-  await waitForText(window, "When on, conversions may access internet and local-network services.");
-  assert.equal(toggle.checked, true);
+  assert.ok(!window.document.body.textContent.includes("Allow network access"));
 });
 
 test("remote OCR requires nearby network and provider authorization without enabling unrelated AI modes", async () => {
@@ -779,21 +821,12 @@ test("remote OCR requires nearby network and provider authorization without enab
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
   await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitForText(window, "The selected capability uses a remote provider");
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Advanced settings")!.click();
-  await waitFor(() => Boolean(window.document.querySelector(".settings-sheet")));
-  const aiMode = [...window.document.querySelectorAll<HTMLSelectElement>(".settings-sheet select")]
-    .find((select) => [...select.options].some((option) => option.value === "prefer"))!;
-  assert.equal(aiMode.value, "off");
+  await waitForText(window, "The selected image-recognition source needs network access");
   const grant = [...window.document.querySelectorAll("label")]
-    .find((label) => label.textContent?.includes("I authorize these uploads"))!
+    .find((label) => label.textContent?.includes("Allow this conversion to use the selected AI service"))!
     .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
   assert.equal(grant.checked, false);
-  const network = [...window.document.querySelectorAll("label")]
-    .find((label) => label.textContent?.includes("Allow network access"))!
-    .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  network.click(); grant.click();
-  [...window.document.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]')].at(-1)!.click();
+  grant.click();
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
   await waitFor(() => uploaded.length === 1);
   assert.equal(uploaded[0]!.aiMode, "off");
@@ -803,7 +836,8 @@ test("remote OCR requires nearby network and provider authorization without enab
 
 test("meeting recording is an independent route and media never enters the document workbench", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
-  const uploads: Array<[string, boolean]> = [];
+  const uploads: Array<[string, boolean]> = []; let cancellations = 0; let cancelRequested = false;
+  let emitTaskEvent: Parameters<ApiClient["watchTask"]>[1] | undefined;
   const api: ApiClient = {
     ...availableApi,
     async capabilitySnapshot() { return capabilitySnapshot(true); },
@@ -812,7 +846,12 @@ test("meeting recording is an independent route and media never enters the docum
       uploads.push([file.name, options.diarize]);
       return { ...task("running", "b".repeat(32)), workflow: "meetingTranscript" };
     },
-    async watchTask() {},
+    async cancel(id) { cancellations += 1; cancelRequested = true; return { ...task("running", id), workflow: "meetingTranscript" }; },
+    async getTask(id) { return { ...task(uploads.length > 1 ? "failed" : cancelRequested ? "cancelled" : "running", id), workflow: "meetingTranscript" }; },
+    async watchTask(_id, onEvent, signal) {
+      emitTaskEvent = onEvent;
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    },
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitForText(window, "Add documents");
@@ -828,14 +867,41 @@ test("meeting recording is an independent route and media never enters the docum
   assert.equal(window.document.getElementById("upload-zone"), null);
   assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent?.includes("Start recording")));
   const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
-  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.m4a", { type: "audio/mp4" })] });
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.m4a", { type: "audio/mp4" })], configurable: true });
   input.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitForText(window, "meeting.m4a");
+  const stableActionPanel = window.document.querySelector(".transcript-action-panel");
+  const speechCapabilityStrip = window.document.querySelector(".speech-capability-strip");
+  assert.ok(speechCapabilityStrip?.closest(".transcript-control-column"));
+  assert.ok(stableActionPanel?.parentElement?.classList.contains("transcript-control-column"));
+  assert.equal(stableActionPanel?.closest(".transcript-card"), null);
   [...window.document.querySelectorAll("button")]
     .find((button) => button.textContent?.includes("Create transcript"))!
     .click();
   await waitFor(() => uploads.length === 1);
   assert.deepEqual(uploads, [["meeting.m4a", true]]);
+  await waitForText(window, "Cancel transcription");
+  assert.equal(window.document.querySelector(".transcript-action-panel"), stableActionPanel);
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Cancel transcription")!.click();
+  await waitFor(() => cancellations === 1 && window.document.body.textContent.includes("Cancelling"));
+  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Cancelling" && button.disabled));
+  emitTaskEvent?.({ schemaVersion: 1, sequence: 1, taskId: "b".repeat(32), kind: "progress", status: "cancelled",
+    progressMillionths: 250_000, terminal: true, execution: { stage: "completed", basisPoints: 2_500,
+      completedUnits: 1, totalUnits: 4, message: null } });
+  await waitForText(window, "Cancelled");
+  assert.equal(window.document.querySelector(".transcript-action-panel"), stableActionPanel);
+  await waitForText(window, "Task details");
+  assert.ok(stableActionPanel?.textContent?.includes("Task details"));
+  Object.defineProperty(input, "files", { value: [new File(["audio"], "another.webm", { type: "audio/webm" })], configurable: true });
+  input.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitForText(window, "another.webm");
+  assert.ok(stableActionPanel?.textContent?.includes("Create transcript"));
+  assert.equal(stableActionPanel?.textContent?.includes("Transcribe again"), false);
+  [...stableActionPanel!.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
+  await waitFor(() => uploads.length === 2);
+  await waitForText(window, "Failed");
+  await waitFor(() => stableActionPanel?.textContent?.includes("Task details") === true);
+  assert.ok(stableActionPanel?.textContent?.includes("Task details"));
 });
 
 test("meeting page keeps recording primary and setup feedback beside transcript controls", async () => {
@@ -844,9 +910,10 @@ test("meeting page keeps recording primary and setup feedback beside transcript 
   await waitForText(window, "Record or import");
   await waitForText(window, "Prepare audio components");
   const start = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Start recording"));
-  const prepare = [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Prepare audio components"));
+  const prepare = [...window.document.querySelectorAll<HTMLAnchorElement>("a")].find((link) => link.textContent?.includes("Prepare audio components"));
   assert.ok(start?.closest(".recorder-console"));
   assert.ok(prepare?.closest(".meeting-options"));
+  assert.equal(prepare?.getAttribute("href"), "/admin/capabilities");
   const source = window.document.querySelector<HTMLSelectElement>(".recording-source select")!;
   assert.deepEqual([...source.options].map((option) => option.textContent), [
     "Microphone only", "Computer audio only", "Microphone + computer audio",
@@ -888,13 +955,13 @@ test("remote transcription requires a one-upload grant beside transcript control
     async watchTask() {},
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "I authorize this audio and required network access for the selected remote provider");
+  await waitForText(window, "Allow this audio to use the selected AI service and network transcription");
   const input = window.document.querySelector<HTMLInputElement>('.meeting-route input[type="file"]')!;
   Object.defineProperty(input, "files", { value: [new File(["audio"], "meeting.webm", { type: "audio/webm" })] });
   input.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitForText(window, "meeting.webm");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
-  await waitForText(window, "Explicitly confirm the required provider authorization.");
+  await waitForText(window, "Confirm use of the selected AI service for this upload.");
   const grant = window.document.querySelector<HTMLInputElement>(".meeting-provider-grant input")!;
   grant.click();
   [...window.document.querySelectorAll("button")].find((button) => button.textContent?.includes("Create transcript"))!.click();
@@ -919,7 +986,7 @@ test("Chinese meeting UI defaults to Simplified Chinese without overriding expli
   assert.equal(transcriptLanguage.value, "zh-Hant");
 });
 
-test("workbench reports the bounded upload rejection code", async () => {
+test("workbench explains upload rejection without exposing an internal code", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const api: ApiClient = {
     ...availableApi,
@@ -932,7 +999,8 @@ test("workbench reports the bounded upload rejection code", async () => {
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
   zone.dispatchEvent(drop); await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitForText(window, "Upload failed: contract.md (invalidTaskOptions)");
+  await waitForText(window, "contract.md: The conversion settings are invalid");
+  assert.equal(window.document.body.textContent.includes("invalidTaskOptions"), false);
 });
 
 test("shell primitives expose keyboard focus and language-safe DOM behavior", () => {

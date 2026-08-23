@@ -1,11 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "model": {
     "bundle": "whisper-small-multilingual",
     "bytes": 487601967,
     "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
     "runtime": "whisper-rs 0.16.0 / bundled whisper.cpp CPU",
-    "beam_size": 5,
+    "decoding_strategy": "greedy",
+    "candidate_count": 1,
     "maximum_threads": 4
   },
   "normalization": {

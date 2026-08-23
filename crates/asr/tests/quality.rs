@@ -29,7 +29,8 @@ struct ModelAuthority {
     bytes: u64,
     sha256: String,
     runtime: String,
-    beam_size: u32,
+    decoding_strategy: String,
+    candidate_count: u32,
     maximum_threads: u16,
 }
 
@@ -66,7 +67,8 @@ struct QualityReport {
     model: String,
     model_bytes: u64,
     runtime: String,
-    beam_size: u32,
+    decoding_strategy: String,
+    candidate_count: u32,
     maximum_threads: u16,
     noise_algorithm: String,
     noise_seed: u64,
@@ -115,8 +117,9 @@ fn whisper_small_multilingual_quality() {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let authority_bytes = std::fs::read(fixture_root.join("asr-quality-authority.json")).unwrap();
     let authority: Authority = serde_json::from_slice(&authority_bytes).unwrap();
-    assert_eq!(authority.schema_version, 2);
-    assert_eq!(authority.model.beam_size, 5);
+    assert_eq!(authority.schema_version, 3);
+    assert_eq!(authority.model.decoding_strategy, "greedy");
+    assert_eq!(authority.model.candidate_count, 1);
     assert_eq!(authority.model.bytes, 487_601_967);
     assert!(authority.model.runtime.contains("whisper.cpp"));
     assert_eq!(authority.noise.algorithm, "lcg-white-noise-v1");
@@ -208,7 +211,7 @@ fn whisper_small_multilingual_quality() {
     assert_eq!(cases.len(), 4, "quality authority must produce exactly four cases");
     assert_eq!(unique_cases.len(), 4, "quality cases must be unique");
     let report = QualityReport {
-        schema_version: 2,
+        schema_version: 3,
         authority_sha256: format!(
             "{:x}",
             Sha256::digest(String::from_utf8(authority_bytes).unwrap().replace("\r\n", "\n"))
@@ -216,7 +219,8 @@ fn whisper_small_multilingual_quality() {
         model: format!("{}@sha256:{}", authority.model.bundle, authority.model.sha256),
         model_bytes: authority.model.bytes,
         runtime: authority.model.runtime,
-        beam_size: authority.model.beam_size,
+        decoding_strategy: authority.model.decoding_strategy,
+        candidate_count: authority.model.candidate_count,
         maximum_threads: authority.model.maximum_threads,
         noise_algorithm: authority.noise.algorithm,
         noise_seed: authority.noise.seed,

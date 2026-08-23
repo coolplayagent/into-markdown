@@ -1,0 +1,61 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/into_markdown_plugin_manager-295d4c5d453ef3b7)
+
+running 30 tests
+test tests::installed_process_snapshot_reports_real_runtime_timing ... ignored, requires an installed real plugin store
+test tests::process_read_locks_are_concurrent_and_exclude_mutation ... ok
+test tests::bounded_zip_entry_probes_without_unaccounted_growth ... ok
+test tests::portable_paths_reject_aliases_devices_and_separators ... ok
+test tests::manager_rejects_scope_root_replacement_after_open ... ok
+test tests::cancellation_and_low_memory_are_stable_and_release_reservations ... ok
+test tests::first_trust_double_rename_failure_is_indeterminate_and_recovers_forward ... ok
+test tests::persisted_trust_merges_stale_managers_and_recovers_replace_phases ... ok
+test tests::scoped_store_rejects_world_writable_existing_intermediate ... ok
+test tests::file_install_does_not_materialize_package ... ok
+test tests::remove_recovery_replays_a_rolled_back_rename_forward ... ok
+test tests::remove_post_move_sync_failure_commits_and_restart_finishes_cleanup ... ok
+test tests::retained_archive_closes_package_hash_authority_chain ... ok
+test tests::process_snapshot_pins_runtime_bytes_across_path_replacement_race ... ok
+test tests::signer_alias_and_fingerprint_revocation_fail_closed ... ok
+test tests::process_snapshot_contains_only_the_manifest_inventory ... ok
+test tests::stale_manager_rejects_replaced_store_without_touching_trust_sentinel ... ok
+test tests::startup_recovery_waits_for_a_transient_store_lock ... ok
+test tests::untrusted_and_revoked_signers_fail_closed ... ok
+test tests::wrong_package_hash_is_rejected_before_install ... ok
+test tests::process_snapshot_rejects_runtime_link_replacements ... ok
+test tests::signed_manifests_reject_portable_device_plugin_ids_without_store_changes ... ok
+test tests::corrupt_extracted_runtime_can_be_repaired_from_an_authenticated_package ... ok
+test tests::signed_install_verify_and_remove_are_end_to_end ... ok
+test tests::snapshot_is_published_only_after_complete_copy_and_cleans_cancelled_next_file ... ok
+test tests::status_inspection_is_fast_metadata_only_while_explicit_verify_hashes_content ... ok
+test tests::signed_malicious_archives_fail_closed_through_both_install_paths ... ok
+test tests::zip_metadata_is_bounded_before_archive_parser_allocation ... ok
+test tests::manager_intersects_declared_and_invocation_wasi_network_authority ... ok
+test tests::signed_install_prepare_and_execute_real_wasi_component ... ok
+
+test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.93s
+
+     Running unittests src/bin/package_plugin.rs (target/debug/deps/package_plugin-e70a1092b683fd57)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plugin_manager_process_fixture.rs (target/debug/deps/plugin_manager_process_fixture-c019e1bab625b65d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/process_e2e.rs (target/debug/deps/process_e2e-ed6c4f98073a84bf)
+
+running 1 test
+test signed_install_prepares_and_executes_real_process_guest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.83s
+
+   Doc-tests into_markdown_plugin_manager
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
