@@ -1,0 +1,20 @@
+name: Documentation contract
+
+on:
+  pull_request:
+    paths: ["README*.md", "CONTRIBUTING*.md", "docs/**", "apps/cli/src/**", "crates/converters/src/core_catalog.rs", "tools/docs-check/**", ".github/workflows/documentation.yml"]
+  push:
+    branches: [main]
+    paths: ["README*.md", "CONTRIBUTING*.md", "docs/**", "apps/cli/src/**", "crates/converters/src/core_catalog.rs", "tools/docs-check/**", ".github/workflows/documentation.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bilingual docs, commands, formats, links, and real conversion
+        run: bazel test //tools/docs-check:docs_check_test

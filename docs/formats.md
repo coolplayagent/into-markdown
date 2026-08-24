@@ -3,17 +3,22 @@
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOC/DOCX/DOCM、ODT/ODS/ODP、
 PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX、XLS/XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、
 Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及
-PNG/JPEG/TIFF/WebP/BMP 图片状态为 `available`。旧 Office 格式还要求安装当前平台的受审
-runtime，缺失时返回 `componentUnavailable`。Audio、Video、YouTube、Wikipedia/MediaWiki、
-ASR、AI provider 与插件能力不进入核心目录，也不会以 `planned` 冒充可用格式。
+PNG/JPEG/TIFF/WebP/BMP 图片以及 Audio/Video 状态为 `available`。旧 Office 格式还要求安装
+当前平台的受审 runtime；Audio/Video 要求完整语音能力插件。能力缺失时返回
+`componentUnavailable`。YouTube、Wikipedia/MediaWiki 等站点适配器不是格式 catalog 条目，
+ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格式。
 
 | 类别 | 格式 |
 | --- | --- |
 | 文档 | PDF；DOC/DOCX/DOCM；PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX；XLS/XLSX/XLSM/XLSB；ODT/ODS/ODP；RTF；EPUB |
 | 文本与数据 | TXT；Markdown；HTML；CSV/TSV；JSON；XML；RSS/Atom；IPYNB |
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
+| 音视频 | Audio；Video（经受认证 FFmpeg 解码并由语音能力插件转写） |
 | 容器与消息 | ZIP；Outlook MSG |
 | 受控输入基础 | HTTP(S) SourceResolver（默认离线，须显式网络授权） |
+
+每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
+`into-md formats --json` 实时发现后逐项校验。
 
 ## 图片
 

@@ -21,6 +21,7 @@ into-md capabilities
 into-md setup
 into-md providers
 into-md plugins
+into-md transcript
 into-md config
 into-md doctor
 into-md completions
@@ -36,6 +37,9 @@ into-md -- ui
 
 无参数且 stdin 连接管道时自动读取 stdin；无参数且 stdin 为终端时显示帮助。
 `into-md -` 始终显式表示 stdin。stdin 不能与其他输入组合。
+
+全部公共命令和当前可用格式的可执行示例见[命令与格式示例](cli-examples.md)。该文档由
+CI 对真实 CLI 发现结果、语法、格式 catalog 和基础转换逐项校验。
 
 ### 本地 Web 服务
 
@@ -296,7 +300,17 @@ into-md setup media [--insecure] [--allow-private-network]
 into-md setup legacy-office [--insecure] [--allow-private-network]
 ```
 
-转换和状态查询不会隐式调用这两个命令。
+转换和状态查询不会隐式调用这些命令。
+
+### 转写后说话人重标记
+
+```text
+into-md transcript relabel <INPUT.md|RESULT.json> --mapping <FROM=TO>... \
+  [-o <OUTPUT>] [--conflict <error|overwrite|rename>] [--json]
+```
+
+`transcript relabel` 只修改已有转写产物中的说话人标签，不重新解码媒体、不执行 ASR 或
+说话人分离，也不访问网络。输入、mapping 和输出结构会完整校验；默认使用冲突保护。
 
 ### AI Provider
 
@@ -391,11 +405,11 @@ into-md version [--json]
 | 70 | 内部错误 |
 | 130 | 用户取消 |
 
-当前工程仍是转换后端脚手架。格式、模型运行时产物、插件或 Provider 后端缺失时，命令返回
-稳定错误，不会执行网络操作、创建虚假安装状态或 panic。
+当前 Core、格式 catalog、能力路由和插件生命周期均为公开产品接口。格式、能力插件或
+Provider 后端缺失时，命令返回稳定错误，不会执行未授权网络操作、创建虚假安装状态或 panic。
 
 `ir-json` 使用 Document IR 的公共版本化契约；`result-json`、Bundle manifest 和
-`--report` 使用与未来 HTTP 服务共享的公共 DTO。Bundle schema 1 内的
+`--report` 使用与本地 Web 服务共享的公共 DTO。Bundle schema 1 内的
 diagnostics/provenance 保持裸数组成员形状，其版本由 manifest 统辖；独立 HTTP 响应
 使用带 `schemaVersion` 的 envelope。
 `result-json` 通过公共 DTO 的 `Pretty` 借用写接口生成：完整缩进后 wire 预算在任何

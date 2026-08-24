@@ -7,6 +7,10 @@
 ## 使用与公共接口
 
 - [CLI](cli.md)：转换、批量、Bundle、能力、Provider、插件、配置和诊断命令。
+- [可执行命令与格式示例](cli-examples.md) / [English](cli-examples.en.md)：全部公共命令和
+  当前可用格式的可运行示例。
+- [安装与部署](user-guide.md) / [English](user-guide.en.md)：四平台校验、安装、离线能力、
+  排障和卸载。
 - [配置](configuration.md)：分层配置、profile、网络授权和能力路由。
 - [格式矩阵](formats.md)：catalog 中的格式、检测、转换和失败边界。
 - [DTO](dto.md)：Document IR、result JSON、batch report 与兼容规则。
@@ -19,6 +23,8 @@
 - [能力插件](capability-plugins.md)：OCR、语音、说话人分离和旧版 Office 的完整插件边界。
 - [插件管理](plugin-management.md)、[进程插件](process-plugins.md)与
   [WASI 插件](wasi-plugins.md)：签名、信任、作用域、隔离与生命周期。
+- [插件开发](plugin-development.md) / [English](plugin-development.en.md)：协议选择、开发、
+  签名、真实执行和发布门禁。
 - [OCR 与 AI](ocr-and-ai.md)：embedded OCR、本地能力和远端 Provider 的证据边界。
 
 本地模型只属于完整能力插件，不提供独立模型安装、更新、替换或选择接口。仓库 `models/`
@@ -34,6 +40,7 @@
   [Linux/Windows 发布](platform-modular-release.md)。
 - [许可证治理](licensing.md)、[许可证检查](license-governance.md)和
   [第三方许可说明](../THIRD_PARTY_NOTICES.md)。
+- [贡献指南](../CONTRIBUTING.md) / [English](../CONTRIBUTING.en.md)。
 
 每个平台产品发布由一个 Core、三个自包含能力插件和一份平台无关 Agent Skill 构成。
 Core 内置 canonical skill 目录；独立 ZIP 与 Core 副本逐文件一致。产品安装器与卸载器不修改
@@ -42,6 +49,8 @@ Core 内置 canonical skill 目录；独立 ZIP 与 Core 副本逐文件一致�
 ## 文档维护规则
 
 - 示例使用真实公开命令，不虚构 `convert` 子命令或独立模型管理接口。
+- 每个公共 CLI 命令和每种当前可用格式必须在中英文可执行示例中各出现一次，并由真实
+  `into-md` 和实时 format catalog 在 CI 中校验。
 - 本地与远端能力都按当前 invocation 的网络授权执行；普通转换默认离线。
 - 发布结论必须来自全新安装包与真实文档、图片、音视频黑盒验收。
 - 历史兼容描述必须明确标为兼容读取或迁移行为，不能冒充当前推荐用法。

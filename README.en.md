@@ -32,8 +32,10 @@ MSG, audio, and video. Legacy Office, OCR, transcription, and diarization use th
 capability plugins.
 
 Release targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows x86_64. macOS x86_64 is
-unsupported. See the [macOS release](docs/macos-arm64-release.md) and
-[Linux/Windows release](docs/platform-modular-release.md) contracts.
+unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature
+verification, installation, offline plugin import, troubleshooting, and uninstall. Platform release
+contracts are the [macOS release](docs/macos-arm64-release.md) and
+[Linux/Windows release](docs/platform-modular-release.md).
 
 ## CLI
 
@@ -60,7 +62,7 @@ Remote sources and providers are denied by default. Add `--allow-network` only w
 user request requires it, narrow access with `--allow-host` where possible, and require separate
 `--allow-private-network` authority for private destinations.
 
-The authoritative interface documentation is maintained in Chinese: [CLI](docs/cli.md),
+See the [CLI](docs/cli.md), [executable command and format examples](docs/cli-examples.en.md),
 [configuration](docs/configuration.md), [format matrix](docs/formats.md), and [DTOs](docs/dto.md).
 
 ## Capabilities and local Web workbench
@@ -109,3 +111,6 @@ images, and media. Compilation, mocks, and skill-structure validation are not su
 The [documentation map](docs/README.md) groups the architecture, security, testing, and release
 contracts. Licensing and supply-chain evidence are in [LICENSE](LICENSE),
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [license governance](docs/licensing.md).
+Read the [contribution guide](CONTRIBUTING.en.md) before changing the repository and the
+[plugin-development guide](docs/plugin-development.en.md) before extending converters or capability
+providers.

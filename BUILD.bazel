@@ -54,7 +54,10 @@ exports_files([
 filegroup(
     name = "documentation",
     srcs = glob([
-        "docs/**/*.md",
+        "CONTRIBUTING*.md",
+        "docs/**/*",
+        "LICENSE",
+        "NOTICE",
         "README.en.md",
         "README.md",
         "THIRD_PARTY_NOTICES.md",

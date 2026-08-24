@@ -28,7 +28,8 @@ TXT、Markdown、HTML、CSV/TSV、JSON、XML、RSS/Atom Feed、Jupyter Notebook�
 Outlook MSG、音频和视频。旧版 Office、OCR、语音转写与说话人分离由对应能力插件提供。
 
 支持 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows x86_64；不支持 macOS x86_64。
-平台边界见 [macOS 发布](docs/macos-arm64-release.md)与
+最终用户的签名校验、安装、离线插件导入、排障和卸载见[安装与部署](docs/user-guide.md)；
+平台发布边界见 [macOS 发布](docs/macos-arm64-release.md)与
 [Linux/Windows 发布](docs/platform-modular-release.md)。
 
 ## 使用 CLI
@@ -56,8 +57,8 @@ into-md documents/ --recursive --output-dir markdown/ \
 `--allow-network`，并尽量使用 `--allow-host` 收窄主机；私网还需要单独的
 `--allow-private-network` 授权。
 
-完整接口见 [CLI](docs/cli.md)、[配置](docs/configuration.md)、[格式矩阵](docs/formats.md)和
-[DTO](docs/dto.md)。
+完整接口见 [CLI](docs/cli.md)、[可执行命令与格式示例](docs/cli-examples.md)、
+[配置](docs/configuration.md)、[格式矩阵](docs/formats.md)和 [DTO](docs/dto.md)。
 
 ## 能力与 Web 工作台
 
@@ -100,4 +101,5 @@ Bazel 是发布构建权威；Cargo 用于快速开发检查和定向测试。�
 
 架构、安全、测试和发布文档统一收录在 [docs/README.md](docs/README.md)。许可证与第三方来源
 见 [LICENSE](LICENSE)、[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)和
-[许可证治理](docs/licensing.md)。
+[许可证治理](docs/licensing.md)。参与开发前请阅读[贡献指南](CONTRIBUTING.md)；扩展转换器或
+能力 provider 见[插件开发](docs/plugin-development.md)。
