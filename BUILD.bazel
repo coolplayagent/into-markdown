@@ -10,6 +10,16 @@ exports_files([
     "pnpm-workspace.yaml",
 ])
 
+filegroup(
+    name = "agent_skill_files",
+    srcs = [
+        ".agents/skills/into-markdown/LICENSE",
+        ".agents/skills/into-markdown/SKILL.md",
+        ".agents/skills/into-markdown/agents/openai.yaml",
+        ".agents/skills/into-markdown/references/cli-workflows.md",
+    ],
+)
+
 platform(
     name = "macos_arm64_platform",
     constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:osx"],

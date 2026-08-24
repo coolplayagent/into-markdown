@@ -1,4 +1,8 @@
-# Local test gates
+# Local test gates evidence snapshot
+
+> 本文件保存 2026-08-23 对特定提交和 PR 的验收证据，不是当前分支状态页。当前产品、命令、
+> 发布组成和必跑门禁以 [文档导航](../README.md)、[测试策略](../testing.md)及发布工作流为准；
+> 后续运行应追加带提交和日期的证据，不改写历史结论。
 
 Date: 2026-08-23
 Branch under final review: the final `codex/admin-visual-pagination` PR head, including the Web, cold-start and evidence patch described below.

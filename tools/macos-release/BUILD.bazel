@@ -22,7 +22,10 @@ py_binary(
         "install",
         "uninstall",
     ],
-    deps = [":library"],
+    deps = [
+        ":library",
+        "//tools/skill-release:library",
+    ],
 )
 
 py_test(

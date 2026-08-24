@@ -1,0 +1,6 @@
+interface:
+  display_name: "Into Markdown"
+  short_description: "Convert documents and media into Markdown"
+  default_prompt: "Use $into-markdown to convert these files into verified Markdown artifacts."
+policy:
+  allow_implicit_invocation: true

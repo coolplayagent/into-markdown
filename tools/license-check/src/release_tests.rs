@@ -656,6 +656,39 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
 }
 
 #[test]
+fn canonical_agent_skill_paths_are_exactly_scoped() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    for path in [
+        "share/into-markdown/skills/into-markdown/LICENSE",
+        "share/into-markdown/skills/into-markdown/SKILL.md",
+        "share/into-markdown/skills/into-markdown/agents/openai.yaml",
+        "share/into-markdown/skills/into-markdown/references/cli-workflows.md",
+    ] {
+        projection.files.push(ArchiveFile {
+            path: path.into(),
+            bytes: 1,
+            sha256: "a".repeat(64),
+            kind: ArchiveFileKind::Project,
+            component_id: None,
+            embedded_components: vec![],
+        });
+    }
+    verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap()).unwrap();
+
+    projection.files.push(ArchiveFile {
+        path: "share/into-markdown/skills/into-markdown/README.md".into(),
+        bytes: 1,
+        sha256: "b".repeat(64),
+        kind: ArchiveFileKind::Project,
+        component_id: None,
+        embedded_components: vec![],
+    });
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("outside the closed path set")));
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     let mut projection = minimal_projection("aarch64-apple-darwin");

@@ -1,5 +1,6 @@
 //! Platform-neutral post-install smoke contract.
 
+mod agent_skill;
 mod catalog;
 mod cli_cases;
 mod manifest;
@@ -57,6 +58,13 @@ fn run_with_executor(
         let projection = manifest::verify_install(&validated)?;
         if projection.target != platform.target() {
             return Err("archive manifest target differs from the executing platform".into());
+        }
+        match agent_skill::verify(&validated.install_root) {
+            Ok(()) => cases.push(CaseResult::passed(
+                "agent-skill",
+                "installed Agent Skill structure and license verified",
+            )),
+            Err(error) => cases.push(CaseResult::failed("agent-skill", "skillInvalid", &error)),
         }
         let authority = catalog::load_authority(&validated, &projection)?;
         cli_cases::run(
@@ -185,6 +193,7 @@ mod tests {
             .unwrap();
         fs::write(rust.join("Cargo.lock"), b"version = 4\n").unwrap();
         fs::write(rust.join("vendor/example/checksum"), b"vendor").unwrap();
+        agent_skill::create_fixture(&install);
         let authority = into_markdown_converters::core_catalog_authority().unwrap();
         fs::write(
             install.join("core-catalog.json"),
@@ -243,7 +252,7 @@ mod tests {
         ];
         let dto = br#"{"schemaVersion":1,"markdown":"Alpha \u4e2d\u6587 line  \nSecond line\n","document":{"blocks":[{}]}}"#.to_vec();
         let corrupt = br#"{"code":"malformed","exitCode":3}"#.to_vec();
-        let pdf = br#"{"code":"componentUnavailable","exitCode":9,"message":"install the pinned PDFium runtime and set PDFIUM_LIBRARY to its exact file"}"#.to_vec();
+        let pdf = br#"{"code":"componentUnavailable","exitCode":9,"message":"repair the installed into-md Core package, then run diagnostics again"}"#.to_vec();
         let image =
             br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup ocr"}"#
                 .to_vec();

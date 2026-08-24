@@ -12,7 +12,11 @@ permissions:
   contents: read
 
 jobs:
+  agent-skill:
+    uses: ./.github/workflows/agent-skill-release.yml
+
   native-release:
+    needs: agent-skill
     environment: release
     strategy:
       fail-fast: false
@@ -136,10 +140,15 @@ jobs:
         env:
           INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}/clean-user-data
         run: |
+          mkdir -p "$HOME/.agents/skills/existing-skill"
+          printf '%s\n' 'preserve user-owned skill' > "$HOME/.agents/skills/existing-skill/SENTINEL"
+          cp -R "$HOME/.agents/skills" "${{ runner.temp }}/agent-skills-before"
           mkdir "${{ runner.temp }}/distribution"
           tar -xzf "${{ runner.temp }}/${{ matrix.archive }}" -C "${{ runner.temp }}/distribution"
           "${{ runner.temp }}/distribution/bin/archive-check" "${{ runner.temp }}/distribution"
           installed=$("${{ runner.temp }}/distribution/install" "${{ runner.temp }}/install" "${{ runner.temp }}/bin" | tail -1)
+          diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
+          diff -ru ".agents/skills/into-markdown" "$installed/share/into-markdown/skills/into-markdown"
           signer_id=$(jq -r .signingKeyId "$installed/share/into-markdown/plugins/official-publisher.json")
           signer_sha=$(jq -r .signingKeySha256 "$installed/share/into-markdown/plugins/official-publisher.json")
           for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
@@ -150,16 +159,35 @@ jobs:
           "$installed/bin/into-md" capabilities list --json | jq -e '[.capabilities[] | select(.status == "ready")] | length == 4'
           "$installed/bin/into-md" "${{ github.workspace }}/tools/macos-release/fixtures/normal.doc" --output "${{ runner.temp }}/legacy-output" --format doc
           "${{ runner.temp }}/distribution/uninstall" "${{ runner.temp }}/install" "${{ runner.temp }}/bin"
+          diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
       - name: Clean-install and verify all capabilities
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}\clean-user-data
         run: |
+          $agentSkills = "$HOME\.agents\skills"
+          New-Item -ItemType Directory -Force "$agentSkills\existing-skill" | Out-Null
+          Set-Content -NoNewline "$agentSkills\existing-skill\SENTINEL" "preserve user-owned skill"
+          function Get-AgentSkillTree([string]$Root) {
+            Get-ChildItem $Root -Force -Recurse | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($Root.Length)
+              if ($_.PSIsContainer) {
+                "$relative|directory"
+              } else {
+                "$relative|file|$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)"
+              }
+            }
+          }
+          $agentSkillsBefore = @(Get-AgentSkillTree $agentSkills)
           Expand-Archive -LiteralPath "${{ runner.temp }}\${{ matrix.archive }}" -DestinationPath "${{ runner.temp }}\distribution"
           & "${{ runner.temp }}\distribution\bin\archive-check.exe" "${{ runner.temp }}\distribution"
           & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
+          if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core installer modified the Agent Skills directory" }
           $installed = Get-ChildItem "${{ runner.temp }}\install\versions" | Select-Object -First 1 -ExpandProperty FullName
+          $canonical = Get-ChildItem ".agents\skills\into-markdown" -File -Recurse | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName.Substring((Resolve-Path ".agents\skills\into-markdown").Path.Length); Hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash } }
+          $embedded = Get-ChildItem "$installed\share\into-markdown\skills\into-markdown" -File -Recurse | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName.Substring((Resolve-Path "$installed\share\into-markdown\skills\into-markdown").Path.Length); Hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash } }
+          if (Compare-Object $canonical $embedded -Property Path, Hash) { throw "embedded Agent Skill differs from canonical source" }
           $catalog = Get-Content "$installed\share\into-markdown\plugins\official-publisher.json" | ConvertFrom-Json
           foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper", "official.legacy-office.libreoffice")) {
             $path = "${{ runner.temp }}\plugins-a\$package.imp"
@@ -171,6 +199,7 @@ jobs:
           if ($ready.Count -ne 4) { throw "not all capabilities are ready" }
           & "$installed\bin\into-md.exe" "${{ github.workspace }}\tools\macos-release\fixtures\normal.doc" --output "${{ runner.temp }}\legacy-output" --format doc
           & "${{ runner.temp }}\distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
+          if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core uninstaller modified the Agent Skills directory" }
       - name: Sign Linux release artifacts
         if: runner.os == 'Linux'
         env:

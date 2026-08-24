@@ -6,6 +6,10 @@ Core 能力的归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`�
 OCR/语音模型或 LibreOffice；每个插件包含离线运行所需的完整 runtime、模型、字典、许可、
 SBOM、签名清单和目标平台声明。
 
+每个产品版本还发布一份平台无关的 `into-markdown-skill.zip` 与 SHA-256。skill 的 canonical
+内容同时进入所有 Core 的 `share/into-markdown/skills/into-markdown/`，并由 Core 归档清单绑定；
+安装器和卸载器都不会修改用户的 agent skill 目录。
+
 原生发布入口是 `tools/platform-release/release.py`。它拒绝在非目标架构组装发布件，并固定
 Rust 版本、PDFium、ONNX Runtime、模型、LibreOffice、FFmpeg 审计产物、下载大小和 SHA-256。
 Linux 归档为确定性 `tar.gz`，Windows 归档为确定性 ZIP。发行工作流在对应原生 runner 上
@@ -45,4 +49,4 @@ Provider 进程和单独的兼容 worker 绑定同一个 SID。插件管理器�
 
 跨平台归档工作流使用 GitHub 当前公开的原生 `ubuntu-24.04-arm` 标签，而不是在 x86_64
 runner 上把交叉编译误报为 ARM64 运行验收。所有发布结论仍以原生安装后的公开 CLI/Web E2E
-报告为准。
+报告为准。平台无关的 skill 工作流先通过后，三平台发布 job 才开始组装 Core 与能力插件。

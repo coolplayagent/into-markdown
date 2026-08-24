@@ -1,0 +1,50 @@
+name: Agent Skill Release
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-skill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate canonical skill
+        run: |
+          set -eu
+          python3 tools/skill-release/skill_release_main.py validate
+          python3 tools/skill-release/test_skill_release.py
+
+      - name: Build reproducible release archives
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/skill-a" "$RUNNER_TEMP/skill-b" dist
+          python3 tools/skill-release/skill_release_main.py build \
+            --archive "$RUNNER_TEMP/skill-a/into-markdown-skill.zip"
+          python3 tools/skill-release/skill_release_main.py build \
+            --archive "$RUNNER_TEMP/skill-b/into-markdown-skill.zip"
+          cmp \
+            "$RUNNER_TEMP/skill-a/into-markdown-skill.zip" \
+            "$RUNNER_TEMP/skill-b/into-markdown-skill.zip"
+          cmp \
+            "$RUNNER_TEMP/skill-a/into-markdown-skill.zip.sha256" \
+            "$RUNNER_TEMP/skill-b/into-markdown-skill.zip.sha256"
+          python3 tools/skill-release/skill_release_main.py verify \
+            --archive "$RUNNER_TEMP/skill-a/into-markdown-skill.zip"
+          python3 tools/skill-release/skill_release_main.py verify \
+            --archive "$RUNNER_TEMP/skill-b/into-markdown-skill.zip"
+          cp "$RUNNER_TEMP/skill-a/into-markdown-skill.zip" dist/
+          cp "$RUNNER_TEMP/skill-a/into-markdown-skill.zip.sha256" dist/
+
+      - name: Upload standalone skill
+        uses: actions/upload-artifact@v4
+        with:
+          name: into-markdown-agent-skill
+          path: |
+            dist/into-markdown-skill.zip
+            dist/into-markdown-skill.zip.sha256
+          if-no-files-found: error
