@@ -12,7 +12,11 @@ permissions:
   contents: read
 
 jobs:
+  agent-skill:
+    uses: ./.github/workflows/agent-skill-release.yml
+
   release:
+    needs: agent-skill
     runs-on: macos-14
     timeout-minutes: 180
     steps:
@@ -131,6 +135,9 @@ jobs:
           done
       - name: Verify notarized clean install and plugin lifecycle
         run: |
+          mkdir -p "$HOME/.agents/skills/existing-skill"
+          printf '%s\n' 'preserve user-owned skill' > "$HOME/.agents/skills/existing-skill/SENTINEL"
+          cp -R "$HOME/.agents/skills" "$RUNNER_TEMP/agent-skills-before"
           archive="$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           distribution="$RUNNER_TEMP/distribution-core"
           mkdir "$distribution"
@@ -140,6 +147,9 @@ jobs:
           installed=$(
             "$distribution/install" "$RUNNER_TEMP/install-core" "$RUNNER_TEMP/bin-core" | tail -1
           )
+          diff -ru "$RUNNER_TEMP/agent-skills-before" "$HOME/.agents/skills"
+          diff -ru ".agents/skills/into-markdown" \
+            "$installed/share/into-markdown/skills/into-markdown"
           export INTO_MARKDOWN_USER_DATA_HOME="$RUNNER_TEMP/clean-user-data"
           mkdir -p "$INTO_MARKDOWN_USER_DATA_HOME" "$RUNNER_TEMP/smoke-core"
           signer_id=$(jq -r '.signingKeyId' "$installed/share/into-markdown/plugins/official-publisher.json")
@@ -169,6 +179,7 @@ jobs:
             --pdfium-library "$installed/lib/pdfium/libpdfium.dylib" \
             --timeout-seconds 90
           "$distribution/uninstall" "$RUNNER_TEMP/install-core" "$RUNNER_TEMP/bin-core"
+          diff -ru "$RUNNER_TEMP/agent-skills-before" "$HOME/.agents/skills"
           hdiutil detach -quiet "$distribution"
           trap - EXIT
       - uses: actions/upload-artifact@v4

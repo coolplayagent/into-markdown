@@ -480,7 +480,8 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
                     | "share/into-markdown/plugins/official-publisher.json"
                     | "install"
                     | "uninstall"
-            ) || file.path.starts_with("lib/into-markdown-rust/")
+            ) || agent_skill_path(&file.path)
+                || file.path.starts_with("lib/into-markdown-rust/")
                 || (file.path.starts_with("bin/models/")
                     && file.path.ends_with("/install-state.json"))
                 || file.path.starts_with("share/into-markdown/smoke/fixtures/")
@@ -542,6 +543,16 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
             ));
         }
     }
+}
+
+fn agent_skill_path(path: &str) -> bool {
+    matches!(
+        path,
+        "share/into-markdown/skills/into-markdown/LICENSE"
+            | "share/into-markdown/skills/into-markdown/SKILL.md"
+            | "share/into-markdown/skills/into-markdown/agents/openai.yaml"
+            | "share/into-markdown/skills/into-markdown/references/cli-workflows.md"
+    )
 }
 
 fn embedded_only(id: &str) -> bool {

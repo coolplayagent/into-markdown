@@ -539,9 +539,10 @@ relationship，以及 PPTX/PPTM/PPSX/PPSM/POTX 的实际 main content type；两
 repository-authored VBA payload，并以成功 semantic hash 证明 payload 在解压前被隔离。
 
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
-recognizer 是显式 manual target；字体只用于重建 OCR PNG，模型只供真实识别质量目标，
-两者均不进入普通测试或发布物。该质量目标通过产品 `ModelManager` 安装原始官方 TAR，
-再经产品 resolver/ORT worker 运行 12 张图，并精确断言简体 0/65≤5%、繁体 6/65≤10%、
+source archive 只由显式 manual target 获取；字体只用于重建 OCR PNG，模型源只供受控派生与
+真实识别质量目标。它们不进入普通测试。发布工具把审计后的模型派生物与 ONNX Runtime 一起
+装入完整 OCR 能力插件，不形成独立模型发布件。质量目标经内部 resolver/ORT worker 运行 12 张图，
+并精确断言简体 0/65≤5%、繁体 6/65≤10%、
 英文 1/185≤5%、混排 1/116≤8%。普通 Cargo integration 明确报告该用例 ignored；fake
 runtime 单元测试不能满足质量门禁。OCR golden 的 NFC、有效字符数、CER 空白/标点规则、
 分组阈值、渲染参数和训练污染声明由 license audit 校验。固定 Python/Pillow/FreeType
@@ -586,3 +587,18 @@ fail closed；官方插件目录与安装 transport 固定 HTTPS 来源、完整
 四目标模块化发布的原生归档、插件安装、确定性和签名门禁见
 [`platform-modular-release.md`](platform-modular-release.md)。交叉编译只验证接口和工具链，不能
 替代 Linux ARM64 或 Windows 的真实安装、AppContainer、LibreOffice、OCR、音频和卸载验收。
+
+## Agent Skill 发布验收
+
+`.agents/skills/into-markdown/` 是唯一 canonical 来源。测试先使用 `skill-creator` 的
+`quick_validate.py`，再执行仓库校验器，检查 frontmatter、路由描述、OpenAI 元数据、引用关系、
+精确允许文件集合和许可证。任何符号链接、额外文件、非 UTF-8 内容或元数据依赖都会失败关闭。
+
+发布工作流在两个独立目录生成同名 `into-markdown-skill.zip`，逐字节比较 ZIP 和 SHA-256
+sidecar，再解包复验固定根目录、排序、时间戳、目录 `0755`、文件 `0644` 和 canonical 字节。
+Core 装配只调用同一 materializer；`archive-manifest.json` 必须逐文件绑定
+`share/into-markdown/skills/into-markdown/`，安装后 smoke 会拒绝缺失、漂移、符号链接或额外文件。
+
+skill 结构通过不代表产品可运行。发布黑盒仍须从全新 Core 安装执行 TXT/DOCX、同 basename
+并发批量与报告、资源 Bundle、OCR、真实 WAV/WebM/MP3 转写、说话人分离、冲突保护、损坏输入、
+远程授权拒绝/受控 host 放行，并确认安装与卸载前后用户 agent 目录没有被产品修改。

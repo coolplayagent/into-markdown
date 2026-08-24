@@ -20,6 +20,10 @@ from legacy_authority import generate as generate_legacy_authority
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "macos-release"))
 from rust_package import materialize as materialize_rust  # noqa: E402
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release"))
+from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
+from skill_release import materialize as materialize_agent_skill  # noqa: E402
+
 VERSION = "0.0.0"
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = [
@@ -593,6 +597,7 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
         copy_file(ROOT / "fixtures/small" / relative, fixture_root / relative)
     for name in ["normal.doc", "normal.ppt", "normal.xls"]:
         copy_file(ROOT / "tools/macos-release/fixtures" / name, fixture_root / "legacy" / name)
+    materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
     materialize_rust(output / "lib/into-markdown-rust")
     copy_file(ROOT / "LICENSE", output / "LICENSE")
     catalog = {identity: {"url": f"{base_url.rstrip('/')}/{record['file']}", "sha256": record["sha256"]} for identity, record in records.items()}

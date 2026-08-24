@@ -4177,7 +4177,60 @@ fn absolute_lexical(path: &Path) -> Result<PathBuf, CliError> {
             format!("output path is not absolute after normalization: {}", path.display()),
         ));
     }
-    Ok(normalized)
+    #[cfg(unix)]
+    {
+        resolve_existing_parent(&normalized)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(normalized)
+    }
+}
+
+/// Resolve only the existing parent portion of an output path.
+///
+/// macOS exposes conventional writable locations such as `/tmp` and `/var`
+/// through filesystem aliases. Opening every lexical component with
+/// `O_NOFOLLOW` consequently rejects ordinary absolute output paths before a
+/// transaction is created. Resolve the current parent once, append any missing
+/// directory components and the untouched target name, then let `SafeDir`
+/// authenticate every physical component and reject a symlink target. A later
+/// alias retarget cannot redirect the already resolved physical destination.
+#[cfg(unix)]
+fn resolve_existing_parent(path: &Path) -> Result<PathBuf, CliError> {
+    let name = path.file_name().ok_or_else(|| recovery_error("target has no file name"))?;
+    let mut existing = path.parent().ok_or_else(|| recovery_error("target has no parent"))?;
+    let mut missing = Vec::new();
+    loop {
+        match fs::metadata(existing) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "outputPathUnsupported",
+                        format!("output parent is not a directory: {}", existing.display()),
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let component = existing
+                    .file_name()
+                    .ok_or_else(|| recovery_error("no existing output ancestor"))?;
+                missing.push(component.to_os_string());
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| recovery_error("no existing output ancestor"))?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut resolved = fs::canonicalize(existing)?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    resolved.push(name);
+    Ok(resolved)
 }
 
 fn common_existing_ancestor(paths: &[PathBuf]) -> Result<PathBuf, CliError> {
@@ -4378,6 +4431,26 @@ mod tests {
             handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
         });
         assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_transaction_resolves_an_existing_symlinked_parent_once() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let physical = root.join("physical");
+        fs::create_dir(&physical).unwrap();
+        let alias = root.join("alias");
+        symlink(&physical, &alias).unwrap();
+        let requested = alias.join("new/nested/document.md");
+        let target = [Target { path: requested, bytes: b"converted" }];
+
+        prepare(&target, false, &context()).unwrap().commit().unwrap();
+
+        assert_eq!(fs::read(physical.join("new/nested/document.md")).unwrap(), b"converted");
+        assert!(manager_directories(&physical).is_empty());
     }
 
     #[cfg(unix)]

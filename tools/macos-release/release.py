@@ -18,6 +18,10 @@ from common import ROOT, ReleaseError, authority, regular_files, run, sha256, wr
 from legacy_authority import generate as generate_legacy_authority
 from rust_package import materialize as materialize_rust
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release"))
+from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
+from skill_release import materialize as materialize_agent_skill  # noqa: E402
+
 TARGET = "aarch64-apple-darwin"
 VERSION = "0.0.0"
 CORE_COMPONENTS = ["pdfium"]
@@ -411,6 +415,7 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
         copy_file(ROOT / "fixtures/small" / relative, fixture_root / relative, 0o644)
     for name in ["normal.doc", "normal.ppt", "normal.xls"]:
         copy_file(pathlib.Path(__file__).with_name("fixtures") / name, fixture_root / "legacy" / name, 0o644)
+    materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
     materialize_rust(output / "lib/into-markdown-rust")
     copy_file(ROOT / "LICENSE", output / "LICENSE", 0o644)
     catalog_records = {plugin_id: {"url": f"{plugin_base_url.rstrip('/')}/{record['file']}", "sha256": record["sha256"]} for plugin_id, record in records.items()}

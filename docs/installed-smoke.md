@@ -10,6 +10,8 @@ The runner requires an immutable installation root containing:
   projection, and the archive projection manifest;
 - a standalone Rust package below `lib/into-markdown-rust/`, including `Cargo.toml`, `Cargo.lock`,
   and a complete Cargo vendor directory;
+- the manifest-bound Agent Skill below `share/into-markdown/skills/into-markdown/`, with the exact
+  reviewed entrypoint, workflow reference, Codex metadata, and project license;
 - the selected fixtures below `share/into-markdown/smoke/fixtures/`.
 
 The adapter also supplies `--audio-fixture` as a separate, license-authorized speech sample. It is
