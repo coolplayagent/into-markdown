@@ -73,3 +73,5 @@ bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resour
 macOS ARM64 的真实 runner 上执行同一重建、Cargo 与 Bazel 门禁；没有 ignored 或异平台
 别名测试。Wasmtime source/tag/commit、crate checksums/features、完整 license 与四 target
 authority 位于 `third_party/wasmtime/`，由 license-check mutation tests 绑定。
+
+从协议选择、manifest、签名到安装与移除验收见[插件开发](plugin-development.md)。

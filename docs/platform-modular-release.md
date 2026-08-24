@@ -1,5 +1,8 @@
 # Linux 与 Windows 模块化发布
 
+最终用户应按[安装与部署指南](user-guide.md)校验签名与摘要、安装 Core、离线导入能力插件并
+排障；本文描述跨平台发布装配与验收权威。
+
 Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个只含
 Core 能力的归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`、
 `official.legacy-office.libreoffice` 三个自包含 `.imp`。Core 不包含 FFmpeg、ONNX Runtime、

@@ -63,3 +63,4 @@ Cargo 目标为 `into-markdown-process-plugin`，Bazel 目标为
 
 签名 `.imp` 安装、类型化 OCR/转写/说话人分离 DTO、readiness 路由和官方包见
 [`capability-plugins.md`](capability-plugins.md)。
+从协议选择、实现、签名到真实生命周期验收见[插件开发](plugin-development.md)。

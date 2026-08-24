@@ -1,5 +1,8 @@
 # macOS ARM64 模块化发布
 
+最终用户应按[安装与部署指南](user-guide.md)校验 DMG、执行安装、离线导入能力插件并排障；
+本文描述发布工程与验收权威。
+
 Apple silicon 每个版本固定发布五个独立构件：
 
 - `into-md-macos-arm64-core.dmg`：Developer ID 签名、Apple 公证并 stapling 的 `into-md`、Document IR、管理界面、PDFium、安装器、Core SBOM 与许可材料；

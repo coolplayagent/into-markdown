@@ -1,5 +1,13 @@
 # 测试策略
 
+## 可执行文档契约
+
+`bazel test //tools/docs-check:docs_check_test` 从构建出的真实 `into-md` 递归发现公共命令，
+读取 `formats --json` 的当前可用 catalog，并要求中英文命令/格式示例精确覆盖。它逐条执行
+命令语法检查和格式 dry-run，完成真实 TXT 与 stdin 转换，解析 version、capabilities 与
+doctor JSON，并验证本地 Markdown 链接及 README 双语入口。公共命令、格式或文档入口发生
+变化而示例未同步时，CI 会失败。
+
 跨格式语义布局、阅读顺序、表格拓扑、资源关联和 IR/GFM hash 门禁见
 [`semantic-layout-quality.md`](semantic-layout-quality.md)。平台无关核心及真实 package
 fixture 由 `//crates/layout-quality:layout_quality_test` 和
