@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "components": [
+    {
+      "id": "font:noto-sans-cjk-sc-regular",
+      "kind": "font",
+      "version": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "source": "https://github.com/notofonts/noto-cjk/blob/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "license": "OFL-1.1",
+      "scope": "test",
+      "distributed": false,
+      "integrity": [{"algorithm":"SHA-256","digest":"2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b","subject":"NotoSansCJKsc-Regular.otf"}],
+      "authority": "fixtures/generate.py + third_party/licenses/OFL-1.1.txt",
+      "files": []
+    },
+    {
+      "id": "test:repository-fixture-corpus",
+      "kind": "test-resource",
+      "version": "fixtures-manifest-schema-1",
+      "source": "https://github.com/coolplayagent/into-markdown/tree/main/fixtures",
+      "license": "Apache-2.0",
+      "scope": "test",
+      "distributed": false,
+      "integrity": [{"algorithm":"SHA-256","digest":"545b26c4b645fbc90d9bed323414e0883e75807b115f91a0d89b07b638c32b9a","subject":"fixtures/manifest.json"}],
+      "authority": "fixtures/manifest.json",
+      "files": []
+    },
+    {
+      "id": "test:asr-quality-zh-clear",
+      "kind": "test-resource",
+      "version": "2019-09-07T02:58:00Z",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/d/d1/%E4%B9%A0%E8%BF%91%E5%B9%B3.ogg",
+      "license": "CC0-1.0",
+      "scope": "test",
+      "distributed": false,
+      "integrity": [{"algorithm":"SHA-256","digest":"89f0787319dd6856df3cc85fc94c7f9fe6ab5e55255ac7ebc5c913e1610b69ea","subject":"fixtures/asr-quality/source/zh-clear.ogg"}],
+      "authority": "fixtures/asr-quality-authority.json",
+      "files": []
+    },
+    {
+      "id": "test:asr-quality-en-clear",
+      "kind": "test-resource",
+      "version": "1fe009caeda75f69bc864d6370b10674e45a92bd",
+      "source": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/1fe009caeda75f69bc864d6370b10674e45a92bd/samples/jfk.wav",
+      "license": "LicenseRef-Public-Domain",
+      "scope": "test",
+      "distributed": false,
+      "integrity": [{"algorithm":"SHA-256","digest":"59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e","subject":"fixtures/asr-quality/source/en-clear.wav"}],
+      "authority": "fixtures/asr-quality-authority.json",
+      "files": []
+    }
+  ]
+}

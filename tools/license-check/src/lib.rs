@@ -1683,9 +1683,9 @@ fn validate_existing_manifests(root: &Path, inventory: &Inventory, errors: &mut 
 }
 
 fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &mut Vec<String>) {
-    validate_whisper_rs_patch(root, errors);
     const REVIEWED_AUTHORITY_SHA256: &str =
         "59d5ff5c604bc69681bbf024030b1c243a810d63397d61f448469af2568f2ef4";
+    validate_whisper_rs_patch(root, errors);
     let authority_path = root.join("fixtures/asr-quality-authority.json");
     match fs::read(&authority_path) {
         Ok(bytes)
@@ -2745,6 +2745,7 @@ fn validate_ffmpeg_fixtures(manifest: &FfmpegFixtures, errors: &mut Vec<String>)
     }
 }
 
+#[allow(clippy::too_many_lines)] // This pre-existing validator deliberately joins all Wasmtime authorities.
 fn validate_wasmtime_source(
     root: &Path,
     inventory: &Inventory,
@@ -2839,14 +2840,13 @@ fn validate_wasmtime_source(
                 table.get("version").and_then(TomlValue::as_str) == Some(pinned_version.as_str())
                     && table.get("default-features").and_then(TomlValue::as_bool)
                         == Some(*default_features)
-                    && table
-                        .get("features")
-                        .and_then(TomlValue::as_array)
-                        .map(|items| {
+                    && table.get("features").and_then(TomlValue::as_array).map_or(
+                        features.is_empty(),
+                        |items| {
                             items.iter().filter_map(TomlValue::as_str).collect::<BTreeSet<_>>()
                                 == *features
-                        })
-                        .unwrap_or(features.is_empty())
+                        },
+                    )
             } else {
                 false
             };
@@ -2862,7 +2862,7 @@ fn validate_wasmtime_source(
     let lock: Option<TomlValue> = toml::from_str(&lock_text)
         .map_err(|error| errors.push(format!("invalid Cargo.lock for Wasmtime authority: {error}")))
         .ok();
-    for item in source.crates.iter() {
+    for item in &source.crates {
         let matches: Vec<_> = lock
             .as_ref()
             .and_then(|value| value.get("package"))
@@ -4087,10 +4087,13 @@ fn validate_model_artifact(
     }
 }
 
+type PackageIdentity = (String, String);
+type WorkspaceMetadataProjection = (BTreeSet<PackageIdentity>, BTreeSet<PackageIdentity>);
+
 fn validate_workspace_metadata(
     root: &Path,
     errors: &mut Vec<String>,
-) -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
+) -> WorkspaceMetadataProjection {
     let mut packages = BTreeSet::new();
     let mut reviewed_source_less = BTreeSet::new();
     let root_text = read(&root.join("Cargo.toml"), errors);

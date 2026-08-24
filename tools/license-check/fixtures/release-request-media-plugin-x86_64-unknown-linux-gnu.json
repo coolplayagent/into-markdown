@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "target": "x86_64-unknown-linux-gnu",
+  "artifact": "media-plugin",
+  "version": "0.0.0",
+  "source_revision": "0000000000000000000000000000000000000000",
+  "components": [
+    "ffmpeg",
+    "onnxruntime-cpu",
+    "whisper-small",
+    "silero-vad-half-onnx-model",
+    "3dspeaker-eres2net-base-onnx-model"
+  ]
+}

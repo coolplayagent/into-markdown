@@ -1,4 +1,7 @@
-use crate::release::{generate_release_inputs, verify_archive_projection};
+use crate::release::{
+    aggregate_release_set, finalize_artifact_metadata, generate_release_inputs,
+    generate_release_inputs_unchecked, verify_archive_projection,
+};
 use crate::schema::{
     ArchiveFile, ArchiveFileKind, ArchiveProjection, FfmpegEvidence, LicenseMaterial,
     LicenseMaterialKind,
@@ -15,6 +18,7 @@ fn request(target: &str, components: &[&str]) -> String {
     serde_json::json!({
         "schema_version": 1,
         "target": target,
+        "source_revision": "0000000000000000000000000000000000000000",
         "components": components,
     })
     .to_string()
@@ -24,10 +28,224 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn observed_build_tools(target: &str) -> Vec<serde_json::Value> {
+    let platform = match target {
+        "aarch64-apple-darwin" => "apple-xcode-toolchain",
+        "x86_64-pc-windows-msvc" => "windows-msvc-toolchain",
+        _ => "ubuntu-build-toolchain",
+    };
+    ["rust-toolchain", "bazel", "node", "pnpm", "python", platform]
+        .into_iter()
+        .map(|authority_id| {
+            let version = match authority_id {
+                "rust-toolchain" => "rustc 1.97.1",
+                "bazel" => "bazel 9.2.0",
+                "node" => "v24.13.0",
+                "pnpm" => "11.19.0",
+                _ => "observed test executable",
+            };
+            serde_json::json!({
+                "authority_id": authority_id,
+                "name": authority_id,
+                "version": version,
+                "bytes": 1,
+                "sha256": "f".repeat(64),
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn standard_spdx_sources_finalization_and_release_set_are_deterministic() {
+    let repository = root();
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    for file in &mut projection.files {
+        file.sha1 = Some("1".repeat(40));
+    }
+    let request = serde_json::json!({
+        "schema_version": 1,
+        "target": projection.target,
+        "artifact": "core",
+        "version": "0.0.0",
+        "source_revision": "0000000000000000000000000000000000000000",
+        "file_name": "into-md-macos-arm64-core.tar.gz",
+        "bytes": 42,
+        "sha256": "a".repeat(64),
+        "components": projection.components,
+        "files": projection.files,
+        "build_tools": observed_build_tools("aarch64-apple-darwin"),
+    });
+    let first = finalize_artifact_metadata(&repository, &request.to_string()).unwrap();
+    let second = finalize_artifact_metadata(&repository, &request.to_string()).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.sbom.path, "into-md-macos-arm64-core.tar.gz.spdx.json");
+    let sbom: serde_json::Value = serde_json::from_str(&first.sbom.contents).unwrap();
+    assert_eq!(sbom["spdxVersion"], "SPDX-2.3");
+    assert_eq!(sbom["packages"][0]["checksums"][0]["algorithm"], "SHA256");
+    assert!(sbom["files"].as_array().is_some_and(|files| !files.is_empty()));
+    let sources: serde_json::Value = serde_json::from_str(&first.sources.contents).unwrap();
+    assert_eq!(sources["artifact"], "into-markdown-core");
+    assert_eq!(sources["artifact_file"]["sha256"], "a".repeat(64));
+    assert_eq!(sources["source_revision"], "0".repeat(40));
+    assert!(sources["build_tools"].as_array().is_some_and(|tools| tools.len() >= 6));
+    assert!(sources["build_tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .all(|tool| tool["executables"].as_array().is_some_and(|items| items.len() == 1))
+    }));
+
+    let artifacts = [
+        ("core", "core.tar.gz"),
+        ("ocr-plugin", "official.ocr.ppocrv6.imp"),
+        ("media-plugin", "official.media.whisper.imp"),
+        ("legacy-office-plugin", "official.legacy-office.libreoffice.imp"),
+    ]
+    .into_iter()
+    .map(|(artifact, file_name)| {
+        serde_json::json!({
+            "artifact": artifact,
+            "file_name": file_name,
+            "bytes": 1,
+            "sha256": "b".repeat(64),
+            "components": [format!("component-{artifact}")],
+            "sbom_sha256": "c".repeat(64),
+            "sources_sha256": "d".repeat(64),
+            "notices_sha256": "e".repeat(64),
+        })
+    })
+    .collect::<Vec<_>>();
+    let aggregate = aggregate_release_set(
+        &serde_json::json!({
+            "schema_version": 1,
+            "target": "aarch64-apple-darwin",
+            "version": "0.0.0",
+            "source_revision": "0000000000000000000000000000000000000000",
+            "artifacts": artifacts,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_str(&aggregate.release_set.contents).unwrap();
+    assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
+    assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 4);
+    assert_eq!(manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn finalization_and_aggregation_reject_orphans_and_profile_drift() {
+    let projection = minimal_projection("aarch64-apple-darwin");
+    let mut files = projection.files;
+    for file in &mut files {
+        file.sha1 = Some("1".repeat(40));
+        file.component_id = None;
+        file.embedded_components.clear();
+    }
+    let errors = finalize_artifact_metadata(
+        &root(),
+        &serde_json::json!({
+            "schema_version": 1,
+            "target": "aarch64-apple-darwin",
+            "artifact": "core",
+            "version": "0.0.0",
+            "source_revision": "0000000000000000000000000000000000000000",
+            "file_name": "core.tar.gz",
+            "bytes": 1,
+            "sha256": "a".repeat(64),
+            "components": projection.components,
+            "files": files,
+            "build_tools": observed_build_tools("aarch64-apple-darwin"),
+        })
+        .to_string(),
+    )
+    .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("owns no member")));
+
+    let projection = minimal_projection("aarch64-apple-darwin");
+    let errors = finalize_artifact_metadata(
+        &root(),
+        &serde_json::json!({
+            "schema_version": 1,
+            "target": "aarch64-apple-darwin",
+            "artifact": "core",
+            "version": "0.0.0",
+            "source_revision": "not-a-revision",
+            "file_name": "core.tar.gz",
+            "bytes": 1,
+            "sha256": "a".repeat(64),
+            "components": projection.components,
+            "files": projection.files,
+            "build_tools": [],
+        })
+        .to_string(),
+    )
+    .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("source_revision")));
+    assert!(errors.iter().any(|error| error.contains("no observed executable")));
+
+    let errors = aggregate_release_set(
+        &serde_json::json!({
+            "schema_version": 1,
+            "target": "aarch64-apple-darwin",
+            "version": "0.0.0",
+            "source_revision": "0000000000000000000000000000000000000000",
+            "artifacts": [],
+        })
+        .to_string(),
+    )
+    .unwrap_err();
+    assert!(errors.iter().any(|error| error.contains("Core and each complete capability")));
+}
+
+#[test]
+fn sixteen_product_target_fixtures_generate_authoritative_metadata() {
+    let repository = root();
+    for target in crate::schema::SUPPORTED_TARGETS {
+        for file in [
+            format!("release-request-{target}.json"),
+            format!("release-request-ocr-plugin-{target}.json"),
+            format!("release-request-media-plugin-{target}.json"),
+            format!("release-request-legacy-office-plugin-{target}.json"),
+        ] {
+            let request =
+                fs::read_to_string(repository.join("tools/license-check/fixtures").join(file))
+                    .unwrap();
+            let generated = generate_release_inputs_unchecked(&repository, &request).unwrap();
+            assert_eq!(generated.target, target);
+            assert!(generated.sbom.contents.contains("\"spdxVersion\": \"SPDX-2.3\""));
+            assert!(generated.sources.contents.contains("\"build_tools\""));
+        }
+    }
+}
+
+#[test]
+fn four_release_set_fixtures_preserve_exact_profile_difference() {
+    let repository = root();
+    for target in crate::schema::SUPPORTED_TARGETS {
+        let request = fs::read_to_string(
+            repository
+                .join("tools/license-check/fixtures")
+                .join(format!("release-set-request-{target}.json")),
+        )
+        .unwrap();
+        let generated = aggregate_release_set(&request).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&generated.release_set.contents).unwrap();
+        assert_eq!(generated.target, target);
+        assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(),
+            3
+        );
+    }
+}
+
 fn declaration(path: &str, bytes: u64, sha256: String, kind: ArchiveFileKind) -> ArchiveFile {
     ArchiveFile {
         path: path.into(),
         bytes,
+        sha1: None,
         sha256,
         kind,
         component_id: None,
@@ -42,6 +260,8 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
     let mut projection = ArchiveProjection {
         schema_version: 1,
         target: target.into(),
+        version: "0.0.0".into(),
+        source_revision: "0000000000000000000000000000000000000000".into(),
         components: inputs.component_ids.clone(),
         files: vec![
             declaration(
@@ -63,9 +283,15 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
                 ArchiveFileKind::Generated,
             ),
             declaration(
-                "sbom-input.json",
-                inputs.sbom_input.bytes,
-                inputs.sbom_input.sha256.clone(),
+                "SBOM.spdx.json",
+                inputs.sbom.bytes,
+                inputs.sbom.sha256.clone(),
+                ArchiveFileKind::Generated,
+            ),
+            declaration(
+                "SOURCES.json",
+                inputs.sources.bytes,
+                inputs.sources.sha256.clone(),
                 ArchiveFileKind::Generated,
             ),
             declaration(
@@ -77,6 +303,7 @@ fn minimal_projection(target: &str) -> ArchiveProjection {
             ArchiveFile {
                 path: "bin/into-md".into(),
                 bytes: 1,
+                sha1: None,
                 sha256: "a".repeat(64),
                 kind: ArchiveFileKind::Project,
                 component_id: None,
@@ -160,7 +387,8 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
             inputs.third_party_notices.bytes,
             inputs.third_party_notices.sha256,
         ),
-        ("sbom-input.json", inputs.sbom_input.bytes, inputs.sbom_input.sha256),
+        ("SBOM.spdx.json", inputs.sbom.bytes, inputs.sbom.sha256),
+        ("SOURCES.json", inputs.sources.bytes, inputs.sources.sha256),
         ("core-catalog.json", inputs.core_catalog.bytes, inputs.core_catalog.sha256),
     ] {
         let file = projection.files.iter_mut().find(|file| file.path == path).unwrap();
@@ -174,7 +402,7 @@ fn install_base_materials(
     projection: &mut ArchiveProjection,
     inputs: &crate::schema::ReleaseInputs,
 ) {
-    let sbom: serde_json::Value = serde_json::from_str(&inputs.sbom_input.contents).unwrap();
+    let sbom: serde_json::Value = serde_json::from_str(&inputs.sources.contents).unwrap();
     let mut npm = Vec::new();
     let mut lucide = Vec::new();
     for id in &inputs.component_ids {
@@ -428,6 +656,7 @@ fn full_offline_whisper_projection_is_hash_and_license_bound() {
     let mut files = vec![ArchiveFile {
         path: "share/into-markdown/models/ggml-small.bin".into(),
         bytes: 487_601_967,
+        sha1: None,
         sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b".into(),
         kind: ArchiveFileKind::Component,
         component_id: Some("whisper-small".into()),
@@ -444,6 +673,8 @@ fn full_offline_whisper_projection_is_hash_and_license_bound() {
     let mut projection = ArchiveProjection {
         schema_version: 1,
         target: "x86_64-unknown-linux-gnu".into(),
+        version: "0.0.0".into(),
+        source_revision: "0000000000000000000000000000000000000000".into(),
         components: selected.clone(),
         files: files.clone(),
         license_materials: vec![],
@@ -491,6 +722,7 @@ fn full_offline_diarization_projection_is_hash_and_license_bound() {
         ArchiveFile {
             path: "bin/models/silero-vad-3dspeaker-eres2net/silero_vad_half.onnx".into(),
             bytes: 1_280_395,
+            sha1: None,
             sha256: "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("silero-vad-half-onnx-model".into()),
@@ -499,6 +731,7 @@ fn full_offline_diarization_projection_is_hash_and_license_bound() {
         ArchiveFile {
             path: "bin/models/silero-vad-3dspeaker-eres2net/3dspeaker_eres2net_base.onnx".into(),
             bytes: 39_593_761,
+            sha1: None,
             sha256: "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("3dspeaker-eres2net-base-onnx-model".into()),
@@ -536,6 +769,7 @@ fn authoritative_runtime_closure_cannot_be_omitted_or_disguised() {
     projection.files.push(ArchiveFile {
         path: "lib/disguised-cargo.dylib".into(),
         bytes: 1,
+        sha1: None,
         sha256: "8".repeat(64),
         kind: ArchiveFileKind::Component,
         component_id: projection.components.iter().find(|id| id.starts_with("cargo:")).cloned(),
@@ -592,6 +826,7 @@ fn projection_rejects_unknown_or_orphaned_components_and_missing_declarations() 
     projection.files.push(ArchiveFile {
         path: "lib/orphan.dylib".into(),
         bytes: 5,
+        sha1: None,
         sha256: "b".repeat(64),
         kind: ArchiveFileKind::Component,
         component_id: None,
@@ -610,6 +845,7 @@ fn orphan_binary_cannot_claim_project_ownership() {
     projection.files.push(ArchiveFile {
         path: "lib/unreviewed.dylib".into(),
         bytes: 10,
+        sha1: None,
         sha256: "e".repeat(64),
         kind: ArchiveFileKind::Project,
         component_id: None,
@@ -627,6 +863,7 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
         ArchiveFile {
             path: "lib/into-markdown-rust/Cargo.toml".into(),
             bytes: 1,
+            sha1: None,
             sha256: "a".repeat(64),
             kind: ArchiveFileKind::Project,
             component_id: None,
@@ -635,6 +872,7 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
         ArchiveFile {
             path: "share/into-markdown/smoke/fixtures/text/normal.txt".into(),
             bytes: 1,
+            sha1: None,
             sha256: "b".repeat(64),
             kind: ArchiveFileKind::Project,
             component_id: None,
@@ -645,6 +883,7 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
     projection.files.push(ArchiveFile {
         path: "share/into-markdown/arbitrary-project-file".into(),
         bytes: 1,
+        sha1: None,
         sha256: "c".repeat(64),
         kind: ArchiveFileKind::Project,
         component_id: None,
@@ -667,6 +906,7 @@ fn canonical_agent_skill_paths_are_exactly_scoped() {
         projection.files.push(ArchiveFile {
             path: path.into(),
             bytes: 1,
+            sha1: None,
             sha256: "a".repeat(64),
             kind: ArchiveFileKind::Project,
             component_id: None,
@@ -678,6 +918,7 @@ fn canonical_agent_skill_paths_are_exactly_scoped() {
     projection.files.push(ArchiveFile {
         path: "share/into-markdown/skills/into-markdown/README.md".into(),
         bytes: 1,
+        sha1: None,
         sha256: "b".repeat(64),
         kind: ArchiveFileKind::Project,
         component_id: None,
@@ -697,6 +938,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     projection.files.push(ArchiveFile {
         path: "bin/ffmpeg".into(),
         bytes: 99,
+        sha1: None,
         sha256: "c".repeat(64),
         kind: ArchiveFileKind::Component,
         component_id: Some("ffmpeg".into()),
@@ -781,6 +1023,7 @@ fn ffmpeg_requires_bound_lgpl_configuration_evidence() {
     projection.files.push(ArchiveFile {
         path: "bin/ffmpeg/authority.json".into(),
         bytes: authority_bytes,
+        sha1: None,
         sha256: authority_sha256,
         kind: ArchiveFileKind::Component,
         component_id: Some("ffmpeg".into()),
@@ -833,11 +1076,28 @@ fn schemas_reject_unknown_fields_and_unfixed_hashes() {
 }
 
 #[test]
+fn legacy_and_standard_sbom_manifests_cannot_coexist() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    projection.files.push(declaration(
+        "sbom-input.json",
+        1,
+        "a".repeat(64),
+        ArchiveFileKind::Generated,
+    ));
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(errors.iter().any(|error| {
+        error.contains("sbom-input.json") && error.contains("outside the closed path set")
+    }));
+}
+
+#[test]
 fn modular_core_catalog_is_an_allowed_project_release_file() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     projection.files.push(ArchiveFile {
         path: "share/into-markdown/plugins/official-publisher.json".into(),
         bytes: 128,
+        sha1: None,
         sha256: "a".repeat(64),
         kind: ArchiveFileKind::Project,
         component_id: None,
@@ -873,7 +1133,7 @@ fn non_release_eligible_authority_is_fail_closed() {
 }
 
 #[test]
-fn sbom_input_carries_ecosystem_and_native_integrity_authority() {
+fn sources_manifest_carries_scoped_ecosystem_and_native_integrity_authority() {
     let generated = generate_release_inputs(
         &root(),
         &request(
@@ -882,11 +1142,16 @@ fn sbom_input_carries_ecosystem_and_native_integrity_authority() {
         ),
     )
     .unwrap();
-    let sbom = &generated.sbom_input.contents;
+    let sbom = &generated.sources.contents;
     assert!(sbom.contains("\"algorithm\": \"SHA-256\""));
     assert!(sbom.contains("sha512-"));
     assert!(sbom.contains("Cargo.lock + third_party/licenses/rust-lock.tsv"));
     assert!(sbom.contains("third_party/onnxruntime/manifest.json"));
+    assert!(sbom.contains("\"scope\": \"build\""));
+    assert!(sbom.contains("\"scope\": \"test\""));
+    assert!(sbom.contains("\"distributed\": false"));
+    assert!(sbom.contains("font:noto-sans-cjk-sc-regular"));
+    assert!(sbom.contains("test:asr-quality-en-clear"));
     assert!(sbom.contains("c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc"));
     assert!(!sbom.contains("5715f06d8992ca8eeeddcce43df3a7d38f97d537052126f558e912cb312460ca"));
 }
@@ -899,6 +1164,7 @@ fn native_runtime_is_bound_to_target_manifest_and_download() {
     projection.files.push(ArchiveFile {
         path: "lib/libonnxruntime.dylib".into(),
         bytes: 43_184_400,
+        sha1: None,
         sha256: "c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc".into(),
         kind: ArchiveFileKind::Component,
         component_id: Some("onnxruntime-cpu".into()),
@@ -926,6 +1192,7 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
         ArchiveFile {
             path: "share/models/detector/inference.onnx".into(),
             bytes: 1_780_590,
+            sha1: None,
             sha256: "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-detector-onnx-model".into()),
@@ -934,6 +1201,7 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
         ArchiveFile {
             path: "share/models/inference.onnx".into(),
             bytes: 4_462_639,
+            sha1: None,
             sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-recognizer-onnx-model".into()),
@@ -942,6 +1210,7 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
         ArchiveFile {
             path: "share/models/ppocrv6_tiny_dict.txt".into(),
             bytes: 27_156,
+            sha1: None,
             sha256: "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-recognizer-character-table".into()),
@@ -951,6 +1220,7 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
     projection.files.push(ArchiveFile {
         path: "lib/libonnxruntime.dylib".into(),
         bytes: 43_184_400,
+        sha1: None,
         sha256: "c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc".into(),
         kind: ArchiveFileKind::Component,
         component_id: Some("onnxruntime-cpu".into()),
@@ -982,6 +1252,7 @@ fn ocr_model_files() -> [ArchiveFile; 3] {
         ArchiveFile {
             path: "share/models/detector/inference.onnx".into(),
             bytes: 1_780_590,
+            sha1: None,
             sha256: "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-detector-onnx-model".into()),
@@ -990,6 +1261,7 @@ fn ocr_model_files() -> [ArchiveFile; 3] {
         ArchiveFile {
             path: "share/models/recognizer/inference.onnx".into(),
             bytes: 4_462_639,
+            sha1: None,
             sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-recognizer-onnx-model".into()),
@@ -998,6 +1270,7 @@ fn ocr_model_files() -> [ArchiveFile; 3] {
         ArchiveFile {
             path: "share/models/ppocrv6_tiny_dict.txt".into(),
             bytes: 27_156,
+            sha1: None,
             sha256: "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd".into(),
             kind: ArchiveFileKind::Component,
             component_id: Some("ppocrv6-tiny-recognizer-character-table".into()),

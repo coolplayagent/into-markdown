@@ -1,9 +1,14 @@
 //! Platform-neutral release projection and archive-verification API.
 
-use crate::sbom::{generated_file, pretty_json, render_notices, render_sbom};
+use crate::sbom::{
+    generated_file, pretty_json, render_artifact_sbom, render_component_sbom, render_notices,
+    render_release_set, render_sources,
+};
 use crate::schema::{
-    ArchiveFile, ArchiveFileKind, ArchiveProjection, Component, Inventory, Policy, ReleaseInputs,
-    ReleaseRequest, SCHEMA_VERSION, SUPPORTED_TARGETS,
+    ArchiveFile, ArchiveFileKind, ArchiveProjection, ArtifactMetadata, ArtifactProjection,
+    BuildTool, BuildToolExecutable, BuildToolInventory, Component, Inventory, Policy,
+    ReleaseArtifact, ReleaseInputs, ReleaseRequest, ReleaseSetMetadata, ReleaseSetRequest,
+    SCHEMA_VERSION, SUPPORTED_TARGETS, SourceDependencyInventory,
 };
 use crate::{ffmpeg, materials, models_fixtures, native, npm, rust};
 use sha2::{Digest, Sha256};
@@ -14,7 +19,8 @@ use std::path::{Component as PathComponent, Path};
 const LICENSE_PATH: &str = "LICENSE";
 const NOTICE_PATH: &str = "NOTICE";
 const THIRD_PARTY_PATH: &str = "THIRD_PARTY_NOTICES.md";
-const SBOM_PATH: &str = "sbom-input.json";
+const SBOM_PATH: &str = "SBOM.spdx.json";
+const SOURCES_PATH: &str = "SOURCES.json";
 const CORE_CATALOG_PATH: &str = "core-catalog.json";
 
 pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<String>) {
@@ -54,26 +60,63 @@ pub fn generate_release_inputs(
     generate_release_inputs_unchecked(repository, request_json)
 }
 
-fn generate_release_inputs_unchecked(
+pub(crate) fn generate_release_inputs_unchecked(
     repository: &Path,
     request_json: &str,
 ) -> Result<ReleaseInputs, Vec<String>> {
     let mut errors = Vec::new();
     let request: Option<ReleaseRequest> = parse("release request", request_json, &mut errors);
-    let authorities = load_authorities(repository, &mut errors);
+    let authorities = load_authorities(
+        repository,
+        request.as_ref().map_or(ReleaseArtifact::Core, |item| item.artifact),
+        &mut errors,
+    );
     let (Some(request), Some((inventory, policy))) = (request, authorities) else {
         return Err(sorted(errors));
     };
     validate_header(request.schema_version, &request.target, &mut errors);
-    let selected = select_components(&request.components, &inventory, &policy, &mut errors);
+    validate_source_revision(&request.source_revision, &mut errors);
+    let selected =
+        select_components(request.artifact, &request.components, &inventory, &policy, &mut errors);
     if !errors.is_empty() {
         return Err(sorted(errors));
     }
 
     let project_notice = read(repository.join(NOTICE_PATH), &mut errors);
     let third_party = render_notices(&project_notice, &selected);
-    let sbom = render_sbom(repository, &request.target, &selected, &mut errors);
+    let build_tools = load_build_tools(repository, &request.target, &mut errors);
+    let non_distributed = source_dependencies(repository, request.artifact, &mut errors);
+    let sbom = render_component_sbom(
+        repository,
+        &request.target,
+        request.artifact,
+        &request.version,
+        &selected,
+        &non_distributed,
+        &build_tools,
+        &mut errors,
+    );
+    let sources = render_sources(
+        repository,
+        &request.target,
+        request.artifact,
+        &request.version,
+        &request.source_revision,
+        &selected,
+        &non_distributed,
+        &build_tools,
+        None,
+        &[],
+        &mut errors,
+    );
     let sbom_json = match pretty_json(&sbom) {
+        Ok(json) => json,
+        Err(error) => {
+            errors.push(error);
+            String::new()
+        }
+    };
+    let sources_json = match pretty_json(&sources) {
         Ok(json) => json,
         Err(error) => {
             errors.push(error);
@@ -99,7 +142,8 @@ fn generate_release_inputs_unchecked(
         component_ids: selected.iter().map(|component| component.id.clone()).collect(),
         notice: generated_file(NOTICE_PATH, project_notice),
         third_party_notices: generated_file(THIRD_PARTY_PATH, third_party),
-        sbom_input: generated_file(SBOM_PATH, sbom_json),
+        sbom: generated_file(SBOM_PATH, sbom_json),
+        sources: generated_file(SOURCES_PATH, sources_json),
         core_catalog: generated_file(CORE_CATALOG_PATH, catalog_json),
     })
 }
@@ -118,10 +162,17 @@ pub fn verify_archive_projection(
         parse("archive projection", projection_json, &mut errors);
     let Some(projection) = projection else { return Err(sorted(errors)) };
     validate_header(projection.schema_version, &projection.target, &mut errors);
+    validate_source_revision(&projection.source_revision, &mut errors);
+    if projection.version.trim().is_empty() {
+        errors.push("archive projection version is empty".to_owned());
+    }
 
     let request = ReleaseRequest {
         schema_version: projection.schema_version,
         target: projection.target.clone(),
+        artifact: ReleaseArtifact::Core,
+        version: projection.version.clone(),
+        source_revision: projection.source_revision.clone(),
         components: projection.components.clone(),
     };
     let request_json = match serde_json::to_string(&request) {
@@ -139,8 +190,16 @@ pub fn verify_archive_projection(
         }
     };
 
-    if let Some((inventory, policy)) = load_authorities(repository, &mut errors) {
-        let selected = select_components(&projection.components, &inventory, &policy, &mut errors);
+    if let Some((inventory, policy)) =
+        load_authorities(repository, ReleaseArtifact::Core, &mut errors)
+    {
+        let selected = select_components(
+            ReleaseArtifact::Core,
+            &projection.components,
+            &inventory,
+            &policy,
+            &mut errors,
+        );
         materials::validate(repository, &projection, &selected, &mut errors);
     }
 
@@ -158,7 +217,383 @@ pub fn verify_archive_projection(
     if errors.is_empty() { Ok(()) } else { Err(sorted(errors)) }
 }
 
-fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inventory, Policy)> {
+/// Generate publishable metadata for a final signed artifact projection.
+///
+/// # Errors
+///
+/// Returns every schema, component, ownership, source, or digest violation.
+pub fn finalize_artifact_metadata(
+    repository: &Path,
+    projection_json: &str,
+) -> Result<ArtifactMetadata, Vec<String>> {
+    crate::audit(repository, true)?;
+    let mut errors = Vec::new();
+    let projection: Option<ArtifactProjection> =
+        parse("artifact projection", projection_json, &mut errors);
+    let Some(projection) = projection else { return Err(sorted(errors)) };
+    validate_header(projection.schema_version, &projection.target, &mut errors);
+    validate_source_revision(&projection.source_revision, &mut errors);
+    if projection.version.trim().is_empty()
+        || projection.bytes == 0
+        || !is_sha256(&projection.sha256)
+        || !safe_file_name(&projection.file_name)
+    {
+        errors.push("artifact identity lacks a safe name, version, size, or SHA-256".to_owned());
+    }
+    let Some((inventory, policy)) = load_authorities(repository, projection.artifact, &mut errors)
+    else {
+        return Err(sorted(errors));
+    };
+    let selected = select_components(
+        projection.artifact,
+        &projection.components,
+        &inventory,
+        &policy,
+        &mut errors,
+    );
+    let expected: BTreeSet<_> = selected.iter().map(|item| item.id.as_str()).collect();
+    let actual: BTreeSet<_> = projection.components.iter().map(String::as_str).collect();
+    if actual.len() != projection.components.len() || actual != expected {
+        errors.push("artifact component set differs from its authoritative closure".to_owned());
+    }
+    validate_artifact_files(&projection.files, &expected, &mut errors);
+    let mut build_tools = load_build_tools(repository, &projection.target, &mut errors);
+    bind_build_tool_executions(&mut build_tools, &projection.build_tools, &mut errors);
+    let non_distributed = source_dependencies(repository, projection.artifact, &mut errors);
+    let sources = render_sources(
+        repository,
+        &projection.target,
+        projection.artifact,
+        &projection.version,
+        &projection.source_revision,
+        &selected,
+        &non_distributed,
+        &build_tools,
+        Some((&projection.file_name, projection.bytes, &projection.sha256)),
+        &projection.files,
+        &mut errors,
+    );
+    let project_notice = read(repository.join(NOTICE_PATH), &mut errors);
+    let notices = render_notices(&project_notice, &selected);
+    let sbom = render_artifact_sbom(
+        repository,
+        &projection.target,
+        projection.artifact,
+        &projection.version,
+        &projection.file_name,
+        projection.bytes,
+        &projection.sha256,
+        &selected,
+        &non_distributed,
+        &build_tools,
+        &projection.files,
+        &mut errors,
+    );
+    let sbom_json = pretty_json(&sbom).unwrap_or_else(|error| {
+        errors.push(error);
+        String::new()
+    });
+    let sources_json = pretty_json(&sources).unwrap_or_else(|error| {
+        errors.push(error);
+        String::new()
+    });
+    if !errors.is_empty() {
+        return Err(sorted(errors));
+    }
+    Ok(ArtifactMetadata {
+        schema_version: SCHEMA_VERSION,
+        target: projection.target,
+        artifact: projection.artifact.id().to_owned(),
+        file_name: projection.file_name.clone(),
+        sha256: projection.sha256,
+        sbom: generated_file(&format!("{}.spdx.json", projection.file_name), sbom_json),
+        sources: generated_file(&format!("{}.sources.json", projection.file_name), sources_json),
+        third_party_notices: generated_file(
+            &format!("{}.THIRD_PARTY_NOTICES.md", projection.file_name),
+            notices,
+        ),
+    })
+}
+
+/// Generate the auditable Core and complete-offline release-set projection.
+///
+/// # Errors
+///
+/// Returns every target, artifact-set, checksum, or profile violation.
+pub fn aggregate_release_set(request_json: &str) -> Result<ReleaseSetMetadata, Vec<String>> {
+    let mut errors = Vec::new();
+    let request: Option<ReleaseSetRequest> =
+        parse("release-set request", request_json, &mut errors);
+    let Some(mut request) = request else { return Err(sorted(errors)) };
+    validate_header(request.schema_version, &request.target, &mut errors);
+    validate_source_revision(&request.source_revision, &mut errors);
+    let expected = BTreeSet::from([
+        ReleaseArtifact::Core,
+        ReleaseArtifact::OcrPlugin,
+        ReleaseArtifact::MediaPlugin,
+        ReleaseArtifact::LegacyOfficePlugin,
+    ]);
+    let actual: BTreeSet<_> = request.artifacts.iter().map(|item| item.artifact).collect();
+    if actual != expected || request.artifacts.len() != expected.len() {
+        errors.push(
+            "release set must contain Core and each complete capability plugin once".to_owned(),
+        );
+    }
+    if request.version.trim().is_empty() {
+        errors.push("release set version is empty".to_owned());
+    }
+    let mut names = BTreeSet::new();
+    for artifact in &request.artifacts {
+        if !names.insert(artifact.file_name.as_str())
+            || !safe_file_name(&artifact.file_name)
+            || artifact.bytes == 0
+            || artifact.components.is_empty()
+            || [
+                artifact.sha256.as_str(),
+                artifact.sbom_sha256.as_str(),
+                artifact.sources_sha256.as_str(),
+                artifact.notices_sha256.as_str(),
+            ]
+            .into_iter()
+            .any(|hash| !is_sha256(hash))
+        {
+            errors.push(format!(
+                "release-set artifact {} has incomplete identity or sidecars",
+                artifact.file_name
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(sorted(errors));
+    }
+    request.artifacts.sort_by_key(|item| item.artifact);
+    let (manifest, sbom) = render_release_set(&request);
+    let base = format!("into-markdown-{}-release-set", request.target);
+    Ok(ReleaseSetMetadata {
+        schema_version: SCHEMA_VERSION,
+        target: request.target,
+        release_set: generated_file(
+            &format!("{base}.json"),
+            pretty_json(&manifest).map_err(|error| vec![error])?,
+        ),
+        sbom: generated_file(
+            &format!("{base}.spdx.json"),
+            pretty_json(&sbom).map_err(|error| vec![error])?,
+        ),
+    })
+}
+
+fn validate_artifact_files(
+    files: &[ArchiveFile],
+    selected: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    if files.is_empty() {
+        errors.push("artifact projection contains no members".to_owned());
+        return;
+    }
+    let mut paths = BTreeSet::new();
+    let mut owners = BTreeSet::new();
+    for file in files {
+        if !paths.insert(file.path.as_str())
+            || !safe_path(&file.path)
+            || !is_sha256(&file.sha256)
+            || file.sha1.as_deref().is_none_or(|value| !is_sha1(value))
+        {
+            errors.push(format!(
+                "artifact member {} has unsafe, duplicate, or incomplete digest identity",
+                file.path
+            ));
+        }
+        if file.bytes == 0 {
+            errors.push(format!("artifact member {} has an empty size", file.path));
+        }
+        for owner in file.component_id.iter().chain(file.embedded_components.iter()) {
+            if !selected.contains(owner.as_str()) {
+                errors.push(format!("artifact member {} has unknown owner {owner}", file.path));
+            }
+            owners.insert(owner.as_str());
+        }
+        if file.kind == ArchiveFileKind::Component && file.component_id.is_none() {
+            errors.push(format!("artifact component member {} is orphaned", file.path));
+        }
+    }
+    for component in selected.difference(&owners) {
+        errors.push(format!("artifact component {component} owns no member"));
+    }
+}
+
+fn load_build_tools(repository: &Path, target: &str, errors: &mut Vec<String>) -> Vec<BuildTool> {
+    let contents = read(repository.join("third_party/licenses/build-tools.json"), errors);
+    let Some(inventory): Option<BuildToolInventory> =
+        parse("build-tool authority", &contents, errors)
+    else {
+        return Vec::new();
+    };
+    if inventory.schema_version != SCHEMA_VERSION {
+        errors.push("unsupported build-tool authority schema_version".to_owned());
+    }
+    let mut ids = BTreeSet::new();
+    let mut result = Vec::new();
+    for tool in inventory.tools {
+        if !ids.insert(tool.id.clone())
+            || !safe_id(&tool.id)
+            || tool.version.trim().is_empty()
+            || !tool.source.starts_with("https://")
+            || tool.license.trim().is_empty()
+            || tool.scope.trim().is_empty()
+            || tool.integrity.is_empty()
+            || tool.integrity.iter().any(|item| {
+                item.algorithm != "SHA-256" || !is_sha256(&item.digest) || item.subject.is_empty()
+            })
+            || tool.targets.iter().any(|item| !SUPPORTED_TARGETS.contains(&item.as_str()))
+        {
+            errors.push(format!("build tool {} has incomplete authority", tool.id));
+        }
+        for evidence in &tool.integrity {
+            let subject = repository.join(&evidence.subject);
+            if !safe_path(&evidence.subject) {
+                errors.push(format!(
+                    "build tool {} has unsafe integrity subject {}",
+                    tool.id, evidence.subject
+                ));
+                continue;
+            }
+            match fs::read(&subject) {
+                Ok(contents) => {
+                    let observed = format!("{:x}", Sha256::digest(contents));
+                    if observed != evidence.digest {
+                        errors.push(format!(
+                            "build tool {} authority digest differs for {}",
+                            tool.id, evidence.subject
+                        ));
+                    }
+                }
+                Err(error) => errors.push(format!(
+                    "cannot read build tool {} authority {}: {error}",
+                    tool.id,
+                    subject.display()
+                )),
+            }
+        }
+        if tool.targets.iter().any(|item| item == target) {
+            result.push(tool);
+        }
+    }
+    if result.is_empty() {
+        errors.push(format!("release target {target} has no build-tool authority"));
+    }
+    result.sort_by(|left, right| left.id.cmp(&right.id));
+    result
+}
+
+fn source_dependencies(
+    repository: &Path,
+    artifact: ReleaseArtifact,
+    errors: &mut Vec<String>,
+) -> Vec<crate::schema::SourceComponent> {
+    let mut result = Vec::new();
+    if artifact == ReleaseArtifact::Core {
+        let contents = read(repository.join("third_party/licenses/npm-inventory.json"), errors);
+        result.extend(npm::source_dependencies(&contents, errors));
+    }
+    let contents =
+        read(repository.join("third_party/licenses/non-distributed-sources.json"), errors);
+    let Some(inventory): Option<SourceDependencyInventory> =
+        parse("non-distributed source authority", &contents, errors)
+    else {
+        return result;
+    };
+    if inventory.schema_version != SCHEMA_VERSION {
+        errors.push("unsupported non-distributed source authority schema_version".to_owned());
+    }
+    result.extend(inventory.components);
+    let mut ids = BTreeSet::new();
+    for component in &result {
+        if !ids.insert(component.id.as_str())
+            || !safe_id(&component.id)
+            || component.kind.trim().is_empty()
+            || component.version.trim().is_empty()
+            || !component.source.starts_with("https://")
+            || component.license.trim().is_empty()
+            || !matches!(component.scope.as_str(), "build" | "test")
+            || component.distributed
+            || component.integrity.is_empty()
+            || component.integrity.iter().any(|item| {
+                !match item.algorithm.as_str() {
+                    "SHA-256" => is_sha256(&item.digest),
+                    "SRI-SHA-512" => item.digest.starts_with("sha512-"),
+                    _ => false,
+                } || item.subject.trim().is_empty()
+            })
+            || component.authority.trim().is_empty()
+            || !component.files.is_empty()
+        {
+            errors
+                .push(format!("non-distributed source {} has incomplete authority", component.id));
+        }
+    }
+    result
+}
+
+fn bind_build_tool_executions(
+    tools: &mut [BuildTool],
+    executions: &[BuildToolExecutable],
+    errors: &mut Vec<String>,
+) {
+    let mut by_id: BTreeMap<_, _> = tools.iter_mut().map(|tool| (tool.id.clone(), tool)).collect();
+    let mut identities = BTreeSet::new();
+    for execution in executions {
+        if !identities.insert((execution.authority_id.as_str(), execution.name.as_str()))
+            || !safe_file_name(&execution.name)
+            || execution.version.trim().is_empty()
+            || execution.bytes == 0
+            || !is_sha256(&execution.sha256)
+        {
+            errors.push(format!(
+                "build-tool execution {}:{} has incomplete identity",
+                execution.authority_id, execution.name
+            ));
+            continue;
+        }
+        let Some(tool) = by_id.get_mut(&execution.authority_id) else {
+            errors.push(format!(
+                "build-tool execution {} has no target authority",
+                execution.authority_id
+            ));
+            continue;
+        };
+        if matches!(tool.id.as_str(), "rust-toolchain" | "bazel" | "node" | "pnpm")
+            && !execution.version.contains(&tool.version)
+        {
+            errors.push(format!(
+                "build-tool execution {} version differs from authority {}",
+                execution.authority_id, tool.version
+            ));
+        }
+        tool.executables.push(execution.clone());
+    }
+    for (id, tool) in by_id {
+        if tool.executables.is_empty() {
+            errors.push(format!("build tool {id} has no observed executable"));
+        }
+        tool.executables.sort_by(|left, right| left.name.cmp(&right.name));
+    }
+}
+
+fn validate_source_revision(revision: &str, errors: &mut Vec<String>) {
+    if !(40..=64).contains(&revision.len())
+        || revision.bytes().any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        errors.push("source_revision must be a lowercase Git object ID".to_owned());
+    }
+}
+
+fn load_authorities(
+    repository: &Path,
+    artifact: ReleaseArtifact,
+    errors: &mut Vec<String>,
+) -> Option<(Inventory, Policy)> {
     let inventory_text = read(repository.join("third_party/licenses/inventory.json"), errors);
     let policy_text = read(repository.join("third_party/licenses/policy.json"), errors);
     let inventory: Option<Inventory> = parse("component inventory", &inventory_text, errors);
@@ -181,9 +616,12 @@ fn load_authorities(repository: &Path, errors: &mut Vec<String>) -> Option<(Inve
                 &cargo_lock,
                 &rust_approvals,
                 &cargo_normal_runtime,
+                artifact.cargo_root(),
                 errors,
             ));
-            inventory.components.extend(npm::load(&npm_inventory, errors));
+            if artifact == ReleaseArtifact::Core {
+                inventory.components.extend(npm::load(&npm_inventory, errors));
+            }
             Some((inventory, policy))
         }
         _ => None,
@@ -224,6 +662,7 @@ fn enrich_inventory_evidence(
 }
 
 fn select_components<'a>(
+    artifact: ReleaseArtifact,
     requested: &[String],
     inventory: &'a Inventory,
     policy: &Policy,
@@ -249,7 +688,10 @@ fn select_components<'a>(
     let mut requested: BTreeSet<&str> = inventory
         .components
         .iter()
-        .filter(|component| component.required_in_core)
+        .filter(|component| {
+            component.required_in_core
+                && (artifact == ReleaseArtifact::Core || component.id.starts_with("cargo:"))
+        })
         .map(|component| component.id.as_str())
         .chain(requested.iter().map(String::as_str))
         .collect();
@@ -398,7 +840,14 @@ fn validate_files(
         errors.push(format!("projected component {component} owns no archive file"));
     }
     let Some(inputs) = inputs else {
-        for path in [LICENSE_PATH, NOTICE_PATH, THIRD_PARTY_PATH, SBOM_PATH, CORE_CATALOG_PATH] {
+        for path in [
+            LICENSE_PATH,
+            NOTICE_PATH,
+            THIRD_PARTY_PATH,
+            SBOM_PATH,
+            SOURCES_PATH,
+            CORE_CATALOG_PATH,
+        ] {
             if !projection.files.iter().any(|file| file.path == path) {
                 errors.push(format!("archive is missing required declaration {path}"));
             }
@@ -428,10 +877,11 @@ fn validate_files(
             inputs.third_party_notices.sha256.clone(),
             ArchiveFileKind::Generated,
         ),
+        (SBOM_PATH, inputs.sbom.bytes, inputs.sbom.sha256.clone(), ArchiveFileKind::Generated),
         (
-            SBOM_PATH,
-            inputs.sbom_input.bytes,
-            inputs.sbom_input.sha256.clone(),
+            SOURCES_PATH,
+            inputs.sources.bytes,
+            inputs.sources.sha256.clone(),
             ArchiveFileKind::Generated,
         ),
         (
@@ -488,7 +938,10 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
         }
         ArchiveFileKind::Declaration => matches!(file.path.as_str(), LICENSE_PATH | NOTICE_PATH),
         ArchiveFileKind::Generated => {
-            matches!(file.path.as_str(), THIRD_PARTY_PATH | SBOM_PATH | CORE_CATALOG_PATH)
+            matches!(
+                file.path.as_str(),
+                THIRD_PARTY_PATH | SBOM_PATH | SOURCES_PATH | CORE_CATALOG_PATH
+            )
         }
         ArchiveFileKind::LicenseMaterial => projection_material_path(&file.path),
         ArchiveFileKind::Component => true,
@@ -602,8 +1055,22 @@ fn safe_path(value: &str) -> bool {
         && value.is_ascii()
 }
 
+fn safe_file_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 160
+        && !value.starts_with('.')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
+        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_sha1(value: &str) -> bool {
+    value.len() == 40
         && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 

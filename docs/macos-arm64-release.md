@@ -34,6 +34,13 @@ PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
 本地命令输出用于确定性门禁的 Core tar 与三个 `.imp`。平台无关的 skill 工作流独立生成两次 ZIP、
 逐字节比较并重新验证内容。正式发布工作流先对两次未注入发布凭据的干净构建逐字节比较，再从已验证的同一构建产物生成 Developer ID 签名版本；Core 装入 DMG 后提交 Apple 公证并 stapling，三个插件分别以 ZIP 载体提交公证。最终发布 DMG、三个 `.imp`、skill ZIP 及各自 SHA-256。
 
+公证和 stapling 完成后，工作流以只读方式重新挂载最终 DMG，先运行其中的 `archive-check`，
+再从实际挂载成员生成最终 Core sidecar。三个 `.imp` 从最终 ZIP 成员生成 sidecar，并与已签名
+package/runtime inventory 双向核对。每个构件发布 `.spdx.json`、`.sources.json`、
+`.THIRD_PARTY_NOTICES.md`；目标级 release set 分别表达仅 Core 与 Core 加三插件的完整离线集合，
+不创建额外的完整离线归档。所有 SPDX 2.3 JSON 由固定版本与 wheel 哈希的官方 `spdx-tools`
+执行完整校验。
+
 发布凭据由 GitHub 受保护的 `release` environment 注入：Developer ID Application 证书、临时 keychain 密码、App Store Connect API key 与插件 Ed25519 私钥都必须非空。工作流结束时删除 keychain 和凭据文件；缺少任一凭据会失败关闭。项目 Mach-O、FFmpeg 与 PDFium 的发布副本在 manifest/SBOM 哈希生成前签名；已具备有效上游 Developer ID 签名的 ONNX Runtime 与 LibreOffice 仍保留其供应商签名。
 
 ## 安装与能力管理

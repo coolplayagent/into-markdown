@@ -6,6 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 use std::process::Command;
 
+type PackageKey = (String, String);
+type CargoTreeProjection =
+    (BTreeSet<PackageKey>, BTreeMap<PackageKey, LocalRuntimePackage>, BTreeSet<String>);
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NormalRuntimeAuthority {
@@ -82,7 +86,8 @@ pub(crate) fn packages(
                 .to_owned(),
         );
     }
-    let (computed_normal, local, _) = cargo_tree_normal_packages(repository, &metadata, errors);
+    let (computed_normal, local, _) =
+        cargo_tree_normal_packages(repository, &metadata, "into-markdown-cli", errors);
     if normal != computed_normal {
         errors.push(
             "Cargo normal package authority differs from cargo metadata normal dependency closure"
@@ -107,6 +112,18 @@ pub(crate) fn packages(
     RuntimeClosure { registry: normal, local }
 }
 
+pub(crate) fn packages_for_root(
+    repository: &Path,
+    root: &str,
+    errors: &mut Vec<String>,
+) -> RuntimeClosure {
+    let Some(metadata) = cargo_metadata(repository, errors) else {
+        return RuntimeClosure { registry: BTreeSet::new(), local: BTreeMap::new() };
+    };
+    let (registry, local, _) = cargo_tree_normal_packages(repository, &metadata, root, errors);
+    RuntimeClosure { registry, local }
+}
+
 pub(crate) fn workspace_normal_packages(
     repository: &Path,
     errors: &mut Vec<String>,
@@ -114,7 +131,8 @@ pub(crate) fn workspace_normal_packages(
     let Some(metadata) = cargo_metadata(repository, errors) else {
         return BTreeSet::new();
     };
-    let (_, _, workspace) = cargo_tree_normal_packages(repository, &metadata, errors);
+    let (_, _, workspace) =
+        cargo_tree_normal_packages(repository, &metadata, "into-markdown-cli", errors);
     workspace
 }
 
@@ -177,9 +195,9 @@ fn workspace_manifests(
 fn cargo_tree_normal_packages(
     repository: &Path,
     metadata: &CargoMetadata,
+    root: &str,
     errors: &mut Vec<String>,
-) -> (BTreeSet<(String, String)>, BTreeMap<(String, String), LocalRuntimePackage>, BTreeSet<String>)
-{
+) -> CargoTreeProjection {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = match Command::new(cargo)
         .args([
@@ -187,7 +205,7 @@ fn cargo_tree_normal_packages(
             "--locked",
             "--offline",
             "-p",
-            "into-markdown-cli",
+            root,
             "-e",
             "normal",
             "--prefix",
@@ -231,12 +249,9 @@ fn cargo_tree_normal_packages(
     let mut normal = BTreeSet::new();
     let mut local = BTreeMap::new();
     let mut workspace_normal = BTreeSet::new();
-    let tree = match std::str::from_utf8(&output.stdout) {
-        Ok(value) => value,
-        Err(_) => {
-            errors.push("cargo tree returned non-UTF-8 package identities".to_owned());
-            return (normal, local, workspace_normal);
-        }
+    let Ok(tree) = std::str::from_utf8(&output.stdout) else {
+        errors.push("cargo tree returned non-UTF-8 package identities".to_owned());
+        return (normal, local, workspace_normal);
     };
     for line in tree.lines() {
         let line = line.strip_suffix(" (*)").unwrap_or(line);

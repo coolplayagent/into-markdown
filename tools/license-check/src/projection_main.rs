@@ -1,6 +1,9 @@
 //! Narrow command-line adapter for release input generation and archive projection verification.
 
-use license_check::release::{generate_release_inputs, verify_archive_projection};
+use license_check::release::{
+    aggregate_release_set, finalize_artifact_metadata, generate_release_inputs,
+    verify_archive_projection,
+};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,7 +30,8 @@ fn run(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Result<String
     let arguments: Vec<_> = arguments.into_iter().collect();
     if arguments.len() != 2 {
         return Err(vec![
-            "usage: release-projection <generate|verify> <projection.json>".to_owned(),
+            "usage: release-projection <generate|verify|finalize|aggregate> <projection.json>"
+                .to_owned(),
         ]);
     }
     let operation = arguments[0].to_string_lossy();
@@ -42,6 +46,14 @@ fn run(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Result<String
         }),
         "verify" => verify_archive_projection(&root, &input)
             .map(|()| "archive projection passed".to_owned()),
+        "finalize" => finalize_artifact_metadata(&root, &input).and_then(|metadata| {
+            serde_json::to_string_pretty(&metadata)
+                .map_err(|error| vec![format!("cannot serialize artifact metadata: {error}")])
+        }),
+        "aggregate" => aggregate_release_set(&input).and_then(|metadata| {
+            serde_json::to_string_pretty(&metadata)
+                .map_err(|error| vec![format!("cannot serialize release-set metadata: {error}")])
+        }),
         _ => Err(vec![format!("unknown operation {operation:?}")]),
     }
 }

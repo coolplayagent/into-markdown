@@ -46,6 +46,14 @@ def check_host() -> None:
         raise ReleaseError(f"rustc {rust} disagrees with fixed toolchain {config['rust']}")
 
 
+def source_revision() -> str:
+    return run(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
+
+
+def distributed_source_ids(manifest: dict) -> list[str]:
+    return [item["id"] for item in manifest["components"] if item["distributed"]]
+
+
 def build(target: pathlib.Path) -> None:
     environment = os.environ.copy()
     cargo_home = pathlib.Path(environment.get("CARGO_HOME", pathlib.Path.home() / ".cargo")).resolve()
@@ -131,46 +139,35 @@ def runtime_inventory(root: pathlib.Path) -> list[dict]:
     return result
 
 
-def write_plugin_declarations(runtime: pathlib.Path, plugin_id: str, components: list[str], licenses: list[tuple[pathlib.Path, str]]) -> None:
+def write_plugin_declarations(
+    runtime: pathlib.Path,
+    plugin_id: str,
+    artifact: str,
+    components: list[str],
+    licenses: list[tuple[pathlib.Path, str]],
+    projection_tool: pathlib.Path,
+) -> None:
     copy_file(ROOT / "NOTICE", runtime / "NOTICE", 0o644)
     for source, name in licenses:
         copy_file(source, runtime / "licenses" / name, 0o644)
-    inventory = {
-        item["id"]: item
-        for item in json.loads(
-            (ROOT / "third_party/licenses/inventory.json").read_text(encoding="utf-8")
-        )["components"]
-    }
-    if any(component not in inventory for component in components):
-        raise ReleaseError(f"{plugin_id} contains a component absent from license authority")
-    packages = []
-    relationships = []
-    for index, component in enumerate(components, 1):
-        authority_item = inventory[component]
-        spdx_id = f"SPDXRef-Package-{index}"
-        packages.append({
-            "name": component,
-            "SPDXID": spdx_id,
-            "versionInfo": authority_item["version"],
-            "downloadLocation": authority_item["source"],
-            "filesAnalyzed": False,
-            "licenseConcluded": authority_item["license"],
-            "licenseDeclared": authority_item["license"],
-            "copyrightText": "NOASSERTION",
-        })
-        relationships.append({
-            "spdxElementId": "SPDXRef-DOCUMENT",
-            "relationshipType": "DESCRIBES",
-            "relatedSpdxElement": spdx_id,
-        })
-    write_json(runtime / "SBOM.spdx.json", {
-        "spdxVersion": "SPDX-2.3", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT",
-        "name": f"{plugin_id}-{VERSION}-{TARGET}",
-        "documentNamespace": f"https://into-markdown.invalid/sbom/{plugin_id}/{VERSION}/{TARGET}",
-        "creationInfo": {"created": "2026-08-22T00:00:00Z", "creators": ["Tool: into-markdown-release"]},
-        "packages": packages,
-        "relationships": relationships,
-    })
+    request = runtime.parent / f"{plugin_id}-release-request.json"
+    write_json(
+        request,
+        {
+            "schema_version": 1,
+            "target": TARGET,
+            "artifact": artifact,
+            "version": VERSION,
+            "source_revision": source_revision(),
+            "components": components,
+        },
+    )
+    inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
+    for key in ["notice", "third_party_notices", "sbom", "sources"]:
+        item = inputs[key]
+        destination = runtime / item["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(item["contents"], encoding="utf-8")
 
 
 def resources(memory_bytes: int, temporary_bytes: int, timeout_ms: int) -> dict:
@@ -209,6 +206,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         raise ReleaseError("official plugin signing key is unavailable")
     packages.mkdir(parents=True)
     packager = release_bin / "package_plugin"
+    projection_tool = release_bin / "release-projection"
     records: dict[str, dict] = {}
     signer: tuple[str, str] | None = None
     with tempfile.TemporaryDirectory(prefix="into-md-capability-runtime-", dir=packages.parent) as name:
@@ -228,7 +226,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
             [ocr / "bin/into-md-ocr-provider", ocr / "bin/onnxruntime-worker"],
             codesign_identity,
         )
-        write_plugin_declarations(ocr, "official.ocr.ppocrv6", OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")])
+        write_plugin_declarations(ocr, "official.ocr.ppocrv6", "ocr-plugin", OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
         ocr_manifest = provider_manifest("official.ocr.ppocrv6", "bin/into-md-ocr-provider", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(805306368, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
         ocr_output = packages / "official.ocr.ppocrv6.imp"
         signer = build_provider_package(packager, ocr, ocr_manifest, signing_key, ocr_output)
@@ -256,7 +254,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         )
         if codesign_identity is not None:
             refresh_ffmpeg_authority(speech / "ffmpeg/authority.json", speech / "ffmpeg/ffmpeg")
-        write_plugin_declarations(speech, "official.media.whisper", SPEECH_COMPONENTS, [(ffmpeg_artifacts / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")])
+        write_plugin_declarations(speech, "official.media.whisper", "media-plugin", SPEECH_COMPONENTS, [(ffmpeg_artifacts / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")], projection_tool)
         copy_file(cache / "ffmpeg-source", speech / "source/ffmpeg-8.1.2.tar.xz", 0o644)
         copy_file(ffmpeg_artifacts / "ffmpeg-relink-aarch64-apple-darwin.tar", speech / "relink/ffmpeg-relink-aarch64-apple-darwin.tar", 0o644)
         media_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
@@ -282,7 +280,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         )
         lo_artifact = next(item for item in authority()["downloads"] if item["id"] == "libreoffice")
         generate_legacy_authority(runtime, runtime / "legacy-office-worker", cache / "libreoffice", lo_artifact)
-        write_plugin_declarations(legacy, "official.legacy-office.libreoffice", LEGACY_COMPONENTS, [(ROOT / "LICENSE", "into-markdown-Apache-2.0.txt")])
+        write_plugin_declarations(legacy, "official.legacy-office.libreoffice", "legacy-office-plugin", LEGACY_COMPONENTS, [(ROOT / "LICENSE", "into-markdown-Apache-2.0.txt")], projection_tool)
         legacy_manifest = provider_manifest("official.legacy-office.libreoffice", "bin/into-md-legacy-office-provider", legacy, [{"id": "legacy-office", "kind": "legacy-office", "providerId": "builtin.legacy-office.libreoffice", "languages": [], "mediaTypes": ["application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint"], "resources": resources(1073741824, 4294967296, 600000)}], ["Apache-2.0", "MPL-2.0"])
         legacy_output = packages / "official.legacy-office.libreoffice.imp"
         if build_provider_package(packager, legacy, legacy_manifest, signing_key, legacy_output) != signer:
@@ -296,9 +294,9 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
 
 def write_release_inputs(output: pathlib.Path, projection_tool: pathlib.Path) -> None:
     request = output.parent / "core-release-request.json"
-    write_json(request, {"schema_version": 1, "target": TARGET, "components": CORE_COMPONENTS})
+    write_json(request, {"schema_version": 1, "target": TARGET, "artifact": "core", "version": VERSION, "source_revision": source_revision(), "components": CORE_COMPONENTS})
     inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
-    for key in ["notice", "third_party_notices", "sbom_input", "core_catalog"]:
+    for key in ["notice", "third_party_notices", "sbom", "sources", "core_catalog"]:
         item = inputs[key]
         destination = output / item["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -325,8 +323,10 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
         path = destination / f"{component}.txt"
         copy_file(ROOT / source, path, 0o644)
         result.append(material(path, output, "license-text", [component], [spdx], contents=True))
-    sbom = json.loads((output / "sbom-input.json").read_text(encoding="utf-8"))
-    npm_components = {item["id"] for item in sbom["components"] if item["id"].startswith("npm:")}
+    sbom = json.loads((output / "SOURCES.json").read_text(encoding="utf-8"))
+    npm_components = {
+        item for item in distributed_source_ids(sbom) if item.startswith("npm:")
+    }
     react_components = sorted(npm_components - {"npm:lucide-react@1.31.0"})
     if react_components:
         path = destination / "npm-react-MIT.txt"
@@ -352,8 +352,8 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
 
 def core_projection(output: pathlib.Path, materials: list[dict], native_transformations: list[dict]) -> dict:
     material_paths = {item["path"] for item in materials}
-    sbom = json.loads((output / "sbom-input.json").read_text(encoding="utf-8"))
-    selected = [component["id"] for component in sbom["components"]]
+    sbom = json.loads((output / "SOURCES.json").read_text(encoding="utf-8"))
+    selected = distributed_source_ids(sbom)
     # PDFium is the only standalone native Core file. All other selected
     # runtime components are linked or compiled into the product executable.
     embedded = [item for item in selected if item != "pdfium"]
@@ -366,7 +366,7 @@ def core_projection(output: pathlib.Path, materials: list[dict], native_transfor
             kind, owner = "license-material", None
         elif relative in {"LICENSE", "NOTICE"}:
             kind, owner = "declaration", None
-        elif relative in {"THIRD_PARTY_NOTICES.md", "sbom-input.json", "core-catalog.json"}:
+        elif relative in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json", "core-catalog.json"}:
             kind, owner = "generated", None
         elif relative == "lib/pdfium/libpdfium.dylib":
             kind, owner = "component", "pdfium"
@@ -378,7 +378,7 @@ def core_projection(output: pathlib.Path, materials: list[dict], native_transfor
         if relative == "bin/into-md":
             entry["embedded_components"] = embedded
         files.append(entry)
-    return {"schema_version": 1, "target": TARGET, "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
+    return {"schema_version": 1, "target": TARGET, "version": VERSION, "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
 
 
 def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, records: dict[str, dict], signer: tuple[str, str], plugin_base_url: str, codesign_identity: str | None) -> pathlib.Path:

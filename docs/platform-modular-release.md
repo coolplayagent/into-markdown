@@ -6,6 +6,11 @@ Core 能力的归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`�
 OCR/语音模型或 LibreOffice；每个插件包含离线运行所需的完整 runtime、模型、字典、许可、
 SBOM、签名清单和目标平台声明。
 
+每个最终 Core/插件构件同时发布以完整文件名为前缀的 `.spdx.json`、`.sources.json` 和
+`.THIRD_PARTY_NOTICES.md` sidecar，并保留既有 SHA-256 与签名。每个目标另有
+`into-markdown-<target>-release-set.json` 和聚合 SPDX；其中 `core` 只引用 Core，
+`complete-offline` 引用 Core 与三个插件，不产生另一份重复归档。
+
 每个产品版本还发布一份平台无关的 `into-markdown-skill.zip` 与 SHA-256。skill 的 canonical
 内容同时进入所有 Core 的 `share/into-markdown/skills/into-markdown/`，并由 Core 归档清单绑定；
 安装器和卸载器都不会修改用户的 agent skill 目录。
@@ -15,6 +20,12 @@ Rust 版本、PDFium、ONNX Runtime、模型、LibreOffice、FFmpeg 审计产物
 Linux 归档为确定性 `tar.gz`，Windows 归档为确定性 ZIP。发行工作流在对应原生 runner 上
 连续组装两次并逐字节比较 Core 和三个插件，然后从归档安装 Core、安装和验证三个插件、运行
 旧 Office 真实文件转换并卸载。
+
+最终 sidecar 在 Authenticode 或 Linux detached signature 完成后生成。Core 成员来自最终
+归档的干净解包目录，并先由归档内 `archive-check` 与 `archive-manifest.json` 双向核对；插件
+直接遍历最终 ZIP，并要求每个成员的大小和 SHA-256 同时匹配已签名 `plugin.json` 与
+`provider.json` runtime inventory。SPDX 2.3 JSON 还会由固定版本、固定 wheel SHA-256 的官方
+`spdx-tools` 重新解析和完整验证。
 
 ```sh
 python tools/platform-release/release.py \

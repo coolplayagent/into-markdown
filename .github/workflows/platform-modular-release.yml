@@ -38,6 +38,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - uses: bazelbuild/setup-bazel@v3
+        with:
+          bazelisk-cache: true
+      - name: Activate fixed pnpm toolchain
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        run: |
+          corepack enable
+          corepack pnpm --version
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -212,6 +223,24 @@ jobs:
           printf '%s' "$RELEASE_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --import
           test "$(gpg --batch --with-colons --fingerprint "$RELEASE_GPG_KEY_FINGERPRINT" | awk -F: '$1 == "fpr" {print $10; exit}')" = "$RELEASE_GPG_KEY_FINGERPRINT"
           for artifact in "${{ runner.temp }}/${{ matrix.archive }}" "${{ runner.temp }}/plugins-a/"*.imp; do gpg --batch --local-user "$RELEASE_GPG_KEY_FINGERPRINT" --detach-sign --armor "$artifact"; done
+      - name: Generate release SBOMs
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        run: >-
+          python tools/release-metadata.py
+          --projection-tool "${{ runner.temp }}/build/release/release-projection${{ runner.os == 'Windows' && '.exe' || '' }}"
+          --target ${{ matrix.target }}
+          --source-revision "${{ github.sha }}"
+          --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
+          --core-root "${{ runner.temp }}/distribution"
+          --plugins "${{ runner.temp }}/plugins-a"
+          --output "${{ runner.temp }}/release-metadata"
+      - name: Validate SPDX with pinned official tooling
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        run: |
+          python -m pip download --no-deps --only-binary=:all: spdx-tools==0.8.3 --dest "${{ runner.temp }}"
+          python -c "import hashlib,pathlib; p=pathlib.Path(r'${{ runner.temp }}')/'spdx_tools-0.8.3-py3-none-any.whl'; assert hashlib.sha256(p.read_bytes()).hexdigest() == '638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a'"
+          python -m pip install "${{ runner.temp }}/spdx_tools-0.8.3-py3-none-any.whl"
+          python -c "import pathlib,subprocess; [subprocess.run(['pyspdxtools','-i',str(p)],check=True) for p in pathlib.Path(r'${{ runner.temp }}/release-metadata').glob('*.spdx.json')]"
       - uses: actions/upload-artifact@v4
         with:
           name: modular-${{ matrix.target }}
@@ -222,6 +251,7 @@ jobs:
             ${{ runner.temp }}/plugins-a/*.imp
             ${{ runner.temp }}/plugins-a/*.sha256
             ${{ runner.temp }}/plugins-a/*.asc
+            ${{ runner.temp }}/release-metadata/*
           if-no-files-found: error
       - name: Remove Windows signing credentials
         if: always() && runner.os == 'Windows'

@@ -22,13 +22,21 @@ The following files are projections or evidence and must agree with the componen
   `cargo-normal-runtime.json` metadata projection describe the complete Rust dependency set. The
   metadata projection is bound to `Cargo.lock` and every workspace member manifest, and partitions
   every locked registry package by dependency kind, so only the
-  transitive normal-dependency closure rooted at `into-markdown-cli` is mandatory; build-only
-  packages are ineligible for release. The audit independently reruns locked, offline Cargo
+  transitive normal-dependency closure rooted at each artifact's Cargo package is mandatory; Core
+  and every capability plugin are projected independently. Build-only packages are ineligible for
+  distribution. The audit independently reruns locked, offline Cargo
   metadata and requires both the dependency-kind partition and workspace-manifest set to match
   exactly. Bazel's `into-md` graph must consume that same normal
   authority through named production targets.
 - `pnpm-lock.yaml`, `third_party/licenses/npm-inventory.json`, checked-in license texts, and the npm
-  SPDX document describe console assets shipped by Bazel.
+  SPDX document describe console assets shipped by Bazel. Runtime packages are distributed Core
+  components; build and test packages remain explicit non-distributed source records.
+- `third_party/licenses/build-tools.json` records the Rust, Bazel, Node, pnpm, Python and native
+  platform toolchain authority for every target. Final source sidecars add the observed version and
+  executable SHA-256 from the release runner.
+- `third_party/licenses/non-distributed-sources.json` keeps fixture-generation fonts and repository
+  or quality-test media visible with their exact source, license, purpose and integrity while
+  requiring `distributed: false`.
 - `models/manifest.json` and model authority files describe source archives, derived runtime files,
   character tables, exact members, sizes, hashes, licenses, and supported targets.
 - Native runtime manifests describe ONNX Runtime and PDFium archives. FFmpeg source, build-policy,
@@ -108,15 +116,15 @@ The projection is data, not policy. It contains:
 - the exact set of component IDs present in the archive;
 - every archived file path and SHA-256, with component payloads owned by one component and typed
   license materials declaring the complete component set they cover;
-- paths to the project `LICENSE`, `NOTICE`, generated third-party notices, and SBOM input;
+- paths to the project `LICENSE`, `NOTICE`, generated third-party notices, SPDX 2.3 JSON, and
+  `SOURCES.json`;
 - the complete archived FFmpeg build-authority content and digest when FFmpeg is present;
 - typed full license texts and notice/source/relink bundles, each bound to an archived path, size,
   hash, material kind, and covered components.
 
-The license checker exposes a narrow archive-verification operation that accepts this projection
-and returns success or a sorted list of policy violations. It does not create archives, install
-toolchains, download dependencies, run installation smoke tests, or infer components from platform
-names. Those responsibilities belong to the platform delivery issues.
+The license checker exposes generation, archive verification, finalization, and aggregation
+operations. It does not create archives, install toolchains, download dependencies, or run
+installation smoke tests. Release workflows supply observations from the exact bytes they built.
 
 Verification applies these invariants:
 
@@ -153,12 +161,15 @@ The narrow API is also exposed as an offline command:
 ```text
 cargo run -p license-check --bin release-projection -- generate REQUEST.json
 cargo run -p license-check --bin release-projection -- verify ARCHIVE-PROJECTION.json
+cargo run -p license-check --bin release-projection -- finalize ARTIFACT-PROJECTION.json
+cargo run -p license-check --bin release-projection -- aggregate RELEASE-SET.json
 ```
 
-`generate` accepts `schema_version`, one supported Rust target triple, and a sorted component ID
-list. Inventory components keep their stable IDs; crates use `cargo:name@version`, and shipped npm
-packages use `npm:name@version`. Its JSON output contains the exact bytes, sizes, and SHA-256 values
-for `NOTICE`, generated `THIRD_PARTY_NOTICES.md`, and `sbom-input.json`.
+`generate` accepts `schema_version`, artifact kind, version, source revision, one supported Rust
+target triple, and a sorted component ID list. Inventory components keep their stable IDs; crates
+use `cargo:name@version`, and npm packages use `npm:name@version`. Its JSON output contains exact
+bytes, sizes, and SHA-256 values for `NOTICE`, generated `THIRD_PARTY_NOTICES.md`, `SBOM.spdx.json`,
+and `SOURCES.json`. The legacy custom `sbom-input.json` is outside the closed archive path set.
 
 `verify` accepts the same target and component set plus archive files. The Cargo and npm runtime
 closure is always added from repository authority, so a projection cannot omit it. A component file names its
@@ -167,10 +178,24 @@ components compiled into that binary without pretending they are separate archiv
 declarations and generated metadata have no component owner. All paths are normalized ASCII relative
 paths; all file hashes are lowercase SHA-256 values.
 
-The checked-in files under `tools/license-check/fixtures/` exercise one platform-neutral core
-conclusion for all four supported targets. FFmpeg is excluded until the selected target has a
-repository-reviewed approval binding its executable, build-authority, `config.log`, and relink
-material hashes; requesting it before that approval fails closed.
+The checked-in files under `tools/license-check/fixtures/` exercise Core and all three capability
+plugins on all four supported targets. Component generation can run before target-native FFmpeg
+bytes exist; finalization binds its executable, build authority, source and relink members, while
+strict archive verification remains fail-closed when checked-in FFmpeg approval is required.
+
+`finalize` consumes the signed or notarized artifact hash, exact member hashes and ownership, source
+revision, and observed build tools. Member SHA-256 remains the release integrity authority; the
+SPDX sidecar additionally records the required SHA-1 and package verification code. It emits
+`<artifact>.spdx.json`, `<artifact>.sources.json`, and
+`<artifact>.THIRD_PARTY_NOTICES.md`. Core tar/ZIP members come from an `archive-check`-verified
+extraction; macOS members come from a read-only mount of the stapled DMG; `.imp` members must agree
+in both directions with `plugin.json` and `provider.json` inventories.
+
+`aggregate` requires exactly Core plus the OCR, media, and legacy Office plugins. Its `core` profile
+contains only Core, while `complete-offline` contains all four artifacts. Component instances are
+artifact-qualified, so ONNX Runtime carried independently by OCR and media remains independently
+auditable. The generated difference contains exactly the three plugins and their component
+instances; no additional offline archive is created.
 
 ## Review and maintenance
 

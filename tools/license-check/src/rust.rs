@@ -20,11 +20,13 @@ struct LockedPackage {
     dependencies: Vec<String>,
 }
 
+#[allow(clippy::too_many_lines)] // Parsing, closure selection, and authority joins stay in one fail-closed pass.
 pub(crate) fn load(
     repository: &std::path::Path,
     lock_text: &str,
     approvals: &str,
     normal_runtime: &str,
+    runtime_root: &str,
     errors: &mut Vec<String>,
 ) -> Vec<Component> {
     let lock: CargoLock = match toml::from_str(lock_text) {
@@ -58,13 +60,18 @@ pub(crate) fn load(
         })
         .map(|package| (package.name.clone(), package.version.clone()))
         .collect();
-    let required = crate::cargo_runtime::packages(
+    let reviewed_core = crate::cargo_runtime::packages(
         repository,
         lock_text,
         &registry_packages,
         normal_runtime,
         errors,
     );
+    let required = if runtime_root == "into-markdown-cli" {
+        reviewed_core
+    } else {
+        crate::cargo_runtime::packages_for_root(repository, runtime_root, errors)
+    };
     let locked: BTreeSet<_> = lock
         .package
         .iter()
@@ -714,7 +721,8 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             .unwrap()
             .replace("whisper-rs\t0.16.0\tUnlicense", "whisper-rs\t0.16.0\tApache-2.0");
         let mut errors = Vec::new();
-        let components = load(&root, &lock_text, &approvals, &authority_text, &mut errors);
+        let components =
+            load(&root, &lock_text, &approvals, &authority_text, "into-markdown-cli", &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert!(!components.iter().any(|component| component.id == "cargo:whisper-rs@0.16.0"));
     }

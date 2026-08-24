@@ -41,11 +41,13 @@ platform(
 )
 
 exports_files([
+    ".bazelversion",
     "Cargo.lock",
     "Cargo.toml",
     "LICENSE",
     "MODULE.bazel",
     "NOTICE",
+    "rust-toolchain.toml",
     "THIRD_PARTY_NOTICES.md",
 ])
 
