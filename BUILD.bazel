@@ -55,7 +55,9 @@ filegroup(
     name = "documentation",
     srcs = glob([
         "CONTRIBUTING*.md",
-        "docs/**/*.md",
+        "docs/**/*",
+        "LICENSE",
+        "NOTICE",
         "README.en.md",
         "README.md",
         "THIRD_PARTY_NOTICES.md",

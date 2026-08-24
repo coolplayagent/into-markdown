@@ -128,8 +128,8 @@ Every example invokes `into-md` directly. CI compares coverage with the real `--
 - RTF: `into-md document.rtf --format rtf -o document.md --conflict error`
 <!-- format-example: epub -->
 - EPUB: `into-md book.epub --format epub -o book.md --conflict error`
-<!-- format-example: txt -->
-- TXT: `into-md notes.txt --format txt -o notes.md --conflict error`
+<!-- format-example: text -->
+- TXT: `into-md notes.txt --format text -o notes.md --conflict error`
 <!-- format-example: markdown -->
 - Markdown: `into-md notes.md --format markdown -o normalized.md --conflict error`
 <!-- format-example: html -->
@@ -150,8 +150,8 @@ Every example invokes `into-md` directly. CI compares coverage with the real `--
 - Image: `into-md scan.png --format image --ocr always -o scan.md --conflict error`
 <!-- format-example: zip -->
 - ZIP: `into-md archive.zip --format zip -o archive.md --conflict error`
-<!-- format-example: msg -->
-- MSG: `into-md message.msg --format msg -o message.md --conflict error`
+<!-- format-example: outlook-msg -->
+- MSG: `into-md message.msg --format outlook-msg -o message.md --conflict error`
 <!-- format-example: audio -->
 - Audio: `into-md meeting.wav --format audio --ai audio-transcription=only -o meeting.md --conflict error`
 <!-- format-example: video -->
