@@ -16,12 +16,16 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
+            shell: bash
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            shell: bash
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            shell: bash
           - os: windows-2025
             target: x86_64-pc-windows-msvc
+            shell: msys2 {0}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -42,7 +46,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install gnupg jq
       - name: Build source and audit artifact
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        shell: ${{ matrix.shell }}
         env:
           FFMPEG_AUDIT_NETWORK: "1"
           FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
