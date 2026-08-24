@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "rust-toolchain",
+      "version": "1.97.1",
+      "source": "https://static.rust-lang.org/dist/",
+      "license": "Apache-2.0 OR MIT",
+      "scope": "build",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"279d77167cec5426fa80f457cd066dc74a360fbe4e2816f4f3fa01487a918fdc","subject":"rust-toolchain.toml"}],
+      "executables": []
+    },
+    {
+      "id": "bazel",
+      "version": "9.2.0",
+      "source": "https://github.com/bazelbuild/bazel/releases/tag/9.2.0",
+      "license": "Apache-2.0",
+      "scope": "source-build",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5","subject":".bazelversion"}],
+      "executables": []
+    },
+    {
+      "id": "node",
+      "version": "24.13.0",
+      "source": "https://github.com/nodejs/node/releases/tag/v24.13.0",
+      "license": "MIT",
+      "scope": "frontend-build",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"961212f04ad6acd17e41e71944690ec577c4856e69e5b8212d09e1800d4578f4","subject":"package.json"}],
+      "executables": []
+    },
+    {
+      "id": "pnpm",
+      "version": "11.19.0",
+      "source": "https://github.com/pnpm/pnpm/releases/tag/v11.19.0",
+      "license": "MIT",
+      "scope": "frontend-build",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"f1952290e6d24dc908a4e911a6fec86417a454a635d95e1d40bc24e84e29f304","subject":"pnpm-lock.yaml"}],
+      "executables": []
+    },
+    {
+      "id": "python",
+      "version": "3.x runner toolchain",
+      "source": "https://github.com/actions/runner-images",
+      "license": "Python-2.0",
+      "scope": "release-assembly",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "executables": []
+    },
+    {
+      "id": "apple-xcode-toolchain",
+      "version": "macos-14 runner image",
+      "source": "https://github.com/actions/runner-images/blob/main/images/macos/macos-14-Readme.md",
+      "license": "LicenseRef-Apple-Xcode",
+      "scope": "compile-sign-package",
+      "distributed": false,
+      "targets": ["aarch64-apple-darwin"],
+      "integrity": [{"algorithm":"SHA-256","digest":"eb88594deebe6be0c65630c08a36d8fbedc6a35c74a0134a75e8854458812e64","subject":"tools/macos-release/authority.json"}],
+      "executables": []
+    },
+    {
+      "id": "ubuntu-build-toolchain",
+      "version": "Ubuntu 24.04 runner image",
+      "source": "https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md",
+      "license": "LicenseRef-Ubuntu-Component-Licenses",
+      "scope": "compile-sign-package",
+      "distributed": false,
+      "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
+      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "executables": []
+    },
+    {
+      "id": "windows-msvc-toolchain",
+      "version": "windows-2025 runner image",
+      "source": "https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md",
+      "license": "LicenseRef-Microsoft-Visual-Studio",
+      "scope": "compile-sign-package",
+      "distributed": false,
+      "targets": ["x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "executables": []
+    }
+  ]
+}

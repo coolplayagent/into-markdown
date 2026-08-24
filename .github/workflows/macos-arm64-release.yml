@@ -24,6 +24,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - uses: bazelbuild/setup-bazel@v3
+        with:
+          bazelisk-cache: true
+      - name: Activate fixed pnpm toolchain
+        run: |
+          corepack enable
+          corepack pnpm --version
       - name: Build audited LGPL FFmpeg runtime
         env:
           FFMPEG_AUDIT_NETWORK: "1"
@@ -133,6 +143,33 @@ jobs:
               --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
             rm "$RUNNER_TEMP/$package.zip"
           done
+      - name: Generate and externally validate release SBOMs
+        run: |
+          set -eu
+          metadata="$RUNNER_TEMP/release-metadata"
+          mount="$RUNNER_TEMP/core-dmg-readonly"
+          mkdir "$mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" \
+            "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          "$mount/bin/archive-check" "$mount"
+          python3 tools/release-metadata.py \
+            --projection-tool "$RUNNER_TEMP/build-a/release/release-projection" \
+            --target aarch64-apple-darwin \
+            --source-revision "${{ github.sha }}" \
+            --core-artifact "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" \
+            --core-root "$mount" \
+            --plugins "$RUNNER_TEMP/plugins-signed" \
+            --output "$metadata"
+          hdiutil detach "$mount"
+          trap - EXIT
+          wheel="$RUNNER_TEMP/spdx_tools-0.8.3-py3-none-any.whl"
+          python3 -m pip download --no-deps --only-binary=:all: \
+            spdx-tools==0.8.3 --dest "$RUNNER_TEMP"
+          test "$(shasum -a 256 "$wheel" | awk '{print $1}')" = \
+            638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a
+          python3 -m pip install "$wheel"
+          for document in "$metadata"/*.spdx.json; do pyspdxtools -i "$document"; done
       - name: Verify notarized clean install and plugin lifecycle
         run: |
           mkdir -p "$HOME/.agents/skills/existing-skill"
@@ -191,6 +228,7 @@ jobs:
             ${{ runner.temp }}/plugins-signed/*.imp
             ${{ runner.temp }}/plugins-signed/*.imp.sha256
             ${{ runner.temp }}/into-md-macos-arm64-core-smoke.json
+            ${{ runner.temp }}/release-metadata/*
           if-no-files-found: error
       - name: Remove release credentials
         if: always()

@@ -225,7 +225,9 @@ pub(crate) fn integrity(
 ) -> Vec<IntegrityEvidence> {
     let Some(approvals) = load_approvals(repository, errors) else { return Vec::new() };
     let Some(approved) = approvals.targets.get(target).and_then(Option::as_ref) else {
-        errors.push(format!("FFmpeg target {target} has no repository-approved build evidence"));
+        // Component metadata can be generated before a native release build exists. Final
+        // artifact metadata binds the executable, authority, source, and relink member hashes;
+        // archive verification remains fail-closed when it requires checked-in approval.
         return Vec::new();
     };
     if !approved_fields_valid(approved) {

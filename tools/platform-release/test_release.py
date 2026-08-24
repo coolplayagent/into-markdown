@@ -18,11 +18,22 @@ from release import (
     OCR_COMPONENTS,
     SPEECH_COMPONENTS,
     create_archive,
+    distributed_source_ids,
     libreoffice_component,
 )
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_release_projection_excludes_non_distributed_source_records(self) -> None:
+        manifest = {
+            "components": [
+                {"id": "cargo:runtime@1", "distributed": True},
+                {"id": "npm:build@1", "distributed": False},
+                {"id": "font:test", "distributed": False},
+            ]
+        }
+        self.assertEqual(distributed_source_ids(manifest), ["cargo:runtime@1"])
+
     def test_release_matrix_has_exact_core_and_plugin_resource_partition(self) -> None:
         self.assertEqual(CORE_COMPONENTS, ["pdfium"])
         for target in authority()["targets"]:

@@ -112,6 +112,7 @@ fn validate_transformations(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Existing focused native tests remain near validation entrypoints.
 mod tests {
     use super::*;
 
@@ -134,6 +135,7 @@ mod tests {
         let file = ArchiveFile {
             path: "lib/pdfium/libpdfium.dylib".to_owned(),
             bytes: source_bytes + 512,
+            sha1: None,
             sha256: "a".repeat(64),
             kind: ArchiveFileKind::Component,
             component_id: Some("pdfium".to_owned()),

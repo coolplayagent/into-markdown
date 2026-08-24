@@ -23,6 +23,11 @@ LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务�
 - `third_party/licenses/npm-release.spdx.json` 是嵌入式控制台生产 JavaScript 的确定性
   SPDX 2.3 SBOM。document namespace 绑定实际资产完整 SHA-256，creationInfo 固定且不含
   时间漂移、本机路径或随机值；包、文件与 relationship ID 必须唯一且不能悬空。
+- `third_party/licenses/build-tools.json` 固定四平台 Rust、Bazel、Node、pnpm、Python 与原生
+  编译/链接工具的官方来源、版本、许可和仓库 authority 哈希。最终 `.sources.json` 追加本次
+  runner 实际执行文件的版本、大小与 SHA-256；这些工具记录为 `distributed: false`。
+- `third_party/licenses/non-distributed-sources.json` 单独记录生成测试图片所用字体与质量测试
+  音频的固定来源、许可、用途和哈希，并强制 `distributed: false`，避免它们被误算为发布成员。
 - 根 `//:release_license_files` 是发布归档必须携带的许可证与 SBOM 权威集合。它必须
   精确包含项目 LICENSE/NOTICE、第三方声明、所有实际 runtime npm 许可文本以及上述 SPDX
   SBOM；审计对 inventory 推导出的集合双向比较，缺项与未管理的额外项都失败。
@@ -136,8 +141,10 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
 控制台进入归档时，还必须从 `//:release_license_files` 复制 React 系列完整 MIT 文本与
 `npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
-当前审计核对仓库声明与受管下载输入，不检查已生成归档，也不证明归档中每个文件
-都已建档；发布流水线实现归档后仍须增加逐文件/声明完整性检查。
+统一 `release-projection` 对 Core 与三个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
+声明，并对 Core 归档清单、最终解包成员以及插件签名/runtime inventory 做双向逐文件检查。
+签名、公证或 stapling 后的最终构件再生成 artifact sidecar；四个平台的聚合 release set
+明确区分仅 Core 与 Core 加三插件的完整离线集合。
 
 ## Wasmtime WASI runtime
 
