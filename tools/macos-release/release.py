@@ -428,7 +428,20 @@ def main() -> None:
     validate_ffmpeg_artifacts(arguments.ffmpeg_artifacts.resolve())
     if not arguments.skip_build:
         build(arguments.build_root.resolve())
-    acquire(arguments.cache.resolve(), {"pdfium", "onnxruntime", "ocr-detector", "ocr-recognizer", "ocr-dictionary", "ffmpeg-source", "whisper-small", "silero-vad", "3dspeaker", "libreoffice"})
+    acquire(
+        arguments.cache.resolve(),
+        {
+            "pdfium",
+            "onnxruntime",
+            "ocr-detector",
+            "ocr-recognizer",
+            "ocr-dictionary",
+            "ffmpeg-source",
+            "whisper-small",
+            "silero-vad",
+            "3dspeaker",
+        },
+    )
     release_bin = arguments.build_root.resolve() / "release"
     records, signer = package_official_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.codesign_identity)
     stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, records, signer, arguments.plugin_base_url, arguments.codesign_identity)

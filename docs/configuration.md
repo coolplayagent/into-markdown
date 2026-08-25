@@ -118,11 +118,6 @@ mode = "prefer"
 primary = "provider:local-vision/vision-ocr"
 fallbacks = ["plugin:official.ocr.ppocrv6/ocr"]
 
-[capability_routes.legacy-office]
-mode = "only"
-primary = "plugin:official.legacy-office.libreoffice/legacy-office"
-fallbacks = []
-
 [capability_routes.transcription]
 mode = "only"
 primary = "plugin:official.media.whisper/transcription"

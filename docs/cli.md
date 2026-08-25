@@ -278,8 +278,9 @@ into-md capabilities reset <CAPABILITY> [--scope <global|project>]
 
 `SOURCE_REF` 使用 `plugin:<插件ID>/<能力ID>`、`provider:<Provider ID>/<能力ID>` 或 `off`。
 OCR 可选择本地插件或远端 Provider；转写和说话人能力分别路由，因此可以组合远端转写与
-本地说话人识别。LibreOffice 只由本地插件提供。JSON 输出包含当前来源、全部候选来源、
-本地插件状态与版本；不暴露插件内部模型为可管理对象。
+本地说话人识别。`legacy-office` 路由为兼容保留，但当前正式发布不提供旧版 Office 插件，
+`.doc/.ppt/.xls` 会稳定返回未安装能力；替代解析路线由 #191 跟踪。JSON 输出包含当前来源、
+全部候选来源、本地插件状态与版本；不暴露插件内部模型为可管理对象。
 
 官方能力插件下载支持 CONNECT 代理路由：`INTO_MD_HTTPS_PROXY`（回退
 `HTTPS_PROXY`、`https_proxy`）取 `http://[user:pass@]host:port`，`INTO_MD_NO_PROXY`

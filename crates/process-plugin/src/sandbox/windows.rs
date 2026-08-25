@@ -596,9 +596,20 @@ fn verify_acl_with_masks(
         }
         return Err(unavailable("plugin DACL unavailable"));
     }
-    // SAFETY: owner and current token SID are valid while descriptor/token remain owned.
-    let mut valid = !owner.is_null() && unsafe { EqualSid(owner, user) } != 0;
-    let mut rejection = (!valid).then(|| "owner is not the current user".to_owned());
+    // SAFETY: owner and current token SID are valid while descriptor/token remain owned. Elevated
+    // Windows tokens can canonicalize an explicitly supplied user owner to the token's trusted
+    // Administrators owner. This remains inside the same OS-administrator trust boundary, while
+    // AppContainer runtime ACLs continue to require the exact current-user owner.
+    let owner_allowed = !owner.is_null()
+        && unsafe {
+            EqualSid(owner, user) != 0
+                || allow_os_administrators
+                    && (IsWellKnownSid(owner, WinLocalSystemSid) != 0
+                        || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0)
+        };
+    let mut valid = owner_allowed;
+    let mut rejection =
+        (!valid).then(|| "owner is outside the OS-administrator boundary".to_owned());
     let mut control = 0_u16;
     let mut revision = 0_u32;
     // SAFETY: descriptor is live and both outputs are writable.
