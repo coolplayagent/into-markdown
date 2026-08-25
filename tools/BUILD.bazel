@@ -8,3 +8,12 @@ py_test(
     ],
     main = "release_metadata_test.py",
 )
+
+py_test(
+    name = "publish_release_assets_test",
+    srcs = [
+        "publish_release_assets.py",
+        "publish_release_assets_test.py",
+    ],
+    main = "publish_release_assets_test.py",
+)

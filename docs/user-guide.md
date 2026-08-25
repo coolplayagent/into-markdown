@@ -8,8 +8,8 @@ SHA-256、签名、SPDX、来源与第三方声明 sidecar。只组合相同版�
 | 能力 | 构件 |
 | --- | --- |
 | 普通文档、PDF、Web 工作台 | 对应平台 Core |
-| OCR | `official.ocr.ppocrv6.imp` |
-| 转写与说话人分离 | `official.media.whisper.imp` |
+| OCR | `official.ocr.ppocrv6-<target>.imp` |
+| 转写与说话人分离 | `official.media.whisper-<target>.imp` |
 | Agent 指令 | `into-markdown-skill.zip` |
 
 旧版 `.doc/.ppt/.xls` 不在当前发布中，也不会调用 LibreOffice；替代解析路线由
@@ -84,8 +84,9 @@ installed="$HOME/.local/share/into-markdown/current"
 catalog="$installed/share/into-markdown/plugins/official-publisher.json"
 signer_id=$(jq -r .signingKeyId "$catalog")
 signer_sha=$(jq -r .signingKeySha256 "$catalog")
+target=x86_64-unknown-linux-gnu # 改为当前平台 target
 for package in official.ocr.ppocrv6 official.media.whisper; do
-  file="/media/release/$package.imp"
+  file="/media/release/$package-$target.imp"
   sha=$(sha256sum "$file" | awk '{print $1}')
   into-md plugins install "$file" --sha256 "$sha" \
     --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global

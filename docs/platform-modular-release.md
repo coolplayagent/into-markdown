@@ -47,7 +47,7 @@ python tools/platform-release/release.py \
   --cache /absolute/cache \
   --ffmpeg-artifacts /absolute/ffmpeg-audit \
   --plugin-signing-key /absolute/official-key.pk8 \
-  --plugin-base-url https://downloads.example/into-md/x86_64-unknown-linux-gnu \
+  --plugin-base-url https://github.com/coolplayagent/into-markdown/releases/download/RELEASE_TAG \
   --output /absolute/core-stage \
   --plugins-output /absolute/plugins \
   --archive /absolute/into-md-linux-x86_64-core.tar.gz
@@ -62,9 +62,8 @@ thumbprint；语音插件中的 FFmpeg 发布副本也在插件 manifest 哈希�
 和每个 `.imp` 生成受保护 GPG 密钥的 detached signature。缺少发布凭据时工作流必须失败，
 不能用临时签名冒充公开发布签名。
 
-Windows 旧 Office 插件使用稳定的零 capability AppContainer 身份，使已签名 runtime authority、
-Provider 进程和单独的兼容 worker 绑定同一个 SID。插件管理器仍只给当前已验证、不可变的 runtime
-快照授予读取和执行 ACL；其他插件继续使用按安装作用域派生的隔离身份。
+Windows 的 OCR 与语音进程使用稳定的零 capability AppContainer 身份。插件管理器只给当前已
+验证、不可变的 runtime 快照授予读取和执行 ACL，并由 kill-on-close Job Object 持有整个进程树。
 
 跨平台归档工作流使用 GitHub 当前公开的原生 `ubuntu-24.04-arm` 标签，而不是在 x86_64
 runner 上把交叉编译误报为 ARM64 运行验收。所有发布结论仍以原生安装后的公开 CLI/Web E2E
@@ -91,3 +90,10 @@ SHA-256 的 Gitleaks 扫描完整 Git 历史，并下载扫描 issue/PR metadata
 Actions 日志和历史 artifacts。任何发现先吊销/轮换并清理精确历史数据；仓库 owner/admin
 转换可见性后立即恢复 main 保护、push ruleset、只读默认 token、fork 审批和受保护 `release`
 environment。当前发布 job 只接受 main 或 tag，并且正式凭据只通过该 environment 提供。
+
+正式 workflow dispatch 接收一个有界 `release_tag`，在 Core 的官方发布者记录中写入该 GitHub
+Release 的不可变下载根。公开资产使用 `插件ID-目标.imp`，因此三个目标的同 ID 插件可以安全地
+共存于 GitHub Release 的平面命名空间；包内插件 ID 和本地 `.imp` 文件名保持不变。Linux、Windows
+job 全绿后，工作流只创建或更新受保护的 draft release，并同时上传 Core、签名、摘要、SBOM、
+来源、NOTICE、平台审计、installed-smoke 与 acceptance 报告。macOS 同提交的签名/公证工作流
+补齐自己的目标资产；只有四个平台全部通过并复核摘要后才把 draft 发布为公开 release。

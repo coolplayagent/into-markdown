@@ -19,8 +19,12 @@ flowchart LR
 
 每个平台发布两个独立、已签名的本地包：
 
-- `official.ocr.ppocrv6.imp`：OCR provider、受审计 ONNX Runtime、worker、模型与字典；
-- `official.media.whisper.imp`：转写/分离 provider、受审计 FFmpeg、ONNX Runtime、worker 与模型。
+- `official.ocr.ppocrv6-<target>.imp`：OCR provider、受审计 ONNX Runtime、worker、模型与字典；
+- `official.media.whisper-<target>.imp`：转写/分离 provider、受审计 FFmpeg、ONNX Runtime、worker 与模型。
+
+`<target>` 是 `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、
+`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`。目标后缀只解决 GitHub Release 的平面资产
+命名冲突；下载后的包内 ID、签名 authority 和插件管理命令仍使用不带后缀的稳定插件 ID。
 
 `into-md setup ocr|media` 下载、安装并验证整个能力插件。模型不会在转换时
 自动下载，也不是可独立安装、更新或切换的产品对象。Web 控制台在 OCR 控件或会议转写

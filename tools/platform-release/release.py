@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import shutil
 import sys
 import tarfile
@@ -64,6 +65,15 @@ FIXTURES = [
     "ods/normal.ods",
     "odp/normal.odp",
 ]
+
+
+def published_plugin_file(filename: str, target: str) -> str:
+    path = pathlib.PurePosixPath(filename)
+    if path.name != filename or path.suffix != ".imp" or not path.stem:
+        raise ReleaseError("plugin package filename is invalid")
+    if not re.fullmatch(r"[a-z0-9_]+(?:-[a-z0-9_]+)+", target):
+        raise ReleaseError("plugin publication target is invalid")
+    return f"{path.stem}-{target}.imp"
 
 
 def check_host(target: str, config: dict) -> None:
@@ -616,7 +626,13 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
     materialize_rust(output / "lib/into-markdown-rust")
     copy_file(ROOT / "LICENSE", output / "LICENSE")
-    catalog = {identity: {"url": f"{base_url.rstrip('/')}/{record['file']}", "sha256": record["sha256"]} for identity, record in records.items()}
+    catalog = {
+        identity: {
+            "url": f"{base_url.rstrip('/')}/{published_plugin_file(record['file'], target)}",
+            "sha256": record["sha256"],
+        }
+        for identity, record in records.items()
+    }
     write_json(output / "share/into-markdown/plugins/official-publisher.json", {"schemaVersion": 2, "signingKeyId": signer[0], "signingKeySha256": signer[1], "packages": catalog})
     projection = release_bin / executable_name("release-projection", target)
     write_release_inputs(output, projection, target)

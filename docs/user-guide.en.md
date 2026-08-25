@@ -9,8 +9,8 @@ from the same version and target.
 | Capability | Artifact |
 | --- | --- |
 | Ordinary documents, PDF, and Web workbench | Platform Core |
-| OCR | `official.ocr.ppocrv6.imp` |
-| Transcription and diarization | `official.media.whisper.imp` |
+| OCR | `official.ocr.ppocrv6-<target>.imp` |
+| Transcription and diarization | `official.media.whisper-<target>.imp` |
 | Agent instructions | `into-markdown-skill.zip` |
 
 Legacy `.doc/.ppt/.xls` files are not shipped in the current release and never invoke LibreOffice;
@@ -88,8 +88,9 @@ installed="$HOME/.local/share/into-markdown/current"
 catalog="$installed/share/into-markdown/plugins/official-publisher.json"
 signer_id=$(jq -r .signingKeyId "$catalog")
 signer_sha=$(jq -r .signingKeySha256 "$catalog")
+target=x86_64-unknown-linux-gnu # replace with the current platform target
 for package in official.ocr.ppocrv6 official.media.whisper; do
-  file="/media/release/$package.imp"
+  file="/media/release/$package-$target.imp"
   sha=$(sha256sum "$file" | awk '{print $1}')
   into-md plugins install "$file" --sha256 "$sha" \
     --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global

@@ -35,6 +35,13 @@ FIXTURES = [
 ]
 
 
+def published_plugin_file(filename: str) -> str:
+    path = pathlib.PurePosixPath(filename)
+    if path.name != filename or path.suffix != ".imp" or not path.stem:
+        raise ReleaseError("plugin package filename is invalid")
+    return f"{path.stem}-{TARGET}.imp"
+
+
 def check_host() -> None:
     config = authority()
     if os.uname().sysname != "Darwin" or os.uname().machine != "arm64":
@@ -397,7 +404,13 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
     materialize_rust(output / "lib/into-markdown-rust")
     copy_file(ROOT / "LICENSE", output / "LICENSE", 0o644)
-    catalog_records = {plugin_id: {"url": f"{plugin_base_url.rstrip('/')}/{record['file']}", "sha256": record["sha256"]} for plugin_id, record in records.items()}
+    catalog_records = {
+        plugin_id: {
+            "url": f"{plugin_base_url.rstrip('/')}/{published_plugin_file(record['file'])}",
+            "sha256": record["sha256"],
+        }
+        for plugin_id, record in records.items()
+    }
     write_json(output / "share/into-markdown/plugins/official-publisher.json", {"schemaVersion": 2, "signingKeyId": signer[0], "signingKeySha256": signer[1], "packages": catalog_records})
     projection_tool = release_bin / "release-projection"
     write_release_inputs(output, projection_tool)

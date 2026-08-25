@@ -19,10 +19,19 @@ from release import (
     SPEECH_COMPONENTS,
     create_archive,
     distributed_source_ids,
+    published_plugin_file,
 )
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_published_plugin_names_are_flat_and_target_unique(self) -> None:
+        self.assertEqual(
+            published_plugin_file("official.ocr.ppocrv6.imp", "x86_64-pc-windows-msvc"),
+            "official.ocr.ppocrv6-x86_64-pc-windows-msvc.imp",
+        )
+        with self.assertRaisesRegex(RuntimeError, "filename"):
+            published_plugin_file("nested/package.imp", "x86_64-pc-windows-msvc")
+
     def test_release_projection_excludes_non_distributed_source_records(self) -> None:
         manifest = {
             "components": [
