@@ -1723,6 +1723,26 @@ impl SafeDir {
         self.verify_namespace()
     }
 
+    fn remove_committed_backup(
+        &self,
+        name: &OsStr,
+        expected: &FileIdentity,
+    ) -> Result<(), CliError> {
+        validate_single_name(name)?;
+        self.verify_private_namespace()?;
+        let file = self.open_regular(name)?;
+        if file_identity(&file)? != *expected {
+            return Err(recovery_error("committed backup identity changed before cleanup"));
+        }
+        // A pre-existing output may legitimately have another hard-link name.
+        // The transaction directory is private and the journal binds this exact
+        // inode, so unlinking only its private backup name cannot remove or
+        // mutate the caller-owned alias.
+        rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::empty())?;
+        self.sync()?;
+        self.verify_private_namespace()
+    }
+
     pub(crate) fn remove_empty_child(&self, name: &OsStr) -> Result<(), CliError> {
         validate_single_name(name)?;
         self.verify_namespace()?;
@@ -2241,6 +2261,18 @@ impl SafeDir {
         self.directory.remove_file(name)?;
         self.sync()?;
         self.verify_namespace()
+    }
+
+    fn remove_committed_backup(
+        &self,
+        name: &OsStr,
+        expected: &FileIdentity,
+    ) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        verify_name_identity(self, name, Some(expected))?;
+        self.directory.remove_file(name)?;
+        self.sync()?;
+        self.verify_private_namespace()
     }
 
     pub(crate) fn remove_regular_private(&self, name: &OsStr) -> Result<(), CliError> {
@@ -3512,7 +3544,7 @@ fn finish_committed(
                     directory_handle.path.join(&backup).display()
                 )));
             }
-            directory_handle.remove_regular(&backup)?;
+            directory_handle.remove_committed_backup(&backup, &identity)?;
         }
         let staged = stage_name(index);
         if directory_handle.inspect_regular(&staged)?.is_some() {
