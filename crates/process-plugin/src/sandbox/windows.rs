@@ -598,6 +598,7 @@ fn verify_acl_with_masks(
     }
     // SAFETY: owner and current token SID are valid while descriptor/token remain owned.
     let mut valid = !owner.is_null() && unsafe { EqualSid(owner, user) } != 0;
+    let mut rejection = (!valid).then(|| "owner is not the current user".to_owned());
     let mut control = 0_u16;
     let mut revision = 0_u32;
     // SAFETY: descriptor is live and both outputs are writable.
@@ -605,6 +606,7 @@ fn verify_acl_with_masks(
         || require_protected && control & SE_DACL_PROTECTED == 0
     {
         valid = false;
+        rejection.get_or_insert_with(|| "DACL is unavailable or not protected".to_owned());
     }
     // SAFETY: dacl points inside the live descriptor.
     let count = unsafe { (*dacl).AceCount };
@@ -612,6 +614,7 @@ fn verify_acl_with_masks(
         || usize::from(count) > allowed.len() + usize::from(allow_os_administrators) * 2
     {
         valid = false;
+        rejection.get_or_insert_with(|| format!("unexpected allowed ACE count {count}"));
     }
     let mut seen = vec![false; allowed.len()];
     let mut seen_system = false;
@@ -621,42 +624,50 @@ fn verify_acl_with_masks(
         // SAFETY: index is bounded by AceCount and raw is writable.
         if unsafe { GetAce(dacl, index, &raw mut raw) } == 0 || raw.is_null() {
             valid = false;
+            rejection.get_or_insert_with(|| format!("ACE {index} is unreadable"));
             break;
         }
         // SAFETY: GetAce returned an ACE inside the live ACL.
         let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
         if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE_VALUE {
             valid = false;
+            rejection.get_or_insert_with(|| format!("ACE {index} is not access-allowed"));
             break;
         }
         let sid = (&raw const ace.SidStart).cast_mut().cast();
         let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
-        let expected_mask = if let Some(identity) = identity {
+        let (identity_name, expected_mask) = if let Some(identity) = identity {
             if seen[identity] {
                 valid = false;
+                rejection.get_or_insert_with(|| format!("ACE {index} duplicates an allowed SID"));
                 break;
             }
             seen[identity] = true;
-            masks[identity]
+            ("user", masks[identity])
         } else if allow_os_administrators && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } != 0
         {
             if seen_system {
                 valid = false;
+                rejection.get_or_insert_with(|| format!("ACE {index} duplicates LocalSystem"));
                 break;
             }
             seen_system = true;
-            FILE_ALL_ACCESS
+            ("LocalSystem", FILE_ALL_ACCESS)
         } else if allow_os_administrators
             && unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) } != 0
         {
             if seen_administrators {
                 valid = false;
+                rejection.get_or_insert_with(|| {
+                    format!("ACE {index} duplicates Builtin Administrators")
+                });
                 break;
             }
             seen_administrators = true;
-            FILE_ALL_ACCESS
+            ("Builtin Administrators", FILE_ALL_ACCESS)
         } else {
             valid = false;
+            rejection.get_or_insert_with(|| format!("ACE {index} has an unauthorized SID"));
             break;
         };
         let expected_inheritance = if is_directory { 3 } else { 0 };
@@ -664,14 +675,26 @@ fn verify_acl_with_masks(
             || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
         {
             valid = false;
+            rejection.get_or_insert_with(|| {
+                format!(
+                    "ACE {index} for {identity_name} has mask 0x{:08x} and flags 0x{:02x}",
+                    ace.Mask, ace.Header.AceFlags
+                )
+            });
             break;
         }
     }
-    valid &= seen.into_iter().all(|value| value);
+    if !seen.into_iter().all(|value| value) {
+        valid = false;
+        rejection.get_or_insert_with(|| "an expected allowed SID is absent".to_owned());
+    }
     // SAFETY: descriptor is the LocalAlloc block returned above.
     unsafe { LocalFree(descriptor) };
     if !valid {
-        return Err(unavailable("plugin DACL contains unauthorized identity"));
+        return Err(unavailable(format!(
+            "plugin DACL rejected: {}",
+            rejection.as_deref().unwrap_or("unknown ACL mismatch")
+        )));
     }
     Ok(())
 }
