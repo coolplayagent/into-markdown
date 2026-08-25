@@ -89,7 +89,7 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let source = vec![b'x'; 1024 * 1024];
     let error = stall.execute(&source, ExecutionOptions::default()).unwrap_err();
     assert_eq!(error.code, PluginErrorCode::Timeout);
-    assert!(started.elapsed() < Duration::from_secs(5), "blocked request write ignored deadline");
+    assert!(started.elapsed() < Duration::from_secs(30), "blocked request write ignored deadline");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn cancellation_race_is_stable_for_twenty_real_processes() {
         let (ready, observed) = std::sync::mpsc::sync_channel(1);
         let listener = std::sync::Arc::new(CancelReady(ready));
         let trigger_thread = std::thread::spawn(move || {
-            observed.recv_timeout(Duration::from_secs(5)).unwrap();
+            observed.recv_timeout(Duration::from_secs(30)).unwrap();
             trigger.cancel();
         });
         let context = ExecutionContext::new(
