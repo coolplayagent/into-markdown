@@ -405,9 +405,15 @@ mod tests {
             .imports()
             .unwrap()
             .filter_map(Result::ok)
-            .map(|import| {
+            .filter_map(|import| {
                 let identity = std::str::from_utf8(import.library()).unwrap();
-                if cfg!(windows) { identity.to_ascii_lowercase() } else { identity.to_owned() }
+                if identity.is_empty() {
+                    None
+                } else if cfg!(windows) {
+                    Some(identity.to_ascii_lowercase())
+                } else {
+                    Some(identity.to_owned())
+                }
             })
             .collect::<BTreeSet<_>>();
         assert!(imported.is_subset(&parsed));
