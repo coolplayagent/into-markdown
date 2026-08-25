@@ -264,6 +264,12 @@ fn exercise(
         let installed_payload = user_data.join("into-markdown/plugins").join(id).join(relative);
         let mut damaged = fs::read(&installed_payload).expect("installed payload");
         damaged[0] ^= 0x80;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&installed_payload, fs::Permissions::from_mode(0o600))
+                .expect("make installed payload owner-writable for damage injection");
+        }
         fs::write(&installed_payload, damaged).expect("damage installed payload");
         let rejected =
             invoke(binary, cwd, user_data, &["plugins", "verify", id, "--scope", scope, "--json"]);

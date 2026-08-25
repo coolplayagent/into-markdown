@@ -460,12 +460,12 @@ fn move_file_with_transient_retry(source: &[u16], destination: &[u16], flags: u3
 
 pub(crate) fn verify_private_path(path: &Path) -> Result<(), PluginError> {
     let current_user = CurrentUser::open()?;
-    verify_acl(path, &[current_user.sid()], true)
+    verify_acl_with_masks(path, &[current_user.sid()], &[FILE_ALL_ACCESS], true, true)
 }
 
 pub(crate) fn verify_private_child(path: &Path) -> Result<(), PluginError> {
     let current_user = CurrentUser::open()?;
-    verify_acl(path, &[current_user.sid()], false)
+    verify_acl_with_masks(path, &[current_user.sid()], &[FILE_ALL_ACCESS], false, true)
 }
 
 pub(crate) fn verify_trusted_parent(path: &Path) -> Result<(), PluginError> {
@@ -555,7 +555,7 @@ fn verify_acl(path: &Path, allowed: &[PSID], require_protected: bool) -> Result<
         .enumerate()
         .map(|(index, _)| if index == 0 { FILE_ALL_ACCESS } else { APP_READ_EXECUTE })
         .collect::<Vec<_>>();
-    verify_acl_with_masks(path, allowed, &masks, require_protected)
+    verify_acl_with_masks(path, allowed, &masks, require_protected, false)
 }
 
 fn verify_acl_with_masks(
@@ -563,6 +563,7 @@ fn verify_acl_with_masks(
     allowed: &[PSID],
     masks: &[u32],
     require_protected: bool,
+    allow_os_administrators: bool,
 ) -> Result<(), PluginError> {
     if allowed.is_empty() || allowed.len() != masks.len() {
         return Err(unavailable("plugin DACL authority is invalid"));
@@ -607,10 +608,14 @@ fn verify_acl_with_masks(
     }
     // SAFETY: dacl points inside the live descriptor.
     let count = unsafe { (*dacl).AceCount };
-    if usize::from(count) != allowed.len() {
+    if usize::from(count) < allowed.len()
+        || usize::from(count) > allowed.len() + usize::from(allow_os_administrators) * 2
+    {
         valid = false;
     }
     let mut seen = vec![false; allowed.len()];
+    let mut seen_system = false;
+    let mut seen_administrators = false;
     for index in 0..u32::from(count) {
         let mut raw = std::ptr::null_mut();
         // SAFETY: index is bounded by AceCount and raw is writable.
@@ -626,16 +631,34 @@ fn verify_acl_with_masks(
         }
         let sid = (&raw const ace.SidStart).cast_mut().cast();
         let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
-        let Some(identity) = identity else {
+        let expected_mask = if let Some(identity) = identity {
+            if seen[identity] {
+                valid = false;
+                break;
+            }
+            seen[identity] = true;
+            masks[identity]
+        } else if allow_os_administrators && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } != 0
+        {
+            if seen_system {
+                valid = false;
+                break;
+            }
+            seen_system = true;
+            FILE_ALL_ACCESS
+        } else if allow_os_administrators
+            && unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) } != 0
+        {
+            if seen_administrators {
+                valid = false;
+                break;
+            }
+            seen_administrators = true;
+            FILE_ALL_ACCESS
+        } else {
             valid = false;
             break;
         };
-        let expected_mask = masks[identity];
-        if seen[identity] {
-            valid = false;
-            break;
-        }
-        seen[identity] = true;
         let expected_inheritance = if is_directory { 3 } else { 0 };
         if ace.Mask != expected_mask
             || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
@@ -1299,6 +1322,7 @@ fn validate_working_directory(policy: &RuntimePolicy, directory: &Path) -> Resul
         &[current.sid(), app.as_ptr()],
         &[FILE_ALL_ACCESS, FILE_ALL_ACCESS],
         true,
+        false,
     )
 }
 

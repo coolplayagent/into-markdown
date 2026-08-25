@@ -253,11 +253,11 @@
   "moduleExtensions": {
     "//third_party/licenses:downloads.bzl%downloads": {
       "general": {
-        "bzlTransitiveDigest": "TfQKYaQP/Ri0LhfHsvIoJkBHjd3veI+gJ+a0yE4dpGI=",
+        "bzlTransitiveDigest": "t6QlQV7bpuIjUHpTKN3xhRus/pi+nYIXvdv9PB+Vr1c=",
         "usagesDigest": "YItk5McM/nU5ZVdSduh0zAeBNSl8iILaQ3P/JbSrpag=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
-          "FILE:@@//third_party/licenses/downloads.json b40c922ca813bc6a1d0c6f2e013d35499dd04048df5002a4620d161ef120a2e3",
+          "FILE:@@//third_party/licenses/downloads.json 8b3b5301ae0b22f0821931428dfabe32e95d4d3f35898b539f7f12141d2d2574",
           "FILE:@@//third_party/pdfium/manifest.json c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368"
         ],
         "generatedRepoSpecs": {
@@ -287,7 +287,8 @@
               "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },
@@ -297,7 +298,8 @@
               "downloaded_file_path": "PP-OCRv6_tiny_det_onnx_infer.tar",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -337,7 +339,8 @@
               "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -347,7 +350,8 @@
               "downloaded_file_path": "runtime-model.tar",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -357,7 +361,8 @@
               "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },
@@ -367,7 +372,8 @@
               "downloaded_file_path": "runtime-model.tar",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },

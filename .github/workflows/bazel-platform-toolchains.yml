@@ -73,6 +73,7 @@ jobs:
         shell: bash
         env:
           NATIVE_CONFIG: ${{ matrix.config }}
+          MSYS2_ARG_CONV_EXCL: '*'
         run: |
           assert_rejected() {
             set +e
@@ -110,6 +111,7 @@ jobs:
         shell: bash
         env:
           NATIVE_CONFIG: ${{ matrix.config }}
+          MSYS2_ARG_CONV_EXCL: '*'
         run: |
           assert_rejected() {
             set +e

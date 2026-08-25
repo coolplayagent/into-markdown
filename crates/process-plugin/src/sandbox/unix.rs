@@ -284,10 +284,15 @@ mod linux {
             ];
             let legacy: &[libc::c_long] = if allow_child_processes {
                 &[]
-            } else if cfg!(target_arch = "x86_64") {
-                &[libc::SYS_fork, libc::SYS_vfork]
             } else {
-                &[]
+                #[cfg(target_arch = "x86_64")]
+                {
+                    &[libc::SYS_fork, libc::SYS_vfork]
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    &[]
+                }
             };
             let mut filters = Vec::with_capacity(64 + denied.len() * 2);
             filters.push(stmt(LD_W_ABS, 4));

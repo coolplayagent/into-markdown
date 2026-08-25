@@ -72,7 +72,8 @@ mod quality {
             format!("{:x}", Sha256::digest(&recognizer)),
             "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
         );
-        let dictionary = fs::read(runfiles.join("_main/models/ppocrv6_tiny_dict.txt")).unwrap();
+        let dictionary =
+            fs::read(runfile(&runfiles, "_main/models/ppocrv6_tiny_dict.txt")).unwrap();
         let model_parent = tempfile::tempdir().unwrap();
         let model_root = model_parent.path().join("models");
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
@@ -82,17 +83,18 @@ mod quality {
         assert_eq!(status.state, "installed");
 
         let runtime_relative = env!("OCR_QUALITY_ORT_LIBRARY");
-        let runtime_library = runfiles
-            .join(env!("OCR_QUALITY_ORT_REPOSITORY"))
-            .join(runtime_relative)
-            .canonicalize()
-            .unwrap();
+        let runtime_library = runfile(
+            &runfiles,
+            &format!("{}/{}", env!("OCR_QUALITY_ORT_REPOSITORY"), runtime_relative),
+        )
+        .canonicalize()
+        .unwrap();
         let runtime_root = runtime_library
             .ancestors()
             .nth(Path::new(runtime_relative).components().count())
             .unwrap()
             .to_path_buf();
-        let worker = runfiles.join(env!("OCR_QUALITY_WORKER")).canonicalize().unwrap();
+        let worker = runfile(&runfiles, env!("OCR_QUALITY_WORKER")).canonicalize().unwrap();
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Always;
         options.ocr.minimum_confidence = 0.0;
@@ -134,14 +136,14 @@ mod quality {
         .unwrap();
 
         let manifest: serde_json::Value = serde_json::from_slice(
-            &fs::read(runfiles.join("_main/fixtures/manifest.json")).unwrap(),
+            &fs::read(runfile(&runfiles, "_main/fixtures/manifest.json")).unwrap(),
         )
         .unwrap();
         let mut totals = BTreeMap::<String, (usize, usize)>::new();
         for golden in manifest["ocr_quality"]["goldens"].as_array().unwrap() {
             let id = golden["fixture_id"].as_str().unwrap();
-            let bytes =
-                fs::read(runfiles.join(format!("_main/fixtures/small/ocr/{id}.png"))).unwrap();
+            let bytes = fs::read(runfile(&runfiles, &format!("_main/fixtures/small/ocr/{id}.png")))
+                .unwrap();
             assert_eq!(
                 format!("{:x}", Sha256::digest(&bytes)),
                 golden["fixture_sha256"].as_str().unwrap()
@@ -248,7 +250,24 @@ mod quality {
 
     fn read_archive(runfiles: &Path, repository: &str) -> Vec<u8> {
         assert_ne!(repository, "unsupported", "quality target requires an audited platform");
-        fs::read(runfiles.join(repository).join("file/runtime-model.tar")).unwrap()
+        fs::read(runfile(runfiles, &format!("{repository}/file/runtime-model.tar"))).unwrap()
+    }
+
+    fn runfile(runfiles: &Path, logical: &str) -> PathBuf {
+        if let Some(manifest) = std::env::var_os("RUNFILES_MANIFEST_FILE") {
+            let manifest = PathBuf::from(manifest);
+            let metadata = fs::metadata(&manifest).expect("Bazel runfiles manifest metadata");
+            assert!(metadata.len() <= 64 * 1024 * 1024, "Bazel runfiles manifest is too large");
+            let contents = fs::read_to_string(manifest).expect("Bazel runfiles manifest");
+            if let Some(path) = contents.lines().find_map(|line| {
+                let (name, path) = line.split_once(' ')?;
+                (name == logical).then(|| PathBuf::from(path))
+            }) {
+                return path;
+            }
+            panic!("Bazel runfile is missing from the manifest: {logical}");
+        }
+        runfiles.join(logical)
     }
 
     fn service_error(

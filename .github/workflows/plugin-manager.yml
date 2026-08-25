@@ -47,6 +47,7 @@ jobs:
           repository-cache: true
       - name: Validate Cargo runtime authority mutations
         run: |
+          cargo fetch --locked
           cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_overlap_and_omission -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_kind_reclassification -j1

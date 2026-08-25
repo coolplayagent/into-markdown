@@ -4191,7 +4191,18 @@ fn read_linked_parent_lease(parent: &SafeDir, limit: u64) -> io::Result<Vec<u8>>
 
 #[cfg(unix)]
 fn remove_linked_parent_lease(parent: &SafeDir) -> Result<(), CliError> {
-    remove_regular_handle_if_present(parent, OsStr::new(PARENT_LEASE_NAME))
+    let name = OsStr::new(PARENT_LEASE_NAME);
+    let Some(_) = parent.inspect_regular(name)? else {
+        return Ok(());
+    };
+    parent.verify_namespace()?;
+    let file = parent.open_regular(name)?;
+    if rustix::fs::fstat(&file)?.st_nlink != 2 {
+        return Err(recovery_error("physical parent lease link count is invalid"));
+    }
+    rustix::fs::unlinkat(&parent.fd, name, rustix::fs::AtFlags::empty())?;
+    parent.sync()?;
+    parent.verify_namespace()
 }
 
 #[cfg(windows)]

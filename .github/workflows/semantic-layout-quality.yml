@@ -107,6 +107,6 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked -p into-markdown-layout-quality --all-targets --no-deps -- -D warnings
       - name: Check the locked Cargo license authority integration
-        run: >-
-          cargo test --locked -p license-check
-          normal_runtime_authority_matches_locked_metadata -j1
+        run: |
+          cargo fetch --locked
+          cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j1

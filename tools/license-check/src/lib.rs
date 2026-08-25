@@ -756,6 +756,8 @@ struct ModelDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     sha256: String,
 }
 
@@ -766,6 +768,8 @@ struct ModelRuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     archive_sha256: Option<String>,
     archive_size: Option<u64>,
     archive_member: Option<String>,
@@ -3015,6 +3019,11 @@ fn is_canonical_https(value: &str) -> bool {
     })
 }
 
+fn valid_download_mirrors(primary: &str, mirrors: &[String]) -> bool {
+    let mut seen = BTreeSet::from([primary]);
+    mirrors.iter().all(|mirror| is_canonical_https(mirror) && seen.insert(mirror.as_str()))
+}
+
 fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
     let mut repositories = BTreeSet::new();
     let mut runtime_ids = BTreeSet::new();
@@ -3026,6 +3035,7 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             || !is_safe_model_id(&item.repository)
             || !is_safe_model_file_name(&item.downloaded_file_path)
             || !is_canonical_https(&item.url)
+            || !valid_download_mirrors(&item.url, &item.mirror_urls)
             || !is_sha256(&item.sha256)
         {
             errors.push(format!("model download {} has incomplete fields", item.repository));
@@ -3039,6 +3049,7 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             || !is_safe_model_id(&item.repository)
             || !is_safe_model_file_name(&item.downloaded_file_path)
             || !is_canonical_https(&item.url)
+            || !valid_download_mirrors(&item.url, &item.mirror_urls)
             || !is_sha256(&item.sha256)
             || item.size == 0
         {
@@ -4372,6 +4383,7 @@ mod tests {
                     repository: "ppocrv6_tiny_detector_source".to_owned(),
                     downloaded_file_path: "detector.tar".to_owned(),
                     url: detector.url.clone(),
+                    mirror_urls: vec![],
                     sha256: detector.sha256.clone(),
                 },
                 ModelDownload {
@@ -4379,6 +4391,7 @@ mod tests {
                     repository: "ppocrv6_tiny_recognizer_source".to_owned(),
                     downloaded_file_path: "recognizer.tar".to_owned(),
                     url: recognizer.url.clone(),
+                    mirror_urls: vec![],
                     sha256: recognizer.sha256.clone(),
                 },
             ],
@@ -4416,6 +4429,7 @@ mod tests {
             repository: "reviewed_runtime".to_owned(),
             downloaded_file_path: artifact.file_name.clone(),
             url: artifact.url.clone(),
+            mirror_urls: vec![],
             archive_sha256: None,
             archive_size: None,
             archive_member: None,

@@ -13,7 +13,7 @@ def _downloads_impl(module_ctx):
             name = item["repository"],
             downloaded_file_path = item["downloaded_file_path"],
             sha256 = item["sha256"],
-            urls = [item["url"]],
+            urls = [item["url"]] + item.get("mirror_urls", []),
         )
 
     # Runtime model files are intentionally empty until generated ONNX artifacts,
@@ -25,20 +25,20 @@ def _downloads_impl(module_ctx):
                 name = item["repository"],
                 build_file_content = "exports_files(glob(['**']), visibility = ['//visibility:public'])",
                 sha256 = item["archive_sha256"],
-                urls = [item["url"]],
+                urls = [item["url"]] + item.get("mirror_urls", []),
             )
             http_file(
                 name = item["repository"] + "_archive",
                 downloaded_file_path = "runtime-model.tar",
                 sha256 = item["archive_sha256"],
-                urls = [item["url"]],
+                urls = [item["url"]] + item.get("mirror_urls", []),
             )
         else:
             http_file(
                 name = item["repository"],
                 downloaded_file_path = item["downloaded_file_path"],
                 sha256 = item["sha256"],
-                urls = [item["url"]],
+                urls = [item["url"]] + item.get("mirror_urls", []),
             )
 
     for item in manifest.get("native_archives", []):

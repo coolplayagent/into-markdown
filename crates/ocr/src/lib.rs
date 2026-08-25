@@ -212,6 +212,8 @@ struct SourceDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     sha256: String,
 }
 
@@ -222,6 +224,8 @@ struct RuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     archive_sha256: Option<String>,
     archive_size: Option<u64>,
     archive_member: Option<String>,
@@ -524,6 +528,7 @@ fn unique_sources(
         validate_id(&item.repository)?;
         validate_file_name(&item.downloaded_file_path)?;
         validate_https(&item.url)?;
+        validate_mirror_urls(&item.url, &item.mirror_urls)?;
         validate_hash(&item.sha256)?;
         if result.insert(item.artifact_id.as_str(), item).is_some()
             || !repositories.insert(item.repository.as_str())
@@ -571,6 +576,7 @@ fn unique_runtimes(
         validate_id(&item.repository)?;
         validate_file_name(&item.downloaded_file_path)?;
         validate_https(&item.url)?;
+        validate_mirror_urls(&item.url, &item.mirror_urls)?;
         validate_hash(&item.sha256)?;
         if item.size == 0
             || result.insert(item.artifact_id.as_str(), item).is_some()
@@ -899,6 +905,19 @@ fn validate_https(value: &str) -> Result<(), ConversionError> {
         return Err(invalid_manifest(
             "model URL must be canonical HTTPS without credentials/query/fragment",
         ));
+    }
+    Ok(())
+}
+
+fn validate_mirror_urls(primary: &str, mirrors: &[String]) -> Result<(), ConversionError> {
+    let mut unique = BTreeSet::new();
+    for mirror in mirrors {
+        validate_https(mirror)?;
+        if mirror == primary || !unique.insert(mirror.as_str()) {
+            return Err(invalid_manifest(
+                "model download mirrors must be unique and distinct from the primary URL",
+            ));
+        }
     }
     Ok(())
 }
@@ -2724,6 +2743,30 @@ mod tests {
             "\"runtime_artifacts\": [{\"id\":\"evil\",\"role\":\"detector\",\"file_name\":\"../evil\",\"url\":\"https://example.invalid/evil\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":1,\"platforms\":[\"aarch64-apple-darwin\"],\"license\":\"MIT\"}]",
         );
         assert!(ModelManifest::from_authorities(&traversal, downloads).is_err());
+    }
+
+    #[test]
+    fn download_mirrors_fail_closed() {
+        let primary = "https://example.invalid/model.onnx";
+        assert!(
+            validate_mirror_urls(primary, &["https://mirror.invalid/model.onnx".to_owned()])
+                .is_ok()
+        );
+        assert!(validate_mirror_urls(primary, &[primary.to_owned()]).is_err());
+        assert!(
+            validate_mirror_urls(
+                primary,
+                &[
+                    "https://mirror.invalid/model.onnx".to_owned(),
+                    "https://mirror.invalid/model.onnx".to_owned(),
+                ]
+            )
+            .is_err()
+        );
+        assert!(
+            validate_mirror_urls(primary, &["http://mirror.invalid/model.onnx".to_owned()])
+                .is_err()
+        );
     }
 
     #[test]
