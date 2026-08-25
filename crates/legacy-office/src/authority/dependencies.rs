@@ -378,6 +378,9 @@ mod tests {
 
     #[test]
     fn platform_dependency_parser_matches_object_import_inventory() {
+        #[cfg(target_os = "linux")]
+        let executable = Path::new("/bin/true").to_path_buf();
+        #[cfg(not(target_os = "linux"))]
         let executable = std::env::current_exe().unwrap();
         let bytes = std::fs::read(executable).unwrap();
         let format = if cfg!(target_os = "macos") {

@@ -2237,10 +2237,7 @@ fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Res
             return Err(Error::BinaryValidation(format!("missing required ABI export {required}")));
         }
     }
-    let imports = file.imports().map_err(|error| Error::BinaryValidation(error.to_string()))?;
-    for import in imports {
-        let import = import.map_err(|error| Error::BinaryValidation(error.to_string()))?;
-        let library = String::from_utf8_lossy(import.library()).to_ascii_lowercase();
+    for library in dynamic_dependencies(bytes, &file, platform)? {
         if !artifact.allowed_dependencies.iter().any(|item| library == item.to_ascii_lowercase()) {
             return Err(Error::BinaryValidation(format!(
                 "unreviewed dynamic dependency {library}"
@@ -2248,6 +2245,66 @@ fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Res
         }
     }
     Ok(())
+}
+
+fn dynamic_dependencies(
+    bytes: &[u8],
+    file: &object::File<'_>,
+    platform: Platform,
+) -> Result<BTreeSet<String>, Error> {
+    if matches!(platform, Platform::LinuxX64 | Platform::LinuxArm64) {
+        let object::File::Elf64(elf) = file else {
+            return Err(Error::BinaryValidation("expected ELF64 dependency table".into()));
+        };
+        use object::read::elf::Dyn as _;
+        let endian = elf.endian();
+        let sections = elf.elf_section_table();
+        let Some((dynamic, string_index)) = sections
+            .dynamic(endian, bytes)
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?
+        else {
+            return Err(Error::BinaryValidation("missing ELF dynamic dependency table".into()));
+        };
+        let strings = sections
+            .strings(endian, bytes, string_index)
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        let mut libraries = BTreeSet::new();
+        for entry in dynamic {
+            // ELF DT_NEEDED is the stable ABI tag value 1.
+            if entry.tag32(endian) != Some(1) {
+                continue;
+            }
+            let name = entry
+                .string(endian, strings)
+                .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+            let name = std::str::from_utf8(name)
+                .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+            if name.is_empty() || name.bytes().any(|byte| byte.is_ascii_control()) {
+                return Err(Error::BinaryValidation("invalid ELF dynamic dependency name".into()));
+            }
+            libraries.insert(name.to_ascii_lowercase());
+        }
+        if libraries.is_empty() {
+            return Err(Error::BinaryValidation("empty ELF dynamic dependency table".into()));
+        }
+        return Ok(libraries);
+    }
+
+    let imports = file.imports().map_err(|error| Error::BinaryValidation(error.to_string()))?;
+    let mut libraries = BTreeSet::new();
+    for import in imports {
+        let import = import.map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        let library = std::str::from_utf8(import.library())
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        if library.is_empty() || library.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(Error::BinaryValidation("invalid dynamic dependency name".into()));
+        }
+        libraries.insert(library.to_ascii_lowercase());
+    }
+    if libraries.is_empty() {
+        return Err(Error::BinaryValidation("empty dynamic dependency table".into()));
+    }
+    Ok(libraries)
 }
 
 fn expected_binary_identity(platform: Platform) -> (BinaryFormat, Architecture) {

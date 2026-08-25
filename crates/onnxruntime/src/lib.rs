@@ -878,6 +878,11 @@ fn audit_loaded_linux(target: &Target, trusted_main: Option<&Path>) -> Result<()
         }
         // SAFETY: the platform loader supplies a NUL-terminated image name.
         let path = unsafe { CStr::from_ptr(information.dlpi_name) };
+        if path.to_bytes().is_empty() {
+            // glibc represents the main executable with an empty dlpi_name.
+            // It is the already-running worker, not a loader search result.
+            return 0;
+        }
         let path = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
         if path.is_absolute() {
             audit.paths.push(path.to_owned());

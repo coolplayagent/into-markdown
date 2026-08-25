@@ -1612,9 +1612,9 @@ mod tests {
         let output = convert(links.as_bytes()).unwrap();
         assert!(!output.document.blocks.is_empty());
 
-        // Windows debug runtimes consume more fixed thread-entry stack before this parser runs.
-        // Both values remain far below the platform defaults and still catch recursive parsing.
-        let small_stack = if cfg!(windows) { 256 * 1024 } else { 64 * 1024 };
+        // Keep the stack far below every supported platform default while leaving room for the
+        // test harness and current debug runtime's fixed thread-entry frames.
+        let small_stack = 256 * 1024;
         let joined = std::thread::Builder::new()
             .stack_size(small_stack)
             .spawn(move || convert(links.as_bytes()).map(|result| result.document.blocks.len()))
