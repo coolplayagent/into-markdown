@@ -4,6 +4,7 @@ use crate::{
     PageInfo, PathBoundsAllocationPlan, PdfRect, PixelFormat,
 };
 use libloading::Library;
+use object::read::elf::Dyn as _;
 use object::{Architecture, BinaryFormat, NameOrOrdinal, Object as _};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -2256,7 +2257,6 @@ fn dynamic_dependencies(
         let object::File::Elf64(elf) = file else {
             return Err(Error::BinaryValidation("expected ELF64 dependency table".into()));
         };
-        use object::read::elf::Dyn as _;
         let endian = elf.endian();
         let sections = elf.elf_section_table();
         let Some((dynamic, string_index)) = sections

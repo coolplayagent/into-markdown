@@ -725,7 +725,7 @@ test("workbench separates the current batch from scrollable recent history", asy
   assert.ok(current.compareDocumentPosition(recent) & window.Node.DOCUMENT_POSITION_FOLLOWING);
   window.document.querySelector<HTMLButtonElement>(".recent-task-link")!.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
-  assert.equal(window.location.pathname, "/workbench");
+  assert.equal(window.location.pathname, `/results/${historyTasks[0]!.id}`);
 });
 
 test("history paginates in place and loads records beyond the first server page", async () => {
@@ -789,7 +789,7 @@ test("root workbench automatically opens the first successful result dialog", as
   await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
   await waitFor(() => Boolean(window.document.querySelector(".result-dialog")));
-  assert.equal(window.location.pathname, "/");
+  assert.equal(window.location.pathname, `/results/${completed.id}`);
 });
 
 test("local workbench keeps implementation limits and network policy out of the normal flow", async () => {

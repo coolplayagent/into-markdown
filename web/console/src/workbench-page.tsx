@@ -9,6 +9,7 @@ import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
 import { HistoryPanel } from "./history-panel";
 import { useCapabilities } from "./capability-store";
+import { useRouter } from "./router";
 import {
   SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, formatForName, listAllTasks,
   executionStageLabel, iconForFormat, supportsFileName,
@@ -33,6 +34,7 @@ function entryKey(file: File): string {
 
 export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
   const { locale, t } = useI18n();
+  const { navigate } = useRouter();
   const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const directory = useRef<HTMLInputElement>(null);
@@ -53,6 +55,15 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const ocrCapability: CapabilityAdmin | undefined = quickOcr ? { id: "ocr", status: normalizeStatus(quickOcr.status), localStatus: normalizeStatus(quickOcr.localStatus), currentSource: quickOcr.currentSource, sources: quickOcr.sources, ...(quickOcr.version ? { version: quickOcr.version } : {}), ...(quickOcr.localVersion ? { localVersion: quickOcr.localVersion } : {}) } : undefined;
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
+
+  const selectTask = useCallback((id: string) => {
+    setActiveTaskId(id);
+    navigate(`/results/${id}`);
+  }, [navigate]);
+  const closeResult = useCallback(() => {
+    setActiveTaskId(undefined);
+    navigate("/workbench");
+  }, [navigate]);
 
   const updateTask = useCallback((id: string, update: (task: TaskRecord) => TaskRecord) => {
     setEntries((current) => current.map((entry) => entry.task?.id === id ? { ...entry, task: update(entry.task) } : entry));
@@ -105,9 +116,9 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     const first = entries.find((entry) => entry.task?.status === "succeeded")?.task;
     if (first) {
       navigatedBatch.current = batchId;
-      setActiveTaskId(first.id);
+      selectTask(first.id);
     }
-  }, [batchId, entries, uploading]);
+  }, [batchId, entries, selectTask, uploading]);
 
   const selectedBytes = useMemo(() => entries.reduce((sum, entry) => sum + entry.file.size, 0), [entries]);
   const remoteOcrSelected = ocrCapability?.currentSource.startsWith("provider:") === true;
@@ -211,7 +222,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const failureCode = entry.error ?? entry.task?.diagnostics[0]?.code;
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
               const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${diagnosticLabel(failureCode ?? "conversionFailed", t)}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
-              if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => setActiveTaskId(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;
+              if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => selectTask(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;
               return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => setEntries((current) => current.filter((_, item) => item !== index))}><X size={17} aria-hidden="true" /></button>}</li>;
             })}</ul></div>
           </section>}
@@ -224,8 +235,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
-    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={setActiveTaskId} onCleanup={() => void cleanup()} feedback={historyFeedback} /></div>
-    {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
+    </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={selectTask} onCleanup={() => void cleanup()} feedback={historyFeedback} /></div>
+    {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={selectTask} onClose={closeResult} onTaskRemoved={(id) => setRecentTasks((current) => current.filter((task) => task.id !== id))} />}
   </section>;
 }
 

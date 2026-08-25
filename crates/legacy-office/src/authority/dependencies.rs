@@ -151,7 +151,7 @@ fn malformed() -> ConversionError {
 }
 
 fn parse_elf(bytes: &[u8]) -> Result<Specification, ConversionError> {
-    if bytes.get(..6) != Some(b"\x7fELF\x02") || bytes.get(5) != Some(&1) {
+    if bytes.get(..6) != Some(b"\x7fELF\x02\x01") {
         return Err(unavailable("dependencyAuthority"));
     }
     let program_offset =

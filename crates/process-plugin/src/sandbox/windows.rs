@@ -19,14 +19,14 @@ use windows_sys::Win32::Security::Isolation::{
     DeriveAppContainerSidFromAppContainerName, GetAppContainerFolderPath,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, DACL_SECURITY_INFORMATION, EqualSid, FreeSid, GetAce,
+    ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, EqualSid, FreeSid, GetAce,
     GetSecurityDescriptorControl, GetTokenInformation, InitializeSecurityDescriptor,
     IsWellKnownSid, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
     SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
     SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-    SetSecurityDescriptorOwner, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY, TOKEN_USER,
-    TokenAppContainerSid, TokenIsAppContainer, TokenUser, WinBuiltinAdministratorsSid,
-    WinLocalSystemSid,
+    SetSecurityDescriptorOwner, TOKEN_APPCONTAINER_INFORMATION, TOKEN_OWNER, TOKEN_QUERY,
+    TOKEN_USER, TokenAppContainerSid, TokenIsAppContainer, TokenOwner, TokenUser,
+    WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateDirectoryW, FILE_ALL_ACCESS, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
@@ -569,6 +569,7 @@ fn verify_acl_with_masks(
         return Err(unavailable("plugin DACL authority is invalid"));
     }
     let user = allowed[0];
+    let current_identity = if allow_os_administrators { Some(CurrentUser::open()?) } else { None };
     let is_directory = std::fs::metadata(path)
         .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
         .is_dir();
@@ -596,15 +597,18 @@ fn verify_acl_with_masks(
         }
         return Err(unavailable("plugin DACL unavailable"));
     }
-    // SAFETY: owner and current token SID are valid while descriptor/token remain owned. Elevated
-    // Windows tokens can canonicalize an explicitly supplied user owner to the token's trusted
-    // Administrators owner. This remains inside the same OS-administrator trust boundary, while
-    // AppContainer runtime ACLs continue to require the exact current-user owner.
+    // SAFETY: owner and current-token SIDs are valid while the descriptor/token buffers remain
+    // owned. Windows can canonicalize an explicitly supplied owner to the elevated token's exact
+    // TokenOwner SID. Accepting that SID preserves the launching process's authority boundary;
+    // arbitrary owners remain rejected and AppContainer runtime ACLs still require the user SID.
     let owner_allowed = !owner.is_null()
         && unsafe {
             EqualSid(owner, user) != 0
                 || allow_os_administrators
-                    && (IsWellKnownSid(owner, WinLocalSystemSid) != 0
+                    && (current_identity
+                        .as_ref()
+                        .is_some_and(|identity| EqualSid(owner, identity.owner_sid()) != 0)
+                        || IsWellKnownSid(owner, WinLocalSystemSid) != 0
                         || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0)
         };
     let mut valid = owner_allowed;
@@ -619,85 +623,11 @@ fn verify_acl_with_masks(
         valid = false;
         rejection.get_or_insert_with(|| "DACL is unavailable or not protected".to_owned());
     }
-    // SAFETY: dacl points inside the live descriptor.
-    let count = unsafe { (*dacl).AceCount };
-    if usize::from(count) < allowed.len()
-        || usize::from(count) > allowed.len() + usize::from(allow_os_administrators) * 2
+    if let Err(reason) =
+        validate_acl_aces(dacl, allowed, masks, is_directory, allow_os_administrators)
     {
         valid = false;
-        rejection.get_or_insert_with(|| format!("unexpected allowed ACE count {count}"));
-    }
-    let mut seen = vec![false; allowed.len()];
-    let mut seen_system = false;
-    let mut seen_administrators = false;
-    for index in 0..u32::from(count) {
-        let mut raw = std::ptr::null_mut();
-        // SAFETY: index is bounded by AceCount and raw is writable.
-        if unsafe { GetAce(dacl, index, &raw mut raw) } == 0 || raw.is_null() {
-            valid = false;
-            rejection.get_or_insert_with(|| format!("ACE {index} is unreadable"));
-            break;
-        }
-        // SAFETY: GetAce returned an ACE inside the live ACL.
-        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
-        if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE_VALUE {
-            valid = false;
-            rejection.get_or_insert_with(|| format!("ACE {index} is not access-allowed"));
-            break;
-        }
-        let sid = (&raw const ace.SidStart).cast_mut().cast();
-        let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
-        let (identity_name, expected_mask) = if let Some(identity) = identity {
-            if seen[identity] {
-                valid = false;
-                rejection.get_or_insert_with(|| format!("ACE {index} duplicates an allowed SID"));
-                break;
-            }
-            seen[identity] = true;
-            ("user", masks[identity])
-        } else if allow_os_administrators && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } != 0
-        {
-            if seen_system {
-                valid = false;
-                rejection.get_or_insert_with(|| format!("ACE {index} duplicates LocalSystem"));
-                break;
-            }
-            seen_system = true;
-            ("LocalSystem", FILE_ALL_ACCESS)
-        } else if allow_os_administrators
-            && unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) } != 0
-        {
-            if seen_administrators {
-                valid = false;
-                rejection.get_or_insert_with(|| {
-                    format!("ACE {index} duplicates Builtin Administrators")
-                });
-                break;
-            }
-            seen_administrators = true;
-            ("Builtin Administrators", FILE_ALL_ACCESS)
-        } else {
-            valid = false;
-            rejection.get_or_insert_with(|| format!("ACE {index} has an unauthorized SID"));
-            break;
-        };
-        let expected_inheritance = if is_directory { 3 } else { 0 };
-        if ace.Mask != expected_mask
-            || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
-        {
-            valid = false;
-            rejection.get_or_insert_with(|| {
-                format!(
-                    "ACE {index} for {identity_name} has mask 0x{:08x} and flags 0x{:02x}",
-                    ace.Mask, ace.Header.AceFlags
-                )
-            });
-            break;
-        }
-    }
-    if !seen.into_iter().all(|value| value) {
-        valid = false;
-        rejection.get_or_insert_with(|| "an expected allowed SID is absent".to_owned());
+        rejection.get_or_insert(reason);
     }
     // SAFETY: descriptor is the LocalAlloc block returned above.
     unsafe { LocalFree(descriptor) };
@@ -710,9 +640,80 @@ fn verify_acl_with_masks(
     Ok(())
 }
 
+fn validate_acl_aces(
+    dacl: *mut ACL,
+    allowed: &[PSID],
+    masks: &[u32],
+    is_directory: bool,
+    allow_os_administrators: bool,
+) -> Result<(), String> {
+    // SAFETY: caller obtained dacl from a live security descriptor.
+    let count = unsafe { (*dacl).AceCount };
+    if usize::from(count) < allowed.len()
+        || usize::from(count) > allowed.len() + usize::from(allow_os_administrators) * 2
+    {
+        return Err(format!("unexpected allowed ACE count {count}"));
+    }
+    let mut seen = vec![false; allowed.len()];
+    let mut seen_system = false;
+    let mut seen_administrators = false;
+    for index in 0..u32::from(count) {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: index is bounded by AceCount and raw is writable.
+        if unsafe { GetAce(dacl, index, &raw mut raw) } == 0 || raw.is_null() {
+            return Err(format!("ACE {index} is unreadable"));
+        }
+        // SAFETY: GetAce returned an ACE inside the live ACL.
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE_VALUE {
+            return Err(format!("ACE {index} is not access-allowed"));
+        }
+        let sid = (&raw const ace.SidStart).cast_mut().cast();
+        let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
+        let (identity_name, expected_mask) = if let Some(identity) = identity {
+            if seen[identity] {
+                return Err(format!("ACE {index} duplicates an allowed SID"));
+            }
+            seen[identity] = true;
+            ("user", masks[identity])
+        } else if allow_os_administrators && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } != 0
+        {
+            if seen_system {
+                return Err(format!("ACE {index} duplicates LocalSystem"));
+            }
+            seen_system = true;
+            ("LocalSystem", FILE_ALL_ACCESS)
+        } else if allow_os_administrators
+            && unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) } != 0
+        {
+            if seen_administrators {
+                return Err(format!("ACE {index} duplicates Builtin Administrators"));
+            }
+            seen_administrators = true;
+            ("Builtin Administrators", FILE_ALL_ACCESS)
+        } else {
+            return Err(format!("ACE {index} has an unauthorized SID"));
+        };
+        let expected_inheritance = if is_directory { 3 } else { 0 };
+        if ace.Mask != expected_mask
+            || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
+        {
+            return Err(format!(
+                "ACE {index} for {identity_name} has mask 0x{:08x} and flags 0x{:02x}",
+                ace.Mask, ace.Header.AceFlags
+            ));
+        }
+    }
+    if !seen.into_iter().all(|value| value) {
+        return Err("an expected allowed SID is absent".to_owned());
+    }
+    Ok(())
+}
+
 struct CurrentUser {
     _token: OwnedHandle,
     storage: Vec<usize>,
+    owner_storage: Vec<usize>,
 }
 
 impl CurrentUser {
@@ -724,47 +725,56 @@ impl CurrentUser {
         }
         // SAFETY: OpenProcessToken returned a newly owned handle.
         let token = unsafe { OwnedHandle::from_raw_handle(token) };
-        let mut needed = 0_u32;
-        // SAFETY: null-buffer sizing call with a valid token.
-        unsafe {
-            GetTokenInformation(
-                token.as_raw_handle(),
-                TokenUser,
-                std::ptr::null_mut(),
-                0,
-                &raw mut needed,
-            )
-        };
-        if needed == 0 {
-            return Err(unavailable("current user identity unavailable"));
-        }
-        let word = size_of::<usize>();
-        let words = usize::try_from(needed)
-            .ok()
-            .and_then(|bytes| bytes.checked_add(word - 1))
-            .map(|bytes| bytes / word)
-            .ok_or_else(|| unavailable("current user identity size overflow"))?;
-        let mut storage = vec![0_usize; words];
-        // SAFETY: aligned storage has at least `needed` writable bytes and token is valid.
-        if unsafe {
-            GetTokenInformation(
-                token.as_raw_handle(),
-                TokenUser,
-                storage.as_mut_ptr().cast(),
-                needed,
-                &raw mut needed,
-            )
-        } == 0
-        {
-            return Err(unavailable("current user identity unavailable"));
-        }
-        Ok(Self { _token: token, storage })
+        let storage = token_information(&token, TokenUser, "current user identity")?;
+        let owner_storage = token_information(&token, TokenOwner, "current token owner")?;
+        Ok(Self { _token: token, storage, owner_storage })
     }
 
     fn sid(&self) -> PSID {
         // SAFETY: storage is aligned, initialized by GetTokenInformation(TokenUser), and live.
         unsafe { (*self.storage.as_ptr().cast::<TOKEN_USER>()).User.Sid }
     }
+
+    fn owner_sid(&self) -> PSID {
+        // SAFETY: storage is aligned, initialized by GetTokenInformation(TokenOwner), and live.
+        unsafe { (*self.owner_storage.as_ptr().cast::<TOKEN_OWNER>()).Owner }
+    }
+}
+
+fn token_information(
+    token: &OwnedHandle,
+    class: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
+    label: &str,
+) -> Result<Vec<usize>, PluginError> {
+    let mut needed = 0_u32;
+    // SAFETY: null-buffer sizing call with a valid token.
+    unsafe {
+        GetTokenInformation(token.as_raw_handle(), class, std::ptr::null_mut(), 0, &raw mut needed)
+    };
+    if needed == 0 {
+        return Err(unavailable(format!("{label} unavailable")));
+    }
+    let word = size_of::<usize>();
+    let words = usize::try_from(needed)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(word - 1))
+        .map(|bytes| bytes / word)
+        .ok_or_else(|| unavailable(format!("{label} size overflow")))?;
+    let mut storage = vec![0_usize; words];
+    // SAFETY: aligned storage has at least `needed` writable bytes and token is valid.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            class,
+            storage.as_mut_ptr().cast(),
+            needed,
+            &raw mut needed,
+        )
+    } == 0
+    {
+        return Err(unavailable(format!("{label} unavailable")));
+    }
+    Ok(storage)
 }
 
 pub(crate) struct Child {
