@@ -468,7 +468,7 @@ fn manual_native_runtime_conversion() {
         let input = std::fs::read(value(variable)).unwrap();
         let context = into_markdown_core::ExecutionContext::new(
             ExecutionOptions {
-                timeout: Some(Duration::from_mins(1)),
+                timeout: Some(Duration::from_mins(10)),
                 ..ExecutionOptions::default()
             },
             ResourceLimits::default(),

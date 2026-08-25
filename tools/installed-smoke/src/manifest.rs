@@ -207,6 +207,8 @@ mod tests {
         let projection = ArchiveProjection {
             schema_version: 1,
             target: "aarch64-apple-darwin".into(),
+            version: "0.0.0".into(),
+            source_revision: "a".repeat(40),
             components: vec![],
             files: paths
                 .into_iter()
@@ -263,6 +265,7 @@ mod tests {
         ArchiveFile {
             path: path.into(),
             bytes: bytes.len() as u64,
+            sha1: None,
             sha256: format!("{:x}", Sha256::digest(&bytes)),
             kind,
             component_id: None,

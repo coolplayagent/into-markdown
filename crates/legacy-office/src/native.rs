@@ -8,7 +8,9 @@ use libloading::Library;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::fs::{File, OpenOptions};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 mod macos_ipc;
@@ -25,7 +27,7 @@ pub(crate) fn run_from_args(arguments: impl Iterator<Item = std::ffi::OsString>)
     let policy = Policy::parse(arguments).map_err(|()| 70)?;
     let runtime = PreparedRuntime::new(&policy).map_err(|()| 72)?;
     sandbox::install_or_inherit(&policy).map_err(|()| 70)?;
-    let runtime = runtime.load().map_err(|()| 72)?;
+    let runtime = runtime.load()?;
     match run_request(&policy, &runtime) {
         Ok(()) => Ok(()),
         Err(code) => {
@@ -128,7 +130,11 @@ fn read_bounded_output(path: &Path, root: &Path, maximum: u64) -> Result<Vec<u8>
     {
         return Err(ERROR_RESOURCE);
     }
+    #[cfg(not(windows))]
     let canonical = path.canonicalize().map_err(|_| ERROR_RUNTIME)?;
+    #[cfg(windows)]
+    let canonical =
+        crate::authority::authenticated_windows_path(path, false).map_err(|_| ERROR_RUNTIME)?;
     if !canonical.starts_with(root) {
         return Err(ERROR_RUNTIME);
     }
@@ -175,6 +181,10 @@ struct NativeRuntime {
     authority: crate::authority::VerifiedBundle,
     #[cfg(not(target_os = "macos"))]
     _library: Library,
+    #[cfg(windows)]
+    _library_directory: WindowsDllDirectory,
+    #[cfg(windows)]
+    _dependency_libraries: Vec<Library>,
     #[cfg(not(target_os = "macos"))]
     _authority: crate::authority::VerifiedBundle,
     #[cfg(not(target_os = "macos"))]
@@ -228,14 +238,14 @@ impl PreparedRuntime {
         })
     }
 
-    fn load(self) -> Result<NativeRuntime, ()> {
+    fn load(self) -> Result<NativeRuntime, u8> {
         #[cfg(target_os = "macos")]
         {
-            let contents = self.authority.install_root.parent().ok_or(())?;
+            let contents = self.authority.install_root.parent().ok_or(72)?;
             let soffice = contents.join("MacOS/soffice");
-            let metadata = std::fs::symlink_metadata(&soffice).map_err(|_| ())?;
+            let metadata = std::fs::symlink_metadata(&soffice).map_err(|_| 72)?;
             if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(());
+                return Err(72);
             }
             Ok(NativeRuntime {
                 authority: self.authority,
@@ -249,17 +259,27 @@ impl PreparedRuntime {
             // SAFETY: every package-owned dependency was copied from an
             // authority-hashed no-follow handle into this private immutable tree;
             // sandbox installation completed before the loader can run a constructor.
-            let library = load_library(&library_path)?;
+            #[cfg(not(windows))]
+            let library = load_library(&library_path).map_err(|()| 72)?;
+            #[cfg(windows)]
+            let (library, library_directory, dependency_libraries) =
+                load_library(&library_path, &self.authority.dependency_files)?;
             // SAFETY: authority ABI validation requires this exact C export.
             let hook = unsafe {
                 *library
-                .get::<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit>(
-                    b"libreofficekit_hook_2\0",
-                )
-                .map_err(|_| ())?
+                    .get::<
+                        unsafe extern "C" fn(*const c_char, *const c_char) -> *mut LibreOfficeKit,
+                    >(b"libreofficekit_hook_2\0")
+                    .map_err(|_| {
+                        if cfg!(windows) { 75 } else { 72 }
+                    })?
             };
             Ok(NativeRuntime {
                 _library: library,
+                #[cfg(windows)]
+                _library_directory: library_directory,
+                #[cfg(windows)]
+                _dependency_libraries: dependency_libraries,
                 _authority: self.authority,
                 hook,
                 install_root: self.install_root,
@@ -506,21 +526,118 @@ fn load_library(path: &Path) -> Result<Library, ()> {
 }
 
 #[cfg(windows)]
-fn load_library(path: &Path) -> Result<Library, ()> {
-    // DLL_LOAD_DIR confines package dependencies to the authority-validated
-    // kit directory; SYSTEM32 permits only operating-system dependencies. PATH,
-    // the current directory, application directory, and user DLL directories
-    // are deliberately absent.
-    let library = unsafe {
-        libloading::os::windows::Library::load_with_flags(path, WINDOWS_DLL_SEARCH_FLAGS)
+fn load_library(
+    path: &Path,
+    dependencies: &[crate::authority::VerifiedRuntimeFile],
+) -> Result<(Library, WindowsDllDirectory, Vec<Library>), u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::System::LibraryLoader::AddDllDirectory;
+
+    let runtime = path.parent().and_then(Path::parent).ok_or(74)?;
+    let system64 = runtime.join("System64");
+    crate::authority::authenticated_windows_path(&system64, true).map_err(|_| 73)?;
+    let mut wide = system64.as_os_str().encode_wide().collect::<Vec<_>>();
+    wide.push(0);
+    // SAFETY: the terminated path names the authority-validated package
+    // directory and remains live for this synchronous call.
+    let cookie = unsafe { AddDllDirectory(wide.as_ptr()) };
+    if cookie.is_null() {
+        return Err(73);
     }
-    .map_err(|_| ())?;
+    let directory = WindowsDllDirectory { cookie: cookie as usize };
+    // DLL_LOAD_DIR confines package dependencies to the authority-validated
+    // kit directory; USER_DIRS contains only the retained System64 cookie;
+    // SYSTEM32 permits only operating-system dependencies. PATH, the current
+    // directory, application directory, and default directories remain absent.
+    let mut ordered = dependencies
+        .iter()
+        .filter(|dependency| {
+            dependency.path != path
+                && dependency
+                    .path
+                    .extension()
+                    .is_some_and(|value| value.to_string_lossy().eq_ignore_ascii_case("dll"))
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        let left_local = left.path.parent() == Some(system64.as_path());
+        let right_local = right.path.parent() == Some(system64.as_path());
+        right_local.cmp(&left_local).then_with(|| left.relative.cmp(&right.relative))
+    });
+    let mut dependency_libraries = Vec::new();
+    dependency_libraries.try_reserve(ordered.len()).map_err(|_| 74)?;
+    for dependency in ordered {
+        crate::authority::authenticated_windows_path(&dependency.path, false).map_err(|_| 76)?;
+        dependency_libraries.push(load_windows_library_exact(&dependency.path)?);
+    }
+    let library = load_windows_library_exact(path)?;
+    Ok((library, directory, dependency_libraries))
+}
+
+#[cfg(windows)]
+fn load_windows_library_exact(path: &Path) -> Result<Library, u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::LibraryLoader::LoadLibraryExW;
+
+    let mut library_wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    library_wide.push(0);
+    // SAFETY: the absolute, terminated library path and its complete dependency
+    // closure were authenticated immediately above. The returned module handle
+    // is transferred exactly once to libloading for RAII ownership.
+    let handle = unsafe {
+        LoadLibraryExW(library_wide.as_ptr(), std::ptr::null_mut(), WINDOWS_DLL_SEARCH_FLAGS)
+    };
+    if handle.is_null() {
+        // SAFETY: GetLastError is read immediately after the failed loader call.
+        let raw = unsafe { GetLastError() }.cast_signed();
+        eprintln!("into-md-worker:loader-win32={raw}");
+        return Err(windows_loader_exit_code(Some(raw)));
+    }
+    // SAFETY: handle is a unique successful LoadLibraryExW result and ownership
+    // is transferred to this Library, which will call FreeLibrary on drop.
+    let library = unsafe { libloading::os::windows::Library::from_raw(handle as isize) };
     Ok(library.into())
 }
 
 #[cfg(windows)]
+fn windows_loader_exit_code(raw: Option<i32>) -> u8 {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_BAD_EXE_FORMAT, ERROR_DLL_INIT_FAILED, ERROR_INVALID_PARAMETER,
+        ERROR_MOD_NOT_FOUND,
+    };
+
+    match raw.and_then(|value| u32::try_from(value).ok()) {
+        Some(ERROR_ACCESS_DENIED) => 76,
+        Some(ERROR_MOD_NOT_FOUND) => 77,
+        Some(ERROR_BAD_EXE_FORMAT) => 78,
+        Some(ERROR_DLL_INIT_FAILED) => 79,
+        Some(ERROR_INVALID_PARAMETER) => 80,
+        Some(_) | None => 74,
+    }
+}
+
+#[cfg(windows)]
 const WINDOWS_DLL_SEARCH_FLAGS: u32 = libloading::os::windows::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
-    | libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32;
+    | libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32
+    | libloading::os::windows::LOAD_LIBRARY_SEARCH_USER_DIRS;
+
+#[cfg(windows)]
+struct WindowsDllDirectory {
+    cookie: usize,
+}
+
+#[cfg(windows)]
+impl Drop for WindowsDllDirectory {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::LibraryLoader::RemoveDllDirectory;
+        // SAFETY: AddDllDirectory returned this cookie and it is removed once,
+        // after the Library field has been dropped.
+        unsafe {
+            RemoveDllDirectory(self.cookie as *mut std::ffi::c_void);
+        }
+    }
+}
 
 fn file_sha256(path: &Path) -> Result<String, ()> {
     use sha2::Digest as _;
@@ -720,7 +837,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn dll_search_excludes_path_cwd_application_and_user_directories() {
+    fn dll_search_is_limited_to_validated_package_and_system_directories() {
         use libloading::os::windows::{
             LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -728,10 +845,12 @@ mod tests {
         };
         assert_eq!(
             WINDOWS_DLL_SEARCH_FLAGS,
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                | LOAD_LIBRARY_SEARCH_SYSTEM32
+                | LOAD_LIBRARY_SEARCH_USER_DIRS
         );
         assert_eq!(WINDOWS_DLL_SEARCH_FLAGS & LOAD_LIBRARY_SEARCH_APPLICATION_DIR, 0);
         assert_eq!(WINDOWS_DLL_SEARCH_FLAGS & LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, 0);
-        assert_eq!(WINDOWS_DLL_SEARCH_FLAGS & LOAD_LIBRARY_SEARCH_USER_DIRS, 0);
+        assert_ne!(WINDOWS_DLL_SEARCH_FLAGS & LOAD_LIBRARY_SEARCH_USER_DIRS, 0);
     }
 }

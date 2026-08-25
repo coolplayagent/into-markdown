@@ -2,7 +2,7 @@
 
 [English](user-guide.en.md) · [CLI 示例](cli-examples.md)
 
-正式发布由一个平台 Core、三个自包含能力插件和 Agent Skill 组成。每个 Core/插件同时发布
+正式发布由一个平台 Core、两个自包含能力插件和 Agent Skill 组成。每个 Core/插件同时发布
 SHA-256、签名、SPDX、来源与第三方声明 sidecar。只组合相同版本和目标平台的构件。
 
 | 能力 | 构件 |
@@ -10,8 +10,10 @@ SHA-256、签名、SPDX、来源与第三方声明 sidecar。只组合相同版�
 | 普通文档、PDF、Web 工作台 | 对应平台 Core |
 | OCR | `official.ocr.ppocrv6.imp` |
 | 转写与说话人分离 | `official.media.whisper.imp` |
-| DOC/XLS/PPT | `official.legacy-office.libreoffice.imp` |
 | Agent 指令 | `into-markdown-skill.zip` |
+
+旧版 `.doc/.ppt/.xls` 不在当前发布中，也不会调用 LibreOffice；替代解析路线由
+[#191](https://github.com/coolplayagent/into-markdown/issues/191) 跟踪。
 
 ## 安装 Core
 
@@ -32,7 +34,7 @@ Linux 选择与 `uname -m` 匹配的 x86_64 或 ARM64 归档：
 
 ```sh
 sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-gpg --verify into-md-linux-x86_64-core.tar.gz.sig into-md-linux-x86_64-core.tar.gz
+gpg --verify into-md-linux-x86_64-core.tar.gz.asc into-md-linux-x86_64-core.tar.gz
 mkdir into-md-core
 tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
 cd into-md-core
@@ -54,6 +56,11 @@ Get-AuthenticodeSignature .\into-md-core\bin\into-md.exe | Format-List
 
 摘要必须匹配发布 sidecar，Authenticode `Status` 必须为 `Valid`。
 
+Linux 和 Windows 重复运行同一安装命令会验证并修复相同版本，而不是返回冲突。升级保留旧的
+不可变版本，只有新归档完整校验后才切换。Windows PATH 中的 `into-md.exe` 是稳定 launcher，
+因此不要把 `versions/<摘要>/bin` 手工加入 PATH，也不要修改同目录的 `into-md.prefix`。
+文件占用导致升级或卸载失败时先结束提示中对应的本地任务并重试；失败不会删除原安装。
+
 ## 验证与能力安装
 
 ```sh
@@ -63,14 +70,13 @@ into-md capabilities list --json
 into-md doctor --json
 into-md setup ocr
 into-md setup media
-into-md setup legacy-office
 ```
 
 `setup` 只在明确安装动作中联网。转换和状态查询不下载插件或模型；模型属于完整插件内部。
 
 ## 完整离线部署
 
-在联网机器验证 Core、三个 `.imp` 和 sidecar，通过受控介质传入隔离环境。安装 Core 后使用其
+在联网机器验证 Core、两个 `.imp` 和 sidecar，通过受控介质传入隔离环境。安装 Core 后使用其
 固定的官方发布者身份：
 
 ```sh
@@ -78,7 +84,7 @@ installed="$HOME/.local/share/into-markdown/current"
 catalog="$installed/share/into-markdown/plugins/official-publisher.json"
 signer_id=$(jq -r .signingKeyId "$catalog")
 signer_sha=$(jq -r .signingKeySha256 "$catalog")
-for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
+for package in official.ocr.ppocrv6 official.media.whisper; do
   file="/media/release/$package.imp"
   sha=$(sha256sum "$file" | awk '{print $1}')
   into-md plugins install "$file" --sha256 "$sha" \

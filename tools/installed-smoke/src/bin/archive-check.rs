@@ -68,13 +68,8 @@ fn run() -> Result<(), String> {
             if kind.is_dir() {
                 pending.push(entry.path());
             } else if kind.is_file() && entry.path() != manifest {
-                let path = entry.path();
-                let relative = path
-                    .strip_prefix(&root)
-                    .map_err(|_| "archive entry escapes its root")?
-                    .to_str()
-                    .ok_or("archive entry path is not UTF-8")?;
-                if !expected.contains_key(relative) {
+                let relative = manifest_relative(&root, &entry.path())?;
+                if !expected.contains_key(relative.as_str()) {
                     return Err("archive tree contains an unmanifested file".into());
                 }
             } else if !kind.is_file() {
@@ -83,6 +78,21 @@ fn run() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn manifest_relative(root: &Path, path: &Path) -> Result<String, String> {
+    path.strip_prefix(root)
+        .map_err(|_| "archive entry escapes its root")?
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => value
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "archive entry path is not UTF-8".to_owned()),
+            _ => Err("archive entry path is not portable".to_owned()),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.join("/"))
 }
 
 fn verify_file(root: &Path, entry: &license_check::schema::ArchiveFile) -> Result<(), String> {
@@ -113,4 +123,18 @@ fn safe_relative(value: &str) -> bool {
         && value.is_ascii()
         && !value.bytes().any(|byte| byte.is_ascii_control() || matches!(byte, b'\\' | 0x7f))
         && Path::new(value).components().all(|component| matches!(component, Component::Normal(_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_relative_uses_portable_separators() {
+        let root = Path::new("archive");
+        assert_eq!(
+            manifest_relative(root, &root.join("share").join("fixture.txt")).unwrap(),
+            "share/fixture.txt"
+        );
+    }
 }

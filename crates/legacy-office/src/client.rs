@@ -36,6 +36,9 @@ pub(crate) fn convert(
     )
 }
 
+// Conversion is a security boundary: resource reservations, the immutable worker snapshot,
+// protocol exchange, and output validation remain visible as one ordered transaction.
+#[allow(clippy::too_many_lines)]
 fn convert_verified(
     bundle: &VerifiedBundle,
     inherited_process_sandbox: bool,
@@ -81,7 +84,7 @@ fn convert_verified(
     let maximum_temporary_entries = worker_temporary_entry_limit(bundle)?;
     let input: Arc<[u8]> = Arc::from(bytes);
     let io = WorkerIo::spawn(&mut worker, input, source_format, maximum_output_bytes)?;
-    let result = wait_for_reply(
+    let mut result = wait_for_reply(
         &mut worker,
         &io.writes,
         &io.replies,
@@ -106,6 +109,9 @@ fn convert_verified(
         worker.terminate();
     }
     let joined = io.join();
+    if let Err(error) = result {
+        result = Err(augment_worker_error(error, &joined.stderr));
+    }
     drop(input_memory);
     if joined.panicked || (joined.failed && result.is_ok() && status.is_ok()) {
         return Err(unavailable("workerProtocol"));
@@ -363,7 +369,7 @@ struct WorkerIo {
     input_thread: JoinHandle<Result<(), ()>>,
     output_thread: JoinHandle<Result<(), ()>>,
     stderr_reader: JoinHandle<Result<(), ()>>,
-    _stderr_bytes: Arc<Mutex<Vec<u8>>>,
+    stderr_bytes: Arc<Mutex<Vec<u8>>>,
 }
 
 enum ReplyEvent {
@@ -429,18 +435,16 @@ impl WorkerIo {
                 return Err(error);
             }
         };
-        Ok(Self {
-            writes,
-            replies,
-            input_thread,
-            output_thread,
-            stderr_reader,
-            _stderr_bytes: stderr_bytes,
-        })
+        Ok(Self { writes, replies, input_thread, output_thread, stderr_reader, stderr_bytes })
     }
 
     fn join(self) -> JoinOutcome {
-        join_all([self.input_thread, self.output_thread, self.stderr_reader])
+        let captured = Arc::clone(&self.stderr_bytes);
+        let mut outcome = join_all([self.input_thread, self.output_thread, self.stderr_reader]);
+        outcome
+            .stderr
+            .clone_from(&captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        outcome
     }
 }
 
@@ -448,6 +452,29 @@ impl WorkerIo {
 struct JoinOutcome {
     failed: bool,
     panicked: bool,
+    stderr: Vec<u8>,
+}
+
+fn augment_worker_error(error: ConversionError, stderr: &[u8]) -> ConversionError {
+    let ConversionError::ComponentUnavailable { component, detail } = error else {
+        return error;
+    };
+    if component != "legacy-office-worker" || !detail.starts_with("runtimeLibrary") {
+        return ConversionError::ComponentUnavailable { component, detail };
+    }
+    let Some(code) = loader_diagnostic(stderr) else {
+        return ConversionError::ComponentUnavailable { component, detail };
+    };
+    ConversionError::ComponentUnavailable { component, detail: format!("{detail}:win32:{code}") }
+}
+
+fn loader_diagnostic(stderr: &[u8]) -> Option<i32> {
+    const PREFIX: &str = "into-md-worker:loader-win32=";
+    std::str::from_utf8(stderr)
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix(PREFIX)?.parse::<i32>().ok())
+        .filter(|code| *code >= -1)
 }
 
 fn spawn_stderr_reader(
@@ -568,5 +595,13 @@ mod tests {
         .unwrap();
         let outcome = join_all([stderr]);
         assert!(outcome.panicked);
+    }
+
+    #[test]
+    fn loader_diagnostic_accepts_only_the_fixed_numeric_worker_token() {
+        assert_eq!(loader_diagnostic(b"into-md-worker:loader-win32=126\n"), Some(126));
+        assert_eq!(loader_diagnostic(b"path=C:\\private\n"), None);
+        assert_eq!(loader_diagnostic(b"into-md-worker:loader-win32=126:path\n"), None);
+        assert_eq!(loader_diagnostic(b"into-md-worker:loader-win32=-2\n"), None);
     }
 }

@@ -1,7 +1,11 @@
 import { build } from "esbuild-wasm";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, relative, resolve } from "node:path";
+
+// esbuild-wasm launches its service through the literal `node` command. Make
+// that child resolve to the same hermetic runtime that launched this builder.
+process.env.PATH = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
 
 const workspace = resolve(import.meta.dirname, "../..");
 const outputDirectory = resolve(process.argv[2] ?? resolve(import.meta.dirname, "dist"));

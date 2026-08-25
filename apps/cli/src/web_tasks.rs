@@ -1,6 +1,7 @@
 //! Durable upload, conversion queue, and artifact publication for the local Web service.
 
 use crate::output;
+#[cfg(unix)]
 use crate::transaction::SafeDir;
 use into_markdown::{
     AiMode, ArtifactKind, ArtifactReference, AsrOptions, BusyControl, CancellationToken,
@@ -1103,7 +1104,8 @@ impl WebTaskBackend {
         root_handle
             .verify_private_namespace()
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        let task_store = TaskStore::open(root.join("database"), BusyControl::default())?;
+        let task_store = TaskStore::open(root.join("database"), BusyControl::default())
+            .map_err(|error| WebTaskError::Io(format!("open Web task store: {error}")))?;
         #[cfg(test)]
         if SWAP_ROOT_AFTER_TASK_STORE_OPEN.with(|swap| swap.replace(false)) {
             let moved = root.with_extension("authenticated");
@@ -1114,7 +1116,7 @@ impl WebTaskBackend {
             .verify_private_namespace()
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         let recovery = RecoveryStore::open(root.join("recovery"))
-            .map_err(|error| WebTaskError::Io(error.to_string()))?;
+            .map_err(|error| WebTaskError::Io(format!("open Web recovery store: {error}")))?;
         root_handle
             .verify_private_namespace()
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
@@ -1270,7 +1272,7 @@ impl WebTaskBackend {
         name.push_str(display_name);
         Ok(Upload {
             backend: self.clone(),
-            directory,
+            directory: Some(directory),
             nonce,
             file: Some(file),
             name,
@@ -1790,7 +1792,7 @@ impl WebTaskBackend {
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&file)?;
         let metadata = file.metadata()?;
-        if metadata.len() != reference.byte_len || link_count(&metadata) != 1 {
+        if metadata.len() != reference.byte_len || link_count(&file)? != 1 {
             return Err(WebTaskError::Unsafe("artifact identity or size changed".into()));
         }
         let nonce = random_hex()?;
@@ -2242,7 +2244,7 @@ fn validate_web_success(shared: &Shared, record: &TaskRecord) -> Result<(), WebT
 /// In-progress streamed upload.
 pub struct Upload {
     backend: WebTaskBackend,
-    directory: SafeDir,
+    directory: Option<SafeDir>,
     nonce: String,
     file: Option<File>,
     name: String,
@@ -2312,10 +2314,16 @@ impl Upload {
         file.flush()?;
         file.sync_all()?;
         drop(file);
-        self.directory.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        validate_private_directory_handle(&self.directory)?;
+        let directory = self
+            .directory
+            .as_ref()
+            .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?;
+        directory.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        validate_private_directory_handle(directory)?;
         let payload = self
             .directory
+            .as_ref()
+            .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?
             .open_regular_private(std::ffi::OsStr::new("payload"))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&payload)?;
@@ -2391,12 +2399,18 @@ impl Upload {
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
             write_private_handle(&task, "request.json", &request_json)?;
             self.directory
+                .as_ref()
+                .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?
                 .rename_child_private_to_no_replace(
                     std::ffi::OsStr::new("payload"),
                     &task,
                     std::ffi::OsStr::new("input"),
                 )
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+            // Windows refuses to remove a directory while its pinned handle is
+            // live. The payload is already durably published, so release that
+            // handle before removing the now-empty incoming directory.
+            drop(self.directory.take());
             self.backend
                 .owner
                 .shared
@@ -2450,8 +2464,12 @@ impl Drop for Upload {
     fn drop(&mut self) {
         if !self.committed {
             let _ = self.file.take();
-            let removed_file =
-                self.directory.remove_regular_private(std::ffi::OsStr::new("payload"));
+            let removed_file = self.directory.as_ref().map_or(Ok(()), |directory| {
+                directory.remove_regular_private(std::ffi::OsStr::new("payload"))
+            });
+            // See `finish`: the child directory handle itself must be closed
+            // before Windows can remove the directory entry.
+            drop(self.directory.take());
             let removed_directory = self
                 .backend
                 .owner
@@ -3389,7 +3407,7 @@ fn validate_manifest_handle_cancel(
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&file)?;
         let metadata = file.metadata()?;
-        if metadata.len() != entry.byte_len || link_count(&metadata) != 1 {
+        if metadata.len() != entry.byte_len || link_count(&file)? != 1 {
             return Err(WebTaskError::Unsafe("published artifact identity changed".into()));
         }
         let digest = digest_reader_cancel(&mut file, entry.byte_len, cancellation)?;
@@ -3566,8 +3584,7 @@ fn add_json_artifact<T: Serialize>(
     publication_failure_checkpoint_atomic(publication_failure, 2)?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&metadata) != 1
-    {
+    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&file)? != 1 {
         return Err(WebTaskError::Limit("JSON artifact exceeds its durable byte limit".into()));
     }
     drop(file);
@@ -3624,8 +3641,7 @@ fn add_bundle_artifact(
     publication_failure_checkpoint_atomic(publication_failure, 2)?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&metadata) != 1
-    {
+    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&file)? != 1 {
         return Err(WebTaskError::Limit("bundle exceeds its durable byte limit".into()));
     }
     drop(file);
@@ -3967,9 +3983,21 @@ fn validate_private_file(file: &File) -> Result<(), WebTaskError> {
             ));
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let information = winapi_util::file::information(file)?;
+        if !metadata.is_file()
+            || information.file_attributes() & 0x400 != 0
+            || information.number_of_links() != 1
+        {
+            return Err(WebTaskError::Unsafe(
+                "managed file is not regular, singly linked, and non-reparse".into(),
+            ));
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     return Err(WebTaskError::Unsafe("private file validation is unavailable".into()));
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     Ok(())
 }
 
@@ -4179,9 +4207,7 @@ fn write_private_handle_budgeted(
     publication_failure_checkpoint_atomic(publication_failure, 2)?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-        || link_count(&metadata) != 1
-    {
+    if metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX) || link_count(&file)? != 1 {
         return Err(WebTaskError::Unsafe("staged artifact identity changed".into()));
     }
     Ok(())
@@ -4192,8 +4218,7 @@ fn finish_private_write(file: &mut File, bytes: &[u8]) -> Result<(), WebTaskErro
     file.flush()?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-        || link_count(&metadata) != 1
+    if metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX) || link_count(&*file)? != 1
     {
         return Err(WebTaskError::Unsafe("staged artifact identity changed".into()));
     }
@@ -4375,7 +4400,7 @@ fn validate_private_tree(
         directory.names_bounded(1024).map_err(|error| WebTaskError::Unsafe(error.to_string()))?
     {
         match directory.open_regular_private(&member) {
-            Ok(file) if link_count(&file.metadata()?) == 1 => {}
+            Ok(file) if link_count(&file)? == 1 => {}
             Ok(_) => {
                 return Err(WebTaskError::Unsafe(
                     "managed task member has an external hard link".into(),
@@ -4413,7 +4438,7 @@ fn remove_private_tree(
     for member in names {
         match directory.open_regular_private(&member) {
             Ok(file) => {
-                if link_count(&file.metadata()?) != 1 {
+                if link_count(&file)? != 1 {
                     return Err(WebTaskError::Unsafe(
                         "managed task member has an external hard link".into(),
                     ));
@@ -4521,7 +4546,7 @@ fn remove_owned_stage(stage: &SafeDir, allowlist: &[&str]) -> Result<(), WebTask
         let file = stage
             .open_regular_private(name)
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        if link_count(&file.metadata()?) != 1 {
+        if link_count(&file)? != 1 {
             return Err(WebTaskError::Unsafe("stage member has an external hard link".into()));
         }
     }
@@ -4531,6 +4556,409 @@ fn remove_owned_stage(stage: &SafeDir, allowlist: &[&str]) -> Result<(), WebTask
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+struct SafeDir {
+    handle: File,
+    path: PathBuf,
+    identity: (u64, u64),
+}
+
+#[cfg(windows)]
+impl SafeDir {
+    fn open_absolute(path: &Path) -> Result<Self, crate::error::CliError> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(crate::error::CliError::io(
+                "managed directory path is not normalized and absolute",
+            ));
+        }
+        let handle = open_windows_directory(path)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_path(path)
+            .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        let identity = windows_file_identity(&handle)?;
+        Ok(Self { handle, path: path.to_path_buf(), identity })
+    }
+
+    fn verify_namespace(&self) -> Result<(), crate::error::CliError> {
+        let reopened = open_windows_directory(&self.path)?;
+        if windows_file_identity(&reopened)? != self.identity {
+            return Err(crate::error::CliError::io(
+                "managed directory identity changed after authentication",
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_private_namespace(&self) -> Result<(), crate::error::CliError> {
+        self.verify_namespace()?;
+        into_markdown_process_plugin::verify_windows_plugin_store_path(&self.path)
+            .map_err(|error| crate::error::CliError::io(error.to_string()))
+    }
+
+    fn open_child(&self, name: &std::ffi::OsStr) -> Result<Self, crate::error::CliError> {
+        validate_windows_member(name)?;
+        self.verify_namespace()?;
+        let path = self.path.join(name);
+        let child = Self::open_absolute(&path)?;
+        self.verify_namespace()?;
+        Ok(child)
+    }
+
+    fn open_child_optional(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> Result<Option<Self>, crate::error::CliError> {
+        validate_windows_member(name)?;
+        match fs::symlink_metadata(self.path.join(name)) {
+            Ok(_) => self.open_child(name).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn open_child_private(&self, name: &std::ffi::OsStr) -> Result<Self, crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child(name)?;
+        child.verify_private_namespace()?;
+        Ok(child)
+    }
+
+    fn open_child_private_optional(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> Result<Option<Self>, crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child_optional(name)?;
+        if let Some(child) = &child {
+            child.verify_private_namespace()?;
+        }
+        Ok(child)
+    }
+
+    fn open_regular(&self, name: &std::ffi::OsStr) -> Result<File, crate::error::CliError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        validate_windows_member(name)?;
+        self.verify_namespace()?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(0x0020_0000)
+            .open(self.path.join(name))?;
+        let information = winapi_util::file::information(&file)?;
+        if !file.metadata()?.is_file()
+            || information.file_attributes() & 0x400 != 0
+            || information.number_of_links() != 1
+        {
+            return Err(crate::error::CliError::io(
+                "managed file is not regular, singly linked, and non-reparse",
+            ));
+        }
+        self.verify_namespace()?;
+        Ok(file)
+    }
+
+    fn open_regular_optional(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> Result<Option<File>, crate::error::CliError> {
+        validate_windows_member(name)?;
+        match fs::symlink_metadata(self.path.join(name)) {
+            Ok(_) => self.open_regular(name).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn open_regular_private(&self, name: &std::ffi::OsStr) -> Result<File, crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular(name)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
+            .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        Ok(file)
+    }
+
+    fn create_regular(&self, name: &std::ffi::OsStr) -> Result<File, crate::error::CliError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        validate_windows_member(name)?;
+        self.verify_namespace()?;
+        let path = self.path.join(name);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .open(&path)?;
+        self.verify_namespace()?;
+        Ok(file)
+    }
+
+    fn create_regular_private(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> Result<File, crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let file = self.create_regular(name)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
+            .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        Ok(file)
+    }
+
+    fn names(&self) -> Result<Vec<std::ffi::OsString>, crate::error::CliError> {
+        self.names_bounded(MAX_QUEUE + 1)
+    }
+
+    fn names_private(&self) -> Result<Vec<std::ffi::OsString>, crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let names = self.names()?;
+        self.verify_private_namespace()?;
+        Ok(names)
+    }
+
+    fn names_bounded(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<std::ffi::OsString>, crate::error::CliError> {
+        self.verify_namespace()?;
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.path)? {
+            if names.len() >= limit {
+                return Err(crate::error::CliError::io(
+                    "managed directory entry count exceeds its limit",
+                ));
+            }
+            names.push(entry?.file_name());
+        }
+        self.verify_namespace()?;
+        Ok(names)
+    }
+
+    fn create_child_private(&self, name: &std::ffi::OsStr) -> Result<Self, crate::error::CliError> {
+        validate_windows_member(name)?;
+        self.verify_private_namespace()?;
+        let path = self.path.join(name);
+        into_markdown_process_plugin::create_windows_plugin_store_directory(&path)
+            .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        self.verify_private_namespace()?;
+        Self::open_absolute(&path)
+    }
+
+    fn rename_child_no_replace(
+        &self,
+        source: &std::ffi::OsStr,
+        destination: &std::ffi::OsStr,
+    ) -> Result<(), crate::error::CliError> {
+        validate_windows_member(source)?;
+        validate_windows_member(destination)?;
+        self.verify_namespace()?;
+        into_markdown_process_plugin::rename_windows_plugin_file_no_replace(
+            &self.handle,
+            source,
+            destination,
+        )
+        .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        self.verify_namespace()
+    }
+
+    fn rename_child_private_no_replace(
+        &self,
+        source: &std::ffi::OsStr,
+        destination: &std::ffi::OsStr,
+    ) -> Result<(), crate::error::CliError> {
+        self.verify_private_namespace()?;
+        self.rename_child_no_replace(source, destination)?;
+        self.verify_private_namespace()
+    }
+
+    fn rename_child_to_no_replace(
+        &self,
+        source: &std::ffi::OsStr,
+        destination_directory: &Self,
+        destination: &std::ffi::OsStr,
+    ) -> Result<(), crate::error::CliError> {
+        validate_windows_member(source)?;
+        validate_windows_member(destination)?;
+        self.verify_namespace()?;
+        destination_directory.verify_namespace()?;
+        let destination_path = destination_directory.path.join(destination);
+        if destination_path.exists() {
+            return Err(crate::error::CliError::io("managed rename destination already exists"));
+        }
+        into_markdown_process_plugin::move_windows_plugin_file_no_replace(
+            &self.handle,
+            source,
+            &destination_directory.handle,
+            destination,
+        )
+        .map_err(|error| crate::error::CliError::io(error.to_string()))?;
+        self.verify_namespace()?;
+        destination_directory.verify_namespace()
+    }
+
+    fn rename_child_private_to_no_replace(
+        &self,
+        source: &std::ffi::OsStr,
+        destination_directory: &Self,
+        destination: &std::ffi::OsStr,
+    ) -> Result<(), crate::error::CliError> {
+        self.verify_private_namespace()?;
+        destination_directory.verify_private_namespace()?;
+        self.rename_child_to_no_replace(source, destination_directory, destination)?;
+        destination_directory.verify_private_namespace()
+    }
+
+    fn remove_regular(&self, name: &std::ffi::OsStr) -> Result<(), crate::error::CliError> {
+        validate_windows_member(name)?;
+        self.verify_namespace()?;
+        let file = self.open_regular(name)?;
+        let identity = windows_file_identity(&file)?;
+        drop(file);
+        let reopened = self.open_regular(name)?;
+        if windows_file_identity(&reopened)? != identity {
+            return Err(crate::error::CliError::io("managed file identity changed before removal"));
+        }
+        drop(reopened);
+        fs::remove_file(self.path.join(name))?;
+        self.verify_namespace()
+    }
+
+    fn remove_regular_private(&self, name: &std::ffi::OsStr) -> Result<(), crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular_private(name)?;
+        drop(file);
+        self.remove_regular(name)?;
+        self.verify_private_namespace()
+    }
+
+    fn remove_empty_child(&self, name: &std::ffi::OsStr) -> Result<(), crate::error::CliError> {
+        validate_windows_member(name)?;
+        self.verify_namespace()?;
+        let child = self.open_child(name)?;
+        if !child.names()?.is_empty() {
+            return Err(crate::error::CliError::io("managed directory is not empty"));
+        }
+        let identity = child.identity;
+        drop(child);
+        let reopened = self.open_child(name)?;
+        if reopened.identity != identity {
+            return Err(crate::error::CliError::io(
+                "managed directory identity changed before removal",
+            ));
+        }
+        drop(reopened);
+        fs::remove_dir(self.path.join(name))?;
+        self.verify_namespace()
+    }
+
+    fn remove_empty_child_private(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> Result<(), crate::error::CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child_private(name)?;
+        drop(child);
+        self.remove_empty_child(name)?;
+        self.verify_private_namespace()
+    }
+
+    fn measured_tree_bytes(
+        &self,
+        max_depth: u8,
+        max_entries: usize,
+    ) -> Result<u64, crate::error::CliError> {
+        fn visit(
+            directory: &SafeDir,
+            depth: u8,
+            max_depth: u8,
+            entries: &mut usize,
+            max_entries: usize,
+        ) -> Result<u64, crate::error::CliError> {
+            if depth > max_depth {
+                return Err(crate::error::CliError::io("managed storage depth exceeds its limit"));
+            }
+            let mut total = 0_u64;
+            for name in directory.names_bounded(max_entries.saturating_add(1))? {
+                *entries = entries
+                    .checked_add(1)
+                    .ok_or_else(|| crate::error::CliError::io("managed entry count overflow"))?;
+                if *entries > max_entries {
+                    return Err(crate::error::CliError::io(
+                        "managed storage entry count exceeds its limit",
+                    ));
+                }
+                let path = directory.path.join(&name);
+                let metadata = fs::symlink_metadata(&path)?;
+                use std::os::windows::fs::MetadataExt as _;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Err(crate::error::CliError::io(
+                        "managed storage contains a reparse point",
+                    ));
+                }
+                if metadata.is_dir() {
+                    let child = directory.open_child_private(&name)?;
+                    total = total
+                        .checked_add(visit(&child, depth + 1, max_depth, entries, max_entries)?)
+                        .ok_or_else(|| crate::error::CliError::io("managed byte count overflow"))?;
+                } else if metadata.is_file() {
+                    let file = directory.open_regular_private(&name)?;
+                    total = total
+                        .checked_add(winapi_util::file::information(&file)?.file_size())
+                        .ok_or_else(|| {
+                        crate::error::CliError::io("managed byte count overflow")
+                    })?;
+                } else {
+                    return Err(crate::error::CliError::io(
+                        "managed storage contains an unsafe object",
+                    ));
+                }
+            }
+            Ok(total)
+        }
+        let mut entries = 0;
+        visit(self, 0, max_depth, &mut entries, max_entries)
+    }
+
+    fn sync(&self) -> Result<(), crate::error::CliError> {
+        self.verify_namespace()
+    }
+}
+
+#[cfg(windows)]
+fn validate_windows_member(name: &std::ffi::OsStr) -> Result<(), crate::error::CliError> {
+    let path = Path::new(name);
+    if path.as_os_str().is_empty()
+        || path.components().count() != 1
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(crate::error::CliError::io("managed member is not one safe path component"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_directory(path: &Path) -> Result<File, crate::error::CliError> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .custom_flags(0x0020_0000 | 0x0200_0000)
+        .open(path)?;
+    let information = winapi_util::file::information(&file)?;
+    if !file.metadata()?.is_dir() || information.file_attributes() & 0x400 != 0 {
+        return Err(crate::error::CliError::io(
+            "managed directory is not physical and non-reparse",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> Result<(u64, u64), crate::error::CliError> {
+    let information = winapi_util::file::information(file)?;
+    Ok((information.volume_serial_number(), information.file_index()))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -4549,7 +4977,9 @@ fn private_directory(path: PathBuf) -> Result<PathBuf, WebTaskError> {
         Err(error) => return Err(error.into()),
     }
     verify_private_directory(&path)?;
-    path.canonicalize().map_err(Into::into)
+    path.canonicalize().map_err(|error| {
+        WebTaskError::Io(format!("canonicalize managed directory {}: {error}", path.display()))
+    })
 }
 
 #[cfg(unix)]
@@ -4560,11 +4990,15 @@ fn create_private_directory(path: &Path) -> Result<(), WebTaskError> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_private_directory(path: &Path) -> Result<(), WebTaskError> {
+    into_markdown_process_plugin::create_windows_plugin_store_directory(path)
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_private_directory(_path: &Path) -> Result<(), WebTaskError> {
-    Err(WebTaskError::Unsafe(
-        "capability-bound Web storage is currently audited only on Unix".into(),
-    ))
+    Err(WebTaskError::Unsafe("capability-bound Web storage is unavailable".into()))
 }
 
 #[cfg(test)]
@@ -4581,7 +5015,15 @@ fn set_private_permissions(path: &Path) -> Result<(), WebTaskError> {
     Ok(())
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, windows))]
+fn set_private_permissions(path: &Path) -> Result<(), WebTaskError> {
+    // Test callers create an empty directory first. Recreate it with the same
+    // protected DACL path used by production rather than weakening the check.
+    fs::remove_dir(path)?;
+    create_private_directory(path)
+}
+
+#[cfg(all(test, not(any(unix, windows))))]
 fn set_private_permissions(_path: &Path) -> Result<(), WebTaskError> {
     Err(WebTaskError::Unsafe(
         "capability-bound Web storage is currently audited only on Unix".into(),
@@ -4604,6 +5046,9 @@ fn verify_private_directory(path: &Path) -> Result<(), WebTaskError> {
             ));
         }
     }
+    #[cfg(windows)]
+    into_markdown_process_plugin::verify_windows_plugin_store_path(path)
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     Ok(())
 }
 
@@ -4620,49 +5065,74 @@ fn create_private_file(path: &Path) -> Result<File, WebTaskError> {
             .open(path)
             .map_err(Into::into)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(0x0020_0000)
+            .open(path)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(path)
+            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        Ok(file)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         Err(WebTaskError::Unsafe("secure file creation is unavailable".into()))
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn open_regular_nofollow(path: &Path) -> Result<File, WebTaskError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file() || link_count(&metadata) != 1 {
-            return Err(WebTaskError::Unsafe("managed file is not a private regular file".into()));
-        }
-        Ok(file)
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || link_count(&file)? != 1 {
+        return Err(WebTaskError::Unsafe("managed file is not a private regular file".into()));
     }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Err(WebTaskError::Unsafe("secure file open is unavailable".into()))
-    }
+    Ok(file)
 }
 
 #[cfg(unix)]
-fn link_count(metadata: &fs::Metadata) -> u64 {
+fn link_count(file: &File) -> Result<u64, WebTaskError> {
     use std::os::unix::fs::MetadataExt as _;
-    metadata.nlink()
+    Ok(file.metadata()?.nlink())
 }
 
-#[cfg(not(unix))]
-fn link_count(_metadata: &fs::Metadata) -> u64 {
-    0
+#[cfg(windows)]
+fn link_count(file: &File) -> Result<u64, WebTaskError> {
+    Ok(winapi_util::file::information(file)?.number_of_links())
 }
 
+#[cfg(not(any(unix, windows)))]
+fn link_count(_file: &File) -> Result<u64, WebTaskError> {
+    Ok(0)
+}
+
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), WebTaskError> {
     File::open(path)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<(), WebTaskError> {
+    let directory =
+        open_windows_directory(path).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    let _ = windows_file_identity(&directory)
+        .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_path: &Path) -> Result<(), WebTaskError> {
+    Err(WebTaskError::Unsafe("directory synchronization is unavailable".into()))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -6049,7 +6519,8 @@ mod tests {
         }
         *lock(&backend.owner.shared.conversion_gate) = None;
         for task in tasks {
-            assert_eq!(wait_terminal(&backend, &task).status, TaskStatus::Succeeded);
+            let terminal = wait_terminal(&backend, &task);
+            assert_eq!(terminal.status, TaskStatus::Succeeded, "terminal task: {terminal:?}");
         }
     }
 
@@ -6611,6 +7082,11 @@ mod tests {
             .iter()
             .find(|artifact| artifact.kind == ArtifactKind::Markdown)
             .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while backend.owner.shared.active_workers.load(Ordering::SeqCst) != 0 {
+            assert!(Instant::now() < deadline, "conversion worker did not release its quota");
+            std::thread::yield_now();
+        }
         let baseline = lock(&backend.owner.shared.disk_bytes).reserved;
         for phase in 1..=3 {
             backend.owner.shared.snapshot_failure.store(phase, Ordering::SeqCst);
@@ -6914,7 +7390,14 @@ mod tests {
         SWAP_ROOT_AFTER_TASK_STORE_OPEN.with(|swap| swap.set(true));
         assert!(WebTaskBackend::open(&root).is_err());
         assert!(!root.join("recovery").exists());
-        assert!(root.with_extension("authenticated").join("database").exists());
+        // Unix permits the injected root rename and the retained descriptor
+        // detects it. Windows may reject the rename earlier because SQLite's
+        // identity-bound database handle denies delete sharing. Both outcomes
+        // fail before a recovery namespace can be split off.
+        assert!(
+            root.with_extension("authenticated").join("database").exists()
+                || root.join("database").exists()
+        );
     }
 
     #[cfg(unix)]

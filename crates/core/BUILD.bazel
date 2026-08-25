@@ -28,4 +28,12 @@ rust_test(
 rust_doc_test(
     name = "core_doc_test",
     crate = ":core",
+    # rules_rust's Windows doc-test launcher requires creating runfiles
+    # symlinks, which an ordinary non-elevated GitHub-hosted runner cannot do.
+    # Cargo remains the Windows authority for these compile-fail examples;
+    # Bazel continues to run them on Linux and macOS.
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
 )

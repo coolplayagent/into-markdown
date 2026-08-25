@@ -1,6 +1,6 @@
 use crate::authority::AppContainerAuthority;
 use std::os::windows::ffi::OsStrExt as _;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::Isolation::{
@@ -131,10 +131,17 @@ pub(crate) fn storage_path(expected_sid: &str) -> Result<PathBuf, ()> {
     if unsafe { GetAppContainerFolderPath(sid.as_ptr(), &raw mut raw) } < 0 || raw.is_null() {
         return Err(());
     }
-    let result = wide_string(raw)
-        .map(PathBuf::from)
-        .and_then(|path| path.canonicalize().map_err(|_| ()))
-        .and_then(|path| if path.is_absolute() { Ok(path) } else { Err(()) });
+    let result = wide_string(raw).map(PathBuf::from).and_then(|path| {
+        if path.is_absolute()
+            && !path
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            Ok(path)
+        } else {
+            Err(())
+        }
+    });
     // SAFETY: raw is the unique LocalAlloc result from userenv.
     unsafe { LocalFree(raw.cast()) };
     result

@@ -75,7 +75,6 @@ pub enum ReleaseArtifact {
     Core,
     OcrPlugin,
     MediaPlugin,
-    LegacyOfficePlugin,
 }
 
 impl ReleaseArtifact {
@@ -84,16 +83,13 @@ impl ReleaseArtifact {
             Self::Core => "into-markdown-core",
             Self::OcrPlugin => "official.ocr.ppocrv6",
             Self::MediaPlugin => "official.media.whisper",
-            Self::LegacyOfficePlugin => "official.legacy-office.libreoffice",
         }
     }
 
     pub(crate) fn cargo_root(self) -> &'static str {
         match self {
             Self::Core => "into-markdown-cli",
-            Self::OcrPlugin | Self::MediaPlugin | Self::LegacyOfficePlugin => {
-                "into-markdown-official-provider"
-            }
+            Self::OcrPlugin | Self::MediaPlugin => "into-markdown-official-provider",
         }
     }
 }

@@ -2,22 +2,16 @@
 set -eu
 
 fail() { printf '%s\n' "into-md uninstall: $*" >&2; exit 1; }
+distribution=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 prefix=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/into-markdown}
 bin_dir=${2:-${XDG_BIN_HOME:-$HOME/.local/bin}}
-case $prefix:$bin_dir in /*:/*) ;; *) fail "installation paths must be absolute";; esac
-lock=$prefix/.install-lock
-mkdir -p "$prefix"
-mkdir "$lock" 2>/dev/null || fail "another install or uninstall is active"
-cleanup() { rmdir "$lock" 2>/dev/null || true; }
-trap cleanup EXIT HUP INT TERM
-if test -L "$bin_dir/into-md" && test "$(readlink "$bin_dir/into-md")" = "$prefix/current/bin/into-md"; then
-  rm "$bin_dir/into-md"
+case $prefix:$bin_dir in /*:/*) ;; *) fail "installPathUnsafe: installation paths must be absolute";; esac
+helper=$distribution/bin/into-md-installer
+if test ! -x "$helper"; then
+  test -f "$prefix/current.txt" || fail "installAuthorityInvalid: installed version is unavailable"
+  identity=$(tr -d '\r\n' < "$prefix/current.txt")
+  case $identity in ????????????????????????????????????????????????????????????????) ;; *) fail "installAuthorityInvalid: installed version authority is invalid";; esac
+  case $identity in *[!0-9a-f]*) fail "installAuthorityInvalid: installed version authority is invalid";; esac
+  helper=$prefix/versions/$identity/bin/into-md-installer
 fi
-test ! -e "$prefix/current" || test -L "$prefix/current" || fail "unsafe current path"
-test ! -L "$prefix/versions" || fail "unsafe versions path"
-test ! -L "$prefix/current" || rm "$prefix/current"
-if test -d "$prefix/versions"; then
-  chmod -R u+w "$prefix/versions"
-  rm -R -- "$prefix/versions"
-fi
-printf '%s\n' "into-md removed"
+exec "$helper" uninstall "$prefix" "$bin_dir"

@@ -170,7 +170,8 @@ fn whisper_small_multilingual_quality() {
         assert_eq!(format!("{:x}", Sha256::digest(&clear)), fixture.sha256);
         match evaluate(&transcriber, fixture, "clear", &clear, fixture.clear_maximum_error_rate) {
             Ok(report) => cases.push(report),
-            Err((report, failure)) => {
+            Err(failure) => {
+                let (report, failure) = *failure;
                 cases.push(report);
                 failures.push(failure);
             }
@@ -197,7 +198,8 @@ fn whisper_small_multilingual_quality() {
         );
         match evaluate(&transcriber, fixture, "noise", &noisy, fixture.noise_maximum_error_rate) {
             Ok(report) => cases.push(report),
-            Err((report, failure)) => {
+            Err(failure) => {
+                let (report, failure) = *failure;
                 cases.push(report);
                 failures.push(failure);
             }
@@ -241,7 +243,7 @@ fn evaluate(
     condition: &'static str,
     media: &[u8],
     maximum: f64,
-) -> Result<CaseReport, (CaseReport, String)> {
+) -> Result<CaseReport, Box<(CaseReport, String)>> {
     let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
     let result = block_on(transcriber.transcribe(
         TranscriptionRequest {
@@ -311,13 +313,13 @@ fn evaluate(
     };
     match evaluation {
         Ok(_) => Ok(report),
-        Err(rate) => Err((
+        Err(rate) => Err(Box::new((
             report,
             format!(
                 "{} {condition} error rate {rate:.6} exceeds {maximum:.6}; transcript={transcript:?}",
                 fixture.id
             ),
-        )),
+        ))),
     }
 }
 

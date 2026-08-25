@@ -83,3 +83,62 @@ def write_json(path: pathlib.Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def resolve_msvc_tool(name: str) -> pathlib.Path:
+    if os.name != "nt" or pathlib.Path(name).name != name:
+        raise ReleaseError("MSVC tool resolution requires a simple tool name on Windows")
+    version = authority()["targets"]["x86_64-pc-windows-msvc"]["buildBaseline"][
+        "msvcTools"
+    ]
+    configured = os.environ.get("VCToolsInstallDir")
+    if configured:
+        tools = pathlib.Path(configured)
+        if tools.name != version:
+            raise ReleaseError(f"active MSVC tools disagree with fixed version {version}")
+    else:
+        program_files = os.environ.get("ProgramFiles(x86)")
+        if not program_files:
+            raise ReleaseError("ProgramFiles(x86) is unavailable")
+        vswhere = pathlib.Path(program_files) / "Microsoft Visual Studio/Installer/vswhere.exe"
+        if not vswhere.is_file() or vswhere.is_symlink():
+            raise ReleaseError("trusted vswhere.exe is unavailable")
+        installations = run(
+            [
+                vswhere,
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property",
+                "installationPath",
+            ]
+        ).splitlines()
+        if len(installations) != 1:
+            raise ReleaseError("a unique Visual Studio C++ installation is unavailable")
+        tools = pathlib.Path(installations[0]) / f"VC/Tools/MSVC/{version}"
+    candidate = tools / f"bin/HostX64/x64/{name}"
+    if not candidate.is_file() or candidate.is_symlink():
+        raise ReleaseError(f"fixed MSVC tool is unavailable: {candidate}")
+    return candidate.resolve(strict=True)
+
+
+def resolve_windows_sdk_tool(name: str) -> pathlib.Path:
+    if os.name != "nt" or pathlib.Path(name).name != name:
+        raise ReleaseError("Windows SDK tool resolution requires a simple tool name on Windows")
+    version = authority()["targets"]["x86_64-pc-windows-msvc"]["buildBaseline"][
+        "windowsSdk"
+    ]
+    configured = os.environ.get("WindowsSdkDir")
+    if configured:
+        kits = pathlib.Path(configured)
+    else:
+        program_files = os.environ.get("ProgramFiles(x86)")
+        if not program_files:
+            raise ReleaseError("ProgramFiles(x86) is unavailable")
+        kits = pathlib.Path(program_files) / "Windows Kits/10"
+    candidate = kits / f"bin/{version}/x64/{name}"
+    if not candidate.is_file() or candidate.is_symlink():
+        raise ReleaseError(f"fixed Windows SDK tool is unavailable: {candidate}")
+    return candidate.resolve(strict=True)

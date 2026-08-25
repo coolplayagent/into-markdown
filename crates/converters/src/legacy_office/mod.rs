@@ -98,6 +98,7 @@ fn remap_packaged_runtime_error(packaged: bool, error: ConversionError) -> Conve
 }
 
 /// Isolated converter for DOC, PPT/PPS/POT, and XLS compound documents.
+#[derive(Default)]
 pub struct LegacyOfficeConverter {
     adapter: Option<Arc<dyn CompatibilityAdapter>>,
 }
@@ -107,12 +108,6 @@ impl LegacyOfficeConverter {
     #[must_use]
     pub fn with_runtime(runtime: LegacyOfficeRuntime) -> Self {
         Self { adapter: Some(Arc::new(RuntimeAdapter { runtime: Some(runtime) })) }
-    }
-}
-
-impl Default for LegacyOfficeConverter {
-    fn default() -> Self {
-        Self { adapter: None }
     }
 }
 
@@ -160,6 +155,9 @@ impl Converter for LegacyOfficeConverter {
         Ok(context.available_memory_bytes())
     }
 
+    // The adapter transaction and normalized-package dispatch stay adjacent so the verified
+    // runtime output cannot bypass the common nested-conversion and diagnostic policy.
+    #[allow(clippy::too_many_lines)]
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,

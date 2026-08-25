@@ -28,6 +28,7 @@ rust_test(
     crate_name = "into_md_test",
     aliases = aliases(normal = True, normal_dev = True, proc_macro = True, proc_macro_dev = True),
     edition = "2024",
+    env = {"COMPUTERNAME": "bazel-test-host"},
     deps = [
         "//crates/api:into_markdown",
         "//crates/http-transport:http_transport",
@@ -56,6 +57,7 @@ rust_test(
     data = [
         ":into-md",
         "//fixtures:corpus",
+        "//fixtures:manifest.json",
     ],
     deps = [
         "//crates/api:into_markdown",

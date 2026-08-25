@@ -1609,7 +1609,9 @@ mod tests {
         let bytes = tiny_identity_model();
         ResolvedModel {
             identity: ModelIdentity {
-                canonical_path: PathBuf::from(format!("/trusted/{name}.onnx")),
+                canonical_path: std::env::temp_dir()
+                    .join("into-markdown-runtime-tests")
+                    .join(format!("{name}.onnx")),
                 sha256: format!("{:x}", Sha256::digest(&bytes)),
                 bytes: u64::try_from(bytes.len()).unwrap(),
                 file_identity: format!("device:inode:{name}"),

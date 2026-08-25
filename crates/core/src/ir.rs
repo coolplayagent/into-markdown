@@ -1453,6 +1453,7 @@ pub(crate) fn is_safe_container_part_name(part: &str) -> bool {
         || part.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | "..")))
 }
 
+#[allow(clippy::too_many_lines)] // One exhaustive match keeps every IR variant under the same path/depth budget.
 fn validate_block(
     block: &Block,
     path: &str,

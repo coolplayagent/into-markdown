@@ -825,6 +825,37 @@ fn arguments_are_empty(arguments: impl IntoIterator<Item = impl AsRef<std::ffi::
     arguments.into_iter().next().is_none()
 }
 
+fn resolve_runfile(value: &str) -> Result<PathBuf, String> {
+    let supplied = PathBuf::from(value);
+    if supplied.is_file() {
+        return supplied
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel runfile: {error}"));
+    }
+    let manifest = env::var_os("RUNFILES_MANIFEST_FILE")
+        .ok_or_else(|| "Bazel runfiles manifest is unavailable".to_owned())?;
+    let metadata = fs::metadata(&manifest)
+        .map_err(|error| format!("cannot inspect Bazel runfiles manifest: {error}"))?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return Err("Bazel runfiles manifest exceeds the safety limit".to_owned());
+    }
+    let normalized = value.replace('\\', "/").trim_start_matches("./").to_owned();
+    let candidates =
+        [normalized.clone(), format!("_main/{normalized}"), format!("into_markdown/{normalized}")];
+    let contents = fs::read_to_string(manifest)
+        .map_err(|error| format!("cannot read Bazel runfiles manifest: {error}"))?;
+    for line in contents.lines() {
+        if let Some((logical, physical)) = line.split_once(' ')
+            && candidates.iter().any(|candidate| candidate == logical)
+        {
+            return PathBuf::from(physical)
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve Bazel runfile {logical}: {error}"));
+        }
+    }
+    Err(format!("Bazel runfile is absent from the manifest: {normalized}"))
+}
+
 fn repository_root() -> Result<PathBuf, String> {
     if let Ok(workspace) = env::var("BUILD_WORKSPACE_DIRECTORY") {
         let candidate = PathBuf::from(workspace)
@@ -838,8 +869,7 @@ fn repository_root() -> Result<PathBuf, String> {
     if env::var_os("TEST_SRCDIR").is_some()
         && let Ok(manifest) = env::var("LICENSE_CHECK_TEST_WORKSPACE_MANIFEST")
     {
-        let manifest = PathBuf::from(manifest)
-            .canonicalize()
+        let manifest = resolve_runfile(&manifest)
             .map_err(|error| format!("cannot resolve Bazel test workspace manifest: {error}"))?;
         let candidate = manifest
             .parent()

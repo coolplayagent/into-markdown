@@ -37,12 +37,54 @@ pub fn installed_ocr_service(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<Arc<dyn OcrEngine>, ConversionError> {
+    installed_ocr_service_inner(config, options, context, false)
+}
+
+/// Assemble OCR when the caller already enforces a read-only,
+/// replacement-protected native-runtime sandbox.
+///
+/// # Errors
+///
+/// Returns the same bounded verification and runtime errors as
+/// [`installed_ocr_service`].
+#[cfg(feature = "official-provider-runtime")]
+pub fn installed_ocr_service_in_read_only_sandbox(
+    config: &InstalledOcrConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Arc<dyn OcrEngine>, ConversionError> {
+    installed_ocr_service_inner(config, options, context, true)
+}
+
+fn installed_ocr_service_inner(
+    config: &InstalledOcrConfig,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    read_only_sandbox: bool,
+) -> Result<Arc<dyn OcrEngine>, ConversionError> {
     context.checkpoint()?;
     into_markdown_ocr::PpOcrImageEngine::validate_service_limits(&options.limits, context)?;
-    let manager = Arc::new(into_markdown_ocr::ModelManager::embedded(
-        config.writable_model_root.clone(),
-        config.bundled_model_root.clone(),
-    )?);
+    let manager = Arc::new(if read_only_sandbox {
+        #[cfg(feature = "official-provider-runtime")]
+        {
+            into_markdown_ocr::ModelManager::embedded_authenticated_read_only_snapshot(
+                config.writable_model_root.clone(),
+                config.bundled_model_root.clone(),
+            )?
+        }
+        #[cfg(not(feature = "official-provider-runtime"))]
+        {
+            return Err(ConversionError::ComponentUnavailable {
+                component: config.model_bundle.clone(),
+                detail: "authenticated read-only OCR snapshots are unavailable".into(),
+            });
+        }
+    } else {
+        into_markdown_ocr::ModelManager::embedded(
+            config.writable_model_root.clone(),
+            config.bundled_model_root.clone(),
+        )?
+    });
     if config.model_bundle != manager.manifest().default_bundle {
         return Err(ConversionError::ComponentUnavailable {
             component: config.model_bundle.clone(),
@@ -58,19 +100,45 @@ pub fn installed_ocr_service(
             ),
         },
     })?;
-    let library = into_markdown_onnxruntime::RuntimeLibrary::load(
-        &config.runtime_trusted_root,
-        &config.runtime_library,
-    )
+    let library = if read_only_sandbox {
+        #[cfg(feature = "official-provider-runtime")]
+        {
+            into_markdown_onnxruntime::RuntimeLibrary::load_authenticated_read_only_snapshot(
+                &config.runtime_trusted_root,
+                &config.runtime_library,
+            )
+        }
+        #[cfg(not(feature = "official-provider-runtime"))]
+        {
+            unreachable!("read-only sandbox assembly is feature-gated")
+        }
+    } else {
+        into_markdown_onnxruntime::RuntimeLibrary::load(
+            &config.runtime_trusted_root,
+            &config.runtime_library,
+        )
+    }
     .map_err(|error| ConversionError::ComponentUnavailable {
         component: "onnxruntime".into(),
         detail: format!("installed ONNX Runtime is unavailable: {error}"),
     })?;
     let runtime_version = library.version().to_owned();
-    let factory = into_markdown_onnxruntime::OrtSessionFactory::new(
-        Arc::new(library),
-        config.worker_executable.clone(),
-    )
+    let library = Arc::new(library);
+    let factory = if read_only_sandbox {
+        #[cfg(feature = "official-provider-runtime")]
+        {
+            into_markdown_onnxruntime::OrtSessionFactory::new_authenticated_read_only_snapshot(
+                library,
+                config.worker_executable.clone(),
+            )
+        }
+        #[cfg(not(feature = "official-provider-runtime"))]
+        {
+            unreachable!("read-only sandbox assembly is feature-gated")
+        }
+    } else {
+        into_markdown_onnxruntime::OrtSessionFactory::new(library, config.worker_executable.clone())
+    }
     .map_err(|error| ConversionError::ComponentUnavailable {
         component: "onnxruntime-worker".into(),
         detail: format!("installed ONNX worker is unavailable: {error}"),

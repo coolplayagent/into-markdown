@@ -4,13 +4,14 @@ use super::*;
 use std::future::Future;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 #[test]
 fn real_image_description_adapter_obeys_all_product_modes_and_fixed_wire_contract() {
+    let secret_environment = controlled_test_secret_environment();
     let server = ControlledServer::start();
     let address = server.address;
 
@@ -22,7 +23,7 @@ fn real_image_description_adapter_obeys_all_product_modes_and_fixed_wire_contrac
     let config = ProviderConfig::parse(
         &format!("http://{address}/v1"),
         "controlled-vision",
-        "PATH",
+        secret_environment,
         Duration::from_secs(2),
         ["image-description".into()],
     )
@@ -66,6 +67,22 @@ fn real_image_description_adapter_obeys_all_product_modes_and_fixed_wire_contrac
     let error = block_on(absent_engine.convert(image_request(&bytes, AiMode::Only))).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ComponentUnavailable);
     server.shutdown();
+}
+
+fn controlled_test_secret_environment() -> &'static str {
+    // Only inspect non-secret process markers that are supplied by Cargo's supported
+    // platforms or GitHub Actions. This avoids mutating the process environment while
+    // keeping the provider's production environment lookup on the exercised path.
+    ["CODEX_SESSION_ID", "GITHUB_SHA", "GITHUB_RUN_ID", "COMPUTERNAME", "HOSTNAME", "USERDOMAIN"]
+        .into_iter()
+        .find(|name| {
+            std::env::var(name).is_ok_and(|value| {
+                !value.is_empty()
+                    && value.len() <= 4096
+                    && !value.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+            })
+        })
+        .expect("a non-secret platform process marker is required")
 }
 
 struct ControlledServer {
@@ -183,15 +200,7 @@ fn response_body() -> &'static [u8] {
 }
 
 fn fixture_path(relative: &str) -> PathBuf {
-    std::env::var_os("TEST_SRCDIR").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(relative),
-        |runfiles| {
-            PathBuf::from(runfiles)
-                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()))
-                .join("fixtures")
-                .join(relative)
-        },
-    )
+    crate::test_fixture_root().join(relative)
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {

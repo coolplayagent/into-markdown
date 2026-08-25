@@ -12,6 +12,7 @@ mod package;
 mod process;
 mod protocol;
 mod sandbox;
+#[cfg(unix)]
 mod snapshot;
 #[cfg(windows)]
 mod windows_support;

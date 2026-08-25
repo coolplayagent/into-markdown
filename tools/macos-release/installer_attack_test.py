@@ -1,6 +1,7 @@
 import hashlib
 import os
 import pathlib
+import platform
 import subprocess
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 
 class InstallerAttackTest(unittest.TestCase):
     def setUp(self) -> None:
-        if os.uname().sysname != "Darwin":
+        if platform.system() != "Darwin":
             self.skipTest("the release installer is macOS-only")
 
     def distribution(

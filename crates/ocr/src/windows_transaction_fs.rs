@@ -181,11 +181,15 @@ fn open_with_share(
     }
     // SAFETY: handle is newly owned and valid.
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, directory)?;
+    validate_handle(&file, directory, true)?;
     Ok(file)
 }
 
-fn validate_handle(file: &File, directory: bool) -> Result<(), ModelManagerError> {
+fn validate_handle(
+    file: &File,
+    directory: bool,
+    require_private_acl: bool,
+) -> Result<(), ModelManagerError> {
     // SAFETY: fixed-size output and live handle.
     let mut tag: FILE_ATTRIBUTE_TAG_INFO = unsafe { zeroed() };
     if unsafe {
@@ -210,7 +214,9 @@ fn validate_handle(file: &File, directory: bool) -> Result<(), ModelManagerError
     if !directory && info.nNumberOfLinks != 1 {
         return Err(ModelManagerError::UnsafePath);
     }
-    validate_acl(file)?;
+    if require_private_acl {
+        validate_acl(file)?;
+    }
     // Named data streams on artifact/control files are rejected. Directory ADS
     // are not transaction namespace children and FileStreamInfo is not supported
     // for non-empty directory handles on all supported Windows filesystems; all
@@ -414,7 +420,7 @@ fn create_private_file_with_share(path: &Path, share_mode: u32) -> Result<File, 
     }
     // SAFETY: handle is newly owned and valid.
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, false)?;
+    validate_handle(&file, false, true)?;
     Ok(file)
 }
 
@@ -438,6 +444,33 @@ pub(crate) fn open_private_file_read(path: &Path) -> Result<File, ModelManagerEr
     open(path, false, GENERIC_READ)
 }
 
+pub(crate) fn open_authenticated_snapshot_file_read(
+    path: &Path,
+) -> Result<File, ModelManagerError> {
+    let path_wide = wide(path.as_os_str());
+    // The process host authenticated the complete private snapshot and installed
+    // its exact current-user plus AppContainer read-only DACL before launch. The
+    // worker therefore validates object type, reparse state, link count, and ADS,
+    // but must not require the transaction manager's current-user-only DACL.
+    let handle = unsafe {
+        CreateFileW(
+            path_wide.as_ptr(),
+            GENERIC_READ | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(last_error());
+    }
+    let file = unsafe { File::from_raw_handle(handle as RawHandle) };
+    validate_handle(&file, false, false)?;
+    Ok(file)
+}
+
 fn open_for_delete(path: &Path, directory: bool) -> Result<File, ModelManagerError> {
     let path_wide = wide(path.as_os_str());
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
@@ -459,7 +492,7 @@ fn open_for_delete(path: &Path, directory: bool) -> Result<File, ModelManagerErr
         return Err(last_error());
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, directory)?;
+    validate_handle(&file, directory, true)?;
     Ok(file)
 }
 
@@ -588,7 +621,7 @@ impl RootGuard {
         }
         // SAFETY: handle is newly owned and valid.
         let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-        validate_handle(&file, true)?;
+        validate_handle(&file, true, true)?;
         let identity = identity_from_handle(&file)?;
         Ok(Self { file, identity })
     }
@@ -832,6 +865,20 @@ mod tests {
         harden_test_directory(parent.path()).unwrap();
         ensure_private_root(parent.path()).unwrap();
         harden_test_directory(parent.path()).unwrap();
+    }
+
+    #[test]
+    fn authenticated_snapshot_file_accepts_host_authorized_non_private_acl() {
+        let parent = tempfile::tempdir().unwrap();
+        let artifact = parent.path().join("model.onnx");
+        std::fs::write(&artifact, b"model").unwrap();
+
+        assert!(matches!(
+            validate_private_file(&artifact),
+            Err(ModelManagerError::DataDirectoryUnsafe)
+        ));
+        let file = open_authenticated_snapshot_file_read(&artifact).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 5);
     }
 
     #[test]

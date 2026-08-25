@@ -33,8 +33,8 @@ use thiserror::Error;
 const HASH_BUFFER_SIZE: usize = 64 * 1024;
 const HASH_BUFFER_BYTES: u64 = 64 * 1024;
 const ABSOLUTE_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
-const ABSOLUTE_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
-const ABSOLUTE_RUNTIME_ENTRIES: usize = 10_000;
+const ABSOLUTE_RUNTIME_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const ABSOLUTE_RUNTIME_ENTRIES: usize = 25_000;
 
 /// Stable process-plugin failure categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +125,7 @@ pub struct WindowsSandboxAuthority {
     pub profile_name: String,
     /// Expected derived SID.
     pub sid: String,
-    /// Canonical `AppContainer` storage directory used as the private working root.
+    /// Canonical `AppContainer` package root used to derive activated private storage.
     pub storage_root: PathBuf,
 }
 
@@ -233,6 +233,42 @@ pub fn rename_windows_plugin_file_no_replace(
     destination: &std::ffi::OsStr,
 ) -> Result<(), PluginError> {
     sandbox::windows::rename_sibling_no_replace(directory, source, destination)
+}
+
+/// Atomically replace one sibling below a pinned private directory, requesting
+/// write-through publication from Windows.
+///
+/// # Errors
+///
+/// Returns an error when either name is invalid or the replacement fails.
+#[cfg(windows)]
+pub fn replace_windows_plugin_file(
+    directory: &std::fs::File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    sandbox::windows::replace_sibling(directory, source, destination)
+}
+
+/// Atomically move one child between two pinned private directories without replacement.
+///
+/// # Errors
+///
+/// Returns an error when a name is invalid, a directory identity is unavailable, the volumes
+/// differ, or write-through no-replace publication fails.
+#[cfg(windows)]
+pub fn move_windows_plugin_file_no_replace(
+    source_directory: &std::fs::File,
+    source: &std::ffi::OsStr,
+    destination_directory: &std::fs::File,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    sandbox::windows::move_between_no_replace(
+        source_directory,
+        source,
+        destination_directory,
+        destination,
+    )
 }
 
 /// Host-enforced limits and the complete declared environment capability.
@@ -585,6 +621,9 @@ impl ProcessPlugin {
                     stderr_reader,
                     PluginError::new(PluginErrorCode::Launch, "request source staging failed"),
                 );
+            }
+            if let Err(error) = sandbox::authorize_request_source(&self.policy, &staged_source) {
+                return finish_error(child, reader, stderr_reader, error);
             }
             (None, Some("source.bin".to_owned()), Some(reservation))
         };

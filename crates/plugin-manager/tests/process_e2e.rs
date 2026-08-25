@@ -86,7 +86,9 @@ fn target() -> &'static str {
 
 fn fixture_executable() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_plugin_manager_process_fixture") {
-        return fs::canonicalize(path).expect("Cargo fixture executable");
+        if PathBuf::from(path).is_file() {
+            return fs::canonicalize(path).expect("Cargo fixture executable");
+        }
     }
     if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
         let executable = if cfg!(windows) {
@@ -104,7 +106,36 @@ fn fixture_executable() -> PathBuf {
             }
         }
     }
+    if let Some(candidate) = manifest_runfile(&[
+        "_main/crates/plugin-manager/plugin_manager_process_fixture.exe",
+        "into_markdown/crates/plugin-manager/plugin_manager_process_fixture.exe",
+        "_main/crates/plugin-manager/plugin_manager_process_fixture",
+        "into_markdown/crates/plugin-manager/plugin_manager_process_fixture",
+    ]) {
+        return candidate;
+    }
     panic!("process fixture executable is unavailable")
+}
+
+fn manifest_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    let manifest = PathBuf::from(std::env::var_os("RUNFILES_MANIFEST_FILE")?);
+    let metadata = fs::metadata(&manifest).ok()?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let contents = fs::read_to_string(manifest).ok()?;
+    for line in contents.lines() {
+        let Some((logical, physical)) = line.split_once(' ') else {
+            continue;
+        };
+        if logical_paths.contains(&logical) {
+            let candidate = PathBuf::from(physical);
+            if candidate.is_file() {
+                return fs::canonicalize(candidate).ok();
+            }
+        }
+    }
+    None
 }
 
 #[test]
@@ -214,8 +245,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
     // Dispatch must consume the manager-owned verified snapshot directly. A
     // zero temporary-byte budget still permits the fresh working directory and
     // inline request, but would reject the former second runtime-tree copy.
-    let mut dispatch_limits = ResourceLimits::default();
-    dispatch_limits.max_temporary_bytes = 0;
+    let dispatch_limits = ResourceLimits { max_temporary_bytes: 0, ..ResourceLimits::default() };
     let dispatch_execution = ExecutionContext::new(ExecutionOptions::default(), dispatch_limits);
     let output = prepared
         .execute(

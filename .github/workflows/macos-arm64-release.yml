@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       plugin_base_url:
-        description: HTTPS release directory that will contain the three .imp files
+        description: HTTPS release directory that will contain the two .imp files
         required: true
         type: string
 
@@ -41,7 +41,7 @@ jobs:
         run: |
           brew install gnupg
           ./tools/ffmpeg-build-audit.sh
-      - name: Build Core and three self-contained plugins twice
+      - name: Build Core and two self-contained plugins twice
         env:
           PLUGIN_BASE_URL: ${{ inputs.plugin_base_url }}
           PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
@@ -63,7 +63,7 @@ jobs:
           done
           cmp "$RUNNER_TEMP/into-md-macos-arm64-core-a.tar.gz" \
             "$RUNNER_TEMP/into-md-macos-arm64-core-b.tar.gz"
-          for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
+          for package in official.ocr.ppocrv6 official.media.whisper; do
             cmp "$RUNNER_TEMP/plugins-a/$package.imp" "$RUNNER_TEMP/plugins-b/$package.imp"
           done
       - name: Import protected Apple signing and notarization credentials
@@ -118,7 +118,7 @@ jobs:
             --timestamp --options runtime "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           /usr/bin/codesign --verify --strict --verbose=2 \
             "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
-      - name: Notarize Core and three capability plugins
+      - name: Notarize Core and two capability plugins
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -135,7 +135,7 @@ jobs:
           core_sha=$(shasum -a 256 "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" | awk '{print $1}')
           printf '%s  %s\n' "$core_sha" "into-md-macos-arm64-core.dmg" \
             > "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256"
-          for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
+          for package in official.ocr.ppocrv6 official.media.whisper; do
             cp "$RUNNER_TEMP/plugins-signed/$package.imp" "$RUNNER_TEMP/$package.zip"
             xcrun notarytool submit "$RUNNER_TEMP/$package.zip" \
               --key "$RUNNER_TEMP/notary-key.p8" \
@@ -191,7 +191,7 @@ jobs:
           mkdir -p "$INTO_MARKDOWN_USER_DATA_HOME" "$RUNNER_TEMP/smoke-core"
           signer_id=$(jq -r '.signingKeyId' "$installed/share/into-markdown/plugins/official-publisher.json")
           signer_sha=$(jq -r '.signingKeySha256' "$installed/share/into-markdown/plugins/official-publisher.json")
-          for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
+          for package in official.ocr.ppocrv6 official.media.whisper; do
             sha=$(shasum -a 256 "$RUNNER_TEMP/plugins-signed/$package.imp" | awk '{print $1}')
             "$installed/bin/into-md" plugins install "$RUNNER_TEMP/plugins-signed/$package.imp" \
               --sha256 "$sha" --signing-key-id "$signer_id" \
@@ -199,7 +199,7 @@ jobs:
             "$installed/bin/into-md" plugins verify "$package" --scope global
           done
           "$installed/bin/into-md" capabilities list --json | jq -e \
-            '[.capabilities[] | select(.status == "ready")] | length == 4'
+            '[.capabilities[] | select(.status == "ready")] | length == 3'
           archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
           "$installed/bin/installed-smoke" \
             --install-root "$installed" \

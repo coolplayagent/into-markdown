@@ -2,65 +2,12 @@
 set -eu
 
 fail() { printf '%s\n' "into-md install: $*" >&2; exit 1; }
-uid=$(id -u)
-
-check_directory() {
-  path=$1
-  test -d "$path" && test ! -L "$path" || fail "unsafe directory: $path"
-  test "$(stat -c %u -- "$path")" = "$uid" || test "$(stat -c %u -- "$path")" = 0 \
-    || fail "directory has an unexpected owner: $path"
-  permissions=$(stat -c %a -- "$path")
-  other=$((permissions % 10))
-  group=$(((permissions / 10) % 10))
-  if test $((other & 2)) -ne 0 || test $((group & 2)) -ne 0; then
-    test "$(stat -c %u -- "$path")" = 0 && test $((permissions / 1000 & 1)) -eq 1 \
-      || fail "directory is writable by another account: $path"
-  fi
-}
-
-check_chain() {
-  path=$1
-  while test "$path" != /; do check_directory "$path"; path=$(dirname -- "$path"); done
-  check_directory /
-}
-
-test "$(uname -s)" = Linux || fail "requires Linux"
+test "$(uname -s)" = Linux || fail "installPlatformUnsupported: requires Linux"
 distribution=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 prefix=${1:-${XDG_DATA_HOME:-$HOME/.local/share}/into-markdown}
 bin_dir=${2:-${XDG_BIN_HOME:-$HOME/.local/bin}}
-case $prefix:$bin_dir in /*:/*) ;; *) fail "installation paths must be absolute";; esac
-case $prefix:$bin_dir in *'/../'*|*/..) fail "installation paths contain traversal";; esac
-
+case $prefix:$bin_dir in /*:/*) ;; *) fail "installPathUnsafe: installation paths must be absolute";; esac
+case $prefix:$bin_dir in *'/../'*|*/..|*'/./'*|*/.) fail "installPathUnsafe: installation paths must be normalized";; esac
+"$distribution/bin/archive-check" "$distribution" || fail "installIntegrityFailed: distribution integrity check failed"
 archive_id=$(sha256sum "$distribution/archive-manifest.json" | awk '{print $1}')
-"$distribution/bin/archive-check" "$distribution" || fail "distribution integrity check failed"
-versions=$prefix/versions
-destination=$versions/$archive_id
-lock=$prefix/.install-lock
-mkdir -p "$(dirname -- "$prefix")" "$(dirname -- "$bin_dir")"
-check_chain "$(dirname -- "$prefix")"
-check_chain "$(dirname -- "$bin_dir")"
-mkdir -p "$prefix" "$versions" "$bin_dir"
-mkdir "$lock" 2>/dev/null || fail "another install or uninstall is active"
-temporary=$versions/.install-$archive_id-$$
-cleanup() { rm -rf -- "$temporary"; rmdir "$lock" 2>/dev/null || true; }
-trap cleanup EXIT HUP INT TERM
-
-if test -d "$destination"; then
-  "$destination/bin/archive-check" "$destination" || fail "existing installed copy failed integrity check"
-else
-  mkdir "$temporary"
-  cp -a --no-preserve=ownership "$distribution/." "$temporary/"
-  find "$temporary" \( -type l -o ! -type d ! -type f \) -print -quit | grep . >/dev/null \
-    && fail "distribution contains an unsafe file type"
-  "$temporary/bin/archive-check" "$temporary" || fail "installed copy integrity check failed"
-  chmod -R a-w "$temporary"
-  mv "$temporary" "$destination"
-fi
-
-if test -L "$prefix/current"; then rm "$prefix/current"; elif test -e "$prefix/current"; then fail "unsafe current path"; fi
-ln -s "versions/$archive_id" "$prefix/.current-$archive_id-$$"
-mv -T "$prefix/.current-$archive_id-$$" "$prefix/current"
-if test -L "$bin_dir/into-md"; then rm "$bin_dir/into-md"; elif test -e "$bin_dir/into-md"; then fail "unsafe command path"; fi
-ln -s "$prefix/current/bin/into-md" "$bin_dir/.into-md-$archive_id-$$"
-mv -T "$bin_dir/.into-md-$archive_id-$$" "$bin_dir/into-md"
-printf '%s\n' "$destination"
+exec "$distribution/bin/into-md-installer" install "$distribution" "$prefix" "$bin_dir" "$archive_id"

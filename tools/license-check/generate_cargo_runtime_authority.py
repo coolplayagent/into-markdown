@@ -64,7 +64,11 @@ def main() -> None:
         "normal_registry_packages": sorted(normal),
         "non_normal_registry_packages": sorted(registry - normal),
     }
-    OUTPUT.write_text(json.dumps(authority, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    OUTPUT.write_text(
+        json.dumps(authority, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 if __name__ == "__main__":

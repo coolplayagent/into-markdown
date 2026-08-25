@@ -234,14 +234,7 @@ fn execute(
     fixture: &Fixture,
     limit: Option<(&str, u64)>,
 ) -> Result<String, into_markdown_core::ConversionError> {
-    let fixture_root = std::env::var_os("TEST_SRCDIR").map_or_else(
-        || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
-        |runfiles| {
-            std::path::PathBuf::from(runfiles)
-                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()))
-                .join("fixtures")
-        },
-    );
+    let fixture_root = fixture_root();
     let bytes = std::fs::read(fixture_root.join(&fixture.path)).unwrap();
     assert_eq!(u64::try_from(bytes.len()).unwrap(), fixture.bytes, "{}", fixture.id);
     assert_eq!(hex(&bytes), fixture.sha256, "{}", fixture.id);
@@ -294,6 +287,38 @@ fn execute(
     );
     let output = conversion_result?;
     into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+}
+
+fn fixture_root() -> std::path::PathBuf {
+    if let Some(value) = std::env::var_os("RUNFILES_MANIFEST_FILE") {
+        let manifest = std::path::PathBuf::from(value);
+        if std::fs::metadata(&manifest).is_ok_and(|metadata| metadata.len() <= 64 * 1024 * 1024)
+            && let Ok(contents) = std::fs::read_to_string(manifest)
+        {
+            for line in contents.lines() {
+                let Some((logical, physical)) = line.split_once(' ') else {
+                    continue;
+                };
+                if matches!(
+                    logical,
+                    "_main/fixtures/manifest.json" | "into_markdown/fixtures/manifest.json"
+                ) {
+                    let candidate = std::path::PathBuf::from(physical);
+                    if candidate.is_file() {
+                        return candidate.parent().unwrap().to_path_buf();
+                    }
+                }
+            }
+        }
+    }
+    std::env::var_os("TEST_SRCDIR").map_or_else(
+        || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
+        |runfiles| {
+            std::path::PathBuf::from(runfiles)
+                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "_main".into()))
+                .join("fixtures")
+        },
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {

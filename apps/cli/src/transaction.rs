@@ -35,6 +35,8 @@ const JOURNAL_VERSION: u32 = 1;
 const TRANSACTION_PREFIX: &str = ".into-md-txn-01-";
 const INITIAL_PREFIX: &str = ".into-md-init-01-";
 const CLEANUP_PREFIX: &str = ".into-md-clean-01-";
+#[cfg(windows)]
+const EXTERNAL_LOCK_PREFIX: &str = ".into-md-lock-01-";
 const PARENT_MARKER_PREFIX: &str = "parent-";
 const PARENT_LEASE_NAME: &str = ".into-md-output-parent-lease-01";
 const REGISTRY_NAME: &str = ".into-md-output-transactions-01";
@@ -354,7 +356,7 @@ fn publish_config(
     expected: Option<&FileIdentity>,
     temporary_identity: &FileIdentity,
 ) -> Result<(), CliError> {
-    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
     {
         if let Some(expected) = expected {
             rustix::fs::renameat_with(
@@ -391,7 +393,7 @@ fn publish_config(
         }
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     Err(transaction_platform_unavailable())
 }
 
@@ -1876,140 +1878,469 @@ struct AuthenticatedTarget {
     name: OsString,
 }
 
-#[cfg(not(unix))]
-pub(crate) struct SafeDir;
+#[cfg(windows)]
+pub(crate) struct SafeDir {
+    directory: cap_std::fs::Dir,
+    path: PathBuf,
+    identity: FileIdentity,
+}
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 impl SafeDir {
-    pub(crate) fn open_absolute(_path: &Path) -> Result<Self, CliError> {
-        Err(transaction_platform_unavailable())
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const REPARSE_ATTRIBUTE: u64 = 0x0000_0400;
+
+    fn from_file(path: PathBuf, file: File) -> Result<Self, CliError> {
+        let metadata = file.metadata()?;
+        let information = winapi_util::file::information(&file)?;
+        if !metadata.is_dir() || information.file_attributes() & Self::REPARSE_ATTRIBUTE != 0 {
+            return Err(recovery_error("directory handle is not a regular non-reparse directory"));
+        }
+        let identity = FileIdentity {
+            platform: "windows".into(),
+            first: information.volume_serial_number(),
+            second: information.file_index(),
+            size: 0,
+        };
+        Ok(Self { directory: cap_std::fs::Dir::from_std_file(file), path, identity })
     }
 
-    pub(crate) fn open_child(&self, _name: &OsStr) -> Result<Self, CliError> {
-        Err(transaction_platform_unavailable())
+    fn open_direct(path: &Path) -> Result<Self, CliError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(Self::BACKUP_SEMANTICS | Self::OPEN_REPARSE_POINT);
+        Self::from_file(path.to_path_buf(), options.open(path)?)
     }
 
-    pub(crate) fn open_child_optional(&self, _name: &OsStr) -> Result<Option<Self>, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn open_absolute(path: &Path) -> Result<Self, CliError> {
+        if !path.is_absolute() {
+            return Err(recovery_error("directory handle path is not absolute"));
+        }
+        let mut root = PathBuf::new();
+        let mut names = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => root.push(component.as_os_str()),
+                Component::Normal(name) => names.push(name.to_os_string()),
+                _ => return Err(recovery_error("directory handle path is not normalized")),
+            }
+        }
+        let mut current = Self::open_direct(&root)?;
+        for name in names {
+            current = current.open_child(&name)?;
+        }
+        Ok(current)
     }
 
-    pub(crate) fn open_regular(&self, _name: &OsStr) -> Result<File, CliError> {
-        Err(transaction_platform_unavailable())
+    fn open_or_create_absolute(path: &Path) -> Result<Self, CliError> {
+        if !path.is_absolute() {
+            return Err(recovery_error("directory creation path is not absolute"));
+        }
+        let mut root = PathBuf::new();
+        let mut names = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => root.push(component.as_os_str()),
+                Component::Normal(name) => names.push(name.to_os_string()),
+                _ => return Err(recovery_error("directory creation path is not normalized")),
+            }
+        }
+        let mut current = Self::open_direct(&root)?;
+        for name in names {
+            current = match current.open_child_optional(&name)? {
+                Some(child) => child,
+                None => {
+                    match current.directory.create_dir(&name) {
+                        Ok(()) => current.sync()?,
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    current.open_child(&name)?
+                }
+            };
+        }
+        Ok(current)
     }
 
-    pub(crate) fn open_regular_optional(&self, _name: &OsStr) -> Result<Option<File>, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn open_child(&self, name: &OsStr) -> Result<Self, CliError> {
+        use cap_std::fs::OpenOptionsExt as _;
+        validate_single_name(name)?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(Self::BACKUP_SEMANTICS | Self::OPEN_REPARSE_POINT);
+        let file = self.directory.open_with(name, &options)?.into_std();
+        Self::from_file(self.path.join(name), file)
+    }
+
+    pub(crate) fn open_child_optional(&self, name: &OsStr) -> Result<Option<Self>, CliError> {
+        validate_single_name(name)?;
+        match self.directory.symlink_metadata(name) {
+            Ok(_) => self.open_child(name).map(Some),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn open_descendant(&self, relative: &Path) -> Result<Self, CliError> {
+        if relative.as_os_str().is_empty() {
+            let current = Self::open_absolute(&self.path)?;
+            if current.identity != self.identity {
+                return Err(recovery_error("directory identity changed"));
+            }
+            return Ok(current);
+        }
+        validate_relative_path(relative)?;
+        let mut current = Self::open_absolute(&self.path)?;
+        if current.identity != self.identity {
+            return Err(recovery_error("directory identity changed"));
+        }
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(recovery_error("descendant path is not normalized"));
+            };
+            current = current.open_child(name)?;
+        }
+        Ok(current)
+    }
+
+    pub(crate) fn open_regular(&self, name: &OsStr) -> Result<File, CliError> {
+        use cap_std::fs::OpenOptionsExt as _;
+        validate_single_name(name)?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).custom_flags(Self::OPEN_REPARSE_POINT);
+        let file = self.directory.open_with(name, &options)?.into_std();
+        let information = winapi_util::file::information(&file)?;
+        if !file.metadata()?.is_file()
+            || information.file_attributes() & Self::REPARSE_ATTRIBUTE != 0
+            || information.number_of_links() != 1
+        {
+            return Err(recovery_error("managed file identity rejected"));
+        }
+        Ok(file)
+    }
+
+    fn open_lease_file(&self, name: &OsStr) -> Result<File, CliError> {
+        use cap_std::fs::OpenOptionsExt as _;
+        validate_single_name(name)?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).custom_flags(Self::OPEN_REPARSE_POINT);
+        let file = self.directory.open_with(name, &options)?.into_std();
+        let information = winapi_util::file::information(&file)?;
+        if !file.metadata()?.is_file()
+            || information.file_attributes() & Self::REPARSE_ATTRIBUTE != 0
+            || information.number_of_links() != 2
+        {
+            return Err(recovery_error("transaction lease identity rejected"));
+        }
+        Ok(file)
+    }
+
+    fn inspect_lease_file(&self, name: &OsStr) -> Result<Option<FileIdentity>, CliError> {
+        validate_single_name(name)?;
+        match self.directory.symlink_metadata(name) {
+            Ok(_) => self.open_lease_file(name).and_then(|file| file_identity(&file)).map(Some),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn remove_lease_file(&self, name: &OsStr) -> Result<(), CliError> {
+        let file = self.open_lease_file(name)?;
+        drop(file);
+        self.verify_namespace()?;
+        self.directory.remove_file(name)?;
+        self.sync()?;
+        self.verify_namespace()
+    }
+
+    pub(crate) fn open_regular_optional(&self, name: &OsStr) -> Result<Option<File>, CliError> {
+        validate_single_name(name)?;
+        match self.directory.symlink_metadata(name) {
+            Ok(_) => self.open_regular(name).map(Some),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(crate) fn verify_private_namespace(&self) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        into_markdown_process_plugin::verify_windows_plugin_store_path(&self.path).map_err(
+            |error| {
+                recovery_error(format!(
+                    "private transaction directory rejected ({}): {error}",
+                    self.path.display()
+                ))
+            },
+        )?;
+        self.verify_namespace()
     }
 
-    pub(crate) fn open_child_private(&self, _name: &OsStr) -> Result<Self, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn open_child_private(&self, name: &OsStr) -> Result<Self, CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child(name)?;
+        child.verify_private_namespace()?;
+        Ok(child)
     }
 
     pub(crate) fn open_child_private_optional(
         &self,
-        _name: &OsStr,
+        name: &OsStr,
     ) -> Result<Option<Self>, CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_private_namespace()?;
+        let child = self.open_child_optional(name)?;
+        if let Some(child) = &child {
+            child.verify_private_namespace()?;
+        }
+        Ok(child)
     }
 
-    pub(crate) fn create_regular(&self, _name: &OsStr) -> Result<File, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn create_regular(&self, name: &OsStr) -> Result<File, CliError> {
+        use cap_std::fs::OpenOptionsExt as _;
+        validate_single_name(name)?;
+        self.verify_namespace()?;
+        let mut options = cap_std::fs::OpenOptions::new();
+        options
+            .create_new(true)
+            .write(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(Self::OPEN_REPARSE_POINT);
+        let file = self.directory.open_with(name, &options)?.into_std();
+        self.verify_namespace()?;
+        Ok(file)
     }
 
-    pub(crate) fn create_regular_private(&self, _name: &OsStr) -> Result<File, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn create_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
+        self.verify_private_namespace()?;
+        let file = self.create_regular(name)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
+            .map_err(|error| {
+                recovery_error(format!(
+                    "private transaction member rejected ({}): {error}",
+                    self.path.join(name).display()
+                ))
+            })?;
+        Ok(file)
     }
 
-    pub(crate) fn open_regular_private(&self, _name: &OsStr) -> Result<File, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn open_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular(name)?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
+            .map_err(|error| {
+                recovery_error(format!(
+                    "private transaction member rejected ({}): {error}",
+                    self.path.join(name).display()
+                ))
+            })?;
+        Ok(file)
     }
 
     pub(crate) fn names(&self) -> Result<Vec<OsString>, CliError> {
-        Err(transaction_platform_unavailable())
+        self.names_bounded(MAX_RECOVERY_DIRECTORY_ENTRIES)
     }
 
     pub(crate) fn names_private(&self) -> Result<Vec<OsString>, CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_private_namespace()?;
+        let names = self.names()?;
+        self.verify_private_namespace()?;
+        Ok(names)
     }
 
-    pub(crate) fn names_bounded(&self, _limit: usize) -> Result<Vec<OsString>, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn names_bounded(&self, limit: usize) -> Result<Vec<OsString>, CliError> {
+        let mut names = Vec::new();
+        for entry in self.directory.entries()? {
+            let entry = entry?;
+            if names.len() >= limit {
+                return Err(recovery_error("recovery directory entry limit exceeded"));
+            }
+            names.push(entry.file_name());
+        }
+        Ok(names)
     }
 
-    pub(crate) fn create_child_private(&self, _name: &OsStr) -> Result<Self, CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn create_child_private(&self, name: &OsStr) -> Result<Self, CliError> {
+        validate_single_name(name)?;
+        self.verify_private_namespace()?;
+        into_markdown_process_plugin::create_windows_plugin_store_directory(&self.path.join(name))
+            .map_err(|error| recovery_error(&error.to_string()))?;
+        self.sync()?;
+        self.open_child_private(name)
     }
 
     pub(crate) fn rename_child_no_replace(
         &self,
-        _source: &OsStr,
-        _destination: &OsStr,
+        source: &OsStr,
+        destination: &OsStr,
     ) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_namespace()?;
+        let pinned = self.directory.try_clone()?.into_std_file();
+        into_markdown_process_plugin::rename_windows_plugin_file_no_replace(
+            &pinned,
+            source,
+            destination,
+        )
+        .map_err(|error| recovery_error(&error.to_string()))?;
+        self.sync()?;
+        self.verify_namespace()
     }
 
     pub(crate) fn rename_child_private_no_replace(
         &self,
-        _source: &OsStr,
-        _destination: &OsStr,
+        source: &OsStr,
+        destination: &OsStr,
     ) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_private_namespace()?;
+        self.rename_child_no_replace(source, destination)?;
+        self.verify_private_namespace()
     }
 
     pub(crate) fn rename_child_to_no_replace(
         &self,
-        _source: &OsStr,
-        _destination_directory: &Self,
-        _destination: &OsStr,
+        source: &OsStr,
+        destination_directory: &Self,
+        destination: &OsStr,
     ) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_namespace()?;
+        destination_directory.verify_namespace()?;
+        let source_handle = self.directory.try_clone()?.into_std_file();
+        let destination_handle = destination_directory.directory.try_clone()?.into_std_file();
+        into_markdown_process_plugin::move_windows_plugin_file_no_replace(
+            &source_handle,
+            source,
+            &destination_handle,
+            destination,
+        )
+        .map_err(|error| recovery_error(&error.to_string()))?;
+        self.sync()?;
+        destination_directory.sync()?;
+        Ok(())
     }
 
     pub(crate) fn rename_child_private_to_no_replace(
         &self,
-        _source: &OsStr,
-        _destination_directory: &Self,
-        _destination: &OsStr,
+        source: &OsStr,
+        destination_directory: &Self,
+        destination: &OsStr,
     ) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        self.verify_private_namespace()?;
+        destination_directory.verify_private_namespace()?;
+        self.rename_child_to_no_replace(source, destination_directory, destination)?;
+        self.verify_private_namespace()?;
+        destination_directory.verify_private_namespace()
     }
 
-    pub(crate) fn remove_regular(&self, _name: &OsStr) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn remove_regular(&self, name: &OsStr) -> Result<(), CliError> {
+        let expected = self.inspect_regular(name)?.ok_or_else(|| recovery_error("file missing"))?;
+        self.verify_namespace()?;
+        verify_name_identity(self, name, Some(&expected))?;
+        self.directory.remove_file(name)?;
+        self.sync()?;
+        self.verify_namespace()
     }
 
-    pub(crate) fn remove_regular_private(&self, _name: &OsStr) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn remove_regular_private(&self, name: &OsStr) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        let file = self.open_regular_private(name)?;
+        drop(file);
+        self.remove_regular(name)?;
+        self.verify_private_namespace()
     }
 
-    pub(crate) fn remove_empty_child(&self, _name: &OsStr) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn remove_empty_child(&self, name: &OsStr) -> Result<(), CliError> {
+        let child = self.open_child(name)?;
+        if !child.names()?.is_empty() {
+            return Err(recovery_error("managed directory is not empty"));
+        }
+        drop(child);
+        self.verify_namespace()?;
+        self.directory.remove_dir(name)?;
+        self.sync()?;
+        self.verify_namespace()
     }
 
-    pub(crate) fn remove_empty_child_private(&self, _name: &OsStr) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+    pub(crate) fn remove_empty_child_private(&self, name: &OsStr) -> Result<(), CliError> {
+        self.verify_private_namespace()?;
+        let child = self.open_child_private(name)?;
+        drop(child);
+        self.remove_empty_child(name)?;
+        self.verify_private_namespace()
+    }
+
+    fn inspect_regular(&self, name: &OsStr) -> Result<Option<FileIdentity>, CliError> {
+        self.open_regular_optional(name)?.map(|file| file_identity(&file)).transpose()
     }
 
     pub(crate) fn measured_tree_bytes(
         &self,
-        _max_depth: u8,
-        _max_entries: usize,
+        max_depth: u8,
+        max_entries: usize,
     ) -> Result<u64, CliError> {
-        Err(transaction_platform_unavailable())
+        fn visit(
+            directory: &SafeDir,
+            depth: u8,
+            max_depth: u8,
+            entries: &mut usize,
+            max_entries: usize,
+        ) -> Result<u64, CliError> {
+            if depth > max_depth {
+                return Err(recovery_error("managed storage depth exceeds its limit"));
+            }
+            let mut total = 0_u64;
+            for name in directory.names()? {
+                *entries = entries.saturating_add(1);
+                if *entries > max_entries {
+                    return Err(recovery_error("managed storage entry count exceeds its limit"));
+                }
+                if let Some(file) = directory.open_regular_optional(&name)? {
+                    total = total
+                        .checked_add(file.metadata()?.len())
+                        .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
+                } else {
+                    let child = directory.open_child(&name)?;
+                    total = total
+                        .checked_add(visit(&child, depth + 1, max_depth, entries, max_entries)?)
+                        .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
+                }
+            }
+            Ok(total)
+        }
+        let mut entries = 0;
+        visit(self, 0, max_depth, &mut entries, max_entries)
     }
 
     fn verify_namespace(&self) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        let current = Self::open_absolute(&self.path)?;
+        if current.identity != self.identity {
+            return Err(CliError::new(
+                ExitClass::Io,
+                "outputIdentityChanged",
+                format!("output directory changed after authentication: {}", self.path.display()),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn sync(&self) -> Result<(), CliError> {
-        Err(transaction_platform_unavailable())
+        match self.directory.try_clone()?.into_std_file().sync_all() {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || matches!(error.raw_os_error(), Some(1 | 6)) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) struct SafeDir;
 
 impl PreparedTransaction {
     /// Commit every staged target, or recover the complete old set.
@@ -2221,12 +2552,12 @@ impl PreparedTransaction {
         original: CliError,
         targets: &[AuthenticatedTarget],
     ) -> Result<T, CliError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = targets;
             return self.fail_and_recover(original);
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.temporary_reservations.clear();
             let rollback =
@@ -2354,9 +2685,9 @@ pub(crate) fn prepare_with_hook(
     mut hook: impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
 ) -> Result<PreparedTransaction, CliError> {
     ensure_transaction_platform()?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         if targets.is_empty() {
             return Err(CliError::internal("empty output transaction"));
@@ -2376,7 +2707,6 @@ pub(crate) fn prepare_with_hook(
         recover_parent_transactions(&parent_handles)?;
         let root = common_existing_ancestor(&paths)?;
         ensure_same_filesystem(&root, &paths)?;
-        #[cfg(unix)]
         let root_handle = SafeDir::open_absolute(&root)?;
 
         let mut entries = Vec::with_capacity(targets.len());
@@ -2399,7 +2729,6 @@ pub(crate) fn prepare_with_hook(
                     format!("duplicate transaction target: {}", absolute.display()),
                 ));
             }
-            #[cfg(unix)]
             let original = {
                 let parent =
                     absolute.parent().ok_or_else(|| recovery_error("target has no parent"))?;
@@ -2414,8 +2743,6 @@ pub(crate) fn prepare_with_hook(
                         .ok_or_else(|| recovery_error("target has no file name"))?,
                 )?
             };
-            #[cfg(not(unix))]
-            let original = None;
             if original.is_some() && !overwrite {
                 return Err(CliError::new(
                     ExitClass::Io,
@@ -2451,10 +2778,8 @@ pub(crate) fn prepare_with_hook(
         let parent_identities =
             parent_handles.iter().map(|parent| parent.identity.clone()).collect::<Vec<_>>();
         let (nonce, initial_directory, directory, lock) = create_initial_transaction(&root)?;
-        #[cfg(unix)]
         let registry_handle = transaction_registry(&root_handle, false)?
             .ok_or_else(|| recovery_error("transaction registry disappeared"))?;
-        #[cfg(unix)]
         let initial_handle = registry_handle.open_child(
             initial_directory
                 .file_name()
@@ -2465,27 +2790,18 @@ pub(crate) fn prepare_with_hook(
             version: JOURNAL_VERSION,
             nonce,
             root: encoded_root,
-            #[cfg(unix)]
             root_identity: root_handle.identity.clone(),
             parent_identities,
-            #[cfg(not(unix))]
-            root_identity: FileIdentity {
-                platform: "unsupported".into(),
-                first: 0,
-                second: 0,
-                size: 0,
-            },
-            #[cfg(not(unix))]
-            parent_identities: Vec::new(),
             generation: 0,
             phase: JournalPhase::Staging,
             entries,
         };
         if let Err(error) = persist_journal_handle(&initial_handle, &mut journal) {
             drop(lock);
-            let _ = remove_initial_transaction_handle(
+            let _ = remove_initial_transaction_with_external_lock(
                 &registry_handle,
                 initial_directory.file_name().expect("initial transaction has a name"),
+                &journal.nonce,
             );
             return Err(error);
         }
@@ -2505,9 +2821,10 @@ pub(crate) fn prepare_with_hook(
                     ),
                 ));
             }
-            let _ = remove_initial_transaction_handle(
+            let _ = remove_initial_transaction_with_external_lock(
                 &registry_handle,
                 initial_directory.file_name().expect("initial transaction has a name"),
+                &journal.nonce,
             );
             return Err(error);
         }
@@ -2519,6 +2836,25 @@ pub(crate) fn prepare_with_hook(
         ) {
             let cleanup = remove_parent_leases(&parent_handles, &initial_handle, &journal);
             drop(lock);
+            #[cfg(windows)]
+            let external_cleanup = registry_handle.remove_lease_file(&OsString::from(format!(
+                "{EXTERNAL_LOCK_PREFIX}{}",
+                journal.nonce
+            )));
+            #[cfg(windows)]
+            if let Err(external_cleanup) = external_cleanup {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "output transaction publication failed ({}: {}); external lock cleanup failed ({}: {})",
+                        error.code(),
+                        error.message(),
+                        external_cleanup.code(),
+                        external_cleanup.message()
+                    ),
+                ));
+            }
             if let Err(cleanup) = cleanup {
                 return Err(CliError::new(
                     ExitClass::Io,
@@ -2532,12 +2868,18 @@ pub(crate) fn prepare_with_hook(
                     ),
                 ));
             }
-            let _ = remove_initial_transaction_handle(
+            let _ = remove_initial_transaction_with_external_lock(
                 &registry_handle,
                 initial_directory.file_name().expect("initial transaction has a name"),
+                &journal.nonce,
             );
             return Err(error);
         }
+        #[cfg(windows)]
+        registry_handle.remove_lease_file(&OsString::from(format!(
+            "{EXTERNAL_LOCK_PREFIX}{}",
+            journal.nonce
+        )))?;
         if let Err(error) = registry_handle.sync() {
             // The authenticated transaction is now visible. Leave it intact for a
             // later bounded recovery scan instead of guessing whether the rename
@@ -2549,7 +2891,6 @@ pub(crate) fn prepare_with_hook(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(directory.clone());
-        #[cfg(unix)]
         let directory_handle = registry_handle.open_child(
             directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
         )?;
@@ -2561,16 +2902,7 @@ pub(crate) fn prepare_with_hook(
             active: true,
             temporary_reservations: Vec::with_capacity(targets.len()),
             lock: Some(lock),
-            handles: TransactionHandles {
-                #[cfg(unix)]
-                root: root_handle,
-                #[cfg(unix)]
-                directory: directory_handle,
-                #[cfg(not(unix))]
-                root: SafeDir,
-                #[cfg(not(unix))]
-                directory: SafeDir,
-            },
+            handles: TransactionHandles { root: root_handle, directory: directory_handle },
         };
         if let Err(error) = crash_point(&mut hook, "journalCreated", usize::MAX, &mut transaction) {
             if error.code() == "simulatedCrash" {
@@ -2597,7 +2929,6 @@ pub(crate) fn prepare_with_hook(
                 Err(error) => return transaction.fail_and_recover(error),
             };
             transaction.temporary_reservations.push(reservation);
-            #[cfg(unix)]
             let mut file = match transaction.handles.directory.create_regular(&stage_name(index)) {
                 Ok(file) => file,
                 Err(error) => return transaction.fail_and_recover(error),
@@ -2694,11 +3025,11 @@ fn active_transactions() -> &'static Mutex<BTreeSet<PathBuf>> {
 
 #[allow(clippy::unnecessary_wraps)]
 fn ensure_transaction_platform() -> Result<(), CliError> {
-    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
     {
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     {
         Err(transaction_platform_unavailable())
     }
@@ -2713,7 +3044,7 @@ fn transaction_platform_unavailable() -> CliError {
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn open_target_parents(targets: &[PathBuf]) -> Result<Vec<SafeDir>, CliError> {
     let mut parents = BTreeMap::new();
     for target in targets {
@@ -2732,12 +3063,12 @@ fn open_target_parents(targets: &[PathBuf]) -> Result<Vec<SafeDir>, CliError> {
     Ok(parents.into_values().collect())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_target_parents(_targets: &[PathBuf]) -> Result<Vec<SafeDir>, CliError> {
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct RecoveryReference {
     root: PathBuf,
     directory: PathBuf,
@@ -2750,12 +3081,12 @@ struct RecoveryReference {
 /// asks the caller to repeat preflight.
 #[allow(clippy::too_many_lines)]
 fn recover_parent_transactions(parents: &[SafeDir]) -> Result<(), CliError> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = parents;
         return Err(transaction_platform_unavailable());
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let mut references = BTreeMap::new();
         for parent in parents {
@@ -2849,20 +3180,15 @@ fn recover_parent_transactions(parents: &[SafeDir]) -> Result<(), CliError> {
 }
 
 /// Recover every exact manager transaction directory directly under `root`.
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 pub fn recover_pending(root: &Path) -> Result<(), CliError> {
     let root = root.canonicalize()?;
-    #[cfg(unix)]
     let root_handle = SafeDir::open_absolute(&root)?;
-    #[cfg(unix)]
     let Some(registry) = transaction_registry(&root_handle, false)? else { return Ok(()) };
     let active =
         active_transactions().lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     let mut managed = Vec::new();
-    #[cfg(unix)]
     let recovery_names = registry.names()?;
-    #[cfg(not(unix))]
-    let recovery_names = Vec::<OsString>::new();
     for (scanned, name) in recovery_names.into_iter().enumerate() {
         if scanned >= MAX_RECOVERY_DIRECTORY_ENTRIES {
             return Err(CliError::new(
@@ -2879,12 +3205,8 @@ pub fn recover_pending(root: &Path) -> Result<(), CliError> {
         if active.contains(&path) {
             continue;
         }
-        #[cfg(unix)]
         let _ = registry
             .open_child(&name)
-            .map_err(|error| recovery_failed("authenticate transaction directory", &error))?;
-        #[cfg(not(unix))]
-        verify_manager_directory(&path)
             .map_err(|error| recovery_failed("authenticate transaction directory", &error))?;
         managed.push((path, nonce));
         if managed.len() > MAX_RECOVERY_TRANSACTIONS {
@@ -2900,11 +3222,9 @@ pub fn recover_pending(root: &Path) -> Result<(), CliError> {
     }
     managed.sort_by(|left, right| left.0.cmp(&right.0));
     for (directory, nonce) in managed {
-        #[cfg(unix)]
         let directory_handle = registry.open_child(
             directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
         )?;
-        #[cfg(unix)]
         let Some(lock) = try_recovery_lock_handle(&directory_handle)
             .map_err(|error| recovery_failed("authenticate transaction lock", &error))?
         else {
@@ -2923,7 +3243,7 @@ pub fn recover_pending(root: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-#[cfg(all(unix, test))]
+#[cfg(all(test, any(unix, windows)))]
 fn recover_cleanup_directories(registry: &SafeDir) -> Result<(), CliError> {
     for name in registry.names()? {
         let Some(nonce) =
@@ -2949,7 +3269,8 @@ fn recover_cleanup_directories(registry: &SafeDir) -> Result<(), CliError> {
             remove_regular_handle_if_present(&cleanup, &member)?;
         }
         cleanup.sync()?;
-        rustix::fs::unlinkat(&registry.fd, &name, rustix::fs::AtFlags::REMOVEDIR)?;
+        drop(cleanup);
+        registry.remove_empty_child(&name)?;
         registry.sync()?;
     }
     Ok(())
@@ -2966,7 +3287,7 @@ fn recover_transaction(root: &Path, directory: &Path, lock: Option<File>) -> Res
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn recover_initial_transaction(
     root: &Path,
     directory: &Path,
@@ -2990,13 +3311,14 @@ fn recover_initial_transaction(
     drop(lock);
     let registry = transaction_registry(&root_handle, false)?
         .ok_or_else(|| recovery_error("initial transaction registry is missing"))?;
-    remove_initial_transaction_handle(
+    remove_initial_transaction_with_external_lock(
         &registry,
         directory.file_name().ok_or_else(|| recovery_error("initial transaction has no name"))?,
+        &journal.nonce,
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn recover_cleanup_transaction(
     root: &Path,
     directory: &Path,
@@ -3017,16 +3339,32 @@ fn recover_cleanup_transaction(
     drop(lock);
     let registry = transaction_registry(&root_handle, false)?
         .ok_or_else(|| recovery_error("cleanup transaction registry is missing"))?;
+    #[cfg(windows)]
+    remove_external_lock_if_present(&registry, nonce)?;
     for name in ["journal-a.json", "journal-b.json", "transaction.lock"] {
         remove_regular_handle_if_present(directory_handle, OsStr::new(name))?;
     }
     directory_handle.sync()?;
-    rustix::fs::unlinkat(
-        &registry.fd,
+    registry.remove_empty_child(
         directory.file_name().ok_or_else(|| recovery_error("cleanup has no name"))?,
-        rustix::fs::AtFlags::REMOVEDIR,
     )?;
     registry.sync()
+}
+
+#[cfg(windows)]
+fn remove_external_lock_if_present(registry: &SafeDir, nonce: &str) -> Result<(), CliError> {
+    let name = OsString::from(format!("{EXTERNAL_LOCK_PREFIX}{nonce}"));
+    match registry.inspect_regular(&name) {
+        Ok(Some(_)) => registry.remove_regular_private(&name),
+        Ok(None) => Ok(()),
+        Err(_) => {
+            if registry.inspect_lease_file(&name)?.is_some() {
+                registry.remove_lease_file(&name)
+            } else {
+                Ok(())
+            }
+        }
+    }
 }
 
 fn rollback_transaction(
@@ -3036,25 +3374,25 @@ fn rollback_transaction(
     lock: Option<File>,
 ) -> Result<(), CliError> {
     validate_recovery_layout(root, directory, journal)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let root_handle = SafeDir::open_absolute(root)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let registry_handle = transaction_registry(&root_handle, false)?
         .ok_or_else(|| recovery_error("transaction registry is missing"))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let directory_handle = registry_handle.open_child(
         directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
     )?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let targets = authenticate_targets(&root_handle, &journal.entries)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     rollback_transaction_with_handles(&directory_handle, &targets, journal)?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
     remove_transaction_directory(root, directory, journal, lock)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn rollback_transaction_with_handles(
     directory: &SafeDir,
     targets: &[AuthenticatedTarget],
@@ -3082,7 +3420,7 @@ fn rollback_transaction_with_handles(
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn rollback_entry_handle(
     directory: &SafeDir,
     target: &AuthenticatedTarget,
@@ -3105,11 +3443,7 @@ fn rollback_entry_handle(
             }
             if target_identity.is_some() {
                 verify_handle_content(target, entry)?;
-                rustix::fs::unlinkat(
-                    &target.parent.fd,
-                    &target.name,
-                    rustix::fs::AtFlags::empty(),
-                )?;
+                target.parent.remove_regular(&target.name)?;
                 target.parent.sync()?;
             }
             handle_rename(directory, &backup, &target.parent, &target.name)?;
@@ -3131,7 +3465,7 @@ fn rollback_entry_handle(
         }
     } else if target_identity.is_some() {
         verify_handle_content(target, entry)?;
-        rustix::fs::unlinkat(&target.parent.fd, &target.name, rustix::fs::AtFlags::empty())?;
+        target.parent.remove_regular(&target.name)?;
         target.parent.sync()?;
     }
 
@@ -3143,7 +3477,7 @@ fn rollback_entry_handle(
                 entry,
             )?;
         }
-        rustix::fs::unlinkat(&directory.fd, &staged, rustix::fs::AtFlags::empty())?;
+        directory.remove_regular(&staged)?;
         directory.sync()?;
     }
     Ok(())
@@ -3156,18 +3490,18 @@ fn finish_committed(
     lock: Option<File>,
 ) -> Result<(), CliError> {
     validate_recovery_layout(root, directory, journal)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let root_handle = SafeDir::open_absolute(root)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let registry_handle = transaction_registry(&root_handle, false)?
         .ok_or_else(|| recovery_error("transaction registry is missing"))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let directory_handle = registry_handle.open_child(
         directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
     )?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let targets = authenticate_targets(&root_handle, &journal.entries)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     for (index, (entry, target)) in journal.entries.iter().zip(&targets).enumerate() {
         verify_handle_content(target, entry)?;
         let backup = backup_name(index);
@@ -3178,7 +3512,7 @@ fn finish_committed(
                     directory_handle.path.join(&backup).display()
                 )));
             }
-            rustix::fs::unlinkat(&directory_handle.fd, &backup, rustix::fs::AtFlags::empty())?;
+            directory_handle.remove_regular(&backup)?;
         }
         let staged = stage_name(index);
         if directory_handle.inspect_regular(&staged)?.is_some() {
@@ -3187,11 +3521,11 @@ fn finish_committed(
                 &directory_handle.path.join(&staged),
                 entry,
             )?;
-            rustix::fs::unlinkat(&directory_handle.fd, &staged, rustix::fs::AtFlags::empty())?;
+            directory_handle.remove_regular(&staged)?;
         }
         directory_handle.sync()?;
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
     remove_transaction_directory(root, directory, journal, lock)
 }
@@ -3203,9 +3537,9 @@ fn validate_recovery_layout(
 ) -> Result<(), CliError> {
     validate_journal(root, directory, journal)?;
     let allowed = allowed_transaction_names(journal);
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let directory_handle = SafeDir::open_absolute(directory)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     for name in directory_handle.names()? {
         if !allowed.contains(&name) {
             return Err(recovery_error(format!(
@@ -3213,9 +3547,14 @@ fn validate_recovery_layout(
                 directory.join(&name).display()
             )));
         }
-        let _ = directory_handle.open_regular(&name)?;
+        if name.to_string_lossy().starts_with(PARENT_MARKER_PREFIX) {
+            inspect_transaction_lease_member(&directory_handle, &name)?
+                .ok_or_else(|| recovery_error("transaction parent marker disappeared"))?;
+        } else {
+            let _ = directory_handle.open_regular(&name)?;
+        }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
     Ok(())
 }
@@ -3227,21 +3566,21 @@ fn remove_transaction_directory(
     lock: Option<File>,
 ) -> Result<(), CliError> {
     let lock = lock.ok_or_else(|| recovery_error("transaction cleanup requires an owned lock"))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let root_handle = SafeDir::open_absolute(root)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let registry_handle = transaction_registry(&root_handle, false)?
         .ok_or_else(|| recovery_error("transaction registry is missing"))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let directory_handle = registry_handle.open_child(
         directory.file_name().ok_or_else(|| recovery_error("transaction has no name"))?,
     )?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     for index in 0..journal.entries.len() {
         remove_regular_handle_if_present(&directory_handle, &stage_name(index))?;
         remove_regular_handle_if_present(&directory_handle, &backup_name(index))?;
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     directory_handle.sync()?;
 
     // Atomically remove the directory from the recovery namespace while its
@@ -3252,53 +3591,80 @@ fn remove_transaction_directory(
     )
     .ok_or_else(|| recovery_error("transaction directory name is invalid"))?;
     let cleanup_name = OsString::from(format!("{CLEANUP_PREFIX}{nonce}"));
-    #[cfg(unix)]
-    match rustix::fs::statat(
-        &registry_handle.fd,
-        &cleanup_name,
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Err(rustix::io::Errno::NOENT) => {}
-        Ok(_) => return Err(recovery_error("transaction cleanup path already exists")),
-        Err(error) => return Err(error.into()),
+    #[cfg(windows)]
+    let external_lock_name = OsString::from(format!("{EXTERNAL_LOCK_PREFIX}{nonce}"));
+    #[cfg(any(unix, windows))]
+    if registry_handle.open_child_optional(&cleanup_name)?.is_some() {
+        return Err(recovery_error("transaction cleanup path already exists"));
     }
-    #[cfg(unix)]
+    #[cfg(windows)]
+    {
+        match directory_handle.inspect_regular(OsStr::new("transaction.lock")) {
+            Ok(Some(_)) => {
+                fs::hard_link(
+                    directory_handle.path.join("transaction.lock"),
+                    registry_handle.path.join(&external_lock_name),
+                )?;
+            }
+            Ok(None) => {
+                if registry_handle.inspect_regular(&external_lock_name)?.is_none() {
+                    return Err(recovery_error("cleanup lock handoff disappeared"));
+                }
+            }
+            Err(_) => {
+                if directory_handle.inspect_lease_file(OsStr::new("transaction.lock"))?.is_none()
+                    || registry_handle.inspect_lease_file(&external_lock_name)?.is_none()
+                {
+                    return Err(recovery_error("cleanup lock handoff identity mismatch"));
+                }
+            }
+        }
+        if directory_handle.inspect_lease_file(OsStr::new("transaction.lock"))?.is_some() {
+            directory_handle.remove_lease_file(OsStr::new("transaction.lock"))?;
+        }
+        registry_handle.sync()?;
+    }
+    #[cfg(any(unix, windows))]
     handle_rename(
         &registry_handle,
         directory.file_name().expect("transaction name checked"),
         &registry_handle,
         &cleanup_name,
     )?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     registry_handle.sync()?;
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let cleanup_handle = registry_handle.open_child(&cleanup_name)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let parents = journal_parent_handles(&root_handle, journal)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     remove_parent_leases(&parents, &cleanup_handle, journal)?;
     drop(lock);
-    #[cfg(unix)]
+    #[cfg(windows)]
+    registry_handle.remove_regular_private(&external_lock_name)?;
+    #[cfg(any(unix, windows))]
     for name in ["journal-a.json", "journal-b.json", "transaction.lock"] {
         remove_regular_handle_if_present(&cleanup_handle, OsStr::new(name))?;
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     cleanup_handle.sync()?;
-    #[cfg(unix)]
-    rustix::fs::unlinkat(&registry_handle.fd, &cleanup_name, rustix::fs::AtFlags::REMOVEDIR)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
+    drop(cleanup_handle);
+    #[cfg(any(unix, windows))]
+    registry_handle.remove_empty_child(&cleanup_name)?;
+    #[cfg(any(unix, windows))]
     registry_handle.sync()?;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn remove_regular_handle_if_present(directory: &SafeDir, name: &OsStr) -> Result<(), CliError> {
     match directory.inspect_regular(name) {
         Ok(Some(_)) => {
-            rustix::fs::unlinkat(&directory.fd, name, rustix::fs::AtFlags::empty())?;
+            directory.remove_regular(name)?;
         }
         Ok(None) => {}
         Err(error) if error.code() == "outputTargetTypeDenied" => return Err(error),
@@ -3329,7 +3695,7 @@ fn allowed_transaction_names(journal: &Journal) -> BTreeSet<OsString> {
     names
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn persist_journal_handle(directory: &SafeDir, journal: &mut Journal) -> Result<(), CliError> {
     journal.generation = journal.generation.checked_add(1).ok_or_else(|| {
         CliError::new(ExitClass::Io, "transactionJournalOverflow", "journal generation overflow")
@@ -3338,7 +3704,7 @@ fn persist_journal_handle(directory: &SafeDir, journal: &mut Journal) -> Result<
         if journal.generation.is_multiple_of(2) { "journal-b.json" } else { "journal-a.json" };
     let name = OsStr::new(name);
     if directory.inspect_regular(name)?.is_some() {
-        rustix::fs::unlinkat(&directory.fd, name, rustix::fs::AtFlags::empty())?;
+        directory.remove_regular(name)?;
         directory.sync()?;
     }
     let bytes = serde_json::to_vec(journal).map_err(|error| {
@@ -3358,13 +3724,13 @@ fn persist_journal_handle(directory: &SafeDir, journal: &mut Journal) -> Result<
     directory.sync()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn persist_journal_handle(_directory: &SafeDir, _journal: &mut Journal) -> Result<(), CliError> {
     Err(transaction_platform_unavailable())
 }
 
 fn load_journal(root: &Path, directory: &Path, nonce: &str) -> Result<Journal, CliError> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let root_handle = SafeDir::open_absolute(root)?;
         let registry = transaction_registry(&root_handle, false)?
@@ -3375,14 +3741,14 @@ fn load_journal(root: &Path, directory: &Path, nonce: &str) -> Result<Journal, C
         let directory_handle = registry.open_child(directory_name)?;
         load_journal_handle(&root_handle, &directory_handle, directory, nonce)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (root, directory, nonce);
         Err(transaction_platform_unavailable())
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn load_journal_handle(
     root: &SafeDir,
     directory: &SafeDir,
@@ -3415,19 +3781,19 @@ fn load_journal_handle(
 }
 
 fn validate_journal(root: &Path, directory: &Path, journal: &Journal) -> Result<(), CliError> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let root_handle = SafeDir::open_absolute(root)?;
         validate_journal_handle(&root_handle, directory, journal)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (root, directory, journal);
         Err(transaction_platform_unavailable())
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_journal_handle(
     root: &SafeDir,
     directory: &Path,
@@ -3544,12 +3910,95 @@ fn create_initial_transaction(root: &Path) -> Result<(String, PathBuf, PathBuf, 
     ))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_initial_transaction(root: &Path) -> Result<(String, PathBuf, PathBuf, File), CliError> {
+    let root_handle = SafeDir::open_absolute(root)?;
+    let registry = transaction_registry(&root_handle, true)?
+        .ok_or_else(|| recovery_error("transaction registry could not be created"))?;
+    for attempt in 0_u32..128 {
+        let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let digest =
+            Sha256::digest(format!("{}:{time}:{counter}:{attempt}", std::process::id()).as_bytes());
+        let nonce = hex_bytes(&digest[..16]);
+        let initial_name = OsString::from(format!("{INITIAL_PREFIX}{nonce}"));
+        let directory_name = OsString::from(format!("{TRANSACTION_PREFIX}{nonce}"));
+        let initial = root.join(REGISTRY_NAME).join(&initial_name);
+        let directory = root.join(REGISTRY_NAME).join(&directory_name);
+        let initial_handle = match registry.create_child_private(&initial_name) {
+            Ok(handle) => handle,
+            Err(error) if error.message().contains("already exists") => continue,
+            Err(error) => return Err(error),
+        };
+        // Keep the locked handle outside the directory during publication.
+        // Windows otherwise denies renaming a directory which contains the
+        // locked file, even when every directory handle shares deletion.
+        let external_lock_name = OsString::from(format!("{EXTERNAL_LOCK_PREFIX}{nonce}"));
+        let lock = match registry.create_regular_private(&external_lock_name) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let _ =
+                    remove_initial_transaction_with_external_lock(&registry, &initial_name, &nonce);
+                return Err(error);
+            }
+        };
+        if let Err(error) = lock.try_lock() {
+            drop(lock);
+            let _ = remove_initial_transaction_with_external_lock(&registry, &initial_name, &nonce);
+            return Err(lock_error("create transaction lock", &error));
+        }
+        if let Err(error) = fs::hard_link(
+            registry.path.join(&external_lock_name),
+            initial_handle.path.join("transaction.lock"),
+        ) {
+            drop(lock);
+            let _ = remove_initial_transaction_with_external_lock(&registry, &initial_name, &nonce);
+            return Err(error.into());
+        }
+        let publication = (|| {
+            if registry.inspect_lease_file(&external_lock_name)?.is_none()
+                || initial_handle.inspect_lease_file(OsStr::new("transaction.lock"))?.is_none()
+            {
+                return Err(recovery_error("transaction lock link identity mismatch"));
+            }
+            lock.sync_all()?;
+            initial_handle.sync()?;
+            registry.sync()
+        })();
+        if let Err(error) = publication {
+            drop(lock);
+            let cleanup =
+                remove_initial_transaction_with_external_lock(&registry, &initial_name, &nonce);
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(CliError::new(
+                    ExitClass::Io,
+                    "rollbackFailed",
+                    format!(
+                        "transaction lock publication failed ({}: {}); cleanup failed ({}: {})",
+                        error.code(),
+                        error.message(),
+                        cleanup.code(),
+                        cleanup.message()
+                    ),
+                )),
+            };
+        }
+        return Ok((nonce, initial, directory, lock));
+    }
+    Err(CliError::new(
+        ExitClass::Io,
+        "transactionAllocationFailed",
+        "could not allocate an output transaction directory",
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_initial_transaction(_root: &Path) -> Result<(String, PathBuf, PathBuf, File), CliError> {
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn remove_initial_transaction_handle(registry: &SafeDir, name: &OsStr) -> Result<(), CliError> {
     let name_text =
         name.to_str().ok_or_else(|| recovery_error("initial transaction name is invalid"))?;
@@ -3576,14 +4025,52 @@ fn remove_initial_transaction_handle(registry: &SafeDir, name: &OsStr) -> Result
         remove_regular_handle_if_present(&transaction, &member)?;
     }
     transaction.sync()?;
-    rustix::fs::unlinkat(&registry.fd, name, rustix::fs::AtFlags::REMOVEDIR)?;
+    registry.remove_empty_child(name)?;
     registry.sync()?;
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+fn remove_initial_transaction_with_external_lock(
+    registry: &SafeDir,
+    name: &OsStr,
+    nonce: &str,
+) -> Result<(), CliError> {
+    #[cfg(windows)]
+    remove_external_lock_if_present(registry, nonce)?;
+    #[cfg(not(windows))]
+    let _ = nonce;
+    remove_initial_transaction_handle(registry, name)
+}
+
+#[cfg(any(unix, windows))]
 fn try_recovery_lock_handle(directory: &SafeDir) -> Result<Option<File>, CliError> {
+    #[cfg(unix)]
     let lock = directory.open_regular(OsStr::new("transaction.lock"))?;
+    #[cfg(windows)]
+    let lock = match directory.open_regular(OsStr::new("transaction.lock")) {
+        Ok(lock) => lock,
+        Err(_) => match directory.open_lease_file(OsStr::new("transaction.lock")) {
+            Ok(lock) => lock,
+            Err(_) => {
+                let nonce = transaction_directory_nonce(
+                    directory
+                        .path
+                        .file_name()
+                        .ok_or_else(|| recovery_error("transaction directory has no name"))?,
+                )
+                .ok_or_else(|| recovery_error("transaction directory name is invalid"))?;
+                let registry_path = directory
+                    .path
+                    .parent()
+                    .ok_or_else(|| recovery_error("transaction registry path is invalid"))?;
+                let registry = SafeDir::open_absolute(registry_path)?;
+                registry.open_regular_private(&OsString::from(format!(
+                    "{EXTERNAL_LOCK_PREFIX}{nonce}"
+                )))?
+            }
+        },
+    };
     match lock.try_lock() {
         Ok(()) => Ok(Some(lock)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -3592,6 +4079,18 @@ fn try_recovery_lock_handle(directory: &SafeDir) -> Result<Option<File>, CliErro
             &error,
         )),
     }
+}
+
+#[cfg(windows)]
+fn transaction_directory_nonce(name: &OsStr) -> Option<&str> {
+    let name = name.to_str()?;
+    [TRANSACTION_PREFIX, INITIAL_PREFIX, CLEANUP_PREFIX]
+        .into_iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
+        .filter(|nonce| {
+            nonce.len() == 32
+                && nonce.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
 }
 
 #[cfg(windows)]
@@ -3643,6 +4142,67 @@ fn parent_marker_name(identity: &FileIdentity) -> OsString {
 }
 
 #[cfg(unix)]
+fn inspect_linked_parent_lease(parent: &SafeDir) -> Result<Option<FileIdentity>, CliError> {
+    parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))
+}
+
+#[cfg(windows)]
+fn inspect_linked_parent_lease(parent: &SafeDir) -> Result<Option<FileIdentity>, CliError> {
+    parent.inspect_lease_file(OsStr::new(PARENT_LEASE_NAME))
+}
+
+#[cfg(unix)]
+fn inspect_transaction_lease_member(
+    transaction: &SafeDir,
+    name: &OsStr,
+) -> Result<Option<FileIdentity>, CliError> {
+    transaction.inspect_regular(name)
+}
+
+#[cfg(windows)]
+fn inspect_transaction_lease_member(
+    transaction: &SafeDir,
+    name: &OsStr,
+) -> Result<Option<FileIdentity>, CliError> {
+    match transaction.inspect_regular(name) {
+        Ok(identity) => Ok(identity),
+        Err(_) => transaction.inspect_lease_file(name),
+    }
+}
+
+#[cfg(unix)]
+fn read_linked_parent_lease(parent: &SafeDir, limit: u64) -> io::Result<Vec<u8>> {
+    read_limited_regular_handle(parent, OsStr::new(PARENT_LEASE_NAME), limit)
+}
+
+#[cfg(windows)]
+fn read_linked_parent_lease(parent: &SafeDir, limit: u64) -> io::Result<Vec<u8>> {
+    let mut file = parent
+        .open_lease_file(OsStr::new(PARENT_LEASE_NAME))
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let metadata = file.metadata()?;
+    if metadata.len() > limit {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "managed file exceeds its limit"));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn remove_linked_parent_lease(parent: &SafeDir) -> Result<(), CliError> {
+    remove_regular_handle_if_present(parent, OsStr::new(PARENT_LEASE_NAME))
+}
+
+#[cfg(windows)]
+fn remove_linked_parent_lease(parent: &SafeDir) -> Result<(), CliError> {
+    if parent.inspect_lease_file(OsStr::new(PARENT_LEASE_NAME))?.is_some() {
+        parent.remove_lease_file(OsStr::new(PARENT_LEASE_NAME))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn create_parent_leases(
     parents: &[SafeDir],
     transaction: &SafeDir,
@@ -3688,13 +4248,59 @@ fn create_parent_leases(
     transaction.sync()
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn create_parent_leases(
+    parents: &[SafeDir],
+    transaction: &SafeDir,
+    journal: &Journal,
+) -> Result<(), CliError> {
+    for parent in parents {
+        let name = parent_marker_name(&parent.identity);
+        let lease = ParentLease {
+            signature: JOURNAL_SIGNATURE.into(),
+            version: JOURNAL_VERSION,
+            nonce: journal.nonce.clone(),
+            root: journal.root.clone(),
+            root_identity: journal.root_identity.clone(),
+            parent_identity: parent.identity.clone(),
+        };
+        let bytes = serde_json::to_vec(&lease)
+            .map_err(|error| CliError::internal(format!("serialize parent lease: {error}")))?;
+        let mut transaction_file = transaction.create_regular_private(&name)?;
+        transaction_file.write_all(&bytes)?;
+        transaction_file.write_all(b"\n")?;
+        transaction_file.sync_all()?;
+        let source_identity = file_identity(&transaction_file)?;
+        transaction.sync()?;
+        parent.verify_namespace()?;
+        match fs::hard_link(transaction.path.join(&name), parent.path.join(PARENT_LEASE_NAME)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "transactionBusy",
+                    format!("another output transaction owns parent {}", parent.path.display()),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+        parent.sync()?;
+        if inspect_linked_parent_lease(parent)?.as_ref() != Some(&source_identity)
+            || inspect_transaction_lease_member(transaction, &name)?.as_ref()
+                != Some(&source_identity)
+        {
+            return Err(recovery_error("physical parent lease identity mismatch"));
+        }
+    }
+    transaction.sync()
+}
+
+#[cfg(any(unix, windows))]
 fn load_parent_lease(parent: &SafeDir) -> Result<Option<ParentLease>, CliError> {
-    if parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?.is_none() {
+    if inspect_linked_parent_lease(parent)?.is_none() {
         return Ok(None);
     }
-    let bytes = read_limited_regular_handle(parent, OsStr::new(PARENT_LEASE_NAME), 8 * 1024)
-        .map_err(CliError::from)?;
+    let bytes = read_linked_parent_lease(parent, 8 * 1024).map_err(CliError::from)?;
     let lease: ParentLease =
         serde_json::from_slice(&bytes).map_err(|_| recovery_error("parent lease is malformed"))?;
     if lease.signature != JOURNAL_SIGNATURE
@@ -3708,7 +4314,7 @@ fn load_parent_lease(parent: &SafeDir) -> Result<Option<ParentLease>, CliError> 
     Ok(Some(lease))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_parent_lease(
     parent: &SafeDir,
     transaction: &SafeDir,
@@ -3716,8 +4322,8 @@ fn validate_parent_lease(
     lease: &ParentLease,
 ) -> Result<(), CliError> {
     let name = parent_marker_name(&parent.identity);
-    let transaction_identity = transaction.inspect_regular(&name)?;
-    let parent_lease_identity = parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?;
+    let transaction_identity = inspect_transaction_lease_member(transaction, &name)?;
+    let parent_lease_identity = inspect_linked_parent_lease(parent)?;
     let (Some(transaction_identity), Some(parent_lease_identity)) =
         (transaction_identity, parent_lease_identity)
     else {
@@ -3739,7 +4345,7 @@ fn validate_parent_lease(
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_parent_leases(
     transaction: &SafeDir,
     targets: &[AuthenticatedTarget],
@@ -3757,7 +4363,7 @@ fn validate_parent_leases(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn validate_parent_leases(
     _transaction: &SafeDir,
     _targets: &[AuthenticatedTarget],
@@ -3766,7 +4372,7 @@ fn validate_parent_leases(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn remove_parent_leases(
     parents: &[SafeDir],
     transaction: &SafeDir,
@@ -3774,8 +4380,8 @@ fn remove_parent_leases(
 ) -> Result<(), CliError> {
     for parent in parents {
         let marker = parent_marker_name(&parent.identity);
-        let transaction_identity = transaction.inspect_regular(&marker)?;
-        let parent_identity = parent.inspect_regular(OsStr::new(PARENT_LEASE_NAME))?;
+        let transaction_identity = inspect_transaction_lease_member(transaction, &marker)?;
+        let parent_identity = inspect_linked_parent_lease(parent)?;
         let Some(transaction_identity) = transaction_identity else {
             continue;
         };
@@ -3783,7 +4389,7 @@ fn remove_parent_leases(
             let lease = load_parent_lease(parent)?
                 .ok_or_else(|| recovery_error("physical parent lease disappeared"))?;
             validate_parent_lease(parent, transaction, journal, &lease)?;
-            remove_regular_handle_if_present(parent, OsStr::new(PARENT_LEASE_NAME))?;
+            remove_linked_parent_lease(parent)?;
             parent.sync()?;
         }
         remove_regular_handle_if_present(transaction, &marker)?;
@@ -3792,7 +4398,7 @@ fn remove_parent_leases(
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn journal_parent_handles(root: &SafeDir, journal: &Journal) -> Result<Vec<SafeDir>, CliError> {
     let mut parents = BTreeMap::new();
     for entry in &journal.entries {
@@ -3810,7 +4416,7 @@ fn journal_parent_handles(root: &SafeDir, journal: &Journal) -> Result<Vec<SafeD
     Ok(parents.into_values().collect())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn authenticate_targets(
     root: &SafeDir,
     entries: &[JournalEntry],
@@ -3831,7 +4437,7 @@ fn authenticate_targets(
         .collect()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn authenticate_targets(
     _root: &SafeDir,
     _entries: &[JournalEntry],
@@ -3839,7 +4445,7 @@ fn authenticate_targets(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_target_handle_identity(
     target: &AuthenticatedTarget,
     expected: Option<&FileIdentity>,
@@ -3847,7 +4453,7 @@ fn verify_target_handle_identity(
     verify_name_identity(&target.parent, &target.name, expected)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn verify_target_handle_identity(
     _target: &AuthenticatedTarget,
     _expected: Option<&FileIdentity>,
@@ -3855,7 +4461,7 @@ fn verify_target_handle_identity(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_name_identity(
     directory: &SafeDir,
     name: &OsStr,
@@ -3875,7 +4481,7 @@ fn verify_name_identity(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn verify_name_identity(
     _directory: &SafeDir,
     _name: &OsStr,
@@ -3884,7 +4490,7 @@ fn verify_name_identity(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn handle_rename(
     from_directory: &SafeDir,
     from: &OsStr,
@@ -3901,12 +4507,14 @@ fn handle_rename(
         to,
         rustix::fs::RenameFlags::NOREPLACE,
     )?;
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(windows)]
+    from_directory.rename_child_to_no_replace(from, to_directory, to)?;
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     return Err(transaction_platform_unavailable());
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn handle_rename(
     _from_directory: &SafeDir,
     _from: &OsStr,
@@ -3916,7 +4524,7 @@ fn handle_rename(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn install_stage_no_replace_handle(
     staged_directory: &SafeDir,
     staged: &OsStr,
@@ -3925,6 +4533,14 @@ fn install_stage_no_replace_handle(
 ) -> Result<(), CliError> {
     validate_single_name(staged)?;
     validate_single_name(target)?;
+    #[cfg(windows)]
+    {
+        handle_rename(staged_directory, staged, target_directory, target)?;
+        target_directory.sync()?;
+        staged_directory.sync()?;
+        return Ok(());
+    }
+    #[cfg(unix)]
     rustix::fs::linkat(
         &staged_directory.fd,
         staged,
@@ -3953,12 +4569,15 @@ fn install_stage_no_replace_handle(
             )
         }
     })?;
-    target_directory.sync()?;
-    rustix::fs::unlinkat(&staged_directory.fd, staged, rustix::fs::AtFlags::empty())?;
-    staged_directory.sync()
+    #[cfg(unix)]
+    {
+        target_directory.sync()?;
+        rustix::fs::unlinkat(&staged_directory.fd, staged, rustix::fs::AtFlags::empty())?;
+        staged_directory.sync()
+    }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn install_stage_no_replace_handle(
     _staged_directory: &SafeDir,
     _staged: &OsStr,
@@ -3968,7 +4587,7 @@ fn install_stage_no_replace_handle(
     Err(transaction_platform_unavailable())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_handle_content(
     target: &AuthenticatedTarget,
     entry: &JournalEntry,
@@ -3980,7 +4599,7 @@ fn verify_handle_content(
     )
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn verify_handle_content(
     _target: &AuthenticatedTarget,
     _entry: &JournalEntry,
@@ -4050,7 +4669,7 @@ fn file_identity(_file: &File) -> Result<FileIdentity, CliError> {
     ))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn read_limited_regular_handle(
     directory: &SafeDir,
     name: &OsStr,
@@ -4294,6 +4913,33 @@ fn transaction_registry(root: &SafeDir, create: bool) -> Result<Option<SafeDir>,
     }
 }
 
+#[cfg(windows)]
+fn transaction_registry(root: &SafeDir, create: bool) -> Result<Option<SafeDir>, CliError> {
+    match root.open_child_optional(OsStr::new(REGISTRY_NAME))? {
+        Some(directory) => {
+            directory.verify_private_namespace()?;
+            Ok(Some(directory))
+        }
+        None if !create => Ok(None),
+        None => {
+            root.verify_namespace()?;
+            into_markdown_process_plugin::create_windows_plugin_store_directory(
+                &root.path.join(REGISTRY_NAME),
+            )
+            .map_err(|error| {
+                recovery_error(format!(
+                    "create private transaction registry ({}): {error}",
+                    root.path.join(REGISTRY_NAME).display()
+                ))
+            })?;
+            root.sync()?;
+            let directory = root.open_child(OsStr::new(REGISTRY_NAME))?;
+            directory.verify_private_namespace()?;
+            Ok(Some(directory))
+        }
+    }
+}
+
 #[cfg(unix)]
 fn ensure_same_filesystem(root: &Path, targets: &[PathBuf]) -> Result<(), CliError> {
     use std::os::unix::fs::MetadataExt as _;
@@ -4390,7 +5036,7 @@ fn recovery_failed(operation: &str, error: &CliError) -> CliError {
     )
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use into_markdown::{ExecutionOptions, ResourceLimits};
@@ -5001,7 +5647,14 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code(), "rollbackFailed");
         assert!(error.message().contains("injectedCommitFailure"));
+        #[cfg(unix)]
         assert!(error.message().contains("outputTargetTypeDenied"));
+        #[cfg(windows)]
+        assert!(
+            error.message().contains("one or more rollback operations failed"),
+            "{}",
+            error.message()
+        );
         assert_eq!(fs::read(directory.join("backup-0")).unwrap(), b"old-one");
         assert!(directory.join("journal-a.json").exists());
         assert_eq!(fs::read(&second).unwrap(), b"old-two");

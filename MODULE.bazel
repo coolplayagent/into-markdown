@@ -4,6 +4,12 @@ module(
 )
 
 bazel_dep(name = "rules_rust", version = "0.73.0")
+single_version_override(
+    module_name = "rules_rust",
+    patch_strip = 1,
+    patches = ["//toolchains:rules_rust-bzlmod-override-keys.patch"],
+    version = "0.73.0",
+)
 bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "aspect_rules_js", version = "3.3.1")
@@ -84,7 +90,42 @@ crate.from_cargo(
     isolated = False,
     manifests = ["//:Cargo.toml"],
 )
-use_repo(crate, "crates")
+# The upstream proc-macro's package name produces a >260-character temporary
+# object path under Bazel on Windows. Compile the exact crate source through a
+# short local target; dependents still receive it under Cargo's original extern
+# name, and the macro's version authority stays fixed below.
+crate.annotation(
+    additive_build_file_content = 'exports_files(["src/lib.rs"])',
+    crate = "wasmtime-internal-versioned-export-macros",
+    override_target_proc_macro = "//third_party/wasmtime:versioned_exports",
+    version = "39.0.1",
+)
+# The Visual Studio generator can orphan cl.exe while CMake probes the compiler
+# inside a Bazel action.  Ninja uses the same fixed MSVC compiler selected by
+# cc-rs without the nested MSBuild process tree.  Scope this only to Windows so
+# the existing Linux and macOS native build paths remain unchanged.
+crate.annotation_select(
+    build_script_env = {
+        "CMAKE_GENERATOR": "Ninja",
+        # rules_rust's MSVC LDFLAGS repeat the toolchain LIB directories as
+        # unquoted `-LIBPATH:C:\Program Files...` tokens. Ninja correctly
+        # treats the embedded space as an argument boundary. The fixed MSVC
+        # action already supplies the same directories through LIB, while
+        # CMake selects the x64 machine and runtime flags itself.
+        "LDFLAGS": "",
+    },
+    crate = "whisper-rs-sys",
+    triples = ["x86_64-pc-windows-msvc"],
+    version = "0.15.0",
+)
+use_repo(
+    crate,
+    "crates",
+    "crates__proc-macro2-1.0.107",
+    "crates__quote-1.0.47",
+    "crates__syn-2.0.119",
+    "crates__wasmtime-internal-versioned-export-macros-39.0.1",
+)
 
 # A local extension creates every manual model/runtime repository from the same
 # structured manifest consumed by the offline license audit.

@@ -126,11 +126,8 @@ PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输
 普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
 第三方声明目录；显式联网制品审计见 `tools/pdfium-audit.sh`。
 
-LibreOffice runtime 不进入仓库、普通测试或 Core；只进入对应目标的旧 Office 能力插件。机器契约
-`third_party/legacy-office/authority.schema.json` 与隔离 worker 会在原生包装任务中核对该安装内
-`LICENSE`、完整文件清单、ABI、artifact size/SHA-256 和依赖闭包后生成并随插件签名。
-ELF/Mach-O/PE 递归依赖也必须分别进入 package inventory 或平台精确 `systemLibraries`；
-LibreOffice core 的 MPL-2.0 不能替代随具体版本变化的所有 bundled component 许可。
+LibreOffice runtime 不进入仓库、普通测试、Core 或当前发布插件。仓库中保留的旧版 Office
+authority 与隔离代码只作为后续替换工作的历史输入，不能投影进 release set；替代方案由 #191 跟踪。
 
 Wasmtime、字体和未受审能力模型仍是占位项。FFmpeg 只进入语音能力插件，并
 必须记录具体版本、源码 URL、哈希、补丁、构建开关、许可证文本与 NOTICE 要求。
@@ -141,10 +138,10 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 `THIRD_PARTY_NOTICES.md`，以及实际包含组件要求保留的上游许可证和声明。
 控制台进入归档时，还必须从 `//:release_license_files` 复制 React 系列完整 MIT 文本与
 `npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
-统一 `release-projection` 对 Core 与三个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
+统一 `release-projection` 对 Core 与两个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
 声明，并对 Core 归档清单、最终解包成员以及插件签名/runtime inventory 做双向逐文件检查。
 签名、公证或 stapling 后的最终构件再生成 artifact sidecar；四个平台的聚合 release set
-明确区分仅 Core 与 Core 加三插件的完整离线集合。
+明确区分仅 Core 与 Core 加两个插件的完整离线集合。
 
 ## Wasmtime WASI runtime
 

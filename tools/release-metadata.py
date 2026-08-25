@@ -17,7 +17,6 @@ import zipfile
 ARTIFACTS = {
     "official.ocr.ppocrv6.imp": "ocr-plugin",
     "official.media.whisper.imp": "media-plugin",
-    "official.legacy-office.libreoffice.imp": "legacy-office-plugin",
 }
 
 
@@ -287,7 +286,6 @@ def plugin_projection(
         expected_identity = {
             "ocr-plugin": "official.ocr.ppocrv6",
             "media-plugin": "official.media.whisper",
-            "legacy-office-plugin": "official.legacy-office.libreoffice",
         }[expected_artifact]
         if (
             source_manifest["target"] != target

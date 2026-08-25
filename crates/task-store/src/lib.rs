@@ -8,36 +8,38 @@
 
 use into_markdown_core::ConversionError;
 use into_markdown_engine::{RecoveryStore, RecoveryToken, TaskPhase};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use rusqlite::OpenFlags;
 use rusqlite::{Connection, OptionalExtension as _, params};
 use serde::{Deserialize, Serialize};
 #[cfg(all(test, unix))]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::path::PathBuf;
+#[cfg(any(unix, windows))]
+use std::path::Component;
 #[cfg(unix)]
-use std::path::{Component, Path};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const SCHEMA_VERSION: i64 = 5;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const DATABASE_FILE: &str = "tasks.sqlite3";
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_DATABASE_BYTES: i64 = 256 * 1024 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const PAGE_SIZE: i64 = 4096;
 const MAX_ROWS: u32 = 100;
 const MAX_DIAGNOSTICS: usize = 64;
 const MAX_ARTIFACTS: usize = 128;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_JSON_BYTES: usize = 16 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_JSON_BYTES_I32: i32 = 16 * 1024;
 const MAX_TASKS: i64 = 100_000;
 const ID_BYTES: usize = 16;
@@ -49,7 +51,7 @@ thread_local! {
 
 #[derive(Clone)]
 struct BusyAttempt {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
 }
@@ -72,7 +74,7 @@ impl BusyOperation {
             } else {
                 *slot = Some((
                     BusyAttempt {
-                        #[cfg(unix)]
+                        #[cfg(any(unix, windows))]
                         deadline: Instant::now()
                             .checked_add(control.timeout)
                             .unwrap_or_else(Instant::now),
@@ -101,7 +103,7 @@ impl Drop for BusyOperation {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn sqlite_busy_handler(_attempt: i32) -> bool {
     let retry = BUSY_ATTEMPT.with(|slot| {
         slot.borrow().as_ref().is_some_and(|(attempt, _)| {
@@ -560,7 +562,7 @@ pub struct TaskStore {
     connection: Connection,
     interrupt: Arc<rusqlite::InterruptHandle>,
     directory: SafeDirectory,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     database_identity: (u64, u64),
     busy: BusyControl,
 }
@@ -588,10 +590,42 @@ impl TaskStore {
     /// Open or create a private store, configure WAL/durability, and migrate it.
     ///
     /// Migrations are transactional and only move forward. Unknown newer
-    /// versions fail closed. Unix is the currently audited operational target;
-    /// other targets compile but return [`TaskStoreError::PlatformUnavailable`].
+    /// versions fail closed. Unix uses directory-relative no-follow handles; Windows binds the
+    /// database and sidecars to protected current-user DACLs and physical file identities.
     pub fn open(root: impl Into<PathBuf>, busy: BusyControl) -> Result<Self, TaskStoreError> {
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let _operation = BusyOperation::enter(&busy)?;
+            let directory = SafeDirectory::open_or_create_windows(root.into())?;
+            let database_identity = directory.prepare_database_file_windows(DATABASE_FILE)?;
+            let connection = Connection::open_with_flags(
+                directory.path.join(DATABASE_FILE),
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | OpenFlags::SQLITE_OPEN_CREATE
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )
+            .map_err(map_sqlite_open)?;
+            install_limits(&connection);
+            configure_busy(&connection, &busy)?;
+            let interrupt = Arc::new(connection.get_interrupt_handle());
+            let mut interrupts = busy
+                .interrupts
+                .lock()
+                .map_err(|_| TaskStoreError::Io("busy control lock was poisoned".into()))?;
+            interrupts.try_reserve(1).map_err(|_| {
+                TaskStoreError::Limit("interrupt registration allocation failed".into())
+            })?;
+            interrupts.push(Arc::downgrade(&interrupt));
+            drop(interrupts);
+            check_schema_ceiling(&connection)?;
+            configure(&connection)?;
+            migrate(&connection)?;
+            verify_integrity(&connection)?;
+            directory.verify_database_files_windows(database_identity)?;
+            Ok(Self { connection, interrupt, directory, database_identity, busy })
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (root, busy);
             Err(TaskStoreError::PlatformUnavailable(
@@ -1406,7 +1440,9 @@ impl TaskStore {
     fn preflight(&self) -> Result<(), TaskStoreError> {
         #[cfg(unix)]
         return self.directory.verify_database_files(self.database_identity);
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        return self.directory.verify_database_files_windows(self.database_identity);
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = &self.directory;
             Err(TaskStoreError::PlatformUnavailable(
@@ -1593,7 +1629,7 @@ impl TaskStore {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn configure_busy(connection: &Connection, busy: &BusyControl) -> Result<(), TaskStoreError> {
     let _ = busy;
     connection.busy_handler(Some(sqlite_busy_handler)).map_err(map_sqlite_generic)
@@ -1625,7 +1661,7 @@ fn wait_for_busy(busy: &BusyControl, started: Instant) -> Result<(), TaskStoreEr
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn install_limits(connection: &Connection) {
     use rusqlite::limits::Limit;
     let _ = connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_JSON_BYTES_I32);
@@ -1635,7 +1671,7 @@ fn install_limits(connection: &Connection) {
     let _ = connection.set_limit(Limit::SQLITE_LIMIT_COMPOUND_SELECT, 16);
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
     connection
         .execute_batch(&format!(
@@ -1689,7 +1725,7 @@ fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[allow(clippy::too_many_lines)]
 fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
     let version: i64 = connection
@@ -1828,7 +1864,7 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn check_schema_ceiling(connection: &Connection) -> Result<(), TaskStoreError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -1845,7 +1881,7 @@ fn check_schema_ceiling(connection: &Connection) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_integrity(connection: &Connection) -> Result<(), TaskStoreError> {
     let result: String = connection
         .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
@@ -2085,7 +2121,7 @@ fn is_interrupt(error: &rusqlite::Error) -> bool {
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn map_sqlite_open(error: rusqlite::Error) -> TaskStoreError {
     map_sqlite_generic(error)
 }
@@ -2390,6 +2426,78 @@ impl SafeDirectory {
     }
 }
 
+#[cfg(windows)]
+impl SafeDirectory {
+    fn open_or_create_windows(path: PathBuf) -> Result<Self, TaskStoreError> {
+        let path = resolved_absolute(path)?;
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                into_markdown_process_plugin::create_windows_plugin_store_directory(&path)
+                    .map_err(|error| TaskStoreError::UnsafePath(error.to_string()))?;
+            }
+            Err(error) => return Err(TaskStoreError::Io(error.to_string())),
+        }
+        into_markdown_process_plugin::verify_windows_plugin_store_path(&path)
+            .map_err(|error| TaskStoreError::UnsafePath(error.to_string()))?;
+        Ok(Self { path })
+    }
+
+    fn prepare_database_file_windows(&self, name: &str) -> Result<(u64, u64), TaskStoreError> {
+        let path = self.path.join(name);
+        match std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
+            Ok(file) => file.sync_all().map_err(|error| TaskStoreError::Io(error.to_string()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(TaskStoreError::Io(error.to_string())),
+        }
+        self.private_file_identity_windows(name)
+    }
+
+    fn private_file_identity_windows(&self, name: &str) -> Result<(u64, u64), TaskStoreError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let path = self.path.join(name);
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&path)
+            .map_err(|error| TaskStoreError::UnsafePath(error.to_string()))?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .custom_flags(0x0020_0000)
+            .open(&path)
+            .map_err(|error| TaskStoreError::Io(error.to_string()))?;
+        let information = winapi_util::file::information(&file)
+            .map_err(|error| TaskStoreError::Io(error.to_string()))?;
+        if !file.metadata().map_err(|error| TaskStoreError::Io(error.to_string()))?.is_file()
+            || information.file_attributes() & 0x400 != 0
+            || information.number_of_links() != 1
+        {
+            return Err(TaskStoreError::UnsafePath(
+                "SQLite authority is not a singly linked physical file".into(),
+            ));
+        }
+        Ok((information.volume_serial_number(), information.file_index()))
+    }
+
+    fn verify_database_files_windows(
+        &self,
+        database_identity: (u64, u64),
+    ) -> Result<(), TaskStoreError> {
+        if self.private_file_identity_windows(DATABASE_FILE)? != database_identity {
+            return Err(TaskStoreError::UnsafePath("SQLite database identity changed".into()));
+        }
+        for name in [format!("{DATABASE_FILE}-wal"), format!("{DATABASE_FILE}-shm")] {
+            match std::fs::symlink_metadata(self.path.join(&name)) {
+                Ok(_) => {
+                    let _ = self.private_file_identity_windows(&name)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(TaskStoreError::Io(error.to_string())),
+            }
+        }
+        into_markdown_process_plugin::verify_windows_plugin_store_path(&self.path)
+            .map_err(|error| TaskStoreError::UnsafePath(error.to_string()))
+    }
+}
+
 #[cfg(unix)]
 fn private_directory_identity(fd: &rustix::fd::OwnedFd) -> Result<(u64, u64), TaskStoreError> {
     let stat = rustix::fs::fstat(fd).map_err(path_io)?;
@@ -2457,6 +2565,39 @@ fn resolved_absolute(path: PathBuf) -> Result<PathBuf, TaskStoreError> {
     Ok(resolved)
 }
 
+#[cfg(windows)]
+fn resolved_absolute(path: PathBuf) -> Result<PathBuf, TaskStoreError> {
+    use std::os::windows::fs::MetadataExt as _;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map_err(|error| TaskStoreError::Io(error.to_string()))?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir => {
+                return Err(TaskStoreError::UnsafePath(
+                    "store root must be absolute and normalized".into(),
+                ));
+            }
+        }
+    }
+    if !normalized.is_absolute() || normalized.parent().is_none() {
+        return Err(TaskStoreError::UnsafePath("volume root is not a store".into()));
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(&normalized)
+        && metadata.file_attributes() & 0x400 != 0
+    {
+        return Err(TaskStoreError::UnsafePath("store root cannot be a reparse point".into()));
+    }
+    Ok(normalized)
+}
+
 #[cfg(unix)]
 fn path_io(error: rustix::io::Errno) -> TaskStoreError {
     if error == rustix::io::Errno::LOOP {
@@ -2469,7 +2610,7 @@ fn path_io(error: rustix::io::Errno) -> TaskStoreError {
 #[cfg(all(test, unix))]
 mod tests;
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(any(unix, windows))))]
 mod non_unix_tests {
     use super::{BusyControl, TaskStore, TaskStoreError};
 
@@ -2482,5 +2623,23 @@ mod non_unix_tests {
 
         assert!(matches!(result, Err(TaskStoreError::PlatformUnavailable(_))));
         assert!(!root.exists());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::{BusyControl, TaskStore};
+
+    #[test]
+    fn open_creates_a_private_identity_bound_store() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("windows-store");
+        let store = TaskStore::open(&root, BusyControl::default()).unwrap();
+        assert!(store.list(1, None).unwrap().is_empty());
+        into_markdown_process_plugin::verify_windows_plugin_store_path(&root).unwrap();
+        into_markdown_process_plugin::verify_windows_plugin_store_child(
+            &root.join("tasks.sqlite3"),
+        )
+        .unwrap();
     }
 }

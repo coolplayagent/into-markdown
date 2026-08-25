@@ -26,6 +26,7 @@ tempfile.workspace = true
 zip.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+into-markdown-process-plugin = { path = "../../crates/process-plugin" }
 windows-sys.workspace = true
 
 [lints.rust]

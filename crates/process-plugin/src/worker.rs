@@ -214,6 +214,9 @@ pub fn serve_raw_with_isolated_stdout(
     serve_raw_with_writer(plugin_id, maximum_frame_bytes, Box::new(writer), handler)
 }
 
+// Keeping the complete handshake, request validation, cancellation wiring, and terminal frame
+// transition in one function makes the protocol state machine auditable as a single sequence.
+#[allow(clippy::too_many_lines)]
 fn serve_raw_with_writer(
     plugin_id: &str,
     maximum_frame_bytes: u32,
@@ -273,14 +276,21 @@ fn serve_raw_with_writer(
         }
         (None, Some(path)) if path == "source.bin" => {
             let path = std::env::current_dir()?.join(path);
-            let canonical = path.canonicalize()?;
-            let working = std::env::current_dir()?.canonicalize()?;
-            if canonical.parent() != Some(working.as_path())
-                || !std::fs::symlink_metadata(&canonical)?.is_file()
-            {
+            let metadata = std::fs::symlink_metadata(&path)?;
+            #[cfg(windows)]
+            let reparse = {
+                use std::os::windows::fs::MetadataExt as _;
+                metadata.file_attributes() & 0x0000_0400 != 0
+            };
+            #[cfg(not(windows))]
+            let reparse = metadata.file_type().is_symlink();
+            // The wire contract accepts only this literal one-component name. The host created
+            // it with create-new semantics in the sandbox-owned working directory, and the
+            // AppContainer has read-only access, so no path canonicalization is needed here.
+            if reparse || !metadata.is_file() {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "source path is invalid"));
             }
-            (Vec::new(), Some(canonical))
+            (Vec::new(), Some(path))
         }
         _ => {
             return Err(io::Error::new(
@@ -372,8 +382,10 @@ impl Drop for ProtocolWriter {
 }
 
 fn isolate_protocol_stdout() -> io::Result<ProtocolWriter> {
-    io::stdout().flush()?;
     const STDOUT_DESCRIPTOR: libc::c_int = 1;
+    const STDERR_DESCRIPTOR: libc::c_int = 2;
+
+    io::stdout().flush()?;
     // SAFETY: duplicating a valid inherited stdout descriptor does not alias Rust ownership;
     // `ProtocolWriter` assumes responsibility for closing the duplicate.
     let protocol = unsafe { libc::dup(STDOUT_DESCRIPTOR) };
@@ -385,7 +397,6 @@ fn isolate_protocol_stdout() -> io::Result<ProtocolWriter> {
         let _ = unsafe { libc::close(protocol) };
         return Err(error);
     }
-    const STDERR_DESCRIPTOR: libc::c_int = 2;
     // SAFETY: both inherited standard descriptors are open. `dup2` atomically makes ambient
     // stdout use the host's separately drained stderr pipe while the duplicated protocol
     // descriptor continues to reference the original stdout pipe.

@@ -17,6 +17,7 @@ pub(crate) struct Policy {
     pub file_limit: u64,
     pub open_file_limit: u32,
     pub system_read_paths: Vec<PathBuf>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub inherited_process_sandbox: bool,
     #[cfg(windows)]
     pub app_container_sid: String,
@@ -176,22 +177,31 @@ fn set_number<T: std::str::FromStr>(slot: &mut Option<T>, value: &OsString) -> R
 }
 
 fn canonical_directory(path: &Path) -> Result<(), ()> {
+    #[cfg(windows)]
+    return crate::authority::authenticated_windows_path(path, true).map(|_| ()).map_err(|_| ());
+    #[cfg(not(windows))]
     if !path.is_absolute() || !path.is_dir() || path.canonicalize().map_err(|_| ())? != path {
         return Err(());
     }
+    #[cfg(not(windows))]
     Ok(())
 }
 
 fn canonical_file(path: &Path) -> Result<(), ()> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
-    if !path.is_absolute()
-        || metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || path.canonicalize().map_err(|_| ())? != path
+    #[cfg(windows)]
+    return crate::authority::authenticated_windows_path(path, false).map(|_| ()).map_err(|_| ());
+    #[cfg(not(windows))]
     {
-        return Err(());
+        let metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
+        if !path.is_absolute()
+            || metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || path.canonicalize().map_err(|_| ())? != path
+        {
+            return Err(());
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -231,9 +241,14 @@ fn system_file(path: &Path) -> Result<(), ()> {
     DYLD_CACHE_IDENTITIES.contains(&value).then_some(()).ok_or(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn system_file(path: &Path) -> Result<(), ()> {
     canonical_file(path)
+}
+
+#[cfg(windows)]
+fn system_file(path: &Path) -> Result<(), ()> {
+    crate::authority::authenticated_windows_system_path(path).map_err(|_| ())
 }
 
 #[cfg(target_os = "linux")]

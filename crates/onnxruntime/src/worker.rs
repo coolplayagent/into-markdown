@@ -5,7 +5,7 @@ use super::protocol::{
     self, ERROR, ERROR_ABI, ERROR_INFERENCE, ERROR_PROTOCOL, ERROR_RESOURCE, ERROR_SESSION, Frame,
     INIT, INIT_OK, MAX_MESSAGES, RUN, RUN_OK, SHUTDOWN,
 };
-use super::{RuntimeLibrary, authority, current_target, ort_error};
+use super::{RuntimeLibrary, authority, current_target, ort_error, private_tempdir};
 use into_markdown_core::{ConversionError, ExecutionContext, Tensor};
 use into_markdown_ocr::{Dimension, ModelContract, ModelMetadata, SessionOptions, TensorSpec};
 use std::ffi::OsString;
@@ -41,18 +41,18 @@ impl WorkerClient {
         contract: &ModelContract,
         options: &SessionOptions,
         context: &ExecutionContext,
+        authenticated_snapshot: bool,
     ) -> Result<(Self, ModelMetadata), ConversionError> {
         context.checkpoint()?;
         let limits = worker_limits(library, model, contract)?;
-        let working_directory = tempfile::Builder::new()
-            .prefix("into-md-ort-worker-cwd-")
-            .tempdir()
+        let working_directory = private_tempdir("into-md-ort-worker-cwd-", authenticated_snapshot)
             .map_err(|_| ort_error("workerLaunch"))?;
         let mut process = spawn_worker(
             worker_executable,
             library.private_path(),
             working_directory.path(),
             limits,
+            authenticated_snapshot,
         )?;
         let stdin = process.child.stdin.take().ok_or_else(|| ort_error("workerLaunch"))?;
         let mut stdout = process.child.stdout.take().ok_or_else(|| ort_error("workerLaunch"))?;
@@ -228,6 +228,9 @@ struct WorkerProcess {
 }
 
 impl WorkerProcess {
+    // The cross-platform protocol loop calls one uniform hook. Windows and Linux enforce the
+    // limit at process creation, while macOS additionally samples the child's physical footprint.
+    #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self, clippy::unnecessary_wraps))]
     fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
         #[cfg(target_os = "macos")]
         {
@@ -291,8 +294,9 @@ fn spawn_worker(
     runtime: &Path,
     working_directory: &Path,
     limits: WorkerLimits,
+    authenticated_snapshot: bool,
 ) -> Result<WorkerProcess, ConversionError> {
-    validate_worker_path(executable)?;
+    validate_worker_path(executable, authenticated_snapshot)?;
     if !runtime.is_absolute() || !working_directory.is_absolute() {
         return Err(ort_error("workerLaunch"));
     }
@@ -430,7 +434,10 @@ const fn align_physical_memory_limit(limit: u64, page_size: u64) -> Option<u64> 
     if aligned == 0 { None } else { Some(aligned) }
 }
 
-pub(crate) fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
+pub(crate) fn validate_worker_path(
+    path: &Path,
+    authenticated_snapshot: bool,
+) -> Result<(), ConversionError> {
     if !path.is_absolute() {
         return Err(ort_error("workerLaunch"));
     }
@@ -438,6 +445,19 @@ pub(crate) fn validate_worker_path(path: &Path) -> Result<(), ConversionError> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(ort_error("workerLaunch"));
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(ort_error("workerLaunch"));
+        }
+        if authenticated_snapshot {
+            return Ok(());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = authenticated_snapshot;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

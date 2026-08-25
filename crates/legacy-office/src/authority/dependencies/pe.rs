@@ -173,7 +173,10 @@ fn parse_descriptors(
         if name_rva >= directory.rva && name_rva < checked_end(directory.rva, directory.size)? {
             return Err(malformed());
         }
-        needed.insert(rva_string(bytes, sections, name_rva)?);
+        // PE import identities and the Windows loader are case-insensitive.
+        // Normalize only ASCII DLL names; resolved package paths are rebound to
+        // the exact manifest spelling by the dependency authority.
+        needed.insert(rva_string(bytes, sections, name_rva)?.to_ascii_lowercase());
     }
     terminated.then_some(()).ok_or_else(malformed)
 }

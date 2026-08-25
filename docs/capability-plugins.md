@@ -1,6 +1,6 @@
 # 自包含能力插件
 
-旧 Office、OCR、语音转写和说话人分离通过独立的 capability provider 提供。宿主只保留类型化
+OCR、语音转写和说话人分离通过独立的 capability provider 提供。宿主只保留类型化
 SPI、统一插件管理、确定性路由和隔离进程适配器；官方 PP-OCRv6、Whisper 与
 Silero/3D-Speaker 实现位于独立可执行文件中，不在 `into-md` 进程内初始化推理运行时。
 
@@ -17,15 +17,14 @@ flowchart LR
 
 ## 安装体验
 
-每个平台发布三个独立、已签名的本地包：
+每个平台发布两个独立、已签名的本地包：
 
-- `official.legacy-office.libreoffice.imp`：旧 Office provider、LibreOffice runtime 与 worker；
 - `official.ocr.ppocrv6.imp`：OCR provider、受审计 ONNX Runtime、worker、模型与字典；
 - `official.media.whisper.imp`：转写/分离 provider、受审计 FFmpeg、ONNX Runtime、worker 与模型。
 
-`into-md setup legacy-office|ocr|media` 下载、安装并验证整个能力插件。模型不会在转换时
-自动下载，也不是可独立安装、更新或切换的产品对象。Web 控制台在旧 Office 文件行、OCR
-控件或会议转写控件旁提供安装操作，进度和错误显示在相同区域。
+`into-md setup ocr|media` 下载、安装并验证整个能力插件。模型不会在转换时
+自动下载，也不是可独立安装、更新或切换的产品对象。Web 控制台在 OCR 控件或会议转写
+控件旁提供安装操作，进度和错误显示在相同区域。
 
 第三方本地包使用显式信任安装：
 
@@ -56,7 +55,7 @@ into-md plugins verify vendor.ocr --scope global --json
 - provider 运行时、经过认证的 helper、库、固定模型、字典和许可/SBOM；安装后无需读取
   Core 的共享模型目录即可离线运行。
 
-能力分为 `legacy-office`、`ocr`、`transcription` 和 `diarization`。每项能力独立声明
+当前发布能力分为 `ocr`、`transcription` 和 `diarization`。每项能力独立声明
 provider ID、语言、媒体类型、最大输入/输出/内存/临时空间和超时。host 与 provider 使用
 `process-v1` 长度前缀 JSON 协议；小输入通过 pipe，大输入写入请求私有暂存文件。
 OCR 返回输入 SHA-256、尺寸和方向绑定的 DTO，转写与分离返回经过 IR 校验的时间片段，
@@ -109,5 +108,5 @@ fallbacks = []
 发行构建通过通用 `package_plugin` 工具对精确 runtime inventory 签名并生成 `.imp`；
 能力包没有旁路打包器。发布私钥只从 CI secret `PLUGIN_SIGNING_KEY_BASE64` 注入，仓库和
 产物仅包含公钥记录。Core 携带 `official-publisher.json`，把官方包 HTTPS 地址、包摘要、
-签名 key ID 与公钥指纹固定下来，`setup` 在注册前重新认证这些值。三个包分别发布、签名
+签名 key ID 与公钥指纹固定下来，`setup` 在注册前重新认证这些值。两个包分别发布、签名
 并生成 SBOM，Core 不包含它们的 runtime 或模型资源。

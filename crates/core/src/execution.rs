@@ -212,6 +212,7 @@ struct ExecutionShared {
     limits: ResourceLimits,
     memory_bytes: AtomicU64,
     temporary_bytes: AtomicU64,
+    temporary_directory: PathBuf,
     media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
 }
 
@@ -249,12 +250,38 @@ impl ExecutionContext {
     /// Construct a context from request controls and conversion limits.
     #[must_use]
     pub fn new(options: ExecutionOptions, limits: ResourceLimits) -> Self {
-        Self::new_with_timer_spawner(options, limits, std::thread::Builder::spawn)
+        Self::new_with_timer_spawner(
+            options,
+            limits,
+            std::env::temp_dir(),
+            std::thread::Builder::spawn,
+        )
+    }
+
+    /// Construct a context whose automatically cleaned temporary files stay in an
+    /// already-authorized request directory.
+    ///
+    /// Sandboxed process hosts use this when the platform temp-directory API points
+    /// outside the sandbox despite an explicit private working directory.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new_with_temporary_directory(
+        options: ExecutionOptions,
+        limits: ResourceLimits,
+        temporary_directory: PathBuf,
+    ) -> Self {
+        Self::new_with_timer_spawner(
+            options,
+            limits,
+            temporary_directory,
+            std::thread::Builder::spawn,
+        )
     }
 
     fn new_with_timer_spawner<F>(
         options: ExecutionOptions,
         limits: ResourceLimits,
+        temporary_directory: PathBuf,
         spawn: F,
     ) -> Self
     where
@@ -279,6 +306,7 @@ impl ExecutionContext {
             limits,
             memory_bytes: AtomicU64::new(0),
             temporary_bytes: AtomicU64::new(0),
+            temporary_directory,
             media_checkpoint: Mutex::new(None),
         });
         if let Some(deadline) = timer_deadline {
@@ -618,7 +646,14 @@ impl ExecutionContext {
     ///
     /// Returns a cancellation, timeout, resource-limit, or local I/O error.
     pub fn temporary_file(&self, prefix: &str) -> Result<TemporaryFile, ConversionError> {
-        self.temporary_file_in(std::env::temp_dir(), prefix)
+        self.temporary_file_in(&self.shared.temporary_directory, prefix)
+    }
+
+    /// Directory used by request-scoped native helpers for private temporary children.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn temporary_directory(&self) -> &Path {
+        &self.shared.temporary_directory
     }
 
     /// Create an automatically cleaned, accounted temporary file in `directory`.
@@ -1384,6 +1419,7 @@ mod tests {
                 ..ExecutionOptions::default()
             },
             ResourceLimits::default(),
+            std::env::temp_dir(),
             |_, _| Err(io::Error::other("injected deadline timer spawn failure")),
         );
         let clone = context.clone();
@@ -1419,6 +1455,7 @@ mod tests {
             let context = ExecutionContext::new_with_timer_spawner(
                 ExecutionOptions { timeout: Some(timeout), ..ExecutionOptions::default() },
                 ResourceLimits::default(),
+                std::env::temp_dir(),
                 |_, _| {
                     spawn_calls.fetch_add(1, Ordering::AcqRel);
                     Err(io::Error::other("timer must not be spawned"))
@@ -1444,6 +1481,7 @@ mod tests {
                 ..ExecutionOptions::default()
             },
             ResourceLimits::default(),
+            std::env::temp_dir(),
             |_, _| Err(io::Error::other("injected deadline timer spawn failure")),
         );
         drop(listener);

@@ -35,7 +35,10 @@ rust_test(
         "//fixtures:manifest.json",
         "//fixtures:semantic-layout-quality-authority.json",
     ],
-    data = ["//fixtures:corpus"],
+    data = [
+        "//fixtures:corpus",
+        "//fixtures:manifest.json",
+    ],
     edition = "2024",
     deps = [
         ":layout_quality",

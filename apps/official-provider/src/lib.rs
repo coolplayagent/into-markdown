@@ -24,6 +24,10 @@ const LEGACY_OFFICE_PROVIDER_ID: &str = "builtin.legacy-office.libreoffice";
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Serve one OCR request on the authenticated process protocol.
+///
+/// # Errors
+///
+/// Returns an I/O error when the authenticated worker protocol cannot be served.
 pub fn serve_ocr() -> std::io::Result<()> {
     serve_raw_with_isolated_stdout(
         OCR_PLUGIN_ID,
@@ -66,7 +70,7 @@ pub fn serve_ocr() -> std::io::Result<()> {
                 },
                 &context,
             ))
-            .map_err(worker_error)?;
+            .map_err(|error| worker_error(&error))?;
             let into_markdown::OcrRecognition::Bound(result) = recognition else {
                 return Err(WorkerError::new("invalidResult", "official OCR result is not bound"));
             };
@@ -83,14 +87,18 @@ pub fn serve_ocr() -> std::io::Result<()> {
 }
 
 /// Serve one speech-transcription or speaker-diarization request.
+///
+/// # Errors
+///
+/// Returns an I/O error when the authenticated worker protocol cannot be served.
 pub fn serve_media() -> std::io::Result<()> {
     serve_raw_with_isolated_stdout(
         MEDIA_PLUGIN_ID,
         MAX_FRAME_BYTES,
         |request, events, cancellation| match request.input_format.as_str() {
-            "readiness" => media_readiness(request, cancellation),
-            "transcription" => transcribe(request, events, cancellation),
-            "diarization" => diarize(request, events, cancellation),
+            "readiness" => media_readiness(&request, cancellation),
+            "transcription" => transcribe(&request, &events, cancellation),
+            "diarization" => diarize(&request, &events, cancellation),
             _ => Err(WorkerError::new(
                 "unsupportedOperation",
                 "expected transcription or diarization operation",
@@ -99,7 +107,11 @@ pub fn serve_media() -> std::io::Result<()> {
     )
 }
 
-/// Serve legacy Office normalization using the plugin-owned LibreOffice runtime.
+/// Serve legacy Office normalization using the plugin-owned `LibreOffice` runtime.
+///
+/// # Errors
+///
+/// Returns an I/O error when the authenticated worker protocol cannot be served.
 pub fn serve_legacy_office() -> std::io::Result<()> {
     serve_raw_with_isolated_stdout(
         LEGACY_OFFICE_PLUGIN_ID,
@@ -107,6 +119,7 @@ pub fn serve_legacy_office() -> std::io::Result<()> {
         |request, events, cancellation| {
             let context = execution_context(cancellation, &ResourceLimits::default());
             let root = distribution_root()?.join("legacy-office-runtime");
+            #[allow(unused_mut)]
             let mut runtime_config = into_markdown_legacy_office::RuntimeConfig::new(
                 root.join("authority.json"),
                 root.clone(),
@@ -127,7 +140,7 @@ pub fn serve_legacy_office() -> std::io::Result<()> {
                         "legacy Office readiness identity is invalid",
                     ));
                 }
-                runtime.verify(&context).map_err(worker_error)?;
+                runtime.verify(&context).map_err(|error| worker_error(&error))?;
                 return Ok("{\"ready\":true}".into());
             }
             if request.input_format != "legacy-office" {
@@ -159,7 +172,7 @@ pub fn serve_legacy_office() -> std::io::Result<()> {
                     parameters.maximum_output_bytes,
                     &context,
                 )
-                .map_err(worker_error)?;
+                .map_err(|error| worker_error(&error))?;
             events
                 .progress(
                     "converting",
@@ -197,10 +210,10 @@ pub fn serve_legacy_office() -> std::io::Result<()> {
 }
 
 fn media_readiness(
-    request: WorkerRequest,
+    request: &WorkerRequest,
     cancellation: CancellationToken,
 ) -> Result<String, WorkerError> {
-    let mut parameters: ReadinessParameters = parameters(&request)?;
+    let mut parameters: ReadinessParameters = parameters(request)?;
     if parameters.schema_version != 1 {
         return Err(WorkerError::new("invalidRequest", "media readiness version is invalid"));
     }
@@ -229,11 +242,11 @@ fn media_readiness(
 }
 
 fn transcribe(
-    request: WorkerRequest,
-    events: WorkerEvents,
+    request: &WorkerRequest,
+    events: &WorkerEvents,
     cancellation: CancellationToken,
 ) -> Result<String, WorkerError> {
-    let parameters: TranscriptionParameters = parameters(&request)?;
+    let parameters: TranscriptionParameters = parameters(request)?;
     if parameters.schema_version != 1 || parameters.capability_id != "transcription" {
         return Err(WorkerError::new(
             "invalidRequest",
@@ -242,7 +255,7 @@ fn transcribe(
     }
     let context = execution_context(cancellation, &parameters.options.limits);
     events.progress("ai", Some(0), Some(1), Some("provider.transcription.start".into())).ok();
-    let source = source_bytes(&request, &context)?;
+    let source = source_bytes(request, &context)?;
     let root = distribution_root()?;
     let transcriber = asr_service(&root, &parameters.options, &context)?;
     let result = block_on(transcriber.transcribe(
@@ -253,18 +266,18 @@ fn transcribe(
         },
         &context,
     ))
-    .map_err(worker_error)?;
+    .map_err(|error| worker_error(&error))?;
     events.progress("ai", Some(1), Some(1), Some("provider.transcription.complete".into())).ok();
     serde_json::to_string(&result)
         .map_err(|_| WorkerError::new("invalidResult", "transcription result serialization failed"))
 }
 
 fn diarize(
-    request: WorkerRequest,
-    events: WorkerEvents,
+    request: &WorkerRequest,
+    events: &WorkerEvents,
     cancellation: CancellationToken,
 ) -> Result<String, WorkerError> {
-    let parameters: DiarizationParameters = parameters(&request)?;
+    let parameters: DiarizationParameters = parameters(request)?;
     if parameters.schema_version != 1 || parameters.capability_id != "diarization" {
         return Err(WorkerError::new(
             "invalidRequest",
@@ -273,7 +286,7 @@ fn diarize(
     }
     let context = execution_context(cancellation, &parameters.options.limits);
     events.progress("ai", Some(0), Some(1), Some("provider.diarization.start".into())).ok();
-    let source = source_bytes(&request, &context)?;
+    let source = source_bytes(request, &context)?;
     let root = distribution_root()?;
     let diarizer = diarization_service(&root, &parameters.options, &context)?;
     let result = block_on(diarizer.diarize(
@@ -286,7 +299,7 @@ fn diarize(
         },
         &context,
     ))
-    .map_err(worker_error)?;
+    .map_err(|error| worker_error(&error))?;
     events.progress("ai", Some(1), Some(1), Some("provider.diarization.complete".into())).ok();
     serde_json::to_string(&result)
         .map_err(|_| WorkerError::new("invalidResult", "diarization result serialization failed"))
@@ -299,12 +312,12 @@ fn ocr_service(
 ) -> Result<std::sync::Arc<dyn into_markdown::OcrEngine>, WorkerError> {
     let model_root = root.join("models");
     let runtime_root = root.join("onnxruntime");
-    into_markdown::installed_ocr_service(
+    into_markdown::installed_ocr_service_in_read_only_sandbox(
         &InstalledOcrConfig {
             writable_model_root: model_root.clone(),
             bundled_model_root: Some(model_root),
             runtime_library: into_markdown::expected_ocr_runtime_library(&runtime_root)
-                .map_err(worker_error)?,
+                .map_err(|error| worker_error(&error))?,
             runtime_trusted_root: runtime_root,
             worker_executable: root.join("bin").join(worker_name()),
             model_bundle: "pp-ocrv6-tiny-zh-en".into(),
@@ -312,7 +325,7 @@ fn ocr_service(
         options,
         context,
     )
-    .map_err(worker_error)
+    .map_err(|error| worker_error(&error))
 }
 
 fn asr_service(
@@ -334,7 +347,7 @@ fn asr_service(
         options,
         context,
     )
-    .map_err(worker_error)
+    .map_err(|error| worker_error(&error))
 }
 
 fn diarization_service(
@@ -350,7 +363,7 @@ fn diarization_service(
             writable_model_root: model_root.clone(),
             bundled_model_root: Some(model_root),
             runtime_library: into_markdown::expected_ocr_runtime_library(&runtime_root)
-                .map_err(worker_error)?,
+                .map_err(|error| worker_error(&error))?,
             runtime_trusted_root: runtime_root,
             worker_executable: root.join("bin").join(worker_name()),
             ffmpeg_executable: ffmpeg_root.join(ffmpeg_name()),
@@ -361,7 +374,7 @@ fn diarization_service(
         options,
         context,
     )
-    .map_err(worker_error)
+    .map_err(|error| worker_error(&error))
 }
 
 fn parameters<T: serde::de::DeserializeOwned>(request: &WorkerRequest) -> Result<T, WorkerError> {
@@ -386,7 +399,7 @@ fn source_bytes(
         let size = fs::metadata(path)
             .map_err(|_| WorkerError::new("invalidRequest", "staged source is unavailable"))?
             .len();
-        let memory = context.reserve_memory(size).map_err(worker_error)?;
+        let memory = context.reserve_memory(size).map_err(|error| worker_error(&error))?;
         let bytes = fs::read(path)
             .map_err(|_| WorkerError::new("invalidRequest", "staged source cannot be read"))?;
         if bytes.len() as u64 != size {
@@ -401,17 +414,16 @@ fn source_bytes(
 }
 
 fn execution_context(cancellation: CancellationToken, limits: &ResourceLimits) -> ExecutionContext {
-    ExecutionContext::new(
+    let temporary_directory = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    ExecutionContext::new_with_temporary_directory(
         ExecutionOptions { cancellation, ..ExecutionOptions::default() },
         limits.clone(),
+        temporary_directory,
     )
 }
 
 fn distribution_root() -> Result<PathBuf, WorkerError> {
-    let executable =
-        std::env::current_exe().and_then(|path| path.canonicalize()).map_err(|_| {
-            WorkerError::new("componentUnavailable", "provider executable is unavailable")
-        })?;
+    let executable = current_provider_executable()?;
     let parent = executable.parent().ok_or_else(|| {
         WorkerError::new("componentUnavailable", "provider runtime root is unavailable")
     })?;
@@ -422,7 +434,36 @@ fn distribution_root() -> Result<PathBuf, WorkerError> {
     })
 }
 
-fn worker_error(error: ConversionError) -> WorkerError {
+fn current_provider_executable() -> Result<PathBuf, WorkerError> {
+    let executable = std::env::current_exe().map_err(|_| {
+        WorkerError::new("componentUnavailable", "provider executable is unavailable")
+    })?;
+    #[cfg(not(windows))]
+    {
+        return executable.canonicalize().map_err(|_| {
+            WorkerError::new("componentUnavailable", "provider executable is unavailable")
+        });
+    }
+    #[cfg(windows)]
+    {
+        // GetModuleFileNameW, which backs current_exe, returns the loaded image's absolute
+        // kernel identity. Canonicalizing it reopens every ancestor and fails deliberately for
+        // an AppContainer whose snapshot parent grants the worker no directory-list authority.
+        // The manager already rejected reparse points, hash-verified the private snapshot, and
+        // retained it for this process lifetime, so preserve that authenticated image path.
+        if executable.is_absolute()
+            && !executable
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            Ok(executable)
+        } else {
+            Err(WorkerError::new("componentUnavailable", "provider executable identity is invalid"))
+        }
+    }
+}
+
+fn worker_error(error: &ConversionError) -> WorkerError {
     WorkerError::new(error.code().as_str(), error.to_string())
 }
 
@@ -579,7 +620,7 @@ mod speech_tests {
             max_memory_bytes: 1536 * 1024 * 1024,
             max_file_bytes: 4 * 1024 * 1024 * 1024,
             max_open_files: 1024,
-            request_timeout: Duration::from_secs(10 * 60),
+            request_timeout: Duration::from_mins(10),
             allow_child_processes: true,
             ..RuntimePolicy::default()
         };
@@ -665,6 +706,13 @@ mod speech_tests {
 mod tests {
     use super::*;
     use into_markdown::OcrPolicy;
+
+    #[test]
+    fn provider_image_identity_resolves_to_an_absolute_distribution_root() {
+        let executable = current_provider_executable().unwrap();
+        assert!(executable.is_absolute());
+        assert!(distribution_root().unwrap().is_absolute());
+    }
 
     #[test]
     #[ignore = "requires a self-contained INTO_MD_PROVIDER_RUNTIME and INTO_MD_OCR_FIXTURE"]

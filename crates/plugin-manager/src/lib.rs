@@ -33,8 +33,10 @@ const LOCK_NAME: &str = ".manager.lock";
 const TRUST_NAME: &str = ".trusted-signers.json";
 const MAX_PACKAGE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_FILES: usize = 10_000;
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_FILES: usize = 25_000;
+// A complete manifest can bind 25,000 legal paths of up to 1,024 ASCII bytes each. Keep the
+// manifest independently bounded while allowing the declared file-count/path-size contract.
+const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 8 * 1024 * 1024;
 static NONCE: AtomicU64 = AtomicU64::new(1);
 
@@ -288,9 +290,67 @@ impl PackageSnapshot {
 struct PreparedProcessSnapshot {
     authority: into_markdown_process_plugin::PluginManifest,
     installed: InstalledPlugin,
-    _snapshot_directory: tempfile::TempDir,
+    _snapshot_directory: PrivateSnapshotDirectory,
     _snapshot_reservation: ResourceReservation,
     _metadata_reservation: ResourceReservation,
+}
+
+struct PrivateSnapshotDirectory {
+    #[cfg(not(windows))]
+    directory: tempfile::TempDir,
+    #[cfg(windows)]
+    path: PathBuf,
+}
+
+impl PrivateSnapshotDirectory {
+    fn create(prefix: &str) -> Result<Self, ManagerError> {
+        #[cfg(not(windows))]
+        {
+            return tempfile::Builder::new()
+                .prefix(prefix)
+                .tempdir()
+                .map(|directory| Self { directory })
+                .map_err(ManagerError::from);
+        }
+        #[cfg(windows)]
+        {
+            let mut last_error = None;
+            for _ in 0..16 {
+                let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+                let path =
+                    std::env::temp_dir().join(format!("{prefix}{}-{nonce}", std::process::id()));
+                match into_markdown_process_plugin::create_windows_plugin_store_directory(&path) {
+                    Ok(()) => return Ok(Self { path }),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            Err(ManagerError::new(
+                ManagerErrorCode::Io,
+                last_error.map_or_else(
+                    || "private runtime snapshot directory unavailable".to_owned(),
+                    |error| error.to_string(),
+                ),
+            ))
+        }
+    }
+
+    fn path(&self) -> &Path {
+        #[cfg(not(windows))]
+        {
+            self.directory.path()
+        }
+        #[cfg(windows)]
+        {
+            &self.path
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PrivateSnapshotDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 /// A request policy bound to one authenticated immutable process snapshot.
@@ -1325,8 +1385,17 @@ impl PluginManager {
         // never exposed to the worker.
         let (installed, _, manifest, manifest_bytes) =
             self.inspect_installed_status_unlocked(id, execution)?;
+        let metadata_bytes = u64::try_from(manifest_bytes.len())
+            .unwrap_or(u64::MAX)
+            .checked_mul(8)
+            .ok_or_else(|| {
+                ManagerError::new(
+                    ManagerErrorCode::ResourceLimit,
+                    "runtime manifest memory plan overflow",
+                )
+            })?;
         let metadata_reservation =
-            execution.reserve_memory(MAX_MANIFEST_BYTES * 8).map_err(map_execution_error)?;
+            execution.reserve_memory(metadata_bytes).map_err(map_execution_error)?;
         if manifest.protocol != "process-v1" {
             return Err(ManagerError::new(ManagerErrorCode::UnsupportedProtocol, "not process-v1"));
         }
@@ -1359,10 +1428,7 @@ impl PluginManager {
         // The verified copy is independent of the mutable package store. Keeping it in an
         // owner-private temporary directory lets one conversion retain multiple providers from
         // the same store without holding the store-wide mutation lock for their whole lifetime.
-        let snapshot_directory = tempfile::Builder::new()
-            .prefix(&format!("into-md-plugin-dispatch-{}-", NONCE.fetch_add(1, Ordering::Relaxed)))
-            .tempdir()
-            .map_err(ManagerError::from)?;
+        let snapshot_directory = PrivateSnapshotDirectory::create("into-md-plugin-dispatch-")?;
         let snapshot = snapshot_directory.path().join("runtime");
         copy_verified_runtime_tree(
             &manifest,
@@ -2367,9 +2433,9 @@ fn validate_relative_path(value: &str) -> Result<(), ManagerError> {
             part.is_empty()
                 || part.len() > 240
                 || part.ends_with(['.', ' '])
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                || !part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@')
+                })
                 || windows_device(part)
         })
     {
@@ -3136,7 +3202,7 @@ fn copy_verified_runtime_tree(
         let mut output = OpenOptions::new().create_new(true).write(true).open(&to)?;
         let mut hasher = Sha256::new();
         let mut total = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         loop {
             execution.checkpoint().map_err(map_execution_error)?;
             let read = input.read(&mut buffer)?;
@@ -3525,23 +3591,24 @@ mod tests {
     #[test]
     fn process_read_locks_are_concurrent_and_exclude_mutation() {
         let directory = tempfile::tempdir().unwrap();
-        let first = StoreLock::acquire_shared(directory.path()).unwrap();
-        let second = StoreLock::acquire_shared(directory.path()).unwrap();
-        let error = match StoreLock::acquire(directory.path()) {
+        let root = lock_test_directory(directory.path());
+        let first = StoreLock::acquire_shared(&root).unwrap();
+        let second = StoreLock::acquire_shared(&root).unwrap();
+        let error = match StoreLock::acquire(&root) {
             Ok(_) => panic!("exclusive lock unexpectedly overlapped shared locks"),
             Err(error) => error,
         };
         assert_eq!(error.code, ManagerErrorCode::Conflict);
         drop(first);
         drop(second);
-        assert!(StoreLock::acquire(directory.path()).is_ok());
+        assert!(StoreLock::acquire(&root).is_ok());
     }
 
     #[test]
     fn startup_recovery_waits_for_a_transient_store_lock() {
         let directory = tempfile::tempdir().unwrap();
-        let held = StoreLock::acquire(directory.path()).unwrap();
-        let root = directory.path().to_owned();
+        let root = lock_test_directory(directory.path());
+        let held = StoreLock::acquire(&root).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let waiter = std::thread::spawn(move || {
             let lock = StoreLock::acquire_wait(&root).unwrap();
@@ -3552,6 +3619,16 @@ mod tests {
         drop(held);
         receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         waiter.join().unwrap();
+    }
+
+    fn lock_test_directory(parent: &Path) -> PathBuf {
+        let root = parent.join("private-lock-root");
+        #[cfg(windows)]
+        into_markdown_process_plugin::create_windows_plugin_store_directory(&root)
+            .expect("private Windows lock root");
+        #[cfg(not(windows))]
+        fs::create_dir(&root).expect("private lock root");
+        root
     }
 
     fn context() -> ExecutionContext {
@@ -4197,6 +4274,7 @@ mod tests {
             assert!(validate_package_path(invalid).is_err(), "accepted {invalid:?}");
         }
         assert!(validate_package_path("assets/image-1.png").is_ok());
+        assert!(validate_package_path("resource/ca@valencia/messages.mo").is_ok());
     }
 
     #[test]
@@ -4341,6 +4419,28 @@ mod tests {
     }
 
     #[test]
+    fn signed_manifest_larger_than_one_mebibyte_installs_within_declared_limits() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let paths = (0..6_000)
+            .map(|index| format!("resources/{index:05}-{}.bin", "a".repeat(180)))
+            .collect::<Vec<_>>();
+        let mut files = vec![("bin/plugin.exe", b"fixture".as_slice(), 0o600)];
+        files.extend(paths.iter().map(|path| (path.as_str(), b"".as_slice(), 0o600)));
+        let (package, trusted) =
+            signed_package_with_files("large.fixture", "bin/plugin.exe", files);
+        let mut archive = ZipArchive::new(Cursor::new(&package)).expect("package ZIP");
+        let manifest_bytes = archive.by_name(MANIFEST_NAME).expect("manifest").size();
+        assert!(manifest_bytes > 1024 * 1024);
+        assert!(manifest_bytes <= MAX_MANIFEST_BYTES);
+        drop(archive);
+
+        let manager =
+            PluginManager::open(temporary.path().join("plugins"), trusted).expect("manager");
+        manager.install_bytes(&package, None, &context()).expect("large valid manifest");
+        assert!(manager.verify("large.fixture", &context()).is_ok());
+    }
+
+    #[test]
     fn status_inspection_is_fast_metadata_only_while_explicit_verify_hashes_content() {
         let temporary = tempfile::tempdir().expect("tempdir");
         let (package, trusted) = signed_package("fixture.plugin");
@@ -4356,6 +4456,7 @@ mod tests {
             permissions.set_mode(0o700);
         }
         #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&runtime, permissions).expect("make runtime writable for corruption");
         fs::write(&runtime, b"corrupt").expect("same-size corruption");
@@ -4393,6 +4494,7 @@ mod tests {
             permissions.set_mode(0o600);
         }
         #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&runtime, permissions).expect("make runtime writable for corruption");
         fs::write(&runtime, b"corrupt").expect("corrupt extracted runtime");

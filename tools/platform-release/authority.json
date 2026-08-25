@@ -7,6 +7,12 @@
       "os": "linux",
       "architecture": "x86_64",
       "archive": "tar.gz",
+      "buildBaseline": {
+        "container": "docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6",
+        "cpu": "x86-64",
+        "glibcMaximum": "2.28",
+        "kernelMinimum": "5.15"
+      },
       "pdfium": {
         "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-linux-x64.tgz",
         "bytes": 3675613,
@@ -19,17 +25,18 @@
         "sha256": "c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba",
         "member": "onnxruntime-linux-x64-1.29.0/lib/libonnxruntime.so.1.29.0",
         "destination": "onnxruntime/lib/libonnxruntime.so.1.29.0"
-      },
-      "libreoffice": {
-        "url": "https://mirror.aarnet.edu.au/pub/tdf/libreoffice/stable/26.2.5/deb/x86_64/LibreOffice_26.2.5_Linux_x86-64_deb.tar.gz",
-        "bytes": 218075885,
-        "sha256": "2f03bfb2ac9f33ea7c77331b4b7a23300fb0ed7443566046bf8b5bc51c1bed1e"
       }
     },
     "aarch64-unknown-linux-gnu": {
       "os": "linux",
       "architecture": "aarch64",
       "archive": "tar.gz",
+      "buildBaseline": {
+        "container": "docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6",
+        "cpu": "armv8-a",
+        "glibcMaximum": "2.28",
+        "kernelMinimum": "5.15"
+      },
       "pdfium": {
         "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-linux-arm64.tgz",
         "bytes": 3618464,
@@ -42,34 +49,29 @@
         "sha256": "e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f",
         "member": "onnxruntime-linux-aarch64-1.29.0/lib/libonnxruntime.so.1.29.0",
         "destination": "onnxruntime/lib/libonnxruntime.so.1.29.0"
-      },
-      "libreoffice": {
-        "url": "https://mirror.aarnet.edu.au/pub/tdf/libreoffice/stable/26.2.5/deb/aarch64/LibreOffice_26.2.5_Linux_aarch64_deb.tar.gz",
-        "bytes": 205571155,
-        "sha256": "0e72aa19d216f54100389b8b7840e2d1212470d88fddddb1dae9993d06d7e4ec"
       }
     },
     "x86_64-pc-windows-msvc": {
       "os": "windows",
       "architecture": "x86_64",
       "archive": "zip",
+      "buildBaseline": {
+        "cpu": "x86-64",
+        "msvcTools": "14.44.35207",
+        "windowsSdk": "10.0.26100.0"
+      },
       "pdfium": {
         "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-win-x64.tgz",
         "bytes": 3762593,
         "sha256": "55329d5cb5de8a379a2fc563106492d7f385a1f795d18970922c71f708f9fbb4",
         "member": "bin/pdfium.dll",
-        "destination": "bin/pdfium.dll"
+        "destination": "lib/pdfium/pdfium.dll"
       },
       "onnxruntime": {
         "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip",
         "sha256": "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
         "member": "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
         "destination": "onnxruntime/lib/onnxruntime.dll"
-      },
-      "libreoffice": {
-        "url": "https://mirror.aarnet.edu.au/pub/tdf/libreoffice/stable/26.2.5/win/x86_64/LibreOffice_26.2.5_Win_x86-64.msi",
-        "bytes": 372948992,
-        "sha256": "f15ba07bfcb0186986cf3171063506f5d207c11f8cc051ba0d135209e9e915f9"
       }
     }
   },

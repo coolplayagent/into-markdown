@@ -2282,7 +2282,9 @@ api_key_env = "EXPLICIT_KEY"
         let explicit = root.join("explicit.toml");
         fs::write(&explicit, "schema_version = 1\n").unwrap();
 
-        let loaded = load_with_global(&root, None, &[explicit.clone()], true, None, None).unwrap();
+        let loaded =
+            load_with_global(&root, None, std::slice::from_ref(&explicit), true, None, None)
+                .unwrap();
 
         assert_eq!(loaded.paths.global, None);
         assert_eq!(loaded.paths.explicit, vec![explicit.clone()]);

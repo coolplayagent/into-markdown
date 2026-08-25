@@ -4,6 +4,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["rules_rust-bzlmod-override-keys.patch"])
+
 toolchain_type(name = "platform_contract_type")
 
 foreign_rejecting_toolchains()

@@ -48,9 +48,9 @@ The following files are projections or evidence and must agree with the componen
 - `fixtures/manifest.json` and `fixtures/downloads.json` distinguish repository-owned test data from
   manually acquired licensed inputs. Fixtures are not silently promoted to release components.
 
-LibreOffice is released only inside the target-specific signed capability plugin after its exact
-artifact, complete runtime inventory, dependency closure, license material, and ABI authority have
-been generated and verified. Wasmtime, generated models outside reviewed capability packages, and
+LibreOffice is excluded from Core and every current release artifact. Its retained authority data
+and isolation code are historical inputs for the replacement work tracked in issue #191, and must
+not enter a release projection. Wasmtime, generated models outside reviewed capability packages, and
 distribution fonts remain denied while their inventory entries are planned or lack complete
 immutable acquisition and notice evidence.
 
@@ -178,7 +178,7 @@ components compiled into that binary without pretending they are separate archiv
 declarations and generated metadata have no component owner. All paths are normalized ASCII relative
 paths; all file hashes are lowercase SHA-256 values.
 
-The checked-in files under `tools/license-check/fixtures/` exercise Core and all three capability
+The checked-in files under `tools/license-check/fixtures/` exercise Core and both capability
 plugins on all four supported targets. Component generation can run before target-native FFmpeg
 bytes exist; finalization binds its executable, build authority, source and relink members, while
 strict archive verification remains fail-closed when checked-in FFmpeg approval is required.
@@ -191,10 +191,10 @@ SPDX sidecar additionally records the required SHA-1 and package verification co
 extraction; macOS members come from a read-only mount of the stapled DMG; `.imp` members must agree
 in both directions with `plugin.json` and `provider.json` inventories.
 
-`aggregate` requires exactly Core plus the OCR, media, and legacy Office plugins. Its `core` profile
-contains only Core, while `complete-offline` contains all four artifacts. Component instances are
+`aggregate` requires exactly Core plus the OCR and media plugins. Its `core` profile
+contains only Core, while `complete-offline` contains all three artifacts. Component instances are
 artifact-qualified, so ONNX Runtime carried independently by OCR and media remains independently
-auditable. The generated difference contains exactly the three plugins and their component
+auditable. The generated difference contains exactly the two plugins and their component
 instances; no additional offline archive is created.
 
 ## Review and maintenance

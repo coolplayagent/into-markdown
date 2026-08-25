@@ -6,7 +6,7 @@ use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::{Component, Path};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LocalFree,
     SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
@@ -34,9 +34,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
@@ -50,6 +50,10 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const INFINITE: u32 = u32::MAX;
+const ERROR_ACCESS_DENIED_VALUE: u32 = 5;
+const ERROR_SHARING_VIOLATION_VALUE: u32 = 32;
+const ERROR_LOCK_VIOLATION_VALUE: u32 = 33;
+const MOVE_RETRY_ATTEMPTS: u32 = 8;
 const HRESULT_ALREADY_EXISTS: i32 = 0x8007_00B7_u32.cast_signed();
 const HRESULT_FILE_NOT_FOUND: i32 = 0x8007_0002_u32.cast_signed();
 const ACCESS_ALLOWED_ACE_TYPE_VALUE: u32 = 0;
@@ -118,6 +122,66 @@ pub(crate) fn authorize_path(
 ) -> Result<(), PluginError> {
     let app = AppContainerSid::derive_verified(&authority.profile_name, &authority.sid)?;
     grant_runtime_path(path, app.as_ptr(), true)?;
+    verify_runtime_tree(path, app.as_ptr(), true)
+}
+
+pub(crate) fn authorize_request_source(
+    authority: &crate::WindowsSandboxAuthority,
+    path: &Path,
+) -> Result<(), PluginError> {
+    let current = CurrentUser::open()?;
+    let app = AppContainerSid::derive_verified(&authority.profile_name, &authority.sid)?;
+    let mut access = [
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: current.sid().cast(),
+            },
+        },
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: APP_READ_EXECUTE,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: app.as_ptr().cast(),
+            },
+        },
+    ];
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: both token/profile-backed SIDs and the writable ACL output remain live.
+    if unsafe { SetEntriesInAclW(2, access.as_mut_ptr(), std::ptr::null(), &raw mut acl) } != 0
+        || acl.is_null()
+    {
+        return Err(unavailable("request source DACL construction failed"));
+    }
+    let mut wide = wide_path(path)?;
+    // SAFETY: the path and exact two-entry ACL remain live for this synchronous installation.
+    let installed = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: SetEntriesInAclW returned LocalAlloc-owned storage.
+    unsafe { LocalFree(acl.cast()) };
+    if installed != 0 {
+        return Err(unavailable("request source DACL installation failed"));
+    }
     verify_runtime_tree(path, app.as_ptr(), true)
 }
 
@@ -273,10 +337,8 @@ pub(crate) fn rename_sibling_no_replace(
     source: &std::ffi::OsStr,
     destination: &std::ffi::OsStr,
 ) -> Result<(), PluginError> {
-    // cap-primitives 3.4.5 opens Windows directory handles without
-    // FILE_SHARE_DELETE. The live `directory` handle therefore leases this
-    // parent namespace against rename/replacement while the absolute names
-    // below are derived and passed to MoveFileExW.
+    // The caller retains and revalidates this authenticated directory handle
+    // around publication. Absolute names are derived only from that handle.
     for name in [source, destination] {
         let mut components = Path::new(name).components();
         if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
@@ -301,12 +363,99 @@ pub(crate) fn rename_sibling_no_replace(
     let parent = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer));
     let source = wide_path(&parent.join(source))?;
     let destination = wide_path(&parent.join(destination))?;
-    // SAFETY: both NUL-terminated paths remain live. REPLACE_EXISTING is
-    // deliberately absent, so a raced destination is never overwritten.
-    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+    // REPLACE_EXISTING is deliberately absent, so a raced destination is never overwritten.
+    if !move_file_with_transient_retry(&source, &destination, MOVEFILE_WRITE_THROUGH) {
         return Err(unavailable("plugin transaction rename failed"));
     }
     Ok(())
+}
+
+pub(crate) fn replace_sibling(
+    directory: &File,
+    source: &std::ffi::OsStr,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    for name in [source, destination] {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(unavailable("plugin transaction name rejected"));
+        }
+    }
+    let parent = final_directory_path(directory)?;
+    let source = wide_path(&parent.join(source))?;
+    let destination = wide_path(&parent.join(destination))?;
+    // The pinned directory leases the namespace for the write-through replace.
+    if !move_file_with_transient_retry(&source, &destination, MOVEFILE_WRITE_THROUGH | 0x1) {
+        return Err(unavailable("plugin transaction replacement failed"));
+    }
+    Ok(())
+}
+
+fn final_directory_path(directory: &File) -> Result<std::path::PathBuf, PluginError> {
+    let mut buffer = vec![0_u16; 32_768];
+    // SAFETY: the pinned directory handle is live and the output buffer is writable.
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            directory.as_raw_handle().cast(),
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    };
+    if written == 0 || usize::try_from(written).unwrap_or(usize::MAX) >= buffer.len() {
+        return Err(unavailable("plugin transaction directory identity unavailable"));
+    }
+    buffer.truncate(written as usize);
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer)))
+}
+
+pub(crate) fn move_between_no_replace(
+    source_directory: &File,
+    source: &std::ffi::OsStr,
+    destination_directory: &File,
+    destination: &std::ffi::OsStr,
+) -> Result<(), PluginError> {
+    for name in [source, destination] {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+            return Err(unavailable("plugin transaction name rejected"));
+        }
+    }
+    let source_path = final_directory_path(source_directory)?.join(source);
+    let destination_path = final_directory_path(destination_directory)?.join(destination);
+    let source = wide_path(&source_path)?;
+    let destination = wide_path(&destination_path)?;
+    // REPLACE_EXISTING is deliberately absent.
+    if !move_file_with_transient_retry(&source, &destination, MOVEFILE_WRITE_THROUGH) {
+        return Err(unavailable(format!(
+            "plugin transaction cross-directory rename failed ({} -> {}): {}",
+            source_path.display(),
+            destination_path.display(),
+            std::io::Error::last_os_error(),
+        )));
+    }
+    Ok(())
+}
+
+fn move_file_with_transient_retry(source: &[u16], destination: &[u16], flags: u32) -> bool {
+    for attempt in 0..MOVE_RETRY_ATTEMPTS {
+        // SAFETY: both slices contain live NUL-terminated absolute paths for the call.
+        if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), flags) } != 0 {
+            return true;
+        }
+        // Antivirus/indexer handles can briefly deny a write-through rename even when every
+        // product-owned handle permits deletion. Persistent locks and ACL failures still fail.
+        let error = unsafe { GetLastError() };
+        if !matches!(
+            error,
+            ERROR_ACCESS_DENIED_VALUE | ERROR_SHARING_VIOLATION_VALUE | ERROR_LOCK_VIOLATION_VALUE
+        ) || attempt + 1 == MOVE_RETRY_ATTEMPTS
+        {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1_u64 << attempt));
+    }
+    false
 }
 
 pub(crate) fn verify_private_path(path: &Path) -> Result<(), PluginError> {
@@ -401,6 +550,23 @@ pub(crate) fn verify_trusted_parent(path: &Path) -> Result<(), PluginError> {
 }
 
 fn verify_acl(path: &Path, allowed: &[PSID], require_protected: bool) -> Result<(), PluginError> {
+    let masks = allowed
+        .iter()
+        .enumerate()
+        .map(|(index, _)| if index == 0 { FILE_ALL_ACCESS } else { APP_READ_EXECUTE })
+        .collect::<Vec<_>>();
+    verify_acl_with_masks(path, allowed, &masks, require_protected)
+}
+
+fn verify_acl_with_masks(
+    path: &Path,
+    allowed: &[PSID],
+    masks: &[u32],
+    require_protected: bool,
+) -> Result<(), PluginError> {
+    if allowed.is_empty() || allowed.len() != masks.len() {
+        return Err(unavailable("plugin DACL authority is invalid"));
+    }
     let user = allowed[0];
     let is_directory = std::fs::metadata(path)
         .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
@@ -460,21 +626,16 @@ fn verify_acl(path: &Path, allowed: &[PSID], require_protected: bool) -> Result<
         }
         let sid = (&raw const ace.SidStart).cast_mut().cast();
         let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
-        let expected_mask = match identity {
-            Some(0) => FILE_ALL_ACCESS,
-            Some(1) if allowed.len() == 2 => APP_READ_EXECUTE,
-            _ => {
-                valid = false;
-                break;
-            }
+        let Some(identity) = identity else {
+            valid = false;
+            break;
         };
-        if let Some(identity) = identity {
-            if seen[identity] {
-                valid = false;
-                break;
-            }
-            seen[identity] = true;
+        let expected_mask = masks[identity];
+        if seen[identity] {
+            valid = false;
+            break;
         }
+        seen[identity] = true;
         let expected_inheritance = if is_directory { 3 } else { 0 };
         if ace.Mask != expected_mask
             || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
@@ -598,10 +759,70 @@ impl Child {
 
 pub(super) fn working_directory(policy: &RuntimePolicy) -> Result<tempfile::TempDir, PluginError> {
     validate_storage(policy)?;
-    tempfile::Builder::new()
+    let directory = tempfile::Builder::new()
         .prefix("into-md-plugin-")
         .tempdir_in(&policy.windows.storage_root)
-        .map_err(|_| unavailable("AppContainer working directory unavailable"))
+        .map_err(|_| unavailable("AppContainer working directory unavailable"))?;
+    protect_working_directory(policy, directory.path())?;
+    validate_working_directory(policy, directory.path())?;
+    Ok(directory)
+}
+
+fn protect_working_directory(policy: &RuntimePolicy, path: &Path) -> Result<(), PluginError> {
+    let current = CurrentUser::open()?;
+    let app = AppContainerSid::derive_verified(&policy.windows.profile_name, &policy.windows.sid)?;
+    let mut access = [
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: current.sid().cast(),
+            },
+        },
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: app.as_ptr().cast(),
+            },
+        },
+    ];
+    let mut acl = std::ptr::null_mut();
+    // SAFETY: both token/profile-backed SIDs and the writable ACL output remain live.
+    if unsafe { SetEntriesInAclW(2, access.as_mut_ptr(), std::ptr::null(), &raw mut acl) } != 0
+        || acl.is_null()
+    {
+        return Err(unavailable("AppContainer working DACL construction failed"));
+    }
+    let mut wide = wide_path(path)?;
+    // SAFETY: the exact two-entry ACL and terminated path remain live for the call.
+    let installed = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: SetEntriesInAclW returned LocalAlloc-owned storage.
+    unsafe { LocalFree(acl.cast()) };
+    if installed != 0 {
+        return Err(unavailable("AppContainer working DACL installation failed"));
+    }
+    Ok(())
 }
 
 pub(super) fn spawn(
@@ -644,11 +865,11 @@ pub(super) fn spawn(
     startup.StartupInfo.hStdOutput = inherited[1];
     startup.StartupInfo.hStdError = inherited[2];
     startup.lpAttributeList = attributes.as_mut_ptr();
-    let application = wide_path(&plugin.executable)?;
-    let current_directory = wide_path(directory)?;
+    let application = wide_process_path(&plugin.executable)?;
+    let current_directory = wide_process_path(directory)?;
     let environment = environment_block(policy, directory)?;
     // Establish every fallible Job limit before creating a suspended process.
-    let job = create_job(policy.max_memory_bytes)?;
+    let job = create_job(policy.max_memory_bytes, policy.allow_child_processes)?;
     let mut information = PROCESS_INFORMATION::default();
     // SAFETY: all UTF-16 buffers, startup attributes, capability/SID storage, inherited handles,
     // and output pointers remain alive for the duration of CreateProcessW.
@@ -756,11 +977,15 @@ fn environment_block(policy: &RuntimePolicy, directory: &Path) -> Result<Vec<u16
             _ => None,
         })
         .ok_or_else(|| unavailable("Windows system drive unavailable"))?;
-    let private = directory.to_string_lossy();
+    // Every request receives an authenticated writable directory below the
+    // AppContainer AC authority. It is already the process current directory
+    // and is removed only after the complete Job has stopped.
+    let private = process_path_text(directory)?;
     pairs.extend([
         format!("SystemRoot={windows}"),
         format!("windir={windows}"),
         format!("SystemDrive={drive}"),
+        format!("INTO_MARKDOWN_PRIVATE_TEMP={private}"),
         format!("USERPROFILE={private}"),
         format!("LOCALAPPDATA={private}"),
         format!("APPDATA={private}"),
@@ -795,7 +1020,7 @@ fn windows_directory() -> Result<String, PluginError> {
     String::from_utf16(&buffer[..length]).map_err(|_| unavailable("Windows directory is invalid"))
 }
 
-fn create_job(memory: u64) -> Result<OwnedHandle, PluginError> {
+fn create_job(memory: u64, allow_child_processes: bool) -> Result<OwnedHandle, PluginError> {
     // SAFETY: null security/name pointers request a private unnamed Job.
     let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if raw.is_null() || raw == INVALID_HANDLE_VALUE {
@@ -805,11 +1030,14 @@ fn create_job(memory: u64) -> Result<OwnedHandle, PluginError> {
     let job = unsafe { OwnedHandle::from_raw_handle(raw) };
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        | JOB_OBJECT_LIMIT_JOB_MEMORY
         | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-    limits.BasicLimitInformation.ActiveProcessLimit = 1;
-    limits.ProcessMemoryLimit =
+    limits.BasicLimitInformation.ActiveProcessLimit = if allow_child_processes { 16 } else { 1 };
+    let memory =
         usize::try_from(memory).map_err(|_| unavailable("job memory conversion failed"))?;
+    limits.ProcessMemoryLimit = memory;
+    limits.JobMemoryLimit = memory;
     // SAFETY: `limits` has the documented structure/size and `job` is valid.
     if unsafe {
         SetInformationJobObject(
@@ -1045,6 +1273,35 @@ fn storage_path(sid: PSID) -> Result<std::path::PathBuf, PluginError> {
         .map_err(|_| unavailable("AppContainer storage canonicalization failed"))
 }
 
+fn validate_working_directory(policy: &RuntimePolicy, directory: &Path) -> Result<(), PluginError> {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let root = policy
+        .windows
+        .storage_root
+        .canonicalize()
+        .map_err(|_| unavailable("AppContainer storage unavailable"))?;
+    let metadata = std::fs::symlink_metadata(directory)
+        .map_err(|_| unavailable("AppContainer working directory unavailable"))?;
+    if !metadata.is_dir() || metadata.file_attributes() & 0x0000_0400 != 0 {
+        return Err(unavailable("AppContainer working directory identity mismatch"));
+    }
+    let canonical = directory
+        .canonicalize()
+        .map_err(|_| unavailable("AppContainer working directory canonicalization failed"))?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err(unavailable("AppContainer working directory identity mismatch"));
+    }
+    let current = CurrentUser::open()?;
+    let app = AppContainerSid::derive_verified(&policy.windows.profile_name, &policy.windows.sid)?;
+    verify_acl_with_masks(
+        &canonical,
+        &[current.sid(), app.as_ptr()],
+        &[FILE_ALL_ACCESS, FILE_ALL_ACCESS],
+        true,
+    )
+}
+
 fn sid_text(sid: PSID) -> Result<String, PluginError> {
     let mut raw = std::ptr::null_mut();
     // SAFETY: caller supplies a valid SID and `raw` is writable.
@@ -1060,7 +1317,61 @@ fn sid_text(sid: PSID) -> Result<String, PluginError> {
 }
 
 fn wide_path(path: &Path) -> Result<Vec<u16>, PluginError> {
-    wide_os(path.as_os_str())
+    let absolute =
+        std::path::absolute(path).map_err(|_| unavailable("absolute Windows path unavailable"))?;
+    let encoded = absolute.as_os_str().encode_wide().collect::<Vec<_>>();
+    let slash = u16::from(b'\\');
+    let verbatim = [slash, slash, u16::from(b'?'), slash];
+    let unc = [slash, slash];
+    let mut value = if encoded.starts_with(&verbatim) {
+        encoded
+    } else if encoded.starts_with(&unc) {
+        "\\\\?\\UNC\\".encode_utf16().chain(encoded.into_iter().skip(2)).collect()
+    } else {
+        "\\\\?\\".encode_utf16().chain(encoded).collect()
+    };
+    if value.contains(&0) {
+        return Err(unavailable("wide string contains NUL"));
+    }
+    value.push(0);
+    Ok(value)
+}
+
+fn wide_process_path(path: &Path) -> Result<Vec<u16>, PluginError> {
+    let absolute =
+        std::path::absolute(path).map_err(|_| unavailable("absolute Windows path unavailable"))?;
+    let encoded = absolute.as_os_str().encode_wide().collect::<Vec<_>>();
+    let slash = u16::from(b'\\');
+    let verbatim = [slash, slash, u16::from(b'?'), slash];
+    let verbatim_unc = [
+        slash,
+        slash,
+        u16::from(b'?'),
+        slash,
+        u16::from(b'U'),
+        u16::from(b'N'),
+        u16::from(b'C'),
+        slash,
+    ];
+    let legacy = if encoded.starts_with(&verbatim_unc) {
+        [slash, slash].into_iter().chain(encoded.into_iter().skip(verbatim_unc.len())).collect()
+    } else if encoded.starts_with(&verbatim) {
+        encoded.into_iter().skip(verbatim.len()).collect()
+    } else {
+        encoded
+    };
+    let mut legacy = legacy;
+    legacy.push(0);
+    Ok(legacy)
+}
+
+fn process_path_text(path: &Path) -> Result<String, PluginError> {
+    let mut wide = wide_process_path(path)?;
+    let terminated = wide.pop();
+    if terminated != Some(0) {
+        return Err(unavailable("process environment path is not terminated"));
+    }
+    String::from_utf16(&wide).map_err(|_| unavailable("process environment path is invalid"))
 }
 fn wide_text(value: &str) -> Result<Vec<u16>, PluginError> {
     wide_os(std::ffi::OsStr::new(value))
@@ -1091,6 +1402,31 @@ fn wide_string(value: *const u16) -> Result<String, PluginError> {
         .map_err(|_| unavailable("wide string is invalid"))
 }
 
-fn unavailable(detail: &'static str) -> PluginError {
+fn unavailable(detail: impl Into<String>) -> PluginError {
     PluginError::new(PluginErrorCode::SandboxUnavailable, detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_api_paths_use_verbatim_drive_and_unc_prefixes() {
+        let drive = wide_path(Path::new(r"C:\isolated\runtime")).unwrap();
+        let drive = String::from_utf16(&drive[..drive.len() - 1]).unwrap();
+        assert_eq!(drive, r"\\?\C:\isolated\runtime");
+        let unc = wide_path(Path::new(r"\\server\share\runtime")).unwrap();
+        let unc = String::from_utf16(&unc[..unc.len() - 1]).unwrap();
+        assert_eq!(unc, r"\\?\UNC\server\share\runtime");
+        let verbatim = wide_path(Path::new(r"\\?\C:\already\verbatim")).unwrap();
+        let verbatim = String::from_utf16(&verbatim[..verbatim.len() - 1]).unwrap();
+        assert_eq!(verbatim, r"\\?\C:\already\verbatim");
+
+        let process = wide_process_path(Path::new(r"\\?\C:\process\working")).unwrap();
+        let process = String::from_utf16(&process[..process.len() - 1]).unwrap();
+        assert_eq!(process, r"C:\process\working");
+        let process_unc = wide_process_path(Path::new(r"\\?\UNC\server\share\working")).unwrap();
+        let process_unc = String::from_utf16(&process_unc[..process_unc.len() - 1]).unwrap();
+        assert_eq!(process_unc, r"\\server\share\working");
+    }
 }

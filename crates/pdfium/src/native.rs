@@ -150,6 +150,7 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDF_GetLastError",
 ];
 const MAX_RUNTIME_LIBRARY_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const MAX_RELEASE_PROJECTION_BYTES: u64 = 32 * 1024 * 1024;
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -181,6 +182,7 @@ struct ManifestTarget {
     allowed_dependencies: Vec<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct ReleaseProjection {
     schema_version: u64,
@@ -190,6 +192,7 @@ struct ReleaseProjection {
     native_transformations: Vec<NativeTransformation>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct ReleaseProjectionFile {
     path: String,
@@ -199,6 +202,7 @@ struct ReleaseProjectionFile {
     component_id: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct NativeTransformation {
     component_id: String,
@@ -388,6 +392,17 @@ type ObjectType = unsafe extern "C" fn(Handle) -> c_int;
 type CreateBitmap = unsafe extern "C" fn(c_int, c_int, c_int, *mut c_void, c_int) -> Handle;
 type Render = unsafe extern "C" fn(Handle, Handle, c_int, c_int, c_int, c_int, c_int, c_int);
 type LastError = unsafe extern "C" fn() -> c_ulong;
+
+#[cfg(windows)]
+const fn last_error_code(value: c_ulong) -> u32 {
+    value
+}
+
+#[cfg(not(windows))]
+fn last_error_code(value: c_ulong) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 type GetBitmap = unsafe extern "C" fn(Handle) -> Handle;
 type GetImagePixelSize = unsafe extern "C" fn(Handle, *mut c_uint, *mut c_uint) -> c_int;
 type GetBitmapInt = unsafe extern "C" fn(Handle) -> c_int;
@@ -589,10 +604,7 @@ impl Native {
     }
 
     fn error(&self, operation: &'static str) -> Error {
-        Error::Native {
-            operation,
-            code: u32::try_from(unsafe { (self.last_error)() }).unwrap_or(u32::MAX),
-        }
+        Error::Native { operation, code: last_error_code(unsafe { (self.last_error)() }) }
     }
 
     fn font_name_with_length(
@@ -1908,6 +1920,7 @@ struct Snapshot {
     path: PathBuf,
     file: Option<File>,
     bytes: Vec<u8>,
+    #[cfg(unix)]
     load_by_path: bool,
 }
 
@@ -1946,6 +1959,7 @@ impl Snapshot {
     }
 }
 
+#[cfg_attr(windows, allow(clippy::permissions_set_readonly_false))]
 impl Drop for Snapshot {
     fn drop(&mut self) {
         drop(self.file.take());
@@ -1962,6 +1976,7 @@ fn validated_snapshot(path: &Path, artifact: &Artifact) -> Result<Snapshot, Erro
     validated_snapshot_with_hook(path, artifact, || {}, || {})
 }
 
+#[allow(clippy::too_many_lines)] // Keep the security-sensitive open, hash, copy, and lock sequence linear.
 fn validated_snapshot_with_hook(
     path: &Path,
     artifact: &Artifact,
@@ -2069,6 +2084,7 @@ fn validated_snapshot_with_hook(
         path: snapshot_path,
         file: Some(snapshot_file),
         bytes,
+        #[cfg(unix)]
         load_by_path: signed_authority.is_some(),
     })
 }

@@ -32,6 +32,8 @@ const BINARY_LIMIT: u64 = 128 * 1024 * 1024;
 const PCM_LIMIT: u64 = 512 * 1024 * 1024;
 const PROCESS_MEMORY_MIN: u64 = 4 * 1024 * 1024;
 const PROCESS_MEMORY_MAX: u64 = 2 * 1024 * 1024 * 1024;
+#[cfg(windows)]
+const WINDOWS_PROCESS_MEMORY_HEADROOM: u64 = 1024 * 1024;
 #[cfg(target_os = "macos")]
 const MACOS_VIRTUAL_ADDRESS_LIMIT: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -82,7 +84,7 @@ const EXPECTED_CONFIG: [&str; 29] = [
     "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
     "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
     "--enable-parser=aac,mpegaudio,opus,vorbis",
-    "--enable-filter=aformat,aresample",
+    "--enable-filter=aformat,aresample,asetpts",
     "--enable-encoder=pcm_s16le",
     "--enable-muxer=pcm_s16le",
     "--enable-static",
@@ -319,7 +321,7 @@ struct NormalizationResult {
 pub struct FfmpegRuntime {
     executable: PathBuf,
     version: String,
-    _backing: RuntimeBacking,
+    backing: RuntimeBacking,
 }
 
 #[derive(Debug)]
@@ -397,16 +399,16 @@ impl FfmpegRuntime {
         {
             return Err(LoadError::Authority);
         }
-        let root = trusted_root.canonicalize().map_err(|_| LoadError::UnsafePath)?;
-        if !executable.is_absolute() {
-            return Err(LoadError::UnsafePath);
-        }
-        let canonical = executable.canonicalize().map_err(|_| LoadError::UnsafePath)?;
-        if canonical != executable || !canonical.starts_with(&root) {
-            return Err(LoadError::UnsafePath);
-        }
-        let mut file = open_no_follow(&canonical)?;
+        let verified_executable = verified_executable_path(trusted_root, executable, snapshot)?;
+        let mut file = open_no_follow(&verified_executable)?;
         let metadata = file.metadata().map_err(|_| LoadError::Io)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err(LoadError::UnsafePath);
+            }
+        }
         if !metadata.is_file() || metadata.len() != authority.executable_bytes {
             return Err(LoadError::HashMismatch);
         }
@@ -438,9 +440,9 @@ impl FfmpegRuntime {
         validate_binary(&binary, &authority)?;
         if !snapshot {
             return Ok(Self {
-                executable: canonical,
+                executable: verified_executable,
                 version: authority.ffmpeg_version,
-                _backing: RuntimeBacking::ReadOnlySandbox,
+                backing: RuntimeBacking::ReadOnlySandbox,
             });
         }
         let directory = tempfile::Builder::new()
@@ -460,7 +462,7 @@ impl FfmpegRuntime {
         Ok(Self {
             executable: private,
             version: authority.ffmpeg_version,
-            _backing: RuntimeBacking::Snapshot { _directory: directory },
+            backing: RuntimeBacking::Snapshot { _directory: directory },
         })
     }
 
@@ -642,7 +644,7 @@ impl FfmpegRuntime {
         let encoded_path = encoded_input.path().as_os_str().to_owned();
         let private = tempfile::Builder::new()
             .prefix("into-md-media-")
-            .tempdir()
+            .tempdir_in(context.temporary_directory())
             .map_err(|_| component("workerLaunch"))?;
         let frame_limit = output_frames.to_string();
         let rate = limits.sample_rate.to_string();
@@ -673,6 +675,8 @@ impl FfmpegRuntime {
                 "-vn",
                 "-sn",
                 "-dn",
+                "-af",
+                "asetpts=N/SR/TB",
                 "-frames:a",
                 &frame_limit,
                 "-ar",
@@ -693,12 +697,19 @@ impl FfmpegRuntime {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let inherited_read_only_sandbox = matches!(self._backing, RuntimeBacking::ReadOnlySandbox);
+        let inherited_read_only_sandbox = matches!(self.backing, RuntimeBacking::ReadOnlySandbox);
         let mut process =
             spawn_limited(command, limits.max_process_memory_bytes, inherited_read_only_sandbox)?;
         drop(process.child.stdin.take());
         #[cfg(test)]
         let _active_worker = ActiveWorker::new();
+        #[cfg(windows)]
+        let memory_monitor = {
+            use std::os::windows::io::AsRawHandle;
+            process.job.as_raw_handle()
+        };
+        #[cfg(not(windows))]
+        let memory_monitor = ();
         let child = &mut process.child;
         if fail_worker_stage(1) {
             return Err(component("workerPipeSetup"));
@@ -769,7 +780,7 @@ impl FfmpegRuntime {
             return Err(component("workerThread"));
         };
         let status = loop {
-            match child_memory_exceeded(child, limits.max_process_memory_bytes) {
+            match child_memory_exceeded(child, memory_monitor, limits.max_process_memory_bytes) {
                 Ok(true) => {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -792,6 +803,23 @@ impl FfmpegRuntime {
             }
             #[cfg(test)]
             if HOLD_WORKER.load(Ordering::Acquire) {
+                // The hold hook keeps successful workers observable for the
+                // cancellation/timeout tests, but a hard OS resource limit may
+                // terminate the child first. Surface that exit immediately so
+                // its status/stderr are classified as the resource failure.
+                match child.try_wait() {
+                    Ok(Some(status)) if !status.success() => break status,
+                    Ok(Some(_) | None) => {}
+                    Err(_) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = out_rx.recv();
+                        let _ = err_rx.recv();
+                        let _ = output_reader.join();
+                        let _ = error_reader.join();
+                        return Err(component("workerWait"));
+                    }
+                }
                 if let Err(error) = context.checkpoint() {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -918,7 +946,7 @@ fn expected_dependencies() -> impl Iterator<Item = &'static str> {
     ];
     const LINUX_X64: [&str; 2] = ["libc.so.6", "libm.so.6"];
     const LINUX_ARM64: [&str; 2] = ["libc.so.6", "libm.so.6"];
-    const WINDOWS: [&str; 4] = ["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"];
+    const WINDOWS: [&str; 4] = ["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"];
     let values: &'static [&'static str] = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => &MACOS,
         ("linux", "x86_64") => &LINUX_X64,
@@ -1052,11 +1080,11 @@ fn child_failure(status: std::process::ExitStatus, stderr: &[u8]) -> ChildFailur
         }
     }
     #[cfg(not(unix))]
-    if matches!(status.code().map(|code| code as u32), Some(0xC000_0017 | 0xC000_009A)) {
+    if matches!(status.code().map(i32::cast_unsigned), Some(0xC000_0017 | 0xC000_009A)) {
         return ChildFailure::Resource;
     }
     #[cfg(not(unix))]
-    if status.code().is_some_and(|code| (code as u32) & 0xC000_0000 == 0xC000_0000) {
+    if status.code().is_some_and(|code| code.cast_unsigned() & 0xC000_0000 == 0xC000_0000) {
         return ChildFailure::Crash;
     }
     if RESOURCE_ERROR_MARKERS
@@ -1070,7 +1098,11 @@ fn child_failure(status: std::process::ExitStatus, stderr: &[u8]) -> ChildFailur
 }
 
 #[cfg(target_os = "macos")]
-fn child_memory_exceeded(child: &std::process::Child, limit: u64) -> Result<bool, ConversionError> {
+fn child_memory_exceeded(
+    child: &std::process::Child,
+    (): (),
+    limit: u64,
+) -> Result<bool, ConversionError> {
     // SAFETY: this libc structure is plain integer data and all-zero is a valid
     // output buffer initialization for `proc_pid_rusage`.
     let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
@@ -1092,9 +1124,98 @@ fn child_memory_exceeded(child: &std::process::Child, limit: u64) -> Result<bool
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn child_memory_exceeded(
     _child: &std::process::Child,
+    job: std::os::windows::io::RawHandle,
+    limit: u64,
+) -> Result<bool, ConversionError> {
+    use std::mem::size_of;
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject,
+    };
+    let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: `job` remains owned by LimitedProcess for this call and the
+    // output buffer has the exact layout requested by the information class.
+    let queried = unsafe {
+        QueryInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&raw mut information).cast(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                .map_err(|_| component("workerMemoryMonitor"))?,
+            std::ptr::null_mut(),
+        ) != 0
+    };
+    if !queried {
+        return Err(component("workerMemoryMonitor"));
+    }
+    let peak = u64::try_from(information.PeakProcessMemoryUsed)
+        .map_err(|_| component("workerMemoryMonitor"))?;
+    // A denied Windows commit can leave the process alive but unable to make
+    // forward progress, while the recorded peak remains below the hard job
+    // limit. Reserve one allocator-sized window so this is reported as the
+    // resource failure that caused the stall instead of a later task timeout.
+    Ok(peak >= limit.saturating_sub(WINDOWS_PROCESS_MEMORY_HEADROOM))
+}
+
+fn canonical_executable_is_safe(root: &Path, requested: &Path, canonical: &Path) -> bool {
+    if !canonical.starts_with(root) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        // Windows canonicalization normally adds the `\\?\` namespace prefix even when the
+        // authenticated absolute input used the equivalent drive path. Raw Path equality would
+        // reject that valid identity. The no-follow handle and reparse-attribute check below bind
+        // the final member; canonical containment binds its resolved ancestors to the trusted root.
+        let _ = requested;
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        canonical == requested
+    }
+}
+
+fn verified_executable_path(
+    trusted_root: &Path,
+    executable: &Path,
+    snapshot: bool,
+) -> Result<PathBuf, LoadError> {
+    if !snapshot {
+        validate_read_only_sandbox_path(trusted_root, executable)?;
+        return Ok(executable.to_path_buf());
+    }
+    let root = trusted_root.canonicalize().map_err(|_| LoadError::UnsafePath)?;
+    if !executable.is_absolute() {
+        return Err(LoadError::UnsafePath);
+    }
+    let canonical = executable.canonicalize().map_err(|_| LoadError::UnsafePath)?;
+    if !canonical_executable_is_safe(&root, executable, &canonical) {
+        return Err(LoadError::UnsafePath);
+    }
+    Ok(canonical)
+}
+
+fn validate_read_only_sandbox_path(root: &Path, executable: &Path) -> Result<(), LoadError> {
+    let clean_absolute = |path: &Path| {
+        path.is_absolute()
+            && !path.components().any(|component| {
+                matches!(component, std::path::Component::CurDir | std::path::Component::ParentDir)
+            })
+    };
+    if !clean_absolute(root) || !clean_absolute(executable) || !executable.starts_with(root) {
+        return Err(LoadError::UnsafePath);
+    }
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+fn child_memory_exceeded(
+    _child: &std::process::Child,
+    (): (),
     _limit: u64,
 ) -> Result<bool, ConversionError> {
     Ok(false)
@@ -1404,7 +1525,7 @@ fn map_reader_error(error: ReaderError) -> ConversionError {
 struct LimitedProcess {
     child: std::process::Child,
     #[cfg(windows)]
-    _job: std::os::windows::io::OwnedHandle,
+    job: std::os::windows::io::OwnedHandle,
 }
 
 impl Drop for LimitedProcess {
@@ -1535,7 +1656,7 @@ fn spawn_limited(
     }
     // SAFETY: unique ownership transfers to OwnedHandle.
     let job = unsafe { OwnedHandle::from_raw_handle(job) };
-    Ok(LimitedProcess { child, _job: job })
+    Ok(LimitedProcess { child, job })
 }
 
 fn resource(limit: &'static str) -> ConversionError {

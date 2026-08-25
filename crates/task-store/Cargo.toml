@@ -16,6 +16,10 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+into-markdown-process-plugin = { path = "../process-plugin" }
+winapi-util.workspace = true
+
 [dev-dependencies]
 into-markdown-converters = { path = "../converters" }
 into-markdown-render-markdown = { path = "../render-markdown" }

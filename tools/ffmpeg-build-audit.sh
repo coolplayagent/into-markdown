@@ -34,7 +34,16 @@ if [ -n "${FFMPEG_AUDIT_SIGNATURE:-}" ]; then cp "$FFMPEG_AUDIT_SIGNATURE" "$wor
 fi
 printf '%s  %s\n' "$sig_sha" "$work/source.asc" | shasum -a 256 -c -
 command -v gpg >/dev/null
-GNUPGHOME="$work/gnupg"; export GNUPGHOME; mkdir -m 700 "$GNUPGHOME"
+GNUPGHOME="$work/gnupg"; export GNUPGHOME
+case "$(uname -s)" in
+  MINGW*|MSYS*)
+    mkdir "$GNUPGHOME"
+    windows_gnupg=$(cygpath -w "$GNUPGHOME")
+    windows_owner=$(whoami.exe | tr -d '\r')
+    MSYS2_ARG_CONV_EXCL='*' icacls.exe "$windows_gnupg" /inheritance:r /grant:r "$windows_owner:(OI)(CI)F" >/dev/null
+    ;;
+  *) mkdir -m 700 "$GNUPGHOME" ;;
+esac
 key_url=$(jq -er .signing_key_url "$source_manifest")
 key_sha=$(jq -er .signing_key_sha256 "$source_manifest")
 curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 4096 "$key_url" -o "$work/signing-key.asc"
@@ -51,7 +60,22 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args='--extra-cflags=-mmacosx-version-min=14.0 --extra-ldflags=-mmacosx-version-min=14.0' ;;
   Linux-x86_64) target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args= ;;
   Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
-  MINGW*-x86_64|MSYS*-x86_64) command -v cl >/dev/null; command -v objdump >/dev/null; target=x86_64-pc-windows-msvc; format=pe; arch=x86_64; toolchain_args='--toolchain=msvc --disable-x86asm' ;;
+  MINGW*-x86_64|MSYS*-x86_64)
+    command -v cl.exe >/dev/null; command -v objdump >/dev/null
+    target=x86_64-pc-windows-msvc; format=pe; arch=x86_64
+    toolchain_args='--toolchain=msvc --disable-x86asm'
+    msvc_tools=$(jq -er '.targets["x86_64-pc-windows-msvc"].buildBaseline.msvcTools' "$root/tools/platform-release/authority.json")
+    INTO_MD_REAL_CL=$(command -v cl.exe); export INTO_MD_REAL_CL
+    case "$INTO_MD_REAL_CL" in
+      *"/$msvc_tools/"*) ;;
+      *) echo "cl.exe is not from fixed MSVC tools $msvc_tools: $INTO_MD_REAL_CL" >&2; exit 2 ;;
+    esac
+    INTO_MD_MSVC_BANNER_VERSION=$("$INTO_MD_REAL_CL" 2>&1 | sed -n 's/.*\([0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]*\).*/\1/p' | head -n 1)
+    test -n "$INTO_MD_MSVC_BANNER_VERSION"
+    export INTO_MD_MSVC_BANNER_VERSION
+    msvc_cc_adapter="$root/tools/msvc-cl-adapter.sh"
+    test -x "$msvc_cc_adapter"
+    ;;
   *) echo "unsupported audit host" >&2; exit 2 ;;
 esac
 
@@ -65,7 +89,7 @@ set -- \
   --enable-swresample --enable-protocol=file,pipe \
   --enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav \
   --enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le \
-  --enable-parser=aac,mpegaudio,opus,vorbis --enable-filter=aformat,aresample \
+  --enable-parser=aac,mpegaudio,opus,vorbis --enable-filter=aformat,aresample,asetpts \
   --enable-encoder=pcm_s16le --enable-muxer=pcm_s16le --enable-static --disable-shared $toolchain_args
 source_date_epoch=$(jq -er .source_date_epoch "$source_manifest")
 actual_config=$(printf '%s\n' "$@" | sort)
@@ -73,8 +97,24 @@ expected_config=$({ printf '%s\n' "--prefix=$prefix"; jq -er --arg target "$targ
 test "$actual_config" = "$expected_config"
 (test "$format" = "$(jq -er --arg target "$target" '.targets[$target].binary_format' "$build_policy")")
 (test "$arch" = "$(jq -er --arg target "$target" '.targets[$target].binary_architecture' "$build_policy")")
-(cd "$src" && SOURCE_DATE_EPOCH="$source_date_epoch" ./configure "$@" && SOURCE_DATE_EPOCH="$source_date_epoch" make -j2 && make DESTDIR="$stage" install)
-if [ "$format" = pe ]; then tool="$stage$prefix/bin/ffmpeg.exe"; else tool="$stage$prefix/bin/ffmpeg"; fi
+if [ "$format" = pe ]; then
+  configure_command="env cc=$msvc_cc_adapter"
+else
+  configure_command=env
+fi
+if ! (cd "$src" && SOURCE_DATE_EPOCH="$source_date_epoch" $configure_command ./configure "$@"); then
+  echo "FFmpeg configure failed; final config.log diagnostics:" >&2
+  tail -n 200 "$src/ffbuild/config.log" >&2 || true
+  exit 1
+fi
+(cd "$src" && SOURCE_DATE_EPOCH="$source_date_epoch" make -j2 && make DESTDIR="$stage" install)
+if [ "$format" = pe ]; then
+  tool="$stage$prefix/bin/ffmpeg.exe"
+  artifact_name="ffmpeg-$target.exe"
+else
+  tool="$stage$prefix/bin/ffmpeg"
+  artifact_name="ffmpeg-$target"
+fi
 test -x "$tool"
 report="$work/version.txt"
 "$tool" -hide_banner -version > "$report"
@@ -112,7 +152,7 @@ while IFS="$tab" read -r fixture_format fixture_url fixture_bytes fixture_sha; d
     --max-filesize 1048576 "$fixture_url" -o "$fixture"
   test "$(wc -c < "$fixture" | tr -d ' ')" = "$fixture_bytes"
   printf '%s  %s\n' "$fixture_sha" "$fixture" | shasum -a 256 -c -
-  "$tool" -nostdin -v error -protocol_whitelist pipe -i pipe:0 -frames:a 16000 \
+  "$tool" -nostdin -v error -protocol_whitelist pipe -i pipe:0 -af asetpts=N/SR/TB -frames:a 16000 \
     -ar 16000 -ac 1 -c:a pcm_s16le -f s16le pipe:1 < "$fixture" > "$work/$fixture_format.pcm"
   test -s "$work/$fixture_format.pcm"
 done
@@ -120,7 +160,7 @@ if printf 'not media' | "$tool" -nostdin -v error -protocol_whitelist pipe -i pi
 
 bytes=$(wc -c < "$tool" | tr -d ' ')
 sha=$(shasum -a 256 "$tool" | awk '{print $1}')
-compiler=$(cc --version 2>/dev/null | head -n 1 || cl 2>&1 | head -n 1 || true)
+if [ "$format" = pe ]; then compiler=$("$INTO_MD_REAL_CL" 2>&1 | head -n 1 || true); else compiler=$(cc --version 2>/dev/null | head -n 1 || true); fi
 config_log_sha=$(shasum -a 256 "$src/ffbuild/config.log" | awk '{print $1}')
 relink="$output_dir/ffmpeg-relink-$target.tar"
 (cd "$src" && find . -type f \( -name '*.o' -o -path './ffbuild/config.log' -o -name 'config.h' -o -name 'Makefile' \) -print | LC_ALL=C sort > "$work/relink-files.txt")
@@ -136,7 +176,14 @@ case "$format" in
   pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
 esac
 expected_deps=$(jq -cS --arg target "$target" '.targets[$target].dynamic_dependencies' "$build_policy")
-test "$(printf '%s' "$deps" | jq -cS .)" = "$(printf '%s' "$expected_deps" | jq -cS .)"
+actual_deps_sorted=$(printf '%s' "$deps" | jq -cS .)
+expected_deps_sorted=$(printf '%s' "$expected_deps" | jq -cS .)
+if [ "$actual_deps_sorted" != "$expected_deps_sorted" ]; then
+  echo "FFmpeg dependency audit failed for $target" >&2
+  echo "actual:   $actual_deps_sorted" >&2
+  echo "expected: $expected_deps_sorted" >&2
+  exit 1
+fi
 case "$format-$arch" in
   mach-o-aarch64) file "$tool" | grep -q 'Mach-O 64-bit executable arm64' ;;
   elf-x86_64) file "$tool" | grep -q 'ELF 64-bit.*x86-64' ;;
@@ -149,16 +196,16 @@ jq -n --arg version "$version" --arg target "$target" --arg sha "$sha" --argjson
   --arg source_sha "$source_sha" --arg signature_sha "$sig_sha" --arg fingerprint FCF986EA15E6E293A5644F10B4322F04D67658D8 \
   --arg policy_sha "$policy_sha" --arg config_log_sha "$config_log_sha" --arg relink_sha "$relink_sha" --argjson relink_bytes "$relink_bytes" \
   '{schema_version:1,ffmpeg_version:$version,target:$target,executable_bytes:$bytes,executable_sha256:$sha,configure:$configure,binary_format:$format,binary_architecture:$arch,dependencies:$deps,toolchain:$compiler,source_sha256:$source_sha,source_signature_sha256:$signature_sha,signing_key_fingerprint:$fingerprint,build_policy_sha256:$policy_sha,config_log_sha256:$config_log_sha,relink_bytes:$relink_bytes,relink_sha256:$relink_sha}' > "$output_dir/ffmpeg-authority-$target.json"
-cp "$tool" "$output_dir/ffmpeg-$target"
+cp "$tool" "$output_dir/$artifact_name"
 cp "$src/COPYING.LGPLv2.1" "$output_dir/COPYING.LGPLv2.1"
 license_sha=$(shasum -a 256 "$output_dir/COPYING.LGPLv2.1" | awk '{print $1}')
-jq -n --arg target "$target" --arg binary "ffmpeg-$target" \
+jq -n --arg target "$target" --arg binary "$artifact_name" \
   --arg authority "ffmpeg-authority-$target.json" --arg license_sha "$license_sha" \
   --arg relink "ffmpeg-relink-$target.tar" \
   '{schema_version:1,target:$target,distributed_files:[$binary,$authority,"COPYING.LGPLv2.1",$relink],license_sha256:$license_sha,fixture_policy:{included:false,usage:"transient manual CI decoder smoke",redistribution:"prohibited-license-unverified"}}' \
   > "$output_dir/ffmpeg-inventory-$target.json"
-artifact_sha_before=$(shasum -a 256 "$output_dir/ffmpeg-$target" | awk '{print $1}')
-artifact_bytes_before=$(wc -c < "$output_dir/ffmpeg-$target" | tr -d ' ')
+artifact_sha_before=$(shasum -a 256 "$output_dir/$artifact_name" | awk '{print $1}')
+artifact_bytes_before=$(wc -c < "$output_dir/$artifact_name" | tr -d ' ')
 if [ "${FFMPEG_AUDIT_PRODUCTION_SMOKE:-}" = 1 ]; then
   fixture_dir="$work/production-fixtures"; mkdir "$fixture_dir"
   jq -er '.fixtures[] | [.format,.url,.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
@@ -166,13 +213,21 @@ if [ "${FFMPEG_AUDIT_PRODUCTION_SMOKE:-}" = 1 ]; then
     curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors "$fixture_url" -o "$fixture_dir/sample.$fixture_format"
     printf '%s  %s\n' "$fixture_sha" "$fixture_dir/sample.$fixture_format" | shasum -a 256 -c -
   done
-  FFMPEG_TEST_EXECUTABLE="$output_dir/ffmpeg-$target" \
-    FFMPEG_TEST_AUTHORITY="$output_dir/ffmpeg-authority-$target.json" \
-    FFMPEG_TEST_FIXTURES="$fixture_dir" cargo test -p into-markdown-ffmpeg native_smoke -- --ignored
+  test_executable=$(cd "$output_dir" && pwd)/$artifact_name
+  test_authority=$(cd "$output_dir" && pwd)/ffmpeg-authority-$target.json
+  test_fixtures=$fixture_dir
+  if [ "$format" = pe ]; then
+    test_executable=$(cygpath -w "$test_executable")
+    test_authority=$(cygpath -w "$test_authority")
+    test_fixtures=$(cygpath -w "$test_fixtures")
+  fi
+  FFMPEG_TEST_EXECUTABLE="$test_executable" \
+    FFMPEG_TEST_AUTHORITY="$test_authority" \
+    FFMPEG_TEST_FIXTURES="$test_fixtures" cargo test -p into-markdown-ffmpeg native_smoke -- --ignored
 fi
-test "$(shasum -a 256 "$output_dir/ffmpeg-$target" | awk '{print $1}')" = "$artifact_sha_before"
-test "$(wc -c < "$output_dir/ffmpeg-$target" | tr -d ' ')" = "$artifact_bytes_before"
-expected_files=$(printf '%s\n' "COPYING.LGPLv2.1" "ffmpeg-$target" "ffmpeg-authority-$target.json" "ffmpeg-inventory-$target.json" "ffmpeg-relink-$target.tar" | sort)
+test "$(shasum -a 256 "$output_dir/$artifact_name" | awk '{print $1}')" = "$artifact_sha_before"
+test "$(wc -c < "$output_dir/$artifact_name" | tr -d ' ')" = "$artifact_bytes_before"
+expected_files=$(printf '%s\n' "COPYING.LGPLv2.1" "$artifact_name" "ffmpeg-authority-$target.json" "ffmpeg-inventory-$target.json" "ffmpeg-relink-$target.tar" | sort)
 actual_files=$(find "$output_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | sort)
 test "$actual_files" = "$expected_files"
 test "$(find "$output_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" = ""

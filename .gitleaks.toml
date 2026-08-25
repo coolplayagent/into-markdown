@@ -1,0 +1,18 @@
+title = "Into Markdown public-release secret audit"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated local build products are re-created from scanned sources"
+paths = ['''(^|[\\/])target[\\/]''']
+
+[[allowlists]]
+description = "Reviewed deterministic test token and FFmpeg public signing-key fingerprint"
+regexTarget = "match"
+regexes = [
+  '''token\s*=\s*"00112233445566778899aabbccddeeff"''',
+  '''signing_key_sha256"?:\s*"397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5"''',
+  '''signing_key_(?:sha256|fingerprint)"?:\s*"FCF986EA15E6E293A5644F10B4322F04D67658D8"''',
+  '''randomKey,''',
+]

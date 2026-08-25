@@ -51,6 +51,9 @@ impl Converter for MediaConverter {
         Ok(context.available_memory_bytes())
     }
 
+    // Transcription, optional diarization, and provenance validation form one ordered provider
+    // transaction whose invariants are easier to audit together.
+    #[allow(clippy::too_many_lines)]
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
@@ -159,8 +162,7 @@ impl Converter for MediaConverter {
                 diarization_identity =
                     Some((diarization_result.provider, diarization_result.model));
             }
-            let mut document = Document::default();
-            document.blocks = result.segments;
+            let mut document = Document { blocks: result.segments, ..Document::default() };
             let diagnostics = if options.diarization.enabled {
                 document
                     .blocks

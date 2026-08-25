@@ -37,15 +37,18 @@ const MACOS_SYSTEM_LIBRARIES: &[&str] = &[
 
 pub(super) fn explicit_directory(path: &Path) -> Result<PathBuf, ConversionError> {
     if !path.is_absolute() {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:absolute"));
     }
     let metadata = fs::symlink_metadata(path).map_err(|_| unavailable("runtimeNotPackaged"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() || is_reparse(&metadata) {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:type"));
     }
+    #[cfg(not(windows))]
     let canonical = path.canonicalize().map_err(|_| unavailable("unsafePath"))?;
+    #[cfg(windows)]
+    let canonical = authenticated_windows_path(path, true)?;
     if canonical != path {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:identity"));
     }
     Ok(canonical)
 }
@@ -55,17 +58,132 @@ pub(super) fn explicit_regular_file(
     root: Option<&Path>,
 ) -> Result<PathBuf, ConversionError> {
     if !path.is_absolute() || root.is_some_and(|root| !path.starts_with(root)) {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:containment"));
     }
     let metadata = fs::symlink_metadata(path).map_err(|_| unavailable("runtimeNotPackaged"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || is_reparse(&metadata) {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:type"));
     }
+    #[cfg(not(windows))]
     let canonical = path.canonicalize().map_err(|_| unavailable("unsafePath"))?;
+    #[cfg(windows)]
+    let canonical = authenticated_windows_path(path, false)?;
     if canonical != path || root.is_some_and(|root| !canonical.starts_with(root)) {
-        return Err(unavailable("unsafePath"));
+        return Err(unavailable("unsafePath:identity"));
     }
     Ok(canonical)
+}
+
+#[cfg(windows)]
+pub(crate) fn authenticated_windows_path(
+    path: &Path,
+    directory: bool,
+) -> Result<PathBuf, ConversionError> {
+    use std::mem::size_of;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_INFO, FileNameInfo, GetFileInformationByHandleEx,
+    };
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(unavailable("unsafePath:components"));
+    }
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    let file = options.open(path).map_err(|_| unavailable("unsafePath:open"))?;
+    let metadata = file.metadata().map_err(|_| unavailable("unsafePath:handleMetadata"))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+    {
+        return Err(unavailable("unsafePath:handleType"));
+    }
+    // FILE_NAME_INFO comes directly from the authenticated handle. Unlike
+    // GetFinalPathNameByHandleW, it does not reopen every ancestor and therefore
+    // works when the AppContainer intentionally has no authority above the
+    // manager-owned snapshot. Comparing the full volume-relative name still
+    // detects a parent reparse redirection.
+    let mut buffer = vec![0_u64; (64 * 1024) / size_of::<u64>()];
+    let buffer_bytes = u32::try_from(buffer.len() * size_of::<u64>()).unwrap_or(u32::MAX);
+    // SAFETY: the authenticated handle remains live and the aligned output buffer is writable.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle().cast(),
+            FileNameInfo,
+            buffer.as_mut_ptr().cast(),
+            buffer_bytes,
+        )
+    } == 0
+    {
+        return Err(unavailable("unsafePath:finalName"));
+    }
+    // SAFETY: the successful call initialized a FILE_NAME_INFO header and the
+    // bounded byte count below proves the variable UTF-16 tail is in `buffer`.
+    let information = unsafe { &*buffer.as_ptr().cast::<FILE_NAME_INFO>() };
+    let name_bytes = usize::try_from(information.FileNameLength).unwrap_or(usize::MAX);
+    if name_bytes == 0
+        || !name_bytes.is_multiple_of(2)
+        || name_bytes > usize::try_from(buffer_bytes).unwrap_or(0) - size_of::<u32>()
+    {
+        return Err(unavailable("unsafePath:finalNameEncoding"));
+    }
+    // SAFETY: FILE_NAME_INFO stores `FileNameLength` bytes immediately after
+    // its u32 length field; u16 alignment is satisfied by the u64 buffer.
+    let name = unsafe {
+        std::slice::from_raw_parts(
+            std::ptr::addr_of!(information.FileName).cast::<u16>(),
+            name_bytes / 2,
+        )
+    };
+    let opened_name =
+        String::from_utf16(name).map_err(|_| unavailable("unsafePath:finalNameEncoding"))?;
+    let expected_name = windows_volume_relative_path(path)?;
+    if !opened_name.eq_ignore_ascii_case(&expected_name) {
+        return Err(unavailable("unsafePath:finalNameIdentity"));
+    }
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+fn windows_volume_relative_path(path: &Path) -> Result<String, ConversionError> {
+    let value = path.as_os_str().to_string_lossy();
+    let normalized = if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else if let Some(dos) = value.strip_prefix(r"\\?\") {
+        dos.to_owned()
+    } else {
+        value.into_owned()
+    };
+    if let Some(unc) = normalized.strip_prefix(r"\\") {
+        let mut components = unc.splitn(3, '\\');
+        let server = components.next().unwrap_or_default();
+        let share = components.next().unwrap_or_default();
+        let relative = components.next().unwrap_or_default();
+        if server.is_empty() || share.is_empty() || relative.is_empty() {
+            return Err(unavailable("unsafePath:finalNameIdentity"));
+        }
+        return Ok(format!(r"\{relative}"));
+    }
+    let bytes = normalized.as_bytes();
+    if bytes.len() < 3
+        || bytes[1] != b':'
+        || !bytes[0].is_ascii_alphabetic()
+        || !matches!(bytes[2], b'\\' | b'/')
+    {
+        return Err(unavailable("unsafePath:finalNameIdentity"));
+    }
+    Ok(normalized[2..].replace('/', r"\"))
 }
 
 pub(super) fn checked_join(root: &Path, relative: &str) -> Result<PathBuf, ConversionError> {
@@ -124,17 +242,33 @@ pub(super) fn system_library_path(
             const SYSTEM_DLLS: &[&str] = &[
                 "advapi32.dll",
                 "bcrypt.dll",
+                "bcryptprimitives.dll",
                 "comctl32.dll",
                 "comdlg32.dll",
                 "crypt32.dll",
+                "d2d1.dll",
+                "d3d9.dll",
+                "dbghelp.dll",
                 "dwmapi.dll",
+                "fontsub.dll",
                 "gdi32.dll",
+                "gdiplus.dll",
+                "httpapi.dll",
                 "imm32.dll",
+                "iphlpapi.dll",
                 "kernel32.dll",
+                "mfplat.dll",
+                "mfplay.dll",
+                "mfreadwrite.dll",
+                "mpr.dll",
                 "msvcrt.dll",
+                "ncrypt.dll",
+                "netapi32.dll",
                 "ntdll.dll",
                 "ole32.dll",
                 "oleaut32.dll",
+                "oledlg.dll",
+                "propsys.dll",
                 "rpcrt4.dll",
                 "secur32.dll",
                 "setupapi.dll",
@@ -142,15 +276,23 @@ pub(super) fn system_library_path(
                 "shlwapi.dll",
                 "user32.dll",
                 "ucrtbase.dll",
+                "userenv.dll",
+                "usp10.dll",
                 "version.dll",
+                "wer.dll",
+                "winhttp.dll",
                 "winmm.dll",
                 "winspool.drv",
                 "ws2_32.dll",
+                "wsock32.dll",
             ];
             let identity = library.identity.to_ascii_lowercase();
             let expected = format!(r"C:\Windows\System32\{identity}");
-            if !(SYSTEM_DLLS.contains(&identity.as_str())
-                || identity.starts_with("api-ms-win-") && identity.ends_with(".dll"))
+            let api_set_dll = identity.starts_with("api-ms-win-")
+                && Path::new(&identity)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"));
+            if !(SYSTEM_DLLS.contains(&identity.as_str()) || api_set_dll)
                 || !library.path.eq_ignore_ascii_case(&expected)
             {
                 return Err(unavailable("sandboxAuthority"));
@@ -159,6 +301,27 @@ pub(super) fn system_library_path(
         }
         _ => Err(unavailable("sandboxAuthority")),
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn authenticated_windows_system_path(path: &Path) -> Result<(), ConversionError> {
+    let value = path.to_str().ok_or_else(|| unavailable("sandboxAuthority"))?;
+    let identity = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| unavailable("sandboxAuthority"))?
+        .to_ascii_lowercase();
+    let authority = SystemLibraryAuthority { identity: identity.clone(), path: value.to_owned() };
+    system_library_path(&authority, "x86_64-pc-windows-msvc")?;
+
+    // API-set DLL names are loader contracts represented by the Windows API
+    // schema, not standalone files in System32. Their exact System32 identity
+    // is authenticated above; all concrete system DLLs retain handle-based
+    // no-reparse authentication.
+    if identity.starts_with("api-ms-win-") {
+        return Ok(());
+    }
+    authenticated_windows_path(path, false).map(|_| ())
 }
 
 fn macos_system_library(library: &SystemLibraryAuthority) -> Result<PathBuf, ConversionError> {
@@ -191,4 +354,49 @@ pub(super) fn is_reparse(metadata: &fs::Metadata) -> bool {
 #[cfg(not(windows))]
 pub(super) const fn is_reparse(_: &fs::Metadata) -> bool {
     false
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::authenticated_windows_path;
+    use std::fs;
+
+    #[test]
+    fn authenticates_non_ascii_files_and_directories_by_handle() {
+        let temporary = tempfile::Builder::new()
+            .prefix("into-md-office-path-")
+            .tempdir()
+            .expect("temporary directory");
+        let directory = temporary.path().join("验证 目录");
+        fs::create_dir(&directory).expect("create directory");
+        let file = directory.join("运行时.bin");
+        fs::write(&file, b"authenticated").expect("create file");
+
+        assert_eq!(
+            authenticated_windows_path(&directory, true).expect("directory authority"),
+            directory
+        );
+        assert_eq!(authenticated_windows_path(&file, false).expect("file authority"), file);
+    }
+
+    #[test]
+    fn rejects_parent_components_and_final_reparse_points() {
+        use std::os::windows::fs::symlink_file;
+
+        let temporary = tempfile::Builder::new()
+            .prefix("into-md-office-path-")
+            .tempdir()
+            .expect("temporary directory");
+        let file = temporary.path().join("runtime.bin");
+        fs::write(&file, b"authenticated").expect("create file");
+        assert!(
+            authenticated_windows_path(&temporary.path().join("child/../runtime.bin"), false)
+                .is_err()
+        );
+
+        let link = temporary.path().join("runtime-link.bin");
+        if symlink_file(&file, &link).is_ok() {
+            assert!(authenticated_windows_path(&link, false).is_err());
+        }
+    }
 }

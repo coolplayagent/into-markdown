@@ -57,9 +57,28 @@ fn target() -> &'static str {
     "unsupported"
 }
 
+fn manifest_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    let manifest = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
+    let metadata = fs::metadata(&manifest).ok()?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let contents = fs::read_to_string(manifest).ok()?;
+    contents.lines().find_map(|line| {
+        let (logical, physical) = line.split_once(' ')?;
+        logical_paths
+            .contains(&logical)
+            .then(|| PathBuf::from(physical))
+            .filter(|path| path.is_file())
+    })
+}
+
 fn process_fixture() -> PathBuf {
     if let Some(path) = std::env::var_os("INTO_MD_PLUGIN_PROCESS_FIXTURE") {
-        return fs::canonicalize(path).expect("process fixture");
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return fs::canonicalize(path).expect("process fixture");
+        }
     }
     if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
         let name = if cfg!(windows) {
@@ -75,15 +94,48 @@ fn process_fixture() -> PathBuf {
             }
         }
     }
+    let name = if cfg!(windows) {
+        "plugin_manager_process_fixture.exe"
+    } else {
+        "plugin_manager_process_fixture"
+    };
+    if let Some(path) = manifest_runfile(&[
+        &format!("_main/crates/plugin-manager/{name}"),
+        &format!("into_markdown/crates/plugin-manager/{name}"),
+    ]) {
+        return fs::canonicalize(path).expect("Bazel process fixture");
+    }
+    if std::env::var_os("RUNFILES_MANIFEST_FILE").is_none()
+        && let Ok(test_binary) = std::env::current_exe()
+        && let Some(profile_directory) = test_binary.parent().and_then(Path::parent)
+    {
+        let candidate = profile_directory.join(name);
+        if candidate.is_file() {
+            return fs::canonicalize(candidate).expect("Cargo process fixture");
+        }
+    }
     panic!("INTO_MD_PLUGIN_PROCESS_FIXTURE was not provided")
 }
 
 fn cli_binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_into-md") {
-        return fs::canonicalize(path).expect("Cargo CLI");
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return fs::canonicalize(path).expect("Cargo CLI");
+        }
     }
     if let Some(path) = std::env::var_os("INTO_MD_BIN") {
-        return fs::canonicalize(path).expect("CLI");
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return fs::canonicalize(path).expect("CLI");
+        }
+    }
+    let name = if cfg!(windows) { "into-md.exe" } else { "into-md" };
+    if let Some(path) = manifest_runfile(&[
+        &format!("_main/apps/cli/{name}"),
+        &format!("into_markdown/apps/cli/{name}"),
+    ]) {
+        return fs::canonicalize(path).expect("Bazel CLI");
     }
     panic!("into-md binary unavailable")
 }
@@ -184,28 +236,48 @@ fn exercise(
     scope: &str,
 ) {
     let package = package_path.to_str().expect("package path");
-    for (operation, arguments) in [
-        (
-            "install",
-            vec![
-                "plugins",
-                "install",
-                package,
-                "--sha256",
-                package_sha,
-                "--signing-key-id",
-                key_id,
-                "--signing-key-sha256",
-                fingerprint,
-                "--scope",
-                scope,
-            ],
-        ),
-        ("verify", vec!["plugins", "verify", id, "--scope", scope, "--json"]),
-        ("disable", vec!["plugins", "disable", id, "--scope", scope]),
-    ] {
-        assert_success(&invoke(binary, cwd, user_data, &arguments), operation);
+    let install_arguments = [
+        "plugins",
+        "install",
+        package,
+        "--sha256",
+        package_sha,
+        "--signing-key-id",
+        key_id,
+        "--signing-key-sha256",
+        fingerprint,
+        "--scope",
+        scope,
+    ];
+    assert_success(&invoke(binary, cwd, user_data, &install_arguments), "install");
+    assert_success(&invoke(binary, cwd, user_data, &install_arguments), "idempotent reinstall");
+    assert_success(
+        &invoke(binary, cwd, user_data, &["plugins", "verify", id, "--scope", scope, "--json"]),
+        "verify",
+    );
+    if scope == "global" {
+        let relative = if id == "fixture.manager-process" {
+            if cfg!(windows) { "bin/plugin.exe" } else { "bin/plugin" }
+        } else {
+            "plugin.component.wasm"
+        };
+        let installed_payload = user_data.join("into-markdown/plugins").join(id).join(relative);
+        let mut damaged = fs::read(&installed_payload).expect("installed payload");
+        damaged[0] ^= 0x80;
+        fs::write(&installed_payload, damaged).expect("damage installed payload");
+        let rejected =
+            invoke(binary, cwd, user_data, &["plugins", "verify", id, "--scope", scope, "--json"]);
+        assert!(!rejected.status.success(), "damaged payload still verified");
+        assert_success(&invoke(binary, cwd, user_data, &install_arguments), "repair reinstall");
+        assert_success(
+            &invoke(binary, cwd, user_data, &["plugins", "verify", id, "--scope", scope, "--json"]),
+            "verify repaired plugin",
+        );
     }
+    assert_success(
+        &invoke(binary, cwd, user_data, &["plugins", "disable", id, "--scope", scope]),
+        "disable",
+    );
     if scope == "project" {
         let project_config =
             fs::read_to_string(cwd.join(".into-markdown.toml")).expect("project config pin");

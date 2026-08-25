@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 import urllib.parse
+import urllib.error
 import urllib.request
 
 from common import ReleaseError, sha256
@@ -21,6 +22,11 @@ ALLOWED_HOSTS = {
     "release-assets.githubusercontent.com",
     "us.aws.cdn.hf.co",
 }
+DOWNLOAD_ATTEMPTS = 4
+
+
+class IncompleteDownload(Exception):
+    """A trusted endpoint closed before the authority-declared byte count."""
 
 
 def acquire(cache: pathlib.Path, downloads: dict[str, dict]) -> None:
@@ -31,25 +37,55 @@ def acquire(cache: pathlib.Path, downloads: dict[str, dict]) -> None:
             continue
         temporary = destination.with_suffix(".download")
         temporary.unlink(missing_ok=True)
-        request = urllib.request.Request(
-            item["url"], headers={"User-Agent": "into-markdown-release/1"}
-        )
-        with urllib.request.urlopen(request, timeout=180) as response, temporary.open(
-            "xb"
-        ) as output:
-            parsed = urllib.parse.urlparse(response.geturl())
-            if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
-                raise ReleaseError(f"{identity} redirected outside the release allowlist")
-            expected = item.get("bytes")
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                download_once(identity, item, temporary)
+            except (IncompleteDownload, TimeoutError, urllib.error.URLError, OSError) as error:
+                if attempt == DOWNLOAD_ATTEMPTS:
+                    temporary.unlink(missing_ok=True)
+                    raise ReleaseError(
+                        f"{identity} download failed after {DOWNLOAD_ATTEMPTS} attempts"
+                    ) from error
+                continue
+            if not valid(temporary, item):
+                temporary.unlink(missing_ok=True)
+                raise ReleaseError(f"{identity} download differs from authority")
+            os.replace(temporary, destination)
+            break
+
+
+def download_once(identity: str, item: dict, temporary: pathlib.Path) -> None:
+    expected = item.get("bytes")
+    offset = temporary.stat().st_size if temporary.exists() else 0
+    headers = {"User-Agent": "into-markdown-release/1"}
+    if offset:
+        headers["Range"] = f"bytes={offset}-"
+    request = urllib.request.Request(item["url"], headers=headers)
+    with urllib.request.urlopen(request, timeout=180) as response:
+        parsed = urllib.parse.urlparse(response.geturl())
+        if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+            raise ReleaseError(f"{identity} redirected outside the release allowlist")
+        status = getattr(response, "status", 200)
+        if offset and status == 206:
+            content_range = response.headers.get("Content-Range", "")
+            expected_range = f"bytes {offset}-"
+            expected_total = f"/{expected}" if expected is not None else "/"
+            if not content_range.startswith(expected_range) or expected_total not in content_range:
+                temporary.unlink(missing_ok=True)
+                raise ReleaseError(f"{identity} returned an invalid content range")
+            mode = "ab"
+            total = offset
+        else:
+            mode = "wb"
             total = 0
+        with temporary.open(mode) as output:
             while chunk := response.read(1024 * 1024):
                 total += len(chunk)
                 if expected is not None and total > expected:
                     raise ReleaseError(f"{identity} download exceeds authority")
                 output.write(chunk)
-        if not valid(temporary, item):
-            raise ReleaseError(f"{identity} download differs from authority")
-        os.replace(temporary, destination)
+    if expected is not None and total != expected:
+        raise IncompleteDownload(f"{identity} downloaded {total} of {expected} bytes")
 
 
 def valid(path: pathlib.Path, item: dict) -> bool:

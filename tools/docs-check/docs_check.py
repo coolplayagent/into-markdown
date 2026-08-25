@@ -9,14 +9,29 @@ MARKER = re.compile(r"<!--\s*(cli|format)-example:\s*([^>]+?)\s*-->\s*\n[^\n]*?`
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
 STALE = ("当前工程仍是转换后端脚手架", "与未来 HTTP 服务共享", "转换和状态查询不会隐式调用这两个命令")
-TOKENS = ("official.ocr.ppocrv6", "official.media.whisper", "official.legacy-office.libreoffice", "into-markdown-skill.zip", "macOS ARM64", "Linux x86_64", "Linux ARM64", "Windows x86_64")
+TOKENS = ("official.ocr.ppocrv6", "official.media.whisper", "into-markdown-skill.zip", "macOS ARM64", "Linux x86_64", "Linux ARM64", "Windows x86_64")
 
 
 class CheckError(RuntimeError): pass
 
 
+def runfile(*logical_paths):
+    manifest = os.environ.get("RUNFILES_MANIFEST_FILE")
+    if not manifest: return None
+    manifest_path = pathlib.Path(manifest)
+    if not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024 * 1024: return None
+    wanted = set(logical_paths)
+    with manifest_path.open(encoding="utf-8") as source:
+        for line in source:
+            logical, separator, physical = line.rstrip("\r\n").partition(" ")
+            if separator and logical in wanted:
+                candidate = pathlib.Path(physical)
+                if candidate.is_file(): return candidate.resolve()
+    return None
+
+
 def invoke(binary, args, cwd, env, stdin=None):
-    result = subprocess.run([str(binary), *args], cwd=cwd, env=env, input=stdin, capture_output=True, text=True)
+    result = subprocess.run([str(binary), *args], cwd=cwd, env=env, input=stdin, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         raise CheckError(f"into-md {' '.join(args)} failed ({result.returncode})\n{result.stderr}")
     return result.stdout
@@ -120,9 +135,14 @@ def check_markdown(root):
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument("--into-md", required=True, type=pathlib.Path); parser.add_argument("--repository", type=pathlib.Path); args = parser.parse_args()
     if args.repository: root = args.repository.resolve()
-    elif os.environ.get("TEST_SRCDIR"): root = (pathlib.Path(os.environ["TEST_SRCDIR"])/os.environ["TEST_WORKSPACE"]).resolve()
+    elif os.environ.get("TEST_SRCDIR"):
+        readme = runfile("_main/README.md", "into_markdown/README.md")
+        root = readme.parent if readme else (pathlib.Path(os.environ["TEST_SRCDIR"])/os.environ["TEST_WORKSPACE"]).resolve()
     else: root = pathlib.Path(subprocess.run(["git","rev-parse","--show-toplevel"], check=True, capture_output=True, text=True).stdout.strip()).resolve()
     binary = next((x.resolve() for x in (args.into_md, root/args.into_md, pathlib.Path.cwd()/args.into_md) if x.is_file()), None)
+    if binary is None:
+        name = "into-md.exe" if os.name == "nt" else "into-md"
+        binary = runfile(f"_main/apps/cli/{name}", f"into_markdown/apps/cli/{name}")
     if binary is None: raise CheckError(f"into-md unavailable: {args.into_md}")
     with tempfile.TemporaryDirectory(prefix="into-md-doc-user-") as user:
         env = dict(os.environ); env["INTO_MARKDOWN_USER_DATA_HOME"] = user; env.pop("INTO_MARKDOWN_CONFIG", None)

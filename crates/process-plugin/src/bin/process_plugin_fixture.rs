@@ -8,6 +8,8 @@ use into_markdown_process_plugin::worker::{self, WorkerError};
 use std::io::Write as _;
 use std::time::Duration;
 
+// This fixture intentionally keeps the complete protocol branch matrix visible in one process.
+#[allow(clippy::too_many_lines)]
 fn main() -> std::io::Result<()> {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--child-probe")) {
         print!("child-ok");

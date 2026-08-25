@@ -401,6 +401,27 @@ fn authority_bundle() -> AuthorityBundle {
 }
 
 fn fixture_root() -> PathBuf {
+    if let Some(value) = std::env::var_os("RUNFILES_MANIFEST_FILE") {
+        let manifest = PathBuf::from(value);
+        if std::fs::metadata(&manifest).is_ok_and(|metadata| metadata.len() <= 64 * 1024 * 1024)
+            && let Ok(contents) = std::fs::read_to_string(manifest)
+        {
+            for line in contents.lines() {
+                let Some((logical, physical)) = line.split_once(' ') else {
+                    continue;
+                };
+                if matches!(
+                    logical,
+                    "_main/fixtures/manifest.json" | "into_markdown/fixtures/manifest.json"
+                ) {
+                    let candidate = PathBuf::from(physical);
+                    if candidate.is_file() {
+                        return candidate.parent().unwrap().to_path_buf();
+                    }
+                }
+            }
+        }
+    }
     std::env::var_os("TEST_SRCDIR").map_or_else(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
         |runfiles| {

@@ -8,8 +8,6 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
 #[cfg(target_os = "macos")]
 mod macos_container;
 #[cfg(unix)]
@@ -38,14 +36,8 @@ pub(crate) fn working_directory(
     {
         let parent = crate::windows_support::storage_path(&bundle.app_container.sid)
             .map_err(|()| unavailable("appContainerStorage"))?;
-        let metadata =
-            std::fs::symlink_metadata(&parent).map_err(|_| unavailable("appContainerStorage"))?;
-        if !metadata.is_dir()
-            || metadata.file_attributes() & 0x400 != 0
-            || parent.canonicalize().map_err(|_| unavailable("appContainerStorage"))? != parent
-        {
-            return Err(unavailable("appContainerStorage"));
-        }
+        crate::authority::authenticated_windows_path(&parent, true)
+            .map_err(|_| unavailable("appContainerStorage"))?;
         return tempfile::Builder::new()
             .prefix("into-md-legacy-office-")
             .tempdir_in(parent)
@@ -60,13 +52,16 @@ pub(crate) struct WorkerChild {
     child: unix::Child,
     #[cfg(windows)]
     child: windows::Child,
+    #[cfg(unix)]
     _runtime_tree: Option<crate::snapshot::VerifiedTree>,
     #[cfg(target_os = "macos")]
     container: Option<macos_container::PreparedContainer>,
     #[cfg(target_os = "macos")]
     ipc_socket: std::path::PathBuf,
     status: Option<WorkerStatus>,
+    #[cfg(target_os = "macos")]
     memory_limit: u64,
+    #[cfg(target_os = "macos")]
     process_limit: u32,
 }
 
@@ -89,6 +84,9 @@ type WorkerStderr = std::fs::File;
 type WorkerStderr = std::fs::File;
 
 impl WorkerChild {
+    // Worker snapshot construction and sandbox launch are one transaction; splitting them would
+    // make it easier to accidentally launch paths that were not part of the verified snapshot.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn spawn(
         bundle: &VerifiedBundle,
         inherited_process_sandbox: bool,
@@ -99,40 +97,57 @@ impl WorkerChild {
     ) -> Result<Self, ConversionError> {
         let (working_directory, temporary_root) =
             canonical_working_roots(working_directory, temporary_root)?;
+        #[cfg(windows)]
+        if !crate::windows_support::current_token_matches(&bundle.app_container.sid)
+            .map_err(|()| unavailable("appContainerIdentity"))?
+        {
+            return Err(unavailable("appContainerIdentity"));
+        }
+        #[cfg(windows)]
+        let _ = context;
         #[cfg(unix)]
         unix::ensure_descriptor_budget(bundle.runtime_files.len())?;
         #[cfg(unix)]
         let prepared = unix::Prepared::new().map_err(|error| unix::map_spawn_error(&error))?;
+        #[cfg(target_os = "macos")]
         let mut runtime_tree = crate::snapshot::copy_tree(
             &bundle.runtime_files,
             &working_directory.join(".runtime"),
             context,
         )?;
-        let worker_relative = bundle
-            .worker
-            .strip_prefix(&bundle.root)
-            .ok()
-            .and_then(Path::to_str)
-            .ok_or_else(|| unavailable("workerIdentity"))?;
-        let kit_relative = bundle
-            .kit_library
-            .strip_prefix(&bundle.root)
-            .ok()
-            .and_then(Path::to_str)
-            .ok_or_else(|| unavailable("workerIdentity"))?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let runtime_tree = crate::snapshot::copy_tree(
+            &bundle.runtime_files,
+            &working_directory.join(".runtime"),
+            context,
+        )?;
+        #[cfg(unix)]
+        let worker_relative = manifest_relative_path(&bundle.root, &bundle.worker)?;
+        #[cfg(unix)]
+        let kit_relative = manifest_relative_path(&bundle.root, &bundle.kit_library)?;
+        #[cfg(unix)]
         let install_relative = bundle
             .install_root
             .strip_prefix(&bundle.root)
             .map_err(|_| unavailable("workerIdentity"))?;
+        #[cfg(unix)]
         let executable_path = runtime_tree
-            .path(worker_relative)
+            .path(&worker_relative)
             .ok_or_else(|| unavailable("workerIdentity"))?
             .to_owned();
+        #[cfg(windows)]
+        let executable_path = bundle.worker.clone();
+        #[cfg(unix)]
         let runtime_root = runtime_tree.root().to_owned();
+        #[cfg(windows)]
+        let runtime_root = bundle.root.clone();
+        #[cfg(unix)]
         let worker_original = runtime_tree
-            .path(worker_relative)
+            .path(&worker_relative)
             .ok_or_else(|| unavailable("workerIdentity"))?
             .to_owned();
+        #[cfg(windows)]
+        let worker_original = bundle.worker.clone();
         #[cfg(target_os = "macos")]
         let container = if let Some(authority) = &bundle.container {
             let mount = runtime_tree.create_mountpoint(&authority.mount_relative)?;
@@ -148,8 +163,14 @@ impl WorkerChild {
         } else {
             None
         };
+        #[cfg(unix)]
         let kit_library = runtime_root.join(kit_relative);
+        #[cfg(windows)]
+        let kit_library = bundle.kit_library.clone();
+        #[cfg(unix)]
         let install_root = runtime_root.join(install_relative);
+        #[cfg(windows)]
+        let install_root = bundle.install_root.clone();
         if !install_root.is_dir() {
             return Err(unavailable("workerIdentity"));
         }
@@ -180,7 +201,9 @@ impl WorkerChild {
                 #[cfg(target_os = "macos")]
                 ipc_socket,
                 status: None,
+                #[cfg(target_os = "macos")]
                 memory_limit: address_limit,
+                #[cfg(target_os = "macos")]
                 process_limit: bundle.process_limit,
             });
         }
@@ -192,13 +215,7 @@ impl WorkerChild {
             address_limit,
             &bundle.app_container,
         )
-        .map(|child| Self {
-            child,
-            _runtime_tree: Some(runtime_tree),
-            status: None,
-            memory_limit: address_limit,
-            process_limit: bundle.process_limit,
-        });
+        .map(|child| Self { child, status: None });
         #[allow(unreachable_code)]
         Err(unavailable("unsupportedTarget"))
     }
@@ -222,6 +239,9 @@ impl WorkerChild {
         Ok(self.status.is_some())
     }
 
+    // The portable caller relies on one fallible enforcement contract. macOS performs the
+    // process-group measurement here; Windows enforces the same limit in its Job Object.
+    #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self, clippy::unnecessary_wraps))]
     pub(crate) fn enforce_memory_limit(&mut self) -> Result<(), ConversionError> {
         #[cfg(target_os = "macos")]
         {
@@ -272,7 +292,15 @@ impl WorkerChild {
         match self.status.and_then(status_code) {
             Some(70) => "sandboxUnavailable",
             Some(71) => "workerProtocol",
-            Some(72) => "runtimeFailure",
+            Some(72) => "runtimeAuthority",
+            Some(73) => "runtimeDllDirectory",
+            Some(74) => "runtimeLibraryLoad",
+            Some(75) => "runtimeExport",
+            Some(76) => "runtimeLibraryAccess",
+            Some(77) => "runtimeDependencyMissing",
+            Some(78) => "runtimeImageFormat",
+            Some(79) => "runtimeInitializer",
+            Some(80) => "runtimeLoaderFlags",
             Some(_) | None => "workerTerminated",
         }
     }
@@ -297,10 +325,18 @@ fn canonical_working_roots(
     if !working_directory.is_absolute() || !working_directory.is_dir() {
         return Err(unavailable("workerTemporaryDirectory"));
     }
+    #[cfg(not(windows))]
     let working_directory =
         working_directory.canonicalize().map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    #[cfg(not(windows))]
     let temporary_root =
         temporary_root.canonicalize().map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    #[cfg(windows)]
+    let working_directory = crate::authority::authenticated_windows_path(working_directory, true)
+        .map_err(|_| unavailable("workerTemporaryDirectory"))?;
+    #[cfg(windows)]
+    let temporary_root = crate::authority::authenticated_windows_path(temporary_root, true)
+        .map_err(|_| unavailable("workerTemporaryDirectory"))?;
     if !temporary_root.starts_with(&working_directory) {
         return Err(unavailable("workerTemporaryDirectory"));
     }
@@ -308,6 +344,26 @@ fn canonical_working_roots(
     std::fs::create_dir(temporary_root.join("home"))
         .map_err(|_| unavailable("workerTemporaryDirectory"))?;
     Ok((working_directory, temporary_root))
+}
+
+#[cfg(unix)]
+fn manifest_relative_path(root: &Path, path: &Path) -> Result<String, ConversionError> {
+    let relative = path.strip_prefix(root).map_err(|_| unavailable("workerIdentity"))?;
+    let mut result = String::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(unavailable("workerIdentity"));
+        };
+        let component = component.to_str().ok_or_else(|| unavailable("workerIdentity"))?;
+        if !result.is_empty() {
+            result.push('/');
+        }
+        result.push_str(component);
+    }
+    if result.is_empty() {
+        return Err(unavailable("workerIdentity"));
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,7 +469,9 @@ fn spawn_platform(
         #[cfg(target_os = "macos")]
         ipc_socket: std::path::PathBuf::from("/private/tmp/unused-test-ipc"),
         status: None,
+        #[cfg(target_os = "macos")]
         memory_limit: address_limit,
+        #[cfg(target_os = "macos")]
         process_limit: 1,
     })
 }

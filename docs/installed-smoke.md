@@ -69,3 +69,8 @@ The report schema records platform, architecture, archive digest, catalog-derive
 statuses, ordered case results, elapsed time, and cleanup. A failed case or cleanup failure makes the
 overall result fail. Reports contain no captured document content, command output, environment
 values, or local absolute paths.
+
+Linux and Windows release jobs additionally run `tools/platform-release/platform_acceptance.py`.
+That separate runner exercises installer-owned plugin state combinations and lifecycle operations;
+it does not add options to `installed-smoke` or change this report contract. Its report embeds the
+signed-artifact platform audit and proves the immutable installed Core tree is unchanged throughout.

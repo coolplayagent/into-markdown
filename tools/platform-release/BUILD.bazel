@@ -1,3 +1,70 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
 exports_files([
     "authority.json",
 ])
+
+rust_binary(
+    name = "into-md-installer",
+    srcs = ["installer.rs"],
+    crate_name = "into_md_installer",
+    edition = "2024",
+)
+
+rust_test(
+    name = "installer_test",
+    srcs = ["installer.rs"],
+    crate_name = "into_md_installer_test",
+    edition = "2024",
+)
+
+py_library(
+    name = "release_library",
+    srcs = [
+        "acquire.py",
+        "common.py",
+        "legacy_authority.py",
+        "release.py",
+    ],
+    data = ["authority.json"],
+    imports = ["."],
+    deps = [
+        "//tools/macos-release:library",
+        "//tools/skill-release:library",
+    ],
+)
+
+py_test(
+    name = "release_test",
+    srcs = ["test_release.py"],
+    data = ["//tools/installed-smoke:rust_consumer_source"],
+    main = "test_release.py",
+    deps = [":release_library"],
+)
+
+py_library(
+    name = "platform_tools_library",
+    srcs = [
+        "audit.py",
+        "common.py",
+        "legacy_authority.py",
+        "platform_acceptance.py",
+    ],
+    imports = ["."],
+)
+
+py_test(
+    name = "platform_tools_test",
+    srcs = [
+        "test_platform_tools.py",
+    ],
+    data = [
+        "Install.ps1",
+        "Uninstall.ps1",
+        "installer.rs",
+        "installer_test_program.rs",
+    ],
+    main = "test_platform_tools.py",
+    deps = [":platform_tools_library"],
+)

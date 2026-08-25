@@ -15,7 +15,7 @@ pub(super) fn validate(
     target_name: &str,
     root: &Path,
     context: &ExecutionContext,
-) -> Result<(), ConversionError> {
+) -> Result<Vec<VerifiedRuntimeFile>, ConversionError> {
     let inventory =
         target.files.iter().map(|entry| (entry.path.as_str(), entry)).collect::<BTreeMap<_, _>>();
     let declared_system = target
@@ -28,7 +28,7 @@ pub(super) fn validate(
         })
         .collect::<Result<BTreeSet<_>, ConversionError>>()?;
     if declared_system.len() != target.sandbox.system_libraries.len() {
-        return Err(unavailable("dependencyAuthority"));
+        return Err(unavailable("dependencyAuthority:duplicateSystemDeclaration"));
     }
     let mut used_system = BTreeSet::new();
     let _worker_files = closure(
@@ -41,7 +41,7 @@ pub(super) fn validate(
         &mut used_system,
         context,
     )?;
-    let _native_files = closure(
+    let native_files = closure(
         &target.kit_library,
         target,
         target_name,
@@ -52,9 +52,15 @@ pub(super) fn validate(
         context,
     )?;
     if used_system != declared_system {
-        return Err(unavailable("dependencyAuthority"));
+        let missing =
+            declared_system.difference(&used_system).cloned().collect::<Vec<_>>().join(",");
+        let unexpected =
+            used_system.difference(&declared_system).cloned().collect::<Vec<_>>().join(",");
+        return Err(unavailable(format!(
+            "dependencyAuthority:systemClosure:missing={missing}:unexpected={unexpected}"
+        )));
     }
-    Ok(())
+    Ok(native_files)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -77,25 +83,26 @@ fn closure(
             continue;
         }
         if visited.len() > MAX_DEPENDENCIES {
-            return Err(unavailable("dependencyAuthority"));
+            return Err(unavailable("dependencyAuthority:closureLimit"));
         }
         let entry = inventory
             .get(relative.as_str())
             .copied()
-            .ok_or_else(|| unavailable("dependencyAuthority"))?;
+            .ok_or_else(|| unavailable(format!("dependencyAuthority:missing:{relative}")))?;
         if !matches!(entry.role, FileRole::Worker | FileRole::KitLibrary | FileRole::Runtime) {
-            return Err(unavailable("dependencyAuthority"));
+            return Err(unavailable(format!("dependencyAuthority:role:{relative}")));
         }
         let path = root.join(&relative);
         if entry.bytes == 0 || entry.bytes > MAX_DEPENDENCY_BYTES {
-            return Err(unavailable("dependencyAuthority"));
+            return Err(unavailable(format!("dependencyAuthority:size:{relative}")));
         }
         let _memory = context.reserve_memory(entry.bytes)?;
         let bytes = std::fs::read(&path).map_err(|_| unavailable("dependencyIo"))?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != entry.bytes {
             return Err(unavailable("dependencyIo"));
         }
-        let specification = parse(&bytes, &target.abi.binary_format, target_name)?;
+        let specification = parse(&bytes, &target.abi.binary_format, target_name)
+            .map_err(|_| unavailable(format!("dependencyAuthority:parse:{relative}")))?;
         for needed in specification.needed {
             context.checkpoint()?;
             if declared_system.contains(needed.as_str()) {
@@ -103,7 +110,10 @@ fn closure(
                 continue;
             }
             let resolved =
-                resolve(&relative, &needed, &specification.search, inventory, target_name)?;
+                resolve(&relative, &needed, &specification.search, inventory, target_name)
+                    .map_err(|_| {
+                        unavailable(format!("dependencyAuthority:unresolved:{relative}:{needed}"))
+                    })?;
             if !pending.contains(&resolved) && !visited.contains(&resolved) {
                 pending.try_reserve(1).map_err(|_| unavailable("dependencyAuthority"))?;
                 pending.push(resolved);
@@ -257,19 +267,28 @@ fn resolve(
     let owner_directory = Path::new(owner).parent().unwrap_or_else(|| Path::new(""));
     let mut candidates = Vec::new();
     if let Some(suffix) = needed.strip_prefix("@loader_path/") {
-        push_candidate(&mut candidates, owner_directory, suffix, inventory)?;
+        push_candidate(&mut candidates, owner_directory, suffix, inventory, target)?;
     } else if let Some(suffix) = needed.strip_prefix("@rpath/") {
         for path in search {
             let base = expand_search(path, owner_directory, target)?;
-            push_candidate(&mut candidates, &base, suffix, inventory)?;
+            push_candidate(&mut candidates, Path::new(&base), suffix, inventory, target)?;
         }
     } else if needed.contains('/') {
         return Err(unavailable("dependencyAuthority"));
     } else {
-        push_candidate(&mut candidates, owner_directory, needed, inventory)?;
+        push_candidate(&mut candidates, owner_directory, needed, inventory, target)?;
+        if target == "x86_64-pc-windows-msvc" {
+            push_candidate(
+                &mut candidates,
+                Path::new("libreoffice/System64"),
+                needed,
+                inventory,
+                target,
+            )?;
+        }
         for path in search {
             let base = expand_search(path, owner_directory, target)?;
-            push_candidate(&mut candidates, &base, needed, inventory)?;
+            push_candidate(&mut candidates, Path::new(&base), needed, inventory, target)?;
         }
     }
     candidates.sort();
@@ -280,23 +299,19 @@ fn resolve(
     Ok(candidates.remove(0))
 }
 
-fn expand_search(
-    value: &str,
-    owner: &Path,
-    target: &str,
-) -> Result<std::path::PathBuf, ConversionError> {
+fn expand_search(value: &str, owner: &Path, target: &str) -> Result<String, ConversionError> {
     let relative = value
         .strip_prefix("$ORIGIN/")
         .or_else(|| value.strip_prefix("${ORIGIN}/"))
         .or_else(|| value.strip_prefix("@loader_path/"));
     if value == "$ORIGIN" || value == "${ORIGIN}" || value == "@loader_path" {
-        return Ok(owner.to_owned());
+        return normalize(owner);
     }
     if let Some(relative) = relative {
-        return normalize(owner.join(relative));
+        return normalize(&owner.join(relative));
     }
     if target == "x86_64-pc-windows-msvc" || !value.starts_with('/') {
-        return normalize(owner.join(value));
+        return normalize(&owner.join(value));
     }
     Err(unavailable("dependencyAuthority"))
 }
@@ -306,24 +321,39 @@ fn push_candidate(
     base: &Path,
     suffix: &str,
     inventory: &BTreeMap<&str, &RuntimeFile>,
+    target: &str,
 ) -> Result<(), ConversionError> {
-    let candidate = normalize(base.join(suffix))?;
-    let candidate = candidate.to_str().ok_or_else(|| unavailable("dependencyAuthority"))?;
-    if inventory.contains_key(candidate) {
-        candidates.push(candidate.to_owned());
+    let candidate = normalize(&base.join(suffix))?;
+    if let Some(path) = inventory.keys().find(|path| {
+        if target == "x86_64-pc-windows-msvc" {
+            path.eq_ignore_ascii_case(&candidate)
+        } else {
+            **path == candidate
+        }
+    }) {
+        candidates.push((*path).to_string());
     }
     Ok(())
 }
 
-fn normalize(path: std::path::PathBuf) -> Result<std::path::PathBuf, ConversionError> {
+fn normalize(path: &Path) -> Result<String, ConversionError> {
     if path.is_absolute() || path.components().any(|part| !matches!(part, Component::Normal(_))) {
         return Err(unavailable("dependencyAuthority"));
     }
-    let value = path.to_str().ok_or_else(|| unavailable("dependencyAuthority"))?;
-    if !safe_relative(value) {
+    let value = path
+        .components()
+        .map(|component| match component {
+            Component::Normal(component) => {
+                component.to_str().ok_or_else(|| unavailable("dependencyAuthority"))
+            }
+            _ => Err(unavailable("dependencyAuthority")),
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .join("/");
+    if !safe_relative(&value) {
         return Err(unavailable("dependencyAuthority"));
     }
-    Ok(path)
+    Ok(value)
 }
 
 fn le16(bytes: &[u8], offset: usize) -> Result<u16, ConversionError> {
@@ -372,7 +402,10 @@ mod tests {
             .imports()
             .unwrap()
             .filter_map(Result::ok)
-            .map(|import| std::str::from_utf8(import.library()).unwrap().to_owned())
+            .map(|import| {
+                let identity = std::str::from_utf8(import.library()).unwrap();
+                if cfg!(windows) { identity.to_ascii_lowercase() } else { identity.to_owned() }
+            })
             .collect::<BTreeSet<_>>();
         assert!(imported.is_subset(&parsed));
         assert!(!parsed.is_empty());
@@ -440,5 +473,52 @@ mod tests {
             path: "/usr/lib/libconstructor-canary.so.6".into(),
         };
         assert!(system_library_path(&fake, "x86_64-unknown-linux-gnu").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolution_is_case_insensitive_and_returns_manifest_spelling() {
+        let runtime = RuntimeFile {
+            path: "libreoffice/program/Argon2OptDll.dll".into(),
+            bytes: 1,
+            sha256: "a".repeat(64),
+            role: FileRole::Runtime,
+        };
+        let vcruntime = RuntimeFile {
+            path: "libreoffice/System64/vcruntime140.dll".into(),
+            bytes: 1,
+            sha256: "b".repeat(64),
+            role: FileRole::Runtime,
+        };
+        let inventory = BTreeMap::from([
+            (runtime.path.as_str(), &runtime),
+            (vcruntime.path.as_str(), &vcruntime),
+        ]);
+        assert_eq!(
+            resolve(
+                "libreoffice/program/mergedlo.dll",
+                "argon2optdll.dll",
+                &[],
+                &inventory,
+                "x86_64-pc-windows-msvc",
+            )
+            .unwrap(),
+            runtime.path
+        );
+        assert_eq!(
+            resolve(
+                "legacy-office-worker.exe",
+                "VCRUNTIME140.DLL",
+                &[],
+                &inventory,
+                "x86_64-pc-windows-msvc",
+            )
+            .unwrap(),
+            vcruntime.path
+        );
+        assert_eq!(
+            normalize(&Path::new("libreoffice/program").join("mergedlo.dll")).unwrap(),
+            "libreoffice/program/mergedlo.dll"
+        );
     }
 }

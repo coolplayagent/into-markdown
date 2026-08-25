@@ -2,41 +2,41 @@
 
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs::File;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::path::{Component, Path};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::Arc;
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 const TOKEN_BYTES: usize = 16;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const HEADER_BLOCK_BYTES: usize = 4 * 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 // A maximally nested Table node adds node/block/rows/row/cells/cell/blocks
 // containers around the next public IR level. The fixed allowance covers the
 // checkpoint envelope, document metadata, and enum representation.
 pub(super) const MAX_CHECKPOINT_JSON_DEPTH: usize = into_markdown_core::MAX_DOCUMENT_DEPTH * 8 + 32;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_JSON_CONTAINER_ENTRIES: u64 = 1_100_000;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_JSON_VALUES: u64 = 4_000_000;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const JSON_VALUE_ALLOCATION_BYTES: u64 = 32;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAGIC: &[u8] = b"into-markdown-checkpoint-v1\n";
 
 /// Opaque, filesystem-safe identifier for one recoverable task.
@@ -78,7 +78,7 @@ pub enum TaskPhase {
     Succeeded,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl TaskPhase {
     fn file_label(self) -> &'static str {
         match self {
@@ -119,7 +119,7 @@ pub struct TaskCheckpoint {
     pub payload_sha256: String,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl TaskCheckpoint {
     fn validate(
         &self,
@@ -166,9 +166,9 @@ impl TaskCheckpoint {
 /// Directory-backed checkpoint store. It performs no network access.
 #[derive(Debug, Clone)]
 pub struct RecoveryStore {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     directory: Arc<SafeDirectory>,
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     quarantine_failure: Arc<AtomicUsize>,
 }
 
@@ -199,7 +199,7 @@ impl RecoveryStore {
     /// unsafe. Builds without audited relative-directory operations fail
     /// closed.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             Ok(Self {
                 directory: Arc::new(SafeDirectory::open_or_create(root.into())?),
@@ -207,7 +207,7 @@ impl RecoveryStore {
                 quarantine_failure: Arc::new(AtomicUsize::new(0)),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = root;
             Err(ConversionError::ComponentUnavailable {
@@ -223,14 +223,14 @@ impl RecoveryStore {
     ///
     /// Returns a recovery error when the operating system RNG is unavailable.
     pub fn create_token(&self) -> Result<RecoveryToken, ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.directory.verify_namespace()?;
         let mut bytes = [0_u8; TOKEN_BYTES];
         getrandom::fill(&mut bytes).map_err(|error| {
             recovery_error("entropy", format!("generate recovery token: {error}"))
         })?;
         let token = RecoveryToken(hex(&bytes));
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.directory.verify_namespace()?;
         Ok(token)
     }
@@ -248,7 +248,7 @@ impl RecoveryStore {
         &self,
         token: &RecoveryToken,
     ) -> Result<Option<TaskCheckpoint>, ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.directory.verify_namespace()?;
             for phase in [TaskPhase::Succeeded, TaskPhase::Converted, TaskPhase::Media] {
@@ -261,7 +261,7 @@ impl RecoveryStore {
             self.directory.verify_namespace()?;
             Ok(None)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -273,25 +273,23 @@ impl RecoveryStore {
     /// Retention callers use this before committing their task-store deletion,
     /// so an unsafe checkpoint cannot turn a reversible object quarantine into
     /// a partially committed deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when the namespace or any checkpoint identity
+    /// is unsafe.
     pub fn verify_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.directory.verify_namespace()?;
             for name in purge_names(token) {
                 if let Some(file) = self.directory.open_regular(&name)? {
-                    let stat = rustix::fs::fstat(&file)
-                        .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
-                    if stat.st_nlink != 1 {
-                        return Err(recovery_error(
-                            "unsafePath",
-                            "checkpoint selected for deletion has an external hard link",
-                        ));
-                    }
+                    require_singly_linked(&file, "checkpoint selected for deletion")?;
                 }
             }
             self.directory.verify_namespace()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -301,11 +299,15 @@ impl RecoveryStore {
     /// Atomically move every checkpoint name out of the live token namespace.
     /// The returned intent must be restored if the coordinating database
     /// transaction fails, or finished after it commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when validation, publication, or rollback fails.
     pub fn quarantine_purge(
         &self,
         token: &RecoveryToken,
     ) -> Result<RecoveryPurge, ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.verify_purge(token)?;
             let mut moved: Vec<(String, String)> = Vec::new();
@@ -349,7 +351,7 @@ impl RecoveryStore {
             }
             Ok(RecoveryPurge { token: token.clone() })
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -357,18 +359,32 @@ impl RecoveryStore {
     }
 
     /// Restore a pre-commit checkpoint quarantine.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when the authenticated quarantine cannot be restored.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn restore_purge(&self, purge: RecoveryPurge) -> Result<(), ConversionError> {
         self.restore_quarantined_purge(&purge.token)
     }
 
     /// Permanently remove a post-commit checkpoint quarantine.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when the authenticated quarantine cannot be removed.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn finish_purge(&self, purge: RecoveryPurge) -> Result<(), ConversionError> {
         self.remove_quarantined_purge(&purge.token)
     }
 
     /// Restore checkpoint quarantine left by a crash before the DB commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when validation or atomic restoration fails.
     pub fn restore_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.verify_quarantined_purge(token)?;
             for source in purge_names(token) {
@@ -380,7 +396,7 @@ impl RecoveryStore {
             self.directory.sync()?;
             self.directory.verify_namespace()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -388,8 +404,12 @@ impl RecoveryStore {
     }
 
     /// Remove checkpoint quarantine left by a crash after the DB commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when validation or durable removal fails.
     pub fn remove_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.verify_quarantined_purge(token)?;
             for source in purge_names(token) {
@@ -398,26 +418,19 @@ impl RecoveryStore {
             self.directory.sync()?;
             self.directory.verify_namespace()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn verify_quarantined_purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
         self.directory.verify_namespace()?;
         for source in purge_names(token) {
             if let Some(file) = self.directory.open_regular(&purge_quarantine_name(&source))? {
-                let stat = rustix::fs::fstat(&file)
-                    .map_err(|error| recovery_io("inspect quarantined checkpoint", error))?;
-                if stat.st_nlink != 1 {
-                    return Err(recovery_error(
-                        "unsafePath",
-                        "quarantined checkpoint has an external hard link",
-                    ));
-                }
+                require_singly_linked(&file, "quarantined checkpoint")?;
             }
         }
         self.directory.verify_namespace()
@@ -431,20 +444,17 @@ impl RecoveryStore {
     /// Permanently remove every checkpoint and lock owned by one canonical
     /// token. This is intended for retention after a task reached a terminal
     /// state; it performs no path construction from caller-controlled text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a recovery error when a file is unsafe or durable removal fails.
     pub fn purge(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.verify_purge(token)?;
             for name in purge_names(token) {
                 if let Some(file) = self.directory.open_regular(&name)? {
-                    let stat = rustix::fs::fstat(&file)
-                        .map_err(|error| recovery_io("inspect checkpoint for deletion", error))?;
-                    if stat.st_nlink != 1 {
-                        return Err(recovery_error(
-                            "unsafePath",
-                            "checkpoint selected for deletion has an external hard link",
-                        ));
-                    }
+                    require_singly_linked(&file, "checkpoint selected for deletion")?;
                     drop(file);
                     self.directory.unlink(&name)?;
                 }
@@ -452,7 +462,7 @@ impl RecoveryStore {
             self.directory.sync()?;
             self.directory.verify_namespace()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -485,7 +495,24 @@ impl RecoveryStore {
             self.directory.verify_namespace()?;
             Ok(TaskLock { _file: file })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            self.directory.verify_namespace()?;
+            loop {
+                match self.directory.open_lock(&lock_name(token)) {
+                    Ok(file) => {
+                        self.directory.verify_namespace()?;
+                        return Ok(TaskLock { _file: file });
+                    }
+                    Err(ConversionError::Recovery { reason: "busy", .. }) => {
+                        context.checkpoint()?;
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (token, context);
             Err(platform_unavailable())
@@ -497,7 +524,7 @@ impl RecoveryStore {
         token: &RecoveryToken,
         context: &ExecutionContext,
     ) -> Result<Option<LoadedCheckpoint<T>>, ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.directory.verify_namespace()?;
             for phase in [TaskPhase::Succeeded, TaskPhase::Converted, TaskPhase::Media] {
@@ -553,7 +580,7 @@ impl RecoveryStore {
             self.directory.verify_namespace()?;
             Ok(None)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (token, context);
             Err(platform_unavailable())
@@ -601,13 +628,13 @@ impl RecoveryStore {
     }
 
     pub(crate) fn remove_media(&self, token: &RecoveryToken) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.directory.unlink(&phase_name(token, TaskPhase::Media))?;
             self.directory.sync()?;
             self.directory.verify_namespace()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = token;
             Err(platform_unavailable())
@@ -625,7 +652,7 @@ impl RecoveryStore {
         payload: &T,
         replace: bool,
     ) -> Result<(), ConversionError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.directory.verify_namespace()?;
             let existing = self.directory.open_regular(&phase_name(token, phase))?;
@@ -636,14 +663,7 @@ impl RecoveryStore {
                 ));
             }
             if let Some(file) = existing {
-                let stat = rustix::fs::fstat(&file)
-                    .map_err(|error| recovery_io("inspect replaced checkpoint", error))?;
-                if stat.st_nlink != 1 {
-                    return Err(recovery_error(
-                        "unsafePath",
-                        "checkpoint selected for replacement has an external hard link",
-                    ));
-                }
+                require_singly_linked(&file, "checkpoint selected for replacement")?;
             }
             let mut nonce = [0_u8; 8];
             getrandom::fill(&mut nonce).map_err(|error| {
@@ -701,9 +721,10 @@ impl RecoveryStore {
             }
             result
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
-            let _ = (token, context, input_fingerprint, options_fingerprint, phase, payload);
+            let _ =
+                (token, context, input_fingerprint, options_fingerprint, phase, payload, replace);
             Err(platform_unavailable())
         }
     }
@@ -755,7 +776,7 @@ pub(crate) struct TaskLock {
     _file: File,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn inspect_file(
     mut file: File,
     token: &RecoveryToken,
@@ -786,7 +807,7 @@ fn inspect_file(
     Ok(metadata)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn split_envelope<'a>(
     bytes: &'a [u8],
     token: &RecoveryToken,
@@ -819,7 +840,7 @@ fn split_envelope<'a>(
     Ok((payload, metadata))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn fixed_header_json(header: &[u8]) -> Result<&[u8], ConversionError> {
     let Some(end) = header.iter().position(|byte| *byte == b'\n') else {
         return Err(recovery_error("corrupt", "checkpoint metadata is unterminated"));
@@ -830,13 +851,13 @@ fn fixed_header_json(header: &[u8]) -> Result<&[u8], ConversionError> {
     Ok(&header[..end])
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct JsonStats {
     values: u64,
     string_bytes: u64,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn preflight_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonStats, ConversionError> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Container {
@@ -923,7 +944,7 @@ fn preflight_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonStats,
     Ok(JsonStats { values, string_bytes })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn checked_value(values: u64) -> Result<u64, ConversionError> {
     let values = values.saturating_add(1);
     if values > MAX_JSON_VALUES {
@@ -932,7 +953,7 @@ fn checked_value(values: u64) -> Result<u64, ConversionError> {
     Ok(values)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct BudgetWriter {
     file: File,
     reservation: ResourceReservation,
@@ -940,7 +961,7 @@ struct BudgetWriter {
     failure: Option<ConversionError>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl BudgetWriter {
     fn new(file: File, reservation: ResourceReservation) -> Self {
         Self { file, reservation, written: 0, failure: None }
@@ -966,7 +987,7 @@ impl BudgetWriter {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Write for BudgetWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let amount = u64::try_from(bytes.len()).map_err(io::Error::other)?;
@@ -1001,14 +1022,14 @@ impl Write for BudgetWriter {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct HashingWriter<'a> {
     inner: &'a mut BudgetWriter,
     hash: Sha256,
     bytes: u64,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl<'a> HashingWriter<'a> {
     fn new(inner: &'a mut BudgetWriter) -> Self {
         Self { inner, hash: Sha256::new(), bytes: 0 }
@@ -1023,7 +1044,7 @@ impl<'a> HashingWriter<'a> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Write for HashingWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.inner.write(bytes)?;
@@ -1200,6 +1221,216 @@ impl SafeDirectory {
     }
 }
 
+#[cfg(windows)]
+#[derive(Debug)]
+struct SafeDirectory {
+    handle: File,
+    path: PathBuf,
+    identity: (u64, u64),
+}
+
+#[cfg(windows)]
+impl SafeDirectory {
+    fn open_or_create(path: PathBuf) -> Result<Self, ConversionError> {
+        let path = resolved_absolute_windows(path)?;
+        let mut existing = path.as_path();
+        let mut missing = Vec::new();
+        while !existing.exists() {
+            missing.push(
+                existing
+                    .file_name()
+                    .ok_or_else(|| recovery_error("unsafePath", "checkpoint root is invalid"))?
+                    .to_os_string(),
+            );
+            existing = existing.parent().ok_or_else(|| {
+                recovery_error("unsafePath", "checkpoint root has no existing ancestor")
+            })?;
+        }
+        let mut current = std::fs::canonicalize(existing)
+            .map_err(|error| recovery_io("resolve checkpoint root ancestor", error))?;
+        for name in missing.into_iter().rev() {
+            current.push(name);
+            into_markdown_process_plugin::create_windows_plugin_store_directory(&current)
+                .map_err(|error| recovery_error("unsafePath", error.to_string()))?;
+        }
+        Self::open_existing(&path)
+    }
+
+    fn open_existing(path: &Path) -> Result<Self, ConversionError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(0x0020_0000 | 0x0200_0000)
+            .open(path)
+            .map_err(|error| recovery_io("open checkpoint directory", error))?;
+        let information = winapi_util::file::information(&handle)
+            .map_err(|error| recovery_io("inspect checkpoint directory", error))?;
+        if !handle
+            .metadata()
+            .map_err(|error| recovery_io("inspect checkpoint directory", error))?
+            .is_dir()
+            || information.file_attributes() & 0x400 != 0
+        {
+            return Err(recovery_error(
+                "unsafePath",
+                "checkpoint root is not a physical directory",
+            ));
+        }
+        into_markdown_process_plugin::verify_windows_plugin_store_path(path)
+            .map_err(|error| recovery_error("unsafePath", error.to_string()))?;
+        Ok(Self {
+            handle,
+            path: path.to_path_buf(),
+            identity: (information.volume_serial_number(), information.file_index()),
+        })
+    }
+
+    fn verify_namespace(&self) -> Result<(), ConversionError> {
+        let retained = winapi_util::file::information(&self.handle)
+            .map_err(|error| recovery_io("inspect checkpoint directory handle", error))?;
+        if (retained.volume_serial_number(), retained.file_index()) != self.identity {
+            return Err(recovery_error(
+                "unsafePath",
+                "checkpoint directory handle identity changed after opening",
+            ));
+        }
+        let reopened = Self::open_existing(&self.path)?;
+        if reopened.identity != self.identity {
+            return Err(recovery_error(
+                "unsafePath",
+                "checkpoint directory identity changed after opening",
+            ));
+        }
+        Ok(())
+    }
+
+    fn open_regular(&self, name: &str) -> Result<Option<File>, ConversionError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        self.verify_namespace()?;
+        let path = self.path.join(name);
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(0x0020_0000)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(recovery_io("open checkpoint", error)),
+        };
+        require_singly_linked(&file, "checkpoint")?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&path)
+            .map_err(|error| recovery_error("unsafePath", error.to_string()))?;
+        self.verify_namespace()?;
+        Ok(Some(file))
+    }
+
+    fn create_regular(&self, name: &str) -> Result<File, ConversionError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        self.verify_namespace()?;
+        let path = self.path.join(name);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0x1 | 0x2 | 0x4)
+            .custom_flags(0x0020_0000)
+            .open(&path)
+            .map_err(|error| recovery_io("create checkpoint temporary file", error))?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&path)
+            .map_err(|error| recovery_error("unsafePath", error.to_string()))?;
+        Ok(file)
+    }
+
+    fn open_lock(&self, name: &str) -> Result<File, ConversionError> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        self.verify_namespace()?;
+        let path = self.path.join(name);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .share_mode(0)
+            .custom_flags(0x0020_0000)
+            .open(&path)
+            .map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::WouldBlock
+                ) {
+                    recovery_error("busy", "recovery task lock is already held")
+                } else {
+                    recovery_io("open recovery task lock", error)
+                }
+            })?;
+        into_markdown_process_plugin::verify_windows_plugin_store_child(&path)
+            .map_err(|error| recovery_error("unsafePath", error.to_string()))?;
+        Ok(file)
+    }
+
+    fn link_no_replace(&self, source: &str, target: &str) -> Result<(), ConversionError> {
+        into_markdown_process_plugin::rename_windows_plugin_file_no_replace(
+            &self.handle,
+            std::ffi::OsStr::new(source),
+            std::ffi::OsStr::new(target),
+        )
+        .map_err(|error| recovery_error("conflict", error.to_string()))
+    }
+
+    fn unlink(&self, name: &str) -> Result<(), ConversionError> {
+        let Some(file) = self.open_regular(name)? else {
+            return Ok(());
+        };
+        drop(file);
+        std::fs::remove_file(self.path.join(name))
+            .map_err(|error| recovery_io("remove checkpoint temporary file", error))
+    }
+
+    fn rename_no_replace(&self, source: &str, target: &str) -> Result<(), ConversionError> {
+        into_markdown_process_plugin::rename_windows_plugin_file_no_replace(
+            &self.handle,
+            std::ffi::OsStr::new(source),
+            std::ffi::OsStr::new(target),
+        )
+        .map_err(|error| recovery_io("quarantine checkpoint", error))
+    }
+
+    fn rename_replace(&self, source: &str, target: &str) -> Result<(), ConversionError> {
+        into_markdown_process_plugin::replace_windows_plugin_file(
+            &self.handle,
+            std::ffi::OsStr::new(source),
+            std::ffi::OsStr::new(target),
+        )
+        .map_err(|error| recovery_io("replace media checkpoint", error))
+    }
+
+    fn sync(&self) -> Result<(), ConversionError> {
+        self.verify_namespace()
+    }
+}
+
+#[cfg(windows)]
+fn resolved_absolute_windows(path: PathBuf) -> Result<PathBuf, ConversionError> {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|error| recovery_io("resolve checkpoint root", error))?
+            .join(path)
+    };
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(recovery_error(
+            "unsafePath",
+            "checkpoint root must be an absolute normalized path",
+        ));
+    }
+    Ok(path)
+}
+
 #[cfg(unix)]
 fn open_root() -> Result<rustix::fd::OwnedFd, ConversionError> {
     rustix::fs::open(
@@ -1266,6 +1497,40 @@ fn require_regular(fd: &rustix::fd::OwnedFd) -> Result<(), ConversionError> {
 }
 
 #[cfg(unix)]
+fn require_singly_linked(file: &File, label: &str) -> Result<(), ConversionError> {
+    let stat = rustix::fs::fstat(file)
+        .map_err(|error| recovery_io("inspect checkpoint file handle", error))?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || stat.st_nlink != 1
+    {
+        return Err(recovery_error(
+            "unsafePath",
+            format!("{label} is not a singly linked regular file"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_singly_linked(file: &File, label: &str) -> Result<(), ConversionError> {
+    let information = winapi_util::file::information(file)
+        .map_err(|error| recovery_io("inspect checkpoint file handle", error))?;
+    if !file
+        .metadata()
+        .map_err(|error| recovery_io("inspect checkpoint file handle", error))?
+        .is_file()
+        || information.file_attributes() & 0x400 != 0
+        || information.number_of_links() != 1
+    {
+        return Err(recovery_error(
+            "unsafePath",
+            format!("{label} is not a singly linked regular file"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn resolved_absolute(path: PathBuf) -> Result<PathBuf, ConversionError> {
     let path = if path.is_absolute() {
         path
@@ -1311,17 +1576,17 @@ fn resolved_absolute(path: PathBuf) -> Result<PathBuf, ConversionError> {
     Ok(resolved)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn phase_name(token: &RecoveryToken, phase: TaskPhase) -> String {
     format!("{}.{}.checkpoint", token.as_str(), phase.file_label())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn lock_name(token: &RecoveryToken) -> String {
     format!("{}.lock", token.as_str())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn purge_names(token: &RecoveryToken) -> [String; 4] {
     [
         phase_name(token, TaskPhase::Succeeded),
@@ -1331,7 +1596,7 @@ fn purge_names(token: &RecoveryToken) -> [String; 4] {
     ]
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn purge_quarantine_name(source: &str) -> String {
     format!(".{source}.retention-trash")
 }
@@ -1343,7 +1608,7 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn canonical_sha256(value: &str) -> bool {
     value.len() == 64
         && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
@@ -1353,12 +1618,12 @@ fn recovery_error(reason: &'static str, detail: impl Into<String>) -> Conversion
     ConversionError::Recovery { reason, detail: detail.into() }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn recovery_io(operation: &str, error: impl std::fmt::Display) -> ConversionError {
     recovery_error("io", format!("{operation}: {error}"))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn platform_unavailable() -> ConversionError {
     ConversionError::ComponentUnavailable {
         component: "recovery-store".into(),
@@ -1366,7 +1631,7 @@ fn platform_unavailable() -> ConversionError {
     }
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(any(unix, windows))))]
 mod platform_tests {
     use super::*;
 

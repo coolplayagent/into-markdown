@@ -1,4 +1,4 @@
-"""Build Linux or Windows Core plus three signed self-contained capability plugins."""
+"""Build Linux or Windows Core plus two signed self-contained capability plugins."""
 
 from __future__ import annotations
 
@@ -14,8 +14,16 @@ import tempfile
 import zipfile
 
 from acquire import acquire
-from common import ROOT, ReleaseError, authority, regular_files, run, sha256, write_json
-from legacy_authority import generate as generate_legacy_authority
+from common import (
+    ROOT,
+    ReleaseError,
+    authority,
+    regular_files,
+    resolve_windows_sdk_tool,
+    run,
+    sha256,
+    write_json,
+)
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "macos-release"))
 from rust_package import materialize as materialize_rust  # noqa: E402
@@ -92,12 +100,13 @@ def authenticode_files(paths: list[pathlib.Path], thumbprint: str | None) -> Non
         character not in "0123456789abcdefABCDEF" for character in thumbprint
     ):
         raise ReleaseError("Windows signing thumbprint is invalid on this host")
+    signtool = resolve_windows_sdk_tool("signtool.exe")
     for path in paths:
         if not path.is_file() or path.is_symlink():
             raise ReleaseError(f"Authenticode input is not a regular file: {path}")
         run(
             [
-                "signtool.exe",
+                signtool,
                 "sign",
                 "/fd",
                 "SHA256",
@@ -110,7 +119,7 @@ def authenticode_files(paths: list[pathlib.Path], thumbprint: str | None) -> Non
                 path,
             ]
         )
-        run(["signtool.exe", "verify", "/pa", "/all", path])
+        run([signtool, "verify", "/pa", "/all", path])
 
 
 def refresh_ffmpeg_authority(authority_path: pathlib.Path, executable: pathlib.Path) -> None:
@@ -120,20 +129,29 @@ def refresh_ffmpeg_authority(authority_path: pathlib.Path, executable: pathlib.P
     write_json(authority_path, value)
 
 
-def libreoffice_component(target: str) -> str:
-    return {
-        "x86_64-unknown-linux-gnu": "libreoffice-linux-x86_64",
-        "aarch64-unknown-linux-gnu": "libreoffice-linux-arm64",
-        "x86_64-pc-windows-msvc": "libreoffice-windows-x86_64",
-    }[target]
-
-
 def build(target: str, output: pathlib.Path) -> pathlib.Path:
     environment = os.environ.copy()
     environment.update({"CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(output)})
     rustflags = ["-C", "strip=debuginfo"]
+    target_cpu = {
+        "x86_64-unknown-linux-gnu": "x86-64",
+        "aarch64-unknown-linux-gnu": "generic",
+        "x86_64-pc-windows-msvc": "x86-64",
+    }[target]
+    rustflags.extend(["-C", f"target-cpu={target_cpu}"])
     if target.endswith("linux-gnu"):
         rustflags.extend(["-C", "link-arg=-Wl,-rpath,$ORIGIN/../lib/pdfium"])
+    elif target == "x86_64-pc-windows-msvc":
+        rustflags.extend(
+            [
+                "-C",
+                "debuginfo=0",
+                "-C",
+                "link-arg=/Brepro",
+                "-C",
+                "link-arg=/DEBUG:NONE",
+            ]
+        )
     environment["RUSTFLAGS"] = " ".join(rustflags)
     run(
         [
@@ -154,10 +172,6 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             "into-markdown-plugin-manager",
             "--bin",
             "package_plugin",
-            "-p",
-            "into-markdown-legacy-office",
-            "--bin",
-            "legacy-office-worker",
             "-p",
             "installed-smoke",
             "--bin",
@@ -187,12 +201,40 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             "into-md-ocr-provider",
             "--bin",
             "into-md-media-provider",
-            "--bin",
-            "into-md-legacy-office-provider",
         ],
         cwd=ROOT,
         env=environment,
     )
+    installer = output / "release" / executable_name("into-md-installer", target)
+    installer_command = [
+            "rustc",
+            "--edition=2024",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "strip=debuginfo",
+            "-C",
+            f"target-cpu={target_cpu}",
+    ]
+    if target == "x86_64-pc-windows-msvc":
+        installer_command.extend(
+            [
+                "-C",
+                "debuginfo=0",
+                "-C",
+                "link-arg=/Brepro",
+                "-C",
+                "link-arg=/DEBUG:NONE",
+            ]
+        )
+    installer_command.extend(
+        [
+            ROOT / "tools/platform-release/installer.rs",
+            "-o",
+            installer,
+        ]
+    )
+    run(installer_command, cwd=ROOT, env=environment)
     return output / "release"
 
 
@@ -202,7 +244,6 @@ def downloads_for(target_config: dict) -> dict[str, dict]:
         {
             "pdfium": target_config["pdfium"],
             "onnxruntime": target_config["onnxruntime"],
-            "libreoffice": target_config["libreoffice"],
         }
     )
     return result
@@ -253,7 +294,6 @@ def runtime_inventory(root: pathlib.Path) -> list[dict]:
         executable = (
             relative.startswith("bin/")
             or relative in {"ffmpeg/ffmpeg", "ffmpeg/ffmpeg.exe"}
-            or relative.endswith(("/legacy-office-worker", "/legacy-office-worker.exe"))
         )
         result.append(
             {
@@ -295,7 +335,7 @@ def write_plugin_declarations(
         item = inputs[key]
         destination = runtime / item["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(item["contents"], encoding="utf-8")
+        destination.write_text(item["contents"], encoding="utf-8", newline="\n")
 
 
 def resources(memory: int, temporary: int, timeout: int) -> dict:
@@ -381,7 +421,9 @@ def validate_ffmpeg(root: pathlib.Path, target: str) -> None:
     }
     if not root.is_dir() or {path.name for path in root.iterdir()} != expected:
         raise ReleaseError("FFmpeg audit output does not contain the exact artifact set")
-    metadata = json.loads((root / f"ffmpeg-authority-{target}.json").read_text())
+    metadata = json.loads(
+        (root / f"ffmpeg-authority-{target}.json").read_text(encoding="utf-8")
+    )
     executable = root / f"ffmpeg-{target}{'.exe' if target.endswith('windows-msvc') else ''}"
     if (
         metadata.get("schema_version") != 1
@@ -459,15 +501,6 @@ def package_plugins(
             raise ReleaseError("official plugin signer identities disagree")
         records[speech_manifest["id"]] = {"file": output.name, "sha256": sha256(output)}
 
-        legacy = temporary / "legacy"
-        copy_file(release_bin / executable_name("into-md-legacy-office-provider", target), legacy / f"bin/into-md-legacy-office-provider{suffix}", True)
-        generate_legacy_authority(legacy / "legacy-office-runtime", release_bin / executable_name("legacy-office-worker", target), cache / "libreoffice", target_config["libreoffice"], target)
-        write_plugin_declarations(legacy, "official.legacy-office.libreoffice", "legacy-office-plugin", target, [libreoffice_component(target)], [(ROOT / "LICENSE", "into-markdown-Apache-2.0.txt")], projection_tool)
-        legacy_manifest = provider_manifest("official.legacy-office.libreoffice", target, f"bin/into-md-legacy-office-provider{suffix}", legacy, [{"id": "legacy-office", "kind": "legacy-office", "providerId": "builtin.legacy-office.libreoffice", "languages": [], "mediaTypes": ["application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint"], "resources": resources(1073741824, 4294967296, 600000)}], ["Apache-2.0", "MPL-2.0"])
-        output = packages / "official.legacy-office.libreoffice.imp"
-        if build_provider_package(packager, legacy, legacy_manifest, target, signing_key, output) != signer:
-            raise ReleaseError("official plugin signer identities disagree")
-        records[legacy_manifest["id"]] = {"file": output.name, "sha256": sha256(output)}
     if signer is None:
         raise ReleaseError("official signer was not produced")
     return records, signer
@@ -481,7 +514,7 @@ def write_release_inputs(output: pathlib.Path, projection: pathlib.Path, target:
         item = inputs[key]
         destination = output / item["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(item["contents"], encoding="utf-8")
+        destination.write_text(item["contents"], encoding="utf-8", newline="\n")
 
 
 def material(path: pathlib.Path, root: pathlib.Path, kind: str, components: list[str], spdx: list[str], contents: bool = False) -> dict:
@@ -503,7 +536,7 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
         path = destination / f"{component}.txt"
         copy_file(ROOT / source, path)
         result.append(material(path, output, "license-text", [component], [spdx], True))
-    sbom = json.loads((output / "SOURCES.json").read_text())
+    sbom = json.loads((output / "SOURCES.json").read_text(encoding="utf-8"))
     npm = {item for item in distributed_source_ids(sbom) if item.startswith("npm:")}
     react = sorted(npm - {"npm:lucide-react@1.31.0"})
     if react:
@@ -530,7 +563,9 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
 
 def core_projection(output: pathlib.Path, materials: list[dict], target: str, pdfium_path: str, native_transformations: list[dict]) -> dict:
     material_paths = {item["path"] for item in materials}
-    selected = distributed_source_ids(json.loads((output / "SOURCES.json").read_text()))
+    selected = distributed_source_ids(
+        json.loads((output / "SOURCES.json").read_text(encoding="utf-8"))
+    )
     # PDFium is the only standalone native Core file. All other selected
     # runtime components are linked or compiled into the product executable.
     embedded = [item for item in selected if item != "pdfium"]
@@ -563,7 +598,7 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
         raise ReleaseError("Core output directory already exists")
     output.mkdir(parents=True)
     suffix = ".exe" if target == "x86_64-pc-windows-msvc" else ""
-    for name in ["into-md", "installed-smoke", "archive-check"]:
+    for name in ["into-md", "installed-smoke", "archive-check", "into-md-installer"]:
         copy_file(release_bin / executable_name(name, target), output / f"bin/{name}{suffix}", True)
     if target_config["os"] == "linux":
         copy_file(pathlib.Path(__file__).with_name("install"), output / "install", True)

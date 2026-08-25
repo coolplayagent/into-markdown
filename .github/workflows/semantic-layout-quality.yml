@@ -83,7 +83,7 @@ jobs:
           -p into-markdown-layout-quality
       - name: Run the same quality boundary through Bazel
         run: >-
-          bazel test --config=${{ matrix.config }} --lockfile_mode=error
+          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.config }} --lockfile_mode=error
           //crates/layout-quality:layout_quality_test
           //crates/layout-quality:semantic_layout_quality
           //crates/converters:converters_test

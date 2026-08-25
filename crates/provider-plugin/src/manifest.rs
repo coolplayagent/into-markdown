@@ -11,7 +11,8 @@ pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const CAPABILITY_PROTOCOL: &str = "capability-provider";
 /// Hash-bound provider descriptor stored inside a generic signed process package.
 pub const PROVIDER_MANIFEST_NAME: &str = "provider.json";
-const MAX_PLUGIN_FILES: usize = 10_000;
+const MAX_PLUGIN_FILES: usize = 25_000;
+const MAX_PROVIDER_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CAPABILITIES: usize = 64;
 const MAX_DECLARED_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
@@ -29,7 +30,7 @@ pub struct HostApiRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityKind {
-    /// Legacy binary Office normalization through a private LibreOffice runtime.
+    /// Legacy binary Office normalization through a private `LibreOffice` runtime.
     LegacyOffice,
     /// Image or rendered-page OCR.
     Ocr,
@@ -176,21 +177,31 @@ impl PluginManifest {
 
     fn validate_targets(&self) -> Result<(), String> {
         let mut triples = BTreeSet::new();
+        let mut total_files = 0_usize;
         for target in &self.targets {
-            if !valid_target(&target.triple)
-                || !triples.insert(&target.triple)
-                || !portable_path(&target.entrypoint)
-                || target.files.is_empty()
-                || target.files.len() > MAX_PLUGIN_FILES
-            {
-                return Err("target identity or entrypoint is invalid".into());
+            total_files = total_files
+                .checked_add(target.files.len())
+                .ok_or_else(|| "target file count overflowed".to_owned())?;
+            if !valid_target(&target.triple) {
+                return Err("target triple is invalid".into());
+            }
+            if !triples.insert(&target.triple) {
+                return Err("target triple is duplicated".into());
+            }
+            if !portable_path(&target.entrypoint) {
+                return Err("target entrypoint path is invalid".into());
+            }
+            if target.files.is_empty() {
+                return Err("target file inventory is empty".into());
+            }
+            if target.files.len() > MAX_PLUGIN_FILES || total_files > MAX_PLUGIN_FILES {
+                return Err("target file inventory exceeds the package limit".into());
             }
             let mut paths = BTreeSet::new();
             let mut folded = BTreeSet::new();
             let mut total = 0_u64;
             for file in &target.files {
                 if !portable_path(&file.path)
-                    || file.bytes == 0
                     || !valid_sha256(&file.sha256)
                     || !paths.insert(&file.path)
                     || !folded.insert(file.path.to_ascii_lowercase())
@@ -206,7 +217,7 @@ impl PluginManifest {
             else {
                 return Err("target entrypoint is absent from the file inventory".into());
             };
-            if !entrypoint.executable {
+            if !entrypoint.executable || entrypoint.bytes == 0 {
                 return Err("target entrypoint is not executable".into());
             }
         }
@@ -250,6 +261,10 @@ impl PluginManifest {
 ///
 /// The generic plugin manager authenticates the complete tree, including this file. This loader
 /// additionally binds the inner provider identity and version to the signed outer package.
+///
+/// # Errors
+///
+/// Returns a bounded validation error when the descriptor or outer package binding is invalid.
 pub fn load_installed_manifest(
     installed: &into_markdown_plugin_manager::InstalledPlugin,
 ) -> Result<(PluginManifest, String), String> {
@@ -259,7 +274,10 @@ pub fn load_installed_manifest(
     let path = installed.root.join(PROVIDER_MANIFEST_NAME);
     let metadata = std::fs::symlink_metadata(&path)
         .map_err(|_| "capability provider descriptor is unavailable".to_owned())?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024 {
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_PROVIDER_MANIFEST_BYTES
+    {
         return Err("capability provider descriptor is not a bounded regular file".into());
     }
     let capacity = usize::try_from(metadata.len())
@@ -269,7 +287,7 @@ pub fn load_installed_manifest(
         .try_reserve_exact(capacity)
         .map_err(|_| "capability provider descriptor allocation failed".to_owned())?;
     File::open(&path)
-        .and_then(|file| file.take(1024 * 1024 + 1).read_to_end(&mut bytes))
+        .and_then(|file| file.take(MAX_PROVIDER_MANIFEST_BYTES + 1).read_to_end(&mut bytes))
         .map_err(|_| "capability provider descriptor cannot be read".to_owned())?;
     if bytes.len() as u64 != metadata.len() {
         return Err("capability provider descriptor changed while reading".into());
@@ -306,9 +324,9 @@ fn valid_version(value: &str) -> bool {
 fn valid_target(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -429,6 +447,27 @@ mod tests {
     }
 
     #[test]
+    fn accepts_supported_x86_64_target_triples() {
+        for triple in ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"] {
+            let mut value = manifest();
+            value.targets[0].triple = triple.into();
+            value.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn accepts_hash_bound_empty_runtime_file() {
+        let mut value = manifest();
+        value.targets[0].files.push(PluginFileDescriptor {
+            path: "runtime/package/__init__.py".into(),
+            bytes: 0,
+            sha256: format!("{:x}", Sha256::digest([])),
+            executable: false,
+        });
+        value.validate().unwrap();
+    }
+
+    #[test]
     fn rejects_path_aliases() {
         let mut value = manifest();
         value.targets[0].files.push(PluginFileDescriptor {
@@ -438,5 +477,32 @@ mod tests {
             executable: false,
         });
         assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn loads_authenticated_provider_descriptor_larger_than_one_mebibyte() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut value = manifest();
+        value.targets[0].files.extend((0..6_000).map(|index| PluginFileDescriptor {
+            path: format!("runtime/{index:05}-{}.bin", "a".repeat(180)),
+            bytes: 0,
+            sha256: format!("{:x}", Sha256::digest([])),
+            executable: false,
+        }));
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(bytes.len() > 1024 * 1024);
+        assert!(bytes.len() as u64 <= MAX_PROVIDER_MANIFEST_BYTES);
+        std::fs::write(temporary.path().join(PROVIDER_MANIFEST_NAME), bytes).unwrap();
+        let installed = into_markdown_plugin_manager::InstalledPlugin {
+            id: value.id.clone(),
+            version: value.version.clone(),
+            protocol: "process-v1".into(),
+            package_sha256: "a".repeat(64),
+            content_root_sha256: "b".repeat(64),
+            signing_key_id: "publisher.test".into(),
+            root: temporary.path().to_owned(),
+        };
+        let (loaded, _) = load_installed_manifest(&installed).unwrap();
+        assert_eq!(loaded.targets[0].files.len(), 6_001);
     }
 }

@@ -51,7 +51,10 @@ rust_test(
         "//:Cargo.toml",
         "//fixtures:corpus",
     ],
-    data = ["//fixtures:corpus"],
+    data = [
+        "//fixtures:corpus",
+        "//fixtures:manifest.json",
+    ],
     edition = "2024",
     deps = [
         "//crates/core",

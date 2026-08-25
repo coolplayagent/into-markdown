@@ -1471,6 +1471,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "into-markdown-converters",
+ "into-markdown-process-plugin",
  "libc",
  "license-check",
  "serde",
@@ -1625,11 +1626,13 @@ dependencies = [
  "base64",
  "getrandom 0.4.3",
  "into-markdown-core",
+ "into-markdown-process-plugin",
  "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "winapi-util",
 ]
 
 [[package]]
@@ -1844,6 +1847,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror",
  "url",
 ]
@@ -1867,6 +1871,7 @@ dependencies = [
  "into-markdown-converters",
  "into-markdown-core",
  "into-markdown-engine",
+ "into-markdown-process-plugin",
  "into-markdown-render-markdown",
  "rusqlite",
  "rustix 1.1.4",
@@ -1874,6 +1879,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "winapi-util",
 ]
 
 [[package]]
