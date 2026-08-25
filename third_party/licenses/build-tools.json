@@ -53,7 +53,7 @@
       "scope": "release-assembly",
       "distributed": false,
       "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"bf83aa7254c83b0f58ee4fedcdab90142f7cef9bb742df93c6c194c01de9300d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -75,7 +75,7 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"bf83aa7254c83b0f58ee4fedcdab90142f7cef9bb742df93c6c194c01de9300d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -86,7 +86,7 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"bf83aa7254c83b0f58ee4fedcdab90142f7cef9bb742df93c6c194c01de9300d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     }
   ]

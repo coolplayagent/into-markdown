@@ -43,8 +43,8 @@ asset filename 完全相等时建立 `attachment` 关联；同名歧义保持未
 coverage 表同时列出每个核心格式 family 的 normal、complex、misordered、corrupt 和
 resource-boundary 证据及其真实 Bazel gate。PDF 使用带固定 PDFium runtime 的
 `//crates/converters:pdf_layout_quality`；图像 OCR 使用完整 detector→recognizer→公共 API 的
-`//crates/api:ppocrv6_image_quality`；旧 Office 使用隔离 worker 的
-`//crates/legacy-office:legacy_office_test`。这些目标与共享门禁由四平台矩阵一起执行，不把清单
+`//crates/api:ppocrv6_image_quality`；旧 Office 使用 Core converter 的
+`//crates/converters:converters_test`。这些目标与共享门禁由四平台矩阵一起执行，不把清单
 中的 target 名称当作通过证据。矩阵同时运行 converter 与 PDF layout 单元门禁，固定覆盖
 单栏/多栏、横纵排、浮动图片、页眉页脚、脚注及 Presentation shape 顺序。
 `counterexample:reading-order` 不是格式转换样本，而是共享比较器的故意乱序
@@ -81,7 +81,7 @@ bazel test --config=macos_arm64 \
   //crates/pdf-layout:pdf_layout_test \
   //crates/converters:pdf_layout_quality \
   //crates/api:ppocrv6_image_quality \
-  //crates/legacy-office:legacy_office_test
+  //crates/converters:converters_test
 ```
 
 `.github/workflows/semantic-layout-quality.yml` 在 macOS ARM64、Linux x86-64、Linux ARM64 和

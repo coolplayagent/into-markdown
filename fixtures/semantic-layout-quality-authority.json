@@ -3941,12 +3941,12 @@
     },
     {
       "format_family": "legacy-office",
-      "normal_fixture": "gate:legacy-office-installed-smoke",
+      "normal_fixture": "gate:legacy-office-core-installed-smoke",
       "complex_fixture": "gate:legacy-office-complex-smoke",
       "misordered_counterexample": "counterexample:reading-order",
       "corrupt_fixture": "gate:legacy-office-corrupt-input",
       "resource_boundary_fixture": "gate:legacy-office-resource-limits",
-      "gate": "//crates/legacy-office:legacy_office_test"
+      "gate": "//crates/converters:converters_test"
     }
   ]
 }

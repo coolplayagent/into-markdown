@@ -2824,7 +2824,7 @@ mod tests {
         let snapshot_dto: serde_json::Value = serde_json::from_str(snapshot_body).unwrap();
         assert_eq!(snapshot_dto["schemaVersion"], 1);
         assert!(snapshot_dto["formats"].as_array().is_some_and(|value| !value.is_empty()));
-        assert_eq!(snapshot_dto["capabilities"].as_array().map(Vec::len), Some(4));
+        assert_eq!(snapshot_dto["capabilities"].as_array().map(Vec::len), Some(3));
         assert!(snapshot_dto.get("models").is_none());
         assert!(snapshot_dto["providers"].is_array());
         assert!(snapshot_dto["plugins"].is_array());

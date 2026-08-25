@@ -1,6 +1,7 @@
 # 自包含能力插件
 
-OCR、语音转写和说话人分离通过独立的 capability provider 提供。宿主只保留类型化
+OCR、语音转写和说话人分离通过独立的 capability provider 提供。Office 97–2003 的
+DOC/PPT/XLS 已由 Core 原生解析。宿主只保留类型化
 SPI、统一插件管理、确定性路由和隔离进程适配器；官方 PP-OCRv6、Whisper 与
 Silero/3D-Speaker 实现位于独立可执行文件中，不在 `into-md` 进程内初始化推理运行时。
 

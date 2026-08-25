@@ -69,7 +69,6 @@ function mockPayload(input) {
     generation: 1,
     checking: false,
     capabilities: [
-      { id: "legacy-office", name: "Legacy Office", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
       { id: "ocr", name: "Image OCR", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
       { id: "transcription", name: "Speech transcription", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },
       { id: "diarization", name: "Speaker identification", status: "not-installed", localStatus: "not-installed", currentSource: "off", currentSourceName: "Off", sources: ["off"] },

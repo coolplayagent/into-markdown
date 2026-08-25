@@ -128,7 +128,6 @@ linux-raw-sys	0.12.1	MIT
 litemap	0.8.2	Unicode-3.0
 log	0.4.33	MIT
 matrixmultiply	0.3.11	MIT
-md-5	0.10.6	MIT
 memchr	2.8.3	MIT
 miniz_oxide	0.8.9	MIT
 ndarray	0.17.2	MIT

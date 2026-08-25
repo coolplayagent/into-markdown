@@ -101,8 +101,8 @@ for bundled permissive dependencies; both must be preserved if distributed.
 
 FFmpeg 8.1.2 is built from pinned signed source with a reviewed LGPL-compatible
 configuration, GPL/nonfree/network/external-library support disabled, and exact executable,
-authority, corresponding-source, and relink evidence. LibreOffice and Wasmtime retain their
-separate reviewed release boundaries; generated models and distribution fonts remain planned.
+authority, corresponding-source, and relink evidence. Wasmtime retains its separate reviewed
+release boundary; generated models and distribution fonts remain planned.
 
 Noto Sans CJK SC Regular is a hash-pinned, manual fixture-generator input under
 OFL-1.1. The complete license text is in `third_party/licenses/OFL-1.1.txt`.

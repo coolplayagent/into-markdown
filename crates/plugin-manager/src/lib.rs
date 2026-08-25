@@ -1672,11 +1672,8 @@ impl PluginManager {
 
 fn cleanup_process_identity(root: &Path, id: &str) -> Result<(), ManagerError> {
     #[cfg(windows)]
-    if id != "official.legacy-office.libreoffice" {
-        let sandbox_identity = windows_sandbox_identity(root, id);
-        into_markdown_process_plugin::remove_windows_sandbox(&sandbox_identity)
-            .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
-    }
+    into_markdown_process_plugin::remove_windows_sandbox(&windows_sandbox_identity(root, id))
+        .map_err(|error| ManagerError::new(ManagerErrorCode::Io, error.to_string()))?;
     #[cfg(not(windows))]
     let _ = (root, id);
     Ok(())
@@ -1684,15 +1681,7 @@ fn cleanup_process_identity(root: &Path, id: &str) -> Result<(), ManagerError> {
 
 #[cfg(windows)]
 fn windows_sandbox_identity<'a>(root: &'a Path, id: &'a str) -> std::borrow::Cow<'a, str> {
-    if id == "official.legacy-office.libreoffice" {
-        // The signed LibreOffice runtime authority must name the exact SID used
-        // by both the provider and its separately launched compatibility
-        // worker. Keep this zero-capability identity stable across scopes; ACLs
-        // still grant only each manager-verified immutable snapshot.
-        std::borrow::Cow::Borrowed(id)
-    } else {
-        std::borrow::Cow::Owned(format!("{}:{id}", root.display()))
-    }
+    std::borrow::Cow::Owned(format!("{}:{id}", root.display()))
 }
 
 fn validate_manifest(

@@ -5,7 +5,7 @@ export const MAX_PREVIEW_BYTES = 256 * 1024;
 export interface ComponentStatus { available: boolean; code: string; detail: string }
 export interface StatusResponse { schemaVersion: 1; localApi: ComponentStatus; documentConsole: ComponentStatus; imageOcr: ComponentStatus; audioTranscription?: ComponentStatus; speakerDiarization?: ComponentStatus }
 export interface FormatAdmin { format: string; family: string; status: string; source: string; extensions: string[]; runtimeComponent?: string; installHint?: string }
-export interface CapabilityAdmin { id: "legacy-office" | "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
+export interface CapabilityAdmin { id: "ocr" | "transcription" | "diarization"; status: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; localStatus: "not-installed" | "downloading" | "verifying" | "ready" | "update-available" | "corrupt" | "incompatible" | "blocked" | "disabled"; currentSource: string; sources: string[]; version?: string; localVersion?: string }
 export type CapabilityQuickStatus = CapabilityAdmin["status"] | "unknown" | "checking";
 export interface CapabilityQuickView {
   id: CapabilityAdmin["id"]; name: string; status: CapabilityQuickStatus; localStatus: CapabilityQuickStatus;
@@ -122,7 +122,7 @@ function isFormatAdmin(value: unknown): value is FormatAdmin {
 function isCapabilityAdmin(value: unknown): value is CapabilityAdmin {
   const sourceRef = (item: unknown) => item === "off" || typeof item === "string" && /^(plugin|provider):[A-Za-z0-9._-]+\/[a-z][a-z0-9-]{0,63}$/.test(item);
   const status = (item: unknown) => ["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked", "disabled"].includes(String(item));
-  return isObject(value) && ["legacy-office", "ocr", "transcription", "diarization"].includes(String(value.id))
+  return isObject(value) && ["ocr", "transcription", "diarization"].includes(String(value.id))
     && status(value.status) && status(value.localStatus)
     && sourceRef(value.currentSource) && stringList(value.sources, 64)
     && value.sources.every(sourceRef) && value.sources.includes(value.currentSource as string)
@@ -135,7 +135,7 @@ function parseCapabilitySnapshot(value: unknown): CapabilitySnapshot {
     || typeof value.checking !== "boolean" || value.checkedAtMs !== undefined && !Number.isSafeInteger(value.checkedAtMs)
     || !Array.isArray(value.capabilities) || value.capabilities.length > 16) throw new ApiError("invalidResponse");
   for (const item of value.capabilities) {
-    if (!isObject(item) || !["legacy-office", "ocr", "transcription", "diarization"].includes(String(item.id))
+    if (!isObject(item) || !["ocr", "transcription", "diarization"].includes(String(item.id))
       || !safeText(item.name, 128) || !statuses.has(String(item.status)) || !statuses.has(String(item.localStatus))
       || !safeText(item.currentSource, 512) || !safeText(item.currentSourceName, 256) || !stringList(item.sources, 64)
       || item.version !== undefined && !safeText(item.version, 128)
@@ -235,7 +235,7 @@ function isPluginAdmin(value: unknown, configurationReadOnly: boolean): value is
 export function parseAdminSnapshot(value: unknown): AdminSnapshot {
   if (!isObject(value) || value.schemaVersion !== 1 || !Array.isArray(value.formats) || value.formats.length > 128
     || value.formats.some((item) => !isFormatAdmin(item))
-    || !Array.isArray(value.capabilities) || value.capabilities.length !== 4 || value.capabilities.some((item) => !isCapabilityAdmin(item))
+    || !Array.isArray(value.capabilities) || value.capabilities.length !== 3 || value.capabilities.some((item) => !isCapabilityAdmin(item))
     || !Array.isArray(value.providers) || value.providers.length > 128 || value.providers.some((item) => !isProviderAdmin(item, value.configurationReadOnly === true))
     || !Array.isArray(value.plugins) || value.plugins.length > 256 || value.plugins.some((item) => !isPluginAdmin(item, value.configurationReadOnly === true))
     || !isObject(value.configuration) || typeof value.configurationReadOnly !== "boolean" || !Array.isArray(value.profiles) || value.profiles.length > 128

@@ -1429,7 +1429,7 @@ pub trait Diarizer: Send + Sync {
     ) -> BoxFuture<'a, Result<DiarizationResult, ConversionError>>;
 }
 
-/// Borrowed request for normalizing one legacy binary Office document into OOXML.
+/// Legacy compatibility request retained for third-party provider API compatibility.
 #[derive(Debug, Clone, Copy)]
 pub struct LegacyOfficeRequest<'a> {
     /// Original compound-document bytes.
@@ -1440,7 +1440,7 @@ pub struct LegacyOfficeRequest<'a> {
     pub maximum_output_bytes: u64,
 }
 
-/// Authenticated normalized OOXML package returned by a local compatibility plugin.
+/// Legacy compatibility result retained for third-party provider API compatibility.
 pub struct LegacyOfficeResult {
     /// Normalized DOCX, XLSX, or PPTX bytes.
     pub bytes: Box<[u8]>,
@@ -1448,9 +1448,9 @@ pub struct LegacyOfficeResult {
     pub format: InputFormat,
     /// Stable provider identity declared by the signed plugin.
     pub provider: String,
-    /// `LibreOffice` runtime version.
+    /// Compatibility implementation version.
     pub version: String,
-    /// Hash of the verified runtime authority.
+    /// Hash of the implementation authority.
     pub artifact_sha256: String,
     /// Runtime target triple.
     pub target: String,
@@ -1458,7 +1458,9 @@ pub struct LegacyOfficeResult {
     pub memory: ResourceReservation,
 }
 
-/// Local self-contained legacy Office compatibility provider.
+/// Third-party legacy Office compatibility provider.
+///
+/// Core DOC/PPT/XLS conversion does not use this extension point.
 pub trait LegacyOfficeNormalizer: Send + Sync {
     /// Stable provider ID.
     fn id(&self) -> &str;

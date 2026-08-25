@@ -225,8 +225,8 @@ fn valid_anonymous_speaker(value: &str, maximum: u16) -> bool {
 mod tests {
     use super::*;
     use into_markdown_core::{
-        BlockNode, Inline, NodeId, Provenance, ProvenanceKind, SourceLocator, TimeRange,
-        Transcriber, TranscriptionResult,
+        BlockNode, ExecutionOptions, Inline, NodeId, Provenance, ProvenanceKind, ResourceLimits,
+        SourceLocator, TimeRange, Transcriber, TranscriptionResult,
     };
     use std::sync::Arc;
 
@@ -286,7 +286,7 @@ mod tests {
                 ..into_markdown_core::SourceMetadata::default()
             },
         };
-        let context = ExecutionContext::new(Default::default(), Default::default());
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let services = Services { transcriber: Some(Arc::new(Stub)), ..Services::default() };
         let output = futures::executor::block_on(MediaConverter.convert(
             &input,
@@ -319,7 +319,7 @@ mod tests {
                 ..into_markdown_core::SourceMetadata::default()
             },
         };
-        let context = ExecutionContext::new(Default::default(), Default::default());
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let error = futures::executor::block_on(MediaConverter.convert(
             &input,
             &FormatCandidate::explicit(InputFormat::Audio),

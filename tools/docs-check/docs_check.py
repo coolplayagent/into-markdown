@@ -9,7 +9,7 @@ MARKER = re.compile(r"<!--\s*(cli|format)-example:\s*([^>]+?)\s*-->\s*\n[^\n]*?`
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
 STALE = ("当前工程仍是转换后端脚手架", "与未来 HTTP 服务共享", "转换和状态查询不会隐式调用这两个命令")
-TOKENS = ("official.ocr.ppocrv6", "official.media.whisper", "into-markdown-skill.zip", "macOS ARM64", "Linux x86_64", "Linux ARM64", "Windows x86_64")
+TOKENS = ("official.ocr.ppocrv6", "official.media.whisper", "Office 97", "into-markdown-skill.zip", "macOS ARM64", "Linux x86_64", "Linux ARM64", "Windows x86_64")
 
 
 class CheckError(RuntimeError): pass

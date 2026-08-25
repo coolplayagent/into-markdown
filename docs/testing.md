@@ -11,8 +11,8 @@ doctor JSON，并验证本地 Markdown 链接及 README 双语入口。公共命
 跨格式语义布局、阅读顺序、表格拓扑、资源关联和 IR/GFM hash 门禁见
 [`semantic-layout-quality.md`](semantic-layout-quality.md)。平台无关核心及真实 package
 fixture 由 `//crates/layout-quality:layout_quality_test` 和
-`//crates/layout-quality:semantic_layout_quality` 执行；PDF、OCR 和旧 Office 保留各自必须安装
-真实 runtime 的显式 gate，不用 mock 结果替代。四个受支持平台分别运行相同 authority，
+`//crates/layout-quality:semantic_layout_quality` 执行；PDF 与 OCR 保留各自真实 runtime 的
+显式 gate，Office 97–2003 直接从临时 Core 安装运行，不用 mock 结果替代。四个受支持平台分别运行相同 authority，
 任何规范 IR/GFM byte 差异都会失败。
 
 WASI Preview 2 runtime 的真实 component 门禁为：
@@ -89,11 +89,15 @@ real parser evidence as well as common-enricher evidence:
   is never fetched, while audited data/CID or converter-resolved local assets
   enter the common stage. These parser tests and the format-wide enricher tests
   are separate evidence; they do not claim a real MSG API end-to-end run.
-- Legacy DOC/PPT/XLS nested dispatch is exercised by
-  `all_legacy_families_use_same_context_nested_dispatch_and_conservative_provenance`.
-  The real installed-runtime target remains
-  `manual_native_three_families_enter_real_nested_converters`; an unexecuted
-  manual target is not counted as runtime evidence.
+- Office 97–2003 DOC/PPT/XLS 使用仓库原创且可重复生成的 CFB corpus，直接进入 Core 原生
+  converter。转换器测试覆盖格式混淆、CFB 损坏、稳定错误和串行/重复/并发的 Document JSON、
+  Markdown、Asset、diagnostic 确定性；持续 fuzz smoke 分别调用三个格式入口。四个平台的发布
+  workflow 从临时安装目录运行 `installed-smoke`，同时验证 CLI golden 和离线 Rust API consumer，
+  不把源码树中的 converter、PATH、系统 Office 或网络作为实现来源。
+- `tools/legacy-office-performance.py` 在同一 Linux runner 比较 PR base 与候选 Core CLI，记录
+  Core 可执行文件大小、冷启动、逐格式转换、串行/并发批量吞吐及峰值 RSS。旧基线缺少可选
+  runtime 时只记录不可用状态，候选仍须通过绝对资源上限与可解释的相对回退门禁；JSON 报告
+  作为 `legacy-office-performance-linux-x86_64` artifact 上传。
 - RecoveryStore tests (Unix filesystem semantics) prove enriched converter
   output is atomically checkpointed before rendering and is not enriched again
   after a process restart. Windows gates compile that path; Unix CI executes it.
@@ -487,38 +491,11 @@ durable terminal record 恢复。Unix Web 后端测试用 conversion barrier 确
 幂等性。真实 loopback HTTP 测试同时检查 SSE content type、event/id/data framing、版本字段及
 非法/重复 `Last-Event-ID` 的稳定错误。
 
-旧 Office native runtime、PDF、ZIP 与 EPUB 的小型二进制攻击图在各自 process/converter/API
-测试中程序生成，不复制 Office 或网络样本。旧 Office 测试 worker 是仓库源码构建的受控
-协议端点，authority 仍对它执行 exact tree/hash/license/ABI 校验；定向测试覆盖 DOC→DOCX、
-PPT→PPTX、XLS→XLSX、格式混淆、尾随帧、低内存 fail-before、额外文件/symlink、worker crash、
-encrypted、精确输出上限、取消/timeout、process-group descendant reap、temporary/lease 释放、
-temporary sparse-file 超限时的 watchdog terminate/reap，以及 nested 服务只收到根
-context/options。恶意图还覆盖非 CLOEXEC secret file/socket 不继承、原子 worker/kit path swap、
-未授权 loader dependency/rpath、Linux cross-process/io_uring syscall、请求写入 broken pipe、提前/
-部分响应、非零退出，以及 ZIP duplicate/path/encryption/overlap/CRC/family/root-relationship 混淆。
-它不代表 LibreOffice 质量或许可验证。
-
-Windows 的普通图以可注入 suspended-launch contract 覆盖 assign Job、token mismatch/error、resume
-失败后的 terminate+wait 顺序，以及命令行 quoting 和收窄 DLL flags；这些只作为 Windows target
-编译/运行证据，不在非 Windows 主机伪报为真实 AppContainer。真实 Windows runner 还必须使用
-包装任务预置的 profile/ACL 执行下面的 native smoke test。Unix fake-worker process fixtures 不依赖
-任何系统 Office 安装。
-
-显式本机 runtime 的 manual smoke test 使用安装内 LICENSE/third-party 清单生成的 authority，
-且只从以下四个绝对路径变量读取，不查询 PATH：
-
-```shell
-INTO_MD_LEGACY_OFFICE_ROOT=/absolute/runtime-bundle \
-INTO_MD_LEGACY_OFFICE_AUTHORITY=/absolute/runtime-bundle/authority.json \
-INTO_MD_LEGACY_OFFICE_WORKER=/absolute/runtime-bundle/worker \
-INTO_MD_LEGACY_OFFICE_DOC_FIXTURE=/absolute/repository-owned.doc \
-INTO_MD_LEGACY_OFFICE_PPT_FIXTURE=/absolute/repository-owned.ppt \
-INTO_MD_LEGACY_OFFICE_XLS_FIXTURE=/absolute/repository-owned.xls \
-cargo test -p into-markdown-legacy-office --test worker_process manual_native_runtime_conversion -- --ignored
-```
-
-同一组变量可运行 converters 内 ignored manual test，实际进入 DOCX、PresentationML 与 XLSX 三个
-nested converter，而不是只检查 worker 返回包头。
+Office 97–2003、PDF、ZIP 与 EPUB 的小型二进制攻击图在 converter/API 测试中程序生成，不复制
+网络样本。DOC/PPT/XLS 的仓库原创 corpus 由 manifest 固定来源、许可和 SHA-256；定向测试覆盖
+CFB 循环/重叠/截断、加密、格式混淆、DOC piece、PPT record/persist、BIFF8 Dimensions、取消和
+资源上限。所有旧 Office 测试直接调用 Core converter，并以隔离环境及进程/网络观察证明没有
+PATH、系统 Office、外部进程、OCR、AI 或网络依赖。
 
 ## 全格式 fixture 语料库
 
@@ -594,7 +571,7 @@ fail closed；官方插件目录与安装 transport 固定 HTTPS 来源、完整
 
 四目标模块化发布的原生归档、插件安装、确定性和签名门禁见
 [`platform-modular-release.md`](platform-modular-release.md)。交叉编译只验证接口和工具链，不能
-替代 Linux ARM64 或 Windows 的真实安装、AppContainer、LibreOffice、OCR、音频和卸载验收。
+替代 Linux ARM64 或 Windows 的真实安装、OCR、音频和卸载验收。
 
 ## Agent Skill 发布验收
 

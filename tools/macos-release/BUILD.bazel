@@ -7,7 +7,6 @@ py_library(
         "archive.py",
         "audit.py",
         "common.py",
-        "legacy_authority.py",
         "rust_package.py",
     ],
     imports = ["."],
@@ -54,3 +53,9 @@ exports_files([
     "install",
     "uninstall",
 ])
+
+filegroup(
+    name = "legacy_fixtures",
+    srcs = glob(["fixtures/*"]),
+    visibility = ["//crates/converters:__pkg__"],
+)

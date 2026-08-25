@@ -365,6 +365,7 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
 
     let denied = Command::new(binary())
         .args([
+            "--no-config",
             "--config",
             config.to_str().unwrap(),
             "providers",
@@ -375,13 +376,14 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
         .env("PROVIDER_TEST_KEY", canary)
         .output()
         .unwrap();
-    assert_eq!(denied.status.code(), Some(5));
+    assert_eq!(denied.status.code(), Some(5), "{}", String::from_utf8_lossy(&denied.stderr));
     assert!(String::from_utf8_lossy(&denied.stderr).contains("privateNetworkDenied"));
     assert!(!denied.stdout.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
     assert!(!denied.stderr.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
 
     let output = Command::new(binary())
         .args([
+            "--no-config",
             "--config",
             config.to_str().unwrap(),
             "providers",
@@ -524,10 +526,10 @@ fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
     std::fs::write(&config, "schema_version = 1\n[conversion.limits]\nmax_field_bytes = 16\n")
         .unwrap();
     let output = run_with_stdin(
-        &["--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
+        &["--no-config", "--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
         aggregate,
     );
-    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(output.status.code(), Some(5), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
 
     let inline_attachment = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"markdown","cell_type":"markdown","metadata":{},"source":"prefix ![x](attachment:a)","attachments":{"a":{"image/png":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}}]}"#;
@@ -539,7 +541,7 @@ fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
         .unwrap();
     let combined_error = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"error","cell_type":"code","metadata":{},"execution_count":null,"source":"x","outputs":[{"output_type":"error","ename":"Error","evalue":"value","traceback":"12345678"}]}]}"#;
     let output = run_with_stdin(
-        &["--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
+        &["--no-config", "--config", config.to_str().unwrap(), "--format", "ipynb", "-"],
         combined_error,
     );
     assert_eq!(output.status.code(), Some(5));

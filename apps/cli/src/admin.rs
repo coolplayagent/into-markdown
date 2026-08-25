@@ -563,7 +563,6 @@ fn snapshot_loaded(
         let package_scope =
             (!synthetic_context).then(|| effective_plugin_scope(loaded, cwd, id)).transpose()?;
         let official_capability = match id.as_str() {
-            "official.legacy-office.libreoffice" => "legacy-office",
             "official.ocr.ppocrv6" => "ocr",
             "official.media.whisper" => "transcription",
             _ => "",
@@ -800,7 +799,6 @@ fn apply_inner(
             }
             require_dangerous(action)?;
             let setup_target = match target {
-                "legacy-office" => "legacy-office",
                 "ocr" => "ocr",
                 "transcription" | "diarization" | "media" => "media",
                 _ => return Err(CliError::usage("unknown capability")),
@@ -1267,7 +1265,6 @@ fn policy(code: &'static str) -> CliError {
 
 fn capability_plugin_id(capability: &str) -> Result<&'static str, CliError> {
     match capability {
-        "legacy-office" => Ok("official.legacy-office.libreoffice"),
         "ocr" => Ok("official.ocr.ppocrv6"),
         "transcription" | "diarization" | "media" => Ok("official.media.whisper"),
         _ => Err(CliError::usage("unknown capability")),

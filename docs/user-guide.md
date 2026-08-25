@@ -7,13 +7,12 @@ SHA-256、签名、SPDX、来源与第三方声明 sidecar。只组合相同版�
 
 | 能力 | 构件 |
 | --- | --- |
-| 普通文档、PDF、Web 工作台 | 对应平台 Core |
+| 普通文档、Office 97–2003、PDF、Web 工作台 | 对应平台 Core |
 | OCR | `official.ocr.ppocrv6-<target>.imp` |
 | 转写与说话人分离 | `official.media.whisper-<target>.imp` |
 | Agent 指令 | `into-markdown-skill.zip` |
 
-旧版 `.doc/.ppt/.xls` 不在当前发布中，也不会调用 LibreOffice；替代解析路线由
-[#191](https://github.com/coolplayagent/into-markdown/issues/191) 跟踪。
+Office 97–2003 的 `.doc/.ppt/.xls` 由 Core 原生解析，不调用 LibreOffice 或其它外部办公套件。
 
 ## 安装 Core
 

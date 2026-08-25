@@ -638,9 +638,6 @@ fn enrich_inventory_evidence(
             "onnxruntime-cpu" => Some("third_party/onnxruntime/manifest.json"),
             "pdfium" => Some("third_party/pdfium/manifest.json"),
             "ffmpeg" => Some("third_party/ffmpeg/source.json"),
-            "libreoffice-macos-arm64" => {
-                Some("third_party/legacy-office/macos-arm64-manifest.json")
-            }
             "ppocrv6-tiny-recognizer-onnx-model" | "ppocrv6-tiny-recognizer-character-table" => {
                 Some("models/ppocrv6-tiny-recognizer-authority.json")
             }
@@ -721,7 +718,7 @@ const OCR_RUNTIME_COMPONENTS: [&str; 4] = [
 ];
 
 fn validate_catalog_runtime_authority(
-    inventory: &Inventory,
+    _inventory: &Inventory,
     by_id: &BTreeMap<&str, &Component>,
     errors: &mut Vec<String>,
 ) {
@@ -729,12 +726,7 @@ fn validate_catalog_runtime_authority(
         .iter()
         .filter_map(|capability| capability.runtime.map(|runtime| runtime.component))
         .collect();
-    let expected = BTreeSet::from([
-        "official.legacy-office.libreoffice",
-        "official.media.whisper",
-        "official.ocr.ppocrv6",
-        "pdfium",
-    ]);
+    let expected = BTreeSet::from(["official.media.whisper", "official.ocr.ppocrv6", "pdfium"]);
     if catalog != expected {
         errors.push(format!(
             "core runtime catalog differs from license projection authority: {catalog:?}"
@@ -755,12 +747,6 @@ fn validate_catalog_runtime_authority(
                 "core or official capability plugin component {id} lacks reviewed release authority"
             ));
         }
-    }
-    if inventory.components.iter().any(|component| component.id == "legacy-office") {
-        errors.push(
-            "project-owned legacy-office worker must not be disguised as third-party inventory"
-                .to_owned(),
-        );
     }
 }
 

@@ -1,5 +1,7 @@
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 
+use super::ole::CompoundBudget;
+
 /// Aggregate limits shared by every layer of one MSG conversion.
 pub(super) struct MsgBudget<'a> {
     options: &'a ConversionOptions,
@@ -129,6 +131,24 @@ impl<'a> MsgBudget<'a> {
 
     pub(super) const fn context(&self) -> &ExecutionContext {
         self.context
+    }
+}
+
+impl CompoundBudget for MsgBudget<'_> {
+    fn cfb_entry(&mut self) -> Result<(), ConversionError> {
+        self.entry()
+    }
+
+    fn cfb_expanded(&mut self, bytes: u64) -> Result<(), ConversionError> {
+        self.expanded(bytes)
+    }
+
+    fn cfb_depth(&self, depth: u16, part: &str) -> Result<(), ConversionError> {
+        self.depth(depth, part)
+    }
+
+    fn cfb_work(&mut self, units: u64) -> Result<(), ConversionError> {
+        self.work(units)
     }
 }
 

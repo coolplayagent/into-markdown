@@ -1,0 +1,37 @@
+[package]
+name = "into-markdown-legacy-office-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+futures = "=0.3.34"
+into-markdown-converters = { path = "../../crates/converters" }
+into-markdown-core = { path = "../../crates/core" }
+libfuzzer-sys = "=0.4.13"
+
+[[bin]]
+name = "legacy_doc"
+path = "fuzz_targets/legacy_doc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legacy_ppt"
+path = "fuzz_targets/legacy_ppt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legacy_xls"
+path = "fuzz_targets/legacy_xls.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

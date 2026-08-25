@@ -1589,7 +1589,6 @@ dependencies = [
  "into-markdown-core",
  "into-markdown-engine",
  "into-markdown-http-transport",
- "into-markdown-legacy-office",
  "into-markdown-ocr",
  "into-markdown-pdf-layout",
  "into-markdown-pdfium",
@@ -1678,26 +1677,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "into-markdown-legacy-office"
-version = "0.0.0"
-dependencies = [
- "crc32fast",
- "into-markdown-core",
- "libc",
- "libloading 0.9.0",
- "md-5",
- "object 0.40.0",
- "quick-xml 0.38.3",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "windows-sys 0.61.2",
- "zip 2.4.2",
-]
-
-[[package]]
 name = "into-markdown-ocr"
 version = "0.0.0"
 dependencies = [
@@ -1727,7 +1706,6 @@ dependencies = [
  "base64",
  "futures",
  "into-markdown",
- "into-markdown-legacy-office",
  "into-markdown-process-plugin",
  "into-markdown-provider-plugin",
  "serde",
@@ -2101,16 +2079,6 @@ name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
-
-[[package]]
-name = "md-5"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
-dependencies = [
- "cfg-if",
- "digest",
-]
 
 [[package]]
 name = "memchr"

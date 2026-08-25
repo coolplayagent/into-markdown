@@ -382,7 +382,7 @@ mod tests {
         };
         let missing_library_request = request.clone();
         let formats = serde_json::to_vec(&authority.entries).unwrap();
-        let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.legacy-office","status":"missing","detail":"install legacy Office"},{"id":"runtime.asr","status":"missing","detail":"run into-md setup media"}]"#.to_vec();
+        let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.asr","status":"missing","detail":"run into-md setup media"}]"#.to_vec();
         let markdown = [
             b"Alpha \xe4\xb8\xad\xe6\x96\x87 line  \nSecond line\n".to_vec(),
             b"Corpus Alpha \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
@@ -420,14 +420,12 @@ mod tests {
             stdout: vec![],
             stderr: br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup media"}"#.to_vec(),
         });
-        let legacy = br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup legacy-office"}"#.to_vec();
-        for _ in 0..3 {
-            outputs.push_back(CommandOutput {
-                exit_code: Some(9),
-                stdout: vec![],
-                stderr: legacy.clone(),
-            });
-        }
+        outputs.push_back(ok(b"Corpus Alpha \xe4\xb8\xad\xe6\x96\x87\n".to_vec()));
+        outputs.push_back(ok(b"## Slide 1: Corpus \xe4\xbd\xa0\xe5\xa5\xbd \xe2\x80\x93 \xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n\nCorpus \xe4\xbd\xa0\xe5\xa5\xbd \xe2\x80\x93 \xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n\nEnglish fran\xc3\xa7ais\n\n### Speaker notes\n\nNota \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n\n## Slide 2: Second layout\n\nSecond layout\n\n\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7\n\n![](<data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=>)\n".to_vec()));
+        outputs.push_back(ok(
+            br#"{"assets":[{"mediaType":"image/png","dataBase64":"AA=="}]}"#.to_vec()
+        ));
+        outputs.push_back(ok(b"## Sheet: Corpus\n\n|  |  |  |\n| --- | --- | --- |\n| Corpus | `=TRUE [cached: true]` | 42\\.5 |\n| 2024\\-01\\-01 00:00:00 | `=SUM(1,2) [cached: 3]` | `=cmd` |\n".to_vec()));
         outputs.push_back(ok(metadata));
         outputs.push_back(ok(vec![]));
         outputs.push_back(ok(vec![]));

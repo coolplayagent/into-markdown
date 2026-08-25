@@ -35,6 +35,14 @@ const PROVIDER_ID: &str = "builtin.converter.workbook";
 #[derive(Debug, Default)]
 pub struct WorkbookConverter;
 
+pub(crate) fn convert_legacy_xls(
+    bytes: &[u8],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    calamine_adapter::convert_xls(bytes, options, context)
+}
+
 impl Converter for WorkbookConverter {
     fn id(&self) -> &'static str {
         PROVIDER_ID

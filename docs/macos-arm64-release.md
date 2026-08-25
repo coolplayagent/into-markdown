@@ -10,7 +10,7 @@ Apple silicon 每个版本固定发布四个独立构件：
 - `official.media.whisper-aarch64-apple-darwin.imp`：语音 provider、FFmpeg、ONNX Runtime、worker、Whisper、VAD 与说话人模型；
 - `into-markdown-skill.zip`：平台无关的 Agent Skill，另附 SHA-256，并以相同字节内置于 Core。
 
-Core 不携带 FFmpeg、ONNX Runtime 或本地 OCR/语音模型。每个插件都是通用插件管理器可安装的有界签名 ZIP，`plugin.json` 绑定目标平台、入口、执行权限和全部文件哈希；`provider.json`、SBOM、许可、模型及 runtime 均在同一签名清单内。本地模型是插件私有实现资源，不存在独立安装或切换入口。
+Core 内置 Office 97–2003 原生解析，但不携带 FFmpeg、ONNX Runtime 或本地 OCR/语音模型。每个插件都是通用插件管理器可安装的有界签名 ZIP，`plugin.json` 绑定目标平台、入口、执行权限和全部文件哈希；`provider.json`、SBOM、许可、模型及 runtime 均在同一签名清单内。本地模型是插件私有实现资源，不存在独立安装或切换入口。
 
 ## 构建
 
@@ -65,10 +65,10 @@ into-md capabilities list
 
 - Core 与两个插件分别具有签名/哈希/SBOM/许可证据；
 - Core DMG 的公证票据和 stapling 验证通过，两个插件的独立公证提交均为 Accepted；
-- Core inventory 不出现 `ffmpeg`、`onnxruntime` 或 `models`；
+- Core inventory 不出现 `ffmpeg`、`onnxruntime` 或 `models`，DOC/PPT/XLS 目录状态为 Core `available`；
 - Core 清单包含完整 Agent Skill，且内置副本与独立 skill ZIP 逐文件一致；
 - 插件安装、更新、校验、禁用、修复、卸载和离线重启；
-- 代表性 Core 格式、扫描 PDF/PNG/JPEG、WAV/MP3/M4A/WebM 和双人语音；旧版 DOC/XLS/PPT 不由当前发布集合声明，后续解析路线由 #191 跟踪；
+- 代表性 Core 格式（包括 DOC/XLS/PPT）、扫描 PDF/PNG/JPEG、WAV/MP3/M4A/WebM 和双人语音；
 - 本地/远端来源切换、`prefer`/`fallback`/`only`、超时/限流/坏响应/断网、provenance；
 - 浏览器刷新、重启、任务恢复、产物下载及控件附近的错误修复。
 

@@ -296,8 +296,7 @@ pub struct RuntimePolicy {
     pub read_only_roots: Vec<PathBuf>,
     /// Permit provider-owned helpers below the authenticated runtime root.
     pub allow_child_processes: bool,
-    /// Permit the narrowly scoped macOS services required by the signed
-    /// `LibreOffice` compatibility child. Ignored on other platforms.
+    /// Permit narrowly scoped macOS compatibility-child services. Ignored on other platforms.
     pub macos_compatibility_child: bool,
     /// Pre-provisioned no-capability `AppContainer` authority.
     #[cfg(windows)]

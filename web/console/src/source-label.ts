@@ -1,7 +1,6 @@
 import type { Locale } from "./i18n";
 
 const pluginNames: Record<string, [string, string]> = {
-  "official.legacy-office.libreoffice": ["旧版 Office 转换", "Legacy Office conversion"],
   "official.ocr.ppocrv6": ["本地 OCR（PP-OCR）", "Local OCR (PP-OCR)"],
   "official.media.whisper": ["本地语音（Whisper）", "Local speech (Whisper)"],
 };

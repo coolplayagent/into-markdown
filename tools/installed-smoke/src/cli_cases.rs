@@ -124,28 +124,22 @@ pub(crate) fn run(
     );
     for (id, fixture, golden) in [
         (
-            "legacy-doc-runtime",
+            "legacy-doc-core",
             "legacy/normal.doc",
             "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
         ),
         (
-            "legacy-ppt-runtime",
+            "legacy-ppt-core",
             "legacy/normal.ppt",
-            "ee775c9996e8c0f02a4f8fb94644da6310ff9e503abcc76cc1f7526076c6d917",
+            "6398b674f4d8e5968892fb24e953acd63627e4adbd0b2acaa340d193cef48fc4",
         ),
         (
-            "legacy-xls-runtime",
+            "legacy-xls-core",
             "legacy/normal.xls",
-            "84ac1de9422a2b206a15e1a4f52bf1a3f5466100d930f4cc47f30d50005276d0",
+            "4c3e870f2da63ebb4c94addc2600824f5e4285ab9bdfee86172f189002ae3104",
         ),
     ] {
-        record(
-            cases,
-            id,
-            legacy_conversion(
-                request, root, authority, projection, &doctor, fixture, golden, executor,
-            ),
-        );
+        record(cases, id, legacy_conversion(request, root, fixture, golden, executor));
     }
     if request.cancelled() {
         return Err("smoke run cancelled".into());
@@ -244,22 +238,13 @@ fn media_conversion(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn legacy_conversion(
     request: &ValidatedRequest,
     root: &Path,
-    authority: &CoreCatalogAuthority,
-    projection: &ArchiveProjection,
-    doctor: &BTreeMap<String, DoctorEntry>,
     fixture: &str,
     golden: &str,
     executor: &dyn Executor,
 ) -> Result<(), String> {
-    let runtime = authority
-        .optional_runtimes
-        .iter()
-        .find(|entry| entry.component == "official.legacy-office.libreoffice")
-        .ok_or_else(|| "legacy runtime is absent from catalog authority".to_owned())?;
     let path = fixture_path(request, fixture)?;
     let output = cli(
         request,
@@ -277,35 +262,43 @@ fn legacy_conversion(
         &[],
         executor,
     )?;
-    let available = doctor.get("runtime.legacy-office").is_some_and(|entry| entry.status == "ok");
-    let projected = runtime_is_projected(projection, "official.legacy-office.libreoffice")?;
-    if projected && !available {
-        return Err("projected legacy runtime is unavailable after installation".into());
-    }
-    if available {
-        if output.exit_code == Some(0)
-            && output.stderr.is_empty()
-            && format!("{:x}", Sha256::digest(&output.stdout)) == golden
-        {
-            return Ok(());
-        }
-        return Err("available legacy runtime output differs from golden".into());
-    }
-    let event: serde_json::Value = serde_json::from_slice(&output.stderr)
-        .map_err(|_| "missing legacy runtime error is not JSON")?;
-    let message = event["message"].as_str().unwrap_or_default();
-    let hint = runtime.install_hint.as_str();
-    let hint_token = hint.split('`').nth(1).unwrap_or(hint);
-    if output.exit_code == Some(9)
-        && output.stdout.is_empty()
-        && event["code"] == "componentUnavailable"
-        && event["exitCode"] == 9
-        && message.contains(hint_token)
+    if output.exit_code == Some(0)
+        && output.stderr.is_empty()
+        && format!("{:x}", Sha256::digest(&output.stdout)) == golden
     {
-        Ok(())
-    } else {
-        Err("missing legacy runtime did not return its exact contract".into())
+        if Path::new(fixture)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("ppt"))
+        {
+            let dto = cli(
+                request,
+                root,
+                &[
+                    &path.display().to_string(),
+                    "--no-config",
+                    "--emit",
+                    "result-json",
+                    "--asset-mode",
+                    "embed",
+                ],
+                &[],
+                executor,
+            )?;
+            let value: serde_json::Value = serde_json::from_slice(&dto.stdout)
+                .map_err(|error| format!("native PPT result DTO is invalid: {error}"))?;
+            let assets = value["assets"].as_array().ok_or("native PPT assets are absent")?;
+            if dto.exit_code != Some(0)
+                || !dto.stderr.is_empty()
+                || assets.len() != 1
+                || assets[0]["mediaType"] != "image/png"
+                || assets[0]["dataBase64"].as_str().is_none_or(str::is_empty)
+            {
+                return Err("native PPT safe image asset contract failed".into());
+            }
+        }
+        return Ok(());
     }
+    Err("native legacy Office output differs from golden".into())
 }
 
 fn record(cases: &mut Vec<CaseResult>, id: &str, result: Result<(), String>) {
@@ -548,9 +541,7 @@ fn runtime_is_projected(
 ) -> Result<bool, String> {
     let required: &[&str] = match runtime_component {
         "pdfium" => &["pdfium"],
-        "official.ocr.ppocrv6"
-        | "official.media.whisper"
-        | "official.legacy-office.libreoffice" => &[],
+        "official.ocr.ppocrv6" | "official.media.whisper" => &[],
         _ => return Err("catalog authority contains an unknown optional runtime".into()),
     };
     if required.is_empty() {
@@ -575,7 +566,6 @@ enum FormatRuntimeBinding {
 fn doctor_id(component: &str) -> Result<&str, String> {
     match component {
         "official.ocr.ppocrv6" => Ok("runtime.ocr"),
-        "official.legacy-office.libreoffice" => Ok("runtime.legacy-office"),
         "pdfium" => Ok("runtime.pdfium"),
         "official.media.whisper" => Ok("runtime.asr"),
         _ => Err("catalog authority contains an unknown optional runtime".into()),
@@ -716,9 +706,6 @@ mod tests {
 
         assert!(!runtime_is_projected(&projection(&[]), "official.ocr.ppocrv6").unwrap());
         assert!(!runtime_is_projected(&projection(&[]), "official.media.whisper").unwrap());
-        assert!(
-            !runtime_is_projected(&projection(&[]), "official.legacy-office.libreoffice").unwrap()
-        );
     }
 
     fn fixture_request(relative: &str) -> (tempfile::TempDir, ValidatedRequest) {

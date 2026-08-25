@@ -68,7 +68,6 @@ def audit_plugin_package(
                 must_execute = (
                     name.startswith("bin/")
                     or name == "ffmpeg/ffmpeg"
-                    or name.endswith("/legacy-office-worker")
                 )
                 if authority.get("executable") is not must_execute:
                     raise ReleaseError(

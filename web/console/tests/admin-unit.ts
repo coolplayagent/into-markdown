@@ -32,7 +32,6 @@ const snapshot: AdminSnapshot = {
   configurationReadOnly: false,
   formats: [{ format: "pdf", family: "document", status: "available", source: "core", extensions: ["pdf"], runtimeComponent: "pdfium", installHint: "install runtime" }],
   capabilities: [
-    { id: "legacy-office", status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.legacy-office.libreoffice/legacy-office", "off"] },
     { id: "ocr", status: "ready", localStatus: "ready", currentSource: "plugin:official.ocr.ppocrv6/ocr", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: "1.0.0", localVersion: "1.0.0" },
     { id: "transcription", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/transcription", sources: ["plugin:official.media.whisper/transcription", "off"], version: "1.0.0", localVersion: "1.0.0" },
     { id: "diarization", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/diarization", sources: ["plugin:official.media.whisper/diarization", "off"], version: "1.0.0", localVersion: "1.0.0" },

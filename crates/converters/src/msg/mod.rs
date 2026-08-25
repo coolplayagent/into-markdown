@@ -2,7 +2,7 @@ mod attachments;
 mod body;
 mod budget;
 mod merge;
-mod ole;
+pub(crate) mod ole;
 mod properties;
 mod recipients;
 

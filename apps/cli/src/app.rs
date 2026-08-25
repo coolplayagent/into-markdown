@@ -30,7 +30,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
-// Self-contained Speech and LibreOffice capability packages intentionally
+// Self-contained OCR and speech capability packages intentionally
 // include their audited models/runtimes. Keep the wire bound finite while
 // allowing the reviewed packages plus release metadata.
 const MAX_PLUGIN_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -375,18 +375,6 @@ pub(crate) fn prepare_official_capability(
             let refreshed = reload_after_setup(global, context)?;
             crate::services::verify_asr_runtime(&refreshed, &context.cwd)?;
             crate::services::verify_diarization_runtime(&refreshed, &context.cwd)?;
-            Ok(refreshed)
-        }
-        SetupCommand::LegacyOffice { insecure: _, allow_private_network: _ } => {
-            ensure_official_plugin(
-                "official.legacy-office.libreoffice",
-                global,
-                loaded,
-                catalog,
-                context,
-            )?;
-            let refreshed = reload_after_setup(global, context)?;
-            crate::services::verify_legacy_office_runtime(&refreshed, &context.cwd)?;
             Ok(refreshed)
         }
     }
@@ -866,8 +854,7 @@ pub(crate) fn inspect_capabilities(
     loaded: &LoadedConfig,
     cwd: &Path,
 ) -> Result<CapabilityInspection, CliError> {
-    const ITEMS: [(&str, &str, &str); 4] = [
-        ("legacy-office", "official.legacy-office.libreoffice", "legacy-office"),
+    const ITEMS: [(&str, &str, &str); 3] = [
         ("ocr", "official.ocr.ppocrv6", "ocr"),
         ("transcription", "official.media.whisper", "transcription"),
         ("diarization", "official.media.whisper", "diarization"),
@@ -900,11 +887,10 @@ pub(crate) fn inspect_capabilities(
 }
 
 pub(crate) fn checking_capability_views(loaded: &LoadedConfig) -> Vec<CapabilityView> {
-    let inspected =
-        ["official.legacy-office.libreoffice", "official.ocr.ppocrv6", "official.media.whisper"]
-            .into_iter()
-            .map(|id| (id, PluginInspection::Checking))
-            .collect();
+    let inspected = ["official.ocr.ppocrv6", "official.media.whisper"]
+        .into_iter()
+        .map(|id| (id, PluginInspection::Checking))
+        .collect();
     capability_views_from_inspections(loaded, &inspected).unwrap_or_default()
 }
 
@@ -937,8 +923,7 @@ fn capability_views_from_inspections(
     loaded: &LoadedConfig,
     inspected: &std::collections::BTreeMap<&str, PluginInspection>,
 ) -> Result<Vec<CapabilityView>, CliError> {
-    const ITEMS: [(&str, &str, &str); 4] = [
-        ("legacy-office", "official.legacy-office.libreoffice", "legacy-office"),
+    const ITEMS: [(&str, &str, &str); 3] = [
         ("ocr", "official.ocr.ppocrv6", "ocr"),
         ("transcription", "official.media.whisper", "transcription"),
         ("diarization", "official.media.whisper", "diarization"),
@@ -1012,7 +997,6 @@ enum PluginInspection {
 
 pub(crate) fn capability_name(id: &str) -> &'static str {
     match id {
-        "legacy-office" => "旧版 Office",
         "ocr" => "图片 OCR",
         "transcription" => "语音转写",
         "diarization" => "说话人识别",
@@ -1022,7 +1006,6 @@ pub(crate) fn capability_name(id: &str) -> &'static str {
 
 pub(crate) fn capability_plugin_name(id: &str) -> &'static str {
     match id {
-        "official.legacy-office.libreoffice" => "本地旧版 Office（LibreOffice）",
         "official.ocr.ppocrv6" => "本地 OCR（PP-OCR）",
         "official.media.whisper" => "本地语音（Whisper）",
         _ => "本地扩展",
@@ -1047,7 +1030,6 @@ pub(crate) fn capability_plugin(
     id: &str,
 ) -> Result<(&'static str, &'static [&'static str]), CliError> {
     match id {
-        "legacy-office" => Ok(("official.legacy-office.libreoffice", &["legacy-office"])),
         "ocr" => Ok(("official.ocr.ppocrv6", &["ocr"])),
         "transcription" | "diarization" => {
             Ok(("official.media.whisper", &["transcription", "diarization"]))
@@ -1062,7 +1044,6 @@ pub(crate) fn verify_capability_runtime(
     cwd: &Path,
 ) -> Result<(), CliError> {
     let result = match id {
-        "legacy-office" => crate::services::verify_legacy_office_runtime(loaded, cwd),
         "ocr" => crate::services::verify_ocr_runtime(loaded, cwd),
         "transcription" => crate::services::verify_asr_runtime(loaded, cwd),
         "diarization" => crate::services::verify_diarization_runtime(loaded, cwd),
@@ -1073,7 +1054,6 @@ pub(crate) fn verify_capability_runtime(
 
 fn capability_route<'a>(loaded: &'a LoadedConfig, id: &str) -> &'a config::CapabilityRouteConfig {
     match id {
-        "legacy-office" => &loaded.effective.capability_routes.legacy_office,
         "ocr" => &loaded.effective.capability_routes.ocr,
         "transcription" => &loaded.effective.capability_routes.transcription,
         "diarization" => &loaded.effective.capability_routes.diarization,
@@ -1115,7 +1095,9 @@ fn validate_capability_source(
         CapabilitySourceRef::Plugin { plugin_id, capability_id } => {
             let expected = match capability {
                 CapabilityId::LegacyOffice => {
-                    ("official.legacy-office.libreoffice", "legacy-office")
+                    return Err(CliError::usage(
+                        "legacy Office is a built-in Core capability and has no selectable source",
+                    ));
                 }
                 CapabilityId::Ocr => ("official.ocr.ppocrv6", "ocr"),
                 CapabilityId::Transcription => ("official.media.whisper", "transcription"),
@@ -3697,7 +3679,6 @@ fn doctor_check_name(id: &str) -> String {
         "runtime.ocr" => "本地 OCR".into(),
         "runtime.asr" => "本地语音转写".into(),
         "runtime.diarization" => "本地说话人识别".into(),
-        "runtime.legacy-office" => "本地旧版 Office".into(),
         "networkProbe" => "联网检查".into(),
         value if value.starts_with("providerEnvironment:") => {
             format!("AI 服务 {}", value.trim_start_matches("providerEnvironment:"))
@@ -3881,7 +3862,6 @@ fn append_fast_runtime_checks(
         let capability_id = match runtime.component {
             "official.ocr.ppocrv6" => "ocr",
             "official.media.whisper" => "transcription",
-            "official.legacy-office.libreoffice" => "legacy-office",
             _ => continue,
         };
         append_fast_capability_check(checks, capability.id, capability_id, capabilities);
@@ -3932,7 +3912,6 @@ fn doctor_official_plugin_fast_check(
     capabilities: &[CapabilityView],
 ) -> Option<(&'static str, String)> {
     let capability_id = match id {
-        "official.legacy-office.libreoffice" => "legacy-office",
         "official.ocr.ppocrv6" => "ocr",
         "official.media.whisper" => "transcription",
         _ => return None,
@@ -3962,9 +3941,6 @@ fn verify_core_runtime(component: &str, loaded: &LoadedConfig, cwd: &Path) -> bo
         "official.ocr.ppocrv6" => crate::services::verify_ocr_runtime(loaded, cwd).is_ok(),
         "official.media.whisper" => crate::services::verify_asr_runtime(loaded, cwd).is_ok(),
         "speaker-diarization" => crate::services::verify_diarization_runtime(loaded, cwd).is_ok(),
-        "official.legacy-office.libreoffice" => {
-            crate::services::verify_legacy_office_runtime(loaded, cwd).is_ok()
-        }
         _ => false,
     }
 }
@@ -6626,7 +6602,6 @@ mod tests {
         for (id, hint) in [
             ("runtime.pdfium", "repair the installed into-md Core package"),
             ("runtime.ocr", "setup ocr"),
-            ("runtime.legacy-office", "setup legacy-office"),
             ("runtime.asr", "setup media"),
             ("runtime.diarization", "setup media"),
         ] {

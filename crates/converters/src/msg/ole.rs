@@ -1,6 +1,6 @@
 mod chain;
 
-use super::budget::{MsgBudget, limit, malformed};
+use super::budget::{limit, malformed};
 use chain::walk_chain;
 use into_markdown_core::ConversionError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,7 +13,7 @@ const DIFAT: u32 = 0xffff_fffc;
 const NONE: u32 = 0xffff_ffff;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EntryKind {
+pub(crate) enum EntryKind {
     Storage,
     Stream,
     Root,
@@ -32,17 +32,20 @@ struct DirectoryEntry {
 }
 
 #[derive(Debug)]
-pub(super) struct CompoundFile {
+pub(crate) struct CompoundFile {
     entries: Vec<DirectoryEntry>,
     streams: BTreeMap<usize, Vec<u8>>,
 }
 
 impl CompoundFile {
-    pub(super) fn open(bytes: &[u8], budget: &mut MsgBudget<'_>) -> Result<Self, ConversionError> {
+    pub(crate) fn open<B: CompoundBudget + ?Sized>(
+        bytes: &[u8],
+        budget: &mut B,
+    ) -> Result<Self, ConversionError> {
         Header::parse(bytes)?.open(bytes, budget)
     }
 
-    pub(super) fn root(&self) -> Storage<'_> {
+    pub(crate) fn root(&self) -> Storage<'_> {
         Storage { file: self, index: 0 }
     }
 
@@ -55,17 +58,17 @@ impl CompoundFile {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Storage<'a> {
+pub(crate) struct Storage<'a> {
     file: &'a CompoundFile,
     index: usize,
 }
 
 impl<'a> Storage<'a> {
-    pub(super) fn path(&self) -> String {
+    pub(crate) fn path(&self) -> String {
         stable_path(&self.file.entries[self.index].path)
     }
 
-    pub(super) fn stream(&self, name: &str) -> Option<&'a [u8]> {
+    pub(crate) fn stream(&self, name: &str) -> Option<&'a [u8]> {
         self.file
             .children(self.index)
             .find(|(_, entry)| {
@@ -74,20 +77,31 @@ impl<'a> Storage<'a> {
             .and_then(|(index, _)| self.file.streams.get(&index).map(Vec::as_slice))
     }
 
-    pub(super) fn storages(&self) -> impl Iterator<Item = Storage<'a>> + 'a {
+    pub(crate) fn storages(&self) -> impl Iterator<Item = Storage<'a>> + 'a {
         self.file.children(self.index).filter_map(|(index, entry)| {
             (entry.kind == EntryKind::Storage).then_some(Storage { file: self.file, index })
         })
     }
 
-    pub(super) fn storage(&self, name: &str) -> Option<Storage<'a>> {
+    pub(crate) fn storage(&self, name: &str) -> Option<Storage<'a>> {
         self.storages()
             .find(|storage| storage.file.entries[storage.index].name.eq_ignore_ascii_case(name))
     }
 
-    pub(super) fn name(&self) -> &'a str {
+    pub(crate) fn name(&self) -> &'a str {
         &self.file.entries[self.index].name
     }
+}
+
+/// Resource accounting required by the shared CFB/OLE reader.
+///
+/// Format frontends retain ownership of their public limit names and diagnostics while the
+/// container reader enforces one audited sector/directory implementation.
+pub(crate) trait CompoundBudget {
+    fn cfb_entry(&mut self) -> Result<(), ConversionError>;
+    fn cfb_expanded(&mut self, bytes: u64) -> Result<(), ConversionError>;
+    fn cfb_depth(&self, depth: u16, part: &str) -> Result<(), ConversionError>;
+    fn cfb_work(&mut self, units: u64) -> Result<(), ConversionError>;
 }
 
 #[derive(Clone, Copy)]
@@ -153,10 +167,10 @@ impl Header {
     }
 
     #[allow(clippy::too_many_lines)] // Sector ownership stays adjacent to every chain read.
-    fn open(
+    fn open<B: CompoundBudget + ?Sized>(
         self,
         bytes: &[u8],
-        budget: &mut MsgBudget<'_>,
+        budget: &mut B,
     ) -> Result<CompoundFile, ConversionError> {
         if bytes.len() < self.sector_size || !bytes.len().is_multiple_of(self.sector_size) {
             return Err(malformed("cfb/header", "CFB file length is not sector aligned"));
@@ -246,7 +260,7 @@ impl Header {
         }
         let mut root_mini_stream = concatenate(bytes, self.sector_size, &root_chain)?;
         root_mini_stream.truncate(to_usize64(root.size, "cfb/root")?);
-        budget.expanded(root.size)?;
+        budget.cfb_expanded(root.size)?;
 
         let mut mini_owners: Vec<Option<String>> =
             vec![None; root_mini_stream.len().div_ceil(self.mini_sector_size)];
@@ -254,7 +268,7 @@ impl Header {
         for (index, entry) in
             entries.iter().enumerate().filter(|(_, entry)| entry.kind == EntryKind::Stream)
         {
-            budget.expanded(entry.size)?;
+            budget.cfb_expanded(entry.size)?;
             let part = stable_path(&entry.path);
             let data = if entry.size < u64::from(self.mini_cutoff) {
                 read_mini_stream(
@@ -280,11 +294,11 @@ impl Header {
         Ok(CompoundFile { entries, streams })
     }
 
-    fn read_difat(
+    fn read_difat<B: CompoundBudget + ?Sized>(
         self,
         bytes: &[u8],
         sector_count: usize,
-        budget: &mut MsgBudget<'_>,
+        budget: &mut B,
     ) -> Result<(Vec<u32>, Vec<u32>), ConversionError> {
         let mut fat_ids = Vec::new();
         for offset in (76..512).step_by(4) {
@@ -297,7 +311,7 @@ impl Header {
         let mut difat_ids = Vec::new();
         let mut current = self.first_difat;
         for _ in 0..self.difat_sectors {
-            budget.work(1)?;
+            budget.cfb_work(1)?;
             validate_physical(current, sector_count, "cfb/difat")?;
             if !difat_ids.insert_unique(current) {
                 return Err(malformed("cfb/difat", "DIFAT chain contains a cycle"));
@@ -343,17 +357,17 @@ impl InsertUnique for Vec<u32> {
         }
     }
 }
-fn parse_directory(
+fn parse_directory<B: CompoundBudget + ?Sized>(
     bytes: &[u8],
     major: u16,
-    budget: &mut MsgBudget<'_>,
+    budget: &mut B,
 ) -> Result<Vec<DirectoryEntry>, ConversionError> {
     if !bytes.len().is_multiple_of(128) {
         return Err(malformed("cfb/directory", "directory stream is not entry aligned"));
     }
     let mut entries = Vec::with_capacity(bytes.len() / 128);
     for (index, raw) in bytes.chunks_exact(128).enumerate() {
-        budget.entry()?;
+        budget.cfb_entry()?;
         let object_type = raw[66];
         if object_type == 0 {
             entries.push(DirectoryEntry {
@@ -431,9 +445,9 @@ fn parse_directory(
     }
     Ok(entries)
 }
-fn assign_paths(
+fn assign_paths<B: CompoundBudget + ?Sized>(
     entries: &mut [DirectoryEntry],
-    budget: &mut MsgBudget<'_>,
+    budget: &mut B,
 ) -> Result<(), ConversionError> {
     let mut seen = vec![false; entries.len()];
     seen[0] = true;
@@ -449,19 +463,19 @@ fn assign_paths(
     Ok(())
 }
 
-fn visit_tree(
+fn visit_tree<B: CompoundBudget + ?Sized>(
     entries: &mut [DirectoryEntry],
     index: u32,
     parent: &[String],
     storage_depth: u16,
     tree_depth: u16,
     seen: &mut [bool],
-    budget: &mut MsgBudget<'_>,
+    budget: &mut B,
 ) -> Result<(), ConversionError> {
     if index == NONE {
         return Ok(());
     }
-    budget.depth(storage_depth.max(tree_depth), "cfb/directory")?;
+    budget.cfb_depth(storage_depth.max(tree_depth), "cfb/directory")?;
     let index = to_usize(index)?;
     if index >= entries.len() || entries[index].name.is_empty() {
         return Err(malformed("cfb/directory", "directory link is out of bounds or empty"));

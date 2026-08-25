@@ -18,15 +18,10 @@ path = "src/bin/ocr.rs"
 name = "into-md-media-provider"
 path = "src/bin/media.rs"
 
-[[bin]]
-name = "into-md-legacy-office-provider"
-path = "src/bin/legacy-office.rs"
-
 [dependencies]
 base64.workspace = true
 futures.workspace = true
 into-markdown = { path = "../../crates/api", features = ["official-provider-runtime"] }
-into-markdown-legacy-office = { path = "../../crates/legacy-office" }
 into-markdown-process-plugin = { path = "../../crates/process-plugin" }
 into-markdown-provider-plugin = { path = "../../crates/provider-plugin" }
 serde.workspace = true

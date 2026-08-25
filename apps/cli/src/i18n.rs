@@ -132,8 +132,7 @@ const ZH_ROOT_HELP: &str = "\
 const ZH_FORMATS_HELP: &str = "查看格式能力\n\n用法：into-md formats [--family <类别>] [--status <状态>] [--json]\n      into-md formats show <格式> [--json]\n      into-md formats detect <输入> [提示选项] [--json]\n";
 const ZH_UI_HELP: &str = "启动仅限本机的安全 Web 服务入口\n\n用法：into-md ui [--port <端口>] [--no-open] [--data-dir <目录>]\n";
 const ZH_CAPABILITIES_HELP: &str = "查看、选择和验证能力来源\n\n用法：into-md capabilities [list] [--json]\n      into-md capabilities <show|use|reset|verify> ...\n";
-const ZH_SETUP_HELP: &str =
-    "安装并验证官方本地能力插件\n\n用法：into-md setup <ocr|media|legacy-office>\n";
+const ZH_SETUP_HELP: &str = "安装并验证官方本地能力插件\n\n用法：into-md setup <ocr|media>\n";
 const ZH_PROVIDERS_HELP: &str = "配置和检查 AI 提供者\n\n用法：into-md providers [--json]\n      into-md providers <show|add|remove|set-default|capabilities|test> ...\n";
 const ZH_PLUGINS_HELP: &str = "查看和管理进程外或 WASI 插件\n\n用法：into-md plugins [--json]\n      into-md plugins <show|install|verify|enable|disable|remove> ...\n";
 const ZH_CONFIG_HELP: &str = "查看和编辑分层配置\n\n用法：into-md config <paths|show|init|validate|get|set|unset|profile> ...\n";

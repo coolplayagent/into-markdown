@@ -22,10 +22,6 @@ pub(crate) const PDFIUM: RuntimeRequirement = RuntimeRequirement {
     component: "pdfium",
     install_hint: "repair the installed into-md Core package, then run diagnostics again",
 };
-pub(crate) const LEGACY_OFFICE: RuntimeRequirement = RuntimeRequirement {
-    component: "official.legacy-office.libreoffice",
-    install_hint: "run `into-md setup legacy-office`",
-};
 const OCR: RuntimeRequirement = RuntimeRequirement {
     component: "official.ocr.ppocrv6",
     install_hint: "run `into-md setup ocr`",
@@ -69,11 +65,11 @@ const FORMATS: &[FormatDescriptor] = &[
 
 const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(0, Some(PDFIUM)),
-    plugin_catalog(1, LEGACY_OFFICE),
+    catalog(1, None),
     catalog(2, None),
-    plugin_catalog(3, LEGACY_OFFICE),
+    catalog(3, None),
     catalog(4, None),
-    plugin_catalog(5, LEGACY_OFFICE),
+    catalog(5, None),
     catalog(6, None),
     catalog(7, None),
     catalog(8, None),
@@ -147,11 +143,11 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     ),
     component("builtin.converter.epub", CapabilityKind::Converter, 240, &[InputFormat::Epub]),
     component("builtin.converter.rtf", CapabilityKind::Converter, 240, &[InputFormat::Rtf]),
-    plugin_converter(
+    component(
         "builtin.converter.legacy-office",
+        CapabilityKind::Converter,
         230,
         &[InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls],
-        LEGACY_OFFICE,
     ),
     component("builtin.converter.feed", CapabilityKind::Converter, 220, &[InputFormat::Feed]),
     component("builtin.converter.zip", CapabilityKind::Converter, 220, &[InputFormat::Zip]),
@@ -184,7 +180,6 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     ),
     runtime("runtime.pdfium", PDFIUM),
     plugin_runtime("runtime.ocr", OCR),
-    plugin_runtime("runtime.legacy-office", LEGACY_OFFICE),
     plugin_runtime("runtime.asr", ASR),
 ];
 
@@ -327,29 +322,32 @@ pub const fn core_capabilities() -> &'static [CapabilityDescriptor] {
     CAPABILITIES
 }
 
-/// Verify the packaged legacy Office runtime without launching its worker.
+/// Verify that Office 97–2003 conversion is present in the compiled Core catalog.
+///
+/// This compatibility entry point previously authenticated a separately packaged
+/// runtime. It now verifies the built-in converter and performs no filesystem,
+/// process, or network access.
 ///
 /// # Errors
 ///
-/// Returns a stable catalog component error and install hint when the runtime
-/// is absent or fails its embedded authority.
+/// Returns a stable catalog error if the compiled converter inventory is inconsistent,
+/// or the request context has been cancelled or exceeded its deadline.
 pub fn verify_packaged_legacy_office_runtime(
     context: &into_markdown_core::ExecutionContext,
 ) -> Result<(), ConversionError> {
-    let runtime = into_markdown_legacy_office::LegacyOfficeRuntime::packaged()
-        .map_err(remap_legacy_runtime_error)?;
-    runtime.verify(context).map(drop).map_err(remap_legacy_runtime_error)
-}
-
-fn remap_legacy_runtime_error(error: ConversionError) -> ConversionError {
-    match error {
-        ConversionError::ComponentUnavailable { component, detail } => {
-            ConversionError::ComponentUnavailable {
-                component: LEGACY_OFFICE.component.into(),
-                detail: format!("{}; cause: {component}/{detail}", LEGACY_OFFICE.install_hint),
-            }
-        }
-        error => error,
+    context.checkpoint()?;
+    validate_core_capabilities(CAPABILITIES)?;
+    let present = CAPABILITIES.iter().any(|entry| {
+        entry.id == "builtin.converter.legacy-office"
+            && entry.source == CapabilitySource::Core
+            && entry.availability == CapabilityAvailability::Available
+            && entry.formats == [InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls]
+            && entry.runtime.is_none()
+    });
+    if present {
+        Ok(())
+    } else {
+        catalog_error("built-in legacy Office converter is absent or inconsistent")
     }
 }
 
@@ -542,7 +540,7 @@ fn register_converter_by_id(
         "builtin.converter.odf" => Arc::new(OdfConverter),
         "builtin.converter.epub" => Arc::new(EpubConverter),
         "builtin.converter.rtf" => Arc::new(RtfConverter),
-        "builtin.converter.legacy-office" => Arc::new(LegacyOfficeConverter::default()),
+        "builtin.converter.legacy-office" => Arc::new(LegacyOfficeConverter),
         "builtin.converter.feed" => Arc::new(FeedConverter),
         "builtin.converter.zip" => Arc::new(ZipConverter),
         "builtin.converter.html" => Arc::new(HtmlConverter),
@@ -681,7 +679,7 @@ mod tests {
             authority.entries_sha256,
             format!("{:x}", Sha256::digest(serde_json::to_vec(&authority.entries).unwrap()))
         );
-        assert_eq!(authority.optional_runtimes.len(), 4);
+        assert_eq!(authority.optional_runtimes.len(), 3);
         assert_eq!(
             authority.optional_runtimes_sha256,
             format!(
