@@ -68,7 +68,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: bazelbuild/setup-bazel@v3
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
           disk-cache: semantic-layout-${{ matrix.config }}
@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: bazelbuild/setup-bazel@v3
+      - uses: bazel-contrib/setup-bazel@0.15.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1

@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
-      - uses: bazelbuild/setup-bazel@v3
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
       - name: Activate fixed pnpm toolchain
