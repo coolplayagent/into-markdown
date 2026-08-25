@@ -569,7 +569,7 @@ fn verify_acl_with_masks(
         return Err(unavailable("plugin DACL authority is invalid"));
     }
     let user = allowed[0];
-    let current_identity = if allow_os_administrators { Some(CurrentUser::open()?) } else { None };
+    let current_identity = CurrentUser::open()?;
     let is_directory = std::fs::metadata(path)
         .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
         .is_dir();
@@ -599,16 +599,14 @@ fn verify_acl_with_masks(
     }
     // SAFETY: owner and current-token SIDs are valid while the descriptor/token buffers remain
     // owned. Windows can canonicalize an explicitly supplied owner to the elevated token's exact
-    // TokenOwner SID. Accepting that SID preserves the launching process's authority boundary;
-    // arbitrary owners remain rejected and AppContainer runtime ACLs still require the user SID.
+    // TokenOwner SID. Accepting that exact SID preserves the launching process's authority
+    // boundary for both private roots and AppContainer snapshots; arbitrary owners remain rejected.
     let owner_allowed = !owner.is_null()
         && unsafe {
             EqualSid(owner, user) != 0
+                || EqualSid(owner, current_identity.owner_sid()) != 0
                 || allow_os_administrators
-                    && (current_identity
-                        .as_ref()
-                        .is_some_and(|identity| EqualSid(owner, identity.owner_sid()) != 0)
-                        || IsWellKnownSid(owner, WinLocalSystemSid) != 0
+                    && (IsWellKnownSid(owner, WinLocalSystemSid) != 0
                         || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0)
         };
     let mut valid = owner_allowed;
