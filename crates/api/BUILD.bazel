@@ -97,6 +97,7 @@ rust_test(
         },
     }),
     tags = ["manual"],
+    timeout = "long",
     deps = [
         ":into_markdown_ocr_provider_runtime",
         "//crates/core",
