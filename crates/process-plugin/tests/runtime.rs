@@ -385,7 +385,9 @@ impl Harness {
 
 #[test]
 fn payloads_larger_than_a_protocol_frame_use_the_private_staged_source() {
-    let runtime = Harness::try_new_with_mode_and_file_limit(None, Some(32 * 1024 * 1024)).unwrap();
+    let fixture_bytes = std::fs::metadata(fixture_executable()).unwrap().len();
+    let max_file_bytes = fixture_bytes.max(32 * 1024 * 1024);
+    let runtime = Harness::try_new_with_mode_and_file_limit(None, Some(max_file_bytes)).unwrap();
     let mut source = vec![b'x'; 13 * 1024 * 1024];
     source[..8].copy_from_slice(b"large-ok");
     let result = runtime.execute(&source, ExecutionOptions::default()).unwrap();
