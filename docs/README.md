@@ -27,8 +27,8 @@
   签名、真实执行和发布门禁。
 - [OCR 与 AI](ocr-and-ai.md)：embedded OCR、本地能力和远端 Provider 的证据边界。
 
-本地模型只属于完整能力插件，不提供独立模型安装、更新、替换或选择接口。仓库 `models/`
-保存构建与供应链权威，不代表面向用户的模型管理功能。
+完整能力插件是本地模型与运行时的安装、更新和验证单元。仓库 `models/` 保存这些插件所需的
+构建与供应链权威。
 
 ## 安全、质量与发布
 
@@ -43,12 +43,12 @@
 - [贡献指南](../CONTRIBUTING.md) / [English](../CONTRIBUTING.en.md)。
 
 每个平台产品发布由一个 Core、两个自包含能力插件和一份平台无关 Agent Skill 构成。
-Core 内置 canonical skill 目录；独立 ZIP 与 Core 副本逐文件一致。产品安装器与卸载器不修改
-用户的 agent skill 目录。
+Core 内置 canonical skill 目录；独立 ZIP 与 Core 副本逐文件一致。用户将 skill 显式安装到
+agent 的发现目录。
 
 ## 文档维护规则
 
-- 示例使用真实公开命令，不虚构 `convert` 子命令或独立模型管理接口。
+- 示例遵循真实公开 CLI 语法；模型相关安装与更新以完整能力插件为管理单元。
 - 每个公共 CLI 命令和每种当前可用格式必须在中英文可执行示例中各出现一次，并由真实
   `into-md` 和实时 format catalog 在 CI 中校验。
 - 本地与远端能力都按当前 invocation 的网络授权执行；普通转换默认离线。

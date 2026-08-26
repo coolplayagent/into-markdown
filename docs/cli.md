@@ -6,7 +6,7 @@
 
 ## 命令结构
 
-转换不使用 `convert` 子命令：
+转换命令语法为：
 
 ```text
 into-md [选项] <输入...>
@@ -47,8 +47,8 @@ CI 对真实 CLI 发现结果、语法、格式 catalog 和基础转换逐项校
 into-md ui [--port <0..65535>] [--no-open] [--data-dir <目录>]
 ```
 
-`ui` 固定绑定 `127.0.0.1`；默认 `--port 0` 由操作系统分配空闲端口，不存在 host、
-外部监听地址或外部会话令牌选项。`--no-open` 禁止启动浏览器。`--data-dir` 指定私有
+`ui` 固定绑定 `127.0.0.1`；默认 `--port 0` 由操作系统分配空闲端口。公开选项只用于
+端口选择、浏览器启动和本地数据目录；`--no-open` 禁止启动浏览器，`--data-dir` 指定私有
 本地状态根；Unix 上逐级通过不跟随符号链接的目录句柄创建或打开，并要求最终目录
 仅当前用户可访问；Windows 上拒绝 reparse point。完整安全与生命周期契约见
 [本地 Web 服务](ui.md)。
@@ -279,7 +279,7 @@ into-md capabilities reset <CAPABILITY> [--scope <global|project>]
 `SOURCE_REF` 使用 `plugin:<插件ID>/<能力ID>`、`provider:<Provider ID>/<能力ID>` 或 `off`。
 OCR 可选择本地插件或远端 Provider；转写和说话人能力分别路由，因此可以组合远端转写与
 本地说话人识别。Office 97–2003 由 Core 直接转换，不进入能力路由。JSON 输出包含当前来源、全部候选来源、
-本地插件状态与版本；不暴露插件内部模型为可管理对象。
+本地插件状态与版本；模型身份记录在经过签名的 provider 描述中，并随完整插件管理。
 
 官方能力插件下载支持 CONNECT 代理路由：`INTO_MD_HTTPS_PROXY`（回退
 `HTTPS_PROXY`、`https_proxy`）取 `http://[user:pass@]host:port`，`INTO_MD_NO_PROXY`
@@ -299,7 +299,7 @@ into-md setup ocr [--insecure] [--allow-private-network]
 into-md setup media [--insecure] [--allow-private-network]
 ```
 
-转换和状态查询不会隐式调用这些命令。
+这些命令显式安装并验证对应的完整能力插件。
 
 ### 转写后说话人重标记
 

@@ -526,7 +526,7 @@ repository-authored VBA payload，并以成功 semantic hash 证明 payload 在�
 普通 Cargo/Bazel 图只读取 checked-in `fixtures/small/`，不联网。Noto 字体和 PP-OCRv6
 source archive 只由显式 manual target 获取；字体只用于重建 OCR PNG，模型源只供受控派生与
 真实识别质量目标。它们不进入普通测试。发布工具把审计后的模型派生物与 ONNX Runtime 一起
-装入完整 OCR 能力插件，不形成独立模型发布件。质量目标经内部 resolver/ORT worker 运行 12 张图，
+装入完整 OCR 能力插件，并以该插件作为发布与验收单元。质量目标经内部 resolver/ORT worker 运行 12 张图，
 并精确断言简体 0/65≤5%、繁体 6/65≤10%、
 英文 1/185≤5%、混排 1/116≤8%。普通 Cargo integration 明确报告该用例 ignored；fake
 runtime 单元测试不能满足质量门禁。OCR golden 的 NFC、有效字符数、CER 空白/标点规则、

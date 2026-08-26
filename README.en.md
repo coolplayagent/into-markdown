@@ -7,9 +7,6 @@ Rust conversion core, the `into-md` CLI, a local Web workbench, stable JSON and 
 and two self-contained optional capability plugins. Every result passes through the
 provenance-aware Document IR and the single deterministic GFM renderer.
 
-The project is independent of the neighbouring `anydoc` and `markitdown` projects and does not
-wrap either implementation.
-
 ## Product composition
 
 - Core: CLI, Web workbench, Document IR, detection and conversion, PDFium, secure output
@@ -19,9 +16,9 @@ wrap either implementation.
 - Agent Skill `into-markdown`: portable instructions for compatible agents, released as a
   standalone ZIP and embedded byte-for-byte in every Core package.
 
-Models are private implementation resources of complete capability plugins. They are not separate
-product objects to install, update, or switch. Ordinary conversion never downloads plugins,
-models, or remote content.
+Models and runtimes for OCR and speech are installed, verified, and updated with their complete
+capability plugins. Ordinary conversion reuses installed plugins; explicit `setup` operations
+install capabilities.
 
 ## Supported surface
 
@@ -38,7 +35,7 @@ contracts are the [macOS release](docs/macos-arm64-release.md) and
 
 ## CLI
 
-Conversion accepts inputs directly; there is no `convert` subcommand:
+Place conversion inputs directly after `into-md` and its options:
 
 ```sh
 into-md version --json
@@ -75,8 +72,8 @@ into-md doctor --json
 into-md ui
 ```
 
-Each `setup` command installs and verifies a complete official capability plugin; conversion never
-invokes setup implicitly. `into-md ui` listens only on `127.0.0.1` and provides batch conversion,
+Each `setup` command explicitly installs and verifies a complete official capability plugin.
+`into-md ui` listens only on `127.0.0.1` and provides batch conversion,
 progress and cancellation, task history, artifact preview/download, and format, capability,
 provider, plugin, configuration, and diagnostic administration. CLI and Web paths share the same
 routing, configuration, and security boundaries.
@@ -86,11 +83,9 @@ See [capability plugins](docs/capability-plugins.md),
 
 ## Agent Skill
 
-The standalone `into-markdown-skill.zip` can be explicitly extracted into an agent's discovery
-directory. Every Core also includes `share/into-markdown/skills/into-markdown/` for users who prefer
-to copy or link the canonical directory. Product installers and uninstallers never mutate agent
-directories. Codex can invoke `$into-markdown` explicitly or select it for matching conversion
-requests.
+Users install the Agent Skill by extracting `into-markdown-skill.zip` into an agent's discovery
+directory or by copying or linking `share/into-markdown/skills/into-markdown/` from any Core.
+Codex can invoke `$into-markdown` explicitly or select it for matching conversion requests.
 
 See the [Agent Skill release and installation guide](docs/agent-skill.md).
 

@@ -2,9 +2,9 @@
 
 Into Markdown accepts only plugins that are signed, explicitly installed, and executed inside an
 isolation boundary. A plugin cannot bypass the common Document IR, resource validation, output
-transaction, or per-invocation network authority. User-facing OCR, speech, and legacy Office
-capabilities must ship as complete `.imp` packages containing their runtime, models, licenses, and
-SBOM. Models are not managed separately.
+transaction, or per-invocation network authority. User-facing OCR and speech capabilities ship as
+complete `.imp` packages containing their runtimes, models, licenses, and SBOMs, with the complete
+plugin as the management unit. Core natively provides Office 97–2003 parsing.
 
 ## Choose a protocol
 

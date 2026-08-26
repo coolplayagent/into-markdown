@@ -2,7 +2,8 @@
 
 Into Markdown 以开放 Agent Skills 目录格式发布 `into-markdown` skill。它指导 agent 调用已安装的
 `into-md` 完成文档、图片、完整音视频、stdin、目录和明确授权远程来源的转换，并校验真实产物。
-它不安装产品、不管理能力插件或 Provider，也不打开本地 Web 管理界面。
+Skill 负责转换和只读诊断；产品安装、能力插件与 Provider 管理以及本地 Web 管理由对应的
+CLI 或 Web 工作流负责。
 
 目录结构遵循 [OpenAI Agent Skills 文档](https://learn.chatgpt.com/docs/build-skills)。
 `agents/openai.yaml` 只增强 Codex 中的显示、默认提示与隐式匹配；不声明 MCP 依赖，也不改变
@@ -18,7 +19,7 @@ ZIP 固定以 `into-markdown/` 为根目录，条目顺序、时间戳和权限�
 
 ## 显式安装
 
-产品安装器不会修改任何 agent 配置或 skill 目录。使用独立 ZIP 安装到 Codex 用户目录：
+将独立 ZIP 安装到 Codex 用户目录：
 
 ```sh
 shasum -a 256 -c into-markdown-skill.zip.sha256
@@ -46,8 +47,8 @@ Expand-Archive -LiteralPath .\into-markdown-skill.zip -DestinationPath "$HOME\.a
 `$into-markdown` 显式调用，也可以在匹配的文件转换任务中自动选择它。Codex 的用户级发现目录
 与符号链接支持见同一份[官方本地 skill 文档](https://learn.chatgpt.com/docs/build-skills)。
 
-删除 Core 不会删除用户自行复制的 skill，也不会删除指向 Core 的链接。用户应在不再需要时只移除
-自己创建的精确 `into-markdown` 目录或链接。
+用户自行复制的 skill 和建立的链接拥有独立生命周期；Core 删除后，可移除或重新指向自己创建的
+精确 `into-markdown` 目录或链接。
 
 ## 构建与验证
 
@@ -68,7 +69,7 @@ Core 装配器复用同一 materializer；安装后 smoke 还会检查 skill 的
 ## English summary
 
 The release publishes one portable `into-markdown-skill.zip` and embeds the identical canonical
-directory in every Core package. Installation into an agent's discovery directory is always an
-explicit user action. The product installer and uninstaller never modify `$HOME/.agents/skills`.
-The skill runs the installed CLI for conversion and read-only diagnostics; it does not administer
-plugins, providers, models, configuration, or the Web UI.
+directory in every Core package. Users explicitly install either copy into an agent's discovery
+directory. The skill runs the installed CLI for conversion and read-only diagnostics; the CLI and
+Web workflows handle product installation, plugins, providers, models, configuration, and Web UI
+administration.
