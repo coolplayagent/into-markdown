@@ -22,23 +22,35 @@ fn manifest_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
     })
 }
 
+fn directory_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    let root = std::env::var_os("RUNFILES_DIR")
+        .or_else(|| std::env::var_os("TEST_SRCDIR"))
+        .map(PathBuf::from)?;
+    logical_paths.iter().map(|logical| root.join(logical)).find(|path| path.is_file())
+}
+
+fn runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    manifest_runfile(logical_paths).or_else(|| directory_runfile(logical_paths))
+}
+
+fn existing_binary(path: PathBuf) -> Option<PathBuf> {
+    path.is_file().then(|| path.canonicalize().ok()).flatten()
+}
+
 fn binary() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_into-md").map(PathBuf::from)
-        && path.is_file()
+        && let Some(path) = existing_binary(path)
     {
         return path;
     }
-    if let Some(path) = std::env::var_os("INTO_MD_BIN").map(PathBuf::from)
-        && path.is_file()
+    if let Some(path) = std::env::var_os("INTO_MD_BIN").map(PathBuf::from).and_then(existing_binary)
     {
         return path;
     }
     let name = if cfg!(windows) { "into-md.exe" } else { "into-md" };
-    manifest_runfile(&[
-        &format!("_main/apps/cli/{name}"),
-        &format!("into_markdown/apps/cli/{name}"),
-    ])
-    .expect("Cargo or Bazel must provide the into-md binary")
+    runfile(&[&format!("_main/apps/cli/{name}"), &format!("into_markdown/apps/cli/{name}")])
+        .and_then(existing_binary)
+        .expect("Cargo or Bazel must provide the into-md binary")
 }
 
 fn run(arguments: &[&str]) -> (i32, String) {
@@ -301,10 +313,8 @@ fn image_description_response() -> &'static [u8] {
 
 fn fixture(relative: &str) -> PathBuf {
     if std::env::var_os("TEST_SRCDIR").is_some()
-        && let Some(manifest) = manifest_runfile(&[
-            "_main/fixtures/manifest.json",
-            "into_markdown/fixtures/manifest.json",
-        ])
+        && let Some(manifest) =
+            runfile(&["_main/fixtures/manifest.json", "into_markdown/fixtures/manifest.json"])
     {
         return manifest.parent().expect("fixture root").join(relative);
     }

@@ -26,6 +26,7 @@ rust_library(
         "@crates//:wasmtime",
         "@crates//:wasmtime-wasi",
         "@crates//:wasmtime-wasi-io",
+        "@crates//:winx",
     ],
     visibility = ["//visibility:public"],
 )

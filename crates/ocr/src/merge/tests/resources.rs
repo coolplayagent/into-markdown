@@ -382,6 +382,10 @@ fn three_thousand_subthreshold_regions_share_fingerprint_cancel_meter() {
 
 #[test]
 fn three_thousand_subthreshold_regions_share_fingerprint_timeout_meter() {
+    // Preparing the large fixture is not part of the fingerprint operation
+    // under test. Start the deadline only after that immutable input exists.
+    let setup_context = context();
+    let result = fingerprint_result(&setup_context);
     let context = ExecutionContext::new(
         ExecutionOptions {
             timeout: Some(Duration::from_millis(10)),
@@ -389,7 +393,6 @@ fn three_thousand_subthreshold_regions_share_fingerprint_timeout_meter() {
         },
         ResourceLimits::default(),
     );
-    let result = fingerprint_result(&context);
     let reached = Arc::new(AtomicUsize::new(0));
     let hook_reached = Arc::clone(&reached);
     crate::batch::set_fingerprint_test_hook(Some(Box::new(move |bytes| {

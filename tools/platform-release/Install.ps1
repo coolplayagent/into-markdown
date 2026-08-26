@@ -4,12 +4,16 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-function Assert-AbsoluteNormalized([string]$Path, [string]$Label) {
+function Resolve-AbsoluteNormalized([string]$Path, [string]$Label) {
   if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw "installPathUnsafe: $Label must be absolute" }
-  $full = [IO.Path]::GetFullPath($Path)
-  if (-not [StringComparer]::OrdinalIgnoreCase.Equals($full.TrimEnd('\'), $Path.TrimEnd('\'))) {
+  if (-not [StringComparer]::Ordinal.Equals($Path, $Path.Normalize([Text.NormalizationForm]::FormC))) {
+    throw "installPathUnsafe: $Label must use normalized Unicode"
+  }
+  $segments = $Path -split '[\\/]'
+  if ($segments -contains '.' -or $segments -contains '..') {
     throw "installPathUnsafe: $Label must be normalized"
   }
+  return [IO.Path]::GetFullPath($Path)
 }
 
 function Assert-NoReparseChain([string]$Path) {
@@ -64,8 +68,8 @@ function Set-OrAssertPrivateDirectory([string]$Path) {
   }
 }
 
-Assert-AbsoluteNormalized $Prefix "installation prefix"
-Assert-AbsoluteNormalized $CommandDirectory "command directory"
+$Prefix = Resolve-AbsoluteNormalized $Prefix "installation prefix"
+$CommandDirectory = Resolve-AbsoluteNormalized $CommandDirectory "command directory"
 Assert-NoReparseChain $Prefix
 Assert-NoReparseChain $CommandDirectory
 Set-OrAssertPrivateDirectory $Prefix

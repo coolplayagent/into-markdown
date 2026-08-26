@@ -231,8 +231,12 @@ jobs:
             spdx-tools==0.8.3 --dest "$RUNNER_TEMP"
           test "$(shasum -a 256 "$wheel" | awk '{print $1}')" = \
             638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a
-          python3 -m pip install "$wheel"
-          for document in "$metadata"/*.spdx.json; do pyspdxtools -i "$document"; done
+          spdx_venv="$RUNNER_TEMP/spdx-validation-venv"
+          python3 -m venv "$spdx_venv"
+          "$spdx_venv/bin/python" -m pip install "$wheel"
+          for document in "$metadata"/*.spdx.json; do
+            "$spdx_venv/bin/pyspdxtools" -i "$document"
+          done
       - name: Verify final clean install and plugin lifecycle
         run: |
           mkdir -p "$HOME/.agents/skills/existing-skill"
