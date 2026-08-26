@@ -21,7 +21,10 @@ class AcquireTests(unittest.TestCase):
         payload = b"verified-runtime"
         item = {
             "id": "runtime",
-            "url": "https://github.com/owner/repository/download/runtime",
+            "url": "https://paddle-model-ecology.bj.bcebos.com/runtime",
+            "mirror_urls": [
+                "https://github.com/owner/repository/download/runtime"
+            ],
             "bytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
@@ -33,6 +36,10 @@ class AcquireTests(unittest.TestCase):
             ) as opened:
                 acquire.acquire(cache)
             self.assertEqual(opened.call_count, 2)
+            self.assertEqual(
+                opened.call_args_list[1].args[0].full_url,
+                item["mirror_urls"][0],
+            )
             self.assertEqual((cache / "runtime").read_bytes(), payload)
 
 

@@ -36,11 +36,13 @@ def acquire(cache: pathlib.Path, selected: set[str] | None = None) -> None:
         if destination.is_file() and validate(destination, item):
             continue
         temporary = destination.with_suffix(".download")
+        urls = [item["url"], *item.get("mirror_urls", [])]
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             temporary.unlink(missing_ok=True)
             try:
                 request = urllib.request.Request(
-                    item["url"], headers={"User-Agent": "into-markdown-release/1"}
+                    urls[(attempt - 1) % len(urls)],
+                    headers={"User-Agent": "into-markdown-release/1"},
                 )
                 with urllib.request.urlopen(request, timeout=180) as response, temporary.open(
                     "xb"

@@ -37,9 +37,10 @@ def acquire(cache: pathlib.Path, downloads: dict[str, dict]) -> None:
             continue
         temporary = destination.with_suffix(".download")
         temporary.unlink(missing_ok=True)
+        urls = [item["url"], *item.get("mirror_urls", [])]
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             try:
-                download_once(identity, item, temporary)
+                download_once(identity, item, temporary, urls[(attempt - 1) % len(urls)])
             except (IncompleteDownload, TimeoutError, urllib.error.URLError, OSError) as error:
                 if attempt == DOWNLOAD_ATTEMPTS:
                     temporary.unlink(missing_ok=True)
@@ -54,13 +55,15 @@ def acquire(cache: pathlib.Path, downloads: dict[str, dict]) -> None:
             break
 
 
-def download_once(identity: str, item: dict, temporary: pathlib.Path) -> None:
+def download_once(
+    identity: str, item: dict, temporary: pathlib.Path, url: str
+) -> None:
     expected = item.get("bytes")
     offset = temporary.stat().st_size if temporary.exists() else 0
     headers = {"User-Agent": "into-markdown-release/1"}
     if offset:
         headers["Range"] = f"bytes={offset}-"
-    request = urllib.request.Request(item["url"], headers=headers)
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=180) as response:
         parsed = urllib.parse.urlparse(response.geturl())
         if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
