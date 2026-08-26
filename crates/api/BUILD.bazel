@@ -120,6 +120,7 @@ rust_test(
     edition = "2024",
     env = {
         "COMPUTERNAME": "bazel-test-host",
+        "RUST_TEST_THREADS": "1",
     },
     deps = [
         "//crates/ai",

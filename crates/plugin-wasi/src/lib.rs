@@ -1466,11 +1466,54 @@ fn same_canonical_path(requested: &Path, canonical: &Path) -> bool {
 
 #[cfg(windows)]
 fn same_canonical_path(requested: &Path, canonical: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt as _;
+
     fn normalized(path: &Path) -> String {
         let value = path.to_string_lossy();
         value.strip_prefix(r"\\?\").unwrap_or(&value).replace('/', "\\").to_ascii_lowercase()
     }
-    normalized(requested) == normalized(canonical)
+
+    let has_alias_component = requested
+        .as_os_str()
+        .encode_wide()
+        .collect::<Vec<_>>()
+        .split(|unit| *unit == u16::from(b'\\') || *unit == u16::from(b'/'))
+        .any(|segment| {
+            segment == [u16::from(b'.')] || segment == [u16::from(b'.'), u16::from(b'.')]
+        });
+    if has_alias_component || !requested.is_absolute() {
+        return false;
+    }
+
+    if normalized(requested) == normalized(canonical) {
+        return true;
+    }
+
+    // Windows may expand an 8.3 path segment while canonicalizing. Accept that
+    // spelling only when both names identify the same non-reparse directory;
+    // open_directory_handle_nofollow still rejects reparse points in ancestors.
+    windows_directory_identity(requested).is_some_and(|identity| {
+        windows_directory_identity(canonical).is_some_and(|canonical| identity == canonical)
+    })
+}
+
+#[cfg(windows)]
+fn windows_directory_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u64 = 0x400;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let information = winx::winapi_util::file::information(&directory).ok()?;
+    if information.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return None;
+    }
+    Some((information.volume_serial_number(), information.file_index()))
 }
 
 fn private_preopen_metadata(path: &Path) -> Result<std::fs::Metadata, WasiPluginError> {
