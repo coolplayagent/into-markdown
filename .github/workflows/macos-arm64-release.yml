@@ -255,7 +255,8 @@ jobs:
           diff -ru ".agents/skills/into-markdown" \
             "$installed/share/into-markdown/skills/into-markdown"
           export INTO_MARKDOWN_USER_DATA_HOME="$RUNNER_TEMP/clean-user-data"
-          mkdir -p "$INTO_MARKDOWN_USER_DATA_HOME" "$RUNNER_TEMP/smoke-core"
+          mkdir -m 700 "$INTO_MARKDOWN_USER_DATA_HOME"
+          mkdir -p "$RUNNER_TEMP/smoke-core"
           signer_id=$(jq -r '.signingKeyId' "$installed/share/into-markdown/plugins/official-publisher.json")
           signer_sha=$(jq -r '.signingKeySha256' "$installed/share/into-markdown/plugins/official-publisher.json")
           for package in official.ocr.ppocrv6 official.media.whisper; do
