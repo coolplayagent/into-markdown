@@ -88,6 +88,12 @@ jobs:
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
           python -c 'import os; assert tuple(map(int, os.uname().release.split("-")[0].split(".")[:2])) >= (5, 15)'
       - uses: actions/checkout@v4
+      - name: Bind fixed Linux checkout ownership
+        if: runner.os == 'Linux'
+        run: |
+          git config --global --unset-all safe.directory || true
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
       - name: Validate immutable release URL authority
         shell: bash
         env:
