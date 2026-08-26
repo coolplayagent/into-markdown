@@ -61,6 +61,11 @@ jobs:
         run: >-
           bazel test --config=macos_arm64 --lockfile_mode=error
           //tools/macos-release:installer_attack_test
+      - name: Run Windows installer transaction security tests outside the Bazel pipe
+        if: matrix.config == 'windows_x86_64'
+        run: >-
+          python tools/platform-release/test_platform_tools.py
+          PlatformToolTests.test_windows_native_install_is_idempotent_and_rolls_back_bad_upgrade
       - name: Prove the Rust-library allocator bridge is required
         if: matrix.config == 'macos_arm64'
         shell: bash
