@@ -32,6 +32,7 @@ const BINARY_LIMIT: u64 = 128 * 1024 * 1024;
 const PCM_LIMIT: u64 = 512 * 1024 * 1024;
 const PROCESS_MEMORY_MIN: u64 = 4 * 1024 * 1024;
 const PROCESS_MEMORY_MAX: u64 = 2 * 1024 * 1024 * 1024;
+const PROCESS_MEMORY_SIGNAL_CEILING: u64 = 64 * 1024 * 1024;
 #[cfg(windows)]
 const WINDOWS_PROCESS_MEMORY_HEADROOM: u64 = 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -872,7 +873,7 @@ impl FfmpegRuntime {
             });
         }
         if !status.success() {
-            match child_failure(status, &stderr) {
+            match child_failure(status, &stderr, limits.max_process_memory_bytes) {
                 ChildFailure::Resource => return Err(resource("mediaProcessMemoryOrCpu")),
                 ChildFailure::Crash => return Err(component("workerCrash")),
                 ChildFailure::Ordinary => {}
@@ -944,8 +945,8 @@ fn expected_dependencies() -> impl Iterator<Item = &'static str> {
         "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
         "/usr/lib/libSystem.B.dylib",
     ];
-    const LINUX_X64: [&str; 2] = ["libc.so.6", "libm.so.6"];
-    const LINUX_ARM64: [&str; 2] = ["libc.so.6", "libm.so.6"];
+    const LINUX_X64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
+    const LINUX_ARM64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
     const WINDOWS: [&str; 4] = ["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"];
     let values: &'static [&'static str] = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => &MACOS,
@@ -1068,11 +1069,18 @@ enum ChildFailure {
     Ordinary,
 }
 
-fn child_failure(status: std::process::ExitStatus, stderr: &[u8]) -> ChildFailure {
+fn child_failure(
+    status: std::process::ExitStatus,
+    stderr: &[u8],
+    process_memory_limit: u64,
+) -> ChildFailure {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if status.signal() == Some(libc::SIGXCPU) {
+            return ChildFailure::Resource;
+        }
+        if status.signal().is_some() && process_memory_limit <= PROCESS_MEMORY_SIGNAL_CEILING {
             return ChildFailure::Resource;
         }
         if status.signal().is_some() {
@@ -1081,6 +1089,12 @@ fn child_failure(status: std::process::ExitStatus, stderr: &[u8]) -> ChildFailur
     }
     #[cfg(not(unix))]
     if matches!(status.code().map(i32::cast_unsigned), Some(0xC000_0017 | 0xC000_009A)) {
+        return ChildFailure::Resource;
+    }
+    #[cfg(not(unix))]
+    if status.code().is_some_and(|code| code.cast_unsigned() & 0xC000_0000 == 0xC000_0000)
+        && process_memory_limit <= PROCESS_MEMORY_SIGNAL_CEILING
+    {
         return ChildFailure::Resource;
     }
     #[cfg(not(unix))]
@@ -1582,7 +1596,7 @@ fn spawn_limited(
         });
     }
     command.spawn().map(|child| LimitedProcess { child }).map_err(|_| {
-        if limit <= 64 * 1024 * 1024 {
+        if limit <= PROCESS_MEMORY_SIGNAL_CEILING {
             resource("mediaProcessMemoryOrCpu")
         } else {
             component("workerLimitUnavailable")
@@ -1815,6 +1829,38 @@ mod tests {
         assert!(dependencies_exact(&expected, &expected));
         assert!(!dependencies_exact(&["a".to_owned()], &expected));
         assert!(!dependencies_exact(&["a".to_owned(), "b".to_owned(), "c".to_owned()], &expected));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn low_memory_signal_is_a_resource_failure_but_normal_limit_signal_is_a_crash() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let low_memory = std::process::ExitStatus::from_raw(libc::SIGSEGV);
+        assert!(matches!(
+            child_failure(low_memory, &[], PROCESS_MEMORY_MIN),
+            ChildFailure::Resource
+        ));
+        let normal_limit = std::process::ExitStatus::from_raw(libc::SIGSEGV);
+        assert!(matches!(
+            child_failure(normal_limit, &[], PROCESS_MEMORY_MAX),
+            ChildFailure::Crash
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn low_memory_exception_is_a_resource_failure_but_normal_limit_exception_is_a_crash() {
+        use std::os::windows::process::ExitStatusExt as _;
+        let low_memory = std::process::ExitStatus::from_raw(0xC000_0005);
+        assert!(matches!(
+            child_failure(low_memory, &[], PROCESS_MEMORY_MIN),
+            ChildFailure::Resource
+        ));
+        let normal_limit = std::process::ExitStatus::from_raw(0xC000_0005);
+        assert!(matches!(
+            child_failure(normal_limit, &[], PROCESS_MEMORY_MAX),
+            ChildFailure::Crash
+        ));
     }
 
     #[test]

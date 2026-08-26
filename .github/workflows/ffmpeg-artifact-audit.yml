@@ -16,15 +16,29 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
+            container: ''
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
           - os: windows-2025
             target: x86_64-pc-windows-msvc
+            container: ''
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     timeout-minutes: 45
     steps:
+      - name: Bootstrap fixed Linux build container
+        if: runner.os == 'Linux'
+        run: |
+          dnf install --assumeyes binutils curl file gcc gcc-c++ git gnupg2 jq make perl python3 tar which xz
+          if [ "$(uname -m)" = x86_64 ]; then
+            dnf --enablerepo=powertools install --assumeyes nasm
+            nasm -v
+          fi
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,9 +49,9 @@ jobs:
           install: make diffutils xz curl gnupg jq file binutils python coreutils perl
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
-      - name: Install audit tools
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes build-essential curl gnupg jq xz-utils
+        with:
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
       - name: Install macOS audit tools
         if: runner.os == 'macOS'
         run: brew install gnupg jq

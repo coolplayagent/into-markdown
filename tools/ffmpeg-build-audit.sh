@@ -1,12 +1,27 @@
 #!/bin/sh
 set -eu
 
+fail() { printf '%s\n' "FFmpeg audit: $*" >&2; exit 1; }
+
 if [ "${FFMPEG_AUDIT_NETWORK:-}" != 1 ]; then
   echo "FFmpeg source build is networked and opt-in; set FFMPEG_AUDIT_NETWORK=1" >&2
   exit 2
 fi
 command -v jq >/dev/null
 for audit_tool in curl gpg jq make file python3 shasum; do command -v "$audit_tool" >/dev/null; done
+curl_retry_all_errors=
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  curl_retry_all_errors=--retry-all-errors
+fi
+download() {
+  max_bytes=$1
+  download_url=$2
+  destination=$3
+  set -- -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-delay 1
+  if [ -n "$curl_retry_all_errors" ]; then set -- "$@" "$curl_retry_all_errors"; fi
+  if [ "$max_bytes" -gt 0 ]; then set -- "$@" --max-filesize "$max_bytes"; fi
+  curl "$@" "$download_url" -o "$destination"
+}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source_manifest="$root/third_party/ffmpeg/source.json"
 build_policy="$root/third_party/ffmpeg/build-policy.json"
@@ -25,12 +40,12 @@ test "$(jq -er .ffmpeg_version "$build_policy")" = "$version"
 sig_url=$(jq -er .signature_url "$source_manifest")
 sig_sha=$(jq -er .signature_sha256 "$source_manifest")
 if [ -n "${FFMPEG_AUDIT_SOURCE:-}" ]; then cp "$FFMPEG_AUDIT_SOURCE" "$work/source.tar.xz"; else
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 12000000 "$url" -o "$work/source.tar.xz"
+  download 12000000 "$url" "$work/source.tar.xz"
 fi
 test "$(wc -c < "$work/source.tar.xz" | tr -d ' ')" = "$source_bytes"
 printf '%s  %s\n' "$source_sha" "$work/source.tar.xz" | shasum -a 256 -c -
 if [ -n "${FFMPEG_AUDIT_SIGNATURE:-}" ]; then cp "$FFMPEG_AUDIT_SIGNATURE" "$work/source.asc"; else
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 1024 "$sig_url" -o "$work/source.asc"
+  download 1024 "$sig_url" "$work/source.asc"
 fi
 printf '%s  %s\n' "$sig_sha" "$work/source.asc" | shasum -a 256 -c -
 command -v gpg >/dev/null
@@ -46,35 +61,64 @@ case "$(uname -s)" in
 esac
 key_url=$(jq -er .signing_key_url "$source_manifest")
 key_sha=$(jq -er .signing_key_sha256 "$source_manifest")
-curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 --max-filesize 4096 "$key_url" -o "$work/signing-key.asc"
+download 4096 "$key_url" "$work/signing-key.asc"
 printf '%s  %s\n' "$key_sha" "$work/signing-key.asc" | shasum -a 256 -c -
 gpg --batch --import "$work/signing-key.asc"
 test "$(gpg --batch --with-colons --fingerprint FCF986EA15E6E293A5644F10B4322F04D67658D8 | awk -F: '$1 == "fpr" {print $10; exit}')" = FCF986EA15E6E293A5644F10B4322F04D67658D8
 gpg --batch --verify "$work/source.asc" "$work/source.tar.xz"
 tar -xJf "$work/source.tar.xz" -C "$work"
 src="$work/ffmpeg-$version"
-test -s "$src/COPYING.LGPLv2.1"
-grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1"
+test -s "$src/COPYING.LGPLv2.1" || fail "verified source archive is missing COPYING.LGPLv2.1"
+grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1" \
+  || fail "verified source archive has an unexpected LGPL license"
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args='--extra-cflags=-mmacosx-version-min=14.0 --extra-ldflags=-mmacosx-version-min=14.0' ;;
-  Linux-x86_64) target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args= ;;
+  Linux-x86_64)
+    command -v nasm >/dev/null || fail "nasm is required for the x86_64 optimized build"
+    target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args=
+    ;;
   Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
   MINGW*-x86_64|MSYS*-x86_64)
-    command -v cl.exe >/dev/null; command -v objdump >/dev/null
+    command -v objdump >/dev/null || fail "objdump is unavailable in the MSYS2 release shell"
     target=x86_64-pc-windows-msvc; format=pe; arch=x86_64
     toolchain_args='--toolchain=msvc --disable-x86asm'
     msvc_tools=$(jq -er '.targets["x86_64-pc-windows-msvc"].buildBaseline.msvcTools' "$root/tools/platform-release/authority.json")
-    INTO_MD_REAL_CL=$(command -v cl.exe); export INTO_MD_REAL_CL
+    if command -v cl.exe >/dev/null 2>&1; then
+      INTO_MD_REAL_CL=$(command -v cl.exe)
+    elif [ -n "${VCToolsInstallDir:-}" ]; then
+      INTO_MD_REAL_CL=$(cygpath -u "$VCToolsInstallDir")/bin/HostX64/x64/cl.exe
+      test -f "$INTO_MD_REAL_CL" \
+        || fail "cl.exe is missing from fixed VCToolsInstallDir: $INTO_MD_REAL_CL"
+    else
+      fail "cl.exe is unavailable and VCToolsInstallDir is not set in the MSYS2 release shell"
+    fi
+    export INTO_MD_REAL_CL
+    # setup-msys2 intentionally starts with a minimal POSIX PATH. FFmpeg's
+    # MSVC linker adapter invokes link by name, so make the fixed VC bin
+    # directory authoritative over MSYS2's unrelated /usr/bin/link utility.
+    PATH=$(dirname "$INTO_MD_REAL_CL"):$PATH
+    export PATH
+    if ! command -v cargo >/dev/null 2>&1; then
+      test -n "${USERPROFILE:-}" \
+        || fail "USERPROFILE is unavailable for the fixed Rust toolchain"
+      cargo_bin=$(cygpath -u "$USERPROFILE")/.cargo/bin
+      test -x "$cargo_bin/cargo.exe" \
+        || fail "cargo.exe is missing from the fixed Rust toolchain: $cargo_bin"
+      PATH=$cargo_bin:$PATH
+      export PATH
+    fi
     case "$INTO_MD_REAL_CL" in
       *"/$msvc_tools/"*) ;;
       *) echo "cl.exe is not from fixed MSVC tools $msvc_tools: $INTO_MD_REAL_CL" >&2; exit 2 ;;
     esac
-    INTO_MD_MSVC_BANNER_VERSION=$("$INTO_MD_REAL_CL" 2>&1 | sed -n 's/.*\([0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]*\).*/\1/p' | head -n 1)
-    test -n "$INTO_MD_MSVC_BANNER_VERSION"
+    msvc_banner=$("$INTO_MD_REAL_CL" 2>&1 || true)
+    INTO_MD_MSVC_BANNER_VERSION=$(printf '%s\n' "$msvc_banner" | sed -n 's/.*\([0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]*\).*/\1/p' | head -n 1)
+    test -n "$INTO_MD_MSVC_BANNER_VERSION" \
+      || fail "could not determine the MSVC compiler version from cl.exe"
     export INTO_MD_MSVC_BANNER_VERSION
     msvc_cc_adapter="$root/tools/msvc-cl-adapter.sh"
-    test -x "$msvc_cc_adapter"
+    test -x "$msvc_cc_adapter" || fail "MSVC compiler adapter is missing or not executable"
     ;;
   *) echo "unsupported audit host" >&2; exit 2 ;;
 esac
@@ -148,8 +192,7 @@ jq -e '.distribution == "transient-manual-ci-only" and .redistribution == "prohi
 jq -er '.fixtures[] | [.format,.url,(.bytes|tostring),.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
 while IFS="$tab" read -r fixture_format fixture_url fixture_bytes fixture_sha; do
   fixture="$work/fixture.$fixture_format"
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 1 \
-    --max-filesize 1048576 "$fixture_url" -o "$fixture"
+  download 1048576 "$fixture_url" "$fixture"
   test "$(wc -c < "$fixture" | tr -d ' ')" = "$fixture_bytes"
   printf '%s  %s\n' "$fixture_sha" "$fixture" | shasum -a 256 -c -
   "$tool" -nostdin -v error -protocol_whitelist pipe -i pipe:0 -af asetpts=N/SR/TB -frames:a 16000 \
@@ -171,9 +214,9 @@ relink_sha=$(shasum -a 256 "$relink" | awk '{print $1}')
 policy_sha=$(shasum -a 256 "$build_policy" | awk '{print $1}')
 deps='[]'
 case "$format" in
-  mach-o) deps=$(otool -L "$tool" | tail -n +2 | awk '{print $1}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
-  elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
-  pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  mach-o) deps=$(otool -L "$tool" | tail -n +2 | awk '{print $1}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
 esac
 expected_deps=$(jq -cS --arg target "$target" '.targets[$target].dynamic_dependencies' "$build_policy")
 actual_deps_sorted=$(printf '%s' "$deps" | jq -cS .)
@@ -210,7 +253,7 @@ if [ "${FFMPEG_AUDIT_PRODUCTION_SMOKE:-}" = 1 ]; then
   fixture_dir="$work/production-fixtures"; mkdir "$fixture_dir"
   jq -er '.fixtures[] | [.format,.url,.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
   while IFS="$tab" read -r fixture_format fixture_url fixture_sha; do
-    curl -fsSL --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors "$fixture_url" -o "$fixture_dir/sample.$fixture_format"
+    download 1048576 "$fixture_url" "$fixture_dir/sample.$fixture_format"
     printf '%s  %s\n' "$fixture_sha" "$fixture_dir/sample.$fixture_format" | shasum -a 256 -c -
   done
   test_executable=$(cd "$output_dir" && pwd)/$artifact_name

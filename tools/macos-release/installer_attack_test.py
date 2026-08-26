@@ -44,7 +44,10 @@ class InstallerAttackTest(unittest.TestCase):
         )
 
     def test_preplaced_symlink_current_directory_and_corrupt_destination_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        # The installer intentionally rejects a writable ancestor. GitHub's
+        # shared runner temp directory can have a collaborative mode, so put
+        # the security fixture below the runner user's trusted home instead.
+        with tempfile.TemporaryDirectory(dir=pathlib.Path.home()) as temporary:
             root = pathlib.Path(temporary).resolve()
             distribution, identity = self.distribution(root)
             command = root / "command"
@@ -82,7 +85,7 @@ class InstallerAttackTest(unittest.TestCase):
             self.assertEqual(os.readlink(prefix / "current"), "versions/previous")
 
     def test_verified_installed_version_can_upgrade_to_a_new_archive(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=pathlib.Path.home()) as temporary:
             root = pathlib.Path(temporary).resolve()
             old, old_identity = self.distribution(root, "old", "{}\n")
             new, new_identity = self.distribution(root, "new", '{"new":true}\n')
@@ -90,9 +93,11 @@ class InstallerAttackTest(unittest.TestCase):
             command = root / "command"
             command.mkdir()
 
-            self.assertEqual(self.invoke(old, prefix, command).returncode, 0)
+            result = self.invoke(old, prefix, command)
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(os.readlink(prefix / "current"), f"versions/{old_identity}")
-            self.assertEqual(self.invoke(new, prefix, command).returncode, 0)
+            result = self.invoke(new, prefix, command)
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(os.readlink(prefix / "current"), f"versions/{new_identity}")
             self.assertEqual(os.readlink(command / "into-md"), f"{prefix}/current/bin/into-md")
             self.assertTrue((prefix / "versions" / old_identity).is_dir())
