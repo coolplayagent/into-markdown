@@ -39,7 +39,10 @@ function Set-OrAssertPrivateDirectory([string]$Path) {
   if ($created) {
     [IO.Directory]::CreateDirectory($Path) | Out-Null
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = Get-Acl -LiteralPath $Path
+    # Start from an empty descriptor instead of editing the inherited one. Some
+    # Windows volumes materialize parent ACEs as explicit entries on creation;
+    # protecting that inherited descriptor would retain those mutation grants.
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetOwner($identity)
     $acl.SetAccessRuleProtection($true, $false)
     $rule = [Security.AccessControl.FileSystemAccessRule]::new(
@@ -49,7 +52,7 @@ function Set-OrAssertPrivateDirectory([string]$Path) {
       [Security.AccessControl.PropagationFlags]::None,
       [Security.AccessControl.AccessControlType]::Allow
     )
-    $acl.SetAccessRule($rule)
+    $acl.AddAccessRule($rule) | Out-Null
     Set-Acl -LiteralPath $Path -AclObject $acl
   }
   $acl = Get-Acl -LiteralPath $Path
@@ -63,7 +66,7 @@ function Set-OrAssertPrivateDirectory([string]$Path) {
   foreach ($entry in $acl.Access) {
     $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
     if ($entry.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($entry.FileSystemRights -band $mutation) -and $sid -ne $current) {
-      throw "installPathUnsafe: installation prefix grants mutation to another identity"
+      throw "installPathUnsafe: $Path grants mutation to another identity ($sid)"
     }
   }
 }
