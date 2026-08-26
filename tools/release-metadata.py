@@ -24,6 +24,21 @@ OCR_MODEL_COMPONENTS = {
     "ppocrv6-tiny-recognizer-character-table",
     "ppocrv6-tiny-recognizer-onnx-model",
 }
+PLUGIN_RUNTIME_COMPONENTS = {
+    "ocr-plugin": (
+        "onnxruntime-cpu",
+        "ppocrv6-tiny-detector-onnx-model",
+        "ppocrv6-tiny-recognizer-character-table",
+        "ppocrv6-tiny-recognizer-onnx-model",
+    ),
+    "media-plugin": (
+        "ffmpeg",
+        "onnxruntime-cpu",
+        "whisper-small",
+        "silero-vad-half-onnx-model",
+        "3dspeaker-eres2net-base-onnx-model",
+    ),
+}
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -152,6 +167,22 @@ def source_components(contents: bytes) -> list[str]:
         for component in value["components"]
         if component["distributed"]
     ]
+
+
+def scoped_plugin_components(
+    source_component_ids: list[str], artifact: str
+) -> list[str]:
+    runtime_components = PLUGIN_RUNTIME_COMPONENTS[artifact]
+    missing_runtime = set(runtime_components) - set(source_component_ids)
+    if missing_runtime:
+        raise RuntimeError(
+            f"plugin source inventory omits runtime components: "
+            f"{sorted(missing_runtime)}"
+        )
+    cargo_components = [
+        item for item in source_component_ids if item.startswith("cargo:")
+    ]
+    return [*cargo_components, *runtime_components]
 
 
 def core_projection(
@@ -327,7 +358,8 @@ def plugin_projection(
             or source_manifest["artifact"] != expected_identity
         ):
             raise RuntimeError(f"plugin source identity differs: {artifact.name}")
-        components = source_components(sources)
+        source_component_ids = source_components(sources)
+        components = scoped_plugin_components(source_component_ids, expected_artifact)
         cargo_components = [item for item in components if item.startswith("cargo:")]
         files = []
         for info in infos:
