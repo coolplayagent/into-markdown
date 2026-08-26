@@ -78,7 +78,20 @@ else
   find "$temporary" -type l -o ! -type d ! -type f | grep . >/dev/null && fail "distribution contains an unsafe file type"
   "$temporary/bin/archive-check" "$temporary" || fail "installed copy integrity check failed"
   chmod -R a-w "$temporary"
-  mv "$temporary" "$destination"
+  # macOS denies renaming a directory whose own owner-write bit is clear,
+  # even when its parent is installer-owned and writable. Keep every child
+  # immutable, restore write only on the staging root for the atomic rename,
+  # then remove it again before publishing `current`.
+  chmod u+w "$temporary"
+  if ! mv "$temporary" "$destination"; then
+    chmod -R u+w "$temporary" 2>/dev/null || true
+    fail "cannot publish verified installed copy"
+  fi
+  if ! chmod u-w "$destination"; then
+    chmod -R u+w "$destination" 2>/dev/null || true
+    rm -rf "$destination" 2>/dev/null || true
+    fail "cannot make installed copy immutable"
+  fi
 fi
 
 check_absent_or_type "$prefix/current" "Symbolic Link"
