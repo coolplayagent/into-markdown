@@ -4,9 +4,16 @@ import unittest
 
 from archive import create, extract
 from common import ReleaseError, sha256
+from release import published_plugin_file
 
 
 class ArchiveTest(unittest.TestCase):
+    def test_published_plugin_name_is_target_unique(self) -> None:
+        self.assertEqual(
+            published_plugin_file("official.media.whisper.imp"),
+            "official.media.whisper-aarch64-apple-darwin.imp",
+        )
+
     def test_archive_is_reproducible_and_extracts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

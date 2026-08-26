@@ -2711,13 +2711,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             return self.image_alt_fallback(alt);
         };
         let canonical_padding = if payload.len() % 4 == 0 {
-            if payload.ends_with("==") {
-                2
-            } else if payload.ends_with('=') {
-                1
-            } else {
-                0
-            }
+            if payload.ends_with("==") { 2 } else { usize::from(payload.ends_with('=')) }
         } else {
             0
         };

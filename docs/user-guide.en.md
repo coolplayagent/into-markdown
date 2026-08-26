@@ -2,17 +2,19 @@
 
 [中文](user-guide.md) · [CLI examples](cli-examples.en.md)
 
-A release contains one platform Core, three self-contained capability plugins, and the Agent Skill.
+A release contains one platform Core, two self-contained capability plugins, and the Agent Skill.
 Every Core/plugin has SHA-256, signature, SPDX, source, and notice sidecars. Combine only artifacts
 from the same version and target.
 
 | Capability | Artifact |
 | --- | --- |
 | Ordinary documents, PDF, and Web workbench | Platform Core |
-| OCR | `official.ocr.ppocrv6.imp` |
-| Transcription and diarization | `official.media.whisper.imp` |
-| DOC/XLS/PPT | `official.legacy-office.libreoffice.imp` |
+| OCR | `official.ocr.ppocrv6-<target>.imp` |
+| Transcription and diarization | `official.media.whisper-<target>.imp` |
 | Agent instructions | `into-markdown-skill.zip` |
+
+Legacy `.doc/.ppt/.xls` files are not shipped in the current release and never invoke LibreOffice;
+[#191](https://github.com/coolplayagent/into-markdown/issues/191) tracks the replacement parser path.
 
 ## Install Core
 
@@ -33,7 +35,7 @@ On Linux, select the x86_64 or ARM64 archive matching `uname -m`:
 
 ```sh
 sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-gpg --verify into-md-linux-x86_64-core.tar.gz.sig into-md-linux-x86_64-core.tar.gz
+gpg --verify into-md-linux-x86_64-core.tar.gz.asc into-md-linux-x86_64-core.tar.gz
 mkdir into-md-core
 tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
 cd into-md-core
@@ -55,6 +57,13 @@ Get-AuthenticodeSignature .\into-md-core\bin\into-md.exe | Format-List
 
 The digest must match the release sidecar and Authenticode `Status` must be `Valid`.
 
+Repeating the same Linux or Windows install verifies and repairs that version instead of returning
+a conflict. An upgrade keeps the immutable old version and switches authority only after the new
+archive passes every check. On Windows, the `into-md.exe` on PATH is a stable launcher: do not add a
+`versions/<digest>/bin` directory to PATH or edit the adjacent `into-md.prefix`. If an in-use file
+blocks upgrade or removal, stop the identified local task and retry; the failed operation preserves
+the prior installation.
+
 ## Verify and install capabilities
 
 ```sh
@@ -64,7 +73,6 @@ into-md capabilities list --json
 into-md doctor --json
 into-md setup ocr
 into-md setup media
-into-md setup legacy-office
 ```
 
 `setup` uses the network only for that explicit installation. Conversion and status commands never
@@ -72,7 +80,7 @@ download plugins or models; models remain internal to complete plugins.
 
 ## Complete offline deployment
 
-Verify Core, all three `.imp` files, and sidecars on a connected machine, then transfer them through
+Verify Core, both `.imp` files, and sidecars on a connected machine, then transfer them through
 controlled media. Install Core and use its pinned official publisher identity:
 
 ```sh
@@ -80,8 +88,9 @@ installed="$HOME/.local/share/into-markdown/current"
 catalog="$installed/share/into-markdown/plugins/official-publisher.json"
 signer_id=$(jq -r .signingKeyId "$catalog")
 signer_sha=$(jq -r .signingKeySha256 "$catalog")
-for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
-  file="/media/release/$package.imp"
+target=x86_64-unknown-linux-gnu # replace with the current platform target
+for package in official.ocr.ppocrv6 official.media.whisper; do
+  file="/media/release/$package-$target.imp"
   sha=$(sha256sum "$file" | awk '{print $1}')
   into-md plugins install "$file" --sha256 "$sha" \
     --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global

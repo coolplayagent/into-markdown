@@ -149,6 +149,16 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(runtime["component_id"], "onnxruntime-cpu")
             self.assertTrue(all(len(item["sha1"]) == 40 for item in projection["files"]))
 
+            published = artifact.with_name(
+                "official.ocr.ppocrv6-x86_64-unknown-linux-gnu.imp"
+            )
+            artifact.rename(published)
+            projection = release_metadata.plugin_projection(
+                "x86_64-unknown-linux-gnu", "0.0.0", "1" * 40, published
+            )
+            self.assertEqual(projection["artifact"], "ocr-plugin")
+            self.assertEqual(projection["file_name"], published.name)
+
     def test_plugin_projection_rejects_duplicate_zip_members(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             artifact = pathlib.Path(name) / "official.ocr.ppocrv6.imp"

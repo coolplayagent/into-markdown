@@ -1,4 +1,4 @@
-"""Build the macOS ARM64 Core archive and three signed capability plugins."""
+"""Build the macOS ARM64 Core archive and two signed capability plugins."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from acquire import acquire, extract_tar
 from archive import create as create_archive
 from audit import audit as audit_macho
 from common import ROOT, ReleaseError, authority, regular_files, run, sha256, write_json
-from legacy_authority import generate as generate_legacy_authority
 from rust_package import materialize as materialize_rust
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release"))
@@ -28,13 +27,19 @@ CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv6-tiny-recognizer-character-table", "ppocrv6-tiny-recognizer-onnx-model"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
-LEGACY_COMPONENTS = ["libreoffice-macos-arm64"]
 FIXTURES = [
     "docx/normal.docx", "docx/corrupt.docx", "epub/normal.epub", "msg/normal.msg",
     "ocr/ocr-english-clear-1.png", "pdf/structures.pdf", "rtf/normal.rtf",
     "text/normal.txt", "xlsx/normal.xlsx", "xlsb/normal.xlsb", "pptx/normal.pptx",
     "odt/normal.odt", "ods/normal.ods", "odp/normal.odp",
 ]
+
+
+def published_plugin_file(filename: str) -> str:
+    path = pathlib.PurePosixPath(filename)
+    if path.name != filename or path.suffix != ".imp" or not path.stem:
+        raise ReleaseError("plugin package filename is invalid")
+    return f"{path.stem}-{TARGET}.imp"
 
 
 def check_host() -> None:
@@ -68,8 +73,8 @@ def build(target: pathlib.Path) -> None:
         "RUSTFLAGS": " ".join(f"--remap-path-prefix={source}={destination}" for source, destination in remaps) + " -C strip=debuginfo " + f"-C link-arg=-mmacosx-version-min={authority()['minimumMacos']}",
         "CARGO_TARGET_DIR": str(target),
     })
-    run(["cargo", "build", "-j2", "--release", "--locked", "-p", "into-markdown-cli", "--bin", "into-md", "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker", "-p", "into-markdown-plugin-manager", "--bin", "package_plugin", "-p", "into-markdown-legacy-office", "--bin", "legacy-office-worker", "-p", "installed-smoke", "--bin", "installed-smoke", "-p", "installed-smoke", "--bin", "archive-check", "-p", "license-check", "--bin", "release-projection"], cwd=ROOT, env=environment)
-    run(["cargo", "build", "-j2", "--release", "--locked", "--features", "metal", "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider", "--bin", "into-md-media-provider", "--bin", "into-md-legacy-office-provider"], cwd=ROOT, env=environment)
+    run(["cargo", "build", "-j2", "--release", "--locked", "-p", "into-markdown-cli", "--bin", "into-md", "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker", "-p", "into-markdown-plugin-manager", "--bin", "package_plugin", "-p", "installed-smoke", "--bin", "installed-smoke", "-p", "installed-smoke", "--bin", "archive-check", "-p", "license-check", "--bin", "release-projection"], cwd=ROOT, env=environment)
+    run(["cargo", "build", "-j2", "--release", "--locked", "--features", "metal", "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider", "--bin", "into-md-media-provider"], cwd=ROOT, env=environment)
 
 
 def validate_ffmpeg_artifacts(root: pathlib.Path) -> None:
@@ -134,7 +139,7 @@ def runtime_inventory(root: pathlib.Path) -> list[dict]:
     result = []
     for path in regular_files(root):
         relative = path.relative_to(root).as_posix()
-        executable = relative.startswith("bin/") or relative == "ffmpeg/ffmpeg" or relative.endswith("/legacy-office-worker")
+        executable = relative.startswith("bin/") or relative == "ffmpeg/ffmpeg"
         result.append({"path": relative, "bytes": path.stat().st_size, "sha256": sha256(path), "executable": executable})
     return result
 
@@ -267,25 +272,6 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
             raise ReleaseError("official plugin signer identities disagree")
         records["official.media.whisper"] = {"sha256": sha256(speech_output), "file": speech_output.name}
 
-        legacy = temporary / "legacy-office"
-        copy_file(release_bin / "into-md-legacy-office-provider", legacy / "bin/into-md-legacy-office-provider", 0o755)
-        runtime = legacy / "legacy-office-runtime"
-        copy_file(release_bin / "legacy-office-worker", runtime / "legacy-office-worker", 0o755)
-        codesign_files(
-            [
-                legacy / "bin/into-md-legacy-office-provider",
-                runtime / "legacy-office-worker",
-            ],
-            codesign_identity,
-        )
-        lo_artifact = next(item for item in authority()["downloads"] if item["id"] == "libreoffice")
-        generate_legacy_authority(runtime, runtime / "legacy-office-worker", cache / "libreoffice", lo_artifact)
-        write_plugin_declarations(legacy, "official.legacy-office.libreoffice", "legacy-office-plugin", LEGACY_COMPONENTS, [(ROOT / "LICENSE", "into-markdown-Apache-2.0.txt")], projection_tool)
-        legacy_manifest = provider_manifest("official.legacy-office.libreoffice", "bin/into-md-legacy-office-provider", legacy, [{"id": "legacy-office", "kind": "legacy-office", "providerId": "builtin.legacy-office.libreoffice", "languages": [], "mediaTypes": ["application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint"], "resources": resources(1073741824, 4294967296, 600000)}], ["Apache-2.0", "MPL-2.0"])
-        legacy_output = packages / "official.legacy-office.libreoffice.imp"
-        if build_provider_package(packager, legacy, legacy_manifest, signing_key, legacy_output) != signer:
-            raise ReleaseError("official plugin signer identities disagree")
-        records["official.legacy-office.libreoffice"] = {"sha256": sha256(legacy_output), "file": legacy_output.name}
     if signer is None:
         raise ReleaseError("official plugin signer was not produced")
     audit_macho(packages, "plugins", authority()["minimumMacos"])
@@ -418,7 +404,13 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
     materialize_rust(output / "lib/into-markdown-rust")
     copy_file(ROOT / "LICENSE", output / "LICENSE", 0o644)
-    catalog_records = {plugin_id: {"url": f"{plugin_base_url.rstrip('/')}/{record['file']}", "sha256": record["sha256"]} for plugin_id, record in records.items()}
+    catalog_records = {
+        plugin_id: {
+            "url": f"{plugin_base_url.rstrip('/')}/{published_plugin_file(record['file'])}",
+            "sha256": record["sha256"],
+        }
+        for plugin_id, record in records.items()
+    }
     write_json(output / "share/into-markdown/plugins/official-publisher.json", {"schemaVersion": 2, "signingKeyId": signer[0], "signingKeySha256": signer[1], "packages": catalog_records})
     projection_tool = release_bin / "release-projection"
     write_release_inputs(output, projection_tool)
@@ -449,7 +441,20 @@ def main() -> None:
     validate_ffmpeg_artifacts(arguments.ffmpeg_artifacts.resolve())
     if not arguments.skip_build:
         build(arguments.build_root.resolve())
-    acquire(arguments.cache.resolve(), {"pdfium", "onnxruntime", "ocr-detector", "ocr-recognizer", "ocr-dictionary", "ffmpeg-source", "whisper-small", "silero-vad", "3dspeaker", "libreoffice"})
+    acquire(
+        arguments.cache.resolve(),
+        {
+            "pdfium",
+            "onnxruntime",
+            "ocr-detector",
+            "ocr-recognizer",
+            "ocr-dictionary",
+            "ffmpeg-source",
+            "whisper-small",
+            "silero-vad",
+            "3dspeaker",
+        },
+    )
     release_bin = arguments.build_root.resolve() / "release"
     records, signer = package_official_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.codesign_identity)
     stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, records, signer, arguments.plugin_base_url, arguments.codesign_identity)

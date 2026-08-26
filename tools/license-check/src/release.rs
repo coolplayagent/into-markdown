@@ -331,7 +331,6 @@ pub fn aggregate_release_set(request_json: &str) -> Result<ReleaseSetMetadata, V
         ReleaseArtifact::Core,
         ReleaseArtifact::OcrPlugin,
         ReleaseArtifact::MediaPlugin,
-        ReleaseArtifact::LegacyOfficePlugin,
     ]);
     let actual: BTreeSet<_> = request.artifacts.iter().map(|item| item.artifact).collect();
     if actual != expected || request.artifacts.len() != expected.len() {
@@ -744,10 +743,6 @@ fn validate_catalog_runtime_authority(
     for id in OCR_RUNTIME_COMPONENTS.into_iter().chain([
         "3dspeaker-eres2net-base-onnx-model",
         "ffmpeg",
-        "libreoffice-macos-arm64",
-        "libreoffice-linux-x86_64",
-        "libreoffice-linux-arm64",
-        "libreoffice-windows-x86_64",
         "pdfium",
         "silero-vad-half-onnx-model",
         "whisper-small",
@@ -923,11 +918,13 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
                     | "bin/installed-smoke.exe"
                     | "bin/archive-check"
                     | "bin/archive-check.exe"
+                    | "bin/into-md-installer"
+                    | "bin/into-md-installer.exe"
                     | "bin/onnxruntime-worker"
                     | "bin/onnxruntime-worker.exe"
-                    | "bin/legacy-office-runtime/legacy-office-worker"
-                    | "bin/legacy-office-runtime/legacy-office-worker.exe"
                     | "share/into-markdown/plugins/official-publisher.json"
+                    | "Install.ps1"
+                    | "Uninstall.ps1"
                     | "install"
                     | "uninstall"
             ) || agent_skill_path(&file.path)

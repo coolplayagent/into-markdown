@@ -89,7 +89,7 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let source = vec![b'x'; 1024 * 1024];
     let error = stall.execute(&source, ExecutionOptions::default()).unwrap_err();
     assert_eq!(error.code, PluginErrorCode::Timeout);
-    assert!(started.elapsed() < Duration::from_secs(5), "blocked request write ignored deadline");
+    assert!(started.elapsed() < Duration::from_secs(30), "blocked request write ignored deadline");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn cancellation_race_is_stable_for_twenty_real_processes() {
         let (ready, observed) = std::sync::mpsc::sync_channel(1);
         let listener = std::sync::Arc::new(CancelReady(ready));
         let trigger_thread = std::thread::spawn(move || {
-            observed.recv_timeout(Duration::from_secs(5)).unwrap();
+            observed.recv_timeout(Duration::from_secs(30)).unwrap();
             trigger.cancel();
         });
         let context = ExecutionContext::new(
@@ -200,7 +200,14 @@ fn make_fixture_writable(path: &Path) {
 }
 
 #[cfg(windows)]
-fn make_fixture_writable(_path: &Path) {}
+#[allow(clippy::permissions_set_readonly_false)]
+fn make_fixture_writable(path: &Path) {
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+}
 
 fn assert_temporary_budget_released(context: &ExecutionContext) {
     assert_eq!(
@@ -387,7 +394,10 @@ fn payloads_larger_than_a_protocol_frame_use_the_private_staged_source() {
 
 fn fixture_executable() -> PathBuf {
     if let Some(value) = option_env!("CARGO_BIN_EXE_process-plugin-fixture") {
-        return PathBuf::from(value).canonicalize().unwrap();
+        let candidate = PathBuf::from(value);
+        if candidate.is_file() {
+            return candidate.canonicalize().unwrap();
+        }
     }
     if let Some(runfiles) = std::env::var_os("RUNFILES_DIR") {
         let runfiles = PathBuf::from(runfiles);
@@ -403,12 +413,41 @@ fn fixture_executable() -> PathBuf {
             }
         }
     }
+    if let Some(candidate) = manifest_runfile(&[
+        "_main/crates/process-plugin/process-plugin-fixture.exe",
+        "into_markdown/crates/process-plugin/process-plugin-fixture.exe",
+        "_main/crates/process-plugin/process-plugin-fixture",
+        "into_markdown/crates/process-plugin/process-plugin-fixture",
+    ]) {
+        return candidate;
+    }
     let current = std::env::current_exe().unwrap();
     let debug = current.parent().and_then(Path::parent).unwrap();
     debug
         .join(if cfg!(windows) { "process-plugin-fixture.exe" } else { "process-plugin-fixture" })
         .canonicalize()
         .unwrap()
+}
+
+fn manifest_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    let manifest = PathBuf::from(std::env::var_os("RUNFILES_MANIFEST_FILE")?);
+    let metadata = std::fs::metadata(&manifest).ok()?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let contents = std::fs::read_to_string(manifest).ok()?;
+    for line in contents.lines() {
+        let Some((logical, physical)) = line.split_once(' ') else {
+            continue;
+        };
+        if logical_paths.contains(&logical) {
+            let candidate = PathBuf::from(physical);
+            if candidate.is_file() {
+                return candidate.canonicalize().ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(windows)]

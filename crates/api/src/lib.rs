@@ -2,6 +2,45 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+fn test_fixture_root() -> std::path::PathBuf {
+    if let Some(value) = std::env::var_os("INTO_MD_FIXTURES_MANIFEST") {
+        let manifest = std::path::PathBuf::from(value);
+        if manifest.is_file() {
+            return manifest.parent().unwrap().to_path_buf();
+        }
+    }
+    if let Some(value) = std::env::var_os("RUNFILES_MANIFEST_FILE") {
+        let manifest = std::path::PathBuf::from(value);
+        if std::fs::metadata(&manifest).is_ok_and(|metadata| metadata.len() <= 64 * 1024 * 1024)
+            && let Ok(contents) = std::fs::read_to_string(manifest)
+        {
+            for line in contents.lines() {
+                let Some((logical, physical)) = line.split_once(' ') else {
+                    continue;
+                };
+                if matches!(
+                    logical,
+                    "_main/fixtures/manifest.json" | "into_markdown/fixtures/manifest.json"
+                ) {
+                    let candidate = std::path::PathBuf::from(physical);
+                    if candidate.is_file() {
+                        return candidate.parent().unwrap().to_path_buf();
+                    }
+                }
+            }
+        }
+    }
+    std::env::var_os("TEST_SRCDIR").map_or_else(
+        || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
+        |runfiles| {
+            std::path::PathBuf::from(runfiles)
+                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "_main".into()))
+                .join("fixtures")
+        },
+    )
+}
+
 #[cfg(feature = "official-provider-runtime")]
 mod asr_service;
 #[cfg(feature = "official-provider-runtime")]
@@ -64,6 +103,8 @@ pub use into_markdown_task_store::{
     InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
     TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
+#[cfg(feature = "official-provider-runtime")]
+pub use ocr_service::installed_ocr_service_in_read_only_sandbox;
 #[cfg(feature = "ocr-provider-runtime")]
 pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installed_ocr_service};
 
@@ -156,7 +197,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::future::Future;
     use std::io::{Cursor, Write as _};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[derive(Default)]
@@ -289,17 +330,7 @@ mod tests {
     }
 
     fn fixture_path(relative: &str) -> PathBuf {
-        std::env::var_os("TEST_SRCDIR").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(relative),
-            |runfiles| {
-                PathBuf::from(runfiles)
-                    .join(
-                        std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()),
-                    )
-                    .join("fixtures")
-                    .join(relative)
-            },
-        )
+        crate::test_fixture_root().join(relative)
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {

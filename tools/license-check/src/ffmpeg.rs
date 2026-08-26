@@ -153,7 +153,7 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
         "--enable-demuxer=aac,avi,flac,matroska,mov,mp3,mpegts,ogg,wav",
         "--enable-decoder=aac,flac,mp3,opus,vorbis,pcm_s8,pcm_s16be,pcm_s16le,pcm_s24be,pcm_s24le,pcm_s32be,pcm_s32le,pcm_f32be,pcm_f32le,pcm_f64be,pcm_f64le",
         "--enable-parser=aac,mpegaudio,opus,vorbis",
-        "--enable-filter=aformat,aresample",
+        "--enable-filter=aformat,aresample,asetpts",
         "--enable-encoder=pcm_s16le",
         "--enable-muxer=pcm_s16le",
         "--enable-static",
@@ -211,7 +211,7 @@ fn expected_target_identity(target: &str) -> Option<(&'static str, &'static str,
         "x86_64-unknown-linux-gnu" => ("elf", "x86_64", &["libc.so.6", "libm.so.6"]),
         "aarch64-unknown-linux-gnu" => ("elf", "aarch64", &["libc.so.6", "libm.so.6"]),
         "x86_64-pc-windows-msvc" => {
-            ("pe", "x86_64", &["ADVAPI32.dll", "KERNEL32.dll", "OLE32.dll", "USER32.dll"])
+            ("pe", "x86_64", &["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"])
         }
         _ => return None,
     };

@@ -509,6 +509,6 @@ mod tests {
         let line = command_line(OsStr::new(r"C:\worker.exe"), &arguments).unwrap();
         assert_eq!(*line.last().unwrap(), 0);
         let line = String::from_utf16(&line[..line.len() - 1]).unwrap();
-        assert_eq!(line, r#""C:\worker.exe" "a\"b" "path\\""#);
+        assert_eq!(line, r#""C:\worker.exe" "a\\\"b" "path\\""#);
     }
 }

@@ -53,7 +53,7 @@
       "scope": "release-assembly",
       "distributed": false,
       "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -64,29 +64,29 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["aarch64-apple-darwin"],
-      "integrity": [{"algorithm":"SHA-256","digest":"eb88594deebe6be0c65630c08a36d8fbedc6a35c74a0134a75e8854458812e64","subject":"tools/macos-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"249c6673c3f56ac54d3c587122d59a0f851524172c0719b4698816bbea975ab9","subject":"tools/macos-release/authority.json"}],
       "executables": []
     },
     {
       "id": "ubuntu-build-toolchain",
-      "version": "Ubuntu 24.04 runner image",
-      "source": "https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md",
-      "license": "LicenseRef-Ubuntu-Component-Licenses",
+      "version": "Rocky Linux 8.10 digest-pinned build container",
+      "source": "https://hub.docker.com/_/rockylinux",
+      "license": "LicenseRef-Rocky-Linux-Component-Licenses",
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
       "id": "windows-msvc-toolchain",
-      "version": "windows-2025 runner image",
+      "version": "MSVC 14.44.35207 and Windows SDK 10.0.26100.0 on windows-2025",
       "source": "https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md",
       "license": "LicenseRef-Microsoft-Visual-Studio",
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"a5733b2ccf1d3e05c39a3070e94d199694fca923f3267c65b6b2623e82ce4b47","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"60400e6334c9cae9b561ef0f2ed1d35d0418c7424c65d97d08bcb6feefd6b0d4","subject":"tools/platform-release/authority.json"}],
       "executables": []
     }
   ]

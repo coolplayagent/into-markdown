@@ -5,6 +5,11 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["Cargo.toml"])
 
+filegroup(
+    name = "rust_consumer_source",
+    srcs = ["src/rust_consumer.rs"],
+)
+
 rust_library(
     name = "installed_smoke_lib",
     srcs = glob(["src/*.rs"], exclude = ["src/main.rs"]),
@@ -12,6 +17,7 @@ rust_library(
     edition = "2024",
     deps = [
         "//crates/converters",
+        "//crates/process-plugin",
         "//tools/license-check:license_check_lib",
     ] + all_crate_deps(normal = True),
 )
@@ -45,6 +51,7 @@ rust_test(
     edition = "2024",
     deps = [
         "//crates/converters",
+        "//crates/process-plugin",
         "//tools/license-check:license_check_lib",
     ] + all_crate_deps(normal = True),
 )

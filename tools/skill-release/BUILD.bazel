@@ -5,7 +5,10 @@ package(default_visibility = ["//visibility:public"])
 py_library(
     name = "library",
     srcs = ["skill_release.py"],
-    data = ["//:agent_skill_files"],
+    data = [
+        "//:LICENSE",
+        "//:agent_skill_files",
+    ],
     imports = ["."],
 )
 

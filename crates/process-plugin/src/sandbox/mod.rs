@@ -23,6 +23,21 @@ pub(crate) fn working_directory(policy: &RuntimePolicy) -> Result<tempfile::Temp
     Err(PluginError::new(PluginErrorCode::SandboxUnavailable, "unsupported target"))
 }
 
+pub(crate) fn authorize_request_source(
+    policy: &RuntimePolicy,
+    path: &std::path::Path,
+) -> Result<(), PluginError> {
+    #[cfg(windows)]
+    {
+        windows::authorize_request_source(&policy.windows, path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (policy, path);
+        Ok(())
+    }
+}
+
 pub(crate) fn spawn(
     plugin: &ValidatedPlugin,
     policy: &RuntimePolicy,
@@ -137,6 +152,9 @@ impl SandboxChild {
         }
     }
 
+    // The cross-platform worker loop intentionally has one fallible query contract; only
+    // macOS can currently obtain the process-group physical footprint through this handle.
+    #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self, clippy::unnecessary_wraps))]
     pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
         #[cfg(target_os = "macos")]
         {

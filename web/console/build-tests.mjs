@@ -1,4 +1,9 @@
 import { build } from "esbuild-wasm";
+import { delimiter, dirname } from "node:path";
+
+// Keep esbuild-wasm's child on the Bazel-provided Node runtime even when the
+// action environment intentionally has no developer PATH entries.
+process.env.PATH = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
 
 await build({
   bundle: true,

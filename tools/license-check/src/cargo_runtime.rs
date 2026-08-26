@@ -174,12 +174,11 @@ fn workspace_manifests(
     let mut paths = BTreeSet::from(["Cargo.toml".to_owned()]);
     for package in metadata.packages.iter().filter(|package| members.contains(&package.id)) {
         let manifest = Path::new(&package.manifest_path);
-        match manifest.strip_prefix(repository) {
-            Ok(relative) => {
-                let value = relative.to_string_lossy().replace('\\', "/");
-                paths.insert(value);
+        match repository_relative(repository, manifest) {
+            Some(relative) => {
+                paths.insert(relative);
             }
-            Err(_) => errors.push(format!(
+            None => errors.push(format!(
                 "cargo metadata workspace manifest escapes repository: {}",
                 package.manifest_path
             )),
@@ -190,6 +189,33 @@ fn workspace_manifests(
             .push("cargo metadata workspace members do not map one-to-one to manifests".to_owned());
     }
     paths
+}
+
+fn repository_relative(repository: &Path, path: &Path) -> Option<String> {
+    if let Ok(relative) = path.strip_prefix(repository) {
+        return Some(relative.to_string_lossy().replace('\\', "/"));
+    }
+    #[cfg(windows)]
+    {
+        fn comparable(path: &Path) -> String {
+            let value = path.to_string_lossy().replace('\\', "/");
+            if let Some(value) = value.strip_prefix("//?/UNC/") {
+                format!("//{value}")
+            } else {
+                value.strip_prefix("//?/").unwrap_or(&value).to_owned()
+            }
+        }
+        let repository = comparable(repository);
+        let repository = repository.trim_end_matches('/');
+        let path = comparable(path);
+        if path.len() > repository.len()
+            && path[..repository.len()].eq_ignore_ascii_case(repository)
+            && path.as_bytes().get(repository.len()) == Some(&b'/')
+        {
+            return Some(path[repository.len() + 1..].to_owned());
+        }
+    }
+    None
 }
 
 fn cargo_tree_normal_packages(
@@ -269,8 +295,7 @@ fn cargo_tree_normal_packages(
         } else if let Some(package) = workspace.get(&(name, version)) {
             workspace_normal.insert(package.name.clone());
             let manifest = Path::new(&package.manifest_path);
-            if let Ok(relative) = manifest.strip_prefix(repository) {
-                let relative = relative.to_string_lossy().replace('\\', "/");
+            if let Some(relative) = repository_relative(repository, manifest) {
                 if relative.starts_with("third_party/") {
                     let key = (package.name.clone(), package.version.clone());
                     let license = package.license.clone().unwrap_or_default();

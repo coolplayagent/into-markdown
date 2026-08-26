@@ -31,7 +31,7 @@ use windows_sys::Win32::Security::{
     ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, EqualSid,
     GetAclInformation, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
     GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
-    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    SECURITY_ATTRIBUTES, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
 };
 #[cfg(test)]
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
@@ -122,6 +122,25 @@ fn current_user_sid() -> Result<(OwnedHandle, Vec<usize>), ModelManagerError> {
     Ok((token, buffer))
 }
 
+fn current_token_owner_sid(token: HANDLE) -> Result<Vec<usize>, ModelManagerError> {
+    let mut needed = 0;
+    // SAFETY: null query obtains the required buffer length for the live token.
+    unsafe { GetTokenInformation(token, TokenOwner, null_mut(), 0, &mut needed) };
+    if needed < u32::try_from(size_of::<TOKEN_OWNER>()).unwrap() {
+        return Err(last_error());
+    }
+    let words = (needed as usize).div_ceil(size_of::<usize>());
+    let mut buffer = vec![0_usize; words];
+    // SAFETY: aligned buffer has the size returned by the initial query.
+    if unsafe {
+        GetTokenInformation(token, TokenOwner, buffer.as_mut_ptr().cast(), needed, &mut needed)
+    } == 0
+    {
+        return Err(last_error());
+    }
+    Ok(buffer)
+}
+
 fn current_user_sid_string() -> Result<String, ModelManagerError> {
     let (_token, buffer) = current_user_sid()?;
     // SAFETY: buffer contains TOKEN_USER returned by GetTokenInformation.
@@ -181,11 +200,15 @@ fn open_with_share(
     }
     // SAFETY: handle is newly owned and valid.
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, directory)?;
+    validate_handle(&file, directory, true)?;
     Ok(file)
 }
 
-fn validate_handle(file: &File, directory: bool) -> Result<(), ModelManagerError> {
+fn validate_handle(
+    file: &File,
+    directory: bool,
+    require_private_acl: bool,
+) -> Result<(), ModelManagerError> {
     // SAFETY: fixed-size output and live handle.
     let mut tag: FILE_ATTRIBUTE_TAG_INFO = unsafe { zeroed() };
     if unsafe {
@@ -210,7 +233,9 @@ fn validate_handle(file: &File, directory: bool) -> Result<(), ModelManagerError
     if !directory && info.nNumberOfLinks != 1 {
         return Err(ModelManagerError::UnsafePath);
     }
-    validate_acl(file)?;
+    if require_private_acl {
+        validate_acl(file)?;
+    }
     // Named data streams on artifact/control files are rejected. Directory ADS
     // are not transaction namespace children and FileStreamInfo is not supported
     // for non-empty directory handles on all supported Windows filesystems; all
@@ -238,10 +263,15 @@ fn validate_acl(file: &File) -> Result<(), ModelManagerError> {
         return Err(ModelManagerError::Io(std::io::Error::from_raw_os_error(status as i32)));
     }
     let descriptor = SecurityDescriptor(descriptor_raw);
-    let (_token, user_buffer) = current_user_sid()?;
-    // SAFETY: the token buffer contains TOKEN_USER and both SIDs are live.
+    let (token, user_buffer) = current_user_sid()?;
+    let owner_buffer = current_token_owner_sid(token.0)?;
+    // SAFETY: the aligned token buffers contain TOKEN_USER/TOKEN_OWNER and all SIDs are live.
     let user = unsafe { (*(user_buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid };
-    let owner_matches = unsafe { EqualSid(owner, user) } != 0;
+    let token_owner = unsafe { (*(owner_buffer.as_ptr().cast::<TOKEN_OWNER>())).Owner };
+    // Windows can canonicalize an explicitly supplied owner to the elevated token's exact
+    // TokenOwner SID. It is part of this process's authority; unrelated owners remain rejected.
+    let owner_matches =
+        unsafe { EqualSid(owner, user) } != 0 || unsafe { EqualSid(owner, token_owner) } != 0;
     let expected = SecurityDescriptor::private()?;
     let dacl_matches = dacl_bytes(descriptor.0)? == dacl_bytes(expected.0)?;
     let mut control = 0;
@@ -414,7 +444,7 @@ fn create_private_file_with_share(path: &Path, share_mode: u32) -> Result<File, 
     }
     // SAFETY: handle is newly owned and valid.
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, false)?;
+    validate_handle(&file, false, true)?;
     Ok(file)
 }
 
@@ -438,6 +468,33 @@ pub(crate) fn open_private_file_read(path: &Path) -> Result<File, ModelManagerEr
     open(path, false, GENERIC_READ)
 }
 
+pub(crate) fn open_authenticated_snapshot_file_read(
+    path: &Path,
+) -> Result<File, ModelManagerError> {
+    let path_wide = wide(path.as_os_str());
+    // The process host authenticated the complete private snapshot and installed
+    // its exact current-user plus AppContainer read-only DACL before launch. The
+    // worker therefore validates object type, reparse state, link count, and ADS,
+    // but must not require the transaction manager's current-user-only DACL.
+    let handle = unsafe {
+        CreateFileW(
+            path_wide.as_ptr(),
+            GENERIC_READ | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(last_error());
+    }
+    let file = unsafe { File::from_raw_handle(handle as RawHandle) };
+    validate_handle(&file, false, false)?;
+    Ok(file)
+}
+
 fn open_for_delete(path: &Path, directory: bool) -> Result<File, ModelManagerError> {
     let path_wide = wide(path.as_os_str());
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
@@ -459,7 +516,7 @@ fn open_for_delete(path: &Path, directory: bool) -> Result<File, ModelManagerErr
         return Err(last_error());
     }
     let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-    validate_handle(&file, directory)?;
+    validate_handle(&file, directory, true)?;
     Ok(file)
 }
 
@@ -588,7 +645,7 @@ impl RootGuard {
         }
         // SAFETY: handle is newly owned and valid.
         let file = unsafe { File::from_raw_handle(handle as RawHandle) };
-        validate_handle(&file, true)?;
+        validate_handle(&file, true, true)?;
         let identity = identity_from_handle(&file)?;
         Ok(Self { file, identity })
     }
@@ -832,6 +889,20 @@ mod tests {
         harden_test_directory(parent.path()).unwrap();
         ensure_private_root(parent.path()).unwrap();
         harden_test_directory(parent.path()).unwrap();
+    }
+
+    #[test]
+    fn authenticated_snapshot_file_accepts_host_authorized_non_private_acl() {
+        let parent = tempfile::tempdir().unwrap();
+        let artifact = parent.path().join("model.onnx");
+        std::fs::write(&artifact, b"model").unwrap();
+
+        assert!(matches!(
+            validate_private_file(&artifact),
+            Err(ModelManagerError::DataDirectoryUnsafe)
+        ));
+        let file = open_authenticated_snapshot_file_read(&artifact).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 5);
     }
 
     #[test]

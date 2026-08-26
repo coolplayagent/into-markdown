@@ -132,6 +132,79 @@ fn url_hash_path_and_system_allowlists_are_strict() {
     assert!(system_library_path(&fake, current_target().unwrap()).is_err());
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_system_allowlist_covers_the_fixed_libreoffice_import_closure() {
+    let libraries = [
+        "advapi32.dll",
+        "bcrypt.dll",
+        "bcryptprimitives.dll",
+        "crypt32.dll",
+        "d2d1.dll",
+        "d3d9.dll",
+        "dbghelp.dll",
+        "fontsub.dll",
+        "gdi32.dll",
+        "gdiplus.dll",
+        "httpapi.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "mfplat.dll",
+        "mfplay.dll",
+        "mfreadwrite.dll",
+        "mpr.dll",
+        "ncrypt.dll",
+        "netapi32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "oledlg.dll",
+        "propsys.dll",
+        "secur32.dll",
+        "setupapi.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "user32.dll",
+        "userenv.dll",
+        "usp10.dll",
+        "version.dll",
+        "wer.dll",
+        "winhttp.dll",
+        "winmm.dll",
+        "ws2_32.dll",
+        "wsock32.dll",
+    ];
+    for identity in libraries {
+        let authority = SystemLibraryAuthority {
+            identity: identity.into(),
+            path: format!(r"C:\Windows\System32\{identity}"),
+        };
+        assert!(
+            system_library_path(&authority, "x86_64-pc-windows-msvc").is_ok(),
+            "fixed system import was rejected: {identity}"
+        );
+    }
+    let api_set = SystemLibraryAuthority {
+        identity: "api-ms-win-crt-runtime-l1-1-0.dll".into(),
+        path: r"C:\Windows\System32\api-ms-win-crt-runtime-l1-1-0.dll".into(),
+    };
+    assert!(system_library_path(&api_set, "x86_64-pc-windows-msvc").is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn authenticates_windows_api_set_contract_without_a_standalone_file() {
+    use crate::authority::authenticated_windows_system_path;
+
+    assert!(
+        authenticated_windows_system_path(Path::new(
+            r"C:\Windows\System32\api-ms-win-crt-runtime-l1-1-0.dll"
+        ))
+        .is_ok()
+    );
+    assert!(authenticated_windows_system_path(Path::new(r"C:\Windows\Temp\kernel32.dll")).is_err());
+}
+
 #[test]
 fn memory_limit_fails_before_untrusted_authority_is_parsed() {
     let root = tempfile::tempdir().unwrap();
@@ -148,7 +221,10 @@ fn memory_limit_fails_before_untrusted_authority_is_parsed() {
     ) else {
         panic!("low-memory authority unexpectedly succeeded");
     };
-    assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+    assert!(
+        matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }),
+        "unexpected low-memory authority error: {error:?}"
+    );
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
@@ -167,6 +243,19 @@ fn complete_inventory_rejects_unlisted_files() {
     assert!(validate_inventory_complete(&root_path, &authority, &expected, &context).is_ok());
     std::fs::create_dir(root_path.join("empty-extra-directory")).unwrap();
     assert!(validate_inventory_complete(&root_path, &authority, &expected, &context).is_err());
+}
+
+#[test]
+fn complete_inventory_uses_manifest_separators_for_nested_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let authority = root_path.join("authority.json");
+    std::fs::write(&authority, b"{}").unwrap();
+    std::fs::create_dir(root_path.join("nested")).unwrap();
+    std::fs::write(root_path.join("nested/listed"), b"listed").unwrap();
+    let expected = BTreeSet::from(["nested/listed"]);
+    let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    assert!(validate_inventory_complete(&root_path, &authority, &expected, &context).is_ok());
 }
 
 #[test]

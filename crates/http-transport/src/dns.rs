@@ -88,6 +88,7 @@ pub(super) fn resolve_checked(
         check_operation(context, deadline)?;
         match receiver.recv_timeout(blocking_slice(deadline)) {
             Ok(Ok(mut addresses)) => {
+                check_operation(context, deadline)?;
                 if addresses.is_empty()
                     || addresses.len() > MAX_DNS_ADDRESSES
                     || addresses.capacity() > MAX_DNS_ADDRESSES

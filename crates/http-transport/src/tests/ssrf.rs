@@ -29,6 +29,16 @@ impl DnsResolver for SlowDns {
     }
 }
 
+struct CancellingDns(into_markdown_core::CancellationToken);
+
+impl DnsResolver for CancellingDns {
+    fn resolve(&self, _: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        self.0.cancel();
+        std::thread::sleep(Duration::from_millis(50));
+        Ok(vec![format!("8.8.8.8:{port}").parse().unwrap()])
+    }
+}
+
 struct ScriptedConnection {
     response: std::io::Cursor<Vec<u8>>,
     request: Vec<u8>,
@@ -234,16 +244,12 @@ fn dns_result_shape_timeout_and_cancellation_are_bounded() {
     );
 
     let cancellation = into_markdown_core::CancellationToken::new();
-    let cancel_later = cancellation.clone();
+    let resolver_cancellation = cancellation.clone();
     let cancelled_context = ExecutionContext::new(
         into_markdown_core::ExecutionOptions { cancellation, ..Default::default() },
         into_markdown_core::ResourceLimits::default(),
     );
-    let canceller = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(10));
-        cancel_later.cancel();
-    });
-    let client = HttpClient::with_resolver(Arc::new(SlowDns));
+    let client = HttpClient::with_resolver(Arc::new(CancellingDns(resolver_cancellation)));
     assert_eq!(
         client
             .authorized_addresses(
@@ -257,7 +263,6 @@ fn dns_result_shape_timeout_and_cancellation_are_bounded() {
             .kind(),
         TransportErrorKind::Cancelled
     );
-    canceller.join().unwrap();
 }
 
 fn scripted_client(

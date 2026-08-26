@@ -756,6 +756,8 @@ struct ModelDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     sha256: String,
 }
 
@@ -766,6 +768,8 @@ struct ModelRuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     archive_sha256: Option<String>,
     archive_size: Option<u64>,
     archive_member: Option<String>,
@@ -825,6 +829,37 @@ fn arguments_are_empty(arguments: impl IntoIterator<Item = impl AsRef<std::ffi::
     arguments.into_iter().next().is_none()
 }
 
+fn resolve_runfile(value: &str) -> Result<PathBuf, String> {
+    let supplied = PathBuf::from(value);
+    if supplied.is_file() {
+        return supplied
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve Bazel runfile: {error}"));
+    }
+    let manifest = env::var_os("RUNFILES_MANIFEST_FILE")
+        .ok_or_else(|| "Bazel runfiles manifest is unavailable".to_owned())?;
+    let metadata = fs::metadata(&manifest)
+        .map_err(|error| format!("cannot inspect Bazel runfiles manifest: {error}"))?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return Err("Bazel runfiles manifest exceeds the safety limit".to_owned());
+    }
+    let normalized = value.replace('\\', "/").trim_start_matches("./").to_owned();
+    let candidates =
+        [normalized.clone(), format!("_main/{normalized}"), format!("into_markdown/{normalized}")];
+    let contents = fs::read_to_string(manifest)
+        .map_err(|error| format!("cannot read Bazel runfiles manifest: {error}"))?;
+    for line in contents.lines() {
+        if let Some((logical, physical)) = line.split_once(' ')
+            && candidates.iter().any(|candidate| candidate == logical)
+        {
+            return PathBuf::from(physical)
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve Bazel runfile {logical}: {error}"));
+        }
+    }
+    Err(format!("Bazel runfile is absent from the manifest: {normalized}"))
+}
+
 fn repository_root() -> Result<PathBuf, String> {
     if let Ok(workspace) = env::var("BUILD_WORKSPACE_DIRECTORY") {
         let candidate = PathBuf::from(workspace)
@@ -838,8 +873,7 @@ fn repository_root() -> Result<PathBuf, String> {
     if env::var_os("TEST_SRCDIR").is_some()
         && let Ok(manifest) = env::var("LICENSE_CHECK_TEST_WORKSPACE_MANIFEST")
     {
-        let manifest = PathBuf::from(manifest)
-            .canonicalize()
+        let manifest = resolve_runfile(&manifest)
             .map_err(|error| format!("cannot resolve Bazel test workspace manifest: {error}"))?;
         let candidate = manifest
             .parent()
@@ -2985,6 +3019,11 @@ fn is_canonical_https(value: &str) -> bool {
     })
 }
 
+fn valid_download_mirrors(primary: &str, mirrors: &[String]) -> bool {
+    let mut seen = BTreeSet::from([primary]);
+    mirrors.iter().all(|mirror| is_canonical_https(mirror) && seen.insert(mirror.as_str()))
+}
+
 fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<String>) {
     let mut repositories = BTreeSet::new();
     let mut runtime_ids = BTreeSet::new();
@@ -2996,6 +3035,7 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             || !is_safe_model_id(&item.repository)
             || !is_safe_model_file_name(&item.downloaded_file_path)
             || !is_canonical_https(&item.url)
+            || !valid_download_mirrors(&item.url, &item.mirror_urls)
             || !is_sha256(&item.sha256)
         {
             errors.push(format!("model download {} has incomplete fields", item.repository));
@@ -3009,6 +3049,7 @@ fn validate_download_fields(downloads: &DownloadManifest, errors: &mut Vec<Strin
             || !is_safe_model_id(&item.repository)
             || !is_safe_model_file_name(&item.downloaded_file_path)
             || !is_canonical_https(&item.url)
+            || !valid_download_mirrors(&item.url, &item.mirror_urls)
             || !is_sha256(&item.sha256)
             || item.size == 0
         {
@@ -4342,6 +4383,7 @@ mod tests {
                     repository: "ppocrv6_tiny_detector_source".to_owned(),
                     downloaded_file_path: "detector.tar".to_owned(),
                     url: detector.url.clone(),
+                    mirror_urls: vec![],
                     sha256: detector.sha256.clone(),
                 },
                 ModelDownload {
@@ -4349,6 +4391,7 @@ mod tests {
                     repository: "ppocrv6_tiny_recognizer_source".to_owned(),
                     downloaded_file_path: "recognizer.tar".to_owned(),
                     url: recognizer.url.clone(),
+                    mirror_urls: vec![],
                     sha256: recognizer.sha256.clone(),
                 },
             ],
@@ -4386,6 +4429,7 @@ mod tests {
             repository: "reviewed_runtime".to_owned(),
             downloaded_file_path: artifact.file_name.clone(),
             url: artifact.url.clone(),
+            mirror_urls: vec![],
             archive_sha256: None,
             archive_size: None,
             archive_member: None,

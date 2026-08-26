@@ -601,11 +601,12 @@ fn validate_windows_local_path(path: &Path) -> Result<(), ConversionError> {
 
 #[cfg(windows)]
 fn is_windows_device_namespace(path: &[u16]) -> bool {
-    const BACKSLASH: u16 = b'\\' as u16;
-    const QUESTION: u16 = b'?' as u16;
-    const DOT: u16 = b'.' as u16;
+    // ASCII code units are written directly because `From<u8>` is not const on the pinned Rust.
+    const BACKSLASH: u16 = 0x005c;
+    const QUESTION: u16 = 0x003f;
+    const DOT: u16 = 0x002e;
 
-    let is_separator = |value| value == BACKSLASH || value == b'/' as u16;
+    let is_separator = |value| value == BACKSLASH || value == u16::from(b'/');
     if path.len() >= 4
         && is_separator(path[0])
         && is_separator(path[1])
@@ -643,7 +644,7 @@ fn is_windows_device_namespace(path: &[u16]) -> bool {
     let extended = &path[4..];
     let drive_path = extended.len() >= 3
         && is_ascii_letter(extended[0])
-        && extended[1] == b':' as u16
+        && extended[1] == u16::from(b':')
         && is_separator(extended[2]);
     let unc_path = starts_with_ascii_case_insensitive(extended, "UNC\\")
         || starts_with_ascii_case_insensitive(extended, "UNC/");
@@ -652,20 +653,20 @@ fn is_windows_device_namespace(path: &[u16]) -> bool {
 
 #[cfg(windows)]
 fn has_windows_reserved_device_component(path: &[u16]) -> bool {
-    path.split(|value| *value == b'\\' as u16 || *value == b'/' as u16)
+    path.split(|value| *value == u16::from(b'\\') || *value == u16::from(b'/'))
         .filter(|component| !component.is_empty())
         .any(|component| {
             let end = component
                 .iter()
-                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .rposition(|value| *value != u16::from(b' ') && *value != u16::from(b'.'))
                 .map_or(0, |index| index + 1);
             let stem_end = component[..end]
                 .iter()
-                .position(|value| *value == b'.' as u16 || *value == b':' as u16)
+                .position(|value| *value == u16::from(b'.') || *value == u16::from(b':'))
                 .unwrap_or(end);
             let trimmed_stem_end = component[..stem_end]
                 .iter()
-                .rposition(|value| *value != b' ' as u16 && *value != b'.' as u16)
+                .rposition(|value| *value != u16::from(b' ') && *value != u16::from(b'.'))
                 .map_or(0, |index| index + 1);
             let stem = &component[..trimmed_stem_end];
             ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"]
@@ -680,7 +681,7 @@ fn has_windows_reserved_device_component(path: &[u16]) -> bool {
 fn is_numbered_windows_device(value: &[u16], prefix: &str) -> bool {
     value.len() == prefix.len() + 1
         && starts_with_ascii_case_insensitive(value, prefix)
-        && ((b'1' as u16..=b'9' as u16).contains(&value[prefix.len()])
+        && ((u16::from(b'1')..=u16::from(b'9')).contains(&value[prefix.len()])
             || [0x00B9, 0x00B2, 0x00B3].contains(&value[prefix.len()]))
 }
 
@@ -700,12 +701,12 @@ fn equals_ascii_case_insensitive(value: &[u16], expected: &str) -> bool {
 
 #[cfg(windows)]
 fn is_ascii_letter(value: u16) -> bool {
-    (b'A' as u16..=b'Z' as u16).contains(&ascii_uppercase(value))
+    (u16::from(b'A')..=u16::from(b'Z')).contains(&ascii_uppercase(value))
 }
 
 #[cfg(windows)]
 fn ascii_uppercase(value: u16) -> u16 {
-    if (b'a' as u16..=b'z' as u16).contains(&value) {
+    if (u16::from(b'a')..=u16::from(b'z')).contains(&value) {
         value - u16::from(b'a' - b'A')
     } else {
         value

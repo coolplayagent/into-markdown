@@ -4,6 +4,7 @@ use crate::{
     PageInfo, PathBoundsAllocationPlan, PdfRect, PixelFormat,
 };
 use libloading::Library;
+use object::read::elf::Dyn as _;
 use object::{Architecture, BinaryFormat, NameOrOrdinal, Object as _};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -150,6 +151,7 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDF_GetLastError",
 ];
 const MAX_RUNTIME_LIBRARY_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(target_os = "macos")]
 const MAX_RELEASE_PROJECTION_BYTES: u64 = 32 * 1024 * 1024;
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -181,6 +183,7 @@ struct ManifestTarget {
     allowed_dependencies: Vec<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct ReleaseProjection {
     schema_version: u64,
@@ -190,6 +193,7 @@ struct ReleaseProjection {
     native_transformations: Vec<NativeTransformation>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct ReleaseProjectionFile {
     path: String,
@@ -199,6 +203,7 @@ struct ReleaseProjectionFile {
     component_id: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Deserialize)]
 struct NativeTransformation {
     component_id: String,
@@ -388,6 +393,17 @@ type ObjectType = unsafe extern "C" fn(Handle) -> c_int;
 type CreateBitmap = unsafe extern "C" fn(c_int, c_int, c_int, *mut c_void, c_int) -> Handle;
 type Render = unsafe extern "C" fn(Handle, Handle, c_int, c_int, c_int, c_int, c_int, c_int);
 type LastError = unsafe extern "C" fn() -> c_ulong;
+
+#[cfg(windows)]
+const fn last_error_code(value: c_ulong) -> u32 {
+    value
+}
+
+#[cfg(not(windows))]
+fn last_error_code(value: c_ulong) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 type GetBitmap = unsafe extern "C" fn(Handle) -> Handle;
 type GetImagePixelSize = unsafe extern "C" fn(Handle, *mut c_uint, *mut c_uint) -> c_int;
 type GetBitmapInt = unsafe extern "C" fn(Handle) -> c_int;
@@ -589,10 +605,7 @@ impl Native {
     }
 
     fn error(&self, operation: &'static str) -> Error {
-        Error::Native {
-            operation,
-            code: u32::try_from(unsafe { (self.last_error)() }).unwrap_or(u32::MAX),
-        }
+        Error::Native { operation, code: last_error_code(unsafe { (self.last_error)() }) }
     }
 
     fn font_name_with_length(
@@ -1908,6 +1921,7 @@ struct Snapshot {
     path: PathBuf,
     file: Option<File>,
     bytes: Vec<u8>,
+    #[cfg(unix)]
     load_by_path: bool,
 }
 
@@ -1946,6 +1960,7 @@ impl Snapshot {
     }
 }
 
+#[cfg_attr(windows, allow(clippy::permissions_set_readonly_false))]
 impl Drop for Snapshot {
     fn drop(&mut self) {
         drop(self.file.take());
@@ -1962,6 +1977,7 @@ fn validated_snapshot(path: &Path, artifact: &Artifact) -> Result<Snapshot, Erro
     validated_snapshot_with_hook(path, artifact, || {}, || {})
 }
 
+#[allow(clippy::too_many_lines)] // Keep the security-sensitive open, hash, copy, and lock sequence linear.
 fn validated_snapshot_with_hook(
     path: &Path,
     artifact: &Artifact,
@@ -2069,6 +2085,7 @@ fn validated_snapshot_with_hook(
         path: snapshot_path,
         file: Some(snapshot_file),
         bytes,
+        #[cfg(unix)]
         load_by_path: signed_authority.is_some(),
     })
 }
@@ -2221,10 +2238,7 @@ fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Res
             return Err(Error::BinaryValidation(format!("missing required ABI export {required}")));
         }
     }
-    let imports = file.imports().map_err(|error| Error::BinaryValidation(error.to_string()))?;
-    for import in imports {
-        let import = import.map_err(|error| Error::BinaryValidation(error.to_string()))?;
-        let library = String::from_utf8_lossy(import.library()).to_ascii_lowercase();
+    for library in dynamic_dependencies(bytes, &file, platform)? {
         if !artifact.allowed_dependencies.iter().any(|item| library == item.to_ascii_lowercase()) {
             return Err(Error::BinaryValidation(format!(
                 "unreviewed dynamic dependency {library}"
@@ -2232,6 +2246,65 @@ fn validate_binary(bytes: &[u8], platform: Platform, artifact: &Artifact) -> Res
         }
     }
     Ok(())
+}
+
+fn dynamic_dependencies(
+    bytes: &[u8],
+    file: &object::File<'_>,
+    platform: Platform,
+) -> Result<BTreeSet<String>, Error> {
+    if matches!(platform, Platform::LinuxX64 | Platform::LinuxArm64) {
+        let object::File::Elf64(elf) = file else {
+            return Err(Error::BinaryValidation("expected ELF64 dependency table".into()));
+        };
+        let endian = elf.endian();
+        let sections = elf.elf_section_table();
+        let Some((dynamic, string_index)) = sections
+            .dynamic(endian, bytes)
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?
+        else {
+            return Err(Error::BinaryValidation("missing ELF dynamic dependency table".into()));
+        };
+        let strings = sections
+            .strings(endian, bytes, string_index)
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        let mut libraries = BTreeSet::new();
+        for entry in dynamic {
+            // ELF DT_NEEDED is the stable ABI tag value 1.
+            if entry.tag32(endian) != Some(1) {
+                continue;
+            }
+            let name = entry
+                .string(endian, strings)
+                .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+            let name = std::str::from_utf8(name)
+                .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+            if name.is_empty() || name.bytes().any(|byte| byte.is_ascii_control()) {
+                return Err(Error::BinaryValidation("invalid ELF dynamic dependency name".into()));
+            }
+            libraries.insert(name.to_ascii_lowercase());
+        }
+        if libraries.is_empty() {
+            return Err(Error::BinaryValidation("empty ELF dynamic dependency table".into()));
+        }
+        return Ok(libraries);
+    }
+
+    let imports = file.imports().map_err(|error| Error::BinaryValidation(error.to_string()))?;
+    let mut libraries = BTreeSet::new();
+    for import in imports {
+        let import = import.map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        let library = std::str::from_utf8(import.library())
+            .map_err(|error| Error::BinaryValidation(error.to_string()))?;
+        if library.is_empty() || library.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(Error::BinaryValidation("invalid dynamic dependency name".into()));
+        }
+        libraries.insert(library.to_ascii_lowercase());
+    }
+    if libraries.is_empty() {
+        return Err(Error::BinaryValidation("empty dynamic dependency table".into()));
+    }
+    Ok(libraries)
 }
 
 fn expected_binary_identity(platform: Platform) -> (BinaryFormat, Architecture) {

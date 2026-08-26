@@ -1,0 +1,33 @@
+diff --git a/crate_universe/extensions.bzl b/crate_universe/extensions.bzl
+index 37c5010..49cf7bc 100644
+--- a/crate_universe/extensions.bzl
++++ b/crate_universe/extensions.bzl
+@@ -1068,11 +1068,11 @@ def _crate_impl(module_ctx):
+ 
+             replacement = annotation_dict.pop("override_target_proc_macro")
+             if replacement:
+-                annotation_dict["override_targets"]["proc_macro"] = str(replacement)
++                annotation_dict["override_targets"]["proc-macro"] = str(replacement)
+ 
+             replacement = annotation_dict.pop("override_target_build_script")
+             if replacement:
+-                annotation_dict["override_targets"]["build_script"] = str(replacement)
++                annotation_dict["override_targets"]["custom-build"] = str(replacement)
+ 
+             replacement = annotation_dict.pop("override_target_bin")
+             if replacement:
+diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_script.bzl
+index 27579e7..1683a87 100644
+--- a/cargo/private/cargo_build_script.bzl
++++ b/cargo/private/cargo_build_script.bzl
+@@ -900,5 +900,9 @@ def _merge_env_dict(prefix_dict, suffix_dict):
+     """Merges suffix_dict into prefix_dict, appending rather than replacing certain env vars."""
+     for key in ["CFLAGS", "CXXFLAGS", "LDFLAGS"]:
+         if key in prefix_dict and key in suffix_dict and prefix_dict[key]:
+-            prefix_dict[key] += " " + suffix_dict.pop(key)
++            suffix_value = suffix_dict.pop(key)
++            if suffix_value:
++                prefix_dict[key] += " " + suffix_value
++            else:
++                prefix_dict[key] = ""
+     prefix_dict.update(suffix_dict)

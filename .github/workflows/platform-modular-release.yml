@@ -3,8 +3,8 @@ name: Linux and Windows modular release
 on:
   workflow_dispatch:
     inputs:
-      plugin_base_url:
-        description: HTTPS directory that will contain this target's three .imp files
+      release_tag:
+        description: GitHub draft release tag that will contain every target's Core and two .imp files
         required: true
         type: string
 
@@ -25,23 +25,50 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive: into-md-linux-x86_64-core.tar.gz
+            container: docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_x86_64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: into-md-linux-arm64-core.tar.gz
+            container: docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_arm64
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
             archive: into-md-windows-x86_64-core.zip
+            container: ''
+            bazel_config: windows_x86_64
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 240
     steps:
+      - name: Bootstrap fixed Linux build container
+        if: runner.os == 'Linux'
+        run: |
+          dnf install --assumeyes binutils cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3 tar unzip which xz zip
+          test -x /usr/bin/python || ln -s /usr/bin/python3 /usr/local/bin/python
+          python --version
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+          python -c 'import os; assert tuple(map(int, os.uname().release.split("-")[0].split(".")[:2])) >= (5, 15)'
       - uses: actions/checkout@v4
+      - name: Validate immutable release URL authority
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python - <<'PY'
+          import os, re
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tag):
+              raise SystemExit("release tag must be a bounded URL-safe Git ref component")
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
-      - uses: bazelbuild/setup-bazel@v3
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
       - name: Activate fixed pnpm toolchain
@@ -54,11 +81,9 @@ jobs:
           install: make diffutils xz curl gnupg jq file binutils python coreutils perl
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
-      - name: Install native release tools
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes build-essential binutils curl dpkg-dev gnupg jq xz-utils
+        with:
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
       - name: Build and audit FFmpeg on Linux
         if: runner.os == 'Linux'
         shell: bash
@@ -104,11 +129,29 @@ jobs:
           --target ${{ matrix.target }}
           --build-root "${{ runner.temp }}/build"
           --build-only
+      - name: Prepare Cargo plugin lifecycle fixture on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ matrix.target }}"
+          echo "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD/target/${{ matrix.target }}/debug/plugin_manager_process_fixture" >> "$GITHUB_ENV"
+      - name: Prepare Cargo plugin lifecycle fixture on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ matrix.target }}"
+          "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ matrix.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run target-native Cargo, Clippy, and Bazel gates
+        run: |
+          python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test
+          cargo test --workspace --all-targets --locked -- --test-threads=1
+          cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.bazel_config }} --lockfile_mode=error //...
       - name: Authenticode-sign project executables
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $names = @("into-md.exe", "installed-smoke.exe", "archive-check.exe", "into-md-ocr-provider.exe", "into-md-media-provider.exe", "into-md-legacy-office-provider.exe", "onnxruntime-worker.exe", "legacy-office-worker.exe")
+          $names = @("into-md.exe", "installed-smoke.exe", "archive-check.exe", "into-md-installer.exe", "into-md-ocr-provider.exe", "into-md-media-provider.exe", "onnxruntime-worker.exe")
           foreach ($name in $names) {
             & signtool.exe sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /sha1 $env:WINDOWS_SIGNING_THUMBPRINT "$env:RUNNER_TEMP\build\release\$name"
             if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $name" }
@@ -117,21 +160,21 @@ jobs:
           }
       - name: Assemble deterministic Core and plugin packages twice
         run: |
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "${{ inputs.plugin_base_url }}/${{ matrix.target }}" --output "${{ runner.temp }}/core-a" --plugins-output "${{ runner.temp }}/plugins-a" --archive "${{ runner.temp }}/${{ matrix.archive }}.a"
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "${{ inputs.plugin_base_url }}/${{ matrix.target }}" --output "${{ runner.temp }}/core-b" --plugins-output "${{ runner.temp }}/plugins-b" --archive "${{ runner.temp }}/${{ matrix.archive }}.b"
+          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-a" --plugins-output "${{ runner.temp }}/plugins-a" --archive "${{ runner.temp }}/${{ matrix.archive }}.a"
+          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-b" --plugins-output "${{ runner.temp }}/plugins-b" --archive "${{ runner.temp }}/${{ matrix.archive }}.b"
       - name: Verify deterministic bytes
         if: runner.os == 'Linux'
         run: |
           cmp "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}.b"
-          for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do cmp "${{ runner.temp }}/plugins-a/$package.imp" "${{ runner.temp }}/plugins-b/$package.imp"; done
+          for package in official.ocr.ppocrv6 official.media.whisper; do cmp "${{ runner.temp }}/plugins-a/$package.imp" "${{ runner.temp }}/plugins-b/$package.imp"; done
           mv "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}"
-          mv "${{ runner.temp }}/${{ matrix.archive }}.a.sha256" "${{ runner.temp }}/${{ matrix.archive }}.sha256"
+          sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | sed 's/\.a$//' > "${{ runner.temp }}/${{ matrix.archive }}.sha256"
       - name: Verify deterministic bytes
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           if ((Get-FileHash "${{ runner.temp }}\${{ matrix.archive }}.a").Hash -ne (Get-FileHash "${{ runner.temp }}\${{ matrix.archive }}.b").Hash) { throw "Core ZIP is not deterministic" }
-          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper", "official.legacy-office.libreoffice")) {
+          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper")) {
             if ((Get-FileHash "${{ runner.temp }}\plugins-a\$package.imp").Hash -ne (Get-FileHash "${{ runner.temp }}\plugins-b\$package.imp").Hash) { throw "$package is not deterministic" }
           }
           Remove-Item "${{ runner.temp }}\core-a", "${{ runner.temp }}\core-b", "${{ runner.temp }}\plugins-a", "${{ runner.temp }}\plugins-b" -Recurse -Force
@@ -147,7 +190,7 @@ jobs:
           --cache "${{ runner.temp }}/cache"
           --ffmpeg-artifacts ffmpeg-audit-output
           --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8"
-          --plugin-base-url "${{ inputs.plugin_base_url }}/${{ matrix.target }}"
+          --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}"
           --output "${{ runner.temp }}/core-final"
           --plugins-output "${{ runner.temp }}/plugins-a"
           --archive "${{ runner.temp }}/${{ matrix.archive }}"
@@ -163,18 +206,20 @@ jobs:
           mkdir "${{ runner.temp }}/distribution"
           tar -xzf "${{ runner.temp }}/${{ matrix.archive }}" -C "${{ runner.temp }}/distribution"
           "${{ runner.temp }}/distribution/bin/archive-check" "${{ runner.temp }}/distribution"
+          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}/distribution" --plugins "${{ runner.temp }}/plugins-a" --report "${{ runner.temp }}/platform-audit.json"
           installed=$("${{ runner.temp }}/distribution/install" "${{ runner.temp }}/install" "${{ runner.temp }}/bin" | tail -1)
+          repeated=$("${{ runner.temp }}/distribution/install" "${{ runner.temp }}/install" "${{ runner.temp }}/bin" | tail -1)
+          test "$installed" = "$repeated"
           diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
           diff -ru ".agents/skills/into-markdown" "$installed/share/into-markdown/skills/into-markdown"
           signer_id=$(jq -r .signingKeyId "$installed/share/into-markdown/plugins/official-publisher.json")
           signer_sha=$(jq -r .signingKeySha256 "$installed/share/into-markdown/plugins/official-publisher.json")
-          for package in official.ocr.ppocrv6 official.media.whisper official.legacy-office.libreoffice; do
+          for package in official.ocr.ppocrv6 official.media.whisper; do
             sha=$(sha256sum "${{ runner.temp }}/plugins-a/$package.imp" | awk '{print $1}')
             "$installed/bin/into-md" plugins install "${{ runner.temp }}/plugins-a/$package.imp" --sha256 "$sha" --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global
             "$installed/bin/into-md" plugins verify "$package" --scope global
           done
-          "$installed/bin/into-md" capabilities list --json | jq -e '[.capabilities[] | select(.status == "ready")] | length == 4'
-          "$installed/bin/into-md" "${{ github.workspace }}/tools/macos-release/fixtures/normal.doc" --output "${{ runner.temp }}/legacy-output" --format doc
+          "$installed/bin/into-md" capabilities list --json | jq -e '[.capabilities[] | select(.status == "ready")] | length == 3'
           "${{ runner.temp }}/distribution/uninstall" "${{ runner.temp }}/install" "${{ runner.temp }}/bin"
           diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
       - name: Clean-install and verify all capabilities
@@ -199,6 +244,8 @@ jobs:
           $agentSkillsBefore = @(Get-AgentSkillTree $agentSkills)
           Expand-Archive -LiteralPath "${{ runner.temp }}\${{ matrix.archive }}" -DestinationPath "${{ runner.temp }}\distribution"
           & "${{ runner.temp }}\distribution\bin\archive-check.exe" "${{ runner.temp }}\distribution"
+          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}\distribution" --plugins "${{ runner.temp }}\plugins-a" --report "${{ runner.temp }}\platform-audit.json"
+          & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core installer modified the Agent Skills directory" }
           $installed = Get-ChildItem "${{ runner.temp }}\install\versions" | Select-Object -First 1 -ExpandProperty FullName
@@ -206,17 +253,42 @@ jobs:
           $embedded = Get-ChildItem "$installed\share\into-markdown\skills\into-markdown" -File -Recurse | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName.Substring((Resolve-Path "$installed\share\into-markdown\skills\into-markdown").Path.Length); Hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash } }
           if (Compare-Object $canonical $embedded -Property Path, Hash) { throw "embedded Agent Skill differs from canonical source" }
           $catalog = Get-Content "$installed\share\into-markdown\plugins\official-publisher.json" | ConvertFrom-Json
-          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper", "official.legacy-office.libreoffice")) {
+          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper")) {
             $path = "${{ runner.temp }}\plugins-a\$package.imp"
             $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
             & "$installed\bin\into-md.exe" plugins install $path --sha256 $sha --signing-key-id $catalog.signingKeyId --signing-key-sha256 $catalog.signingKeySha256 --scope global
             & "$installed\bin\into-md.exe" plugins verify $package --scope global
           }
           $ready = (& "$installed\bin\into-md.exe" capabilities list --json | ConvertFrom-Json).capabilities | Where-Object status -eq "ready"
-          if ($ready.Count -ne 4) { throw "not all capabilities are ready" }
-          & "$installed\bin\into-md.exe" "${{ github.workspace }}\tools\macos-release\fixtures\normal.doc" --output "${{ runner.temp }}\legacy-output" --format doc
+          if ($ready.Count -ne 3) { throw "not all published capabilities are ready" }
           & "${{ runner.temp }}\distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core uninstaller modified the Agent Skills directory" }
+      - name: Run installed Core smoke and platform acceptance
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          distribution="${{ runner.temp }}/distribution"
+          installed=$("$distribution/install" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin" | tail -1)
+          mkdir "${{ runner.temp }}/installed-smoke-state"
+          archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
+          "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90
+          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root "$installed" --into-md "$installed/bin/into-md" --plugins "${{ runner.temp }}/plugins-a" --publisher "$installed/share/into-markdown/plugins/official-publisher.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" --work-root "${{ runner.temp }}/platform-acceptance-state" --archive-sha256 "$archive_sha" --platform-audit "${{ runner.temp }}/platform-audit.json" --report "${{ runner.temp }}/platform-acceptance.json" --timeout-seconds 900
+          "$distribution/uninstall" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin"
+      - name: Run installed Core smoke and platform acceptance on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $distribution = "${{ runner.temp }}\distribution"
+          & "$distribution\Install.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
+          $identity = (Get-Content "${{ runner.temp }}\accept-install\current.txt" -Raw).Trim()
+          $installed = "${{ runner.temp }}\accept-install\versions\$identity"
+          New-Item -ItemType Directory "${{ runner.temp }}\installed-smoke-state" | Out-Null
+          $archiveSha = (Get-FileHash -Algorithm SHA256 "${{ runner.temp }}\${{ matrix.archive }}").Hash.ToLowerInvariant()
+          & "$installed\bin\installed-smoke.exe" --install-root $installed --into-md "$installed\bin\into-md.exe" --rust-library "$installed\lib\into-markdown-rust" --manifest "$installed\archive-manifest.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" --temp-root "${{ runner.temp }}\installed-smoke-state" --report "${{ runner.temp }}\installed-smoke.json" --archive-sha256 $archiveSha --cargo (rustup which cargo) --rustc (rustup which rustc) --pdfium-library "$installed\lib\pdfium\pdfium.dll" --timeout-seconds 90
+          if ($LASTEXITCODE -ne 0) { throw "installed Core smoke failed" }
+          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root $installed --into-md "$installed\bin\into-md.exe" --plugins "${{ runner.temp }}\plugins-a" --publisher "$installed\share\into-markdown\plugins\official-publisher.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" --work-root "${{ runner.temp }}\platform-acceptance-state" --archive-sha256 $archiveSha --platform-audit "${{ runner.temp }}\platform-audit.json" --report "${{ runner.temp }}\platform-acceptance.json" --timeout-seconds 900
+          if ($LASTEXITCODE -ne 0) { throw "installed platform acceptance failed" }
+          & "$distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
       - name: Sign Linux release artifacts
         if: runner.os == 'Linux'
         env:
@@ -229,6 +301,12 @@ jobs:
           printf '%s' "$RELEASE_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --import
           test "$(gpg --batch --with-colons --fingerprint "$RELEASE_GPG_KEY_FINGERPRINT" | awk -F: '$1 == "fpr" {print $10; exit}')" = "$RELEASE_GPG_KEY_FINGERPRINT"
           for artifact in "${{ runner.temp }}/${{ matrix.archive }}" "${{ runner.temp }}/plugins-a/"*.imp; do gpg --batch --local-user "$RELEASE_GPG_KEY_FINGERPRINT" --detach-sign --armor "$artifact"; done
+      - name: Materialize target-qualified public plugin assets
+        run: >-
+          python tools/publish_release_assets.py
+          --source "${{ runner.temp }}/plugins-a"
+          --output "${{ runner.temp }}/published-plugins"
+          --target "${{ matrix.target }}"
       - name: Generate release SBOMs
         run: >-
           python tools/release-metadata.py
@@ -237,7 +315,7 @@ jobs:
           --source-revision "${{ github.sha }}"
           --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
           --core-root "${{ runner.temp }}/distribution"
-          --plugins "${{ runner.temp }}/plugins-a"
+          --plugins "${{ runner.temp }}/published-plugins"
           --output "${{ runner.temp }}/release-metadata"
       - name: Validate SPDX with pinned official tooling
         run: |
@@ -252,10 +330,11 @@ jobs:
             ${{ runner.temp }}/${{ matrix.archive }}
             ${{ runner.temp }}/${{ matrix.archive }}.sha256
             ${{ runner.temp }}/${{ matrix.archive }}.asc
-            ${{ runner.temp }}/plugins-a/*.imp
-            ${{ runner.temp }}/plugins-a/*.sha256
-            ${{ runner.temp }}/plugins-a/*.asc
+            ${{ runner.temp }}/published-plugins/*
             ${{ runner.temp }}/release-metadata/*
+            ${{ runner.temp }}/platform-audit.json
+            ${{ runner.temp }}/installed-smoke.json
+            ${{ runner.temp }}/platform-acceptance.json
           if-no-files-found: error
       - name: Remove Windows signing credentials
         if: always() && runner.os == 'Windows'
@@ -266,3 +345,43 @@ jobs:
           }
           Remove-Item "$env:RUNNER_TEMP\release-signing.pfx" -Force -ErrorAction SilentlyContinue
           Remove-Item "$env:RUNNER_TEMP\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
+
+  publish-draft:
+    needs: native-release
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: modular-*
+          path: ${{ runner.temp }}/release-artifacts
+      - name: Prepare flat target-qualified release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          publish="$RUNNER_TEMP/publish"
+          mkdir "$publish"
+          for directory in "$RUNNER_TEMP"/release-artifacts/modular-*; do
+            target=${directory##*/modular-}
+            cp "$directory"/into-md-* "$publish"/
+            cp "$directory"/published-plugins/* "$publish"/
+            for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
+              cp "$directory/$report" "$publish/$target-$report"
+            done
+            for document in "$directory"/release-metadata/*; do
+              cp "$document" "$publish/${document##*/}"
+            done
+          done
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
+              --title "Into Markdown $RELEASE_TAG" \
+              --notes "Core plus target-specific OCR and speech plugins. Draft until Linux, Windows, and macOS release gates all pass."
+          fi
+          gh release upload "$RELEASE_TAG" "$publish"/* --clobber

@@ -20,7 +20,8 @@ use zip::write::SimpleFileOptions;
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_PACKAGE_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_FILES: usize = 10_000;
+const MAX_FILES: usize = 25_000;
+const IO_BUFFER_BYTES: usize = 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,7 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total = 0_u64;
     let mut files = Vec::with_capacity(paths.len());
     for (relative, path) in &paths {
-        validate_package_file_path(&relative)?;
+        validate_package_file_path(relative)
+            .map_err(|error| format!("package path rejected ({relative}): {error}"))?;
         let (bytes, sha256) = bounded_digest(path, MAX_FILE_BYTES)?;
         total = total.checked_add(bytes).ok_or("input size overflow")?;
         if total > MAX_PACKAGE_INPUT_BYTES {
@@ -106,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unix_permissions(0o644);
     writer.start_file("plugin.json", options)?;
     writer.write_all(&serde_json::to_vec(&manifest)?)?;
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = io_buffer()?;
     for (authority, (_, path)) in manifest.files.iter().zip(paths) {
         writer.start_file(&authority.path, options)?;
         let mut source = File::open(path)?;
@@ -150,12 +152,12 @@ fn bounded_read(path: &Path, maximum: u64) -> Result<Vec<u8>, Box<dyn std::error
 
 fn bounded_digest(path: &Path, maximum: u64) -> Result<(u64, String), Box<dyn std::error::Error>> {
     let metadata = fs::metadata(path)?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > maximum {
+    if !metadata.is_file() || metadata.len() > maximum {
         return Err("input file size rejected".into());
     }
     let mut source = File::open(path)?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = io_buffer()?;
     let mut total = 0_u64;
     loop {
         let count = source.read(&mut buffer)?;
@@ -172,6 +174,13 @@ fn bounded_digest(path: &Path, maximum: u64) -> Result<(u64, String), Box<dyn st
         return Err("input file changed while reading".into());
     }
     Ok((total, format!("{:x}", digest.finalize())))
+}
+
+fn io_buffer() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(IO_BUFFER_BYTES).map_err(|_| "I/O buffer allocation rejected")?;
+    buffer.resize(IO_BUFFER_BYTES, 0);
+    Ok(buffer)
 }
 
 fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
@@ -200,7 +209,7 @@ fn collect_files(root: &Path) -> Result<Vec<(String, PathBuf)>, Box<dyn std::err
                 }
                 output.push((relative, entry.path()));
                 if output.len() > MAX_FILES {
-                    return Err("package contains more than 10000 files".into());
+                    return Err(format!("package contains more than {MAX_FILES} files").into());
                 }
             } else {
                 return Err("special files are not package inputs".into());
@@ -225,6 +234,8 @@ fn is_executable(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 #[cfg(not(unix))]
+// Keep one fallible cross-platform callback signature; Unix reads executable mode metadata.
+#[allow(clippy::unnecessary_wraps)]
 fn is_executable(_path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     Ok(false)
 }

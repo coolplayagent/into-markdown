@@ -4,12 +4,16 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod container;
 mod dependencies;
 mod paths;
 mod schema;
+#[cfg(windows)]
+pub(crate) use paths::authenticated_windows_path;
+#[cfg(windows)]
+pub(crate) use paths::authenticated_windows_system_path;
 use paths::{
     checked_join, explicit_directory, explicit_regular_file, is_reparse, safe_relative,
     system_library_path,
@@ -109,6 +113,7 @@ pub(crate) struct VerifiedBundle {
     pub worker: PathBuf,
     pub worker_sha256: String,
     pub runtime_files: Vec<VerifiedRuntimeFile>,
+    pub dependency_files: Vec<VerifiedRuntimeFile>,
     pub runtime_snapshot_bytes: u64,
     pub install_root: PathBuf,
     pub kit_library: PathBuf,
@@ -118,8 +123,10 @@ pub(crate) struct VerifiedBundle {
     pub address_space_overhead: u64,
     pub file_size_limit: u64,
     pub open_file_limit: u32,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub process_limit: u32,
     pub system_read_paths: Vec<PathBuf>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub container: Option<VerifiedContainer>,
     #[cfg(windows)]
     pub app_container: AppContainerAuthority,
@@ -127,6 +134,7 @@ pub(crate) struct VerifiedBundle {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct VerifiedContainer {
     pub format: String,
     pub image_relative: String,
@@ -135,6 +143,7 @@ pub(crate) struct VerifiedContainer {
 }
 
 #[derive(Clone)]
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) struct VerifiedRuntimeFile {
     pub relative: String,
     pub path: PathBuf,
@@ -178,11 +187,14 @@ pub(crate) fn verify(
     let kit_library = checked_join(&root, &target.kit_library)?;
     let install_root = checked_join(&root, &target.install_root)?;
     let container = container::verified(target)?;
-    if container.is_none() {
+    let dependency_files = if container.is_none() {
         validate_abi(&kit_library, &target.abi, context)?;
-        dependencies::validate(target, target_name, &root, context)?;
+        let files = dependencies::validate(target, target_name, &root, context)?;
         explicit_directory(&install_root).map_err(|_| unavailable("installRoot"))?;
-    }
+        files
+    } else {
+        Vec::new()
+    };
     let system_read_paths = target
         .sandbox
         .system_libraries
@@ -207,6 +219,7 @@ pub(crate) fn verify(
         worker,
         worker_sha256: inventory.worker_sha256,
         runtime_files: inventory.files,
+        dependency_files,
         runtime_snapshot_bytes,
         install_root,
         kit_library,
@@ -624,12 +637,8 @@ fn validate_inventory_complete(
                 return Err(unavailable("fileInventory"));
             }
             if metadata.is_dir() {
-                let relative = path
-                    .strip_prefix(root)
-                    .ok()
-                    .and_then(Path::to_str)
-                    .ok_or_else(|| unavailable("fileInventory"))?;
-                if !expected_directories.contains(relative) {
+                let relative = inventory_relative_path(root, &path)?;
+                if !expected_directories.contains(relative.as_str()) {
                     return Err(unavailable("fileInventory"));
                 }
                 directories =
@@ -648,12 +657,8 @@ fn validate_inventory_complete(
             if files > MAX_RUNTIME_FILES {
                 return Err(unavailable("fileInventory"));
             }
-            let relative = path
-                .strip_prefix(root)
-                .ok()
-                .and_then(Path::to_str)
-                .ok_or_else(|| unavailable("fileInventory"))?;
-            if !expected.contains(relative) {
+            let relative = inventory_relative_path(root, &path)?;
+            if !expected.contains(relative.as_str()) {
                 return Err(unavailable("fileInventory"));
             }
         }
@@ -662,6 +667,25 @@ fn validate_inventory_complete(
         return Err(unavailable("fileInventory"));
     }
     Ok(())
+}
+
+fn inventory_relative_path(root: &Path, path: &Path) -> Result<String, ConversionError> {
+    let relative = path.strip_prefix(root).map_err(|_| unavailable("fileInventory"))?;
+    let mut result = String::new();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err(unavailable("fileInventory"));
+        };
+        let component = component.to_str().ok_or_else(|| unavailable("fileInventory"))?;
+        if !result.is_empty() {
+            result.push('/');
+        }
+        result.push_str(component);
+    }
+    if result.is_empty() {
+        return Err(unavailable("fileInventory"));
+    }
+    Ok(result)
 }
 
 fn https_url(value: &str) -> bool {
@@ -719,7 +743,7 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
-fn unavailable(detail: &'static str) -> ConversionError {
+fn unavailable(detail: impl Into<String>) -> ConversionError {
     ConversionError::ComponentUnavailable {
         component: "legacy-office-runtime".into(),
         detail: detail.into(),

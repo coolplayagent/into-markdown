@@ -3,7 +3,7 @@
 [English](README.en.md) · [文档导航](docs/README.md)
 
 Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它提供统一的 Rust 转换核心、
-`into-md` CLI、本地 Web 工作台、稳定 JSON/Bundle 接口，以及三个自包含的可选能力插件。
+`into-md` CLI、本地 Web 工作台、稳定 JSON/Bundle 接口，以及两个自包含的可选能力插件。
 所有内容先进入带诊断与溯源的 Document IR，再由唯一的确定性渲染器生成 GFM。
 
 项目独立于相邻的 `anydoc` 与 `markitdown`，不调用或包装它们。
@@ -14,7 +14,6 @@ Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它�
   Provider 管理、安装后验收工具。
 - OCR 插件 `official.ocr.ppocrv6`：PP-OCRv6、ONNX Runtime、worker、模型与字符表。
 - 语音插件 `official.media.whisper`：FFmpeg、Whisper、VAD、说话人分离模型与运行时。
-- 旧版 Office 插件 `official.legacy-office.libreoffice`：LibreOffice runtime 与隔离 worker。
 - Agent Skill `into-markdown`：指导兼容 agent 使用已安装的 `into-md`，同时提供独立 ZIP 并
   以相同字节内置于每个平台 Core。
 
@@ -23,9 +22,11 @@ Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它�
 
 ## 支持范围
 
-当前格式 catalog 包含 PDF、DOC/DOCX、PPT/PPTX、XLS/XLSX、ODT/ODS/ODP、RTF、EPUB、
+当前格式 catalog 包含 PDF、DOCX、PPTX、XLSX、ODT/ODS/ODP、RTF、EPUB、
 TXT、Markdown、HTML、CSV/TSV、JSON、XML、RSS/Atom Feed、Jupyter Notebook、图片、ZIP、
-Outlook MSG、音频和视频。旧版 Office、OCR、语音转写与说话人分离由对应能力插件提供。
+Outlook MSG、音频和视频。OCR、语音转写与说话人分离由对应能力插件提供。旧版
+`.doc/.ppt/.xls` 不在当前发布中，也不会回退到 LibreOffice；后续解析路线由
+[#191](https://github.com/coolplayagent/into-markdown/issues/191) 跟踪。
 
 支持 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows x86_64；不支持 macOS x86_64。
 最终用户的签名校验、安装、离线插件导入、排障和卸载见[安装与部署](docs/user-guide.md)；
@@ -67,7 +68,6 @@ into-md capabilities list --json
 into-md capabilities show ocr --json
 into-md setup ocr
 into-md setup media
-into-md setup legacy-office
 into-md doctor --json
 into-md ui
 ```

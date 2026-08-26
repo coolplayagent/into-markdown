@@ -45,6 +45,9 @@ pub enum LoadError {
     /// The library cannot be opened or copied.
     #[error("ONNX Runtime library I/O failed")]
     Io,
+    /// A bounded load stage failed while handling an authenticated snapshot.
+    #[error("ONNX Runtime library I/O failed during {0}")]
+    SnapshotIo(&'static str),
     /// The dynamic library is missing the required C entry point.
     #[error("ONNX Runtime ABI entry point is unavailable")]
     MissingEntryPoint,
@@ -168,32 +171,80 @@ impl RuntimeLibrary {
     /// Returns a stable [`LoadError`] if the target, path, hash, ABI, API level,
     /// version string, or local I/O does not satisfy the embedded authority.
     pub fn load(trusted_root: &Path, library_path: &Path) -> Result<Self, LoadError> {
+        Self::load_inner(trusted_root, library_path, false)
+    }
+
+    /// Load from a complete runtime snapshot already authenticated and exposed
+    /// through a replacement-protected read-only official worker sandbox.
+    #[cfg(feature = "authenticated-read-only-snapshot")]
+    #[doc(hidden)]
+    pub fn load_authenticated_read_only_snapshot(
+        trusted_root: &Path,
+        library_path: &Path,
+    ) -> Result<Self, LoadError> {
+        Self::load_inner(trusted_root, library_path, true)
+    }
+
+    fn load_inner(
+        trusted_root: &Path,
+        library_path: &Path,
+        authenticated_snapshot: bool,
+    ) -> Result<Self, LoadError> {
         let target_name = current_target().ok_or(LoadError::UnsupportedTarget)?;
         let authority = authority()?;
         let target = authority.targets.get(target_name).ok_or(LoadError::UnsupportedTarget)?;
         validate_authority(&authority, target_name, target)?;
-        let (mut source, canonical) = open_explicit_no_follow(trusted_root, library_path)?;
-        if source.metadata().map_err(|_| LoadError::Io)?.len() != target.library_bytes {
+        let (mut source, canonical) = if authenticated_snapshot {
+            open_explicit_authenticated_snapshot(trusted_root, library_path)
+                .map_err(|error| snapshot_stage(error, "source-open"))?
+        } else {
+            open_explicit_no_follow(trusted_root, library_path)?
+        };
+        if source
+            .metadata()
+            .map_err(|_| snapshot_or_io(authenticated_snapshot, "source-metadata"))?
+            .len()
+            != target.library_bytes
+        {
             return Err(LoadError::HashMismatch);
         }
-        let private_dir =
-            tempfile::Builder::new().prefix("into-md-ort-").tempdir().map_err(|_| LoadError::Io)?;
+        let private_dir = private_tempdir("into-md-ort-", authenticated_snapshot)
+            .map_err(|stage| snapshot_or_io(authenticated_snapshot, stage))?;
         let file_name = Path::new(&target.library).file_name().ok_or(LoadError::UnsafePath)?;
         let private_path = private_dir.path().join(file_name);
-        let mut destination = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&private_path)
-            .map_err(|_| LoadError::Io)?;
-        let actual_hash = copy_and_hash(&mut source, &mut destination, target.library_bytes)?;
+        let mut destination =
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&private_path)
+                .map_err(|_| snapshot_or_io(authenticated_snapshot, "private-file"))?;
+        let actual_hash = copy_and_hash(&mut source, &mut destination, target.library_bytes)
+            .map_err(|error| snapshot_stage_if(authenticated_snapshot, error, "copy"))?;
         if actual_hash != target.library_sha256 {
             return Err(LoadError::HashMismatch);
         }
-        destination.sync_all().map_err(|_| LoadError::Io)?;
+        destination
+            .sync_all()
+            .map_err(|_| snapshot_or_io(authenticated_snapshot, "private-sync"))?;
         drop(destination);
-        ensure_same_open_file(&source, &canonical)?;
-        let private_path = private_path.canonicalize().map_err(|_| LoadError::UnsafePath)?;
-        let binary = read_binary_metadata(&private_path, target.library_bytes)?;
+        ensure_same_open_file(&source, &canonical).map_err(|error| {
+            snapshot_stage_if(authenticated_snapshot, error, "source-revalidate")
+        })?;
+        let private_path = if authenticated_snapshot {
+            let metadata = fs::symlink_metadata(&private_path)
+                .map_err(|_| LoadError::SnapshotIo("private-metadata"))?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || is_windows_reparse_point(&metadata)
+            {
+                return Err(LoadError::UnsafePath);
+            }
+            private_path
+        } else {
+            private_path.canonicalize().map_err(|_| LoadError::UnsafePath)?
+        };
+        let binary = read_binary_metadata(&private_path, target.library_bytes)
+            .map_err(|error| snapshot_stage_if(authenticated_snapshot, error, "binary-read"))?;
         validate_binary_metadata(target, &binary)?;
 
         Ok(Self {
@@ -224,11 +275,96 @@ impl RuntimeLibrary {
     }
 }
 
+fn private_tempdir(prefix: &str, authenticated_snapshot: bool) -> Result<TempDir, &'static str> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    if !authenticated_snapshot {
+        return builder.tempdir().map_err(|_| "private-directory");
+    }
+    // The official process sandbox supplies an authenticated per-request
+    // writable authority. AppContainer activation can rewrite standard TEMP,
+    // so use the host-only variable that plugin policy is forbidden to set.
+    let root = std::env::var_os("INTO_MARKDOWN_PRIVATE_TEMP")
+        .map(PathBuf::from)
+        .ok_or("private-temp-environment")?;
+    if !root.is_absolute() {
+        return Err("private-temp-path");
+    }
+    let metadata = fs::symlink_metadata(&root).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => "private-temp-metadata-not-found",
+        std::io::ErrorKind::PermissionDenied => "private-temp-metadata-permission",
+        _ => "private-temp-metadata-other",
+    })?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err("private-temp-authority");
+    }
+    builder.tempdir_in(root).map_err(|_| "private-temp-create")
+}
+
+const fn snapshot_or_io(authenticated_snapshot: bool, stage: &'static str) -> LoadError {
+    if authenticated_snapshot { LoadError::SnapshotIo(stage) } else { LoadError::Io }
+}
+
+fn snapshot_stage(error: LoadError, stage: &'static str) -> LoadError {
+    match error {
+        LoadError::Io => LoadError::SnapshotIo(stage),
+        other => other,
+    }
+}
+
+fn snapshot_stage_if(
+    authenticated_snapshot: bool,
+    error: LoadError,
+    stage: &'static str,
+) -> LoadError {
+    if authenticated_snapshot { snapshot_stage(error, stage) } else { error }
+}
+
+fn open_explicit_authenticated_snapshot(
+    root: &Path,
+    path: &Path,
+) -> Result<(File, PathBuf), LoadError> {
+    #[cfg(not(windows))]
+    return open_explicit_no_follow(root, path);
+    #[cfg(windows)]
+    {
+        if !root.is_absolute() || !path.is_absolute() {
+            return Err(LoadError::UnsafePath);
+        }
+        let relative = path.strip_prefix(root).map_err(|_| LoadError::UnsafePath)?;
+        if !is_safe_relative(relative) {
+            return Err(LoadError::UnsafePath);
+        }
+        let mut cursor = root.to_path_buf();
+        let root_metadata = fs::symlink_metadata(&cursor).map_err(|_| LoadError::Io)?;
+        if !root_metadata.is_dir() || is_windows_reparse_point(&root_metadata) {
+            return Err(LoadError::UnsafePath);
+        }
+        for part in relative.components() {
+            cursor.push(part.as_os_str());
+            let metadata = fs::symlink_metadata(&cursor).map_err(|_| LoadError::Io)?;
+            if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {
+                return Err(LoadError::UnsafePath);
+            }
+        }
+        let file = open_no_follow(path)?;
+        if !file.metadata().map_err(|_| LoadError::Io)?.is_file() {
+            return Err(LoadError::UnsafePath);
+        }
+        ensure_same_open_file(&file, path)?;
+        Ok((file, path.to_path_buf()))
+    }
+}
+
 /// Real CPU session factory backed by the verified runtime library.
 #[derive(Debug)]
 pub struct OrtSessionFactory {
     library: Arc<RuntimeLibrary>,
     worker_executable: PathBuf,
+    authenticated_snapshot: bool,
 }
 
 /// Verify the exact worker path used by isolated OCR sessions without
@@ -239,7 +375,7 @@ pub struct OrtSessionFactory {
 /// Returns a stable runtime error when the path is absent, relative,
 /// non-canonical, a symlink, not a regular file, or not executable.
 pub fn verify_worker_executable(path: &Path) -> Result<(), ConversionError> {
-    worker::validate_worker_path(path)
+    worker::validate_worker_path(path, false)
 }
 
 impl OrtSessionFactory {
@@ -256,7 +392,21 @@ impl OrtSessionFactory {
         if !worker_executable.is_absolute() {
             return Err(LoadError::UnsafePath);
         }
-        Ok(Self { library, worker_executable })
+        Ok(Self { library, worker_executable, authenticated_snapshot: false })
+    }
+
+    /// Bind a worker from the same host-authenticated read-only official snapshot.
+    #[cfg(feature = "authenticated-read-only-snapshot")]
+    #[doc(hidden)]
+    pub fn new_authenticated_read_only_snapshot(
+        library: Arc<RuntimeLibrary>,
+        worker_executable: impl Into<PathBuf>,
+    ) -> Result<Self, LoadError> {
+        let worker_executable = worker_executable.into();
+        if !worker_executable.is_absolute() {
+            return Err(LoadError::UnsafePath);
+        }
+        Ok(Self { library, worker_executable, authenticated_snapshot: true })
     }
 }
 
@@ -290,6 +440,7 @@ impl SessionFactory for OrtSessionFactory {
             &model.contract,
             options,
             context,
+            self.authenticated_snapshot,
         )?;
         context.checkpoint()?;
         let estimate = self.estimate_bytes(model, options)?;
@@ -434,16 +585,22 @@ fn dependencies_are_system_only(target_name: &str, dependencies: &[SystemDepende
                 if expected_path != dependency.load_name {
                     return false;
                 }
-                let path = Path::new(expected_path);
-                path.is_absolute()
-                    && (path.starts_with("/System/Library") || path.starts_with("/usr/lib"))
-                    && path.components().all(|component| {
-                        matches!(component, Component::RootDir | Component::Normal(_))
-                    })
+                is_safe_macos_system_path(expected_path)
             } else {
                 dependency.path.is_none() && is_safe_file_name(&dependency.load_name)
             }
     })
+}
+
+fn is_safe_macos_system_path(value: &str) -> bool {
+    // Validate the target platform's POSIX spelling lexically so the release
+    // authority has identical meaning when audited from Windows.
+    (value.starts_with("/System/Library/") || value.starts_with("/usr/lib/"))
+        && !value.contains('\\')
+        && value
+            .split('/')
+            .skip(1)
+            .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 fn companions_are_safe(dependencies: &[CompanionDependency]) -> bool {
@@ -721,6 +878,11 @@ fn audit_loaded_linux(target: &Target, trusted_main: Option<&Path>) -> Result<()
         }
         // SAFETY: the platform loader supplies a NUL-terminated image name.
         let path = unsafe { CStr::from_ptr(information.dlpi_name) };
+        if path.to_bytes().is_empty() {
+            // glibc represents the main executable with an empty dlpi_name.
+            // It is the already-running worker, not a loader search result.
+            return 0;
+        }
         let path = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
         if path.is_absolute() {
             audit.paths.push(path.to_owned());
@@ -1477,6 +1639,7 @@ mod tests {
                 &model.contract,
                 &SessionOptions::default(),
                 &cancelled_context,
+                false,
             )
             .err()
             .unwrap();

@@ -6,7 +6,7 @@ use crate::request::ValidatedRequest;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 struct CargoMetadata {
@@ -55,11 +55,35 @@ fn compile_and_run(
     root: &Path,
     executor: &dyn Executor,
 ) -> Result<(), String> {
-    let consumer = root.join("external-consumer");
+    let consumer = root.join("c");
     let source = consumer.join("src");
     fs::create_dir_all(&source)
         .map_err(|error| format!("cannot create external consumer: {error}"))?;
-    let library = toml_path(&request.rust_library)?;
+
+    let home = prepare_home(root, "h")?;
+    let cargo_home = home.join("cargo");
+    fs::create_dir(&cargo_home)
+        .map_err(|error| format!("cannot create empty Cargo home: {error}"))?;
+    write_cargo_config(&cargo_home, &request.rust_library.join("vendor"))?;
+    let target = root.join("o");
+    let mut environment = command_environment(&home);
+    environment.extend(BTreeMap::from([
+        ("CARGO_HOME".into(), cargo_path(&cargo_home)?),
+        ("CARGO_NET_OFFLINE".into(), "true".into()),
+        ("CARGO_TARGET_DIR".into(), cargo_path(&target)?),
+        ("RUSTC".into(), cargo_path(&request.rustc)?),
+    ]));
+    configure_macos_linker(&mut environment)?;
+    configure_windows_linker(request, &mut environment)?;
+    let invocation_root = filesystem_root(&home)?;
+    validate_installed_metadata(request, &invocation_root, &home, &environment, executor)?;
+
+    // MSVC still applies legacy path limits while resolving relative includes in
+    // vendored C sources. Compile an exact private snapshot under the bounded
+    // runner root so a valid long or non-ASCII installation path remains usable.
+    let library_snapshot = root.join("r");
+    snapshot_installed_library(&request.rust_library, &library_snapshot)?;
+    let library = cargo_path(&library_snapshot)?;
     fs::write(
         consumer.join("Cargo.toml"),
         format!(
@@ -69,31 +93,8 @@ fn compile_and_run(
     .map_err(|error| format!("cannot write external consumer manifest: {error}"))?;
     fs::write(source.join("main.rs"), CONSUMER_SOURCE)
         .map_err(|error| format!("cannot write external consumer source: {error}"))?;
-
-    let home = prepare_home(root, "rust-home")?;
-    let cargo_home = home.join("cargo-home");
-    fs::create_dir(&cargo_home)
-        .map_err(|error| format!("cannot create empty Cargo home: {error}"))?;
-    let vendor = toml_path(&request.rust_library.join("vendor"))?;
-    fs::write(
-        cargo_home.join("config.toml"),
-        format!(
-            "[net]\noffline = true\n\n[source.crates-io]\nreplace-with = \"installed-vendor\"\n\n[source.installed-vendor]\ndirectory = {vendor:?}\n"
-        ),
-    )
-    .map_err(|error| format!("cannot write isolated Cargo config: {error}"))?;
-    let target = root.join("consumer-target");
-    let mut environment = command_environment(&home);
-    environment.extend(BTreeMap::from([
-        ("CARGO_HOME".into(), cargo_home.display().to_string()),
-        ("CARGO_NET_OFFLINE".into(), "true".into()),
-        ("CARGO_TARGET_DIR".into(), target.display().to_string()),
-        ("RUSTC".into(), request.rustc.display().to_string()),
-    ]));
-    configure_macos_linker(&mut environment)?;
-    let invocation_root = filesystem_root(&home)?;
-    validate_installed_metadata(request, &invocation_root, &home, &environment, executor)?;
-    let manifest = consumer.join("Cargo.toml").display().to_string();
+    write_cargo_config(&cargo_home, &library_snapshot.join("vendor"))?;
+    let manifest = cargo_path(&consumer.join("Cargo.toml"))?;
     for arguments in [
         vec![
             "generate-lockfile".into(),
@@ -156,6 +157,95 @@ fn compile_and_run(
     }
 }
 
+fn write_cargo_config(cargo_home: &Path, vendor: &Path) -> Result<(), String> {
+    let vendor = cargo_path(vendor)?;
+    fs::write(
+        cargo_home.join("config.toml"),
+        format!(
+            "[net]\noffline = true\n\n[source.crates-io]\nreplace-with = \"installed-vendor\"\n\n[source.installed-vendor]\ndirectory = {vendor:?}\n"
+        ),
+    )
+    .map_err(|error| format!("cannot write isolated Cargo config: {error}"))
+}
+
+fn snapshot_installed_library(source: &Path, destination: &Path) -> Result<(), String> {
+    prepare_snapshot_root(destination)?;
+    let mut pending = vec![(source.to_owned(), destination.to_owned())];
+    let mut files = 0_u64;
+    let mut bytes = 0_u64;
+    while let Some((source_directory, destination_directory)) = pending.pop() {
+        let mut entries = fs::read_dir(&source_directory)
+            .map_err(|error| format!("cannot read installed Rust package: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("cannot read installed Rust package: {error}"))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let source_path = entry.path();
+            let destination_path = destination_directory.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path)
+                .map_err(|error| format!("cannot inspect installed Rust package: {error}"))?;
+            if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) {
+                return Err(
+                    "installed Rust package snapshot contains a link or reparse point".into()
+                );
+            }
+            if metadata.is_dir() {
+                fs::create_dir(&destination_path)
+                    .map_err(|error| format!("cannot create Rust package snapshot: {error}"))?;
+                pending.push((source_path, destination_path));
+            } else if metadata.is_file() {
+                files = files.saturating_add(1);
+                bytes = bytes.saturating_add(metadata.len());
+                if files > 25_000 || bytes > 2 * 1024 * 1024 * 1024 {
+                    return Err("installed Rust package snapshot exceeds its fixed budget".into());
+                }
+                let copied = fs::copy(&source_path, &destination_path)
+                    .map_err(|error| format!("cannot copy installed Rust package: {error}"))?;
+                if copied != metadata.len() {
+                    return Err("installed Rust package snapshot copy is incomplete".into());
+                }
+            } else {
+                return Err(
+                    "installed Rust package contains an unsupported filesystem object".into()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prepare_snapshot_root(path: &Path) -> Result<(), String> {
+    into_markdown_process_plugin::create_windows_plugin_store_directory(path)
+        .map_err(|error| format!("cannot prepare private Rust package snapshot: {error}"))
+}
+
+#[cfg(unix)]
+fn prepare_snapshot_root(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir(path)
+        .map_err(|error| format!("cannot prepare private Rust package snapshot: {error}"))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("cannot protect Rust package snapshot: {error}"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn prepare_snapshot_root(path: &Path) -> Result<(), String> {
+    fs::create_dir(path)
+        .map_err(|error| format!("cannot prepare private Rust package snapshot: {error}"))
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+const fn metadata_is_reparse_point(_: &fs::Metadata) -> bool {
+    false
+}
+
 fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<(), String> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         let linker = Path::new("/usr/bin/clang")
@@ -209,6 +299,149 @@ fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<
     Ok(())
 }
 
+#[cfg(windows)]
+fn configure_windows_linker(
+    _: &ValidatedRequest,
+    environment: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    const MSVC_VERSION: &str = "14.44.35207";
+    const SDK_VERSION: &str = "10.0.26100.0";
+    if std::env::consts::ARCH != "x86_64" {
+        return Err(
+            "installed Rust consumer has no fixed Windows linker for this architecture".into()
+        );
+    }
+    let system_root = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "fixed Windows system root is unavailable".to_owned())?;
+    let system_root = fixed_directory(&system_root, "Windows system root")?;
+    let volume = system_root
+        .ancestors()
+        .last()
+        .ok_or_else(|| "fixed Windows system volume is unavailable".to_owned())?;
+    let program_files = fixed_directory(&volume.join("Program Files (x86)"), "Program Files")?;
+    let mut installations = ["Enterprise", "Professional", "Community", "BuildTools"]
+        .into_iter()
+        .map(|edition| {
+            program_files
+                .join("Microsoft Visual Studio/2022")
+                .join(edition)
+                .join("VC/Tools/MSVC")
+                .join(MSVC_VERSION)
+        })
+        .filter(|candidate| candidate.is_dir())
+        .collect::<Vec<_>>();
+    if installations.len() != 1 {
+        return Err("a unique fixed MSVC installation is unavailable".into());
+    }
+    let tools = fixed_directory(&installations.remove(0), "MSVC tools")?;
+    let tool_bin = fixed_directory(&tools.join("bin/HostX64/x64"), "MSVC executable directory")?;
+    let linker = fixed_file(&tool_bin.join("link.exe"), "MSVC linker")?;
+    let compiler = fixed_file(&tool_bin.join("cl.exe"), "MSVC compiler")?;
+    let librarian = fixed_file(&tool_bin.join("lib.exe"), "MSVC librarian")?;
+    let vc_library = fixed_directory(&tools.join("lib/x64"), "MSVC library directory")?;
+    let vc_include = fixed_directory(&tools.join("include"), "MSVC include directory")?;
+
+    let kits = fixed_directory(&program_files.join("Windows Kits/10"), "Windows SDK")?;
+    let sdk_bin =
+        fixed_directory(&kits.join(format!("bin/{SDK_VERSION}/x64")), "Windows SDK tools")?;
+    fixed_file(&sdk_bin.join("rc.exe"), "Windows resource compiler")?;
+    let sdk_library = ["ucrt", "um"]
+        .map(|kind| {
+            fixed_directory(
+                &kits.join(format!("Lib/{SDK_VERSION}/{kind}/x64")),
+                "Windows SDK library",
+            )
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let sdk_include = ["ucrt", "shared", "um", "winrt", "cppwinrt"]
+        .map(|kind| {
+            fixed_directory(
+                &kits.join(format!("Include/{SDK_VERSION}/{kind}")),
+                "Windows SDK include",
+            )
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    environment
+        .insert("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER".into(), linker.display().to_string());
+    environment
+        .insert("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_AR".into(), librarian.display().to_string());
+    environment.insert("CC".into(), compiler.display().to_string());
+    environment.insert("CXX".into(), compiler.display().to_string());
+    environment.insert("AR".into(), librarian.display().to_string());
+    environment.insert(
+        "LIB".into(),
+        std::iter::once(vc_library)
+            .chain(sdk_library)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    environment.insert(
+        "INCLUDE".into(),
+        std::iter::once(vc_include)
+            .chain(sdk_include)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    environment.insert(
+        "PATH".into(),
+        [tool_bin, sdk_bin, system_root.join("System32")]
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";"),
+    );
+    environment.insert("VCToolsInstallDir".into(), tools.display().to_string());
+    environment.insert("WindowsSdkDir".into(), kits.display().to_string());
+    environment.insert("WindowsSDKVersion".into(), SDK_VERSION.into());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn fixed_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| format!("fixed {label} is unavailable"))?;
+    if !metadata.is_dir() || metadata_is_reparse_point(&metadata) {
+        return Err(format!("fixed {label} is not a trusted directory"));
+    }
+    let canonical = path.canonicalize().map_err(|_| format!("fixed {label} is unavailable"))?;
+    legacy_windows_path(&canonical, label)
+}
+
+#[cfg(windows)]
+fn fixed_file(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| format!("fixed {label} is unavailable"))?;
+    if !metadata.is_file() || metadata_is_reparse_point(&metadata) {
+        return Err(format!("fixed {label} is not a trusted file"));
+    }
+    let canonical = path.canonicalize().map_err(|_| format!("fixed {label} is unavailable"))?;
+    legacy_windows_path(&canonical, label)
+}
+
+#[cfg(windows)]
+fn legacy_windows_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let value = path.to_str().ok_or_else(|| format!("fixed {label} path is not Unicode"))?;
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return Ok(PathBuf::from(format!(r"\\{rest}")));
+    }
+    Ok(PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(value)))
+}
+
+#[cfg(not(windows))]
+fn configure_windows_linker(
+    _: &ValidatedRequest,
+    _: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    Ok(())
+}
+
 fn validate_installed_metadata(
     request: &ValidatedRequest,
     invocation_root: &Path,
@@ -223,7 +456,7 @@ fn validate_installed_metadata(
         "--format-version".into(),
         "1".into(),
         "--manifest-path".into(),
-        request.rust_library.join("Cargo.toml").display().to_string(),
+        cargo_path(&request.rust_library.join("Cargo.toml"))?,
     ];
     let output = executor.execute(CommandSpec {
         program: &request.cargo,
@@ -240,7 +473,13 @@ fn validate_installed_metadata(
         cancel_file: request.cancel_file.as_deref(),
     })?;
     if output.exit_code != Some(0) {
-        return Err("installed Rust package metadata failed offline".into());
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let tail = diagnostics.char_indices().rev().nth(4_096).map_or(0, |(index, _)| index);
+        return Err(format!(
+            "installed Rust package metadata failed offline (exit {:?}): {}",
+            output.exit_code,
+            diagnostics[tail..].trim()
+        ));
     }
     let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)
         .map_err(|_| "installed Rust package metadata is invalid".to_owned())?;
@@ -340,8 +579,14 @@ fn filesystem_root(path: &Path) -> Result<std::path::PathBuf, String> {
 
 fn toml_path(path: &Path) -> Result<String, String> {
     path.to_str()
-        .map(|value| value.replace('\\', "\\\\"))
+        .map(str::to_owned)
         .ok_or_else(|| "installed Rust package path is not Unicode".to_owned())
+}
+
+fn cargo_path(path: &Path) -> Result<String, String> {
+    #[cfg(windows)]
+    let path = legacy_windows_path(path, "Cargo input")?;
+    toml_path(&path)
 }
 
 const CONSUMER_SOURCE: &str = r#"use into_markdown::{ConversionRequest, DtoJsonStyle, InputRef, ResultDto, default_engine};
@@ -380,6 +625,25 @@ mod tests {
     use std::time::Duration;
 
     struct FakeExecutor(Mutex<Option<CommandOutput>>);
+
+    #[test]
+    fn installed_library_snapshot_copies_an_exact_regular_tree() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("snapshot");
+        fs::create_dir_all(source.join("vendor/pkg")).unwrap();
+        fs::write(source.join("Cargo.toml"), b"manifest\n").unwrap();
+        fs::write(source.join("vendor/pkg/file"), b"vendored\n").unwrap();
+        snapshot_installed_library(&source, &destination).unwrap();
+        assert_eq!(fs::read(destination.join("Cargo.toml")).unwrap(), b"manifest\n");
+        assert_eq!(fs::read(destination.join("vendor/pkg/file")).unwrap(), b"vendored\n");
+    }
+
+    #[test]
+    fn toml_debug_quoting_escapes_windows_path_once() {
+        let path = toml_path(Path::new(r"C:\Users\用户\library")).unwrap();
+        assert_eq!(format!("{path:?}"), r#""C:\\Users\\用户\\library""#);
+    }
 
     impl Executor for FakeExecutor {
         fn execute(&self, _: CommandSpec<'_>) -> Result<CommandOutput, String> {

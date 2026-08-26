@@ -4,7 +4,7 @@
 
 Into Markdown is a local-first, offline-by-default document-to-Markdown product. It combines a
 Rust conversion core, the `into-md` CLI, a local Web workbench, stable JSON and Bundle contracts,
-and three self-contained optional capability plugins. Every result passes through the
+and two self-contained optional capability plugins. Every result passes through the
 provenance-aware Document IR and the single deterministic GFM renderer.
 
 The project is independent of the neighbouring `anydoc` and `markitdown` projects and does not
@@ -16,7 +16,6 @@ wrap either implementation.
   transactions, plugin and provider administration, and installed-package acceptance tools.
 - OCR plugin `official.ocr.ppocrv6`: PP-OCRv6, ONNX Runtime, worker, models, and character table.
 - Speech plugin `official.media.whisper`: FFmpeg, Whisper, VAD, diarization models, and runtimes.
-- Legacy Office plugin `official.legacy-office.libreoffice`: LibreOffice runtime and isolated worker.
 - Agent Skill `into-markdown`: portable instructions for compatible agents, released as a
   standalone ZIP and embedded byte-for-byte in every Core package.
 
@@ -26,10 +25,12 @@ models, or remote content.
 
 ## Supported surface
 
-The current format catalog includes PDF, DOC/DOCX, PPT/PPTX, XLS/XLSX, ODT/ODS/ODP, RTF, EPUB,
+The current format catalog includes PDF, DOCX, PPTX, XLSX, ODT/ODS/ODP, RTF, EPUB,
 text, Markdown, HTML, CSV/TSV, JSON, XML, RSS/Atom feeds, Jupyter notebooks, images, ZIP, Outlook
-MSG, audio, and video. Legacy Office, OCR, transcription, and diarization use their corresponding
-capability plugins.
+MSG, audio, and video. OCR, transcription, and diarization use their corresponding capability
+plugins. Legacy `.doc/.ppt/.xls` files are not shipped in the current release and never fall back
+to LibreOffice; [#191](https://github.com/coolplayagent/into-markdown/issues/191) tracks their
+replacement parser path.
 
 Release targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows x86_64. macOS x86_64 is
 unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature
@@ -72,7 +73,6 @@ into-md capabilities list --json
 into-md capabilities show ocr --json
 into-md setup ocr
 into-md setup media
-into-md setup legacy-office
 into-md doctor --json
 into-md ui
 ```

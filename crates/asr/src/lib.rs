@@ -446,6 +446,8 @@ fn environment_allows_metal(mut is_present: impl FnMut(&str) -> bool) -> bool {
     .all(|name| !is_present(name))
 }
 
+type DecodedWindow = (WhisperState, Option<(String, Option<f32>)>);
+
 #[allow(clippy::too_many_arguments)]
 fn decode_window(
     native: &WhisperContext,
@@ -456,7 +458,7 @@ fn decode_window(
     window_start: u64,
     window_end: u64,
     total_frames: u64,
-) -> Result<(WhisperState, Option<(String, Option<f32>)>), ConversionError> {
+) -> Result<DecodedWindow, ConversionError> {
     let mut state = native
         .create_state()
         .map_err(|_| component(PROVIDER_ID, "Whisper decoder state could not be created"))?;
@@ -1013,8 +1015,7 @@ mod tests {
 
     #[test]
     fn policy_limits_fail_before_model_or_media_work() {
-        let mut options = AsrOptions::default();
-        options.max_threads = 0;
+        let mut options = AsrOptions { max_threads: 0, ..AsrOptions::default() };
         assert_eq!(WhisperConfig::try_from(&options).unwrap_err().code(), ErrorCode::ResourceLimit);
         options.max_threads = 1;
         options.max_duration_ms = Some(0);

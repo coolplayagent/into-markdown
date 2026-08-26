@@ -40,6 +40,9 @@ impl std::fmt::Debug for ProcessCapability {
 impl ProcessCapability {
     /// Build the sandbox policy declared by one signed capability manifest.
     ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding or resource envelope is invalid.
     pub fn runtime_policy(
         manifest: &PluginManifest,
         binding: &ProviderBinding,
@@ -87,6 +90,10 @@ impl ProcessCapability {
     }
 
     /// Bind a manager-verified immutable process snapshot to one capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is absent or has changed.
     pub fn new(
         process: PreparedProcessPlugin,
         manifest: &PluginManifest,
@@ -114,12 +121,20 @@ impl ProcessCapability {
     }
 
     /// Adapt this exact binding as OCR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is not an OCR capability.
     pub fn ocr(self, options: ConversionOptions) -> Result<ProcessOcrEngine, ConversionError> {
         self.require(CapabilityKind::Ocr)?;
         Ok(ProcessOcrEngine { capability: self, options })
     }
 
     /// Adapt this exact binding as transcription.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is not transcription.
     pub fn transcriber(
         self,
         options: ConversionOptions,
@@ -129,18 +144,30 @@ impl ProcessCapability {
     }
 
     /// Adapt this exact binding as diarization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is not diarization.
     pub fn diarizer(self, options: ConversionOptions) -> Result<ProcessDiarizer, ConversionError> {
         self.require(CapabilityKind::Diarization)?;
         Ok(ProcessDiarizer { capability: self, options })
     }
 
     /// Adapt this exact binding as legacy Office normalization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is not legacy Office.
     pub fn legacy_office(self) -> Result<ProcessLegacyOfficeNormalizer, ConversionError> {
         self.require(CapabilityKind::LegacyOffice)?;
         Ok(ProcessLegacyOfficeNormalizer { capability: self })
     }
 
     /// Ask the isolated provider to verify its exact model and native runtime without inference.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversion error when sandbox execution or readiness validation fails.
     pub fn verify_ready(
         &self,
         options: &ConversionOptions,

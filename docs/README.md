@@ -20,7 +20,7 @@
 ## 架构与扩展
 
 - [架构](architecture.md)与[公共接口](interfaces.md)：Engine、IR、恢复、资源预算与 SPI。
-- [能力插件](capability-plugins.md)：OCR、语音、说话人分离和旧版 Office 的完整插件边界。
+- [能力插件](capability-plugins.md)：OCR、语音与说话人分离的完整插件边界。
 - [插件管理](plugin-management.md)、[进程插件](process-plugins.md)与
   [WASI 插件](wasi-plugins.md)：签名、信任、作用域、隔离与生命周期。
 - [插件开发](plugin-development.md) / [English](plugin-development.en.md)：协议选择、开发、
@@ -42,7 +42,7 @@
   [第三方许可说明](../THIRD_PARTY_NOTICES.md)。
 - [贡献指南](../CONTRIBUTING.md) / [English](../CONTRIBUTING.en.md)。
 
-每个平台产品发布由一个 Core、三个自包含能力插件和一份平台无关 Agent Skill 构成。
+每个平台产品发布由一个 Core、两个自包含能力插件和一份平台无关 Agent Skill 构成。
 Core 内置 canonical skill 目录；独立 ZIP 与 Core 副本逐文件一致。产品安装器与卸载器不修改
 用户的 agent skill 目录。
 

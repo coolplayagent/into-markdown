@@ -10,7 +10,7 @@ import { ResultDialog } from "./result-page";
 import { HistoryPanel } from "./history-panel";
 import { useCapabilities } from "./capability-store";
 import { capabilitySourceLabel } from "./source-label";
-import { RouteLink } from "./router";
+import { RouteLink, useRouter } from "./router";
 import {
   appendRecordingChunk, beginRecordingDraft, clearRecordingDraft, loadRecordingDraft,
   RecordingDraftLimitError, type RecordingDraft,
@@ -94,6 +94,7 @@ function progressMessage(stage: string | undefined, message: string | null | und
 
 export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
   const { locale, t } = useI18n();
+  const { navigate } = useRouter();
   const capabilities = useCapabilities();
   const input = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -176,6 +177,15 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   }, [stopMeter]);
 
   useEffect(() => setActiveTaskId(initialTaskId), [initialTaskId]);
+
+  const selectTask = useCallback((id: string) => {
+    setActiveTaskId(id);
+    navigate(`/meetings/results/${id}`);
+  }, [navigate]);
+  const closeResult = useCallback(() => {
+    setActiveTaskId(undefined);
+    navigate("/meetings");
+  }, [navigate]);
 
   useEffect(() => {
     if (!languageTouched.current) {
@@ -383,8 +393,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const settleTask = useCallback((record: TaskRecord) => {
     setCancellingTaskId(null);
     setTask(record); setRecent((items) => [record, ...items.filter((item) => item.id !== record.id)]);
-    if (record.status === "succeeded") setActiveTaskId(record.id);
-  }, []);
+    if (record.status === "succeeded") selectTask(record.id);
+  }, [selectTask]);
 
   const watchTask = useCallback((taskId: string) => {
     watcher.current?.abort();
@@ -510,11 +520,11 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
           {(!audioChecking && audioStatus?.available === false || !diarizationChecking && diarizationStatus?.available === false) && <RouteLink className="prepare-media" href="/admin/capabilities"><CircleAlert size={16} />{t("prepareAudioComponents")}</RouteLink>}
         </div>
         </section>
-        <div className={`transcript-action-panel ${task?.status ?? "idle"}`}><div className="transcript-action-buttons">{task && !TERMINAL.has(task.status) ? <button className="secondary" type="button" disabled={cancellingTranscription} onClick={() => void cancelTranscription()}>{cancellingTranscription ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />}{t(cancellingTranscription ? "cancellingTranscription" : "cancelTranscription")}</button> : task ? <><button type="button" onClick={() => setActiveTaskId(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}{t(task.status === "succeeded" ? "viewTranscript" : "taskDetails")}</button><button className="secondary" type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={18} />{t("regenerateTranscript")}</button></> : <button type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={19} />{t("generateTranscript")}</button>}</div></div>
+        <div className={`transcript-action-panel ${task?.status ?? "idle"}`}><div className="transcript-action-buttons">{task && !TERMINAL.has(task.status) ? <button className="secondary" type="button" disabled={cancellingTranscription} onClick={() => void cancelTranscription()}>{cancellingTranscription ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />}{t(cancellingTranscription ? "cancellingTranscription" : "cancelTranscription")}</button> : task ? <><button type="button" onClick={() => selectTask(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}{t(task.status === "succeeded" ? "viewTranscript" : "taskDetails")}</button><button className="secondary" type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={18} />{t("regenerateTranscript")}</button></> : <button type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={19} />{t("generateTranscript")}</button>}</div></div>
         <div className="transcript-status-bar" role="status" aria-live="polite"><span><strong>{task ? taskName(task, t("meetingTranscript")) : t("generateTranscript")}</strong>{" · "}{task ? `${cancellingTranscription ? t("cancellingTranscription") : t(task.status)}${!cancellingTranscription && !TERMINAL.has(task.status) && stage ? ` · ${executionStageLabel(stage, locale)}` : ""}` : file ? t("recordingReady") : t("chooseRecordingBeforeTranscript")}</span>{task && !TERMINAL.has(task.status) && <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>
       </div>
-    </div><HistoryPanel tasks={transcriptHistory} fallbackName={t("meetingTranscript")} onOpen={setActiveTaskId} feedback={historyFeedback} /></div>
-    {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={setActiveTaskId} onClose={() => setActiveTaskId(undefined)} onTaskRemoved={(id) => setRecent((items) => items.filter((item) => item.id !== id))} onTaskUpdated={updateVisibleTask} />}
+    </div><HistoryPanel tasks={transcriptHistory} fallbackName={t("meetingTranscript")} onOpen={selectTask} feedback={historyFeedback} /></div>
+    {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={selectTask} onClose={closeResult} onTaskRemoved={(id) => setRecent((items) => items.filter((item) => item.id !== id))} onTaskUpdated={updateVisibleTask} />}
   </section>;
 }
 

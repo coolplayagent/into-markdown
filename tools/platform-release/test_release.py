@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -12,18 +13,25 @@ import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from common import authority, sha256
-from legacy_authority import LEGACY_PLUGIN_ID, inventory_by_identity
 from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
     SPEECH_COMPONENTS,
     create_archive,
     distributed_source_ids,
-    libreoffice_component,
+    published_plugin_file,
 )
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_published_plugin_names_are_flat_and_target_unique(self) -> None:
+        self.assertEqual(
+            published_plugin_file("official.ocr.ppocrv6.imp", "x86_64-pc-windows-msvc"),
+            "official.ocr.ppocrv6-x86_64-pc-windows-msvc.imp",
+        )
+        with self.assertRaisesRegex(RuntimeError, "filename"):
+            published_plugin_file("nested/package.imp", "x86_64-pc-windows-msvc")
+
     def test_release_projection_excludes_non_distributed_source_records(self) -> None:
         manifest = {
             "components": [
@@ -41,7 +49,6 @@ class PlatformReleaseTests(unittest.TestCase):
                 "core": set(CORE_COMPONENTS),
                 "ocr": set(OCR_COMPONENTS),
                 "speech": set(SPEECH_COMPONENTS),
-                "legacy-office": {libreoffice_component(target)},
             }
             for plugin, components in groups.items():
                 if plugin != "core":
@@ -57,32 +64,39 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(value["sourceDateEpoch"], 1_767_225_600)
         for target, config in value["targets"].items():
             self.assertIn(config["os"], {"linux", "windows"})
-            for name in ["pdfium", "onnxruntime", "libreoffice"]:
+            baseline = config["buildBaseline"]
+            self.assertNotIn("native", baseline["cpu"])
+            if config["os"] == "linux":
+                self.assertEqual(baseline["glibcMaximum"], "2.28")
+                self.assertEqual(baseline["kernelMinimum"], "5.15")
+                self.assertRegex(baseline["container"], r"@sha256:[0-9a-f]{64}$")
+            else:
+                self.assertRegex(baseline["msvcTools"], r"^\d+\.\d+\.\d+$")
+                self.assertRegex(baseline["windowsSdk"], r"^\d+\.\d+\.\d+\.\d+$")
+            for name in ["pdfium", "onnxruntime"]:
                 download = config[name]
                 self.assertTrue(download["url"].startswith("https://"), (target, name))
                 self.assertRegex(download["sha256"], r"^[0-9a-f]{64}$")
-                if name != "onnxruntime":
+                if name == "pdfium":
                     self.assertGreater(download["bytes"], 0)
         for download in value["sharedDownloads"].values():
             self.assertTrue(download["url"].startswith("https://"))
             self.assertGreater(download["bytes"], 0)
             self.assertRegex(download["sha256"], r"^[0-9a-f]{64}$")
 
-    def test_dependency_index_never_silently_overwrites_duplicate_names(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = pathlib.Path(name)
-            (root / "a").mkdir()
-            (root / "b").mkdir()
-            (root / "a/libsame.so").write_bytes(b"a")
-            (root / "b/libsame.so").write_bytes(b"b")
-            inventory = inventory_by_identity(root, case_sensitive=True)
-            self.assertEqual(len(inventory["libsame.so"]), 2)
-
-    def test_windows_legacy_sandbox_identity_matches_the_installer_contract(self) -> None:
-        import hashlib
-
-        suffix = hashlib.sha256(LEGACY_PLUGIN_ID.encode("ascii")).hexdigest()[:24]
-        self.assertEqual(suffix, "8d67189097d50455950e62f7")
+    def test_installed_smoke_uses_the_pinned_windows_native_toolchain(self) -> None:
+        windows = authority()["targets"]["x86_64-pc-windows-msvc"]["buildBaseline"]
+        consumer = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "installed-smoke"
+            / "src"
+            / "rust_consumer.rs"
+        ).read_text(encoding="utf-8")
+        constants = dict(
+            re.findall(r'const (MSVC_VERSION|SDK_VERSION): &str = "([^"]+)";', consumer)
+        )
+        self.assertEqual(constants["MSVC_VERSION"], windows["msvcTools"])
+        self.assertEqual(constants["SDK_VERSION"], windows["windowsSdk"])
 
     def test_windows_zip_is_byte_reproducible_and_contains_only_regular_files(self) -> None:
         config = {"archive": "zip"}

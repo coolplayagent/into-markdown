@@ -1612,8 +1612,11 @@ mod tests {
         let output = convert(links.as_bytes()).unwrap();
         assert!(!output.document.blocks.is_empty());
 
+        // Keep the stack far below every supported platform default while leaving room for the
+        // test harness and current debug runtime's fixed thread-entry frames.
+        let small_stack = 256 * 1024;
         let joined = std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(small_stack)
             .spawn(move || convert(links.as_bytes()).map(|result| result.document.blocks.len()))
             .unwrap()
             .join();

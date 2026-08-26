@@ -756,13 +756,8 @@ mod tests {
 
     #[test]
     fn stable_asset_conflicts_are_preflighted_before_any_write() {
-        let root = std::env::temp_dir().join(format!(
-            "into-md-assets-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
         let assets = vec![
             Asset {
                 id: AssetId("first".into()),
@@ -789,19 +784,12 @@ mod tests {
         assert_eq!(error.code(), "assetConflict");
         assert!(!root.join(planned.uri("first").unwrap()).exists());
         assert_eq!(fs::read(second).unwrap(), b"existing");
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn post_preflight_races_never_overwrite_primary_or_asset_targets() {
-        let root = std::env::temp_dir().join(format!(
-            "into-md-race-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let root = root.canonicalize().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
 
         let requested = root.join("document.md");
         fs::write(&requested, b"original").unwrap();
@@ -840,17 +828,12 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code(), "outputConflict");
         assert_eq!(fs::read(asset_target).unwrap(), b"asset-racer");
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn renderer_asset_uri_and_writer_target_use_the_same_plan() {
-        let root = std::env::temp_dir().join(format!(
-            "into-md-linked-assets-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        let _ = fs::remove_dir_all(&root);
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
         let asset = Asset {
             id: AssetId("图片/CON".into()),
             filename: Some("dir\\Case.PNG".into()),
@@ -883,7 +866,6 @@ mod tests {
         write_assets(&result, &root.join("assets"), AssetModeArg::Extract, ConflictPolicy::Error)
             .unwrap();
         assert_eq!(fs::read(root.join("assets").join(filename)).unwrap(), [1, 2, 3]);
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -2467,6 +2467,26 @@ mod tests {
         MemoryBudget::new(context).unwrap()
     }
 
+    fn controlled_test_secret_environment() -> &'static str {
+        [
+            "CODEX_SESSION_ID",
+            "GITHUB_SHA",
+            "GITHUB_RUN_ID",
+            "COMPUTERNAME",
+            "HOSTNAME",
+            "USERDOMAIN",
+        ]
+        .into_iter()
+        .find(|name| {
+            std::env::var(name).is_ok_and(|value| {
+                !value.is_empty()
+                    && value.len() <= MAX_SECRET_BYTES
+                    && !value.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+            })
+        })
+        .expect("a non-secret platform process marker is required")
+    }
+
     fn parse_raw_response(raw: &[u8]) -> Result<HttpResponse, ProviderError> {
         let context = context();
         let mut memory = memory_budget(&context);
@@ -3100,7 +3120,7 @@ mod tests {
         let config = ProviderConfig::parse(
             "https://provider.example/v1",
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(1),
             ["image-description".into()],
         )
@@ -3127,7 +3147,7 @@ mod tests {
         let config = ProviderConfig::parse(
             "https://provider.example/v1",
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(1),
             ["vision-ocr".into()],
         )
@@ -3154,7 +3174,7 @@ mod tests {
         let config = ProviderConfig::parse(
             "https://provider.example/v1",
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(1),
             [],
         )
@@ -3189,7 +3209,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("http://provider.test:{port}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             ["image-description".into()],
         )
@@ -3252,7 +3272,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("http://provider.test:{port}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             ["image-description".into()],
         )
@@ -3304,7 +3324,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("http://provider.test:{port}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             [],
         )
@@ -3342,7 +3362,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("https://provider.test:{port}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             [],
         )
@@ -3376,7 +3396,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("https://provider.test:{}/v1", address.port()),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             [],
         )
@@ -3406,7 +3426,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("https://provider.test:{}/v1", address.port()),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             [],
         )
@@ -3466,7 +3486,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("http://{address}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             [],
         )
@@ -3511,7 +3531,7 @@ mod tests {
         let config = ProviderConfig::parse(
             &format!("http://{address}/v1"),
             "configured",
-            "PATH",
+            controlled_test_secret_environment(),
             Duration::from_secs(2),
             ["image-description".into()],
         )

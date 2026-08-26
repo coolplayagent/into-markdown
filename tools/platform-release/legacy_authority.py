@@ -12,7 +12,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from common import ReleaseError, regular_files, run, sha256, write_json
+from common import ReleaseError, regular_files, resolve_msvc_tool, run, sha256, write_json
 
 SYSTEM_LINUX = {
     "ld-linux-aarch64.so.1",
@@ -28,17 +28,33 @@ SYSTEM_LINUX = {
 SYSTEM_WINDOWS = {
     "advapi32.dll",
     "bcrypt.dll",
+    "bcryptprimitives.dll",
     "comctl32.dll",
     "comdlg32.dll",
     "crypt32.dll",
+    "d2d1.dll",
+    "d3d9.dll",
+    "dbghelp.dll",
     "dwmapi.dll",
+    "fontsub.dll",
     "gdi32.dll",
+    "gdiplus.dll",
+    "httpapi.dll",
     "imm32.dll",
+    "iphlpapi.dll",
     "kernel32.dll",
+    "mfplat.dll",
+    "mfplay.dll",
+    "mfreadwrite.dll",
+    "mpr.dll",
     "msvcrt.dll",
+    "ncrypt.dll",
+    "netapi32.dll",
     "ntdll.dll",
     "ole32.dll",
     "oleaut32.dll",
+    "oledlg.dll",
+    "propsys.dll",
     "rpcrt4.dll",
     "secur32.dll",
     "setupapi.dll",
@@ -46,9 +62,14 @@ SYSTEM_WINDOWS = {
     "shlwapi.dll",
     "ucrtbase.dll",
     "user32.dll",
+    "userenv.dll",
+    "usp10.dll",
     "version.dll",
+    "winhttp.dll",
     "winmm.dll",
     "winspool.drv",
+    "wer.dll",
+    "wsock32.dll",
     "ws2_32.dll",
 }
 FORBIDDEN_CAPABILITIES = [
@@ -228,7 +249,18 @@ def extract_windows(artifact: pathlib.Path, destination: pathlib.Path) -> None:
             if path.parent.name.lower() == "program"
         ]
         source = unique(candidates, "LibreOffice Windows install root")
-        copy_tree_materialized(source, destination)
+        generated_package = administrative / artifact.name
+        if not generated_package.is_file():
+            raise ReleaseError("LibreOffice administrative MSI output is absent")
+        with generated_package.open("rb") as package:
+            magic = package.read(8)
+        if magic != bytes.fromhex("d0cf11e0a1b11ae1"):
+            raise ReleaseError("LibreOffice administrative MSI output is absent")
+        copy_tree_materialized(
+            source,
+            destination,
+            windows_administrative_exclusions(source, generated_package),
+        )
 
 
 def safe_extract_tar(archive: pathlib.Path, destination: pathlib.Path) -> None:
@@ -240,16 +272,63 @@ def safe_extract_tar(archive: pathlib.Path, destination: pathlib.Path) -> None:
         source.extractall(destination, filter="data")
 
 
-def copy_tree_materialized(source: pathlib.Path, destination: pathlib.Path) -> None:
+def copy_tree_materialized(
+    source: pathlib.Path,
+    destination: pathlib.Path,
+    excluded: set[pathlib.Path] | None = None,
+) -> None:
+    excluded = excluded or set()
     destination.mkdir()
     for entry in sorted(source.iterdir(), key=lambda path: path.name.lower()):
         target = destination / entry.name
+        resolved = entry.resolve(strict=True)
+        if resolved in excluded:
+            continue
         if entry.is_dir():
-            copy_tree_materialized(entry.resolve(strict=True), target)
+            copy_tree_materialized(resolved, target, excluded)
         elif entry.is_file():
-            copy_regular(entry.resolve(strict=True), target, executable=os.access(entry, os.X_OK))
+            copy_regular(resolved, target, executable=os.access(entry, os.X_OK))
         else:
             raise ReleaseError("LibreOffice runtime contains an unsupported entry")
+
+
+def windows_administrative_exclusions(
+    root: pathlib.Path, generated_package: pathlib.Path
+) -> set[pathlib.Path]:
+    """Exclude MSI deployment payloads and package-manager launcher templates."""
+    program = root / "program"
+    python = unique(program.glob("python-core-*"), "LibreOffice bundled Python root")
+    distlib = python / "lib/pip/_vendor/distlib"
+    setuptools = python / "lib/setuptools"
+    launcher_names = {
+        "t32.exe",
+        "t64-arm.exe",
+        "t64.exe",
+        "w32.exe",
+        "w64-arm.exe",
+        "w64.exe",
+        "cli-32.exe",
+        "cli-64.exe",
+        "cli-arm64.exe",
+        "cli.exe",
+        "gui-32.exe",
+        "gui-64.exe",
+        "gui-arm64.exe",
+        "gui.exe",
+    }
+    launchers = {path.name: path for path in [*distlib.glob("*.exe"), *setuptools.glob("*.exe")]}
+    if set(launchers) != launcher_names:
+        raise ReleaseError("LibreOffice Python launcher template inventory changed")
+    required = [
+        generated_package,
+        root / "System",
+        program / "spsupp_x86.dll",
+        program / "twain32shim.exe",
+        *launchers.values(),
+    ]
+    if any(not path.exists() for path in required):
+        raise ReleaseError("LibreOffice administrative exclusion inventory is incomplete")
+    return {path.resolve(strict=True) for path in required}
 
 
 def copy_regular(source: pathlib.Path, destination: pathlib.Path, executable: bool) -> None:
@@ -277,7 +356,11 @@ def unique(values, label: str):
 
 
 def verify_export(kit: pathlib.Path, binary_format: str) -> None:
-    command = ["nm", "-D", str(kit)] if binary_format == "elf" else ["dumpbin", "/exports", str(kit)]
+    command = (
+        ["nm", "-D", str(kit)]
+        if binary_format == "elf"
+        else [resolve_msvc_tool("dumpbin.exe"), "/exports", str(kit)]
+    )
     output = run(command)
     if "libreofficekit_hook_2" not in output:
         raise ReleaseError("LibreOfficeKit required export is absent")
@@ -314,28 +397,59 @@ def linux_system_path(identity: str) -> str:
 
 
 def dependency_closure_windows(worker: pathlib.Path, kit: pathlib.Path, root: pathlib.Path) -> set[str]:
+    dumpbin = resolve_msvc_tool("dumpbin.exe")
     inventory = inventory_by_identity(root, case_sensitive=False)
     pending = [worker, kit]
     visited = set()
     system = set()
+    undeclared = set()
     while pending:
         owner = pending.pop()
         if owner in visited:
             continue
         visited.add(owner)
-        output = run(["dumpbin", "/dependents", str(owner)])
-        needed = [line.strip() for line in output.splitlines() if line.strip().lower().endswith((".dll", ".drv"))]
+        output = run([dumpbin, "/dependents", str(owner)])
+        needed = dumpbin_dependencies(output)
         for identity in needed:
             lowered = identity.lower()
             if lowered in inventory:
-                pending.append(
-                    unique(inventory[lowered], f"LibreOffice PE dependency {identity}")
-                )
+                pending.extend(inventory[lowered])
             elif lowered in SYSTEM_WINDOWS or lowered.startswith("api-ms-win-"):
                 system.add(lowered)
             else:
-                raise ReleaseError(f"undeclared LibreOffice PE dependency: {identity}")
+                undeclared.add(identity)
+    if undeclared:
+        names = ", ".join(sorted(undeclared, key=str.lower))
+        raise ReleaseError(f"undeclared LibreOffice PE dependencies: {names}")
     return system
+
+
+def dumpbin_dependencies(output: str) -> list[str]:
+    """Parse only the dependency table from ``dumpbin /dependents`` output."""
+    header = "Image has the following dependencies:"
+    lines = output.splitlines()
+    try:
+        start = next(index for index, line in enumerate(lines) if line.strip() == header)
+    except StopIteration as error:
+        normalized = [line.strip() for line in lines]
+        if any(line.startswith("Dump of file ") for line in normalized) and any(
+            line.startswith("File Type: ") for line in normalized
+        ):
+            return []
+        raise ReleaseError("dumpbin dependency section is absent") from error
+
+    dependency = re.compile(r"[A-Za-z0-9_.+-]+\.(?:dll|drv)\Z", re.IGNORECASE)
+    result: list[str] = []
+    for line in lines[start + 1 :]:
+        value = line.strip()
+        if not value and not result:
+            continue
+        if dependency.fullmatch(value):
+            result.append(value)
+            continue
+        if result:
+            break
+    return result
 
 
 def inventory_by_identity(

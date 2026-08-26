@@ -6,12 +6,39 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+fn manifest_runfile(logical_paths: &[&str]) -> Option<PathBuf> {
+    let manifest = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
+    let metadata = std::fs::metadata(&manifest).ok()?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return None;
+    }
+    let contents = std::fs::read_to_string(manifest).ok()?;
+    contents.lines().find_map(|line| {
+        let (logical, physical) = line.split_once(' ')?;
+        logical_paths
+            .contains(&logical)
+            .then(|| PathBuf::from(physical))
+            .filter(|path| path.is_file())
+    })
+}
+
 fn binary() -> PathBuf {
-    let path = option_env!("CARGO_BIN_EXE_into-md")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("INTO_MD_BIN").map(PathBuf::from))
-        .expect("Cargo or Bazel must provide the into-md binary");
-    if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) }
+    if let Some(path) = option_env!("CARGO_BIN_EXE_into-md").map(PathBuf::from)
+        && path.is_file()
+    {
+        return path;
+    }
+    if let Some(path) = std::env::var_os("INTO_MD_BIN").map(PathBuf::from)
+        && path.is_file()
+    {
+        return path;
+    }
+    let name = if cfg!(windows) { "into-md.exe" } else { "into-md" };
+    manifest_runfile(&[
+        &format!("_main/apps/cli/{name}"),
+        &format!("into_markdown/apps/cli/{name}"),
+    ])
+    .expect("Cargo or Bazel must provide the into-md binary")
 }
 
 fn run(arguments: &[&str]) -> (i32, String) {
@@ -273,15 +300,15 @@ fn image_description_response() -> &'static [u8] {
 }
 
 fn fixture(relative: &str) -> PathBuf {
-    std::env::var_os("TEST_SRCDIR").map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(relative),
-        |runfiles| {
-            PathBuf::from(runfiles)
-                .join(std::env::var("TEST_WORKSPACE").unwrap_or_else(|_| "into_markdown".into()))
-                .join("fixtures")
-                .join(relative)
-        },
-    )
+    if std::env::var_os("TEST_SRCDIR").is_some()
+        && let Some(manifest) = manifest_runfile(&[
+            "_main/fixtures/manifest.json",
+            "into_markdown/fixtures/manifest.json",
+        ])
+    {
+        return manifest.parent().expect("fixture root").join(relative);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(relative)
 }
 
 #[test]

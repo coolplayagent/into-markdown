@@ -19,5 +19,6 @@ rust_test(
     crate_root = "src/lib.rs",
     crate_name = "into_markdown_ai_test",
     edition = "2024",
+    env = {"COMPUTERNAME": "bazel-test-host"},
     deps = ["//crates/core", "//crates/http-transport:http_transport"] + all_crate_deps(normal = True),
 )

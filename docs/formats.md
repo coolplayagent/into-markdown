@@ -37,7 +37,7 @@ OCR `off` 零调用，`auto` 缺模型或缺少 detector/model 绑定证据时�
 `ImageDescription` 请求，不接受文档 prompt；AI 节点、诊断、provider/page provenance 和
 内存 plan 全部验证成功后才事务发布。
 
-## 旧 Office 隔离转换
+## 旧 Office 历史隔离实现（不进入当前发布）
 
 DOC、PPT/PPS/POT 与 XLS 只接受经 CFB/OLE 目录证据或调用方显式选择的候选，converter probe
 仍要求完整 compound-file magic。固定 worker 把源文档转换为 DOCX、PPTX 或 XLSX 后，通过

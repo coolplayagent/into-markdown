@@ -123,7 +123,12 @@ Supporting regression evidence does not replace any pending Edge row: 27/27 admi
 | Manager-verified runtime dispatch | PASS | The plugin manager now dispatches its private authenticated snapshot directly instead of copying the complete runtime a second time. The real process-plugin E2E passes with a zero temporary-byte dispatch budget, which would reject the former duplicate runtime copy. |
 | Current debug CLI unit suite | PASS | 234/234 CLI unit tests passed; the focused 24-input/eight-worker output-lease regression passed. |
 
-## Current release CLI Core-only plugin matrix
+## Historical three-plugin CLI matrix (not the current release contract)
+
+The evidence below predates the decision to stop publishing the LibreOffice plugin. It is retained
+only as historical transaction and isolation evidence. The current release contract contains Core,
+OCR and speech only; its authoritative four combinations, two installation orders, lifecycle,
+real-fixture and Web checks are emitted by `platform_acceptance.py` for every target.
 
 | Requirement | Result | Evidence |
 |---|---:|---|

@@ -212,6 +212,8 @@ struct SourceDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     sha256: String,
 }
 
@@ -222,6 +224,8 @@ struct RuntimeDownload {
     repository: String,
     downloaded_file_path: String,
     url: String,
+    #[serde(default)]
+    mirror_urls: Vec<String>,
     archive_sha256: Option<String>,
     archive_size: Option<u64>,
     archive_member: Option<String>,
@@ -328,7 +332,7 @@ impl ModelManifest {
         downloads: &DownloadManifest,
         onnxruntime: &OrtManifest,
     ) -> Result<(), ConversionError> {
-        if !matches!(self.schema_version, 1 | 2 | 3) || downloads.schema_version != 1 {
+        if !matches!(self.schema_version, 1..=3) || downloads.schema_version != 1 {
             return Err(invalid_manifest("unsupported schema version"));
         }
         if self.schema_version == 1
@@ -524,6 +528,7 @@ fn unique_sources(
         validate_id(&item.repository)?;
         validate_file_name(&item.downloaded_file_path)?;
         validate_https(&item.url)?;
+        validate_mirror_urls(&item.url, &item.mirror_urls)?;
         validate_hash(&item.sha256)?;
         if result.insert(item.artifact_id.as_str(), item).is_some()
             || !repositories.insert(item.repository.as_str())
@@ -571,6 +576,7 @@ fn unique_runtimes(
         validate_id(&item.repository)?;
         validate_file_name(&item.downloaded_file_path)?;
         validate_https(&item.url)?;
+        validate_mirror_urls(&item.url, &item.mirror_urls)?;
         validate_hash(&item.sha256)?;
         if item.size == 0
             || result.insert(item.artifact_id.as_str(), item).is_some()
@@ -903,6 +909,19 @@ fn validate_https(value: &str) -> Result<(), ConversionError> {
     Ok(())
 }
 
+fn validate_mirror_urls(primary: &str, mirrors: &[String]) -> Result<(), ConversionError> {
+    let mut unique = BTreeSet::new();
+    for mirror in mirrors {
+        validate_https(mirror)?;
+        if mirror == primary || !unique.insert(mirror.as_str()) {
+            return Err(invalid_manifest(
+                "model download mirrors must be unique and distinct from the primary URL",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_hash(value: &str) -> Result<(), ConversionError> {
     if value.len() != 64
         || !value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -1107,7 +1126,27 @@ impl ModelManager {
             }
             #[cfg(any(feature = "authenticated-read-only-snapshot", test))]
             ModelVerification::AuthenticatedReadOnlySnapshot => {
-                verify_directory_metadata_with_context(bundle, path, context)
+                verify_directory_metadata_with_context(bundle, path, context, true)
+            }
+        }
+    }
+
+    fn safe_existing_directory(&self, path: &Path) -> Result<bool, ModelManagerError> {
+        match self.verification {
+            ModelVerification::ContentDigest => safe_existing_directory(path),
+            #[cfg(any(feature = "authenticated-read-only-snapshot", test))]
+            ModelVerification::AuthenticatedReadOnlySnapshot => {
+                safe_existing_authenticated_snapshot_directory(path)
+            }
+        }
+    }
+
+    fn required_runtime_file(&self, path: &Path, missing: &str) -> Result<File, ModelManagerError> {
+        match self.verification {
+            ModelVerification::ContentDigest => required_regular_file(path, missing),
+            #[cfg(any(feature = "authenticated-read-only-snapshot", test))]
+            ModelVerification::AuthenticatedReadOnlySnapshot => {
+                required_authenticated_snapshot_file(path, missing)
             }
         }
     }
@@ -1161,10 +1200,12 @@ impl ModelManager {
                 path: None,
             });
         }
-        self.reject_pending_transaction(bundle)?;
+        if self.verification == ModelVerification::ContentDigest {
+            self.reject_pending_transaction(bundle)?;
+        }
         if let Some(root) = &self.bundled_root {
             let path = root.join(id);
-            if safe_existing_directory(&path)? {
+            if self.safe_existing_directory(&path)? {
                 let state = verification_state(self.verify_directory(bundle, &path, context))?;
                 return Ok(ModelStatus {
                     schema_version: 1,
@@ -1177,7 +1218,7 @@ impl ModelManager {
             }
         }
         let path = self.writable_root.join(id);
-        if safe_existing_directory(&path)? {
+        if self.safe_existing_directory(&path)? {
             let state = verification_state(self.verify_directory(bundle, &path, context))?;
             return Ok(ModelStatus {
                 schema_version: 1,
@@ -1333,7 +1374,7 @@ impl ModelManager {
         };
         #[cfg(not(unix))]
         let mut file =
-            required_regular_file(&directory.join(&artifact.file_name), "artifact missing")?;
+            self.required_runtime_file(&directory.join(&artifact.file_name), "artifact missing")?;
         let metadata = file.metadata()?;
         if metadata.len() != artifact.size {
             return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
@@ -1888,7 +1929,7 @@ fn verify_directory_with_context(
     path: &Path,
     context: &ExecutionContext,
 ) -> Result<(), ModelManagerError> {
-    verify_directory_metadata_with_context(bundle, path, context)?;
+    verify_directory_metadata_with_context(bundle, path, context, false)?;
     for artifact in &bundle.runtime_artifacts {
         context.checkpoint()?;
         let file_path = path.join(&artifact.file_name);
@@ -1915,11 +1956,16 @@ fn verify_directory_metadata_with_context(
     bundle: &ModelBundle,
     path: &Path,
     context: &ExecutionContext,
+    authenticated_snapshot: bool,
 ) -> Result<(), ModelManagerError> {
     context.checkpoint()?;
     reject_symlink(path)?;
     let state_path = path.join("install-state.json");
-    let state_file = required_regular_file(&state_path, "install state is missing")?;
+    let state_file = if authenticated_snapshot {
+        required_authenticated_snapshot_file(&state_path, "install state is missing")?
+    } else {
+        required_regular_file(&state_path, "install state is missing")?
+    };
     let state: InstallState = serde_json::from_reader(state_file)
         .map_err(|error| ModelManagerError::Corrupt(error.to_string()))?;
     if state.schema_version != 1 || state.bundle_id != bundle.id || !state.complete {
@@ -1941,8 +1987,12 @@ fn verify_directory_metadata_with_context(
     for artifact in &bundle.runtime_artifacts {
         context.checkpoint()?;
         let file_path = path.join(&artifact.file_name);
-        let file =
-            required_regular_file(&file_path, &format!("{} is missing", artifact.file_name))?;
+        let missing = format!("{} is missing", artifact.file_name);
+        let file = if authenticated_snapshot {
+            required_authenticated_snapshot_file(&file_path, &missing)?
+        } else {
+            required_regular_file(&file_path, &missing)?
+        };
         let metadata = file.metadata()?;
         if metadata.len() != artifact.size {
             return Err(ModelManagerError::Corrupt(artifact.file_name.clone()));
@@ -2333,6 +2383,28 @@ fn required_regular_file(path: &Path, missing: &str) -> Result<File, ModelManage
     }
 }
 
+fn required_authenticated_snapshot_file(
+    path: &Path,
+    missing: &str,
+) -> Result<File, ModelManagerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(ModelManagerError::UnsafePath),
+        Ok(metadata) if !metadata.is_file() => {
+            Err(ModelManagerError::Corrupt(format!("{} is not a regular file", path.display())))
+        }
+        Ok(_) => {
+            #[cfg(windows)]
+            return windows_transaction_fs::open_authenticated_snapshot_file_read(path);
+            #[cfg(not(windows))]
+            return open_regular_no_follow(path);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(ModelManagerError::Corrupt(missing.into()))
+        }
+        Err(error) => Err(ModelManagerError::Io(error)),
+    }
+}
+
 fn open_regular_no_follow(path: &Path) -> Result<File, ModelManagerError> {
     #[cfg(windows)]
     return windows_transaction_fs::open_private_file_read(path);
@@ -2519,6 +2591,27 @@ fn safe_existing_directory(path: &Path) -> Result<bool, ModelManagerError> {
     }
 }
 
+#[cfg(any(feature = "authenticated-read-only-snapshot", test))]
+fn safe_existing_authenticated_snapshot_directory(path: &Path) -> Result<bool, ModelManagerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(ModelManagerError::UnsafePath),
+        Ok(metadata) if metadata.is_dir() => {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt as _;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+                if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    return Err(ModelManagerError::UnsafePath);
+                }
+            }
+            Ok(true)
+        }
+        Ok(_) => Err(ModelManagerError::UnsafePath),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ModelManagerError::Io(error)),
+    }
+}
+
 fn reject_symlink(path: &Path) -> Result<(), ModelManagerError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() { Err(ModelManagerError::UnsafePath) } else { Ok(()) }
@@ -2650,6 +2743,30 @@ mod tests {
             "\"runtime_artifacts\": [{\"id\":\"evil\",\"role\":\"detector\",\"file_name\":\"../evil\",\"url\":\"https://example.invalid/evil\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":1,\"platforms\":[\"aarch64-apple-darwin\"],\"license\":\"MIT\"}]",
         );
         assert!(ModelManifest::from_authorities(&traversal, downloads).is_err());
+    }
+
+    #[test]
+    fn download_mirrors_fail_closed() {
+        let primary = "https://example.invalid/model.onnx";
+        assert!(
+            validate_mirror_urls(primary, &["https://mirror.invalid/model.onnx".to_owned()])
+                .is_ok()
+        );
+        assert!(validate_mirror_urls(primary, &[primary.to_owned()]).is_err());
+        assert!(
+            validate_mirror_urls(
+                primary,
+                &[
+                    "https://mirror.invalid/model.onnx".to_owned(),
+                    "https://mirror.invalid/model.onnx".to_owned(),
+                ]
+            )
+            .is_err()
+        );
+        assert!(
+            validate_mirror_urls(primary, &["http://mirror.invalid/model.onnx".to_owned()])
+                .is_err()
+        );
     }
 
     #[test]

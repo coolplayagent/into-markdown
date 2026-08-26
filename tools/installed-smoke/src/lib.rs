@@ -18,6 +18,7 @@ pub use request::SmokeRequest;
 
 use crate::process::RealExecutor;
 use std::fs;
+use std::io;
 use std::time::Instant;
 
 /// Execute the complete installed-artifact contract and always attempt cleanup.
@@ -98,13 +99,117 @@ fn run_with_executor(
 }
 
 fn cleanup_run_root(run_root: &std::path::Path) -> CleanupResult {
-    match fs::remove_dir_all(run_root) {
-        Ok(()) if !run_root.exists() => CleanupResult::clean(),
-        Ok(()) => CleanupResult::failed("temporary run directory remains"),
-        Err(error) => {
-            CleanupResult::failed(&format!("cannot remove temporary run directory: {error}"))
+    if let Err(error) = validate_cleanup_root(run_root) {
+        return CleanupResult::failed(&format!(
+            "refusing unsafe temporary cleanup target: {error}"
+        ));
+    }
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    let mut delay = std::time::Duration::from_millis(50);
+    loop {
+        match remove_run_root_once(run_root) {
+            Ok(()) if !run_root.exists() => return CleanupResult::clean(),
+            Ok(()) if Instant::now() >= deadline => {
+                return CleanupResult::failed("temporary run directory remains");
+            }
+            Err(error) if Instant::now() >= deadline => {
+                return CleanupResult::failed(&format!(
+                    "cannot remove temporary run directory after bounded retries: {error}"
+                ));
+            }
+            Ok(()) | Err(_) => {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(500));
+            }
         }
     }
+}
+
+fn validate_cleanup_root(run_root: &std::path::Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(run_root)?;
+    if !metadata.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "run root is not a directory"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "run root is a reparse point"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn remove_run_root_once(run_root: &std::path::Path) -> io::Result<()> {
+    fs::remove_dir_all(run_root)
+}
+
+#[cfg(windows)]
+fn remove_run_root_once(run_root: &std::path::Path) -> io::Result<()> {
+    remove_windows_owned_entry(run_root)
+}
+
+#[cfg(windows)]
+fn remove_windows_owned_entry(path: &std::path::Path) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let attributes = metadata.file_attributes();
+    let directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        make_windows_entry_deletable(path, attributes)?;
+        return if directory { fs::remove_dir(path) } else { fs::remove_file(path) };
+    }
+    if directory {
+        for entry in fs::read_dir(path)? {
+            remove_windows_owned_entry(&entry?.path())?;
+        }
+        make_windows_entry_deletable(path, attributes)?;
+        fs::remove_dir(path)
+    } else {
+        make_windows_entry_deletable(path, attributes)?;
+        fs::remove_file(path)
+    }
+}
+
+#[cfg(windows)]
+fn make_windows_entry_deletable(path: &std::path::Path, attributes: u32) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
+
+    const DELETE_BLOCKING_ATTRIBUTES: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+
+    if attributes & DELETE_BLOCKING_ATTRIBUTES == 0 {
+        return Ok(());
+    }
+    let absolute = std::path::absolute(path)?;
+    let encoded = absolute.as_os_str().encode_wide().collect::<Vec<_>>();
+    let verbatim_prefix = [u16::from(b'\\'), u16::from(b'\\'), u16::from(b'?'), u16::from(b'\\')];
+    let unc_prefix = [u16::from(b'\\'), u16::from(b'\\')];
+    let mut wide = if encoded.starts_with(&verbatim_prefix) {
+        encoded
+    } else if encoded.starts_with(&unc_prefix) {
+        "\\\\?\\UNC\\".encode_utf16().chain(encoded.into_iter().skip(2)).collect::<Vec<_>>()
+    } else {
+        "\\\\?\\".encode_utf16().chain(encoded).collect::<Vec<_>>()
+    };
+    wide.push(0);
+    // SAFETY: `wide` is a NUL-terminated absolute UTF-16 path owned for the duration of this
+    // synchronous call. The entry is inside the validated, runner-owned temporary root.
+    if unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -125,6 +230,35 @@ mod tests {
         let cleanup = cleanup_run_root(&file);
         assert!(!cleanup.clean);
         assert!(file.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_clears_windows_delete_blocking_attributes() {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let run_root = temporary.path().join("owned-run-root");
+        let system_directory = run_root.join("system-directory");
+        fs::create_dir_all(&system_directory).unwrap();
+        fs::write(system_directory.join("readonly.bin"), b"owned").unwrap();
+        for (path, attributes) in [
+            (&system_directory, 0x0000_0002 | 0x0000_0004),
+            (&system_directory.join("readonly.bin"), 0x0000_0001),
+        ] {
+            let absolute = std::path::absolute(path).unwrap();
+            let mut wide = "\\\\?\\"
+                .encode_utf16()
+                .chain(absolute.as_os_str().encode_wide())
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            // SAFETY: the vector is a NUL-terminated absolute UTF-16 path to this test's file.
+            assert_ne!(unsafe { SetFileAttributesW(wide.as_mut_ptr(), attributes) }, 0);
+        }
+        let cleanup = cleanup_run_root(&run_root);
+        assert!(cleanup.clean, "{}", cleanup.detail);
+        assert!(!run_root.exists());
     }
 
     struct TestPlatform;
@@ -206,6 +340,8 @@ mod tests {
         let projection = ArchiveProjection {
             schema_version: 1,
             target: "aarch64-apple-darwin".into(),
+            version: "0.0.0".into(),
+            source_revision: "a".repeat(40),
             components: vec![],
             files,
             license_materials: vec![],
@@ -218,6 +354,16 @@ mod tests {
         let audio_fixture = temporary.path().join("licensed-speech.wav");
         fs::create_dir(&temp_root).unwrap();
         fs::write(&audio_fixture, b"external fixture").unwrap();
+        let fake_toolchain = temporary.path().join("fake-toolchain");
+        let test_rustc = fake_toolchain.join("bin/rustc.exe");
+        fs::create_dir_all(fake_toolchain.join("bin")).unwrap();
+        fs::create_dir_all(fake_toolchain.join("lib/rustlib/x86_64-pc-windows-msvc/bin")).unwrap();
+        fs::write(&test_rustc, b"rustc").unwrap();
+        fs::write(
+            fake_toolchain.join("lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"),
+            b"rust-lld",
+        )
+        .unwrap();
         let request = SmokeRequest {
             install_root: install,
             into_md: binary.clone(),
@@ -229,7 +375,7 @@ mod tests {
             report: report.clone(),
             archive_sha256: "a".repeat(64),
             cargo: binary.clone(),
-            rustc: binary.clone(),
+            rustc: test_rustc,
             pdfium_library: None,
             timeout_seconds: NonZeroU64::new(1).unwrap(),
             cancel_file: None,
@@ -328,6 +474,7 @@ mod tests {
                     },
                     path,
                     bytes: bytes.len() as u64,
+                    sha1: None,
                     sha256: format!("{:x}", Sha256::digest(&bytes)),
                     component_id: None,
                     embedded_components: vec![],

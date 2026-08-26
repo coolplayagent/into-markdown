@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 
@@ -77,7 +78,9 @@ def main() -> None:
             / "into-markdown-wasi-test-guest.wasm"
         )
         rebuilt_digest = digest(rebuilt)
-        if rebuilt_digest != build["component"]["sha256"]:
+        host_family = "windows" if os.name == "nt" else "unix"
+        expected_rebuild_digest = build["rebuildSha256ByHostFamily"][host_family]
+        if rebuilt_digest != expected_rebuild_digest:
             raise SystemExit(f"rebuilt component digest mismatch: {rebuilt_digest}")
     component = ROOT / build["component"]["path"]
     if component.stat().st_size != build["component"]["bytes"]:

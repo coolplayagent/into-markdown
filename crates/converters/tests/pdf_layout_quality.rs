@@ -29,14 +29,15 @@ mod quality {
     fn pinned_pdfium_meets_hash_bound_semantic_precision_recall_and_goldens() {
         let runfiles = PathBuf::from(std::env::var_os("TEST_SRCDIR").expect("Bazel runfiles"));
         let authority_bytes =
-            std::fs::read(runfiles.join("_main/fixtures/pdf-layout-quality-authority.json"))
+            std::fs::read(runfile(&runfiles, "_main/fixtures/pdf-layout-quality-authority.json"))
                 .unwrap();
         let authority: serde_json::Value = serde_json::from_slice(&authority_bytes).unwrap();
-        let manifest_bytes = std::fs::read(runfiles.join("_main/fixtures/manifest.json")).unwrap();
+        let manifest_bytes =
+            std::fs::read(runfile(&runfiles, "_main/fixtures/manifest.json")).unwrap();
         assert_eq!(hex(&manifest_bytes), authority["fixture_manifest_sha256"]);
         let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
         let pdfium_manifest =
-            std::fs::read(runfiles.join("_main/third_party/pdfium/manifest.json")).unwrap();
+            std::fs::read(runfile(&runfiles, "_main/third_party/pdfium/manifest.json")).unwrap();
         assert_eq!(hex(&pdfium_manifest), authority["pdfium_manifest_sha256"]);
         let runtime = runtime_path(&runfiles);
         let mut true_positive = 0_usize;
@@ -50,9 +51,10 @@ mod quality {
                 .iter()
                 .find(|record| record["id"] == id)
                 .unwrap();
-            let bytes = std::fs::read(
-                runfiles.join("_main/fixtures").join(record["path"].as_str().unwrap()),
-            )
+            let bytes = std::fs::read(runfile(
+                &runfiles,
+                &format!("_main/fixtures/{}", record["path"].as_str().unwrap()),
+            ))
             .unwrap();
             assert_eq!(hex(&bytes), golden["fixture_sha256"]);
             let first = convert(&runtime, id, &bytes)
@@ -187,7 +189,27 @@ mod quality {
     fn runtime_path(runfiles: &Path) -> PathBuf {
         let repository = env!("PDF_LAYOUT_PDFIUM_REPOSITORY");
         assert_ne!(repository, "unsupported", "quality target requires an audited platform");
-        runfiles.join(repository).join(env!("PDF_LAYOUT_PDFIUM_LIBRARY")).canonicalize().unwrap()
+        runfile(runfiles, &format!("{repository}/{}", env!("PDF_LAYOUT_PDFIUM_LIBRARY")))
+            .canonicalize()
+            .unwrap()
+    }
+
+    fn runfile(runfiles: &Path, logical: &str) -> PathBuf {
+        if let Some(manifest) = std::env::var_os("RUNFILES_MANIFEST_FILE") {
+            let manifest = PathBuf::from(manifest);
+            let metadata = std::fs::metadata(&manifest).expect("Bazel runfiles manifest metadata");
+            assert!(metadata.len() <= 64 * 1024 * 1024, "Bazel runfiles manifest is too large");
+            let contents =
+                std::fs::read_to_string(manifest).expect("Bazel runfiles manifest contents");
+            if let Some(path) = contents.lines().find_map(|line| {
+                let (name, path) = line.split_once(' ')?;
+                (name == logical).then(|| PathBuf::from(path))
+            }) {
+                return path;
+            }
+            panic!("Bazel runfile is missing from the manifest: {logical}");
+        }
+        runfiles.join(logical)
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {

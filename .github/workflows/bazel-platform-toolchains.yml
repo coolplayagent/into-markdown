@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: bazelbuild/setup-bazel@v3
+      - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-${{ matrix.config }}
@@ -73,6 +73,7 @@ jobs:
         shell: bash
         env:
           NATIVE_CONFIG: ${{ matrix.config }}
+          MSYS2_ARG_CONV_EXCL: '*'
         run: |
           assert_rejected() {
             set +e
@@ -110,6 +111,7 @@ jobs:
         shell: bash
         env:
           NATIVE_CONFIG: ${{ matrix.config }}
+          MSYS2_ARG_CONV_EXCL: '*'
         run: |
           assert_rejected() {
             set +e

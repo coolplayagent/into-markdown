@@ -203,7 +203,7 @@ fn media_conversion(
             if dto["schemaVersion"] != 1 {
                 return Err("available ASR runtime returned an unsupported DTO".into());
             }
-            if !dto["document"]["blocks"].as_array().is_some_and(|blocks| !blocks.is_empty()) {
+            if dto["document"]["blocks"].as_array().is_none_or(Vec::is_empty) {
                 return Err("available ASR runtime produced no transcript blocks".into());
             }
             if dto["document"]["metadata"]["properties"]["media.model"]
@@ -423,7 +423,13 @@ fn corrupt(request: &ValidatedRequest, root: &Path, executor: &dyn Executor) -> 
     {
         Ok(())
     } else {
-        Err("corrupt-input exit contract drifted".into())
+        Err(format!(
+            "corrupt-input exit contract drifted (exit {:?}, stdout {} bytes, code {}, reported exit {})",
+            output.exit_code,
+            output.stdout.len(),
+            event["code"],
+            event["exitCode"]
+        ))
     }
 }
 
@@ -444,13 +450,17 @@ fn zip_fixture(
         .map_err(|error| format!("cannot write ZIP fixture: {error}"))?;
     archive.finish().map_err(|error| format!("cannot finish ZIP fixture: {error}"))?;
     let output = cli(request, root, &[&path.display().to_string(), "--no-config"], &[], executor)?;
-    if output.exit_code == Some(0)
-        && std::str::from_utf8(&output.stdout)
-            .is_ok_and(|value| value.contains("Installed ZIP smoke"))
-    {
+    let contains_marker = std::str::from_utf8(&output.stdout)
+        .is_ok_and(|value| value.contains("Installed ZIP smoke"));
+    if output.exit_code == Some(0) && contains_marker {
         Ok(())
     } else {
-        Err("ZIP conversion contract failed".into())
+        Err(format!(
+            "ZIP conversion contract failed (exit {:?}, stdout {} bytes, stderr {} bytes, marker {contains_marker})",
+            output.exit_code,
+            output.stdout.len(),
+            output.stderr.len()
+        ))
     }
 }
 
@@ -765,6 +775,8 @@ mod tests {
         ArchiveProjection {
             schema_version: 1,
             target: "aarch64-apple-darwin".into(),
+            version: "0.0.0".into(),
+            source_revision: "a".repeat(40),
             components: components.iter().map(|value| (*value).to_owned()).collect(),
             files: vec![],
             license_materials: vec![],

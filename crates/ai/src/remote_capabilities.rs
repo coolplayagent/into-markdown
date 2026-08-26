@@ -827,6 +827,26 @@ mod tests {
         (OpenAiCompatibleClient::new(config, policy.clone()), policy)
     }
 
+    fn controlled_test_secret_environment() -> &'static str {
+        [
+            "CODEX_SESSION_ID",
+            "GITHUB_SHA",
+            "GITHUB_RUN_ID",
+            "COMPUTERNAME",
+            "HOSTNAME",
+            "USERDOMAIN",
+        ]
+        .into_iter()
+        .find(|name| {
+            std::env::var(name).is_ok_and(|value| {
+                !value.is_empty()
+                    && value.len() <= 4096
+                    && !value.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+            })
+        })
+        .expect("a non-secret platform process marker is required")
+    }
+
     fn serve(body: &'static [u8]) -> (std::net::SocketAddr, std::thread::JoinHandle<Vec<u8>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -868,7 +888,8 @@ mod tests {
     fn remote_ocr_returns_typed_unbound_text_with_exact_provider_identity() {
         let response = br#"{"id":"chatcmpl-ocr","object":"chat.completion","created":1,"model":"qwen3.5-ocr","choices":[{"index":0,"message":{"role":"assistant","content":"\u53d1\u7968\u53f7\u7801 12345","annotations":[]},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":4,"total_tokens":5}}"#;
         let (address, worker) = serve(response);
-        let (client, policy) = client(address, "vision-ocr", true, "PATH");
+        let (client, policy) =
+            client(address, "vision-ocr", true, controlled_test_secret_environment());
         let provider = OpenAiRemoteOcr::new(client, policy, "provider.bailian.vision-ocr").unwrap();
         let mut options = ConversionOptions::default();
         options.network.enabled = true;
@@ -898,7 +919,8 @@ mod tests {
     fn remote_transcription_requires_audio_metadata_and_preserves_provenance() {
         let response = br#"{"id":"chatcmpl-asr","object":"chat.completion","created":1,"model":"qwen3-asr-flash","choices":[{"index":0,"message":{"role":"assistant","content":"\u6b22\u8fce\u4f7f\u7528\u3002","annotations":[{"type":"audio_info","language":"zh"}]},"finish_reason":"stop"}],"usage":{"seconds":3,"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
         let (address, worker) = serve(response);
-        let (client, _) = client(address, "audio-transcription", true, "PATH");
+        let (client, _) =
+            client(address, "audio-transcription", true, controlled_test_secret_environment());
         let provider = OpenAiRemoteTranscriber::new(
             client,
             "provider.bailian.audio-transcription",

@@ -71,7 +71,11 @@ pub(crate) fn copy_tree(
     let memory = context.reserve_memory(bookkeeping)?;
     std::fs::create_dir(destination).map_err(|_| invalid())?;
     set_directory_permissions(destination, true).map_err(|()| invalid())?;
+    #[cfg(not(windows))]
     let root = destination.canonicalize().map_err(|_| invalid())?;
+    #[cfg(windows)]
+    let root =
+        crate::authority::authenticated_windows_path(destination, true).map_err(|_| invalid())?;
     let mut cleanup = BuildCleanup { root: root.clone(), armed: true };
     let mut entries = Vec::new();
     entries.try_reserve_exact(files.len()).map_err(|_| invalid())?;
@@ -228,7 +232,11 @@ pub(crate) fn copy_verified(
     if metadata.len() != expected_bytes {
         return Err(invalid());
     }
+    #[cfg(not(windows))]
     let path = destination.canonicalize().map_err(|_| invalid())?;
+    #[cfg(windows)]
+    let path =
+        crate::authority::authenticated_windows_path(destination, false).map_err(|_| invalid())?;
     Ok(VerifiedSnapshot { path, _file: file })
 }
 

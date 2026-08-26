@@ -2,11 +2,27 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test, { afterEach } from "node:test";
 import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { Window } from "happy-dom";
 
-const distDirectory = resolve(process.env.INTO_MD_DIST);
-const manifest = JSON.parse(await readFile(resolve(distDirectory, "asset-manifest.json"), "utf8"));
+const configuredDist = process.env.INTO_MD_DIST;
+const logicalManifest = `${configuredDist.replaceAll("\\", "/")}/asset-manifest.json`;
+
+async function resolveRunfile(logical) {
+  if (isAbsolute(logical)) return logical;
+  if (process.env.RUNFILES_MANIFEST_FILE) {
+    const entries = await readFile(process.env.RUNFILES_MANIFEST_FILE, "utf8");
+    const prefix = `_main/${logical} `;
+    const match = entries.split(/\r?\n/u).find((entry) => entry.startsWith(prefix));
+    if (match) return match.slice(prefix.length);
+  }
+  if (process.env.RUNFILES_DIR) return resolve(process.env.RUNFILES_DIR, "_main", logical);
+  return resolve(logical);
+}
+
+const manifestPath = await resolveRunfile(logicalManifest);
+const distDirectory = dirname(manifestPath);
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const app = manifest.assets.find((asset) => /^\/assets\/app\.[a-f0-9]{16}\.js$/.test(asset.path));
 const bootstrap = manifest.assets.find((asset) => /^\/assets\/bootstrap\.[a-f0-9]{16}\.js$/.test(asset.path));
 assert.ok(app && bootstrap);

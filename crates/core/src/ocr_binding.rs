@@ -339,7 +339,7 @@ impl BoundOcrResult {
     /// detector and recognizer evidence.
     pub fn try_from_dto(dto: BoundOcrResultDto) -> Result<Self, ConversionError> {
         validate_wire_result(&dto.result)?;
-        let identity = dto.input_identity.map(parse_input_identity).transpose()?;
+        let identity = dto.input_identity.as_ref().map(parse_input_identity).transpose()?;
         match identity {
             Some(identity) => Self::try_new_for_input(
                 dto.result,
@@ -382,7 +382,7 @@ fn validate_wire_result(result: &OcrResult) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn parse_input_identity(dto: OcrInputIdentityDto) -> Result<OcrInputIdentity, ConversionError> {
+fn parse_input_identity(dto: &OcrInputIdentityDto) -> Result<OcrInputIdentity, ConversionError> {
     if dto.sha256.len() != 64
         || !dto.sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {

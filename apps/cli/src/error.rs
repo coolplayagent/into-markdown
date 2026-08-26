@@ -75,6 +75,10 @@ impl CliError {
         Self::new(ExitClass::Component, "componentUnavailable", message)
     }
 
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::new(ExitClass::Io, "io", message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ExitClass::Internal, "internal", message)
     }

@@ -62,7 +62,11 @@ def extract(archive: pathlib.Path, destination: pathlib.Path) -> None:
             opened = source.extractfile(member)
             if opened is None:
                 raise ReleaseError("release archive entry cannot be read")
-            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, member.mode)
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                member.mode,
+            )
             with os.fdopen(descriptor, "wb") as output:
                 while chunk := opened.read(1024 * 1024):
                     output.write(chunk)

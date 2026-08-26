@@ -1,4 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_proc_macro")
+
 package(default_visibility = ["//visibility:public"])
+
+# Keep this target name and crate_name compact: MSVC's linker still rejects a
+# long rustc temporary-object path even when Windows long paths are enabled.
+rust_proc_macro(
+    name = "versioned_exports",
+    srcs = ["@crates__wasmtime-internal-versioned-export-macros-39.0.1//:src/lib.rs"],
+    crate_name = "wivem",
+    crate_root = "@crates__wasmtime-internal-versioned-export-macros-39.0.1//:src/lib.rs",
+    edition = "2024",
+    rustc_env = {"CARGO_PKG_VERSION": "39.0.1"},
+    rustc_flags = ["--cap-lints=allow"],
+    deps = [
+        "@crates__proc-macro2-1.0.107//:proc_macro2",
+        "@crates__quote-1.0.47//:quote",
+        "@crates__syn-2.0.119//:syn",
+    ],
+)
 
 exports_files([
     "README.md",

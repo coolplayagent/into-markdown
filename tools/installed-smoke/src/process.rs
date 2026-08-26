@@ -154,20 +154,40 @@ fn read_bounded(
 }
 
 pub(crate) fn command_environment(home: &Path) -> BTreeMap<String, String> {
-    BTreeMap::from([
+    let mut environment = BTreeMap::from([
         ("TMPDIR".to_owned(), home.join("tmp").display().to_string()),
         ("TEMP".to_owned(), home.join("tmp").display().to_string()),
         ("TMP".to_owned(), home.join("tmp").display().to_string()),
-    ])
+    ]);
+    #[cfg(windows)]
+    environment.extend([
+        ("APPDATA".to_owned(), home.join("appdata-roaming").display().to_string()),
+        ("LOCALAPPDATA".to_owned(), home.join("appdata-local").display().to_string()),
+        ("INTO_MARKDOWN_USER_DATA_HOME".to_owned(), home.join("user-data").display().to_string()),
+    ]);
+    environment
 }
 
 pub(crate) fn prepare_home(root: &Path, name: &str) -> Result<PathBuf, String> {
     let home = root.join(name);
-    for directory in
-        [home.clone(), home.join("tmp"), home.join("xdg-config"), home.join("xdg-data")]
-    {
+    let mut directories =
+        vec![home.clone(), home.join("tmp"), home.join("xdg-config"), home.join("xdg-data")];
+    #[cfg(windows)]
+    directories.extend([home.join("appdata-roaming"), home.join("appdata-local")]);
+    for directory in directories {
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("cannot prepare isolated home: {error}"))?;
+    }
+    #[cfg(windows)]
+    {
+        let user_data = home.join("user-data");
+        if user_data.exists() {
+            into_markdown_process_plugin::verify_windows_plugin_store_path(&user_data)
+                .map_err(|error| format!("cannot verify isolated user data: {error}"))?;
+        } else {
+            into_markdown_process_plugin::create_windows_plugin_store_directory(&user_data)
+                .map_err(|error| format!("cannot prepare isolated user data: {error}"))?;
+        }
     }
     Ok(home)
 }
@@ -175,6 +195,25 @@ pub(crate) fn prepare_home(root: &Path, name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_environment_uses_isolated_appdata() {
+        let home = Path::new(r"C:\isolated");
+        let environment = command_environment(home);
+        assert_eq!(
+            environment.get("APPDATA").map(String::as_str),
+            Some(r"C:\isolated\appdata-roaming")
+        );
+        assert_eq!(
+            environment.get("LOCALAPPDATA").map(String::as_str),
+            Some(r"C:\isolated\appdata-local")
+        );
+        assert_eq!(
+            environment.get("INTO_MARKDOWN_USER_DATA_HOME").map(String::as_str),
+            Some(r"C:\isolated\user-data")
+        );
+    }
 
     #[test]
     fn cancellation_kills_a_started_process() {

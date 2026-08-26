@@ -17,8 +17,15 @@ import zipfile
 ARTIFACTS = {
     "official.ocr.ppocrv6.imp": "ocr-plugin",
     "official.media.whisper.imp": "media-plugin",
-    "official.legacy-office.libreoffice.imp": "legacy-office-plugin",
 }
+
+
+def plugin_artifact_kind(filename: str, target: str) -> str:
+    for local_name, kind in ARTIFACTS.items():
+        stem = pathlib.PurePosixPath(local_name).stem
+        if filename in {local_name, f"{stem}-{target}.imp"}:
+            return kind
+    raise RuntimeError(f"plugin artifact filename is not authorized: {filename}")
 
 
 def sha256_bytes(contents: bytes) -> str:
@@ -283,11 +290,10 @@ def plugin_projection(
 
         sources = package.read("SOURCES.json")
         source_manifest = json.loads(sources)
-        expected_artifact = ARTIFACTS[artifact.name]
+        expected_artifact = plugin_artifact_kind(artifact.name, target)
         expected_identity = {
             "ocr-plugin": "official.ocr.ppocrv6",
             "media-plugin": "official.media.whisper",
-            "legacy-office-plugin": "official.legacy-office.libreoffice",
         }[expected_artifact]
         if (
             source_manifest["target"] != target
@@ -354,9 +360,12 @@ def generate(
         core_projection(target, version, source_revision, core_artifact, core_root)
     ]
     for name in ARTIFACTS:
-        artifact = plugins / name
-        if not artifact.is_file():
-            raise RuntimeError(f"release plugin is missing: {name}")
+        stem = pathlib.PurePosixPath(name).stem
+        candidates = [plugins / name, plugins / f"{stem}-{target}.imp"]
+        present = [artifact for artifact in candidates if artifact.is_file()]
+        if len(present) != 1:
+            raise RuntimeError(f"release plugin must have one authorized filename: {name}")
+        artifact = present[0]
         projections.append(plugin_projection(target, version, source_revision, artifact))
     executions = build_tool_executions(target)
     for projection in projections:

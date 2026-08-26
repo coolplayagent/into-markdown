@@ -13,6 +13,10 @@
       "guest-fixture/Cargo.lock": "9154713bac330d9021a3fb93e586b5c984a219482ba5503b64e31e99c4115d12",
       "guest-fixture/src/main.rs": "b3afcb8cd409bc3f9bc0d7d9192cdfdb7c0487df6f02f2633204425a975e0085"
     },
+    "rebuildSha256ByHostFamily": {
+      "unix": "0dadf758837a4fb22a37724f0a7d03a4a6d32690bfb20a21758d093f0f88c6d7",
+      "windows": "9cd2e45d84ea1ef7fb76f8c7eac23dda3a667f8e42285d07477eb098111eddef"
+    },
     "component": {
       "path": "tests/fixtures/guest.component.wasm",
       "bytes": 142935,

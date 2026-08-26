@@ -1178,8 +1178,21 @@ async fn stage_plugin_package(State(state): State<AppState>, request: Request) -
     let partial_path = staging.join(format!("{id}.part"));
     let create_path = partial_path.clone();
     let mut file = match tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&staging)?;
-        std::fs::OpenOptions::new().write(true).create_new(true).open(create_path)
+        #[cfg(test)]
+        std::fs::create_dir_all(&staging).map_err(CliError::from)?;
+        #[cfg(not(test))]
+        {
+            let product = staging
+                .parent()
+                .ok_or_else(|| CliError::config("plugin staging parent is unavailable"))?;
+            crate::app::prepare_user_data_anchor(product)?;
+            crate::app::prepare_user_data_anchor(&staging)?;
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(create_path)
+            .map_err(CliError::from)
     })
     .await
     {

@@ -47,6 +47,7 @@ jobs:
           repository-cache: true
       - name: Validate Cargo runtime authority mutations
         run: |
+          cargo fetch --locked
           cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_overlap_and_omission -j1
           cargo test --locked -p license-check normal_runtime_authority_rejects_kind_reclassification -j1
@@ -96,7 +97,7 @@ jobs:
         if: runner.os == 'Linux' || runner.os == 'macOS'
         run: cargo test --locked -p into-markdown-cli --bin into-md --target ${{ matrix.target }} -j1 ui::tests::administration_snapshot_reuses_session_boundary_and_actions_require_grants -- --exact --test-threads=1
       - name: Run process plugin fixture
-        run: cargo test --locked -p into-markdown-process-plugin --test runtime --target ${{ matrix.target }} -j1
+        run: cargo test --locked -p into-markdown-process-plugin --test runtime --target ${{ matrix.target }} -j1 -- --test-threads=1
       - name: Run isolated real CLI plugin lifecycle
         shell: bash
         run: |

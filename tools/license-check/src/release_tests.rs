@@ -98,7 +98,6 @@ fn standard_spdx_sources_finalization_and_release_set_are_deterministic() {
         ("core", "core.tar.gz"),
         ("ocr-plugin", "official.ocr.ppocrv6.imp"),
         ("media-plugin", "official.media.whisper.imp"),
-        ("legacy-office-plugin", "official.legacy-office.libreoffice.imp"),
     ]
     .into_iter()
     .map(|(artifact, file_name)| {
@@ -128,8 +127,8 @@ fn standard_spdx_sources_finalization_and_release_set_are_deterministic() {
     let manifest: serde_json::Value =
         serde_json::from_str(&aggregate.release_set.contents).unwrap();
     assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
-    assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 4);
-    assert_eq!(manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(), 3);
+    assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 3);
+    assert_eq!(manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -198,14 +197,13 @@ fn finalization_and_aggregation_reject_orphans_and_profile_drift() {
 }
 
 #[test]
-fn sixteen_product_target_fixtures_generate_authoritative_metadata() {
+fn twelve_product_target_fixtures_generate_authoritative_metadata() {
     let repository = root();
     for target in crate::schema::SUPPORTED_TARGETS {
         for file in [
             format!("release-request-{target}.json"),
             format!("release-request-ocr-plugin-{target}.json"),
             format!("release-request-media-plugin-{target}.json"),
-            format!("release-request-legacy-office-plugin-{target}.json"),
         ] {
             let request =
                 fs::read_to_string(repository.join("tools/license-check/fixtures").join(file))
@@ -233,10 +231,10 @@ fn four_release_set_fixtures_preserve_exact_profile_difference() {
             serde_json::from_str(&generated.release_set.contents).unwrap();
         assert_eq!(generated.target, target);
         assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
-        assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 4);
+        assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 3);
         assert_eq!(
             manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(),
-            3
+            2
         );
     }
 }

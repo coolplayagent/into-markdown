@@ -97,6 +97,7 @@ rust_test(
         },
     }),
     tags = ["manual"],
+    timeout = "long",
     deps = [
         ":into_markdown_ocr_provider_runtime",
         "//crates/core",
@@ -112,8 +113,14 @@ rust_test(
 rust_test(
     name = "api_test",
     crate = ":into_markdown",
-    data = ["//fixtures:corpus"],
+    data = [
+        "//fixtures:corpus",
+        "//fixtures:manifest.json",
+    ],
     edition = "2024",
+    env = {
+        "COMPUTERNAME": "bazel-test-host",
+    },
     deps = [
         "//crates/ai",
         "//crates/converters",

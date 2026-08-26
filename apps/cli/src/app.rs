@@ -34,11 +34,12 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 // include their audited models/runtimes. Keep the wire bound finite while
 // allowing the reviewed packages plus release metadata.
 const MAX_PLUGIN_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-// Installation keeps the downloaded package and a verified extracted tree in
-// one transaction. A self-contained capability package can therefore require
-// more temporary space than its final on-disk size while still remaining
-// bounded by the 2 GiB package and expanded-tree limits.
-const MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+// A remote upgrade can simultaneously retain the bounded download, the old
+// rollback package, the authenticated incoming package, and the new extracted
+// tree plus retained package. Keep that complete crash-safe peak within one
+// explicit lifecycle budget instead of making large self-contained plugins
+// installable but impossible to upgrade or repair.
+const MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES: u64 = 11 * 1024 * 1024 * 1024;
 const PLUGIN_CLI_TRANSACTION: &str = ".cli-plugin-transaction.json";
 const PLUGIN_CLI_TRANSACTION_NEXT: &str = ".cli-plugin-transaction.next";
 const PLUGIN_CLI_TRANSACTION_PREVIOUS: &str = ".cli-plugin-transaction.previous";
@@ -1687,7 +1688,38 @@ fn run_plugins(
             }
             let configured_before = config::plugins_in_exact_locked(&config_lock, &config_path)?;
             let old_config = configured_before.get(&inspected.id).cloned();
-            let installed_before = match manager.verify(&inspected.id, &execution) {
+            let verified_before = manager.verify(&inspected.id, &execution);
+            if let Some(configured) = old_config.as_ref()
+                && plugin_config_matches_inspected(&manager, configured, &inspected)
+            {
+                match &verified_before {
+                    Ok(installed) => {
+                        verify_plugin_pin(&manager, configured, installed)?;
+                        if let Some(authority) = &project_scope {
+                            authority.verify_config_guard(&config_lock)?;
+                        }
+                        writeln!(context.stdout, "{}\t{}", installed.id, config_path.display())?;
+                        return Ok(());
+                    }
+                    Err(error) if error.code != ManagerErrorCode::NotInstalled => {
+                        // An exact same-authority reinstall is a verification/repair operation.
+                        // The manager publishes its staged replacement atomically, while the
+                        // unchanged config remains a durable rollback authority. Avoid retaining
+                        // a second multi-gigabyte package snapshot solely for a no-op config CAS.
+                        let repaired = manager
+                            .install_file(package_path, Some(&inspected.package_sha256), &execution)
+                            .map_err(plugin_manager_error)?;
+                        verify_plugin_pin(&manager, configured, &repaired)?;
+                        if let Some(authority) = &project_scope {
+                            authority.verify_config_guard(&config_lock)?;
+                        }
+                        writeln!(context.stdout, "{}\t{}", repaired.id, config_path.display())?;
+                        return Ok(());
+                    }
+                    Err(_) => {}
+                }
+            }
+            let installed_before = match verified_before {
                 Ok(installed) => Some(installed),
                 Err(error) if error.code == ManagerErrorCode::NotInstalled => None,
                 Err(_) => Some(
@@ -2369,7 +2401,8 @@ impl Drop for CliPluginLock {
 
 fn acquire_cli_plugin_lock(root: &Path) -> Result<CliPluginLock, CliError> {
     let path = root.join(PLUGIN_CLI_LOCK);
-    let file = OpenOptions::new().create(true).read(true).write(true).open(&path)?;
+    let file =
+        OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path)?;
     let metadata = fs::symlink_metadata(&path)?;
     #[cfg(windows)]
     let linked = {
@@ -2852,6 +2885,18 @@ fn verify_plugin_pin(
     Ok(())
 }
 
+fn plugin_config_matches_inspected(
+    manager: &PluginManager,
+    configured: &PluginConfig,
+    inspected: &into_markdown_plugin_manager::InspectedPackage,
+) -> bool {
+    configured.protocol == inspected.protocol
+        && configured.sha256.as_deref() == Some(inspected.package_sha256.as_str())
+        && configured.signing_key_id == inspected.signing_key_id
+        && manager.trusted_signers().fingerprints.get(&inspected.signing_key_id)
+            == Some(&configured.signing_key_sha256)
+}
+
 /// Verify one captured effective plugin against the store selected by the
 /// physical source-layer authority. This deliberately validates the merged
 /// pins, not merely the raw configuration in the package's store scope.
@@ -3074,7 +3119,7 @@ fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
         let anchor = canonical_private_user_data_directory(&anchor)?;
         let product = anchor.join("into-markdown");
         prepare_user_data_anchor(&product)?;
-        return Ok((fs::canonicalize(product)?, PathBuf::from("plugins")));
+        Ok((fs::canonicalize(product)?, PathBuf::from("plugins")))
     }
     #[cfg(not(test))]
     {
@@ -3108,7 +3153,7 @@ fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
     }
 }
 
-fn prepare_user_data_anchor(path: &Path) -> Result<(), CliError> {
+pub(crate) fn prepare_user_data_anchor(path: &Path) -> Result<(), CliError> {
     if !path.exists() {
         create_private_user_data_directory(path)?;
     } else if fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -5129,40 +5174,48 @@ fn absolute_root(path: &[u8], flavor: PathFlavor) -> Result<ParsedAbsoluteRoot<'
         return Ok((cursor > 0).then_some((LexicalRoot::Posix, &path[cursor..], flavor)));
     }
     if path.len() >= 2 && is_separator(path[0], flavor) && is_separator(path[1], flavor) {
-        let mut cursor = 2;
-        while cursor < path.len() && is_separator(path[cursor], flavor) {
-            cursor += 1;
+        let mut namespace_end = 2;
+        while namespace_end < path.len() && !is_separator(path[namespace_end], flavor) {
+            namespace_end += 1;
         }
-        let server_start = cursor;
-        while cursor < path.len() && !is_separator(path[cursor], flavor) {
-            cursor += 1;
+        let namespace = &path[2..namespace_end];
+        if namespace == b"?" {
+            if namespace_end == path.len() {
+                return Err(asset_path_unsupported("Windows verbatim path has no absolute root"));
+            }
+            let mut cursor = namespace_end;
+            while cursor < path.len() && is_separator(path[cursor], flavor) {
+                cursor += 1;
+            }
+            let rest = &path[cursor..];
+            if rest.len() >= 3
+                && rest[0].is_ascii_alphabetic()
+                && rest[1] == b':'
+                && is_separator(rest[2], flavor)
+            {
+                return Ok(Some((
+                    LexicalRoot::WindowsDrive(rest[0].to_ascii_uppercase()),
+                    &rest[3..],
+                    flavor,
+                )));
+            }
+            let mut marker_end = cursor;
+            while marker_end < path.len() && !is_separator(path[marker_end], flavor) {
+                marker_end += 1;
+            }
+            if path[cursor..marker_end].eq_ignore_ascii_case(b"UNC") {
+                return unc_root(path, marker_end, flavor);
+            }
+            return Err(asset_path_unsupported(
+                "Windows device paths cannot be represented safely in Markdown",
+            ));
         }
-        let server = &path[server_start..cursor];
-        if server.is_empty() {
-            return Err(asset_path_unsupported("UNC path is missing its server"));
+        if namespace == b"." {
+            return Err(asset_path_unsupported(
+                "Windows device paths cannot be represented safely in Markdown",
+            ));
         }
-        while cursor < path.len() && is_separator(path[cursor], flavor) {
-            cursor += 1;
-        }
-        let share_start = cursor;
-        while cursor < path.len() && !is_separator(path[cursor], flavor) {
-            cursor += 1;
-        }
-        let share = &path[share_start..cursor];
-        if share.is_empty() {
-            return Err(asset_path_unsupported("UNC path is missing its share"));
-        }
-        if matches!(server, b"." | b".." | b"?") || matches!(share, b"." | b"..") {
-            return Err(asset_path_unsupported("UNC path has an invalid server or share"));
-        }
-        while cursor < path.len() && is_separator(path[cursor], flavor) {
-            cursor += 1;
-        }
-        return Ok(Some((
-            LexicalRoot::Unc { server: server.to_vec(), share: share.to_vec() },
-            &path[cursor..],
-            flavor,
-        )));
+        return unc_root(path, 2, flavor);
     }
     if path.len() >= 3
         && path[0].is_ascii_alphabetic()
@@ -5176,6 +5229,46 @@ fn absolute_root(path: &[u8], flavor: PathFlavor) -> Result<ParsedAbsoluteRoot<'
         )));
     }
     Ok(None)
+}
+
+fn unc_root(
+    path: &[u8],
+    mut cursor: usize,
+    flavor: PathFlavor,
+) -> Result<ParsedAbsoluteRoot<'_>, CliError> {
+    while cursor < path.len() && is_separator(path[cursor], flavor) {
+        cursor += 1;
+    }
+    let server_start = cursor;
+    while cursor < path.len() && !is_separator(path[cursor], flavor) {
+        cursor += 1;
+    }
+    let server = &path[server_start..cursor];
+    if server.is_empty() {
+        return Err(asset_path_unsupported("UNC path is missing its server"));
+    }
+    while cursor < path.len() && is_separator(path[cursor], flavor) {
+        cursor += 1;
+    }
+    let share_start = cursor;
+    while cursor < path.len() && !is_separator(path[cursor], flavor) {
+        cursor += 1;
+    }
+    let share = &path[share_start..cursor];
+    if share.is_empty() {
+        return Err(asset_path_unsupported("UNC path is missing its share"));
+    }
+    if matches!(server, b"." | b".." | b"?") || matches!(share, b"." | b"..") {
+        return Err(asset_path_unsupported("UNC path has an invalid server or share"));
+    }
+    while cursor < path.len() && is_separator(path[cursor], flavor) {
+        cursor += 1;
+    }
+    Ok(Some((
+        LexicalRoot::Unc { server: server.to_vec(), share: share.to_vec() },
+        &path[cursor..],
+        flavor,
+    )))
 }
 
 fn split_components(path: &[u8], flavor: PathFlavor) -> impl Iterator<Item = &[u8]> {
@@ -5515,6 +5608,26 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::io::Cursor;
 
+    fn controlled_test_secret_environment() -> &'static str {
+        [
+            "CODEX_SESSION_ID",
+            "GITHUB_SHA",
+            "GITHUB_RUN_ID",
+            "COMPUTERNAME",
+            "HOSTNAME",
+            "USERDOMAIN",
+        ]
+        .into_iter()
+        .find(|name| {
+            std::env::var(name).is_ok_and(|value| {
+                !value.is_empty()
+                    && value.len() <= 4096
+                    && !value.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+            })
+        })
+        .expect("a non-secret platform process marker is required")
+    }
+
     #[test]
     fn plugin_lifecycle_budget_covers_package_and_extracted_tree() {
         let execution = plugin_lifecycle_execution_context();
@@ -5522,7 +5635,7 @@ mod tests {
             execution.resource_limits().max_temporary_bytes,
             MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES
         );
-        assert!(MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES >= 2 * MAX_PLUGIN_PACKAGE_BYTES);
+        const { assert!(MAX_PLUGIN_LIFECYCLE_TEMPORARY_BYTES >= 5 * MAX_PLUGIN_PACKAGE_BYTES) };
     }
 
     #[test]
@@ -6209,21 +6322,22 @@ mod tests {
 
     #[test]
     fn filesystem_asset_paths_are_segment_encoded_and_survive_commonmark() {
-        let cwd = Path::new("/work/project");
         assert_eq!(
-            asset_uri_prefix_for_file(
-                Path::new("out/document.md"),
-                Path::new("out/assets #?%/中文"),
-                cwd,
+            asset_uri_prefix_for_file_with_flavor(
+                b"out/document.md",
+                "out/assets #?%/中文".as_bytes(),
+                b"/work/project",
+                PathFlavor::Posix,
             )
             .unwrap(),
             "assets%20%23%3F%25/%E4%B8%AD%E6%96%87"
         );
         assert_eq!(
-            asset_uri_prefix_for_file(
-                Path::new("out/nested/document.md"),
-                Path::new("out/nested/../../safe assets/图"),
-                cwd,
+            asset_uri_prefix_for_file_with_flavor(
+                b"out/nested/document.md",
+                "out/nested/../../safe assets/图".as_bytes(),
+                b"/work/project",
+                PathFlavor::Posix,
             )
             .unwrap(),
             "../../safe%20assets/%E5%9B%BE"
@@ -6236,6 +6350,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(windows_prefix, "../Assets%20%23%3F%25/%E4%B8%AD%E6%96%87");
+        let verbatim_windows_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"\\?\C:\Users\Docs\document.md",
+            br"C:\Users\Assets",
+            br"\\?\C:\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        assert_eq!(verbatim_windows_prefix, "../Assets");
         let unc_prefix = asset_uri_prefix_for_file_with_flavor(
             br"\\Server\Share\docs\document.md",
             r"\\server\share\assets #?%\中文".as_bytes(),
@@ -6244,6 +6366,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unc_prefix, "../assets%20%23%3F%25/%E4%B8%AD%E6%96%87");
+        let verbatim_unc_prefix = asset_uri_prefix_for_file_with_flavor(
+            br"\\?\UNC\Server\Share\docs\document.md",
+            br"\\server\share\assets",
+            br"\\?\UNC\server\share\work",
+            PathFlavor::Windows,
+        )
+        .unwrap();
+        assert_eq!(verbatim_unc_prefix, "../assets");
         let stdout_prefix = asset_uri_prefix_for_stdout_with_flavor(
             "/var/assets #?%/中文".as_bytes(),
             b"/work/project",
@@ -6297,6 +6427,13 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "assetPathUnsupported");
+        for device in [br"\\.\PhysicalDrive0".as_slice(), br"\\?\GLOBALROOT\Device\HarddiskVolume1"]
+        {
+            let error =
+                asset_uri_prefix_for_stdout_with_flavor(device, br"C:\work", PathFlavor::Windows)
+                    .unwrap_err();
+            assert_eq!(error.code(), "assetPathUnsupported");
+        }
     }
 
     #[test]
@@ -6366,7 +6503,7 @@ mod tests {
         let mut options = ConversionOptions::default();
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("out/document.md");
-        let directory = root.path().join("out/nested/../assets #?%/中文\\literal");
+        let directory = root.path().join("out/nested/../assets #%/中文/literal");
         options.output.asset_uri_prefix =
             Some(asset_uri_prefix_for_file(&output, &directory, root.path()).unwrap());
         let markdown = render_markdown(&document, std::slice::from_ref(&asset), &options).unwrap();
@@ -6585,7 +6722,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(String::from_utf8(stdout).unwrap().contains("sub/a.md"));
+        let expected = Path::new("sub").join("a.md");
+        assert!(String::from_utf8(stdout).unwrap().contains(expected.to_string_lossy().as_ref()));
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -6931,6 +7069,7 @@ mod tests {
         let (b_port, b_server) = models_server();
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("config.toml");
+        let secret_environment = controlled_test_secret_environment();
         fs::write(
             &path,
             format!(
@@ -6941,7 +7080,7 @@ schema_version = 1
 type = "openai-compatible"
 base_url = "http://127.0.0.1:{a_port}/v1"
 model = "fixture-model"
-api_key_env = "PATH"
+api_key_env = "{secret_environment}"
 capabilities = ["image-description"]
 allowed_hosts = ["127.0.0.1"]
 allow_private_network = true
@@ -6950,7 +7089,7 @@ allow_private_network = true
 type = "openai-compatible"
 base_url = "http://localhost:{b_port}/v1"
 model = "fixture-model"
-api_key_env = "PATH"
+api_key_env = "{secret_environment}"
 capabilities = ["image-description"]
 allowed_hosts = ["localhost"]
 allow_private_network = true

@@ -6,7 +6,7 @@
   "included_in_artifacts": false,
   "provenance": "FFmpeg project public samples server; individual authorship and redistribution grants are not documented",
   "fixtures": [
-    {"format":"mp3","url":"https://samples.ffmpeg.org/A-codecs/MP3/SegvMPlayer0.90.mp3","bytes":65536,"sha256":"90eafc94f321a7d3954f5faff61642547cacb971e0401e2cec6c25247ef3f398"},
+    {"format":"mp3","url":"https://samples.ffmpeg.org/A-codecs/MP3/ascii.mp3","bytes":319488,"sha256":"7c72e328ad3fe508ba244d8a20bac3d2c646ceca42341dcb7dc4fbf7bb3badeb"},
     {"format":"m4a","url":"https://samples.ffmpeg.org/A-codecs/AAC/8_Channel_ID.m4a","bytes":136005,"sha256":"9a3ba6b6b7c56082e495e816a728b1813854537c354dae3bfdc0a08ee8a61119"},
     {"format":"flac","url":"https://samples.ffmpeg.org/flac/short.flac","bytes":20547,"sha256":"29e1b72e4c0bc39b0c7c0a1cfd5a1b2c46e41966210e1d0f1f276bc2bfe4b912"},
     {"format":"ogg","url":"https://samples.ffmpeg.org/ogg/virginradio-three-consecutive-chains.ogg","bytes":530260,"sha256":"7dfe83e1c7f3c84ea9368be7c191a3b84a3036f3ec4b5a9296cf9e38d639d646"}

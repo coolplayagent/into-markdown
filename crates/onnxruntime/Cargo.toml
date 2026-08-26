@@ -10,6 +10,9 @@ license.workspace = true
 default = ["cpu"]
 cpu = []
 gpu-provider-placeholder = []
+# Internal boundary for an official worker whose host already authenticated and
+# replacement-protected the complete read-only runtime snapshot.
+authenticated-read-only-snapshot = []
 
 [dependencies]
 into-markdown-core = { path = "../core" }
