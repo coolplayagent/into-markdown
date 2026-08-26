@@ -59,6 +59,7 @@ rust_test(
         "//fixtures:corpus",
         "//fixtures:manifest.json",
     ],
+    tags = ["exclusive"],
     deps = [
         "//crates/api:into_markdown",
         "//crates/process-plugin:process_plugin",
@@ -67,7 +68,10 @@ rust_test(
         "@crates//:zip",
     ],
     edition = "2024",
-    env = {"INTO_MD_BIN": "$(location :into-md)"},
+    env = {
+        "INTO_MD_BIN": "$(location :into-md)",
+        "RUST_TEST_THREADS": "1",
+    },
 )
 
 rust_test(
