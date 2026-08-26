@@ -53,13 +53,15 @@ jobs:
       - name: Bootstrap fixed Linux build container
         if: runner.os == 'Linux'
         run: |
-          dnf install --assumeyes binutils cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3 tar unzip which xz zip
+          dnf install --assumeyes binutils cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3.11 python3.11-pip tar unzip which xz zip
           if [ "$(uname -m)" = x86_64 ]; then
             dnf --enablerepo=powertools install --assumeyes nasm
             nasm -v
           fi
-          test -x /usr/bin/python || ln -s /usr/bin/python3 /usr/local/bin/python
+          ln -sf /usr/bin/python3.11 /usr/local/bin/python
+          ln -sf /usr/bin/python3.11 /usr/local/bin/python3
           python --version
+          python -c 'import sys; assert sys.version_info[:2] == (3, 11)'
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
           python -c 'import os; assert tuple(map(int, os.uname().release.split("-")[0].split(".")[:2])) >= (5, 15)'
       - uses: actions/checkout@v4
