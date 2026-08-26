@@ -37,6 +37,14 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
 
+    def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("toolset: 14.44.35207", workflow)
+        self.assertIn("sdk: 10.0.26100.0", workflow)
+        self.assertIn("CMAKE_GENERATOR=NMake Makefiles", workflow)
+
     def test_command_failure_preserves_bounded_diagnostic_tail(self) -> None:
         script = (
             "import sys; "
