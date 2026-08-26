@@ -94,6 +94,11 @@ case "$(uname -s)-$(uname -m)" in
       fail "cl.exe is unavailable and VCToolsInstallDir is not set in the MSYS2 release shell"
     fi
     export INTO_MD_REAL_CL
+    # setup-msys2 intentionally starts with a minimal POSIX PATH. FFmpeg's
+    # MSVC linker adapter invokes link by name, so make the fixed VC bin
+    # directory authoritative over MSYS2's unrelated /usr/bin/link utility.
+    PATH=$(dirname "$INTO_MD_REAL_CL"):$PATH
+    export PATH
     case "$INTO_MD_REAL_CL" in
       *"/$msvc_tools/"*) ;;
       *) echo "cl.exe is not from fixed MSVC tools $msvc_tools: $INTO_MD_REAL_CL" >&2; exit 2 ;;
