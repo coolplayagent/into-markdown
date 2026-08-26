@@ -72,8 +72,15 @@ def run(
         errors="replace",
     )
     if completed.returncode:
-        detail = completed.stderr.strip().splitlines()[-1:] or ["no diagnostic"]
-        raise ReleaseError(f"command failed ({command[0]}): {detail[0]}")
+        # Cargo and native linkers commonly finish with a generic summary such as
+        # "build failed, waiting for other jobs to finish". Preserve a bounded
+        # diagnostic tail so a hosted release failure exposes the actual compiler
+        # or linker error without flooding Actions logs with the entire build.
+        detail = completed.stderr.strip().splitlines()[-40:] or ["no diagnostic"]
+        rendered = "\n".join(detail)
+        raise ReleaseError(
+            f"command failed ({command[0]}, exit {completed.returncode}):\n{rendered}"
+        )
     return completed.stdout
 
 
