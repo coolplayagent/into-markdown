@@ -35,9 +35,12 @@ jobs:
           install: make diffutils xz curl gnupg jq file binutils python coreutils perl
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
+        with:
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
       - name: Install audit tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes build-essential curl gnupg jq xz-utils
+        run: sudo apt-get update && sudo apt-get install --yes build-essential curl gnupg jq nasm xz-utils
       - name: Install macOS audit tools
         if: runner.os == 'macOS'
         run: brew install gnupg jq

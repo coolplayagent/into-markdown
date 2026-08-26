@@ -56,7 +56,7 @@
       "binary_format": "elf",
       "binary_architecture": "aarch64",
       "additional_flags": [],
-      "dynamic_dependencies": ["libc.so.6", "libm.so.6"]
+      "dynamic_dependencies": ["ld-linux-aarch64.so.1", "libc.so.6", "libm.so.6"]
     },
     "x86_64-pc-windows-msvc": {
       "binary_format": "pe",

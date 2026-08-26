@@ -74,15 +74,26 @@ grep -q 'GNU LESSER GENERAL PUBLIC LICENSE' "$src/COPYING.LGPLv2.1" \
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) target=aarch64-apple-darwin; format=mach-o; arch=aarch64; toolchain_args='--extra-cflags=-mmacosx-version-min=14.0 --extra-ldflags=-mmacosx-version-min=14.0' ;;
-  Linux-x86_64) target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args= ;;
+  Linux-x86_64)
+    command -v nasm >/dev/null || fail "nasm is required for the x86_64 optimized build"
+    target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args=
+    ;;
   Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
   MINGW*-x86_64|MSYS*-x86_64)
-    command -v cl.exe >/dev/null || fail "cl.exe is unavailable in the MSYS2 release shell"
     command -v objdump >/dev/null || fail "objdump is unavailable in the MSYS2 release shell"
     target=x86_64-pc-windows-msvc; format=pe; arch=x86_64
     toolchain_args='--toolchain=msvc --disable-x86asm'
     msvc_tools=$(jq -er '.targets["x86_64-pc-windows-msvc"].buildBaseline.msvcTools' "$root/tools/platform-release/authority.json")
-    INTO_MD_REAL_CL=$(command -v cl.exe); export INTO_MD_REAL_CL
+    if command -v cl.exe >/dev/null 2>&1; then
+      INTO_MD_REAL_CL=$(command -v cl.exe)
+    elif [ -n "${VCToolsInstallDir:-}" ]; then
+      INTO_MD_REAL_CL=$(cygpath -u "$VCToolsInstallDir")/bin/HostX64/x64/cl.exe
+      test -f "$INTO_MD_REAL_CL" \
+        || fail "cl.exe is missing from fixed VCToolsInstallDir: $INTO_MD_REAL_CL"
+    else
+      fail "cl.exe is unavailable and VCToolsInstallDir is not set in the MSYS2 release shell"
+    fi
+    export INTO_MD_REAL_CL
     case "$INTO_MD_REAL_CL" in
       *"/$msvc_tools/"*) ;;
       *) echo "cl.exe is not from fixed MSVC tools $msvc_tools: $INTO_MD_REAL_CL" >&2; exit 2 ;;
