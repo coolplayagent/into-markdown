@@ -8,7 +8,9 @@ import stat
 import unittest
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+# Keep this path inside the runfiles tree. Resolving __file__ first follows the
+# source-file symlink back into the checkout on Unix and loses generated data.
+ROOT = pathlib.Path(__file__).parents[1]
 
 
 def inventory(root: pathlib.Path) -> dict[str, bytes]:
