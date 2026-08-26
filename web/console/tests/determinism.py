@@ -22,7 +22,10 @@ def inventory(root: pathlib.Path) -> dict[str, bytes]:
         raise AssertionError(f"generated Web bundle is not a directory: {root}")
     result: dict[str, bytes] = {}
     for path in sorted(root.rglob("*"), key=lambda candidate: candidate.as_posix()):
-        metadata = path.lstat()
+        # Individual generated files can also be runfiles symlinks. Follow the
+        # Bazel-owned link for classification and content while retaining the
+        # stable runfiles-relative name in the inventory.
+        metadata = path.stat()
         if stat.S_ISDIR(metadata.st_mode):
             continue
         if not stat.S_ISREG(metadata.st_mode):
