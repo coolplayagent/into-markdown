@@ -12,6 +12,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def inventory(root: pathlib.Path) -> dict[str, bytes]:
+    # Bazel exposes tree artifacts as directory symlinks on Linux. pathlib does
+    # not descend when the rglob root itself is a symlink, so bind
+    # the comparison to the resolved tree artifact before walking it.
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise AssertionError(f"generated Web bundle is not a directory: {root}")
     result: dict[str, bytes] = {}
     for path in sorted(root.rglob("*"), key=lambda candidate: candidate.as_posix()):
         metadata = path.lstat()
