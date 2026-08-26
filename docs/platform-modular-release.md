@@ -26,6 +26,7 @@ DOC/PPT/XLS 真实文件转换并卸载。
 
 Linux 两个架构都在 `authority.json` 固定摘要的 Rocky Linux 8.10 原生容器中构建。发布契约是
 glibc 不高于 2.28、运行内核 5.15 以上；x86_64 使用通用 `x86-64`，ARM64 使用通用 ARMv8-A，
+容器内固定使用 Rocky AppStream Python 3.11 执行发布工具，不能回退到 EL8 默认 Python 3.6。
 组装器显式传递 `target-cpu`，不接受宿主 `native` 特性。Windows 固定 MSVC 14.44.35207 与
 Windows SDK 10.0.26100.0。`audit.py` 在最终真实成员上检查 ELF/PE 架构、GLIBC symbol
 ceiling、解释器、DT_NEEDED、RPATH/RUNPATH、文件模式、PE import 与项目二进制 Authenticode；
