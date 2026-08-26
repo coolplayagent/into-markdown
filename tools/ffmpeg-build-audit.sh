@@ -99,6 +99,15 @@ case "$(uname -s)-$(uname -m)" in
     # directory authoritative over MSYS2's unrelated /usr/bin/link utility.
     PATH=$(dirname "$INTO_MD_REAL_CL"):$PATH
     export PATH
+    if ! command -v cargo >/dev/null 2>&1; then
+      test -n "${USERPROFILE:-}" \
+        || fail "USERPROFILE is unavailable for the fixed Rust toolchain"
+      cargo_bin=$(cygpath -u "$USERPROFILE")/.cargo/bin
+      test -x "$cargo_bin/cargo.exe" \
+        || fail "cargo.exe is missing from the fixed Rust toolchain: $cargo_bin"
+      PATH=$cargo_bin:$PATH
+      export PATH
+    fi
     case "$INTO_MD_REAL_CL" in
       *"/$msvc_tools/"*) ;;
       *) echo "cl.exe is not from fixed MSVC tools $msvc_tools: $INTO_MD_REAL_CL" >&2; exit 2 ;;
