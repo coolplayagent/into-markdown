@@ -53,13 +53,16 @@ jobs:
       - name: Bootstrap fixed Linux build container
         if: runner.os == 'Linux'
         run: |
-          dnf install --assumeyes binutils cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3.11 python3.11-pip tar unzip which xz zip
+          dnf install --assumeyes binutils clang-libs cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3.11 python3.11-pip tar unzip which xz zip
           if [ "$(uname -m)" = x86_64 ]; then
             dnf --enablerepo=powertools install --assumeyes nasm
             nasm -v
           fi
           ln -sf /usr/bin/python3.11 /usr/local/bin/python
           ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+          libclang_path="$(rpm -ql clang-libs | grep -E '/libclang\.so(\.[0-9]+)*$' | head -n 1)"
+          test -f "$libclang_path"
+          echo "LIBCLANG_PATH=$(dirname "$libclang_path")" >> "$GITHUB_ENV"
           python --version
           python -c 'import sys; assert sys.version_info[:2] == (3, 11)'
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"

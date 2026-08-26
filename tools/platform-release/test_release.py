@@ -12,7 +12,7 @@ import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from common import ReleaseError, authority, run, sha256
+from common import ROOT, ReleaseError, authority, run, sha256
 from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
@@ -24,6 +24,13 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_linux_release_bootstrap_provides_bindgen_libclang(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
+        self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
+
     def test_command_failure_preserves_bounded_diagnostic_tail(self) -> None:
         script = (
             "import sys; "
