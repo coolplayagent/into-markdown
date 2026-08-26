@@ -1048,6 +1048,8 @@ pub struct ModelManager {
     writable_root: PathBuf,
     bundled_root: Option<PathBuf>,
     verification: ModelVerification,
+    #[cfg(test)]
+    verification_error: Option<std::io::ErrorKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1111,7 +1113,14 @@ impl ModelManager {
         bundled_root: Option<PathBuf>,
         verification: ModelVerification,
     ) -> Self {
-        Self { manifest, writable_root, bundled_root, verification }
+        Self {
+            manifest,
+            writable_root,
+            bundled_root,
+            verification,
+            #[cfg(test)]
+            verification_error: None,
+        }
     }
 
     fn verify_directory(
@@ -1120,6 +1129,10 @@ impl ModelManager {
         path: &Path,
         context: &ExecutionContext,
     ) -> Result<(), ModelManagerError> {
+        #[cfg(test)]
+        if let Some(kind) = self.verification_error {
+            return Err(ModelManagerError::Io(std::io::Error::from(kind)));
+        }
         match self.verification {
             ModelVerification::ContentDigest => {
                 verify_directory_with_context(bundle, path, context)
@@ -3371,22 +3384,18 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn permission_failure_remains_io_error() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
-        let manager = installable_manager(temp.path());
+        let mut manager = installable_manager(temp.path());
         let fetcher = BytesFetcher {
             bytes: b"hello".to_vec(),
             opens: std::sync::atomic::AtomicUsize::new(0),
         };
         let id = TEST_INSTALL_ID;
         manager.install(id, &fetcher, &execution(5)).unwrap();
-        let state = temp.path().join(id).join("install-state.json");
-        fs::set_permissions(&state, fs::Permissions::from_mode(0o0)).unwrap();
+        manager.verification_error = Some(std::io::ErrorKind::PermissionDenied);
         assert!(matches!(manager.verify(id), Err(ModelManagerError::Io(_))));
-        fs::set_permissions(&state, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     #[test]
