@@ -14,7 +14,7 @@ SHA-256、SPDX、来源与第三方声明 sidecar；每个目标的 `*-signing-p
 | 转写与说话人分离 | `official.media.whisper-<target>.imp` |
 | Agent 指令 | `into-markdown-skill.zip` |
 
-Office 97–2003 的 `.doc/.ppt/.xls` 由 Core 原生解析，不调用 LibreOffice 或其它外部办公套件。
+Core 原生解析 Office 97–2003 的 `.doc/.ppt/.xls` 文件。
 
 ## 安装 Core
 
@@ -80,7 +80,8 @@ into-md setup ocr
 into-md setup media
 ```
 
-`setup` 只在明确安装动作中联网。转换和状态查询不下载插件或模型；模型属于完整插件内部。
+`setup` 是联网安装完整能力插件的显式命令，包内包含对应模型与运行时。转换和状态查询使用
+当前已安装的能力状态。
 
 ## 完整离线部署
 
@@ -144,4 +145,4 @@ into-md meeting.webm --ai audio-transcription=only --diarize \
 & .\into-md-core\Uninstall.ps1
 ```
 
-卸载器只删除产品树和命令 shim，不删除用户自行复制或链接的 Agent Skill。
+卸载器负责产品树和命令 shim；用户自行复制的 Agent Skill 或建立的链接由用户单独管理。

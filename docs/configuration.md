@@ -152,8 +152,8 @@ provenance 校验；结构化修复只能提交版本化 Document Patch，不能
 安装、官方包和隔离边界见 [`capability-plugins.md`](capability-plugins.md)。
 
 旧配置中的 `conversion.ocr.model_bundle` 和 `conversion.asr.model_bundle` 只为迁移而读取，
-不会写回；CLI 会给出一次明确提示。新的公共配置不暴露本地模型目录或模型选择，本地模型
-随整个能力插件安装、校验、更新和移除。Provider 的远端模型 ID 仍由 Provider 配置管理。
+不会写回；CLI 会给出一次明确提示。当前公共配置以完整能力插件管理本地模型的安装、校验、
+更新和移除；Provider 配置继续管理远端模型 ID。
 
 配置中的 `allowed_hosts`、重定向和私网策略只能收窄权限，不能启用网络。上例调用
 本机 Provider 时仍需：
@@ -212,7 +212,7 @@ Provider 和插件配置，但不能赋予联网或私网权限。
 Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL、类型、环境变量名和能力；
 全部层合并后，Provider 必须包含 `type`、`base_url`、`model` 与 `api_key_env`，否则
 配置整体无效。`models` 表只覆盖已声明 capability 的远端模型；没有映射时使用 Provider 的
-默认 `model`。本地能力插件的模型是插件私有资源，不属于这个表。单独校验一个不完整文件也会失败。
+默认 `model`。本地模型身份由对应能力插件的签名描述固定。单独校验一个不完整文件也会失败。
 
 `conversion.network.deny_private_networks` 只能省略或设为 `true`；设为 `false` 会被
 拒绝。配置文件和 Profile 中的 `allow_network`、`allow_private_network` 及任何未知

@@ -80,7 +80,7 @@ ACL。任何不安全路径返回 `unsafeDataDirectory`，服务不会在降级�
 `no-store`，不依赖具体 handler 正常返回。
 
 `GET /api/admin` 返回 schema 1 的有界管理快照。格式来自 core catalog；能力状态来自
-统一路由、Provider 和通用插件管理器，不公开插件内部模型集合；Provider 只返回脱敏 URL、
+统一路由、Provider 和通用插件管理器，并以完整插件为本地能力管理单元；Provider 只返回脱敏 URL、
 环境变量名及“是否存在”，永不读取
 或返回环境变量值；配置使用 `LoadedConfig::display_value` 的脱敏结果。插件按 global/project
 精确作用域列出，并通过与 `plugins verify` 相同的 PluginManager authority 复核安装树、发布者

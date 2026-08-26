@@ -10,7 +10,9 @@ Apple silicon 每个版本固定发布四个独立构件：
 - `official.media.whisper-aarch64-apple-darwin.imp`：语音 provider、FFmpeg、ONNX Runtime、worker、Whisper、VAD 与说话人模型；
 - `into-markdown-skill.zip`：平台无关的 Agent Skill，另附 SHA-256，并以相同字节内置于 Core。
 
-Core 内置 Office 97–2003 原生解析，但不携带 FFmpeg、ONNX Runtime 或本地 OCR/语音模型。每个插件都是通用插件管理器可安装的有界签名 ZIP，`plugin.json` 绑定目标平台、入口、执行权限和全部文件哈希；`provider.json`、SBOM、许可、模型及 runtime 均在同一签名清单内。本地模型是插件私有实现资源，不存在独立安装或切换入口。
+Core 内置 Office 97–2003 原生解析和插件管理入口。OCR 与语音插件是通用插件管理器可安装的
+有界签名 ZIP，各自携带 FFmpeg/ONNX Runtime、模型与字典；`plugin.json` 绑定目标平台、入口、
+执行权限和全部文件哈希，`provider.json`、SBOM、许可、模型及 runtime 均在同一签名清单内。
 
 ## 构建
 

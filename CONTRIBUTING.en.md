@@ -3,7 +3,7 @@
 [中文](CONTRIBUTING.md)
 
 Thank you for improving Into Markdown. This repository owns the local-first conversion Core,
-three complete capability plugins, the Agent Skill, installers, and four-platform release
+two complete capability plugins, the Agent Skill, installers, and four-platform release
 authority. A change must preserve the common IR, offline default, explicit authority, and
 reproducible release boundary rather than making only one entry point appear to work.
 
@@ -23,8 +23,9 @@ reproducible release boundary rather than making only one entry point appear to 
   Web, plugins, and providers cannot maintain separate semantic result models.
 - Local input is offline by default. Remote sources and providers access the network only with
   explicit authority for the current invocation; private destinations require a separate grant.
-- OCR, speech, and legacy Office ship as complete capability plugins. Models are internal plugin
-  resources and have no independent install, replacement, or selection interface.
+- Office 97–2003 parsing is built into Core. OCR and speech ship as complete capability plugins
+  containing their runtimes, models, licenses, and SBOMs, and are installed, updated, and verified
+  as plugin units.
 - Changes to public commands, DTOs, error codes, the format catalog, plugin or capability IDs, and
   release paths need compatibility analysis, tests, and synchronized Chinese and English docs.
 - Security failures return stable, parseable errors. They must not panic, silently downgrade, or

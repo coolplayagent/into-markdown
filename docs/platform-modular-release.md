@@ -5,8 +5,8 @@
 
 Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个包含
 Office 97–2003 原生解析的 Core 归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`
-两个自包含 `.imp`。Core 不包含 FFmpeg、ONNX Runtime 或 OCR/语音模型；每个插件包含离线运行所需的完整 runtime、模型、字典、许可、
-SBOM、签名清单和目标平台声明。
+两个自包含 `.imp`。Core 归档承载转换与管理功能；每个能力插件包含离线运行所需的完整
+FFmpeg/ONNX Runtime、模型、字典、许可、SBOM、签名清单和目标平台声明。
 
 每个最终 Core/插件构件同时发布以完整文件名为前缀的 `.spdx.json`、`.sources.json` 和
 `.THIRD_PARTY_NOTICES.md` sidecar，并保留 SHA-256。每个目标另有 `*-signing-policy.json`，明确
@@ -16,7 +16,7 @@ SBOM、签名清单和目标平台声明。
 
 每个产品版本还发布一份平台无关的 `into-markdown-skill.zip` 与 SHA-256。skill 的 canonical
 内容同时进入所有 Core 的 `share/into-markdown/skills/into-markdown/`，并由 Core 归档清单绑定；
-安装器和卸载器都不会修改用户的 agent skill 目录。
+用户通过独立 ZIP 或 Core 内置副本将其显式安装到 agent skill 目录。
 
 原生发布入口是 `tools/platform-release/release.py`。它拒绝在非目标架构组装发布件，并固定
 Rust 版本、PDFium、ONNX Runtime、模型、FFmpeg 审计产物、下载大小和 SHA-256。

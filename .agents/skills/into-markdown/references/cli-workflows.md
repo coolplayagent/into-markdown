@@ -128,7 +128,7 @@ into-md "/absolute/meeting.webm" \
 
 Omit `--expected-speakers` when the count is unknown. Use `--asr-language` only with a reliable language hint. Do not describe this as realtime transcription, and never validate media with renamed extensions, silence, random bytes, or mock transcripts.
 
-If transcription or diarization is unavailable, inspect `into-md capabilities show transcription --json`, `into-md capabilities show diarization --json`, and `into-md doctor --json`. Do not run `setup`, `models`, or plugin-management commands under this skill.
+If transcription or diarization is unavailable, inspect `into-md capabilities show transcription --json`, `into-md capabilities show diarization --json`, and `into-md doctor --json`. Keep this skill to read-only capability checks; `setup` and plugin-management commands belong to a separately requested product-management workflow.
 
 ## Remote sources and providers
 

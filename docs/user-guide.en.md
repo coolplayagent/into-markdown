@@ -15,8 +15,7 @@ Both `.imp` files always retain internal Ed25519 manifest signatures and pinned 
 | Transcription and diarization | `official.media.whisper-<target>.imp` |
 | Agent instructions | `into-markdown-skill.zip` |
 
-Core natively parses Office 97–2003 `.doc/.ppt/.xls` files without invoking LibreOffice or another
-external office suite.
+Core natively parses Office 97–2003 `.doc/.ppt/.xls` files.
 
 ## Install Core
 
@@ -84,8 +83,8 @@ into-md setup ocr
 into-md setup media
 ```
 
-`setup` uses the network only for that explicit installation. Conversion and status commands never
-download plugins or models; models remain internal to complete plugins.
+`setup` is the explicit networked command for installing a complete capability plugin, including
+its models and runtime. Conversion and status commands use the currently installed capability state.
 
 ## Complete offline deployment
 
@@ -149,4 +148,5 @@ query-bearing URLs, private paths, or sensitive content in public issues.
 & .\into-md-core\Uninstall.ps1
 ```
 
-The uninstaller removes only the product tree and command shim, never a user-copied or linked Agent Skill.
+The uninstaller manages the product tree and command shim. Users separately manage any copied or
+linked Agent Skill directory.

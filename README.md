@@ -6,8 +6,6 @@ Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它�
 `into-md` CLI、本地 Web 工作台、稳定 JSON/Bundle 接口，以及两个自包含的可选能力插件。
 所有内容先进入带诊断与溯源的 Document IR，再由唯一的确定性渲染器生成 GFM。
 
-项目独立于相邻的 `anydoc` 与 `markitdown`，不调用或包装它们。
-
 ## 产品组成
 
 - Core：CLI、Web 工作台、Document IR、格式检测与转换、PDFium、安全输出事务、插件与
@@ -17,8 +15,8 @@ Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它�
 - Agent Skill `into-markdown`：指导兼容 agent 使用已安装的 `into-md`，同时提供独立 ZIP 并
   以相同字节内置于每个平台 Core。
 
-模型是完整能力插件的内部实现资源，不是独立安装、更新或切换的产品对象。普通转换不会
-下载插件、模型或远端内容。
+OCR 与语音所需的模型和运行时随完整能力插件安装、校验和更新。普通转换复用已安装的
+插件；能力安装由显式 `setup` 操作完成。
 
 ## 支持范围
 
@@ -34,7 +32,7 @@ Outlook MSG、音频和视频。Office 97–2003 的 DOC/PPT/XLS 由 Core 原生
 
 ## 使用 CLI
 
-转换直接接收输入，不存在 `convert` 子命令：
+将转换输入直接放在 `into-md` 及选项之后：
 
 ```sh
 into-md version --json
@@ -71,7 +69,7 @@ into-md doctor --json
 into-md ui
 ```
 
-`setup` 安装并验证完整官方能力插件；转换过程不会隐式调用它。`into-md ui` 只监听
+`setup` 是安装并验证完整官方能力插件的显式管理命令。`into-md ui` 只监听
 `127.0.0.1`，提供批量转换、进度与取消、任务历史、产物预览/下载，以及格式、能力、
 Provider、插件、配置和诊断管理。Web 与 CLI 复用相同的能力路由、配置和安全边界。
 
@@ -80,10 +78,9 @@ Provider、插件、配置和诊断管理。Web 与 CLI 复用相同的能力路
 
 ## Agent Skill
 
-发布件 `into-markdown-skill.zip` 可显式解压到 agent 的 skill 发现目录。每个平台 Core 也包含
-`share/into-markdown/skills/into-markdown/`，便于用户自行复制或建立链接。产品安装器和
-卸载器不会修改用户的 agent 目录。Codex 可显式调用 `$into-markdown`，也可在匹配的转换任务中
-自动选择它。
+Agent Skill 由用户将发布件 `into-markdown-skill.zip` 解压到 agent 的 skill 发现目录，或从
+每个平台 Core 内的 `share/into-markdown/skills/into-markdown/` 复制或建立链接。Codex 可显式
+调用 `$into-markdown`，也可在匹配的转换任务中自动选择它。
 
 安装、校验与发布契约见 [Agent Skill 发布与安装](docs/agent-skill.md)。
 

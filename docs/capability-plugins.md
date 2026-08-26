@@ -27,9 +27,9 @@ flowchart LR
 `x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`。目标后缀只解决 GitHub Release 的平面资产
 命名冲突；下载后的包内 ID、签名 authority 和插件管理命令仍使用不带后缀的稳定插件 ID。
 
-`into-md setup ocr|media` 下载、安装并验证整个能力插件。模型不会在转换时
-自动下载，也不是可独立安装、更新或切换的产品对象。Web 控制台在 OCR 控件或会议转写
-控件旁提供安装操作，进度和错误显示在相同区域。
+`into-md setup ocr|media` 下载、安装并验证整个能力插件及其中固定的模型与运行时。普通转换
+使用当前已安装的插件。Web 控制台在 OCR 控件或会议转写控件旁提供安装操作，进度和错误
+显示在相同区域。
 
 第三方本地包使用显式信任安装：
 
@@ -46,8 +46,8 @@ into-md plugins verify vendor.ocr --scope global --json
 本地与 HTTPS 包共用通用插件管理器；HTTPS 必须固定完整包 SHA-256，并继续受无重定向、
 默认拒绝私网的传输策略约束。新的发行者公钥指纹必须由调用方显式确认，项目配置只能引用
 已经建立的全局信任，不能自行扩大信任。安装完成后，包位于内容寻址目录，签名、目标
-平台、完整文件集合、可执行权限、大小和 SHA-256 会在每次加载时重新验证。安装、删除和
-信任发布都使用事务日志及崩溃恢复，不存在另一套只服务能力模型的插件生命周期。
+平台、完整文件集合、可执行权限、大小和 SHA-256 会在每次加载时重新验证。能力插件的安装、
+删除和信任发布统一使用通用插件管理器的事务日志与崩溃恢复流程。
 
 ## 包与协议
 
@@ -110,8 +110,8 @@ fallbacks = []
 - 路由只在 readiness 失败时切换；结果 DTO、事件顺序、frame、输出字节和进程树生命周期均
   有宿主上限。
 
-发行构建通过通用 `package_plugin` 工具对精确 runtime inventory 签名并生成 `.imp`；
-能力包没有旁路打包器。发布私钥只从 CI secret `PLUGIN_SIGNING_KEY_BASE64` 注入，仓库和
-产物仅包含公钥记录。Core 携带 `official-publisher.json`，把官方包 HTTPS 地址、包摘要、
-签名 key ID 与公钥指纹固定下来，`setup` 在注册前重新认证这些值。两个包分别发布、签名
-并生成 SBOM，Core 不包含它们的 runtime 或模型资源。
+发行构建统一通过 `package_plugin` 工具对精确 runtime inventory 签名并生成 `.imp`。发布私钥
+只从 CI secret `PLUGIN_SIGNING_KEY_BASE64` 注入，仓库和产物仅包含公钥记录。Core 携带
+`official-publisher.json` 和插件管理入口，把官方包 HTTPS 地址、包摘要、签名 key ID 与公钥
+指纹固定下来，`setup` 在注册前重新认证这些值。两个插件分别携带各自的 runtime 与模型，
+独立发布、签名并生成 SBOM。
