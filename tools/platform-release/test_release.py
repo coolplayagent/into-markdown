@@ -69,6 +69,12 @@ class PlatformReleaseTests(unittest.TestCase):
             if config["os"] == "linux":
                 self.assertEqual(baseline["glibcMaximum"], "2.28")
                 self.assertEqual(baseline["kernelMinimum"], "5.15")
+                self.assertTrue(
+                    baseline["container"].startswith(
+                        "docker.io/rockylinux/rockylinux:8.10@sha256:"
+                    ),
+                    (target, baseline["container"]),
+                )
                 self.assertRegex(baseline["container"], r"@sha256:[0-9a-f]{64}$")
             else:
                 self.assertRegex(baseline["msvcTools"], r"^\d+\.\d+\.\d+$")
