@@ -73,6 +73,9 @@ def build(target: pathlib.Path) -> None:
         "RUSTFLAGS": " ".join(f"--remap-path-prefix={source}={destination}" for source, destination in remaps) + " -C strip=debuginfo " + f"-C link-arg=-mmacosx-version-min={authority()['minimumMacos']}",
         "CARGO_TARGET_DIR": str(target),
     })
+    # release-projection verifies the complete lockfile with offline Cargo
+    # metadata, including packages that are conditional on other platforms.
+    run(["cargo", "fetch", "--locked"], cwd=ROOT, env=environment)
     run(["cargo", "build", "-j2", "--release", "--locked", "-p", "into-markdown-cli", "--bin", "into-md", "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker", "-p", "into-markdown-plugin-manager", "--bin", "package_plugin", "-p", "installed-smoke", "--bin", "installed-smoke", "-p", "installed-smoke", "--bin", "archive-check", "-p", "license-check", "--bin", "release-projection"], cwd=ROOT, env=environment)
     run(["cargo", "build", "-j2", "--release", "--locked", "--features", "metal", "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider", "--bin", "into-md-media-provider"], cwd=ROOT, env=environment)
 

@@ -64,7 +64,7 @@ impl Executor for RealExecutor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        process_tree::configure(&mut command);
+        process_tree::configure(&mut command)?;
         let mut child =
             command.spawn().map_err(|error| format!("cannot start process: {error}"))?;
         let mut tree = match process_tree::own(&child) {
@@ -78,18 +78,15 @@ impl Executor for RealExecutor {
         if let Some(mut input) = child.stdin.take()
             && let Err(error) = input.write_all(spec.stdin)
         {
-            tree.terminate();
-            let _ = child.wait();
+            tree.terminate_and_reap(&mut child);
             return Err(format!("cannot write process input: {error}"));
         }
         let Some(stdout) = child.stdout.take() else {
-            tree.terminate();
-            let _ = child.wait();
+            tree.terminate_and_reap(&mut child);
             return Err("process stdout is unavailable".into());
         };
         let Some(stderr) = child.stderr.take() else {
-            tree.terminate();
-            let _ = child.wait();
+            tree.terminate_and_reap(&mut child);
             return Err("process stderr is unavailable".into());
         };
         let stdout_thread = read_bounded(stdout);
@@ -97,8 +94,7 @@ impl Executor for RealExecutor {
         let deadline = Instant::now() + spec.timeout;
         let status = loop {
             if spec.cancel_file.is_some_and(Path::exists) {
-                tree.terminate();
-                let _ = child.wait();
+                tree.terminate_and_reap(&mut child);
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 return Err("process cancelled".into());
@@ -107,16 +103,14 @@ impl Executor for RealExecutor {
                 Ok(Some(status)) => break status,
                 Ok(None) => {}
                 Err(error) => {
-                    tree.terminate();
-                    let _ = child.wait();
+                    tree.terminate_and_reap(&mut child);
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
                     return Err(format!("cannot poll process: {error}"));
                 }
             }
             if Instant::now() >= deadline {
-                tree.terminate();
-                let _ = child.wait();
+                tree.terminate_and_reap(&mut child);
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 return Err("process deadline exceeded".into());
@@ -125,7 +119,7 @@ impl Executor for RealExecutor {
         };
         // A command that exits while leaving a grandchild holding an inherited
         // pipe must not hang the reader joins or escape the smoke run.
-        tree.terminate();
+        tree.terminate_and_reap(&mut child);
         let stdout = stdout_thread.join().map_err(|_| "stdout reader panicked".to_owned())??;
         let stderr = stderr_thread.join().map_err(|_| "stderr reader panicked".to_owned())??;
         Ok(CommandOutput { exit_code: status.code(), stdout, stderr })

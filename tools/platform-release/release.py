@@ -163,6 +163,10 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             ]
         )
     environment["RUSTFLAGS"] = " ".join(rustflags)
+    # release-projection intentionally runs Cargo metadata offline across the
+    # complete lockfile, including dependencies for non-host targets. Seed that
+    # immutable closure before compiling only the host release products.
+    run(["cargo", "fetch", "--locked"], cwd=ROOT, env=environment)
     run(
         [
             "cargo",

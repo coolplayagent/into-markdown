@@ -24,6 +24,12 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
+        source = (ROOT / "tools/platform-release/release.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('run(["cargo", "fetch", "--locked"]', source)
+
     def test_linux_release_bootstrap_provides_bindgen_libclang(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
