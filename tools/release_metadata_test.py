@@ -176,6 +176,19 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(projection["artifact"], "ocr-plugin")
             self.assertEqual(projection["file_name"], published.name)
 
+    def test_ocr_model_ownership_is_digest_bound_across_archive_paths(self) -> None:
+        detector_digest = (
+            "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8"
+        )
+        self.assertEqual(
+            release_metadata.plugin_owner("models/runtime/detector.onnx", detector_digest),
+            "ppocrv6-tiny-detector-onnx-model",
+        )
+        with self.assertRaisesRegex(RuntimeError, "differs from download authority"):
+            release_metadata.plugin_owner(
+                "models/pp-ocrv6-tiny-detector-onnx/inference.onnx", "0" * 64
+            )
+
     def test_plugin_projection_rejects_duplicate_zip_members(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             artifact = pathlib.Path(name) / "official.ocr.ppocrv6.imp"
