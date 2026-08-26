@@ -93,6 +93,18 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "components": [
                     {"id": "cargo:example@1.0.0", "distributed": True},
                     {"id": "onnxruntime-cpu", "distributed": True},
+                    {
+                        "id": "ppocrv6-tiny-detector-onnx-model",
+                        "distributed": True,
+                    },
+                    {
+                        "id": "ppocrv6-tiny-recognizer-character-table",
+                        "distributed": True,
+                    },
+                    {
+                        "id": "ppocrv6-tiny-recognizer-onnx-model",
+                        "distributed": True,
+                    },
                     {"id": "npm:vite@1.0.0", "distributed": False},
                 ]
             }
@@ -150,7 +162,13 @@ class ReleaseMetadataTests(unittest.TestCase):
             )
             self.assertEqual(
                 projection["components"],
-                ["cargo:example@1.0.0", "onnxruntime-cpu"],
+                [
+                    "cargo:example@1.0.0",
+                    "onnxruntime-cpu",
+                    "ppocrv6-tiny-detector-onnx-model",
+                    "ppocrv6-tiny-recognizer-character-table",
+                    "ppocrv6-tiny-recognizer-onnx-model",
+                ],
             )
             provider = next(
                 item
@@ -175,6 +193,28 @@ class ReleaseMetadataTests(unittest.TestCase):
             )
             self.assertEqual(projection["artifact"], "ocr-plugin")
             self.assertEqual(projection["file_name"], published.name)
+
+    def test_plugin_runtime_components_are_scoped_to_the_artifact(self) -> None:
+        global_sources = [
+            "cargo:shared@1.0.0",
+            *release_metadata.PLUGIN_RUNTIME_COMPONENTS["ocr-plugin"],
+            *release_metadata.PLUGIN_RUNTIME_COMPONENTS["media-plugin"],
+        ]
+        for artifact, expected in release_metadata.PLUGIN_RUNTIME_COMPONENTS.items():
+            selected = release_metadata.scoped_plugin_components(
+                global_sources, artifact
+            )
+            self.assertEqual(
+                set(selected) & release_metadata.OCR_MODEL_COMPONENTS,
+                release_metadata.OCR_MODEL_COMPONENTS
+                if artifact == "ocr-plugin"
+                else set(),
+            )
+            self.assertEqual(
+                set(selected)
+                & set(release_metadata.PLUGIN_RUNTIME_COMPONENTS["media-plugin"]),
+                set(expected) if artifact == "media-plugin" else {"onnxruntime-cpu"},
+            )
 
     def test_ocr_model_ownership_is_digest_bound_across_archive_paths(self) -> None:
         detector_digest = (
