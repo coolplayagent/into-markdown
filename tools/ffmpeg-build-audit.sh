@@ -252,8 +252,14 @@ artifact_bytes_before=$(wc -c < "$output_dir/$artifact_name" | tr -d ' ')
 if [ "${FFMPEG_AUDIT_PRODUCTION_SMOKE:-}" = 1 ]; then
   fixture_dir="$work/production-fixtures"; mkdir "$fixture_dir"
   jq -er '.fixtures[] | [.format,.url,.sha256] | @tsv' "$root/third_party/ffmpeg/fixtures.json" |
-  while IFS="$tab" read -r fixture_format fixture_url fixture_sha; do
-    download 1048576 "$fixture_url" "$fixture_dir/sample.$fixture_format"
+  while IFS="$tab" read -r fixture_format _fixture_url fixture_sha; do
+    # The decoder audit above already downloaded and content-verified every
+    # fixture. Reuse those immutable job-local bytes for the Rust runtime smoke
+    # instead of asking the public sample server for the same files twice.
+    # This directory remains transient and is never included in an artifact.
+    source_fixture="$work/fixture.$fixture_format"
+    test -f "$source_fixture"
+    cp "$source_fixture" "$fixture_dir/sample.$fixture_format"
     printf '%s  %s\n' "$fixture_sha" "$fixture_dir/sample.$fixture_format" | shasum -a 256 -c -
   done
   test_executable=$(cd "$output_dir" && pwd)/$artifact_name
