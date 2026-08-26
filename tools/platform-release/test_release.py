@@ -12,7 +12,7 @@ import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from common import authority, sha256
+from common import ReleaseError, authority, run, sha256
 from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
@@ -24,6 +24,20 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_command_failure_preserves_bounded_diagnostic_tail(self) -> None:
+        script = (
+            "import sys; "
+            "[print(f'diagnostic-{index}', file=sys.stderr) for index in range(45)]; "
+            "raise SystemExit(7)"
+        )
+        with self.assertRaises(ReleaseError) as raised:
+            run([sys.executable, "-c", script])
+        message = str(raised.exception)
+        self.assertIn("exit 7", message)
+        self.assertNotIn("diagnostic-4\n", message)
+        self.assertIn("diagnostic-5", message)
+        self.assertIn("diagnostic-44", message)
+
     def test_published_plugin_names_are_flat_and_target_unique(self) -> None:
         self.assertEqual(
             published_plugin_file("official.ocr.ppocrv6.imp", "x86_64-pc-windows-msvc"),

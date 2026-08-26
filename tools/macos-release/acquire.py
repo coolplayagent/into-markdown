@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import tarfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -23,6 +24,7 @@ ALLOWED_HOSTS = {
     "release-assets.githubusercontent.com",
     "us.aws.cdn.hf.co",
 }
+DOWNLOAD_ATTEMPTS = 4
 
 
 def acquire(cache: pathlib.Path, selected: set[str] | None = None) -> None:
@@ -34,24 +36,41 @@ def acquire(cache: pathlib.Path, selected: set[str] | None = None) -> None:
         if destination.is_file() and validate(destination, item):
             continue
         temporary = destination.with_suffix(".download")
-        temporary.unlink(missing_ok=True)
-        request = urllib.request.Request(item["url"], headers={"User-Agent": "into-markdown-release/1"})
-        with urllib.request.urlopen(request, timeout=120) as response, temporary.open("xb") as output:
-            host = urllib.parse.urlparse(response.geturl()).hostname
-            if host not in ALLOWED_HOSTS:
-                raise ReleaseError("download redirected to an unauthorized host")
-            remaining = item["bytes"]
-            while remaining:
-                chunk = response.read(min(1024 * 1024, remaining + 1))
-                if not chunk or len(chunk) > remaining:
-                    raise ReleaseError(f"{item['id']} download size disagrees with authority")
-                output.write(chunk)
-                remaining -= len(chunk)
-            if response.read(1):
-                raise ReleaseError(f"{item['id']} download exceeds authority")
-        if not validate(temporary, item):
-            raise ReleaseError(f"{item['id']} download hash disagrees with authority")
-        os.replace(temporary, destination)
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            temporary.unlink(missing_ok=True)
+            try:
+                request = urllib.request.Request(
+                    item["url"], headers={"User-Agent": "into-markdown-release/1"}
+                )
+                with urllib.request.urlopen(request, timeout=180) as response, temporary.open(
+                    "xb"
+                ) as output:
+                    parsed = urllib.parse.urlparse(response.geturl())
+                    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+                        raise ReleaseError("download redirected to an unauthorized host")
+                    remaining = item["bytes"]
+                    while remaining:
+                        chunk = response.read(min(1024 * 1024, remaining + 1))
+                        if not chunk or len(chunk) > remaining:
+                            raise ReleaseError(
+                                f"{item['id']} download size disagrees with authority"
+                            )
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                    if response.read(1):
+                        raise ReleaseError(f"{item['id']} download exceeds authority")
+            except (TimeoutError, urllib.error.URLError, OSError) as error:
+                temporary.unlink(missing_ok=True)
+                if attempt == DOWNLOAD_ATTEMPTS:
+                    raise ReleaseError(
+                        f"{item['id']} download failed after {DOWNLOAD_ATTEMPTS} attempts"
+                    ) from error
+                continue
+            if not validate(temporary, item):
+                temporary.unlink(missing_ok=True)
+                raise ReleaseError(f"{item['id']} download hash disagrees with authority")
+            os.replace(temporary, destination)
+            break
 
 
 def validate(path: pathlib.Path, item: dict) -> bool:
