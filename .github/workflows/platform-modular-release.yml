@@ -194,7 +194,7 @@ jobs:
           python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
           cargo test --workspace --all-targets --locked -- --test-threads=1
           cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
-          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.bazel_config }} --lockfile_mode=error //...
+          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.bazel_config }} --lockfile_mode=error --local_test_jobs=1 --test_env=RUST_TEST_THREADS=1 //...
       - name: Authenticode-sign project executables
         if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh

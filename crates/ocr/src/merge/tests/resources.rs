@@ -214,6 +214,11 @@ fn large_text_checkpoint_observes_timeout_after_work_begins() {
         }
     })));
     let _reset = ResetTextHook;
+    let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
+    let large = "a".repeat(16 * 1024);
+    let recognized = recognition(&[(0, &large, 0.99)]);
+    // Fixture allocation is outside the request deadline. The test measures
+    // timeout observation during merge work, not runner scheduling or setup.
     let context = ExecutionContext::new(
         ExecutionOptions {
             timeout: Some(Duration::from_millis(10)),
@@ -221,9 +226,6 @@ fn large_text_checkpoint_observes_timeout_after_work_begins() {
         },
         ResourceLimits::default(),
     );
-    let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
-    let large = "a".repeat(16 * 1024);
-    let recognized = recognition(&[(0, &large, 0.99)]);
     let error = merge_document(
         Document::default(),
         &[input(&detected, &recognized)],
