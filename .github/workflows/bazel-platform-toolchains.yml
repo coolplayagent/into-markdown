@@ -56,6 +56,11 @@ jobs:
           bazel test --config=${{ matrix.config }} --lockfile_mode=error
           //crates/core:core_test
           //toolchains:allocator_bridge_test
+      - name: Run macOS installer transaction security tests
+        if: matrix.config == 'macos_arm64'
+        run: >-
+          bazel test --config=macos_arm64 --lockfile_mode=error
+          //tools/macos-release:installer_attack_test
       - name: Prove the Rust-library allocator bridge is required
         if: matrix.config == 'macos_arm64'
         shell: bash
