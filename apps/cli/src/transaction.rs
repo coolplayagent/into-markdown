@@ -1860,6 +1860,8 @@ pub enum HookDecision {
     Continue,
     #[cfg(test)]
     SimulateCrash,
+    #[cfg(test)]
+    SimulateRollbackFailure,
 }
 
 /// A fully staged transaction. Dropping it preserves the journal for recovery.
@@ -1870,6 +1872,8 @@ pub struct PreparedTransaction {
     context: ExecutionContext,
     active: bool,
     temporary_reservations: Vec<ResourceReservation>,
+    #[cfg(test)]
+    simulate_rollback_failure: bool,
     lock: Option<File>,
     handles: TransactionHandles,
 }
@@ -2592,6 +2596,17 @@ impl PreparedTransaction {
         #[cfg(any(unix, windows))]
         {
             self.temporary_reservations.clear();
+            #[cfg(test)]
+            let rollback = if self.simulate_rollback_failure {
+                Err(CliError::new(
+                    ExitClass::Io,
+                    "injectedRollbackFailure",
+                    "deterministic rollback failure injected by the test hook",
+                ))
+            } else {
+                rollback_transaction_with_handles(&self.handles.directory, targets, &self.journal)
+            };
+            #[cfg(not(test))]
             let rollback =
                 rollback_transaction_with_handles(&self.handles.directory, targets, &self.journal);
             if let Err(recovery) = rollback {
@@ -2933,6 +2948,8 @@ pub(crate) fn prepare_with_hook(
             context: context.clone(),
             active: true,
             temporary_reservations: Vec::with_capacity(targets.len()),
+            #[cfg(test)]
+            simulate_rollback_failure: false,
             lock: Some(lock),
             handles: TransactionHandles { root: root_handle, directory: directory_handle },
         };
@@ -3038,6 +3055,15 @@ fn call_hook(
             transaction.preserve_staged_files();
             transaction.deactivate();
             Err(CliError::new(ExitClass::Io, "simulatedCrash", format!("{phase}:{index}")))
+        }
+        #[cfg(test)]
+        HookDecision::SimulateRollbackFailure => {
+            transaction.simulate_rollback_failure = true;
+            Err(CliError::new(
+                ExitClass::Io,
+                "injectedPermissionFailure",
+                format!("deterministic rollback failure requested at {phase}:{index}"),
+            ))
         }
     }
 }
@@ -5711,9 +5737,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn rollback_permission_failure_keeps_the_backup_recoverable() {
-        use std::os::unix::fs::PermissionsExt as _;
-
+    fn rollback_failure_keeps_the_backup_recoverable() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
         let output_parent = root.join("locked");
@@ -5726,14 +5750,12 @@ mod tests {
         let error = transaction
             .commit_with_hook(|phase, index| {
                 if phase == "targetInstalled" && index == 0 {
-                    fs::set_permissions(&output_parent, fs::Permissions::from_mode(0o500))?;
-                    Err(CliError::new(ExitClass::Io, "injectedPermissionFailure", "injected"))
+                    Ok(HookDecision::SimulateRollbackFailure)
                 } else {
                     Ok(HookDecision::Continue)
                 }
             })
             .unwrap_err();
-        fs::set_permissions(&output_parent, fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(error.code(), "rollbackFailed");
         assert!(error.message().contains("injectedPermissionFailure"));
         assert_eq!(fs::read(directory.join("backup-0")).unwrap(), b"old");

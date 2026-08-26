@@ -20,6 +20,23 @@ SPEC.loader.exec_module(release_metadata)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_build_tool_integrity_digests_match_every_authority_subject(self) -> None:
+        repository = SCRIPT.parent.parent
+        inventory = json.loads(
+            (repository / "third_party/licenses/build-tools.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for tool in inventory["tools"]:
+            for integrity in tool["integrity"]:
+                self.assertEqual(integrity["algorithm"], "SHA-256")
+                subject = repository / integrity["subject"]
+                self.assertEqual(
+                    integrity["digest"],
+                    release_metadata.sha256(subject),
+                    f"{tool['id']} integrity drifted for {integrity['subject']}",
+                )
+
     def test_core_projection_requires_exact_archive_manifest_members(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             temporary = pathlib.Path(name)
