@@ -732,7 +732,9 @@ fn select_components<'a>(
         .map(|component| component.id.as_str())
         .chain(requested.iter().map(String::as_str))
         .collect();
-    if requested.iter().any(|id| OCR_RUNTIME_COMPONENTS.contains(id)) {
+    if artifact == ReleaseArtifact::OcrPlugin
+        && requested.iter().any(|id| OCR_RUNTIME_COMPONENTS.contains(id))
+    {
         requested.extend(OCR_RUNTIME_COMPONENTS);
     }
     for id in requested {
