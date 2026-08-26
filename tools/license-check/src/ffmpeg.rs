@@ -208,8 +208,12 @@ fn expected_target_identity(target: &str) -> Option<(&'static str, &'static str,
                 "/usr/lib/libSystem.B.dylib",
             ],
         ),
-        "x86_64-unknown-linux-gnu" => ("elf", "x86_64", &["libc.so.6", "libm.so.6"]),
-        "aarch64-unknown-linux-gnu" => ("elf", "aarch64", &["libc.so.6", "libm.so.6"]),
+        "x86_64-unknown-linux-gnu" => {
+            ("elf", "x86_64", &["libc.so.6", "libm.so.6", "libpthread.so.0"])
+        }
+        "aarch64-unknown-linux-gnu" => {
+            ("elf", "aarch64", &["libc.so.6", "libm.so.6", "libpthread.so.0"])
+        }
         "x86_64-pc-windows-msvc" => {
             ("pe", "x86_64", &["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"])
         }
