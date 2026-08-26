@@ -944,8 +944,8 @@ fn expected_dependencies() -> impl Iterator<Item = &'static str> {
         "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
         "/usr/lib/libSystem.B.dylib",
     ];
-    const LINUX_X64: [&str; 2] = ["libc.so.6", "libm.so.6"];
-    const LINUX_ARM64: [&str; 2] = ["libc.so.6", "libm.so.6"];
+    const LINUX_X64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
+    const LINUX_ARM64: [&str; 3] = ["libc.so.6", "libm.so.6", "libpthread.so.0"];
     const WINDOWS: [&str; 4] = ["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"];
     let values: &'static [&'static str] = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => &MACOS,

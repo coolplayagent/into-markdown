@@ -205,9 +205,9 @@ relink_sha=$(shasum -a 256 "$relink" | awk '{print $1}')
 policy_sha=$(shasum -a 256 "$build_policy" | awk '{print $1}')
 deps='[]'
 case "$format" in
-  mach-o) deps=$(otool -L "$tool" | tail -n +2 | awk '{print $1}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
-  elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
-  pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  mach-o) deps=$(otool -L "$tool" | tail -n +2 | awk '{print $1}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  elf) deps=$(readelf -d "$tool" | awk '/NEEDED/ {gsub(/\[|\]/,"",$5); print $5}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
+  pe) deps=$(objdump -p "$tool" | awk '$1 == "DLL" && $2 == "Name:" {print $3}' | LC_ALL=C sort -u | jq -Rsc 'split("\n")[:-1]') ;;
 esac
 expected_deps=$(jq -cS --arg target "$target" '.targets[$target].dynamic_dependencies' "$build_policy")
 actual_deps_sorted=$(printf '%s' "$deps" | jq -cS .)
